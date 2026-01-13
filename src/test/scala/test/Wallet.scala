@@ -1,44 +1,17 @@
 package test
 
-import co.nstant.in.cbor.model.{Array as CborArray, ByteString as CborByteString, Map, UnsignedInteger}
-import com.bloxbean.cardano.client.common.cbor.CborSerializationUtil
 import com.bloxbean.cardano.client.crypto.Blake2bUtil
+import com.bloxbean.cardano.client.crypto.api.SigningProvider
 import com.bloxbean.cardano.client.crypto.bip32.key.{HdPrivateKey, HdPublicKey}
 import com.bloxbean.cardano.client.crypto.config.CryptoConfiguration
 import com.bloxbean.cardano.client.transaction.util.TransactionBytes
 import hydrozoa.*
-import hydrozoa.given
-import io.bullet.borer.Cbor
+import hydrozoa.multisig.protocol.types.AckBlock.HeaderSignature
 import scala.language.implicitConversions
 import scalus.builtin.ByteString
-import scalus.cardano.ledger.{OriginalCborByteArray, Transaction, VKeyWitness}
+import scalus.cardano.ledger.{Transaction, VKeyWitness}
 
 case class WalletId(name: String)
-
-// Pure function to add a key witness to a transaction.
-def addWitness(tx: Transaction, wit: VKeyWitness): Transaction =
-    val txBytes = TransactionBytes(tx.toCbor)
-    val witnessSetDI = CborSerializationUtil.deserialize(txBytes.getTxWitnessBytes)
-    val witnessSetMap = witnessSetDI.asInstanceOf[Map]
-
-    val vkWitnessArrayDI = witnessSetMap.get(UnsignedInteger(0))
-
-    val vkWitnessArray: CborArray =
-        if vkWitnessArrayDI != null then vkWitnessArrayDI.asInstanceOf[CborArray]
-        else new CborArray
-
-    if vkWitnessArrayDI == null then witnessSetMap.put(new UnsignedInteger(0), vkWitnessArray): Unit
-
-    val vkeyWitness = new CborArray
-    vkeyWitness.add(CborByteString(wit.vkey.bytes))
-    vkeyWitness.add(CborByteString(wit.signature.bytes))
-
-    vkWitnessArray.add(vkeyWitness)
-
-    val txWitnessBytes = CborSerializationUtil.serialize(witnessSetMap, false)
-    val txBytesSigned = txBytes.withNewWitnessSetBytes(txWitnessBytes).getTxBytes
-    given OriginalCborByteArray = OriginalCborByteArray(txBytesSigned)
-    Cbor.decode(txBytesSigned).to[Transaction].value
 
 trait WalletModule:
 
@@ -53,10 +26,16 @@ trait WalletModule:
         signingKey: SigningKey
     ): VKeyWitness
 
-    def createEd25519Signature(
+    def createHeaderSignature(
         msg: IArray[Byte],
         signingKey: SigningKey
-    ): Ed25519Signature
+    ): HeaderSignature
+
+    def validateHeaderSignature(
+        msg: IArray[Byte],
+        vk: VerificationKey,
+        sig: HeaderSignature
+    ): Boolean
 
 class Wallet(
     name: String,
@@ -76,10 +55,18 @@ class Wallet(
 
     def getName: String = name
 
-    def createEd25519Signature(msg: IArray[Byte]): Ed25519Signature =
-        walletModule.createEd25519Signature(msg, signingKey)
+    def createHeaderSignature(msg: IArray[Byte]): HeaderSignature =
+        walletModule.createHeaderSignature(msg, signingKey)
+
+    def validateHeaderSignature(
+        msg: IArray[Byte],
+        sig: HeaderSignature
+    ): Boolean =
+        walletModule.validateHeaderSignature(msg, verificationKey, sig)
 
 object WalletModuleBloxbean extends WalletModule:
+
+    protected val signingProvider: SigningProvider = CryptoConfiguration.INSTANCE.getSigningProvider
 
     override type VerificationKey = HdPublicKey
     override type SigningKey = HdPrivateKey
@@ -97,20 +84,29 @@ object WalletModuleBloxbean extends WalletModule:
         // See BloxBean's TransactionSigner.class
         val txBytes = TransactionBytes(tx.toCbor)
         val txnBodyHash = Blake2bUtil.blake2bHash256(txBytes.getTxBodyBytes)
-        val signingProvider = CryptoConfiguration.INSTANCE.getSigningProvider
         val signature = signingProvider.signExtended(txnBodyHash, signingKey.getKeyData)
         VKeyWitness(
           signature = ByteString.fromArray(signature),
           vkey = ByteString.fromArray(verificationKey.getKeyData)
         )
 
-    override def createEd25519Signature(
+    override def createHeaderSignature(
         msg: IArray[Byte],
         signingKey: SigningKey
-    ): Ed25519Signature =
-        val signingProvider = CryptoConfiguration.INSTANCE.getSigningProvider
+    ): HeaderSignature =
         val signature = signingProvider.signExtended(
           IArray.genericWrapArray(msg).toArray,
           signingKey.getKeyData
         )
-        Ed25519Signature(IArray.from(signature))
+        HeaderSignature(IArray.from(signature))
+
+    override def validateHeaderSignature(
+        msg: IArray[Byte],
+        vk: HdPublicKey,
+        sig: HeaderSignature
+    ): Boolean =
+        signingProvider.verify(
+          IArray.genericWrapArray(sig.untagged).toArray,
+          IArray.genericWrapArray(msg).toArray,
+          vk.getKeyData
+        )

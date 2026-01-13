@@ -6,6 +6,7 @@ import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explain, expla
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.{WrappedCoin, prebalancedLovelaceDiffHandler}
+import monocle.{Focus, Lens}
 import scala.Function.const
 import scala.annotation.tailrec
 import scalus.builtin.ByteString
@@ -16,14 +17,21 @@ import scalus.cardano.ledger.{Coin, ProtocolParams, Transaction, TransactionHash
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, ReferenceOutput, Send, Spend}
 import scalus.cardano.txbuilder.{SomeBuildError, TransactionBuilder, TransactionBuilderStep, TxBalancingError}
 
-enum RolloutTx extends Tx, RolloutUtxo.Spent, RolloutUtxo.MbProduced {
+sealed trait RolloutTx extends Tx[RolloutTx], RolloutUtxo.Spent, RolloutUtxo.MbProduced {
+    def tx: Transaction
+    def txLens: Lens[RolloutTx, Transaction]
+}
+
+object RolloutTx {
 
     /** The last rollout tx in the sequence. It spends a rollout utxo, but it doesn't produce a
       * rollout utxo.
       */
-    case Last(
+    final case class Last(
         override val tx: Transaction,
-        override val rolloutSpent: RolloutUtxo
+        override val rolloutSpent: RolloutUtxo,
+        override val txLens: Lens[RolloutTx, Transaction] =
+            Focus[Last](_.tx).asInstanceOf[Lens[RolloutTx, Transaction]]
     ) extends RolloutTx
 
     /** A rollout tx preceding the last one in the sequence. It both spends and produces a rollout
@@ -31,14 +39,15 @@ enum RolloutTx extends Tx, RolloutUtxo.Spent, RolloutUtxo.MbProduced {
       *
       * Invariant: the produced rollout utxo MUST have the txId of the [[tx]] field and index 0.
       */
-    case NotLast(
+    final case class NotLast(
         override val tx: Transaction,
         override val rolloutSpent: RolloutUtxo,
-        override val rolloutProduced: RolloutUtxo
-    ) extends RolloutTx, RolloutUtxo.Produced
-}
+        override val rolloutProduced: RolloutUtxo,
+        override val txLens: Lens[RolloutTx, Transaction] =
+            Focus[NotLast](_.tx).asInstanceOf[Lens[RolloutTx, Transaction]]
+    ) extends RolloutTx,
+          RolloutUtxo.Produced
 
-object RolloutTx {
     import Builder.*
     import BuilderOps.*
 

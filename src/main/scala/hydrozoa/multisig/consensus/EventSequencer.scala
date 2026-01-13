@@ -4,31 +4,29 @@ import cats.effect.{Deferred, IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
-import hydrozoa.multisig.consensus.TransactionSequencer.{Config, ConnectionsPending}
+import hydrozoa.multisig.consensus.EventSequencer.{Config, ConnectionsPending}
 import hydrozoa.multisig.protocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
-import hydrozoa.multisig.protocol.ConsensusProtocol.TransactionSequencer.*
-import hydrozoa.multisig.protocol.PersistenceProtocol.*
+import hydrozoa.multisig.protocol.ConsensusProtocol.EventSequencer.*
 import hydrozoa.multisig.protocol.types.{LedgerEvent, LedgerEventId, Peer}
 import scala.collection.immutable.Queue
 
-/** Transaction sequencer receives local submissions of new ledger events and emits them
-  * sequentially into the consensus system.
+/** Event sequencer receives local submissions of new ledger events and emits them sequentially into
+  * the consensus system.
   */
-object TransactionSequencer {
-    final case class Config(peerId: Peer.Number, persistence: Persistence.Ref)
+object EventSequencer {
+    final case class Config(peerId: Peer.Number)
 
     final case class ConnectionsPending(
-        blockProducer: Deferred[IO, BlockWeaver.Ref],
+        blockWeaver: Deferred[IO, BlockWeaver.Handle],
         peerLiaisons: Deferred[IO, List[PeerLiaison.Ref]]
     )
 
-    def apply(config: Config, connections: ConnectionsPending): IO[TransactionSequencer] =
-        IO(new TransactionSequencer(config, connections) {})
+    def apply(config: Config, connections: ConnectionsPending): IO[EventSequencer] =
+        IO(new EventSequencer(config, connections) {})
 }
 
-trait TransactionSequencer(config: Config, connections: ConnectionsPending)
-    extends Actor[IO, Request] {
+trait EventSequencer(config: Config, connections: ConnectionsPending) extends Actor[IO, Request] {
     private val subscribers = Ref.unsafe[IO, Option[Subscribers]](None)
     private val state = State()
 
@@ -38,12 +36,12 @@ trait TransactionSequencer(config: Config, connections: ConnectionsPending)
 
     override def preStart: IO[Unit] =
         for {
-            blockProducer <- connections.blockProducer.get
+            blockWeaver <- connections.blockWeaver.get
             peerLiaisons <- connections.peerLiaisons.get
             _ <- subscribers.set(
               Some(
                 Subscribers(
-                  newLedgerEvent = blockProducer :: peerLiaisons
+                  newLedgerEvent = blockWeaver :: peerLiaisons
                 )
               )
             )
@@ -69,7 +67,6 @@ trait TransactionSequencer(config: Config, connections: ConnectionsPending)
                     newId = LedgerEventId(config.peerId, newNum)
                     // FIXME: fill in
                     newEvent: LedgerEvent = ???
-                    _ <- config.persistence ?: Persistence.PersistRequest(newEvent)
                     _ <- (subs.newLedgerEvent ! newEvent).parallel
                 } yield ()
             case x: ConfirmBlock =>

@@ -3,6 +3,7 @@ package hydrozoa.multisig.ledger.dapp.tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.utxo.MultisigRegimeUtxo
+import monocle.Lens
 import scala.Function.const
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
@@ -12,8 +13,21 @@ import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.{ChangeOutputDiffHandler, Environment, SomeBuildError, TransactionBuilder}
 import sourcecode.*
 
-trait Tx {
+trait Tx[Self <: Tx[Self]] { self: Self =>
     def tx: Transaction
+
+    /** Lens for accessing the transaction field. Implementations should use:
+      * `override val txLens: Lens[ConcreteType, Transaction] = Focus[ConcreteType](_.tx)`
+      * Unfortunately this can't be generalized since Focus requires a concrete type.
+      */
+    def txLens: Lens[Self, Transaction]
+
+    /** This excludes the lens from equality. */
+    override def equals(obj: Any): Boolean = obj match {
+        case that: Tx[?] =>
+            this.tx == that.tx
+        case _ => false
+    }
 }
 
 trait HasValidityStart:

@@ -7,18 +7,22 @@ enum AugmentedBlock(val blockType: Block.Type) {
 
     def effects: BlockEffects
 
-    case Initial(
-        override val block: Block.Initial,
-        override val effects: BlockEffects.Initial
-    ) extends AugmentedBlock(Type.Initial)
+    // TODO: This is not used anywhere currently.
+    // TODO: We can use it as a part of the actors' configs.
+    // case Initial(
+    //    override val block: Block.Initial,
+    //    override val effects: BlockEffects.Initial
+    // ) extends AugmentedBlock(Type.Initial)
 
     case Minor(
         override val block: Block.Minor,
-        override val effects: BlockEffects.Minor
+        override val effects: BlockEffects.Minor,
     ) extends AugmentedBlock(Type.Minor)
 
-    case Major(override val block: Block.Major, override val effects: BlockEffects.Major)
-        extends AugmentedBlock(Type.Major)
+    case Major(
+        override val block: Block.Major,
+        override val effects: BlockEffects.Major
+    ) extends AugmentedBlock(Type.Major)
 
     case Final(
         override val block: Block.Final,
@@ -28,3 +32,10 @@ enum AugmentedBlock(val blockType: Block.Type) {
 
 object AugmentedBlock:
     type Next = Minor | Major | Final
+
+    extension (self: AugmentedBlock.Next)
+        def blockNext: Block.Next = self match {
+            case Minor(b, _) => b
+            case Major(b, _) => b
+            case Final(b, _) => b
+        }

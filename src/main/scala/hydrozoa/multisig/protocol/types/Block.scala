@@ -4,6 +4,10 @@ import cats.effect.IO
 import cats.syntax.all.*
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
+import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{BlockTypeL2, OnchainBlockHeader, given}
+import scalus.builtin.Builtins.serialiseData
+import scalus.builtin.ByteString
+import scalus.builtin.Data.toData
 
 enum Block {
     def id: Block.Number = this.header.blockNum
@@ -34,16 +38,23 @@ enum Block {
         newBody: Block.Body.Next,
         newTime: java.time.Instant,
         newCommitment: KzgCommitment
-    ): Block =
+    ): Block.Next =
         header.nextBlock(newBody, newTime, newCommitment)
 }
 
 object Block {
-    type Subscriber = ActorRef[IO, Block]
+    type Subscriber = ActorRef[IO, Block.Next]
 
     type Next = Block.Minor | Block.Major | Block.Final
 
     extension (next: Next)
+
+        def blockNum: Block.Number = next match {
+            case b: Block.Minor => b.id
+            case b: Block.Major => b.id
+            case b: Block.Final => b.id
+        }
+
         def blockEvents: List[LedgerEventId] = next match {
             case Block.Minor(_, body) => body.events.map(_._1)
             case Block.Major(_, body) => body.events.map(_._1)
@@ -106,7 +117,7 @@ object Block {
             body: Body.Next,
             newTime: java.time.Instant,
             newCommitment: KzgCommitment
-        ): Block =
+        ): Block.Next =
             body match {
                 case b: Body.Minor =>
                     Block.Minor(header = nextHeaderMinor(newTime, newCommitment), body = b)
@@ -121,7 +132,7 @@ object Block {
             newCommitment: KzgCommitment
         ): Header.Minor =
             Header.Minor(
-              blockNum = blockNum.increment,
+              blockNum = this.blockNum.increment,
               blockVersion = blockVersion.incrementMinor,
               timeCreation = newTime,
               commitment = newCommitment
@@ -132,7 +143,7 @@ object Block {
             newCommitment: KzgCommitment
         ): Header.Major =
             Header.Major(
-              blockNum = blockNum.increment,
+              blockNum = this.blockNum.increment,
               blockVersion = blockVersion.incrementMajor,
               timeCreation = newTime,
               commitment = newCommitment
@@ -142,11 +153,33 @@ object Block {
             newTime: java.time.Instant
         ): Header.Final =
             Header.Final(
-              blockNum = blockNum.increment,
+              blockNum = this.blockNum.increment,
               blockVersion = blockVersion.incrementMajor,
               timeCreation = newTime
             )
     }
+
+    extension (minor: Header.Minor)
+
+        // TODO: Factor our MS/RB common types into a separate "common" module.
+        def mkOnchainBlockHeader =
+            // Convert block header into its onchain representation
+            OnchainBlockHeader(
+              BigInt(minor.blockNum),
+              BlockTypeL2.Minor,
+              minor.timeCreation.toEpochMilli,
+              BigInt(minor.blockVersion.major),
+              BigInt(minor.blockVersion.minor),
+              ByteString.fromArray(IArray.genericWrapArray(minor.commitment).toArray)
+            )
+
+        def mkMessage: HeaderMsg = {
+            val blockHeader = minor.mkOnchainBlockHeader
+            // Convert to Data, serialize and get bytes
+            // TODO: shall we use ByteString?
+            val msg = serialiseData(blockHeader.toData)
+            HeaderMsg(IArray.from(msg.bytes))
+        }
 
     object HeaderFields {
         sealed trait Mandatory {
@@ -317,4 +350,20 @@ object Block {
             extension (self: Minor) def increment: Minor = Minor(self + 1)
         }
     }
+
+    // TODO: this is used in the rule-based regime as well, so maybe it should live in the "common" module
+    object HeaderMsg:
+        opaque type HeaderMsg = IArray[Byte]
+
+        def apply(msg: IArray[Byte]): HeaderMsg = msg
+
+        given Conversion[HeaderMsg, IArray[Byte]] = identity
+
+        given Conversion[HeaderMsg, Array[Byte]] = msg => IArray.genericWrapArray(msg).toArray
+
+        given Conversion[HeaderMsg, ByteString] = msg => ByteString.fromArray(msg)
+
+        extension (msg: HeaderMsg) def untagged: IArray[Byte] = identity(msg)
+
+    type HeaderMsg = HeaderMsg.HeaderMsg
 }

@@ -72,7 +72,9 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
         val _ = p.runIO(system.actorOf(BlockWeaver(config)))
 
         def aroundNow(other: Instant): Boolean = {
-            val now = p.runIO(IO.monotonic.map(_.toEpochInstant))
+            // FIXME: Peter please confirm
+            val now = p.runIO(IO.realTime.map(_.toEpochInstant))
+            // println(s"now=$now")
             now - (1.second) < other && now + (1.second) > other
         }
 
@@ -278,7 +280,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
 
                   // First block
                   now <- IO.realTimeInstant
-                  firstBlock: Block = Block.Minor(
+                  firstBlock: Block.Next = Block.Minor(
                     Block.Header.Minor(
                       blockNum = lastKnownBlock.increment,
                       blockVersion = version,
@@ -293,7 +295,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
 
                   // Second block
                   newTime <- IO.realTimeInstant
-                  secondBlock: Block = firstBlock.nextBlock(
+                  secondBlock: Block.Next = firstBlock.nextBlock(
                     Block.Body.Minor(
                       events = secondBlockEvents.map(e => (e.eventId, true)).toList,
                       depositsRefunded = List.empty

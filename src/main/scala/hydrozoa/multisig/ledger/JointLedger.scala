@@ -11,8 +11,7 @@ import hydrozoa.multisig.ledger.JointLedger.*
 import hydrozoa.multisig.ledger.JointLedger.Requests.*
 import hydrozoa.multisig.ledger.VirtualLedgerM.runVirtualLedgerM
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
-import hydrozoa.multisig.ledger.dapp.tx.{RolloutTx, Tx, TxTiming}
-import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq.{NoRollouts, WithRollouts}
+import hydrozoa.multisig.ledger.dapp.tx.{Tx, TxTiming}
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
@@ -250,7 +249,7 @@ final case class JointLedger(
 
         } yield AugmentedBlock.Minor(
           nextBlock,
-          BlockEffects.Minor(nextBlock.id, List.empty, List.empty)
+          BlockEffects.Minor(nextBlock.id, List.empty)
         )
 
         def augmentedBlockMajor(
@@ -288,13 +287,8 @@ final case class JointLedger(
               BlockEffects.Major(
                 nextBlock.id,
                 settlement = settleLedgerRes.settlementTxSeq.settlementTx,
-                rollouts = settleLedgerRes.settlementTxSeq match {
-                    case _: NoRollouts => List.empty
-                    case r: WithRollouts =>
-                        r.rolloutTxSeq.notLast.appended(r.rolloutTxSeq.last).toList
-                },
+                rollouts = settleLedgerRes.settlementTxSeq.mbRollouts,
                 fallback = settleLedgerRes.fallBack,
-                immediateRefunds = List.empty,
                 postDatedRefunds = List.empty
               )
             )
@@ -506,19 +500,12 @@ final case class JointLedger(
 
                 val blockEffects: BlockEffects.Final = {
                     import FinalizationTxSeq.*
-                    val rollouts: List[RolloutTx] = finalizationTxSeq match {
-                        case _: Monolithic => List.empty
-                        case _: WithDeinit => List.empty
-                        case x: FinalizationTxSeq.WithRollouts =>
-                            x.rolloutTxSeq.notLast.appended(x.rolloutTxSeq.last).toList
-                        case x: WithDeinitAndRollouts =>
-                            x.rolloutTxSeq.notLast.appended(x.rolloutTxSeq.last).toList
-                    }
+
                     BlockEffects.Final(
                       nextBlock.id,
                       finalizationTxSeq.finalizationTx,
-                      rollouts = rollouts,
-                      immediateRefunds = List.empty
+                      rollouts = finalizationTxSeq.mbRollouts,
+                      deinit = finalizationTxSeq.mbDeinit
                     )
                 }
 
@@ -539,7 +526,7 @@ final case class JointLedger(
     private def sendAugmentedBlock(augmentedBlock: AugmentedBlock.Next): IO[Unit] =
         for {
             // _ <- blockSigner ! augmentedBlock
-            _ <- IO.parSequence(peerLiaisons.map(_ ! augmentedBlock.block))
+            _ <- IO.parSequence(peerLiaisons.map(_ ! augmentedBlock.blockNext))
         } yield ()
 
     private def checkReferenceBlock(
@@ -593,7 +580,7 @@ final case class JointLedger(
   */
 object JointLedger {
 
-    type Ref = ActorRef[IO, Requests.Request]
+    type Handle = ActorRef[IO, Requests.Request]
 
     final case class CompleteBlockError() extends Throwable
 

@@ -84,26 +84,6 @@ type Address[L <: AnyLayer] = Address.Address[L]
 type AddressL1 = Address.Address[L1]
 type AddressL2 = Address.Address[L2]
 
-///////////////////////////////////////////////////////
-// Ed25519 Signatures
-
-object Ed25519Signature:
-    opaque type Ed25519Signature = IArray[Byte]
-    def apply(signature: IArray[Byte]): Ed25519Signature = signature
-    given Conversion[Ed25519Signature, IArray[Byte]] = identity
-    given Conversion[Ed25519Signature, Array[Byte]] = sig => IArray.genericWrapArray(sig).toArray
-    extension (signature: Ed25519Signature) def untagged: IArray[Byte] = identity(signature)
-
-type Ed25519Signature = Ed25519Signature.Ed25519Signature
-
-object Ed25519SignatureHex:
-    opaque type Ed25519SignatureHex = String
-    def apply(signature: String): Ed25519SignatureHex = signature
-    given Conversion[Ed25519SignatureHex, String] = identity
-    extension (signature: Ed25519SignatureHex) def untagged: String = identity(signature)
-
-type Ed25519SignatureHex = Ed25519SignatureHex.Ed25519SignatureHex
-
 //////////////////////////////////////////////////////////////////
 // UtxoId, TxIx
 
@@ -263,6 +243,14 @@ extension (utxo: UTxO)
 // Keys
 
 // A verification key of a peer, used on both L1 and L2
+// TODO: review, I think it's strange. Shall we use opaque type instead?
+// I agree. What constructors would we need?
+//
+// The valid ways to generate one would be...
+//
+// Key generation
+// (unsafe) key parsing
+// anything else?
 case class VerificationKeyBytes(bytes: ByteString) {
     def verKeyHash: AddrKeyHash = Hash(blake2b_224(bytes))
     def pubKeyHash: PubKeyHash = PubKeyHash(blake2b_224(bytes))
@@ -271,14 +259,3 @@ case class VerificationKeyBytes(bytes: ByteString) {
 object VerificationKeyBytes:
     def applyI(bytes: IArray[Byte]): VerificationKeyBytes =
         new VerificationKeyBytes(ByteString.fromArray(IArray.genericWrapArray(bytes).toArray))
-
-// A signing key of a peer, used on both L1 and L2
-// TODO: why ByteString? This is never used onchain.
-case class SigningKeyBytes(bytes: ByteString)
-
-// UDiffTime
-opaque type UDiffTimeMilli = BigInt
-
-object UDiffTimeMilli:
-    inline def apply(i: Int): UDiffTimeMilli = BigInt.apply(i)
-extension (x: UDiffTimeMilli) def +(i: UDiffTimeMilli): UDiffTimeMilli = i + x

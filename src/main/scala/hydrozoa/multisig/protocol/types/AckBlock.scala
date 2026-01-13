@@ -3,93 +3,90 @@ package hydrozoa.multisig.protocol.types
 import cats.effect.IO
 import cats.syntax.all.*
 import com.suprnation.actor.ActorRef.ActorRef
+import hydrozoa.multisig.protocol.types.AckBlock.Fields.*
+import scalus.builtin.ByteString
 
-import AckBlock.Fields.*
+type AckBlockId = AckBlock.Id
 
 enum AckBlock:
     def id: AckBlock.Id
     def blockNum: Block.Number
 
-    case Initial(
-        override val id: AckBlock.Id,
-        override val blockNum: Block.Number,
-        override val initialization: BlockEffect.Signature
-    ) extends AckBlock, Initialization
-
     case Minor(
         override val id: AckBlock.Id,
         override val blockNum: Block.Number,
-        override val headerSignature: String,
-        override val immediateRefunds: List[BlockEffect.Signature],
-        override val postDatedRefunds: List[BlockEffect.Signature]
-    ) extends AckBlock, MinorHeaderSignature, Refunds.Immediate, Refunds.PostDated
+        override val headerSignature: AckBlock.HeaderSignature,
+        override val postDatedRefunds: List[AckBlock.TxSignature],
+        override val finalizationRequested: Boolean
+    ) extends AckBlock, MinorHeaderSignature, Refunds.PostDated, FinalizationRequested
 
     case Major1(
         override val id: AckBlock.Id,
         override val blockNum: Block.Number,
-        override val fallback: BlockEffect.Signature,
-        override val rollouts: List[BlockEffect.Signature],
-        override val immediateRefunds: List[BlockEffect.Signature],
-        override val postDatedRefunds: List[BlockEffect.Signature]
-    ) extends AckBlock, Rollouts, Fallback, Refunds.Immediate, Refunds.PostDated
+        override val fallback: AckBlock.TxSignature,
+        override val rollouts: List[AckBlock.TxSignature],
+        override val postDatedRefunds: List[AckBlock.TxSignature],
+        override val finalizationRequested: Boolean
+    ) extends AckBlock, Rollouts, Fallback, Refunds.PostDated, FinalizationRequested
 
     case Major2(
         override val id: AckBlock.Id,
         override val blockNum: Block.Number,
-        override val settlement: BlockEffect.Signature
+        override val settlement: AckBlock.TxSignature
     ) extends AckBlock, Settlement
 
     case Final1(
         override val id: AckBlock.Id,
         override val blockNum: Block.Number,
-        override val rollouts: List[BlockEffect.Signature],
-        override val immediateRefunds: List[BlockEffect.Signature]
-    ) extends AckBlock, Rollouts, Refunds.Immediate
+        override val rollouts: List[AckBlock.TxSignature],
+        override val deinit: Option[AckBlock.TxSignature]
+    ) extends AckBlock, Rollouts, Deinit
 
     case Final2(
         override val id: AckBlock.Id,
         override val blockNum: Block.Number,
-        override val finalization: BlockEffect.Signature
+        override val finalization: AckBlock.TxSignature
     ) extends AckBlock, Finalization
 
 object AckBlock {
+
     type Id = Id.Id
     type Number = Number.Number
     type Subscriber = ActorRef[IO, AckBlock]
 
     object Fields {
         sealed trait MinorHeaderSignature {
-            def headerSignature: String
-        }
-
-        sealed trait Initialization {
-            def initialization: BlockEffect.Signature
+            def headerSignature: HeaderSignature
         }
 
         sealed trait Settlement {
-            def settlement: BlockEffect.Signature
+            def settlement: TxSignature
         }
 
         sealed trait Rollouts {
-            def rollouts: List[BlockEffect.Signature]
+            def rollouts: List[TxSignature]
         }
 
         sealed trait Fallback {
-            def fallback: BlockEffect.Signature
+            def fallback: TxSignature
         }
 
         object Refunds {
-            sealed trait Immediate {
-                def immediateRefunds: List[BlockEffect.Signature]
-            }
-
             sealed trait PostDated {
-                def postDatedRefunds: List[BlockEffect.Signature]
+                def postDatedRefunds: List[TxSignature]
             }
         }
 
         sealed trait Finalization {
-            def finalization: BlockEffect.Signature
+            def finalization: TxSignature
+        }
+
+        sealed trait Deinit {
+            def deinit: Option[TxSignature]
+        }
+
+        sealed trait FinalizationRequested {
+            def finalizationRequested: Boolean
         }
     }
 
@@ -109,6 +106,7 @@ object AckBlock {
 
         extension (self: Id)
             def increment: Id = Id(self._1, self._2 + 1)
+            // TODO: rename peerId (or rename all peerId to peerNum
             def peerNum: Peer.Number = Peer.Number(self._1)
             def ackNum: Number = Number(self._2)
     }
@@ -127,4 +125,43 @@ object AckBlock {
 
         extension (self: Number) def increment: Number = Number(self + 1)
     }
+
+    // ===================================
+    // Transactions signatures (Ed25519) - this type doesn't contain vkey as VKeyWitness does.
+    // ===================================
+
+    object TxSignature:
+        opaque type TxSignature = IArray[Byte]
+
+        def apply(signature: IArray[Byte]): TxSignature = signature
+
+        given Conversion[TxSignature, IArray[Byte]] = identity
+
+        given Conversion[TxSignature, Array[Byte]] = sig => IArray.genericWrapArray(sig).toArray
+
+        given Conversion[TxSignature, ByteString] = sig => ByteString.fromArray(sig)
+
+        extension (signature: TxSignature) def untagged: IArray[Byte] = identity(signature)
+
+    type TxSignature = TxSignature.TxSignature
+
+    // ===================================
+    // Minor block header signatures (also Ed25519)
+    // ===================================
+
+    // TODO: this is used in the rule-based regime as well, so maybe it should live in the "common" module
+    object HeaderSignature:
+        opaque type HeaderSignature = IArray[Byte]
+
+        def apply(signature: IArray[Byte]): HeaderSignature = signature
+
+        given Conversion[HeaderSignature, IArray[Byte]] = identity
+
+        given Conversion[HeaderSignature, Array[Byte]] = sig => IArray.genericWrapArray(sig).toArray
+
+        given Conversion[HeaderSignature, ByteString] = sig => ByteString.fromArray(sig)
+
+        extension (signature: HeaderSignature) def untagged: IArray[Byte] = identity(signature)
+
+    type HeaderSignature = HeaderSignature.HeaderSignature
 }

@@ -6,7 +6,6 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import hydrozoa.multisig.consensus.PeerLiaison.{Config, ConnectionsPending, MaxEvents}
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.PeerLiaison.*
-import hydrozoa.multisig.protocol.PersistenceProtocol.*
 import hydrozoa.multisig.protocol.types.*
 import scala.annotation.targetName
 import scala.collection.immutable.Queue
@@ -22,12 +21,11 @@ object PeerLiaison {
     final case class Config(
         peerId: Peer.Number,
         remotePeerId: Peer.Number,
-        maxLedgerEventsPerBatch: MaxEvents = 25,
-        persistence: Persistence.Ref
+        maxLedgerEventsPerBatch: MaxEvents = 25
     )
 
     final case class ConnectionsPending(
-        blockWeaver: Deferred[IO, BlockWeaver.Ref],
+        blockWeaver: Deferred[IO, BlockWeaver.Handle],
         remotePeerLiaison: Deferred[IO, PeerLiaisonRef]
     )
 
@@ -113,7 +111,6 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
                 } yield ()
             case x: NewMsgBatch =>
                 for {
-                    _ <- config.persistence ?: Persistence.PersistRequest(x)
                     _ <- subs.remotePeerLiaison ! x.nextGetMsgBatch
                     _ <- x.ack.traverse_(subs.ackBlock ! _)
                     _ <- x.block.traverse_(subs.newBlock ! _)
@@ -126,7 +123,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
         private val nBlock = Ref.unsafe[IO, Block.Number](Block.Number(0))
         private val nEvent = Ref.unsafe[IO, LedgerEventId.Number](LedgerEventId.Number(0))
         private val qAck = Ref.unsafe[IO, Queue[AckBlock]](Queue())
-        private val qBlock = Ref.unsafe[IO, Queue[Block]](Queue())
+        private val qBlock = Ref.unsafe[IO, Queue[Block.Next]](Queue())
         private val qEvent = Ref.unsafe[IO, Queue[LedgerEvent]](Queue())
         private val sendBatchImmediately = Ref.unsafe[IO, Option[Batch.Id]](None)
 
@@ -152,7 +149,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
                 //        _ <- this.nAck.update(_.increment)
                 //        _ <- this.qAck.update(_ :+ y)
                 //    } yield ()
-                case y: Block =>
+                case y: Block.Next =>
                     for {
                         _ <- this.nBlock.update(_.increment)
                         _ <- this.qBlock.update(_ :+ y)
@@ -205,7 +202,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
                     //      None,
                     //      List()
                     //    )
-                    case y: Block =>
+                    case y: Block.Next =>
                         for {
                             nBlockNew <- this.nBlock.updateAndGet(_.increment)
                         } yield NewMsgBatch(

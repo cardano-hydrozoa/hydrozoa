@@ -2,6 +2,7 @@ package hydrozoa.rulebased.ledger.dapp.tx
 
 import cats.implicits.*
 import hydrozoa.*
+import hydrozoa.multisig.protocol.types.AckBlock.HeaderSignature
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{DisputeRedeemer, OnchainBlockHeader, VoteRedeemer}
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.*
@@ -35,7 +36,7 @@ object VoteTx {
         treasuryUtxo: RuleBasedTreasuryUtxo,
         collateralUtxo: Utxo[L1],
         blockHeader: OnchainBlockHeader,
-        signatures: List[Ed25519Signature],
+        signatures: List[HeaderSignature],
         validityEndSlot: Long,
         network: Network,
         protocolParams: ProtocolParams,

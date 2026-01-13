@@ -100,10 +100,9 @@ extension [K, V](map: mutable.Map[K, V])
         case Some(value) => value
     }
 
-// TODO: refactor all of this to make it just use the scalus types.
 def signTx(peer: TestPeer, txUnsigned: STransaction): STransaction =
     val keyWitness = TestPeer.mkWallet(peer).createTxKeyWitness(txUnsigned)
-    addWitness(txUnsigned, keyWitness)
+    attachVKeyWitnesses(txUnsigned, List(keyWitness))
 
 /** Creates a pubkey transaction yielding a single UTxO from a set of inputs */
 def l2EventTransactionFromInputsAndPeer(
