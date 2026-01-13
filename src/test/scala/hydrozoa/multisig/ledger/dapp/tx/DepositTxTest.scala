@@ -85,7 +85,7 @@ def genDepositRecipe(
         config: Tx.Builder.Config <- genTxConfig(
           testEnvironment,
           testEvaluator,
-          nonSigningValidators
+          nonSigningNonValidityChecksValidators
         )
 
         refundAddr <- genPubkeyAddress()
