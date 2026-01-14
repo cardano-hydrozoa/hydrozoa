@@ -10,6 +10,7 @@ import hydrozoa.multisig.ledger.dapp.tx.Metadata.Initialization
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.{Utxo as _, *}
+import monocle.{Focus, Lens}
 import scala.collection.immutable.SortedMap
 import scala.util.Try
 import scalus.builtin.Data
@@ -31,8 +32,9 @@ final case class InitializationTx(
     multisigRegimeWitness: MultisigRegimeUtxo,
     tokenNames: TokenNames,
     override val resolvedUtxos: ResolvedUtxos,
-    override val tx: Transaction
-) extends Tx,
+    override val tx: Transaction,
+    override val txLens: Lens[InitializationTx, Transaction] = Focus[InitializationTx](_.tx)
+) extends Tx[InitializationTx],
       HasResolvedUtxos,
       HasValidityEnd
 

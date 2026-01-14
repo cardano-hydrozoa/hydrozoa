@@ -6,6 +6,7 @@ import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explainConst}
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.{Utxo as _, prebalancedLovelaceDiffHandler, *}
+import monocle.{Focus, Lens}
 import scala.annotation.tailrec
 import scala.language.implicitConversions
 import scala.util.{Failure, Success}
@@ -20,7 +21,8 @@ import scalus.cardano.txbuilder.ScriptSource.NativeScriptAttached
 import scalus.cardano.txbuilder.SomeBuildError.*
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, ReferenceOutput, Send, Spend, ValidityStartSlot}
 
-sealed trait RefundTx extends Tx {
+sealed trait RefundTx {
+    def tx: Transaction
     def mStartTime: Option[QuantizedInstant] = this match {
         case self: RefundTx.PostDated => Some(self.startTime)
         case _                        => None
@@ -28,9 +30,17 @@ sealed trait RefundTx extends Tx {
 }
 
 object RefundTx {
-    final case class Immediate(override val tx: Transaction) extends RefundTx
+
+    // TODO: shall we keep it for now?
+    final case class Immediate(override val tx: Transaction) extends RefundTx, Tx[Immediate] {
+        override val txLens: Lens[Immediate, Transaction] = Focus[Immediate](_.tx)
+    }
+
     final case class PostDated(override val tx: Transaction, startTime: QuantizedInstant)
-        extends RefundTx
+        extends RefundTx,
+          Tx[PostDated] {
+        override val txLens: Lens[PostDated, Transaction] = Focus[PostDated](_.tx)
+    }
 
     object Builder {
         final case class Immediate(
@@ -274,14 +284,14 @@ object RefundTx {
         io.bullet.borer.Cbor.decode(txBytes).to[Transaction].valueTry match {
             case Success(tx) =>
                 for {
-                    imd <- MD.parse(tx) match {
+                    _ <- MD.parse(tx) match {
                         case Right(md: Metadata.Refund) => Right(md)
                         case Right(md) =>
                             Left(MetadataParseError(MD.UnexpectedTxType(md, "Refund")))
                         case Left(e) => Left(MetadataParseError(e))
                     }
 
-                    refundTx = tx.body.value.validityStartSlot match {
+                    refundTx: RefundTx = tx.body.value.validityStartSlot match {
                         case None => RefundTx.Immediate(tx)
                         case Some(startSlot) =>
                             RefundTx.PostDated(

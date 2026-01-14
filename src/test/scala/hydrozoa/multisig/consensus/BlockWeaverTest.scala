@@ -73,9 +73,9 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
         val _ = p.runIO(system.actorOf(BlockWeaver(config)))
 
         def aroundNow(other: Instant): Boolean = {
-            val now = p.runIO(IO.realTimeInstant)
-            now.toEpochMilli - (10.second.toMillis) < other.toEpochMilli &&
-            now.toEpochMilli + (10.second.toMillis) > other.toEpochMilli
+            val now = p.runIO(realTimeQuantizedInstant(slotConfig = config.slotConfig))
+            now.instant.toEpochMilli - (10.second.toMillis) < other.toEpochMilli &&
+            now.instant.toEpochMilli + (10.second.toMillis) > other.toEpochMilli
         }
 
         // If the next block is the peer's turn...
@@ -283,7 +283,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
 
                   // First block
                   now <- realTimeQuantizedInstant(testTxBuilderEnvironment.slotConfig)
-                  firstBlock: Block = Block.Minor(
+                  firstBlock: Block.Next = Block.Minor(
                     Block.Header.Minor(
                       blockNum = lastKnownBlock.increment,
                       blockVersion = version,
@@ -298,7 +298,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
 
                   // Second block
                   newTime <- realTimeQuantizedInstant(testTxBuilderEnvironment.slotConfig)
-                  secondBlock: Block = firstBlock.nextBlock(
+                  secondBlock: Block.Next = firstBlock.nextBlock(
                     Block.Body.Minor(
                       events = secondBlockEvents.map(e => (e.eventId, Valid)).toList,
                       depositsRefunded = List.empty

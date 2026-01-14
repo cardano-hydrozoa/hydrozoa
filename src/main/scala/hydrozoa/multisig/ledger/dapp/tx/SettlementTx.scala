@@ -9,6 +9,7 @@ import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigTreasuryUtxo, Ro
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.Block
 import hydrozoa.multisig.protocol.types.Block.Version.Major
+import monocle.{Focus, Lens}
 import scala.annotation.tailrec
 import scala.collection.immutable.Vector
 import scalus.builtin.ByteString
@@ -22,14 +23,17 @@ import scalus.cardano.txbuilder.TransactionBuilderStep.*
 
 // TODO: why don't we have direct payouts here?
 sealed trait SettlementTx
-    extends Tx,
+    extends Tx[SettlementTx],
       Block.Version.Major.Produced,
       MultisigTreasuryUtxo.Spent,
       MultisigTreasuryUtxo.Produced,
       DepositUtxo.Many.Spent,
       RolloutUtxo.MbProduced,
       HasResolvedUtxos,
-      HasValidityEnd
+      HasValidityEnd {
+    def tx: Transaction
+    def txLens: Lens[SettlementTx, Transaction]
+}
 
 object SettlementTx {
     import Builder.*
@@ -45,7 +49,9 @@ object SettlementTx {
         override val treasurySpent: MultisigTreasuryUtxo,
         override val treasuryProduced: MultisigTreasuryUtxo,
         override val depositsSpent: Vector[DepositUtxo],
-        override val resolvedUtxos: ResolvedUtxos
+        override val resolvedUtxos: ResolvedUtxos,
+        override val txLens: Lens[SettlementTx, Transaction] =
+            Focus[NoPayouts](_.tx).asInstanceOf[Lens[SettlementTx, Transaction]]
     ) extends NoRollouts
 
     case class WithOnlyDirectPayouts(
@@ -55,7 +61,9 @@ object SettlementTx {
         override val treasurySpent: MultisigTreasuryUtxo,
         override val treasuryProduced: MultisigTreasuryUtxo,
         override val depositsSpent: Vector[DepositUtxo],
-        override val resolvedUtxos: ResolvedUtxos
+        override val resolvedUtxos: ResolvedUtxos,
+        override val txLens: Lens[SettlementTx, Transaction] =
+            Focus[WithOnlyDirectPayouts](_.tx).asInstanceOf[Lens[SettlementTx, Transaction]]
     ) extends WithPayouts,
           NoRollouts
 
@@ -67,7 +75,9 @@ object SettlementTx {
         override val treasuryProduced: MultisigTreasuryUtxo,
         override val depositsSpent: Vector[DepositUtxo],
         override val rolloutProduced: RolloutUtxo,
-        override val resolvedUtxos: ResolvedUtxos
+        override val resolvedUtxos: ResolvedUtxos,
+        override val txLens: Lens[SettlementTx, Transaction] =
+            Focus[WithRollouts](_.tx).asInstanceOf[Lens[SettlementTx, Transaction]]
     ) extends WithPayouts,
           RolloutUtxo.Produced
 

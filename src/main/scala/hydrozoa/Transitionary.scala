@@ -32,6 +32,22 @@ import scalus.ledger.api.{v1, v3}
 import scalus.prelude.Option as ScalusOption
 import scalus.{ledger, prelude, |>}
 
+/** Adds multiple verification key witnesses to a transaction.
+  *
+  * This function preserves the original CBOR encoding of the transaction body (via the KeepRaw
+  * wrapper), modifying only the witness set by adding all provided witnesses.
+  *
+  * @param tx
+  *   The transaction to add the witnesses to
+  * @param witnesses
+  *   The VKeyWitnesses to add
+  * @return
+  *   A new Transaction with all witnesses added
+  */
+def attachVKeyWitnesses(tx: Transaction, witnesses: Iterable[VKeyWitness]): Transaction =
+    tx.focus(_.witnessSet.vkeyWitnesses)
+        .modify(w => TaggedSortedSet(w.toSet ++ witnesses))
+
 //////////////////////////////////
 // "Empty" values used for building up real values and for testing
 

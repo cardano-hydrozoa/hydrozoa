@@ -5,15 +5,15 @@ import hydrozoa.multisig.ledger.dapp.tx.*
 enum BlockEffects(val blockType: Block.Type) {
     def id: Block.Number
 
-    case Initial(
-        override val id: Block.Number,
-        override val initialization: InitializationTx,
-        override val fallback: FallbackTx
-    ) extends BlockEffects(Block.Type.Initial), BlockEffects.Fields.Initial
+//    // TODO: This is not used anywhere currently.
+//    case Initial(
+//        override val id: Block.Number,
+//        override val initialization: InitializationTx,
+//        override val fallback: FallbackTx
+//    ) extends BlockEffects(Block.Type.Initial), BlockEffects.Fields.Initial
 
     case Minor(
         override val id: Block.Number,
-        override val immediateRefunds: List[RefundTx.Immediate],
         override val postDatedRefunds: List[RefundTx.PostDated]
     ) extends BlockEffects(Block.Type.Minor), BlockEffects.Fields.Minor
 
@@ -22,7 +22,6 @@ enum BlockEffects(val blockType: Block.Type) {
         override val settlement: SettlementTx,
         override val rollouts: List[RolloutTx],
         override val fallback: FallbackTx,
-        override val immediateRefunds: List[RefundTx.Immediate],
         override val postDatedRefunds: List[RefundTx.PostDated]
     ) extends BlockEffects(Block.Type.Major), BlockEffects.Fields.Major
 
@@ -30,7 +29,7 @@ enum BlockEffects(val blockType: Block.Type) {
         override val id: Block.Number,
         override val finalization: FinalizationTx,
         override val rollouts: List[RolloutTx],
-        override val immediateRefunds: List[RefundTx.Immediate]
+        override val deinit: Option[DeinitTx]
     ) extends BlockEffects(Block.Type.Final), BlockEffects.Fields.Final
 
 }
@@ -41,16 +40,11 @@ object BlockEffects {
     object Fields {
         sealed trait Initial extends Initialization, Fallback
 
-        sealed trait Minor extends Refunds.Immediate, Refunds.PostDated
+        sealed trait Minor extends Refunds.PostDated
 
-        sealed trait Major
-            extends Settlement,
-              Rollouts,
-              Fallback,
-              Refunds.Immediate,
-              Refunds.PostDated
+        sealed trait Major extends Settlement, Rollouts, Fallback, Refunds.PostDated
 
-        sealed trait Final extends Finalization, Rollouts, Refunds.Immediate
+        sealed trait Final extends Finalization, Rollouts, Deinit
 
         sealed trait Initialization {
             def initialization: InitializationTx
@@ -69,9 +63,6 @@ object BlockEffects {
         }
 
         object Refunds {
-            sealed trait Immediate {
-                def immediateRefunds: List[RefundTx.Immediate]
-            }
 
             sealed trait PostDated {
                 def postDatedRefunds: List[RefundTx.PostDated]
@@ -81,13 +72,9 @@ object BlockEffects {
         sealed trait Finalization {
             def finalization: FinalizationTx
         }
-    }
-}
 
-object BlockEffect {
-    type Id = (Block.Number, Int)
-    case class Signature(
-        id: Id,
-        signature: String
-    )
+        sealed trait Deinit {
+            def deinit: Option[DeinitTx]
+        }
+    }
 }

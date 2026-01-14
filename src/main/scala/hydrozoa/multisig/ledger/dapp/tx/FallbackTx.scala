@@ -12,6 +12,7 @@ import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{RuleBasedTreasuryDatu
 import hydrozoa.rulebased.ledger.dapp.state.VoteDatum as VD
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteDatum
 import hydrozoa.rulebased.ledger.dapp.utxo.RuleBasedTreasuryUtxo
+import monocle.{Focus, Lens}
 import scala.collection.immutable.SortedMap
 import scalus.builtin.Data
 import scalus.builtin.Data.*
@@ -38,10 +39,11 @@ final case class FallbackTx(
     producedDefaultVoteUtxo: Utxo,
     producedPeerVoteUtxos: NonEmptyList[Utxo],
     producedCollateralUtxos: NonEmptyList[Utxo],
-    override val tx: Transaction
+    override val tx: Transaction,
+    override val txLens: Lens[FallbackTx, Transaction] = Focus[FallbackTx](_.tx)
 ) extends HasValidityStart,
     // TODO: shall we add separate raw-type traits for that?
-    Tx {
+    Tx[FallbackTx] {
     def producedVoteUtxos: NonEmptyList[Utxo] =
         NonEmptyList(producedDefaultVoteUtxo, producedPeerVoteUtxos.toList)
 

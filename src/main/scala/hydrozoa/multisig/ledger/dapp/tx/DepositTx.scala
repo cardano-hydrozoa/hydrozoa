@@ -9,6 +9,7 @@ import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.virtual.GenesisObligation
 import io.bullet.borer.{Cbor, Encoder}
+import monocle.{Focus, Lens}
 import scala.util.{Failure, Success, Try}
 import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, platform}
@@ -21,7 +22,8 @@ final case class DepositTx private (
     depositProduced: DepositUtxo,
     validityEnd: QuantizedInstant,
     override val tx: Transaction,
-) extends Tx
+    override val txLens: Lens[DepositTx, Transaction] = Focus[DepositTx](_.tx)
+) extends Tx[DepositTx]
 
 object DepositTx {
     final case class Builder(
