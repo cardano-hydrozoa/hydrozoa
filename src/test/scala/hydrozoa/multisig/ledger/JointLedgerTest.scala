@@ -17,6 +17,7 @@ import hydrozoa.multisig.protocol.types.*
 import hydrozoa.multisig.protocol.types.Block.Version.Full
 import hydrozoa.multisig.protocol.types.LedgerEvent.RegisterDeposit
 import java.time.Instant
+import monocle.Focus.focus
 import org.scalacheck.*
 import org.scalacheck.Prop.propBoolean
 import scala.collection.immutable.Queue
@@ -25,7 +26,8 @@ import scalus.builtin.ByteString
 import scalus.cardano.ledger.{Block as _, *}
 import scalus.prelude.Option as SOption
 import test.*
-import test.Generators.Hydrozoa.*
+import test.Generators.Hydrozoa.{genAdaOnlyPubKeyUtxo, *}
+import test.Generators.Other.genCoinDistributionWithMinAdaUtxo
 
 object JointLedgerTest extends Properties("Joint Ledger Test") {
 
@@ -131,22 +133,17 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                   virtualOutputs.map(vo => Value(vo.l2OutputValue)).toList
                 )
 
-                utxosFundingTail <- pick(
-                  Gen
-                      .listOf(
-                        genAdaOnlyPubKeyUtxo(peer, minimumCoin = Coin.ada(5))
-                      )
-                      .label("Funding Utxos: Tail")
-                )
-
-                utxosFundingHead <- pick(
-                  genAdaOnlyPubKeyUtxo(
-                    peer,
-                    minimumCoin = virtualOutputsValue.coin
-                  ).label("Funding Utxos: Head")
-                )
-
-                utxosFunding = NonEmptyList(utxosFundingHead, utxosFundingTail)
+                utxosFunding <- pick((for {
+                    utxosWith0Coin <- Gen
+                        .nonEmptyListOf(
+                          genAdaOnlyPubKeyUtxo(peer, minimumCoin = Coin.ada(3))
+                        )
+                    utxoDist <- genCoinDistributionWithMinAdaUtxo(
+                      virtualOutputsValue.coin,
+                      NonEmptyList.fromListUnsafe(utxosWith0Coin),
+                      testProtocolParams
+                    )
+                } yield utxoDist).label("Funding Utxos"))
 
                 utxosFundingValue = Value.combine(utxosFunding.toList.map(_._2.value))
 

@@ -1,6 +1,8 @@
 package test
 
 import cats.data.{NonEmptyList, NonEmptyVector}
+import hydrozoa.lib.cardano.value.coin.Distribution
+import hydrozoa.lib.cardano.value.coin.Distribution.NormalizedWeights
 import hydrozoa.multisig.ledger.VirtualLedgerM
 import hydrozoa.multisig.ledger.VirtualLedgerM.{Config, State}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
@@ -27,11 +29,12 @@ import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.{*, given}
 import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger.TransactionOutput.{Babbage, valueLens}
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
 import scalus.prelude.Option as SOption
 import scalus.|>
+import spire.math.{Rational, SafeLong}
 
 /** This module contains shared generators and arbitrary instances that may be shared among multiple
   * tests. We separate them into "Hydrozoa" and "Other" objects for ease of upstreaming.
@@ -43,6 +46,7 @@ object Generators {
       * contain reasonable, hydrozoa-specific defaults.
       */
     object Hydrozoa {
+
         // ===================================
         // Generators
         // ===================================
@@ -549,6 +553,126 @@ object Generators {
             require(n >= 1, s"invalid size given: $n")
             Gen.containerOfN[Vector, A](n, g).map(NonEmptyVector.fromVectorUnsafe)
         }
+
+        def normalizedWeights[Record](n: Int): Gen[NormalizedWeights] = {
+            require(
+              n > 0,
+              "`normalizedWeights(n : Int) : Gen[NormalizedWeights]` requires a positive `n`, but it " +
+                  s"received ${n}"
+            )
+            // One entry gets everything, other entries get none
+            val singletonDistributions: Gen[NormalizedWeights] =
+                Gen.oneOf(
+                  List
+                      .range(0, n)
+                      .foldLeft(List.empty[NormalizedWeights])((acc, index) =>
+                          acc.prepended(
+                            Distribution.unsafeNormalizeWeights(
+                              NonEmptyList.fromListUnsafe(
+                                Vector
+                                    .fill(n)(Rational.zero)
+                                    .updated(index, Rational.one)
+                                    .toList
+                              )
+                            )
+                          )
+                      )
+                )
+            // Every entry gets the same amount
+            val evenDistribution: Gen[NormalizedWeights] =
+                Gen.const(
+                  Distribution.unsafeNormalizeWeights(
+                    NonEmptyList.fromListUnsafe(List.fill(n)(Rational.one))
+                  )
+                )
+
+            // Every entry gets a random amount
+            val randomDistributions: Gen[NormalizedWeights] =
+                Gen
+                    .listOfN(n, Gen.posNum[BigInt].map(Rational(_)))
+                    .map(l => Distribution.unsafeNormalizeWeights(NonEmptyList.fromListUnsafe(l)))
+            Gen.frequency(
+              (1, evenDistribution),
+              (3, singletonDistributions),
+              (10, randomDistributions)
+            )
+        }
+
+        /** Distribute an integral amount over `n > 0` bags. If there is a surplus amount left after
+          * this initial distribution, it is evenly spread across the shares (in order) until it is
+          * exhausted.
+          */
+        def distribution(amount: SafeLong, n: Int): Gen[NonEmptyList[SafeLong]] = {
+            require(
+              n > 0,
+              "`distribution(amount: SafeLong, n : Int) : Gen[NonEmptyList[SafeLong]]` requires a positive `n`, but it " +
+                  s"received ${n}"
+            )
+            for {
+                weights <- normalizedWeights(n)
+            } yield weights.distribute(amount)
+        }
+
+        /** Generate a coin distribution among `n` bags. Note: Some bags may be empty
+          * @param coin
+          * @param n
+          * @return
+          */
+        def genCoinDistribution(coin: Coin, n: Int): Gen[NonEmptyList[Coin]] = {
+            require(
+              n > 0,
+              "`genCoinDistribution(coin: Coin, n : Int) : Gen[NonEmptyList[Coin]]` requires a positive `n`, but it " +
+                  s"received ${n}"
+            )
+            distribution(SafeLong(coin.value), n).map(nel => nel.map(sl => Coin(sl.toLong)))
+        }
+
+        /** Distribute an amount of coin over transaction outputs, ensuring that min ada
+          * requirements are first met. This will ONLY increase the lovelace in each transaction
+          * output and will throw an exception if there is not enough ada to cover min ada.
+          * @param coin
+          * @param transactionOutputs
+          */
+        def genCoinDistributionWithMinAda(
+            coin: Coin,
+            transactionOutputs: NonEmptyList[TransactionOutput],
+            params: ProtocolParams
+        ): Gen[NonEmptyList[TransactionOutput]] =
+
+            val sumBefore = transactionOutputs.toList.map(_.value.coin.value).sum
+            val withMinAda = transactionOutputs.toList.map(ensureMinAda(_, params))
+            val withMinAdaSum = withMinAda.map(_.value.coin.value).sum
+            val remainderToDistribute = coin.value - (withMinAdaSum - sumBefore)
+            require(
+              remainderToDistribute >= 0,
+              "genCoinDistribution: there is not enough lovelace" +
+                  " to distribute while ensuring minAda is met."
+            )
+            for {
+                coinDist <- genCoinDistribution(
+                  Coin(remainderToDistribute),
+                  transactionOutputs.length
+                )
+                zipped = withMinAda.zip(coinDist.toList)
+                summed: List[TransactionOutput] = zipped.foldRight(List.empty)((x, acc) => {
+                    val to: TransactionOutput = x._1
+                    val coin: Coin = x._2
+                    (to |> valueLens
+                        .andThen(Focus[Value](_.coin.value))
+                        .modify(_ + coin.value)) :: acc
+                })
+            } yield NonEmptyList.fromListUnsafe(summed)
+
+        def genCoinDistributionWithMinAdaUtxo(
+            coin: Coin,
+            utxoList: NonEmptyList[Utxo],
+            params: ProtocolParams
+        ): Gen[NonEmptyList[Utxo]] =
+            val transactionOutputs = utxoList.map(_.output)
+            for {
+                outputDist <- genCoinDistributionWithMinAda(coin, transactionOutputs, params)
+            } yield utxoList.map(_.input).zip(outputDist).map(Utxo(_))
+
     }
 
 }
