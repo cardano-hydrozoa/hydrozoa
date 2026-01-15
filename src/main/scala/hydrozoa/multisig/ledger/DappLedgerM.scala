@@ -18,6 +18,7 @@ import hydrozoa.multisig.protocol.types.{Block, LedgerEventId}
 import monocle.syntax.all.*
 import scala.collection.immutable.Queue
 import scala.language.implicitConversions
+import scala.math.Ordered.orderingToOrdered
 import scalus.cardano.ledger.*
 
 private type E[A] = Either[DappLedgerM.Error, A]

@@ -25,6 +25,7 @@ import hydrozoa.multisig.protocol.types.LedgerEventId.ValidityFlag.{Invalid, Val
 import hydrozoa.multisig.protocol.{ConsensusProtocol, types}
 import monocle.Focus.focus
 import scala.collection.immutable.Queue
+import scala.math.Ordered.orderingToOrdered
 import scalus.builtin.{ByteString, platform}
 import scalus.cardano.ledger.{AssetName, Coin, TransactionHash}
 
@@ -381,24 +382,17 @@ final case class JointLedger(
                     val settlementValidityEnd: QuantizedInstant =
                         producing.competingFallbackValidityStart - txTiming.silenceDuration
                     {
-                        if depositAbsorptionStart.isAfter(producing.startTime)
+                        if depositAbsorptionStart > producing.startTime
                         // Not yet mature
                         then acc.focus(_._1).modify(_.appended(deposit))
                         else if pollResults.contains(UtxoIdL1(deposit._2.toUtxo.input)) &&
-                        (depositAbsorptionStart.isBefore(
-                          producing.startTime
-                        ) || depositAbsorptionStart == producing.startTime) &&
-                        (settlementValidityEnd.isBefore(
-                          depositAbsorptionEnd
-                        ) || settlementValidityEnd == depositAbsorptionEnd)
+                        (depositAbsorptionStart <= producing.startTime) &&
+                        (settlementValidityEnd <= depositAbsorptionEnd)
                         // Eligible for absorption
                         then acc.focus(_._2).modify(_.appended(deposit))
-                        else if ((depositAbsorptionStart.isBefore(
-                          producing.startTime
-                        ) || depositAbsorptionStart == producing.startTime)
+                        else if ((depositAbsorptionStart <= producing.startTime)
                             && !pollResults.contains(UtxoIdL1(deposit._2.toUtxo.input))) ||
-                        (settlementValidityEnd
-                            .isAfter(depositAbsorptionEnd))
+                        (settlementValidityEnd > depositAbsorptionEnd)
                         // Never eligible for absorption
                         then acc.focus(_._3).modify(_.appended(deposit))
                         // TODO: Is this total?
