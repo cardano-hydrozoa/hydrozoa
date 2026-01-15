@@ -394,7 +394,7 @@ object JointLedgerTestHelpers {
 
                 req =
                     RegisterDeposit(
-                      serializedDeposit = signTx(peer, depositRefundTxSeq.depositTx.tx).toCbor,
+                      depositTxBytes = signTx(peer, depositRefundTxSeq.depositTx.tx).toCbor,
                       refundTxBytes = signTx(peer, depositRefundTxSeq.refundTx.tx).toCbor,
                       donationToTreasury = Coin.zero,
                       virtualOutputsBytes = virtualOutputsBytes,

@@ -80,8 +80,6 @@ object DappLedgerM {
       * NOTE: This checks SOME time bounds. Specifically, it checks whether the deposit's absorption
       * validity period ended prior to the start of the current block.
       */
-    // TODO: Return the produced deposit utxo and a post-dated refund transaction for it.
-    // Note from Peter (2026-01-09): I think the above TODO is stale?
     def registerDeposit(req: RegisterDeposit): DappLedgerM[Unit] = {
         import req.*
         for {
@@ -89,7 +87,7 @@ object DappLedgerM {
             parseRes =
                 DepositRefundTxSeq
                     .parse(
-                      depositTxBytes = serializedDeposit,
+                      depositTxBytes = depositTxBytes,
                       refundTxBytes = refundTxBytes,
                       config = config,
                       virtualOutputsBytes = virtualOutputsBytes,

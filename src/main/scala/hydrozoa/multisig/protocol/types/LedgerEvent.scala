@@ -66,7 +66,7 @@ object LedgerEvent {
     ) extends LedgerEvent
 
     final case class RegisterDeposit(
-        serializedDeposit: Array[Byte],
+        depositTxBytes: Array[Byte],
         refundTxBytes: Array[Byte],
         eventId: LedgerEventId,
         virtualOutputsBytes: Array[Byte],
