@@ -1,5 +1,6 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.utxo.MultisigRegimeUtxo
@@ -31,10 +32,10 @@ trait Tx[Self <: Tx[Self]] { self: Self =>
 }
 
 trait HasValidityStart:
-    def validityStart: java.time.Instant
+    def validityStart: QuantizedInstant
 
 trait HasValidityEnd {
-    def validityEnd: java.time.Instant
+    def validityEnd: QuantizedInstant
 }
 
 object Tx {

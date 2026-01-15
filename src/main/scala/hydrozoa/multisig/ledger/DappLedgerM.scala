@@ -4,18 +4,19 @@ import cats.data.*
 import cats.effect.IO
 import cats.syntax.all.*
 import hydrozoa.config.EquityShares
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
 import hydrozoa.multisig.ledger
-import hydrozoa.multisig.ledger.DappLedgerM.Error.{ParseDepositError, SettlementTxSeqBuilderError}
+import hydrozoa.multisig.ledger.DappLedgerM.Error.{AbsorptionPeriodExpired, ParseError, SettlementTxSeqBuilderError}
 import hydrozoa.multisig.ledger.dapp.tx.*
-import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
+import hydrozoa.multisig.ledger.dapp.txseq
+import hydrozoa.multisig.ledger.dapp.txseq.{DepositRefundTxSeq, FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import hydrozoa.multisig.ledger.virtual.GenesisObligation
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
+import hydrozoa.multisig.protocol.types.LedgerEvent.RegisterDeposit
 import hydrozoa.multisig.protocol.types.{Block, LedgerEventId}
 import monocle.syntax.all.*
 import scala.collection.immutable.Queue
-import scala.concurrent.duration.FiniteDuration
 import scala.language.implicitConversions
 import scalus.cardano.ledger.*
 
@@ -73,28 +74,38 @@ object DappLedgerM {
     private def lift[A](e: Either[DappLedgerM.Error, A]): DappLedgerM[A] =
         DappLedgerM(Kleisli.liftF(StateT.liftF(e)))
 
-    /** Check that a deposit tx is valid and add the deposit utxo it produces to the ledger's state.
+    /** Check that a deposit tx parses correctly and add the deposit utxo it produces to the
+      * ledger's state.
+      *
+      * NOTE: This checks SOME time bounds. Specifically, it checks whether the deposit's absorption
+      * validity period ended prior to the start of the current block.
       */
-    // TODO: Return the produced deposit utxo and a post-dated refund transaction for it.
-    def registerDeposit(
-        serializedDeposit: Array[Byte],
-        eventId: LedgerEventId,
-        virtualOutputs: NonEmptyList[GenesisObligation]
-    ): DappLedgerM[Unit] = {
+    def registerDeposit(req: RegisterDeposit): DappLedgerM[Unit] = {
+        import req.*
         for {
             config <- ask
-            // FIXME: DepositTx's parser does not check all the invariants.
-            //  Use DepositRefundTxSeq's parser, instead.
             parseRes =
-                DepositTx
-                    .parse(serializedDeposit, config, virtualOutputs)
+                DepositRefundTxSeq
+                    .parse(
+                      depositTxBytes = depositTxBytes,
+                      refundTxBytes = refundTxBytes,
+                      config = config,
+                      virtualOutputsBytes = virtualOutputsBytes,
+                      donationToTreasury = donationToTreasury,
+                      txTiming = txTiming
+                    )
                     .left
-                    .map(ParseDepositError(_))
-            depositTx <- lift(parseRes)
-
-            // _ <- EitherT(validateTimeBounds(depositTx))
+                    .map(ParseError(_))
+            depositRefundTxSeq <- lift(parseRes)
+            depositProduced <- lift(
+              if depositRefundTxSeq.depositTx.validityEnd
+                      + txTiming.depositMaturityDuration
+                      + txTiming.depositAbsorptionDuration < blockStartTime
+              then Left(AbsorptionPeriodExpired(depositRefundTxSeq))
+              else Right(depositRefundTxSeq.depositTx.depositProduced)
+            )
             s <- get
-            newState = s.appendToQueue((eventId, depositTx.depositProduced))
+            newState = s.appendToQueue((eventId, depositProduced))
             _ <- set(newState)
         } yield ()
     }
@@ -111,10 +122,10 @@ object DappLedgerM {
         validDeposits: Queue[(LedgerEventId, DepositUtxo)],
         payoutObligations: Vector[Payout.Obligation],
         tallyFeeAllowance: Coin,
-        votingDuration: FiniteDuration,
+        votingDuration: QuantizedFiniteDuration,
         immatureDeposits: Queue[(LedgerEventId, DepositUtxo)],
-        blockCreatedOn: java.time.Instant,
-        competingFallbackValidityStart: java.time.Instant,
+        blockCreatedOn: QuantizedInstant,
+        competingFallbackValidityStart: QuantizedInstant,
         txTiming: TxTiming
     ): DappLedgerM[SettleLedger.Result] = {
 
@@ -180,8 +191,8 @@ object DappLedgerM {
         payoutObligationsRemaining: Vector[Payout.Obligation],
         multisigRegimeUtxoToSpend: MultisigRegimeUtxo,
         equityShares: EquityShares,
-        blockCreatedOn: java.time.Instant,
-        competingFallbackValidityStart: java.time.Instant,
+        blockCreatedOn: QuantizedInstant,
+        competingFallbackValidityStart: QuantizedInstant,
         txTiming: TxTiming
     ): DappLedgerM[FinalizationTxSeq] = {
         for {
@@ -231,12 +242,18 @@ object DappLedgerM {
 
         sealed trait RegisterDepositError extends DappLedgerM.Error
 
-        final case class ParseDepositError(wrapped: DepositTx.ParseError)
+        final case class ParseError(wrapped: txseq.DepositRefundTxSeq.ParseError)
             extends RegisterDepositError
 
-        final case class InvalidTimeBound(msg: String) extends RegisterDepositError
-
-        final case class ParseRefundPostDatedError(wrapped: String) extends RegisterDepositError
+        /** This is raised during a call to `RegisterDeposit` if the deposit parses successfully,
+          * but reveals an absorption window that is already prior to the block's start time. In
+          * this case, the deposit will NOT be added to the dapp ledger's state.
+          */
+        // NOTE: I'm still returning the successfully-parsed TxSeq, but hesitantly... I'd usually prefer to not
+        // have such a value in scope, but it seems like it might be important to error handling.
+        // Don't do something dumb like pull this error from a Left and use the TxSeq as if it was valid
+        final case class AbsorptionPeriodExpired(depositRefundTxSeq: DepositRefundTxSeq)
+            extends RegisterDepositError
 
         final case class SettlementTxSeqBuilderError(wrapped: SettlementTxSeq.Builder.Error)
             extends DappLedgerM.Error

@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, quantizeLosslessUnsafe, toEpochQuantizedInstant}
 import hydrozoa.lib.cardano.scalus.ledger.api.TransactionOutputEncoders.given
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.explainConst
@@ -19,6 +20,7 @@ import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Sen
 
 final case class DepositTx private (
     depositProduced: DepositUtxo,
+    validityEnd: QuantizedInstant,
     override val tx: Transaction,
     override val txLens: Lens[DepositTx, Transaction] = Focus[DepositTx](_.tx)
 ) extends Tx[DepositTx]
@@ -31,7 +33,7 @@ object DepositTx {
         virtualOutputs: NonEmptyList[GenesisObligation],
         donationToTreasury: Coin,
         changeAddress: ShelleyAddress,
-        validityEnd: java.time.Instant
+        txTiming: TxTiming
     ) extends Tx.Builder {
         def build(): Either[(SomeBuildError, String), DepositTx] = {
             import partialRefundTx.refundInstructions
@@ -80,7 +82,14 @@ object DepositTx {
               )
             )
 
-            val ttl = ValidityEndSlot(validityEnd.toSlot(config.env.slotConfig).slot)
+            val validityEndQuantizedInstant =
+                partialRefundTx.refundInstructions.startTime.toEpochQuantizedInstant(
+                  config.env.slotConfig
+                )
+                    - txTiming.depositAbsorptionDuration
+                    - txTiming.depositMaturityDuration
+                    - txTiming.silenceDuration
+            val ttl = ValidityEndSlot(validityEndQuantizedInstant.toSlot.slot)
 
             for {
                 ctx <- TransactionBuilder
@@ -111,7 +120,11 @@ object DepositTx {
                   rawDepositProduced.value,
                   virtualOutputs
                 )
-            } yield DepositTx(depositProduced, tx)
+            } yield DepositTx(
+              depositProduced,
+              validityEndQuantizedInstant,
+              tx
+            )
         }
     }
 
@@ -138,6 +151,7 @@ object DepositTx {
     def parse(
         txBytes: Tx.Serialized,
         config: Tx.Builder.Config,
+        txTiming: TxTiming,
         virtualOutputs: NonEmptyList[GenesisObligation]
     ): Either[ParseError, DepositTx] = {
         given ProtocolVersion = config.env.protocolParams.protocolVersion
@@ -175,24 +189,29 @@ object DepositTx {
                         .lift(depositUtxoIx)
                         .toRight(MissingDepositOutputAtIndex(depositUtxoIx))
 
-                    depositUtxo <- DepositUtxo
-                        .fromUtxo(
-                          Utxo(TransactionInput(tx.id, depositUtxoIx), depositOutput.value),
-                          config.headAddress,
-                          virtualOutputs
-                        )
-                        .left
-                        .map(DepositUtxoError(_))
-
-                    validityEnd <- Try(
-                      java.time.Instant
-                          .ofEpochMilli(config.env.slotConfig.slotToTime(tx.body.value.ttl.get))
-                    ) match {
+                    validityEnd <- Try {
+                        val ttlSlot = tx.body.value.ttl.get
+                        val ttlPosixMillis = config.env.slotConfig.slotToTime(ttlSlot)
+                        val instant = java.time.Instant.ofEpochMilli(ttlPosixMillis)
+                        instant.quantizeLosslessUnsafe(config.env.slotConfig)
+                    } match {
                         case Failure(exception) => Left(ValidityEndParseError(exception))
                         case Success(v)         => Right(v)
                     }
 
-                } yield DepositTx(depositUtxo, tx)
+                    depositUtxo <- DepositUtxo
+                        .fromUtxo(
+                          Utxo(TransactionInput(tx.id, depositUtxoIx), depositOutput.value),
+                          config.headAddress,
+                          virtualOutputs,
+                          absorptionStart = validityEnd + txTiming.depositMaturityDuration,
+                          absorptionEnd =
+                              validityEnd + txTiming.depositMaturityDuration + txTiming.depositAbsorptionDuration
+                        )
+                        .left
+                        .map(DepositUtxoError(_))
+
+                } yield DepositTx(depositUtxo, validityEnd, tx)
             case Failure(e) => Left(TxCborDeserializationFailed(e))
         }
 

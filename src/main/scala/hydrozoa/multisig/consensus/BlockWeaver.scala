@@ -6,12 +6,13 @@ import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.UtxoIdL1
+import hydrozoa.lib.cardano.scalus.QuantizedTime.toEpochQuantizedInstant
 import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
-import hydrozoa.multisig.ledger.dapp.tx.TxTiming.toEpochInstant
 import hydrozoa.multisig.protocol.types.Block.Number.first
 import hydrozoa.multisig.protocol.types.Block.blockEvents
 import hydrozoa.multisig.protocol.types.{Block, LedgerEvent, LedgerEventId, Peer}
+import scalus.cardano.ledger.SlotConfig
 
 /** Block weaver actor.
   *   - When the node is leading a block, the weaver packages all known unprocessed (by the time
@@ -59,6 +60,7 @@ object BlockWeaver:
           */
         recoveredMempool: Mempool,
         jointLedger: JointLedger.Handle,
+        slotConfig: SlotConfig
     )
 
     // ===================================
@@ -452,8 +454,7 @@ class BlockWeaver(
         then
             for {
                 // _ <- IO.println(s"becoming leader for block: $nextBlockNum")
-                now <- IO.realTime.map(_.toEpochInstant)
-                // _ <- IO.println(s"weaver: now = $now")
+                now <- IO.realTime.map(_.toEpochQuantizedInstant(config.slotConfig))
                 _ <- config.jointLedger ! StartBlock(nextBlockNum, now)
                 _ <- IO.traverse_(mempool.receivingOrder)(event =>
                     config.jointLedger ! mempool.findById(event).get

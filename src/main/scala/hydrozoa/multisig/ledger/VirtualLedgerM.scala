@@ -4,9 +4,9 @@ import cats.*
 import cats.data.*
 import cats.effect.IO
 import cats.implicits.*
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.VirtualLedgerM.Error.{CborParseError, TransactionInvalidError}
 import hydrozoa.multisig.ledger.dapp.tx.Tx
-import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.*
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
@@ -82,7 +82,7 @@ object VirtualLedgerM {
 
     def applyInternalTx(
         tx: Tx.Serialized,
-        time: java.time.Instant
+        time: QuantizedInstant
     ): VirtualLedgerM[Vector[Payout.Obligation]] =
         given OriginalCborByteArray = OriginalCborByteArray(tx)
         // NOTE: We can probably write a cbor deserialization directly to L2EventTransaction.
@@ -142,9 +142,9 @@ object VirtualLedgerM {
           *
           * @return
           */
-        def toL1Context(time: java.time.Instant, slotConfig: SlotConfig): Context = Context(
+        def toL1Context(time: QuantizedInstant, slotConfig: SlotConfig): Context = Context(
           fee = Coin(0),
-          env = UtxoEnv(time.toSlot(slotConfig).slot, protocolParams, CertState.empty, network),
+          env = UtxoEnv(time.toSlot.slot, protocolParams, CertState.empty, network),
           slotConfig = slotConfig
         )
     }

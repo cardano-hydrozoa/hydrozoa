@@ -1,12 +1,13 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
+import cats.effect.unsafe.implicits.global
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.maxNonPlutusTxFee
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.SpentUtxos
-import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.utxo.MultisigTreasuryUtxo
 import org.scalacheck.{Arbitrary, Gen}
 import scala.collection.immutable.SortedMap
@@ -52,6 +53,8 @@ val minInitTreasuryAda: Coin = {
 // as part of its transaction sequence. This generator is provided in case there are bugs
 // discovered and we want to isolate testing specifically to this transaction.
 // See InitializationTxSeqTest.scala
+// TODO: This uses unsafeRunSync to set the initialization time. This should be moved to PropertyM
+// so that it can run IO effects
 val genInitTxRecipe: Gen[InitializationTx.Recipe] =
     for {
         peers <- genTestPeers()
@@ -88,7 +91,8 @@ val genInitTxRecipe: Gen[InitializationTx.Recipe] =
         hmrwCoin <- Arbitrary.arbitrary[Coin]
 
     } yield InitializationTx.Recipe(
-      validityEnd = java.time.Instant.now() + 10.minutes, // FIXEME: Generate
+      validityEnd = realTimeQuantizedInstant(testTxBuilderEnvironment.slotConfig)
+          .unsafeRunSync() + 10.minutes, // FIXME: Generate
       spentUtxos = SpentUtxos(seedUtxo, otherSpentUtxos),
       headNativeScript = hns,
       initialDeposit = initialDeposit,

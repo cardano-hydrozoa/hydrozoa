@@ -2,6 +2,7 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.*
 import hydrozoa.*
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, quantize}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.txseq.FinalizationTxSeq
@@ -125,10 +126,13 @@ def genStandaloneFinalizationTxSeqBuilder(
           config.headNativeScript
         ),
         equityShares = shares,
-        competingFallbackValidityStart =
-            Instant.ofEpochMilli(System.currentTimeMillis() + 3_600_000),
-        blockCreatedOn = Instant.ofEpochMilli(System.currentTimeMillis()),
-        txTiming = TxTiming.default
+        competingFallbackValidityStart = Instant
+            .ofEpochMilli(System.currentTimeMillis() + 3_600_000)
+            .quantize(testTxBuilderEnvironment.slotConfig),
+        blockCreatedOn = Instant
+            .ofEpochMilli(System.currentTimeMillis())
+            .quantize(testTxBuilderEnvironment.slotConfig),
+        txTiming = TxTiming.default(config.env.slotConfig)
       ),
       peers
     )
@@ -137,8 +141,8 @@ def genStandaloneFinalizationTxSeqBuilder(
 def genFinalizationTxSeqBuilder(
     treasuryToSpend: MultisigTreasuryUtxo,
     majorVersion: Int,
-    fallbackValidityStart: Instant,
-    blockCreatedOn: Instant,
+    fallbackValidityStart: QuantizedInstant,
+    blockCreatedOn: QuantizedInstant,
     txTiming: TxTiming,
     config: Tx.Builder.Config,
     peers: NonEmptyList[TestPeer],

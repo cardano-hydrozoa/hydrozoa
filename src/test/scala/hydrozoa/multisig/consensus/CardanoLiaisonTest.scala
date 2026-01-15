@@ -11,6 +11,7 @@ import com.suprnation.actor.{ActorSystem, test as _}
 import com.suprnation.typelevel.actors.syntax.*
 import hydrozoa.UtxoIdL1
 import hydrozoa.lib.actor.SyncRequest
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.CardanoLiaison.{FinalBlockConfirmed, MajorBlockConfirmed}
 import hydrozoa.multisig.consensus.CardanoLiaisonTest.Rollback.SettlementTiming
@@ -18,7 +19,6 @@ import hydrozoa.multisig.consensus.CardanoLiaisonTest.Skeleton.*
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.Config
-import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, RolloutTx, Tx, TxTiming, genFinalizationTxSeqBuilder, genNextSettlementTxSeqBuilder}
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, InitializationTxSeq, InitializationTxSeqTest, RolloutTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.protocol.CardanoBackendProtocol.CardanoBackend.{CardanoBackendError, GetCardanoHeadState, GetTxInfo, Request, SubmitL1Effects}
@@ -56,7 +56,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
         def genL1BlockEffectsChain(
             minSettlements: Int = 5,
             maxSettlements: Int = 25,
-            txTiming: TxTiming = TxTiming.default
+            txTiming: TxTiming = TxTiming.default(testTxBuilderEnvironment.slotConfig)
         ): Gen[Skeleton] = for {
             // init args
             initArgs <- InitializationTxSeqTest.genArgs(txTiming)
@@ -117,11 +117,22 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                         )
                     else
                         for {
-                            // TODO: Implement Gen.Choose[Instant]
-                            blockCreatedOn <- Gen.choose(
-                              previousBlockTimestamp + 10.seconds,
-                              fallbackValidityStart - (txTiming.silenceDuration + 10.seconds)
-                            )
+                            // TODO: Implement Gen.Choose[QuantizedInstant]
+                            blockCreatedOn <- Gen
+                                .choose(
+                                  previousBlockTimestamp.instant.toEpochMilli
+                                      + 10.seconds.toMillis,
+                                  fallbackValidityStart.instant.toEpochMilli
+                                      - txTiming.silenceDuration.finiteDuration.toMillis
+                                      - 10.seconds.toMillis
+                                )
+                                .map(x =>
+                                    QuantizedInstant(
+                                      instant = java.time.Instant.ofEpochMilli(x),
+                                      slotConfig = testTxBuilderEnvironment.slotConfig
+                                    )
+                                )
+
                             settlementBuilderAndArgs <- genNextSettlementTxSeqBuilder(
                               treasuryToSpend,
                               fallbackValidityStart,
@@ -155,10 +166,17 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
             lastSettlementTreasury =
                 settlementTxSeqs.last.settlementTxSeq.settlementTx.treasuryProduced
 
-            finalizationBlockCreatedOn <- Gen.choose(
-              lastSettlementBlockTimestamp + 10.seconds,
-              fallbackValidityStart - (txTiming.silenceDuration + 10.seconds)
-            )
+            finalizationBlockCreatedOn <- Gen
+                .choose(
+                  lastSettlementBlockTimestamp.instant.toEpochMilli + 10.seconds.toMillis,
+                  fallbackValidityStart.instant.toEpochMilli - (txTiming.silenceDuration.finiteDuration.toMillis + 10.seconds.toMillis)
+                )
+                .map(x =>
+                    QuantizedInstant(
+                      slotConfig = testTxBuilderEnvironment.slotConfig,
+                      instant = java.time.Instant.ofEpochMilli(x)
+                    )
+                )
 
             finalizationTxSeqBuilderAndArgs <- genFinalizationTxSeqBuilder(
               lastSettlementTreasury,
@@ -286,7 +304,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
 
             def earliestTtl: Slot =
                 // TODO: for now we use initialization tx ttl, see the comment on `ttl` field
-                skeleton._1.initializationTx.validityEnd.toSlot(testTxBuilderEnvironment.slotConfig)
+                skeleton._1.initializationTx.validityEnd.toSlot
 
             def dumpSkeletonInfo: Unit =
 
@@ -444,17 +462,13 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                                         )
                                 case WithinSilencePeriod =>
                                     val ttl = backboneTx.body.value.ttl.get
-                                    val fallbackValidityStart = fallbackTx.validityStart
-                                        .toSlot(testTxBuilderEnvironment.slotConfig)
-                                        .slot
+                                    val fallbackValidityStart = fallbackTx.validityStart.toSlot.slot
                                     Gen.choose(ttl, fallbackValidityStart)
                                         .flatMap(slot =>
                                             (slot, Some(fallbackTx.tx.id, WithinSilencePeriod))
                                         )
                                 case AfterFallbackBecomesValid =>
-                                    val fallbackValidityStart = fallbackTx.validityStart
-                                        .toSlot(testTxBuilderEnvironment.slotConfig)
-                                        .slot
+                                    val fallbackValidityStart = fallbackTx.validityStart.toSlot.slot
                                     Gen.choose(fallbackValidityStart, fallbackValidityStart + 1000)
                                         .flatMap(slot =>
                                             (

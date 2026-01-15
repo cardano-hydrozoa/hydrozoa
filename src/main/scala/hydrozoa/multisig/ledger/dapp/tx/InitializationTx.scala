@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
@@ -13,7 +14,7 @@ import monocle.{Focus, Lens}
 import scala.collection.immutable.SortedMap
 import scala.util.Try
 import scalus.builtin.Data
-import scalus.builtin.ToData.toData
+import scalus.builtin.Data.toData
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
@@ -26,7 +27,7 @@ import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, ModifyAuxiliaryData, Send, Spend, ValidityEndSlot}
 
 final case class InitializationTx(
-    override val validityEnd: java.time.Instant,
+    override val validityEnd: QuantizedInstant,
     treasuryProduced: MultisigTreasuryUtxo,
     multisigRegimeWitness: MultisigRegimeUtxo,
     tokenNames: TokenNames,
@@ -120,7 +121,7 @@ object InitializationTx {
             )
 
         // Not sure why we use Long in the builder step not Slot
-        val validityEndSlot = ValidityEndSlot(validityEnd.toSlot(env.slotConfig).slot)
+        val validityEndSlot = ValidityEndSlot(validityEnd.toSlot.slot)
 
         val steps = spendAllUtxos
             :+ mintTreasuryToken
@@ -181,7 +182,9 @@ object InitializationTx {
         expectedNetwork: Network,
         tx: Transaction,
         slotConfig: SlotConfig,
-        resolver: Seq[TransactionInput] => ResolvedUtxos
+        resolver: Seq[TransactionInput] => ResolvedUtxos,
+        initializationRequestTimestamp: QuantizedInstant,
+        txTiming: TxTiming
     )(using protocolVersion: ProtocolVersion): Either[ParseError, InitializationTx] =
         for {
             // ===================================
@@ -361,7 +364,18 @@ object InitializationTx {
                     )
 
             // ttl should be present
-            validityEnd <- mbTtl.map(Slot.apply(_).toInstant(slotConfig)).toRight(TtlIsMissing)
+            validityEndSlot <- mbTtl
+                .toRight(TtlIsMissing)
+
+            // Should this be in the init tx parser?
+            _ <- Either.cond(
+              test = (initializationRequestTimestamp
+                  + txTiming.minSettlementDuration
+                  + txTiming.inactivityMarginDuration).toSlot
+                  == Slot(validityEndSlot),
+              right = (),
+              left = InvalidInitializationTtl
+            )
 
             //////
             // Check mint coherence: only a single head token and MR token should be minted
@@ -395,7 +409,10 @@ object InitializationTx {
             )
 
         } yield InitializationTx(
-          validityEnd = validityEnd,
+          validityEnd = QuantizedInstant(
+            slotConfig,
+            java.time.Instant.ofEpochMilli(slotConfig.slotToTime(validityEndSlot))
+          ),
           treasuryProduced = treasury,
           multisigRegimeWitness = MultisigRegimeUtxo(
             multisigRegimeTokenName = derivedTokenNames.multisigRegimeTokenName,
@@ -418,9 +435,11 @@ object InitializationTx {
 
     case object TtlIsMissing extends ParseError
 
+    case object InvalidInitializationTtl extends ParseError
+
     // TODO: rename to Args for consistency?
     final case class Recipe(
-        validityEnd: java.time.Instant,
+        validityEnd: QuantizedInstant,
         spentUtxos: SpentUtxos,
         headNativeScript: HeadMultisigScript,
         initialDeposit: Coin,

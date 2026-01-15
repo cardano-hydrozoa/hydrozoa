@@ -1,7 +1,8 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
-import scala.concurrent.duration.{DurationInt, FiniteDuration, MILLISECONDS}
-import scalus.cardano.ledger.{Slot, SlotConfig}
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, quantize}
+import scala.concurrent.duration.DurationInt
+import scalus.cardano.ledger.SlotConfig
 
 /** TODO: This should be derived from Hydrozoa parameters.
   *
@@ -41,51 +42,37 @@ import scalus.cardano.ledger.{Slot, SlotConfig}
   *   initializationFallbackDeviation; calculatedTime + initializationFallbackDeviation].
   */
 final case class TxTiming(
-    minSettlementDuration: FiniteDuration,
-    inactivityMarginDuration: FiniteDuration,
-    silenceDuration: FiniteDuration,
-    depositMaturityDuration: FiniteDuration,
-    depositAbsorptionDuration: FiniteDuration,
-    initializationFallbackDeviation: FiniteDuration
+    minSettlementDuration: QuantizedFiniteDuration,
+    inactivityMarginDuration: QuantizedFiniteDuration,
+    silenceDuration: QuantizedFiniteDuration,
+    depositMaturityDuration: QuantizedFiniteDuration,
+    depositAbsorptionDuration: QuantizedFiniteDuration,
 )
 
+/** Timing is hard. The precision we have to use is going to be dependent on the slot config.
+  *
+  * For example, when we're parsing a PostDated refund tx, we need to extract a start time. That
+  * start time right now is represented as an Instant, and without additional mitigations, we'll get
+  * a parse failure because the expected start time is generated in the test suite from
+  * IO.realTimeInstant in nanosecond precision.
+  *
+  * But when we convert to a slot, we're necessarily doing to things: (1) truncation due to integer
+  * division, (2) adopting a precision dictated by the SlotConfig.slotLength field
+  *
+  * So using the current slot length of 1000 that appears for Mainnet, Preview, and Preprod we can
+  * use millisecond precision, but that goes away if that changes
+  *
+  * We can use milliseconds for now, but the right way to handle this would probably be some sort of
+  * opaque time object that will only spit out values of Instant, Slot, FiniteDuration, etc that are
+  * exactly at the precision of some given slot config
+  *
+  * For now, we just have to be careful to ensure that we're using millisecond precision everywhere
+  */
 object TxTiming:
-    val default = TxTiming(
-      minSettlementDuration = 12.hours,
-      inactivityMarginDuration = 24.hours,
-      silenceDuration = 5.minutes,
-      depositMaturityDuration = 1.hours,
-      depositAbsorptionDuration = 48.hours,
-      initializationFallbackDeviation = 10.minutes
+    def default(slotConfig: SlotConfig) = TxTiming(
+      minSettlementDuration = 12.hours.quantize(slotConfig),
+      inactivityMarginDuration = 24.hours.quantize(slotConfig),
+      silenceDuration = 5.minutes.quantize(slotConfig),
+      depositMaturityDuration = 1.hours.quantize(slotConfig),
+      depositAbsorptionDuration = 48.hours.quantize(slotConfig),
     )
-
-    extension (instant: java.time.Instant) {
-        def +(duration: FiniteDuration): java.time.Instant =
-            instant.plusNanos(duration.toNanos)
-        def -(duration: FiniteDuration): java.time.Instant =
-            instant.minusNanos(duration.toNanos)
-        def toSlot(slotConfig: SlotConfig): Slot = {
-            Slot(slotConfig.timeToSlot(instant.toEpochMilli))
-        }
-
-        /** Convert into a FiniteDuration from the unix epoch (jan 1st 1970)
-          * @return
-          */
-        def toEpochFiniteDuration: FiniteDuration =
-            FiniteDuration(instant.toEpochMilli, MILLISECONDS)
-    }
-
-    extension (slot: Slot) {
-        def toInstant(slotConfig: SlotConfig): java.time.Instant =
-            java.time.Instant.ofEpochMilli(slotConfig.slotToTime(slot.slot))
-    }
-
-    extension (fd: FiniteDuration) {
-
-        /** Convert an finite duration to an Instant given as the number of milliseconds from Jan
-          * 1st 1970
-          * @return
-          */
-        def toEpochInstant: java.time.Instant =
-            java.time.Instant.ofEpochMilli(fd.toMillis)
-    }

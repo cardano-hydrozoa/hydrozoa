@@ -2,6 +2,8 @@ package org.scalacheck
 
 import cats.*
 import cats.effect.IO
+import cats.effect.kernel.Outcome.Succeeded
+import cats.effect.testkit.TestControl
 import cats.effect.unsafe.IORuntime
 import cats.effect.unsafe.implicits.*
 import cats.syntax.all.*
@@ -9,6 +11,7 @@ import org.scalacheck.Prop.{False, True, Undecided, collect, forAll, propBoolean
 import org.scalacheck.gen.Unsafe.promote
 import org.scalacheck.rng.Seed
 import org.scalacheck.util.Pretty
+import scala.concurrent.duration.DurationInt
 import scala.sys.process.*
 
 object PropertyMTest extends Properties("PropertyM") {
@@ -21,11 +24,81 @@ object PropertyMTest extends Properties("PropertyM") {
             failingRes.copy(status = if failingRes.status == False then True else False)
         )
 
-//    // This property demonstrates calling out to an external process.
-//    // Its more interesting in Haskell, because it is _necessarily_ in IO in haskell, whereas regular scala(check)
-//    // lets you do arbitrary side effects.
-//    //
-//    // However, we do wrap the IO in `IO.blocking`, which means it can then be bound in a PropertyM for/yield via `run`
+    val _ = property("TestControl.execute runner should complete quickly") = {
+
+        /*
+      Taken from: https://typelevel.org/cats-effect/docs/core/test-runtime
+
+      > In this program, we are creating a fiber which yields in an infinite loop, always giving control back to the
+      > runtime and never making any progress. Then, in the main fiber, we sleep for one second and cancel the other
+      > fiber. In both the JVM and JavaScript production runtimes, this program does exactly what you expect and
+      > terminates after (roughly) one second.
+
+      > Under TestControl, this program will execute forever and never terminate. What's worse is it will also never
+      > reach a point where isDeadlocked is true, because it will never deadlock! This perhaps-unintuitive outcome
+      > happens because there is at least one fiber in the program which is active and not sleeping, and so tick will
+      > continue giving control to that fiber without ever advancing the clock. It is possible to test this kind of
+      > program by using tickOne and advance, but you cannot rely on tick to return control when some fiber is
+      > remaining active.
+         */
+        val pathologicalCase: IO[Boolean] =
+            for {
+                fiber <- IO.cede.foreverM.start
+                _ <- IO.sleep(10.second) *> fiber.cancel
+            } yield true
+
+        val startTime = IO.realTime.unsafeRunSync()
+        // - Switch this to `monadicIO` to see it fail
+        // - Running the pathological case in monadicTestControlExecuteEmbed will hang forever
+        val _ = monadicTestControlExecute(
+          prop = PropertyM.run(pathologicalCase),
+          testControlCallback = tc =>
+              // Here, tc : TestControl[Prop] is essentially a "handle" into the TestControl runtime.
+              for {
+                  // At the start of execution, there are no pending fibers. We need to advance until our `pathologicalCase`
+                  // is executing. But we can't call `tick`, because `tick` will keep calling fibers until they return
+                  // and `foreverM` won't return and `tick` doesn't pass any time.
+                  // Thus, we need to call `tickOne` instead and execute only a single fiber.
+                  _ <- tc.tickOne
+                  // At this point we'll have both our "sleep" and "forever" fiber running. We can advance time 10
+                  // seconds, our sleep fiber will wake up, and cancel the "forever" fiber, and the execution will complete.
+                  _ <- tc.advanceAndTick(10.second)
+                  res <- tc.results.map {
+                      case None => throw RuntimeException("Could not get results from test")
+                      case Some(Succeeded(x)) => x
+                      case Some(_) =>
+                          throw RuntimeException(
+                            "Could not get successful results from test ('Some' case)"
+                          )
+                  }
+              } yield res
+        ).check()
+        val endTime = IO.realTime.unsafeRunSync()
+        if endTime - startTime >= 10.seconds
+        then throw RuntimeException("TestControl is not speeding up time properly")
+        else Prop.passed
+    }
+
+    val _ = property("TestControl.executeEmbed runner should complete quickly") = {
+        val startTime = IO.realTime.unsafeRunSync()
+        // Switch this to `monadicIO` to see it fail
+        val _ = monadicTestControlExecuteEmbed(
+          for {
+              _ <- PropertyM.run(IO.sleep(10.seconds))
+          } yield true
+        ).check()
+        val endTime = IO.realTime.unsafeRunSync()
+        if endTime - startTime >= 10.seconds
+        then throw RuntimeException("TestControl is not speeding up time properly")
+        else Prop.passed
+
+    }
+
+    // This property demonstrates calling out to an external process.
+    // Its more interesting in Haskell, because it is _necessarily_ in IO in haskell, whereas regular scala(check)
+    // lets you do arbitrary side effects.
+    //
+    // However, we do wrap the IO in `IO.blocking`, which means it can then be bound in a PropertyM for/yield via `run`
     val _ = property("`factor` cli utility works") = {
 
         def factor(n: Int): IO[Array[Int]] = {
@@ -228,13 +301,18 @@ object PropertyMTest extends Properties("PropertyM") {
         prop
 }
 
+// TODO: Assertions have color codes and emoji for visibility on color-capable terminals.
+// These should be configurable (i.e., disabled) to make logs easier to parse
 object PropertyM:
     /** Like 'assert' but allows caller to specify an explicit message to show on failure.
       */
     def assertWith[M[_]](condition: Boolean, msg: String)(using
         monadM: Monad[M]
     ): PropertyM[M, Unit] = {
-        val prefix = if condition then "Passed: " else "Failed: "
+        val prefix =
+            if condition
+            then Console.GREEN + "\t✅  " + Console.RESET
+            else Console.RED + "\t❌ " + Console.RESET
         for {
             _ <- monitor(prop => (prefix ++ msg) |: prop)
             _ <- assert(condition)
@@ -244,11 +322,8 @@ object PropertyM:
     /** Allows embedding non-monadic properties into monadic ones.
       */
     def assert[M[_]](bool: Boolean)(using Monad[M]): PropertyM[M, Unit] = {
-        // CHECK ME: I assume this is what we want, but I'm not positive.
-        // In quickcheck, unit is `Testable`, but in scalacheck it isn't.
-        given propUnit: (Unit => Prop) = _ => Prop(false)
-
-        if bool then monadForPropM.pure(()) else fail_("Assertion failed")
+        if bool then monadForPropM.pure(())
+        else fail_(Console.RED ++ "Assertion(s) FAILED" ++ Console.RED)
     }
 
     /** Short-circuit execution and fail with the given message.
@@ -348,7 +423,40 @@ object PropertyM:
     // run functions
     // ===================================
 
-    /** Runs the property monad for 'IO'-computations. */
+    // TODO: Better docs, this is an  experiment so far
+    /** Run an IO action within a TestControl
+      * @param prop
+      * @param testControlCallback
+      * @param toProp
+      * @tparam A
+      * @return
+      */
+    def monadicTestControlExecute[A](
+        prop: => PropertyM[IO, A],
+        testControlCallback: TestControl[Prop] => IO[Prop]
+    )(using toProp: A => Prop): Prop =
+        monadic(
+          runner = (ioProp: IO[Prop]) =>
+              (for {
+                  tc <- TestControl.execute(ioProp.map(Prop.secure(_)))
+                  prop <- testControlCallback(tc)
+              } yield prop).unsafeRunSync(),
+          m = prop
+        )
+
+    /** Run the property using `TestControl.executeEmbed` */
+    // TODO: executeEmbed also takes a seed that governs the random execute of fibers.
+    // We should figure out how to pass the seed to/from scalacheck
+    def monadicTestControlExecuteEmbed[A](
+        prop: => PropertyM[IO, A]
+    )(using toProp: A => Prop): Prop =
+        monadic(
+          runner = (ioProp: IO[Prop]) =>
+              TestControl.executeEmbed(ioProp.map(Prop.secure(_))).unsafeRunSync(),
+          m = prop
+        )
+
+    /** Runs the property monad for 'IO'-computations. * */
     // NOTE: the by-name parameter is necessary, otherwise exceptions won't be caught properly. See the
     // "exception" demo.
     def monadicIO[A](
