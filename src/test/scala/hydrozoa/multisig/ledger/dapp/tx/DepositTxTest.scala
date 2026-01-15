@@ -1,15 +1,16 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
+import cats.effect.unsafe.implicits.global
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
-import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import java.util.concurrent.atomic.AtomicLong
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
-import scala.concurrent.duration.DurationInt
 import scalus.builtin.Data.toData
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
@@ -47,7 +48,10 @@ def genDepositRecipe(
           DepositUtxo.Refund.Instructions(
             address = LedgerToPlutusTranslation.getAddress(refundAddr),
             datum = refundData,
-            startTime = deadline
+            startTime = QuantizedInstant(
+              instant = java.time.Instant.ofEpochMilli(deadline.toLong),
+              slotConfig = testTxBuilderEnvironment.slotConfig
+            )
           )
         )
 
@@ -83,7 +87,7 @@ def genDepositRecipe(
         config: Tx.Builder.Config <- genTxConfig(
           testEnvironment,
           testEvaluator,
-          nonSigningValidators
+          nonSigningNonValidityChecksValidators
         )
 
         refundAddr <- genPubkeyAddress()
@@ -94,8 +98,10 @@ def genDepositRecipe(
           refundInstructions = DepositUtxo.Refund.Instructions(
             address = LedgerToPlutusTranslation.getAddress(refundAddr),
             datum = SOption.None,
-            startTime = 0
-          )
+            // TODO: move to propertyM
+            startTime = realTimeQuantizedInstant(config.env.slotConfig).unsafeRunSync()
+          ),
+          slotConfig = config.env.slotConfig
         )
 
     } yield DepositTx.Builder(
@@ -105,7 +111,7 @@ def genDepositRecipe(
       virtualOutputs = virtualOutputs,
       donationToTreasury = Coin(0), // TODO: generate non-zero
       changeAddress = depositor.address(testNetwork),
-      validityEnd = java.time.Instant.now() + 10.minutes // TODO: generate
+      txTiming = TxTiming.default(config.env.slotConfig)
     )
 
 class DepositTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
@@ -145,6 +151,7 @@ class DepositTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
                     DepositTx.parse(
                       depositTx.tx.toCbor,
                       depositTxBuilder.config,
+                      TxTiming.default(testTxBuilderEnvironment.slotConfig),
                       depositTx.depositProduced.virtualOutputs
                     ) match {
                         case Left(e) =>

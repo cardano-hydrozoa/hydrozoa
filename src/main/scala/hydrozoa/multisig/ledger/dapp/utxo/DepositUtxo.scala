@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.utxo
 
 import cats.data.NonEmptyList
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo.DepositUtxoConversionError.*
 import hydrozoa.multisig.ledger.virtual.GenesisObligation
 import scala.util.{Failure, Success, Try}
@@ -14,12 +15,16 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.ledger.api.v3.{Address, PosixTime}
 import scalus.prelude.Option as ScalusOption
 
+/** NOTE: absorptionEnd must be absorptionStart + absorptionDuration for some [[TxTiming]] and
+  * [[SlotConfig]] Perhaps we want to make this more opaque and carry around those configuration
+  * values?
+  */
 final case class DepositUtxo(
     l1Input: TransactionInput,
     l1OutputAddress: ShelleyAddress,
     l1OutputDatum: DepositUtxo.Datum,
     l1OutputValue: Value,
-    virtualOutputs: NonEmptyList[GenesisObligation],
+    virtualOutputs: NonEmptyList[GenesisObligation]
 ) {
     def toUtxo: Utxo =
         Utxo(
@@ -60,12 +65,22 @@ object DepositUtxo {
           *   starting at this time, the head must refund the deposit's funds and must not attempt
           *   to absorb them into the head's treasury. -
           */
-        final case class Instructions(
+        final case class Instructions private (
             address: Address,
             datum: ScalusOption[Data],
             startTime: PosixTime,
         ) derives FromData,
               ToData
+
+        object Instructions {
+            def apply(
+                address: Address,
+                datum: ScalusOption[Data],
+                startTime: QuantizedInstant
+            ): Instructions =
+                new Instructions(address, datum, startTime.instant.toEpochMilli)
+        }
+
     }
 
     trait Spent {
@@ -112,7 +127,9 @@ object DepositUtxo {
     def fromUtxo(
         utxo: Utxo,
         headNativeScriptAddress: ShelleyAddress,
-        virtualOutputs: NonEmptyList[GenesisObligation]
+        virtualOutputs: NonEmptyList[GenesisObligation],
+        absorptionStart: QuantizedInstant,
+        absorptionEnd: QuantizedInstant
     ): Either[DepositUtxoConversionError, DepositUtxo] =
         for {
             babbage <- utxo._2 match {
