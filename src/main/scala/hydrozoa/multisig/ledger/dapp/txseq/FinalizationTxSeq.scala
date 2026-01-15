@@ -2,13 +2,13 @@ package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.data.NonEmptyVector
 import hydrozoa.config.EquityShares
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.dapp
 import hydrozoa.multisig.ledger.dapp.tx
 import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.tx.FinalizationTx.Builder.Args.toArgs1
 import hydrozoa.multisig.ledger.dapp.tx.FinalizationTx.Builder.PartialResult
 import hydrozoa.multisig.ledger.dapp.tx.SettlementTx.Builder.Args as SingleArgs
-import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
@@ -209,8 +209,8 @@ object FinalizationTxSeq {
             payoutObligationsRemaining: Vector[Payout.Obligation],
             multisigRegimeUtxoToSpend: MultisigRegimeUtxo,
             equityShares: EquityShares,
-            competingFallbackValidityStart: java.time.Instant,
-            blockCreatedOn: java.time.Instant,
+            competingFallbackValidityStart: QuantizedInstant,
+            blockCreatedOn: QuantizedInstant,
             txTiming: TxTiming
         ) extends Payout.Obligation.Many.Remaining {
 

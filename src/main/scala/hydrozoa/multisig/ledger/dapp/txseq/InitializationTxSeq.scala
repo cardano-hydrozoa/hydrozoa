@@ -1,17 +1,16 @@
 package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.data.NonEmptyList
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.tx.{Metadata as _, *}
-import hydrozoa.multisig.ledger.dapp.txseq.InitializationTxSeq.Builder.Error.InitializationTxError
 import hydrozoa.multisig.ledger.dapp.utxo.MultisigTreasuryUtxo
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.dapp.state.VoteDatum as VD
 import hydrozoa.{VerificationKeyBytes, ensureMinAda, maxNonPlutusTxFee, given}
 import scala.collection.immutable.SortedMap
-import scala.concurrent.duration.FiniteDuration
 import scalus.builtin.Data
 import scalus.builtin.Data.toData
 import scalus.cardano.address.*
@@ -64,12 +63,12 @@ object InitializationTxSeq {
         expectedNetwork: Network,
         peerKeys: NonEmptyList[VerificationKeyBytes],
         expectedTallyFeeAllowance: Coin,
-        expectedVotingDuration: FiniteDuration,
+        expectedVotingDuration: QuantizedFiniteDuration,
         env: CardanoInfo,
         evaluator: PlutusScriptEvaluator,
         validators: Seq[Validator],
         resolver: Seq[TransactionInput] => ResolvedUtxos,
-        initializationRequestTimestamp: java.time.Instant,
+        initializationRequestTimestamp: QuantizedInstant,
         txTiming: TxTiming
     ): Either[ParseError, InitializationTxSeq] = {
 
@@ -83,7 +82,9 @@ object InitializationTxSeq {
                   expectedNetwork = expectedNetwork,
                   tx = initializationTx,
                   resolver = resolver,
-                  slotConfig = env.slotConfig
+                  slotConfig = env.slotConfig,
+                  initializationRequestTimestamp = initializationRequestTimestamp,
+                  txTiming = txTiming
                 )
                 .left
                 .map(InitializationTxParseError(_))
@@ -122,37 +123,11 @@ object InitializationTxSeq {
                     )
 
             // Check validity ranges are correct and match each other
-            // 1. Fallback starts in a reasonable slot
-            preciseFallbackValidityStart =
-                initializationRequestTimestamp + txTiming.minSettlementDuration +
-                    txTiming.inactivityMarginDuration
-
-            possibleRange = (
-              (preciseFallbackValidityStart - txTiming.initializationFallbackDeviation).toSlot(
-                env.slotConfig
-              ),
-              (preciseFallbackValidityStart + txTiming.initializationFallbackDeviation).toSlot(
-                env.slotConfig
-              )
-            )
-
-            _ <-
-                if fallbackValidityStartSlot < possibleRange._1 || fallbackValidityStartSlot > possibleRange._2
-                then
-                    Left(
-                      FallbackTxValidityStartError(
-                        possibleRange._1,
-                        possibleRange._2,
-                        fallbackValidityStartSlot
-                      )
-                    )
-                else Right(())
-
-            // 2. Silence period is respected: fallbackTx.validityStart -initializationTx.ttl > txTiming.
-            // TODO: Do we need a tolerance window here as well?
+            // Silence period is respected: fallbackTx.validityStart -initializationTx.ttl > txTiming.
             expectedFallbackValidityStart: Slot =
-                (iTx.validityEnd + txTiming.silenceDuration).toSlot(slotConfig = env.slotConfig)
+                (iTx.validityEnd + txTiming.silenceDuration).toSlot
 
+            // TODO: Should this be in the fallback parser?
             _ <-
                 if fallbackValidityStartSlot == expectedFallbackValidityStart
                 then Right(())
@@ -308,7 +283,7 @@ object InitializationTxSeq {
                 initializationTx <- InitializationTx
                     .build(initializationTxRecipe)
                     .left
-                    .map(Error.InitializationTxError(_))
+                    .map(InitializationTxError(_))
 
                 config = Tx.Builder.Config(
                   headNativeScript = hns,
@@ -324,23 +299,23 @@ object InitializationTxSeq {
                   treasuryUtxoSpent = initializationTx.treasuryProduced,
                   tallyFeeAllowance = args.tallyFeeAllowance,
                   votingDuration = args.votingDuration,
-                  validityStart = fallbackTxValidityStart.toSlot(config.env.slotConfig)
+                  validityStart = fallbackTxValidityStart.toSlot
                 )
 
                 fallbackTx <- FallbackTx
                     .build(fallbackTxRecipe)
                     .left
-                    .map(Error.FallbackTxError(_))
+                    .map(FallbackTxError(_))
 
             } yield InitializationTxSeq(initializationTx, fallbackTx)
         }
 
         // TODO: Make the individual builders actually throw these (typed) errors
-        enum Error {
-            case FallbackPRError(e: SomeBuildError)
-            case InitializationTxError(e: SomeBuildError)
-            case FallbackTxError(e: SomeBuildError)
-        }
+        sealed trait Error extends Throwable
+
+        case class FallbackPRError(e: SomeBuildError) extends Error
+        case class InitializationTxError(e: SomeBuildError) extends Error
+        case class FallbackTxError(e: SomeBuildError) extends Error
 
         final case class Args(
             spentUtxos: InitializationTx.SpentUtxos,
@@ -353,12 +328,12 @@ object InitializationTxSeq {
             tallyFeeAllowance: Coin,
             // TODO: use FiniteDuration?
             // TODO: move to TxTiming?
-            votingDuration: FiniteDuration,
+            votingDuration: QuantizedFiniteDuration,
             txTiming: TxTiming,
             // This is the zero point against which we calculate validity
             // ranges. For initialization tx it corresponds to the time
             // an initialization request was received.
-            initializedOn: java.time.Instant
+            initializedOn: QuantizedInstant
         )
     }
 }

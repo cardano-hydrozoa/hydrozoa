@@ -7,7 +7,6 @@ import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.UtxoIdL1
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.ledger.dapp.tx.*
-import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.protocol.types.Block
 import scala.collection.immutable.{Seq, TreeMap}
 import scala.concurrent.duration.FiniteDuration
@@ -306,10 +305,7 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
                         else {
 
                             lazy val initAction = {
-                                if somethingLikeCurrentSlot < config.initializationTx.validityEnd
-                                        .toSlot(
-                                          config.slotConfig
-                                        )
+                                if somethingLikeCurrentSlot < config.initializationTx.validityEnd.toSlot
                                 then
                                     Seq(
                                       Action.InitializeHead(
@@ -480,7 +476,7 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
                               fallbackValidityStart
                             ) match {
                                 // (1)
-                                case _ if currentSlot < happyPathTxTtl.toSlot(config.slotConfig) =>
+                                case _ if currentSlot < happyPathTxTtl.toSlot =>
                                     val effectTxs =
                                         state.happyPathEffects
                                             .rangeFrom(backboneEffectId)
@@ -489,17 +485,10 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
                                     Right(PushForwardMultisig(effectTxs.map(_.tx)))
                                 // (2)
                                 case _
-                                    if currentSlot >= happyPathTxTtl.toSlot(
-                                      config.slotConfig
-                                    ) && currentSlot < fallbackValidityStart.toSlot(
-                                      config.slotConfig
-                                    ) =>
+                                    if currentSlot >= happyPathTxTtl.toSlot && currentSlot < fallbackValidityStart.toSlot =>
                                     Right(SilencePeriodNoop)
                                 // (3)
-                                case _
-                                    if currentSlot >= fallbackValidityStart.toSlot(
-                                      config.slotConfig
-                                    ) =>
+                                case _ if currentSlot >= fallbackValidityStart.toSlot =>
                                     Right(
                                       FallbackToRuleBased(
                                         mbCompetingFallbackEffect.get.tx
@@ -510,8 +499,8 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
                                     Left(
                                       WrongValidityRange(
                                         currentSlot,
-                                        happyPathTxTtl.toSlot(config.slotConfig),
-                                        fallbackValidityStart.toSlot(config.slotConfig)
+                                        happyPathTxTtl.toSlot,
+                                        fallbackValidityStart.toSlot
                                       )
                                     )
                             }

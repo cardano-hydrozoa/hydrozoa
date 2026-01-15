@@ -1,4 +1,5 @@
 package hydrozoa.multisig.ledger.virtual
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.VirtualLedgerM
 import hydrozoa.multisig.ledger.VirtualLedgerM.{Config, State}
 import hydrozoa.multisig.ledger.dapp.token.CIP67
@@ -15,7 +16,7 @@ import scalus.cardano.ledger.{KeepRaw, Metadatum, TransactionException, Transact
 object HydrozoaTransactionMutator {
     def transit(
         context: Config,
-        time: java.time.Instant,
+        time: QuantizedInstant,
         state: State,
         l2Event: L2EventTransaction
     ): Either[String | TransactionException, State] = {

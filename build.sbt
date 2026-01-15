@@ -72,6 +72,7 @@ lazy val core = (project in file("."))
         "org.typelevel" %% "discipline-scalatest" % "2.3.0" % Test,
         "org.scalatest" %% "scalatest" % "3.2.19" % Test,
         "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
+        "org.typelevel" %% "cats-effect-testkit" % "3.6.3" % Test,
         "org.scalus" % "scalus-testkit_3" % scalusVersion % Test,
         "dev.optics" %% "monocle-core" % "3.3.0" % Test,
         "dev.optics" %% "monocle-macro" % "3.3.0" % Test,

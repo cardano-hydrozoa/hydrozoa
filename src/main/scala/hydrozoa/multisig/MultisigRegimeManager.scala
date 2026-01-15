@@ -63,7 +63,8 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
                       numberOfPeers = ???,
                       blockLeadTurn = ???,
                       recoveredMempool = BlockWeaver.Mempool.empty,
-                      jointLedger = ???
+                      jointLedger = ???,
+                      slotConfig = ???
                     )
                   )
                 )

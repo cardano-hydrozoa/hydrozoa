@@ -1,8 +1,8 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toQuantizedInstant}
 import hydrozoa.multisig.ledger.dapp.tx.FinalizationTx.{MergedDeinit, WithDeinit}
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, HasCtx, explain}
-import hydrozoa.multisig.ledger.dapp.tx.TxTiming.toInstant
 import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo, ResidualTreasuryUtxo, RolloutUtxo}
 import hydrozoa.multisig.protocol.types.Block
@@ -42,7 +42,7 @@ object FinalizationTx {
     case class NoPayouts(
         override val majorVersionProduced: Block.Version.Major,
         override val tx: Transaction,
-        override val validityEnd: java.time.Instant,
+        override val validityEnd: QuantizedInstant,
         override val treasurySpent: MultisigTreasuryUtxo,
         override val residualTreasuryProduced: ResidualTreasuryUtxo,
         override val resolvedUtxos: ResolvedUtxos,
@@ -54,7 +54,7 @@ object FinalizationTx {
     case class NoPayoutsMerged(
         override val majorVersionProduced: Block.Version.Major,
         override val tx: Transaction,
-        override val validityEnd: java.time.Instant,
+        override val validityEnd: QuantizedInstant,
         override val treasurySpent: MultisigTreasuryUtxo,
         override val resolvedUtxos: ResolvedUtxos,
         override val txLens: Lens[FinalizationTx, Transaction] =
@@ -65,7 +65,7 @@ object FinalizationTx {
     case class WithOnlyDirectPayouts(
         override val majorVersionProduced: Block.Version.Major,
         override val tx: Transaction,
-        override val validityEnd: java.time.Instant,
+        override val validityEnd: QuantizedInstant,
         override val treasurySpent: MultisigTreasuryUtxo,
         override val residualTreasuryProduced: ResidualTreasuryUtxo,
         override val resolvedUtxos: ResolvedUtxos,
@@ -76,7 +76,7 @@ object FinalizationTx {
     case class WithOnlyDirectPayoutsMerged(
         override val majorVersionProduced: Block.Version.Major,
         override val tx: Transaction,
-        override val validityEnd: java.time.Instant,
+        override val validityEnd: QuantizedInstant,
         override val treasurySpent: MultisigTreasuryUtxo,
         override val resolvedUtxos: ResolvedUtxos,
         override val txLens: Lens[FinalizationTx, Transaction] =
@@ -87,7 +87,7 @@ object FinalizationTx {
     case class WithRollouts(
         override val majorVersionProduced: Block.Version.Major,
         override val tx: Transaction,
-        override val validityEnd: java.time.Instant,
+        override val validityEnd: QuantizedInstant,
         override val treasurySpent: MultisigTreasuryUtxo,
         override val residualTreasuryProduced: ResidualTreasuryUtxo,
         override val rolloutProduced: RolloutUtxo,
@@ -102,7 +102,7 @@ object FinalizationTx {
     case class WithRolloutsMerged(
         override val majorVersionProduced: Block.Version.Major,
         override val tx: Transaction,
-        override val validityEnd: java.time.Instant,
+        override val validityEnd: QuantizedInstant,
         override val treasurySpent: MultisigTreasuryUtxo,
         override val rolloutProduced: RolloutUtxo,
         override val resolvedUtxos: ResolvedUtxos,
@@ -386,7 +386,7 @@ object FinalizationTx {
                       majorVersionProduced = majorVersionProduced,
                       tx = ctx.transaction,
                       validityEnd = Slot(ctx.transaction.body.value.ttl.get)
-                          .toInstant(slotConfig = slotConfig),
+                          .toQuantizedInstant(slotConfig = slotConfig),
                       treasurySpent = treasurySpent,
                       residualTreasuryProduced = residualTreasuryProduced,
                       resolvedUtxos = ctx.resolvedUtxos
@@ -400,8 +400,8 @@ object FinalizationTx {
                     FinalizationTx.NoPayoutsMerged(
                       majorVersionProduced = majorVersionProduced,
                       tx = mergedFinalizationTx,
-                      validityEnd =
-                          Slot(mergedFinalizationTx.body.value.ttl.get).toInstant(slotConfig),
+                      validityEnd = Slot(mergedFinalizationTx.body.value.ttl.get)
+                          .toQuantizedInstant(slotConfig),
                       treasurySpent = treasurySpent,
                       resolvedUtxos = ctx.resolvedUtxos
                     )
@@ -422,7 +422,8 @@ object FinalizationTx {
                     FinalizationTx.WithOnlyDirectPayouts(
                       majorVersionProduced = majorVersionProduced,
                       tx = ctx.transaction,
-                      validityEnd = Slot(ctx.transaction.body.value.ttl.get).toInstant(slotConfig),
+                      validityEnd =
+                          Slot(ctx.transaction.body.value.ttl.get).toQuantizedInstant(slotConfig),
                       treasurySpent = treasurySpent,
                       residualTreasuryProduced = residualTreasuryProduced,
                       resolvedUtxos = ctx.resolvedUtxos
@@ -436,8 +437,8 @@ object FinalizationTx {
                     FinalizationTx.WithOnlyDirectPayoutsMerged(
                       majorVersionProduced = majorVersionProduced,
                       tx = mergedFinalizationTx,
-                      validityEnd =
-                          Slot(mergedFinalizationTx.body.value.ttl.get).toInstant(slotConfig),
+                      validityEnd = Slot(mergedFinalizationTx.body.value.ttl.get)
+                          .toQuantizedInstant(slotConfig),
                       treasurySpent = treasurySpent,
                       resolvedUtxos = ctx.resolvedUtxos
                     )
@@ -462,7 +463,8 @@ object FinalizationTx {
                     FinalizationTx.WithRollouts(
                       majorVersionProduced = majorVersionProduced,
                       tx = ctx.transaction,
-                      validityEnd = Slot(ctx.transaction.body.value.ttl.get).toInstant(slotConfig),
+                      validityEnd =
+                          Slot(ctx.transaction.body.value.ttl.get).toQuantizedInstant(slotConfig),
                       treasurySpent = treasurySpent,
                       residualTreasuryProduced = residualTreasuryProduced,
                       rolloutProduced = rolloutProduced,
@@ -477,8 +479,8 @@ object FinalizationTx {
                     FinalizationTx.WithRolloutsMerged(
                       majorVersionProduced = majorVersionProduced,
                       tx = mergedFinalizationTx,
-                      validityEnd =
-                          Slot(mergedFinalizationTx.body.value.ttl.get).toInstant(slotConfig),
+                      validityEnd = Slot(mergedFinalizationTx.body.value.ttl.get)
+                          .toQuantizedInstant(slotConfig),
                       treasurySpent = treasurySpent,
                       rolloutProduced = rolloutProduced,
                       resolvedUtxos = ctx.resolvedUtxos
