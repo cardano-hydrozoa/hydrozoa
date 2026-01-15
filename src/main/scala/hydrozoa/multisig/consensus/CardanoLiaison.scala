@@ -5,10 +5,9 @@ import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.UtxoIdL1
+import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
-import hydrozoa.multisig.protocol.CardanoBackendProtocol.CardanoBackend
-import hydrozoa.multisig.protocol.CardanoBackendProtocol.CardanoBackend.{GetCardanoHeadState, GetTxInfo, SubmitL1Effects}
 import hydrozoa.multisig.protocol.types.Block
 import scala.collection.immutable.{Seq, TreeMap}
 import scala.concurrent.duration.FiniteDuration
@@ -41,7 +40,7 @@ import scalus.cardano.ledger.{Slot, SlotConfig, Transaction, TransactionHash, Tr
 object CardanoLiaison:
 
     final case class Config(
-        cardanoBackend: CardanoBackend.Ref,
+        cardanoBackend: CardanoBackend[IO],
         initializationTx: InitializationTx,
         initializationFallbackTx: FallbackTx,
         receiveTimeout: FiniteDuration,
@@ -270,15 +269,15 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
         _ <- IO.println("runEffects")
 
         // 1. Get the L1 state, i.e. the list of utxo ids at the multisig address  + the current slot
-        resp <- config.cardanoBackend ?: GetCardanoHeadState
+        resp <- config.cardanoBackend.utxosAt(config.initializationTx.treasuryProduced.address)
 
         _ <- resp match {
 
             case Left(err) =>
-                // This may happen if L1 API is temporarily unavailable
+                // This may happen if L1 API is temporarily unavailable or misconfigured
                 // TODO: we need to address time when we work on autonomous mode
                 //   but for now we can just ignore it and skip till the next event/timeout
-                IO.println(s"error when getting Cardano L1 state: ${err.msg}")
+                IO.println(s"error when getting Cardano L1 state: ${err}")
 
             case Right(l1State) =>
                 for {
@@ -290,11 +289,13 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
                     // _ <- IO.println(state.happyPathEffects.keys)
                     // _ <- IO.println(state.fallbackEffects.keys)
 
+                    somethingLikeCurrentSlot: Slot = ??? // should be in Peter's PR on timing
+
                     // (i.e. those that are directly caused by effect inputs in L1 response).
                     dueActions: Seq[DirectAction] = mkDirectActions(
                       state,
-                      l1State.utxoIds,
-                      l1State.currentSlot
+                      l1State.untagged.keySet,
+                      somethingLikeCurrentSlot
                     ).fold(e => throw RuntimeException(e.msg), x => x)
 
                     // 3. Determine whether the initialization requires submission.
@@ -303,10 +304,12 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
                         if dueActions.nonEmpty
                         then IO.pure(dueActions)
                         else {
+
                             lazy val initAction = {
-                                if l1State.currentSlot < config.initializationTx.validityEnd.toSlot(
-                                      config.slotConfig
-                                    )
+                                if somethingLikeCurrentSlot < config.initializationTx.validityEnd
+                                        .toSlot(
+                                          config.slotConfig
+                                        )
                                 then
                                     Seq(
                                       Action.InitializeHead(
@@ -321,20 +324,20 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
                             state.targetState match {
                                 case TargetState.Active(targetTreasuryUtxoId) =>
                                     IO.pure(
-                                      if l1State.utxoIds.contains(targetTreasuryUtxoId)
+                                      if l1State.contains(targetTreasuryUtxoId)
                                       then List.empty // everything is up-to-date on L1
                                       else initAction
                                     )
                                 case TargetState.Finalized(finalizationTxHash) =>
                                     for {
-                                        txResp <- config.cardanoBackend ?: GetTxInfo(
+                                        txResp <- config.cardanoBackend.getTxInfo(
                                           finalizationTxHash
                                         )
                                         mbInitAction <- txResp match {
                                             case Left(err) =>
                                                 for {
                                                     _ <- IO.println(
-                                                      s"error when getting finalization tx info: ${err.msg}"
+                                                      s"error when getting finalization tx info: ${err}"
                                                     )
                                                 } yield Seq.empty
                                             case Right(txInfo) =>
@@ -351,10 +354,11 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
                     _ <- actionsToSubmit.traverse_(a => IO.println(s"\t- ${a.msg}"))
 
                     _ <- IO.whenA(actionsToSubmit.nonEmpty)(
-                      config.cardanoBackend ! SubmitL1Effects(
-                        actionsToSubmit.flatMap(actionTxs).toList
+                      IO.traverse_(actionsToSubmit.flatMap(actionTxs).toList)(
+                        config.cardanoBackend.submitTx
                       )
                     )
+
                 } yield ()
         }
     } yield ()
