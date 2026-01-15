@@ -41,6 +41,7 @@ import scalus.cardano.ledger.{AddrKeyHash, Block as _, Coin, Utxo, *}
 import scalus.prelude.Option as SOption
 import scalus.testing.kit.TestUtil
 import test.Generators.Hydrozoa.{genAdaOnlyPubKeyUtxo, *}
+import test.Generators.Other.genCoinDistributionWithMinAdaUtxo
 import test.TestM.*
 import test.{nonSigningNonValidityChecksValidators, *}
 
@@ -332,22 +333,17 @@ object JointLedgerTestHelpers {
                   virtualOutputs.map(vo => Value(vo.l2OutputValue)).toList
                 )
 
-                utxosFundingTail <- pick(
-                  Gen
-                      .listOf(
-                        genAdaOnlyPubKeyUtxo(peer, minimumCoin = Coin.ada(5))
-                      )
-                      .label(s"Funding Utxos: Tail for deposit $eventId")
-                )
-
-                utxosFundingHead <- pick(
-                  genAdaOnlyPubKeyUtxo(
-                    peer,
-                    minimumCoin = virtualOutputsValue.coin
-                  ).label(s"Funding Utxos: Head for deposit $eventId")
-                )
-
-                utxosFunding = NonEmptyList(utxosFundingHead, utxosFundingTail)
+                utxosFunding <- pick((for {
+                    utxosWith0Coin <- Gen
+                        .nonEmptyListOf(
+                          genAdaOnlyPubKeyUtxo(peer, minimumCoin = Coin.ada(3))
+                        )
+                    utxoDist <- genCoinDistributionWithMinAdaUtxo(
+                      virtualOutputsValue.coin,
+                      NonEmptyList.fromListUnsafe(utxosWith0Coin),
+                      testProtocolParams
+                    )
+                } yield utxoDist).label("Funding Utxos"))
 
                 utxosFundingValue = Value.combine(utxosFunding.toList.map(_._2.value))
 
