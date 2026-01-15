@@ -1,14 +1,20 @@
 package hydrozoa.multisig.backend.cardano
 
 import hydrozoa.UtxoSetL1
-import scalus.cardano.address.Address
+import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.{AssetName, PolicyId, Transaction, TransactionHash}
 
+/** Notes:
+  *   - Only [[ShelleyAddress]] are supported
+  *   - The return data types are limited, but can be expanded
+  *
+  * @tparam F
+  */
 trait CardanoBackend[F[_]]:
     import CardanoBackend.*
 
-    def utxosAt(address: Address): F[Either[Error, UtxoSetL1]]
-    def utxosAt(address: Address, asset: (PolicyId, AssetName)): F[Either[Error, UtxoSetL1]]
+    def utxosAt(address: ShelleyAddress): F[Either[Error, UtxoSetL1]]
+    def utxosAt(address: ShelleyAddress, asset: (PolicyId, AssetName)): F[Either[Error, UtxoSetL1]]
     def getTxInfo(txHash: TransactionHash): F[Either[Error, GetTxInfo.Response]]
     def submitTx(tx: Transaction): F[Either[Error, Unit]]
 
@@ -20,7 +26,9 @@ object CardanoBackend:
             isKnown: Boolean
         )
 
-    enum Error extends Throwable:
-        case Timeout(msg: String)
-        case InvalidTx(msg: String)
-        case Unknown(msg: String)
+    enum Error(msg: String) extends Throwable:
+        case Timeout(msg: String) extends Error(msg)
+        case InvalidTx(msg: String) extends Error(msg)
+        case Unknown(msg: String) extends Error(msg)
+
+        override def toString: String = msg

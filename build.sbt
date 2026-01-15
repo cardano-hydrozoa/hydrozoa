@@ -6,7 +6,7 @@
 // Locally-built scalus version with the fix from https://github.com/scalus3/scalus/pull/172 applied.
 // Previous version tracking scalus:main was "0.13.0+387-8e7c3b8e-SNAPSHOT" 
 val scalusVersion = "0.14.1"
-//val bloxbeanVersion = "0.7.1"
+val bloxbeanVersion = "0.7.1"
 
 //Compile / mainClass := Some("hydrozoa.HydrozoaNode")
 // Docker / packageName := "cardano-hydrozoa/hydrozoa"
@@ -30,7 +30,7 @@ lazy val core = (project in file("."))
         //"org.scalus" % "scalus-bloxbean-cardano-client-lib_3" % scalusVersion withSources (),
         // Cardano Client library
         //"com.bloxbean.cardano" % "cardano-client-lib" % bloxbeanVersion,
-        //"com.bloxbean.cardano" % "cardano-client-backend-blockfrost" % bloxbeanVersion,
+        "com.bloxbean.cardano" % "cardano-client-backend-blockfrost" % bloxbeanVersion,
         // Tapir for API definition
         // "com.softwaremill.sttp.tapir" %% "tapir-netty-server-sync" % "1.11.14",
         // "com.softwaremill.sttp.tapir" %% "tapir-swagger-ui-bundle" % "1.11.14",
@@ -74,7 +74,8 @@ lazy val core = (project in file("."))
         "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
         "org.scalus" % "scalus-testkit_3" % scalusVersion % Test,
         "dev.optics" %% "monocle-core" % "3.3.0" % Test,
-        "dev.optics" %% "monocle-macro" % "3.3.0" % Test
+        "dev.optics" %% "monocle-macro" % "3.3.0" % Test,
+        "io.github.cdimascio" % "dotenv-java" % "3.0.0" % Test
       )
     )
 // Integration tests

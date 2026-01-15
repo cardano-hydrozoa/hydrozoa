@@ -7,7 +7,7 @@ import cats.syntax.all.catsSyntaxFlatMapOps
 import cats.~>
 import hydrozoa.multisig.backend.cardano.CardanoBackend.GetTxInfo
 import hydrozoa.{L1, Output, UtxoIdL1, UtxoSet, UtxoSetL1}
-import scalus.cardano.address.Address
+import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Mutator
 import scalus.cardano.ledger.rules.{CardanoMutator, Context, State as LedgerState}
@@ -35,7 +35,7 @@ class CardanoBackendMock private (
     import State.*
 
     override def utxosAt(
-        address: Address
+        address: ShelleyAddress
     ): State[MockState, Either[CardanoBackend.Error, UtxoSetL1]] = for {
         state: MockState <- get
         ret: UtxoSetL1 = UtxoSet(
@@ -46,7 +46,7 @@ class CardanoBackendMock private (
     } yield Right(ret)
 
     override def utxosAt(
-        address: Address,
+        address: ShelleyAddress,
         asset: (PolicyId, AssetName)
     ): State[MockState, Either[CardanoBackend.Error, UtxoSetL1]] = {
 
@@ -112,12 +112,12 @@ object CardanoBackendMock {
 
             new CardanoBackend[IO] {
                 override def utxosAt(
-                    address: Address
+                    address: ShelleyAddress
                 ): IO[Either[CardanoBackend.Error, UtxoSetL1]] =
                     transformer(mock.utxosAt(address))
 
                 override def utxosAt(
-                    address: Address,
+                    address: ShelleyAddress,
                     asset: (PolicyId, AssetName)
                 ): IO[Either[CardanoBackend.Error, UtxoSetL1]] =
                     transformer(mock.utxosAt(address, asset))

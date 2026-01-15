@@ -56,3 +56,6 @@ old/**
 
 # justfile
 .just/notify
+
+# dotenv
+.env
