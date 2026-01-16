@@ -123,16 +123,31 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
             x match {
                 case y: LedgerEvent =>
                     for {
+                        nEvent <- this.nEvent.get
+                        nY = y.eventId.eventNum
+                        _ <-
+                            if nEvent.increment == nY then { IO.pure(()) }
+                            else { IO.raiseError(Error("Bad LedgerEvent increment.")) }
                         _ <- this.nEvent.update(_.increment)
                         _ <- this.qEvent.update(_ :+ y)
                     } yield ()
                 case y: AckBlock =>
                     for {
-                        _ <- this.nAck.update(_.increment)
+                        nAck <- this.nAck.get
+                        nY = y.id.ackNum
+                        _ <-
+                            if nAck.increment == nY then { IO.pure(()) }
+                            else { IO.raiseError(Error("Bad AckBlock increment.")) }
+                        _ <- this.nAck.set(nY)
                         _ <- this.qAck.update(_ :+ y)
                     } yield ()
                 case y: Block.Next =>
                     for {
+                        nBlock <- this.nBlock.get
+                        nY = y.blockNum
+                        _ <-
+                            if ??? == nY then { IO.pure(()) }
+                            else { IO.raiseError(Error("Bad Block.Next increment.")) }
                         _ <- this.nBlock.update(_.increment)
                         _ <- this.qBlock.update(_ :+ y)
                     } yield ()
