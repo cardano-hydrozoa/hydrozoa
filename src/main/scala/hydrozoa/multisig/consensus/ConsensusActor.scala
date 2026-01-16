@@ -247,7 +247,7 @@ object ConsensusActor:
 
         // Actors
         // TODO: should be many - a liaison per peer
-        peerLiaison: PeerLiaison.PeerLiaisonRef,
+        peerLiaison: PeerLiaison.Handle,
         blockWeaver: BlockWeaver.Handle,
         cardanoLiaison: CardanoLiaison.Handle,
         eventSequencer: EventSequencer.EventSequencerRef,

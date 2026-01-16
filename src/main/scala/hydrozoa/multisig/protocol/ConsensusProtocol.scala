@@ -2,9 +2,7 @@ package hydrozoa.multisig.protocol
 
 import cats.effect.{Deferred, IO}
 import com.suprnation.actor.ActorRef.ActorRef
-import hydrozoa.multisig.consensus.BlockWeaver
 import hydrozoa.multisig.protocol.types.Block.*
-import hydrozoa.multisig.protocol.types.{AckBlock, Batch, Block, LedgerEvent, LedgerEventId}
 import scala.concurrent.duration.FiniteDuration
 
 object ConsensusProtocol {
@@ -17,13 +15,6 @@ object ConsensusProtocol {
     enum Actors:
         case BlockWeaver, CardanoLiaison, Consensus, JointLedger, PeerLiaison, EventSequencer
 
-    object PeerLiaison {
-        type PeerLiaisonRef = Ref
-        type Ref = ActorRef[IO, Request]
-        type Request =
-            RemoteBroadcast.Request | GetMsgBatch | NewMsgBatch
-    }
-
     object EventSequencer {
         type EventSequencerRef = Ref
         type Ref = ActorRef[IO, Request]
@@ -31,10 +22,6 @@ object ConsensusProtocol {
             SubmitLedgerEvent | ConfirmBlock
 
         type ConfirmBlock = Void
-    }
-
-    object RemoteBroadcast {
-        type Request = BlockWeaver.Request
     }
 
     /** Submit a new ledger event to the head via a peer's ledger event actor. */
@@ -57,61 +44,5 @@ object ConsensusProtocol {
                 time <- IO.monotonic
                 eventOutcome <- Deferred[IO, Unit] // FIXME: LedgerEventOutcome]
             } yield SubmitLedgerEvent(time, event, eventOutcome)
-    }
-
-    /** Request by a comm actor to its remote comm-actor counterpart for a batch of events, blocks,
-      * or block acknowledgements originating from the remote peer.
-      *
-      * @param id
-      *   Batch number that increases by one for every consecutive batch.
-      * @param ackNum
-      *   The requester's last seen block acknowledgement from the remote peer.
-      * @param blockNum
-      *   The requester's last seen block from the remote peer.
-      * @param eventNum
-      *   The requester's last seen event number from the remote peer.
-      */
-    final case class GetMsgBatch(
-        id: Batch.Id,
-        ackNum: AckBlock.Number,
-        blockNum: Block.Number,
-        eventNum: LedgerEventId.Number
-    )
-
-    /** Comm actor provides a batch in response to its remote comm-actor counterpart's request.
-      *
-      * @param id
-      *   Batch number matching the one from the request.
-      * @param ackNum
-      *   The latest acknowledgement number originating from the responder.
-      * @param blockNum
-      *   The latest block number originating from the responder.
-      * @param eventNum
-      *   The latest event number originating from the responder.
-      * @param ack
-      *   If provided, a block acknowledgment originating from the responder after the requested
-      *   [[AckNum]].
-      * @param block
-      *   If provided, a block originating from the responder after the requested [[Number]].
-      * @param events
-      *   A possibly empty list of events originating from the responder after the requested
-      *   [[LedgerEventNum]].
-      */
-    final case class NewMsgBatch(
-        id: Batch.Id,
-        ackNum: AckBlock.Number,
-        blockNum: Block.Number,
-        eventNum: LedgerEventId.Number,
-        ack: Option[AckBlock],
-        // Next since initial blocks are not supposed to be sent over the peer network
-        block: Option[Block.Next],
-        events: List[LedgerEvent]
-    ) {
-        def nextGetMsgBatch = GetMsgBatch(
-          id.increment,
-          ackNum,
-          blockNum,
-          eventNum
-        )
     }
 }

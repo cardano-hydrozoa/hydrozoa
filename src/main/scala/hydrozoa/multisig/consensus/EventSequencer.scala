@@ -19,7 +19,7 @@ object EventSequencer {
 
     final case class ConnectionsPending(
         blockWeaver: Deferred[IO, BlockWeaver.Handle],
-        peerLiaisons: Deferred[IO, List[PeerLiaison.Ref]]
+        peerLiaisons: Deferred[IO, List[PeerLiaison.Handle]]
     )
 
     def apply(config: Config, connections: ConnectionsPending): IO[EventSequencer] =

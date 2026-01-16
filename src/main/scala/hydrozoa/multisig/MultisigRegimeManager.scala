@@ -9,6 +9,7 @@ import com.suprnation.actor.{OneForOneStrategy, SupervisionStrategy}
 import hydrozoa.multisig.MultisigRegimeManager.Config
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
+import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, InitializationTx}
 import hydrozoa.multisig.protocol.ConsensusProtocol
 import hydrozoa.multisig.protocol.ConsensusProtocol.Actors
@@ -49,9 +50,11 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
         for {
 
             pendingBlockWeaver <- Deferred[IO, BlockWeaver.Handle]
-            pendingLocalPeerLiaisons <- Deferred[IO, List[ConsensusProtocol.PeerLiaison.Ref]]
+            pendingLocalPeerLiaisons <- Deferred[IO, List[PeerLiaison.Handle]]
             pendingCardanoLiaison <- Deferred[IO, CardanoLiaison.Handle]
             pendingEventSequencer <- Deferred[IO, ConsensusProtocol.EventSequencer.Ref]
+            pendingJointLedger <- Deferred[IO, JointLedger.Handle]
+            pendingConsensusActor <- Deferred[IO, ConsensusActor.Handle]
 
             blockWeaver <- {
                 import BlockWeaver.Config
@@ -76,18 +79,16 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
                     .filterNot(_ == config.peerId)
                     .traverse(pid =>
                         for {
-                            pendingRemotePeerLiaison <- Deferred[
-                              IO,
-                              ConsensusProtocol.PeerLiaison.Ref
-                            ]
+                            pendingRemotePeerLiaison <- Deferred[IO, PeerLiaison.Handle]
                             localPeerLiaison <- context.actorOf(
                               PeerLiaison(
                                 Config(
-                                  peerId = config.peerId,
+                                  ownPeerId = config.peerId,
                                   remotePeerId = pid
                                 ),
                                 ConnectionsPending(
                                   blockWeaver = pendingBlockWeaver,
+                                  consensusActor = pendingConsensusActor,
                                   remotePeerLiaison = pendingRemotePeerLiaison
                                 )
                               )
