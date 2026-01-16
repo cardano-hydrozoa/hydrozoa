@@ -33,7 +33,7 @@ object ResolutionTx {
         talliedVoteUtxo: TallyVoteUtxo,
         treasuryUtxo: RuleBasedTreasuryUtxo,
         collateralUtxo: Utxo[L1],
-        validityEndSlot: Long,
+        validityEndSlot: Slot,
         network: Network,
         protocolParams: ProtocolParams,
         evaluator: PlutusScriptEvaluator,
@@ -158,7 +158,7 @@ object ResolutionTx {
                       )
                     ),
                     AddCollateral(collateralUtxo.toScalus),
-                    ValidityEndSlot(recipe.validityEndSlot)
+                    ValidityEndSlot(recipe.validityEndSlot.slot)
                   )
                 )
 

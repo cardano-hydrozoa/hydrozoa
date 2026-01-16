@@ -32,7 +32,7 @@ object TallyTx {
         removedVoteUtxo: TallyVoteUtxo,
         treasuryUtxo: RuleBasedTreasuryUtxo,
         collateralUtxo: Utxo[L1],
-        validityEndSlot: Long,
+        validityEndSlot: Slot,
         network: Network,
         protocolParams: ProtocolParams,
         evaluator: PlutusScriptEvaluator,
@@ -140,7 +140,7 @@ object TallyTx {
                     ),
                     ReferenceOutput(SUtxo(treasuryUtxo.asTuple._1, treasuryUtxo.asTuple._2)),
                     AddCollateral(collateralUtxo.toScalus),
-                    ValidityEndSlot(validityEndSlot)
+                    ValidityEndSlot(validityEndSlot.slot)
                   )
                 )
 

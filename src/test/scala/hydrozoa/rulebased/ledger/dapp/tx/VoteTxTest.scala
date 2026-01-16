@@ -133,7 +133,7 @@ def genVoteTxRecipe(
       blockHeader = blockHeader,
       signatures = signatures,
       // TODO: now sure how to do that properly
-      validityEndSlot = 200,
+      validityEndSlot = Slot(200),
       network = testNetwork,
       protocolParams = testProtocolParams,
       evaluator = testEvaluator,
