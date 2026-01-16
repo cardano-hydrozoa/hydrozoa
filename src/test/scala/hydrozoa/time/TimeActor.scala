@@ -17,13 +17,13 @@ class TimeActor extends Actor[IO, TimeMsg] {
     override def receive: Receive[IO, TimeMsg] = {
         case GetTime(replyTo) =>
             for {
-                now <- IO.realTime.map(d => Instant.ofEpochMilli(d.toMillis))
+                now <- IO.realTimeInstant
                 _ <- replyTo.complete(now)
             } yield ()
 
         case PrintTime() =>
             for {
-                now <- IO.realTime.map(d => Instant.ofEpochMilli(d.toMillis))
+                now <- IO.realTimeInstant
                 _ <- IO.println(s"Current time: $now")
             } yield ()
 
@@ -31,7 +31,7 @@ class TimeActor extends Actor[IO, TimeMsg] {
             for {
                 _ <- IO.println(s"Waiting for $delay...")
                 _ <- IO.sleep(delay)
-                now <- IO.realTime.map(d => Instant.ofEpochMilli(d.toMillis))
+                now <- IO.realTimeInstant
                 _ <- IO.println(s"After waiting: $now")
             } yield ()
     }
