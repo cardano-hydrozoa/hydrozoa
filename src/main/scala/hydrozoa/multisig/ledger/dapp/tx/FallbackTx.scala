@@ -219,7 +219,6 @@ object FallbackTx {
                   Slot(setStartSlot.slot).toQuantizedInstant(recipe.config.env.slotConfig),
               treasurySpent = treasuryUtxoSpent,
               treasuryProduced = RuleBasedTreasuryUtxo(
-                treasuryTokenName = recipe.config.tokenNames.headTokenName,
                 utxoId = TransactionInput(txId, 0),
                 address = disputeTreasuryAddress,
                 datum = RuleBasedTreasuryDatum.Unresolved(newTreasuryDatum),

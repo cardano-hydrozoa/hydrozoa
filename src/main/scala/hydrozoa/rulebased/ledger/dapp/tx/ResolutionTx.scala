@@ -174,7 +174,6 @@ object ResolutionTx {
                 )
 
             newTreasuryUtxo = RuleBasedTreasuryUtxo(
-              treasuryTokenName = recipe.treasuryUtxo.treasuryTokenName,
               utxoId = TransactionInput(finalized.transaction.id, 0), // Treasury output at index 0
               address = recipe.treasuryUtxo.address,
               datum = resolvedTreasuryDatum,

@@ -61,7 +61,6 @@ def genEmptyResolvedTreasuryUtxo(
         )
 
         val treasuryUtxo = RuleBasedTreasuryUtxo(
-          treasuryTokenName = beaconTokenName,
           utxoId = txId,
           address = scriptAddr,
           datum = Resolved(emptyResolvedDatum),

@@ -156,7 +156,6 @@ object WithdrawTx {
                 )
 
             newTreasuryUtxo = RuleBasedTreasuryUtxo(
-              treasuryTokenName = treasuryUtxo.treasuryTokenName,
               utxoId = TransactionInput(
                 finalized.transaction.id,
                 0

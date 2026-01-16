@@ -18,7 +18,6 @@ import hydrozoa.rulebased.DisputeActor.Error.*
 import hydrozoa.rulebased.RuleBasedRegimeManager.Requests.Liquidate
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.OnchainBlockHeader
 import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
-import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.dapp.tx.ResolutionTx.ResolutionTxError
 import hydrozoa.rulebased.ledger.dapp.tx.TallyTx.TallyTxError
@@ -28,7 +27,6 @@ import hydrozoa.rulebased.ledger.dapp.utxo.{OwnVoteUtxo, RuleBasedTreasuryUtxo, 
 import scala.concurrent.duration.FiniteDuration
 import scala.util.{Failure, Success, Try}
 import scalus.builtin.Data.fromData
-import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.{DatumOption, Slot}
 import scalus.cardano.txbuilder.SomeBuildError
@@ -61,6 +59,7 @@ final case class DisputeActor(
     collateralUtxo: hydrozoa.Utxo[L1],
     blockHeader: OnchainBlockHeader,
     signatures: List[HeaderSignature],
+    // FIXME: this needs to be set individually for each tx.
     validityEndSlot: Slot,
     ownPeerPkh: VerificationKeyBytes,
     config: Tx.Builder.Config,
@@ -230,50 +229,6 @@ final case class DisputeActor(
         } yield (utxo, d3)
     }
 
-    // Parsing. Its in EitherT over IO because we have some recoverable failures (Lefts) and some unrecoverable failures
-    // thrown as exceptions.
-    // - If we get more than one treasury token or a parsing failure, thats an exception
-    // - if we get zero treasury tokens, it may mean that the deinit has succeeded. But we keep trying, in case
-    //   of rollbacks.
-    private def parseRBTreasury(utxos: UtxoSetL1): EitherT[IO, ParseError, RuleBasedTreasuryUtxo] =
-        for {
-            utxo <-
-                if utxos.size == 1
-                then EitherT.pure[IO, ParseError](hydrozoa.Utxo[L1](utxos.head))
-                else if utxos.size > 1
-                then throw MultipleTreasuryTokensFound(utxos)
-                else EitherT.fromEither[IO](Left(TreasuryMissing))
-
-            d1 <- utxo.output.datumOption match {
-                case None    => EitherT.liftF(IO.raiseError(TreasuryDatumMissing(utxo)))
-                case Some(x) => EitherT.pure[IO, ParseError](x)
-            }
-            d2 <- d1 match {
-                case i: Inline => EitherT.pure[IO, ParseError](i)
-                case _         => EitherT.liftF(IO.raiseError(TreasuryDatumNotInline(utxo)))
-            }
-            datum <- Try(fromData[RuleBasedTreasuryDatum](d2.data)) match {
-                case Success(d) => EitherT.pure[IO, ParseError](d)
-                case Failure(e) =>
-                    EitherT.liftF(IO.raiseError(TreasuryDatumDeserializationError(utxo, e)))
-            }
-
-            address <- utxo.output.address match {
-                case sa: ShelleyAddress => EitherT.pure[IO, ParseError](sa)
-                case _ =>
-                    EitherT.liftF(
-                      IO
-                          .raiseError(TreasuryAddressNotShelley(utxo))
-                    )
-            }
-
-        } yield RuleBasedTreasuryUtxo(
-          treasuryTokenName = tokenNames.headTokenName,
-          utxoId = utxo.input,
-          address = address,
-          datum = datum,
-          value = utxo.output.value
-        )
 }
 
 object DisputeActor {
@@ -317,16 +272,32 @@ object DisputeActor {
         case class VoteDatumDeserializationError(utxo: hydrozoa.Utxo[L1], e: Throwable)
             extends VoteParseError
 
-        case class TreasuryDatumMissing(utxo: hydrozoa.Utxo[L1]) extends TreasuryParseError
-        case class TreasuryDatumNotInline(utxo: hydrozoa.Utxo[L1]) extends TreasuryParseError
-        case class TreasuryDatumDeserializationError(utxo: hydrozoa.Utxo[L1], e: Throwable)
-            extends TreasuryParseError
-        case class TreasuryAddressNotShelley(utxo: hydrozoa.Utxo[L1]) extends TreasuryParseError
         case class MultipleTreasuryTokensFound(utxos: UtxoSetL1) extends TreasuryParseError
+        case class WrappedTreasuryParseError(wrapped: TreasuryParseError) extends TreasuryParseError
 
         /** This either means something is very wrong, or simply that the dispute resolution is over
           * and the deinit transaction completed successfully
           */
         case object TreasuryMissing extends TreasuryParseError
     }
+
+    // Parsing. Its in EitherT over IO because we have some recoverable failures (Lefts) and some unrecoverable failures
+    // thrown as exceptions.
+    // - If we get more than one treasury token or a parsing failure, thats an exception
+    // - if we get zero treasury tokens, it may mean that the deinit has succeeded. But we keep trying, in case
+    //   of rollbacks.
+    // TODO: Factor out. Its shared between this and the li
+    // obtained from the parameters to this class
+    def parseRBTreasury(utxos: UtxoSetL1): EitherT[IO, ParseError, RuleBasedTreasuryUtxo] =
+        for {
+            utxo <-
+                if utxos.size == 1
+                then EitherT.pure[IO, ParseError](hydrozoa.Utxo[L1](utxos.head))
+                else if utxos.size > 1
+                then EitherT.right(IO.raiseError(MultipleTreasuryTokensFound(utxos)))
+                else EitherT.fromEither[IO](Left(TreasuryMissing))
+
+            res <- EitherT.right(IO.fromEither(RuleBasedTreasuryUtxo.parse(utxo)))
+
+        } yield res
 }
