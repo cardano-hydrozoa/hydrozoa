@@ -13,7 +13,14 @@ import scalus.cardano.ledger.{AssetName, Hash, Transaction, TransactionHash}
 
 object RequiresBlockfrostApiKey extends Tag("requires-blockfrost-api-key")
 
-// TODO: test multi-page assets
+/** To run those integration tests an API key is needed to access Blockfrost PREVIEW API. To feed it
+  * to test you have to pur it into .env file in the root of the project (or from where you run this
+  * test suite:
+  *
+  * ```
+  * BLOCKFROST_API_KEY=preview...
+  * ```
+  */
 class CardanoBackendBlockfrostTest extends AnyFunSuite {
 
     def runWithKey[A](io: String => IO[A]): A =

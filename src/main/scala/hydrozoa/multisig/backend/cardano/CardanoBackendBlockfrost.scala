@@ -164,7 +164,6 @@ class CardanoBackendBlockfrost private (
     override def submitTx(tx: Transaction): IO[Either[CardanoBackend.Error, Unit]] =
         IO {
             backendService.getTransactionService.submitTransaction(tx.toCbor) match {
-                // TODO: We need to test how errors work here
                 case result: TxResult if result.isSuccessful => Right(())
                 case result: TxResult                        => Left(Unknown(result.getResponse))
             }
