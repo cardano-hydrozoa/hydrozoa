@@ -577,7 +577,8 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                   skeleton._1.initializationTx,
                   skeleton._1.fallbackTx,
                   100.millis,
-                  slotConfig = testTxBuilderEnvironment.slotConfig
+                  slotConfig = testTxBuilderEnvironment.slotConfig,
+                  ???
                 )
 
                 cardanoLiaison = new CardanoLiaison(
