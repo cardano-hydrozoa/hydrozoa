@@ -5,13 +5,15 @@ import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.UtxoIdL1
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant}
+import hydrozoa.multisig.backend.cardano.CardanoBackend
+import hydrozoa.multisig.consensus.BlockWeaver.PollResults
 import hydrozoa.multisig.ledger.dapp.tx.*
-import hydrozoa.multisig.protocol.CardanoBackendProtocol.CardanoBackend
-import hydrozoa.multisig.protocol.CardanoBackendProtocol.CardanoBackend.{GetCardanoHeadState, GetTxInfo, SubmitL1Effects}
 import hydrozoa.multisig.protocol.types.Block
 import scala.collection.immutable.{Seq, TreeMap}
 import scala.concurrent.duration.FiniteDuration
-import scalus.cardano.ledger.{Slot, SlotConfig, Transaction, TransactionHash, TransactionInput}
+import scala.math.Ordered.orderingToOrdered
+import scalus.cardano.ledger.{SlotConfig, Transaction, TransactionHash, TransactionInput}
 
 /** Hydrozoa's liaison to Cardano L1 (actor):
   *   - Keeps track of the target L1 state the liaison tries to achieve by observing all L1 block
@@ -40,11 +42,12 @@ import scalus.cardano.ledger.{Slot, SlotConfig, Transaction, TransactionHash, Tr
 object CardanoLiaison:
 
     final case class Config(
-        cardanoBackend: CardanoBackend.Ref,
+        cardanoBackend: CardanoBackend[IO],
         initializationTx: InitializationTx,
         initializationFallbackTx: FallbackTx,
         receiveTimeout: FiniteDuration,
-        slotConfig: SlotConfig
+        slotConfig: SlotConfig,
+        blockWeaver: BlockWeaver.Handle
     )
 
     // ===================================
@@ -268,19 +271,24 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
 
         _ <- IO.println("runEffects")
 
-        // 1. Get the L1 state, i.e. the list of utxo ids at the multisig address  + the current slot
-        resp <- config.cardanoBackend ?: GetCardanoHeadState
+        // 1. Get the L1 state, i.e. the list of utxo ids at the multisig address  + the current time
+        resp <- config.cardanoBackend.utxosAt(config.initializationTx.treasuryProduced.address)
 
         _ <- resp match {
 
             case Left(err) =>
-                // This may happen if L1 API is temporarily unavailable
+                // This may happen if L1 API is temporarily unavailable or misconfigured
                 // TODO: we need to address time when we work on autonomous mode
                 //   but for now we can just ignore it and skip till the next event/timeout
-                IO.println(s"error when getting Cardano L1 state: ${err.msg}")
+                IO.println(s"error when getting Cardano L1 state: ${err}")
 
             case Right(l1State) =>
                 for {
+                    // From the whole state we need to know only utxo ids
+                    utxoIds <- IO.pure(l1State.untagged.keySet)
+                    // This may not the ideal place to have it. Every time we get a new head state, we
+                    // forward it to the block weaver.
+                    _ <- config.blockWeaver ! PollResults(utxoIds)
 
                     // 2. Based on the local state, find all due actions
                     state <- stateRef.get
@@ -289,11 +297,13 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
                     // _ <- IO.println(state.happyPathEffects.keys)
                     // _ <- IO.println(state.fallbackEffects.keys)
 
+                    currentTime <- IO.realTime.map(_.toEpochQuantizedInstant(config.slotConfig))
+
                     // (i.e. those that are directly caused by effect inputs in L1 response).
                     dueActions: Seq[DirectAction] = mkDirectActions(
                       state,
-                      l1State.utxoIds,
-                      l1State.currentSlot
+                      utxoIds,
+                      currentTime
                     ).fold(e => throw RuntimeException(e.msg), x => x)
 
                     // 3. Determine whether the initialization requires submission.
@@ -302,8 +312,9 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
                         if dueActions.nonEmpty
                         then IO.pure(dueActions)
                         else {
+
                             lazy val initAction = {
-                                if l1State.currentSlot < config.initializationTx.validityEnd.toSlot
+                                if currentTime < config.initializationTx.validityEnd
                                 then
                                     Seq(
                                       Action.InitializeHead(
@@ -318,20 +329,20 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
                             state.targetState match {
                                 case TargetState.Active(targetTreasuryUtxoId) =>
                                     IO.pure(
-                                      if l1State.utxoIds.contains(targetTreasuryUtxoId)
+                                      if utxoIds.contains(targetTreasuryUtxoId)
                                       then List.empty // everything is up-to-date on L1
                                       else initAction
                                     )
                                 case TargetState.Finalized(finalizationTxHash) =>
                                     for {
-                                        txResp <- config.cardanoBackend ?: GetTxInfo(
+                                        txResp <- config.cardanoBackend.getTxInfo(
                                           finalizationTxHash
                                         )
                                         mbInitAction <- txResp match {
                                             case Left(err) =>
                                                 for {
                                                     _ <- IO.println(
-                                                      s"error when getting finalization tx info: ${err.msg}"
+                                                      s"error when getting finalization tx info: ${err}"
                                                     )
                                                 } yield Seq.empty
                                             case Right(txInfo) =>
@@ -348,10 +359,11 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
                     _ <- actionsToSubmit.traverse_(a => IO.println(s"\t- ${a.msg}"))
 
                     _ <- IO.whenA(actionsToSubmit.nonEmpty)(
-                      config.cardanoBackend ! SubmitL1Effects(
-                        actionsToSubmit.flatMap(actionTxs).toList
+                      IO.traverse_(actionsToSubmit.flatMap(actionTxs).toList)(
+                        config.cardanoBackend.submitTx
                       )
                     )
+
                 } yield ()
         }
     } yield ()
@@ -375,7 +387,7 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
         /** Finalizing a rollout sequence. */
         final case class Rollout(txs: Seq[Transaction]) extends DirectAction
 
-        /** Represents noop action that may occur when the current slot falls into the silence
+        /** Represents noop action that may occur when the current time falls into the silence
           * period - a gap between two competing transactions when the settlement/finalization tx
           * already expired but the fallback is not valid yet.
           */
@@ -408,7 +420,7 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
     private def mkDirectActions(
         state: State,
         utxosFound: Set[UtxoIdL1],
-        slot: Slot
+        currentTime: QuantizedInstant
     ): Either[EffectError, Seq[DirectAction]] =
         utxosFound
             .map(state.effectInputs.get)
@@ -416,10 +428,10 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
             .map(_.get)
             .toSeq
             .sorted
-            .map(mkDirectAction(state, slot))
+            .map(mkDirectAction(state, currentTime))
             .sequence
 
-    private def mkDirectAction(state: State, currentSlot: Slot)(
+    private def mkDirectAction(state: State, currentTime: QuantizedInstant)(
         effectId: EffectId
     ): Either[EffectError, DirectAction] = {
         import Action.*
@@ -463,17 +475,17 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
                             fallbackValidityStart = fallback.validityStart
 
                             _ = println(
-                              s"currentSlot: $currentSlot, happyPathTxTtl: $happyPathTxTtl, fallbackValidityStart: $fallbackValidityStart"
+                              s"currentTime: $currentTime, happyPathTxTtl: $happyPathTxTtl, fallbackValidityStart: $fallbackValidityStart"
                             )
 
                             // Choose between (1), (2), and (3)
                             ret <- (
-                              currentSlot,
+                              currentTime,
                               happyPathTxTtl,
                               fallbackValidityStart
                             ) match {
                                 // (1)
-                                case _ if currentSlot < happyPathTxTtl.toSlot =>
+                                case _ if currentTime < happyPathTxTtl =>
                                     val effectTxs =
                                         state.happyPathEffects
                                             .rangeFrom(backboneEffectId)
@@ -482,10 +494,10 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
                                     Right(PushForwardMultisig(effectTxs.map(_.tx)))
                                 // (2)
                                 case _
-                                    if currentSlot >= happyPathTxTtl.toSlot && currentSlot < fallbackValidityStart.toSlot =>
+                                    if currentTime >= happyPathTxTtl && currentTime < fallbackValidityStart =>
                                     Right(SilencePeriodNoop)
                                 // (3)
-                                case _ if currentSlot >= fallbackValidityStart.toSlot =>
+                                case _ if currentTime >= fallbackValidityStart =>
                                     Right(
                                       FallbackToRuleBased(
                                         mbCompetingFallbackEffect.get.tx
@@ -495,9 +507,9 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
                                 case _ =>
                                     Left(
                                       WrongValidityRange(
-                                        currentSlot,
-                                        happyPathTxTtl.toSlot,
-                                        fallbackValidityStart.toSlot
+                                        currentTime,
+                                        happyPathTxTtl,
+                                        fallbackValidityStart
                                       )
                                     )
                             }
@@ -523,7 +535,11 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
         case UnexpectedRolloutEffect(effectId: EffectId)
         case UnexpectedInitializationEffect(effectId: EffectId)
         case DeinitEffectWithUnexpectedFallback
-        case WrongValidityRange(currentSlot: Slot, happyPathTtl: Slot, fallbackValidityStart: Slot)
+        case WrongValidityRange(
+            currentTime: QuantizedInstant,
+            happyPathTtl: QuantizedInstant,
+            fallbackValidityStart: QuantizedInstant
+        )
 
     import EffectError.*
 
@@ -535,8 +551,8 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
                 s"Unexpected initialization effect with effectId = $effectId, check the integrity of effects and the initialization tx."
             case DeinitEffectWithUnexpectedFallback =>
                 "Impossible: the deinit tx with a competing fallback tx"
-            case WrongValidityRange(currentSlot, happyPathTtl, fallbackValidityStart) =>
-                s"Validity range invariant is not hold: current slot: $currentSlot," +
+            case WrongValidityRange(currentTime, happyPathTtl, fallbackValidityStart) =>
+                s"Validity range invariant is not hold: current time: $currentTime," +
                     s" happy path tx TTL: $happyPathTtl" +
                     s" fallback validity start: $fallbackValidityStart"
         }

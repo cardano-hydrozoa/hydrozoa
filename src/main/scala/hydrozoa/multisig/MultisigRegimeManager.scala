@@ -7,9 +7,9 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.SupervisorStrategy.Escalate
 import com.suprnation.actor.{OneForOneStrategy, SupervisionStrategy}
 import hydrozoa.multisig.MultisigRegimeManager.Config
+import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
 import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, InitializationTx}
-import hydrozoa.multisig.protocol.CardanoBackendProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol
 import hydrozoa.multisig.protocol.ConsensusProtocol.Actors
 import hydrozoa.multisig.protocol.ManagerProtocol.Manager.*
@@ -24,7 +24,7 @@ object MultisigRegimeManager {
     final case class Config(
         peerId: Peer.Number,
         peers: List[Peer.Number],
-        cardanoBackend: CardanoBackend.Ref,
+        cardanoBackend: CardanoBackend[IO],
         initializationTx: InitializationTx,
         fallbackTx: FallbackTx,
         slotConfig: SlotConfig
@@ -47,10 +47,6 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
 
     override def preStart: IO[Unit] =
         for {
-            _ <- context.watch(
-              config.cardanoBackend,
-              TerminatedDependency(Dependencies.CardanoBackend, config.cardanoBackend)
-            )
 
             pendingBlockWeaver <- Deferred[IO, BlockWeaver.Handle]
             pendingLocalPeerLiaisons <- Deferred[IO, List[ConsensusProtocol.PeerLiaison.Ref]]
@@ -107,15 +103,13 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
                 context.actorOf(
                   CardanoLiaison(
                     Config(
-                      // persistence = config.persistence,
                       cardanoBackend = config.cardanoBackend,
                       initializationTx = config.initializationTx,
                       initializationFallbackTx = config.fallbackTx,
                       receiveTimeout = 10.seconds,
-                      slotConfig = config.slotConfig
-                    ),
-                    // ConnectionsPending(
-                    // )
+                      slotConfig = config.slotConfig,
+                      blockWeaver = blockWeaver
+                    )
                   )
                 )
             }

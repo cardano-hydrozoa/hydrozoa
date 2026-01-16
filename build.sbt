@@ -6,9 +6,9 @@
 // Locally-built scalus version with the fix from https://github.com/scalus3/scalus/pull/172 applied.
 // Previous version tracking scalus:main was "0.13.0+387-8e7c3b8e-SNAPSHOT" 
 val scalusVersion = "0.14.1"
-val bloxbeanVersion = "0.7.0"
+val bloxbeanVersion = "0.7.1"
 
-Compile / mainClass := Some("hydrozoa.HydrozoaNode")
+//Compile / mainClass := Some("hydrozoa.HydrozoaNode")
 // Docker / packageName := "cardano-hydrozoa/hydrozoa"
 // dockerBaseImage := "openjdk:21-jdk"
 // dockerExposedPorts ++= Seq(4937)
@@ -27,9 +27,9 @@ lazy val core = (project in file("."))
         // Using `org.scalus" %% "scalus` gives an error when using locally vendored version.
         "org.scalus" % "scalus_3" % scalusVersion withSources (),
         "org.scalus" % "scalus-cardano-ledger_3" % scalusVersion withSources (),
-        "org.scalus" % "scalus-bloxbean-cardano-client-lib_3" % scalusVersion withSources (),
+        //"org.scalus" % "scalus-bloxbean-cardano-client-lib_3" % scalusVersion withSources (),
         // Cardano Client library
-        "com.bloxbean.cardano" % "cardano-client-lib" % bloxbeanVersion,
+        //"com.bloxbean.cardano" % "cardano-client-lib" % bloxbeanVersion,
         "com.bloxbean.cardano" % "cardano-client-backend-blockfrost" % bloxbeanVersion,
         // Tapir for API definition
         // "com.softwaremill.sttp.tapir" %% "tapir-netty-server-sync" % "1.11.14",
@@ -64,18 +64,19 @@ lazy val core = (project in file("."))
         "com.lihaoyi" %% "sourcecode" % "0.3.0",
         "org.typelevel" %% "spire" % "0.18.0",
         "org.scalactic" %% "scalactic" % "3.2.19",
-        "org.typelevel" %% "cats-core" % "2.13.0"
+        "org.typelevel" %% "cats-core" % "2.13.0",
         // "io.netty" % "netty-all" % "4.2.4.Final"
       ),
       libraryDependencies ++= Seq(
-        "org.typelevel" %% "spire-laws" % "0.18.0",
-        "org.typelevel" %% "discipline-scalatest" % "2.3.0",
+        "org.typelevel" %% "spire-laws" % "0.18.0" % Test,
+        "org.typelevel" %% "discipline-scalatest" % "2.3.0" % Test,
         "org.scalatest" %% "scalatest" % "3.2.19" % Test,
         "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
         "org.typelevel" %% "cats-effect-testkit" % "3.6.3" % Test,
         "org.scalus" % "scalus-testkit_3" % scalusVersion % Test,
         "dev.optics" %% "monocle-core" % "3.3.0" % Test,
-        "dev.optics" %% "monocle-macro" % "3.3.0" % Test
+        "dev.optics" %% "monocle-macro" % "3.3.0" % Test,
+        "io.github.cdimascio" % "dotenv-java" % "3.0.0" % Test
       )
     )
 // Integration tests
@@ -109,6 +110,7 @@ ThisBuild / scalacOptions ++= Seq(
 
 // Add the Scalus compiler plugin
 addCompilerPlugin("org.scalus" % "scalus-plugin_3" % scalusVersion)
+
 // Demo workload
 //lazy val demo = (project in file("demo"))
 //    .dependsOn(core, integration)

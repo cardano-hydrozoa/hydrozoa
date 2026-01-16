@@ -85,6 +85,8 @@ object TestPeer:
 
     def mkWalletId(peer: TestPeer): WalletId = WalletId(peer.toString)
 
+    def address(network: Network)(peer: TestPeer): ShelleyAddress = address(peer, network)
+
     def address(peer: TestPeer, network: Network): ShelleyAddress = {
         val (payment, delegation) = addressCache.cache(peer)
         ShelleyAddress(network, payment, delegation)

@@ -44,29 +44,21 @@ TODO:
  */
 object QuantizedTime {
 
-    case class QuantizedInstant private (instant: java.time.Instant, slotConfig: SlotConfig) {
-
-        def isAfter(other: QuantizedInstant): Boolean = {
+    given Ordering[QuantizedInstant] with {
+        override def compare(self: QuantizedInstant, other: QuantizedInstant): Int = {
             // Whether or not this "require" is needed is up to semantic interpretation.
             // I'm choosing to include it because in our particular case such a comparison would almost certainly be a
             // programming error, and it is not a priori given what should happen if the instants being compared as "close"
             // within their respective quantization window.
             require(
-              this.slotConfig == other.slotConfig,
-              s"Tried to compare `isAfter` for $this and $other, but they have " +
-                  "different slotConfigs"
+              self.slotConfig == other.slotConfig,
+              s"Tried to compare $self and $other, but they have " + "different slotConfigs"
             )
-            this.instant.isAfter(other.instant)
+            self.instant.compare(other.instant)
         }
+    }
 
-        def isBefore(other: QuantizedInstant): Boolean = {
-            require(
-              this.slotConfig == other.slotConfig,
-              s"Tried to compare `isBefore` for $this and $other, but they have " +
-                  "different slotConfigs"
-            )
-            this.instant.isBefore(other.instant)
-        }
+    case class QuantizedInstant private (instant: java.time.Instant, slotConfig: SlotConfig) {
 
         /** WARNING: Will throw if the slot configuration is such that the instant is before the
           * zero slot
@@ -131,9 +123,6 @@ object QuantizedTime {
               )
             )
         }
-
-        def <(other: QuantizedInstant): Boolean =
-            this.instant < other.instant
 
         def -(other: QuantizedInstant): QuantizedFiniteDuration = {
             require(

@@ -1,29 +1,34 @@
 package hydrozoa.multisig.backend.cardano
 
-import cats.effect.IO
-import com.suprnation.actor.Actor.{Actor, Receive}
-import hydrozoa.lib.actor.SyncRequest
-import hydrozoa.multisig.protocol.CardanoBackendProtocol.CardanoBackend.*
+import hydrozoa.UtxoSetL1
+import scalus.cardano.address.ShelleyAddress
+import scalus.cardano.ledger.{AssetName, PolicyId, Transaction, TransactionHash}
 
-/** Cardano backend actor is a mock interface to the Cardano blockchain:
+/** Notes:
+  *   - Only [[ShelleyAddress]] are supported
+  *   - The return data types are limited, but can be expanded
   *
-  *   - Receives L1 effects
-  *   - Responds to queries about utxo state.
+  * @tparam F
   */
-object CardanoBackend {
-    def apply(): IO[CardanoBackend] =
-        IO.pure(new CardanoBackend {})
-}
+trait CardanoBackend[F[_]]:
+    import CardanoBackend.*
 
-trait CardanoBackend extends Actor[IO, Request] {
-    override def receive: Receive[IO, Request] = PartialFunction.fromFunction { receiveTotal }
+    def utxosAt(address: ShelleyAddress): F[Either[Error, UtxoSetL1]]
+    def utxosAt(address: ShelleyAddress, asset: (PolicyId, AssetName)): F[Either[Error, UtxoSetL1]]
+    def getTxInfo(txHash: TransactionHash): F[Either[Error, GetTxInfo.Response]]
+    def submitTx(tx: Transaction): F[Either[Error, Unit]]
 
-    private def receiveTotal(req: Request): IO[Unit] = req match {
-        case req: SyncRequest.Any =>
-            req.request match {
-                case x: GetCardanoHeadState.type => ???
-                case x: GetTxInfo                => ???
-            }
-        case x: SubmitL1Effects => ???
-    }
-}
+object CardanoBackend:
+
+    /** So far we only need to know whether a tx is known or it is not. */
+    object GetTxInfo:
+        final case class Response(
+            isKnown: Boolean
+        )
+
+    enum Error(msg: String) extends Throwable:
+        case Timeout(msg: String) extends Error(msg)
+        case InvalidTx(msg: String) extends Error(msg)
+        case Unknown(msg: String) extends Error(msg)
+
+        override def toString: String = msg
