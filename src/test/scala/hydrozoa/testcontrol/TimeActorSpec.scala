@@ -1,9 +1,10 @@
-package hydrozoa.time
+package hydrozoa.testcontrol
 
 import cats.effect.testkit.TestControl
 import cats.effect.unsafe.implicits.global
 import cats.effect.{Deferred, IO}
 import com.suprnation.actor.ActorSystem
+import com.suprnation.typelevel.actors.syntax.*
 import java.time.Instant
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -165,6 +166,8 @@ class TimeActorSpec extends AnyFlatSpec with Matchers {
                     _ <- IO.sleep(1.hour)
                     _ <- actorRef ! PrintTime()
 
+                    // This requires `import com.suprnation.typelevel.actors.syntax.*`
+                    _ <- system.waitForIdle()
                 } yield ()
             }
         }

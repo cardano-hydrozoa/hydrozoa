@@ -1,4 +1,4 @@
-package hydrozoa.time
+package hydrozoa.testcontrol
 
 import cats.effect.{Deferred, IO}
 import com.suprnation.actor.Actor.{Actor, Receive}
