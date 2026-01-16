@@ -107,10 +107,9 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
                       initializationTx = config.initializationTx,
                       initializationFallbackTx = config.fallbackTx,
                       receiveTimeout = 10.seconds,
-                      slotConfig = config.slotConfig
-                    ),
-                    // ConnectionsPending(
-                    // )
+                      slotConfig = config.slotConfig,
+                      blockWeaver = blockWeaver
+                    )
                   )
                 )
             }

@@ -7,6 +7,7 @@ import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.UtxoIdL1
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
+import hydrozoa.multisig.consensus.BlockWeaver.PollResults
 import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.protocol.types.Block
 import scala.collection.immutable.{Seq, TreeMap}
@@ -45,7 +46,8 @@ object CardanoLiaison:
         initializationTx: InitializationTx,
         initializationFallbackTx: FallbackTx,
         receiveTimeout: FiniteDuration,
-        slotConfig: SlotConfig
+        slotConfig: SlotConfig,
+        blockWeaver: BlockWeaver.Handle
     )
 
     // ===================================
@@ -282,6 +284,11 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
 
             case Right(l1State) =>
                 for {
+                    // From the whole state we need to know only utxo ids
+                    utxoIds <- IO.pure(l1State.untagged.keySet)
+                    // This may not the ideal place to have it. Every time we get a new head state, we
+                    // forward it to the block weaver.
+                    _ <- config.blockWeaver ! PollResults(utxoIds)
 
                     // 2. Based on the local state, find all due actions
                     state <- stateRef.get
@@ -295,7 +302,7 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
                     // (i.e. those that are directly caused by effect inputs in L1 response).
                     dueActions: Seq[DirectAction] = mkDirectActions(
                       state,
-                      l1State.untagged.keySet,
+                      utxoIds,
                       currentTime
                     ).fold(e => throw RuntimeException(e.msg), x => x)
 
@@ -322,7 +329,7 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
                             state.targetState match {
                                 case TargetState.Active(targetTreasuryUtxoId) =>
                                     IO.pure(
-                                      if l1State.contains(targetTreasuryUtxoId)
+                                      if utxoIds.contains(targetTreasuryUtxoId)
                                       then List.empty // everything is up-to-date on L1
                                       else initAction
                                     )
