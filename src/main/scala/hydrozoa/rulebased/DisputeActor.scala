@@ -1,11 +1,13 @@
 package hydrozoa.rulebased
 
 import cats.*
+import cats.data.*
 import cats.effect.*
 import cats.syntax.all.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.*
+import hydrozoa.multisig.backend.cardano
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
@@ -13,6 +15,7 @@ import hydrozoa.multisig.ledger.dapp.tx.Tx
 import hydrozoa.multisig.protocol.types.AckBlock.HeaderSignature
 import hydrozoa.rulebased.DisputeActor.*
 import hydrozoa.rulebased.DisputeActor.Error.*
+import hydrozoa.rulebased.RuleBasedRegimeManager.Requests.Liquidate
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.OnchainBlockHeader
 import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum
@@ -22,6 +25,7 @@ import hydrozoa.rulebased.ledger.dapp.tx.TallyTx.TallyTxError
 import hydrozoa.rulebased.ledger.dapp.tx.VoteTx.VoteTxError
 import hydrozoa.rulebased.ledger.dapp.tx.{ResolutionTx, TallyTx, VoteTx}
 import hydrozoa.rulebased.ledger.dapp.utxo.{OwnVoteUtxo, RuleBasedTreasuryUtxo, TallyVoteUtxo}
+import scala.concurrent.duration.FiniteDuration
 import scala.util.{Failure, Success, Try}
 import scalus.builtin.Data.fromData
 import scalus.cardano.address.ShelleyAddress
@@ -33,11 +37,26 @@ import scalus.cardano.txbuilder.SomeBuildError
 // it small for some reason?
 type VoteUtxoWithDatum = (hydrozoa.Utxo[L1], VoteDatum)
 
-/**
- * Returned from the DisputeActor when all vote utxos are processed, and we can proceed with liquidation
+/** Pulls in vote/treasury utxo from cardano backend, and decides whether to submit a vote tx, tally
+  * tx, or dispute resolution tx. If none of these need to be submitted, it tells the rule-based
+  * regime manager to start liquidation.
+  *
+  * This actor calls itself in a loop via an overridden [[preStart]] method.
+  *
+  * Its erroring semantics are as follows:
+  *   - It (currently) swallows query failures from the cardano backend and automatically retries.
+  *     In the future, we may want this to notify the user after some number of failed attempts.
+  *   - It swallows failures from tx submission. We expect there to be some number of failures due
+  *     to utxo contention and rollbacks. In the future, we may try to use heuristics to determine
+  *     when we should start to worry.
+  *   - It throws exceptions on parsing failures. All parsing should be guarded by the presence of a
+  *     specific token, and if a utxo carrying that token is not parseable, we can't proceed. This
+  *     indicates something is severely wrong.
+  *   - It throws exceptions on failures during tx building. All inputs reaching the tx builder
+  *     should be valid, and thus the tx builder should not be able to fail. If it does, we can't
+  *     proceed.
+  *   - It throws an exception if multiple utxos with the treasury token are found.
   */
-case object StartLiquidation
-
 final case class DisputeActor(
     collateralUtxo: hydrozoa.Utxo[L1],
     blockHeader: OnchainBlockHeader,
@@ -49,44 +68,29 @@ final case class DisputeActor(
     headMultisigScript: HeadMultisigScript,
     cardanoBackend: CardanoBackend[IO],
     utxosToWithdrawL2: UtxoSetL2,
+    receiveTimeout: FiniteDuration,
+    rbrmRef: ActorRef[IO, RuleBasedRegimeManager.Requests.Request]
 ) extends Actor[IO, DisputeActor.Requests.Request] {
 
-    /** Throws if the cardano backend gives an error. We can't really recover from this. */
-    private val getDisputeUtxos: IO[hydrozoa.UtxoSetL1] =
-        for {
-            eUtxos <- cardanoBackend.utxosAt(
-              address = DisputeResolutionScript.address(config.env.network),
-              asset = (headMultisigScript.policyId, tokenNames.voteTokenName)
+    private val handleDisputeRes: IO[Either[DisputeActor.Error.Error, Unit]] = {
+        val et: EitherT[IO, DisputeActor.Error.Error, Unit] = for {
+            // Wrapped in EitherT because a Left doesn't signify an unrecoverable failure
+            unparsedDisputeUtxos <- EitherT(
+              cardanoBackend.utxosAt(
+                address = DisputeResolutionScript.address(config.env.network),
+                asset = (headMultisigScript.policyId, tokenNames.voteTokenName)
+              )
             )
-            utxos <- IO.fromEither(eUtxos)
-        } yield utxos
+            disputeUtxos <- EitherT.liftF(parseDisputeUtxos(unparsedDisputeUtxos))
 
-    /** Throws if the cardano backend gives an error. We can't really recover from this. */
-    private val getRulesBasedTreasuryUtxo: IO[hydrozoa.Utxo[L1]] =
-        for {
-            eUtxos <- cardanoBackend.utxosAt(
-              address = RuleBasedTreasuryScript.address(config.env.network),
-              asset = (headMultisigScript.policyId, tokenNames.headTokenName)
+            unparsedTreasuryUtxo <- EitherT(
+              cardanoBackend.utxosAt(
+                address = RuleBasedTreasuryScript.address(config.env.network),
+                asset = (headMultisigScript.policyId, tokenNames.headTokenName)
+              )
             )
-            utxos <- IO.fromEither(eUtxos)
-            utxo <-
-                if utxos.toList.length == 1
-                then IO.pure(hydrozoa.Utxo[L1](utxos.head))
-                // FIXME: type this better
-                else
-                    IO.raiseError(
-                      RuntimeException("Multiple rule-based treasury utxo tokens found")
-                    )
-        } yield utxo
+            treasuryUtxo <- parseRBTreasury(unparsedTreasuryUtxo)
 
-    private val handleDisputeRes: IO[Unit | StartLiquidation.type] = {
-        for {
-            disputeUtxos <- getDisputeUtxos.flatMap(utxos =>
-                IO.fromEither(parseDisputeUtxos(utxos))
-            )
-            treasuryUtxo <- getRulesBasedTreasuryUtxo.flatMap(utxo =>
-                IO.fromEither(parseRBTreasury(utxo))
-            )
             _ <- disputeUtxos match {
                 // Cast Vote
                 case (Some(ownVoteUtxo), _) =>
@@ -103,16 +107,11 @@ final case class DisputeActor(
                       validators = config.validators
                     )
                     for {
-                        // FIXME: if we make the error typesThrowable, we can call IO.fromEither
-                        // instead
                         voteTx <- VoteTx.build(recipe) match {
-                            case Left(e: SomeBuildError) => IO.raiseError(e.reason)
-                            case Left(e: VoteTxError) =>
-                                IO.raiseError(new RuntimeException(s"error building VoteTx: ${e}"))
-                            case Right(tx) => IO.pure(tx)
+                            case Left(e)   => EitherT.liftF(IO.raiseError(VoteTxBuildError(e)))
+                            case Right(tx) => EitherT.pure[IO, cardano.CardanoBackend.Error](tx)
                         }
-                        eUnit <- cardanoBackend.submitTx(voteTx.tx)
-                        _ <- IO.fromEither(eUnit)
+                        _ <- EitherT(cardanoBackend.submitTx(voteTx.tx))
                     } yield ()
 
                 // Tally
@@ -135,16 +134,11 @@ final case class DisputeActor(
                       validators = config.validators
                     )
                     for {
-                        // FIXME: if we make the error typesThrowable, we can call IO.fromEither
-                        // instead
                         tallyTx <- TallyTx.build(recipe) match {
-                            case Left(e: SomeBuildError) => IO.raiseError(e.reason)
-                            case Left(e: TallyTxError) =>
-                                IO.raiseError(new RuntimeException(s"error building tallyTx: ${e}"))
-                            case Right(tx) => IO.pure(tx)
+                            case Left(e)   => EitherT.liftT(IO.raiseError(TallyTxBuildError(e)))
+                            case Right(tx) => EitherT.pure[IO, cardano.CardanoBackend.Error](tx)
                         }
-                        eUnit <- cardanoBackend.submitTx(tallyTx.tx)
-                        _ <- IO.fromEither(eUnit)
+                        _ <- EitherT(cardanoBackend.submitTx(tallyTx.tx))
                     } yield ()
 
                 // Resolve
@@ -160,26 +154,23 @@ final case class DisputeActor(
                       validators = config.validators
                     )
                     for {
-                        // FIXME: if we make the error typesThrowable, we can call IO.fromEither
-                        // instead
                         resolutionTx <- ResolutionTx.build(recipe) match {
-                            case Left(e: SomeBuildError) => IO.raiseError(e.reason)
-                            case Left(e: ResolutionTxError) =>
-                                IO.raiseError(
-                                  new RuntimeException(s"error building ResolutionTx: ${e}")
-                                )
-                            case Right(tx) => IO.pure(tx)
+                            case Left(e) => EitherT.liftF(IO.raiseError(ResolutionTxBuildError(e)))
+                            case Right(tx) => EitherT.pure[IO, cardano.CardanoBackend.Error](tx)
                         }
-                        eUnit <- cardanoBackend.submitTx(resolutionTx.tx)
-                        _ <- IO.fromEither(eUnit)
+                        _ <- EitherT(cardanoBackend.submitTx(resolutionTx.tx))
                     } yield ()
 
                 // This case only matches in the returned list of vote utxos is empty.
                 // This means we're all done with dispute resolution; start liquidation
-                case (None, _) => IO.pure(StartLiquidation)
+                case (None, _) => EitherT.right(rbrmRef ! Liquidate)
             }
+
         } yield ()
+        et.value
     }
+
+    override def preStart: IO[Unit] = context.setReceiveTimeout(receiveTimeout, ())
 
     override def receive: Receive[IO, Requests.Request] = { case _: Requests.HandleDisputeRes =>
         handleDisputeRes
@@ -190,26 +181,25 @@ final case class DisputeActor(
       * is ready for tallying.
       *
       * Assumptions
-      *   - We don't have any extra vote utxos that will validly parse. I.e., we don't check the
-      *     number of utxos given to this function
-      *   - We have all of the vote utxos that exist at the time of the query; we're not missing any
-      *   - Each utxo has a correct transaction input according to the results of the querty
-      *   - Each utxo has the correct vote token in it (I assume this is how the query layer
-      *     identifies the utxos in the first place, so I skip that check here) and sits at the
-      *     correct adddress.
+      *   - We don't have any extra vote utxos that will validly parse, i.e., we don't check the
+      *     number of utxos given to this function. This is an invariant of the system and needs to
+      *     be established elsewhere
+      *     - We assume the CardanoBackend is correctly implemented such that
+      *       - We receive all the vote utxos that exist at the time of the query; we're not missing
+      *         any.
+      *       - Each utxo has a correct transaction input according to the results of the query.
+      *       - Each utxo has the correct vote token in it and sits at the correct adddress.
       *
       * @return
       *   A tuple of [[VoteUtxoWithDatum]]. The first element is wrapped in an option, and is only
       *   "Some" if the dispute actor still needs to cast a vote. The second element is all other
       *   vote utxos.
       */
-    private def parseDisputeUtxos(utxos: hydrozoa.UtxoSetL1): Either[
-      Error.ParseError,
+    private def parseDisputeUtxos(utxos: hydrozoa.UtxoSetL1): IO[
       (
-          Option[VoteUtxoWithDatum] // Own vote utxo
-          ,
+          Option[VoteUtxoWithDatum],
           Seq[VoteUtxoWithDatum]
-      ) // Other vote utxos
+      )
     ] =
         for {
             voteUtxos <- utxos.toList.traverse((i, o) => utxoToVoteUtxo(hydrozoa.Utxo[L1](i, o)))
@@ -223,44 +213,58 @@ final case class DisputeActor(
 
     private def utxoToVoteUtxo(
         utxo: hydrozoa.Utxo[L1]
-    ): Either[Error.ParseError, VoteUtxoWithDatum] = {
+    ): IO[VoteUtxoWithDatum] = {
         for {
-            d1: DatumOption <- utxo._2.datumOption.toRight(
-              DisputeActor.Error.MissingVoteUtxoDatum(utxo)
-            )
+            d1: DatumOption <- utxo._2.datumOption match {
+                case None    => IO.raiseError(DisputeActor.Error.MissingVoteUtxoDatum(utxo))
+                case Some(x) => IO.pure(x)
+            }
             d2: Inline <- d1 match {
-                case i: Inline => Right(i)
-                case _         => Left(DisputeActor.Error.VoteDatumNotInline(utxo))
+                case i: Inline => IO.pure(i)
+                case _         => IO.raiseError(DisputeActor.Error.VoteDatumNotInline(utxo))
             }
             d3: VoteDatum <- Try(fromData[VoteDatum](d2.data)) match {
-                case Success(d) => Right(d)
-                case Failure(e) => Left(VoteDatumDeserializationError(utxo, e))
+                case Success(d) => IO.pure(d)
+                case Failure(e) => IO.raiseError(VoteDatumDeserializationError(utxo, e))
             }
         } yield (utxo, d3)
     }
 
-    /** Assumptions:
-      *   - The treasury exists at the correct address and has the correct token
-      *
-      * @param utxo
-      * @return
-      */
-    // TODO: Maybe this should live in a companion object for RulesBasedTreasuryUtxo?
-    private def parseRBTreasury(utxo: hydrozoa.Utxo[L1]): Either[Error.ParseError, RuleBasedTreasuryUtxo] =
+    // Parsing. Its in EitherT over IO because we have some recoverable failures (Lefts) and some unrecoverable failures
+    // thrown as exceptions.
+    // - If we get more than one treasury token or a parsing failure, thats an exception
+    // - if we get zero treasury tokens, it may mean that the deinit has succeeded. But we keep trying, in case
+    //   of rollbacks.
+    private def parseRBTreasury(utxos: UtxoSetL1): EitherT[IO, ParseError, RuleBasedTreasuryUtxo] =
         for {
-            d1 <- utxo.output.datumOption.toRight(TreasuryDatumMissing(utxo))
+            utxo <-
+                if utxos.size == 1
+                then EitherT.pure[IO, ParseError](hydrozoa.Utxo[L1](utxos.head))
+                else if utxos.size > 1
+                then throw MultipleTreasuryTokensFound(utxos)
+                else EitherT.fromEither[IO](Left(TreasuryMissing))
+
+            d1 <- utxo.output.datumOption match {
+                case None    => EitherT.liftF(IO.raiseError(TreasuryDatumMissing(utxo)))
+                case Some(x) => EitherT.pure[IO, ParseError](x)
+            }
             d2 <- d1 match {
-                case i: Inline => Right(i)
-                case _         => Left(TreasuryDatumNotInline(utxo))
+                case i: Inline => EitherT.pure[IO, ParseError](i)
+                case _         => EitherT.liftF(IO.raiseError(TreasuryDatumNotInline(utxo)))
             }
             datum <- Try(fromData[RuleBasedTreasuryDatum](d2.data)) match {
-                case Success(d) => Right(d)
-                case Failure(e) => Left(TreasuryDatumDeserializationError(utxo, e))
+                case Success(d) => EitherT.pure[IO, ParseError](d)
+                case Failure(e) =>
+                    EitherT.liftF(IO.raiseError(TreasuryDatumDeserializationError(utxo, e)))
             }
 
             address <- utxo.output.address match {
-                case sa: ShelleyAddress => Right(sa)
-                case _                  => Left(TreasuryAddressNotShelley(utxo))
+                case sa: ShelleyAddress => EitherT.pure[IO, ParseError](sa)
+                case _ =>
+                    EitherT.liftF(
+                      IO
+                          .raiseError(TreasuryAddressNotShelley(utxo))
+                    )
             }
 
         } yield RuleBasedTreasuryUtxo(
@@ -283,22 +287,46 @@ object DisputeActor {
     }
 
     object Error {
+
+        /** Hierarchy:
+          *   - ParseError
+          *     - VoteParseError
+          *     - TreasuryParseError
+          *   - BuildError
+          *     - VoteTxBuildError
+          *     - TallyTxBuildError
+          *     - ResolutionTxBuildError
+          *   - CardanoBackendError
+          */
+        type Error = DisputeActor.Error.ParseError | cardano.CardanoBackend.Error |
+            DisputeActor.Error.BuildError
+
+        sealed trait BuildError extends Throwable
+        case class VoteTxBuildError(wrapped: VoteTx.VoteTxError | SomeBuildError) extends BuildError
+        case class TallyTxBuildError(wrapped: TallyTx.TallyTxError | SomeBuildError)
+            extends BuildError
+        case class ResolutionTxBuildError(wrapped: ResolutionTxError | SomeBuildError)
+            extends BuildError
+
         sealed trait ParseError extends Throwable
+        sealed trait VoteParseError extends ParseError
+        sealed trait TreasuryParseError extends ParseError
 
-        case class MissingVoteUtxoDatum(utxo: hydrozoa.Utxo[L1]) extends ParseError
-        case class VoteDatumNotInline(utxo: hydrozoa.Utxo[L1]) extends ParseError
+        case class MissingVoteUtxoDatum(utxo: hydrozoa.Utxo[L1]) extends VoteParseError
+        case class VoteDatumNotInline(utxo: hydrozoa.Utxo[L1]) extends VoteParseError
         case class VoteDatumDeserializationError(utxo: hydrozoa.Utxo[L1], e: Throwable)
-            extends ParseError
-        case class TreasuryDatumMissing(utxo: hydrozoa.Utxo[L1]) extends ParseError
-        case class TreasuryDatumNotInline(utxo: hydrozoa.Utxo[L1]) extends ParseError
+            extends VoteParseError
+
+        case class TreasuryDatumMissing(utxo: hydrozoa.Utxo[L1]) extends TreasuryParseError
+        case class TreasuryDatumNotInline(utxo: hydrozoa.Utxo[L1]) extends TreasuryParseError
         case class TreasuryDatumDeserializationError(utxo: hydrozoa.Utxo[L1], e: Throwable)
-            extends ParseError
-        case class TreasuryAddressNotShelley(utxo: hydrozoa.Utxo[L1]) extends ParseError
+            extends TreasuryParseError
+        case class TreasuryAddressNotShelley(utxo: hydrozoa.Utxo[L1]) extends TreasuryParseError
+        case class MultipleTreasuryTokensFound(utxos: UtxoSetL1) extends TreasuryParseError
+
+        /** This either means something is very wrong, or simply that the dispute resolution is over
+          * and the deinit transaction completed successfully
+          */
+        case object TreasuryMissing extends TreasuryParseError
     }
-
-    object Phase:
-        sealed trait Phase
-        case object NeedToVote
-        case object NeedToTally
-
 }
