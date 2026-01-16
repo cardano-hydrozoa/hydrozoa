@@ -9,7 +9,7 @@ import hydrozoa.multisig.protocol.types.*
 import scala.annotation.targetName
 import scala.collection.immutable.Queue
 
-import PeerLiaison.Request
+import PeerLiaison.{Request, Batch}
 import PeerLiaison.Request.*
 
 trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor[IO, Request] {
@@ -60,15 +60,15 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
             case x: RemoteBroadcast =>
                 for {
                     // Check whether the next batch must be sent immediately, and then turn off the flag regardless.
-                    mBatchId <- state.dischargeSendNextBatchImmediately
-                    _ <- mBatchId match {
+                    mBatchNum <- state.dischargeSendNextBatchImmediately
+                    _ <- mBatchNum match {
                         case None =>
                             // Queue up the message for a future message batch
                             state.:+(x)
-                        case Some(batchId) =>
+                        case Some(batchNum) =>
                             // Immediately send a batch containing only this message
                             state
-                                .immediateNewMsgBatch(batchId, x)
+                                .immediateNewMsgBatch(batchNum, x)
                                 .flatMap(subs.remotePeerLiaison ! _)
                     }
                 } yield ()
@@ -79,7 +79,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
                         case Right(newBatch) =>
                             subs.remotePeerLiaison ! newBatch
                         case Left(state.EmptyNewMsgBatch) =>
-                            state.sendNextBatchImmediatelyUponNewMsg(x.id)
+                            state.sendNextBatchImmediatelyUponNewMsg(x.batchNum)
                         case Left(state.OutOfBoundsGetMsgBatch) =>
                             IO.raiseError(Error("Incorrect bounds in GetMsgBatch."))
                     }
@@ -91,7 +91,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
             //     (block number mod N + remotePeerId)
             case x: NewMsgBatch =>
                 for {
-                    _ <- subs.remotePeerLiaison ! x.nextGetMsgBatch
+                    _ <- subs.remotePeerLiaison ! ??? // x.nextGetMsgBatch
                     _ <- x.ack.traverse_(subs.ackBlock ! _)
                     _ <- x.block.traverse_(subs.newBlock ! _)
                     _ <- x.events.traverse_(subs.newLedgerEvent ! _)
@@ -106,7 +106,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
         private val qAck = Ref.unsafe[IO, Queue[AckBlock]](Queue())
         private val qBlock = Ref.unsafe[IO, Queue[Block.Next]](Queue())
         private val qEvent = Ref.unsafe[IO, Queue[LedgerEvent]](Queue())
-        private val sendBatchImmediately = Ref.unsafe[IO, Option[Batch.Id]](None)
+        private val sendBatchImmediately = Ref.unsafe[IO, Option[Batch.Number]](None)
 
         /** Check whether there are no acks, blocks, or events queued-up to be sent out. */
         private def areEmptyQueues: IO[Boolean] =
@@ -141,13 +141,13 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
         /** Make sure a batch is sent to the counterparty as soon as another local ack/block/event
           * arrives.
           */
-        def sendNextBatchImmediatelyUponNewMsg(batchId: Batch.Id): IO[Unit] =
-            this.sendBatchImmediately.set(Some(batchId))
+        def sendNextBatchImmediatelyUponNewMsg(batchNum: Batch.Number): IO[Unit] =
+            this.sendBatchImmediately.set(Some(batchNum))
 
         /** Check whether a new batch must be immediately sent, deactivating the flag in the
           * process.
           */
-        def dischargeSendNextBatchImmediately: IO[Option[Batch.Id]] =
+        def dischargeSendNextBatchImmediately: IO[Option[Batch.Number]] =
             this.sendBatchImmediately.getAndSet(None)
 
         sealed trait ExtractNewMsgBatchError extends Throwable
@@ -161,7 +161,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
           * queues message queues must be empty, and the corresponding counter is incremented
           * depending on the arrived message's type.
           */
-        def immediateNewMsgBatch(batchId: Batch.Id, x: RemoteBroadcast): IO[NewMsgBatch] =
+        def immediateNewMsgBatch(batchNum: Batch.Number, x: RemoteBroadcast): IO[NewMsgBatch] =
             for {
                 nAck <- this.nAck.get
                 nBlock <- this.nBlock.get
@@ -170,15 +170,12 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
                     case y: LedgerEvent =>
                         for {
                             nEventsNew <- this.nEvent.updateAndGet(_.increment)
-                        } yield NewMsgBatch(batchId, nAck, nBlock, nEventsNew, None, None, List(y))
+                        } yield NewMsgBatch(batchNum, None, None, List(y))
                     case y: AckBlock =>
                         for {
                             nAckNew <- this.nAck.updateAndGet(_.increment)
                         } yield NewMsgBatch(
-                          batchId,
-                          nAckNew,
-                          nBlock,
-                          nEvents,
+                          batchNum,
                           Some(y),
                           None,
                           List()
@@ -187,10 +184,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
                         for {
                             nBlockNew <- this.nBlock.updateAndGet(_.increment)
                         } yield NewMsgBatch(
-                          batchId,
-                          nAck,
-                          nBlockNew,
-                          nEvents,
+                          batchNum,
                           None,
                           Some(y),
                           List()
@@ -246,10 +240,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
                 blockNum = mBlock.fold(nBlock)(_.id)
                 eventNum = events.lastOption.fold(nEvents)(_.eventId.eventNum)
             } yield NewMsgBatch(
-              id = batchReq.id,
-              ackNum = ackNum,
-              blockNum = blockNum,
-              eventNum = eventNum,
+              batchNum = batchReq.batchNum,
               ack = mAck,
               block = mBlock,
               events = events.toList
@@ -263,6 +254,9 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
   *   - Responds to the counterpart's requests for communication batches.
   */
 object PeerLiaison {
+    def apply(config: Config, connections: ConnectionsPending): IO[PeerLiaison] =
+        IO(new PeerLiaison(config, connections) {})
+
     type MaxEvents = Int
 
     final case class Config(
@@ -287,7 +281,7 @@ object PeerLiaison {
         /** Request by a comm actor to its remote comm-actor counterpart for a batch of events,
           * blocks, or block acknowledgements originating from the remote peer.
           *
-          * @param id
+          * @param batchNum
           *   Batch number that increases by one for every consecutive batch.
           * @param ackNum
           *   The requester's last seen block acknowledgement from the remote peer.
@@ -297,7 +291,7 @@ object PeerLiaison {
           *   The requester's last seen event number from the remote peer.
           */
         final case class GetMsgBatch(
-            id: Batch.Id,
+            batchNum: Batch.Number,
             ackNum: AckBlock.Number,
             blockNum: Block.Number,
             eventNum: LedgerEventId.Number
@@ -305,14 +299,8 @@ object PeerLiaison {
 
         /** Comm actor provides a batch in response to its remote comm-actor counterpart's request.
           *
-          * @param id
+          * @param batchNum
           *   Batch number matching the one from the request.
-          * @param ackNum
-          *   The latest acknowledgement number originating from the responder.
-          * @param blockNum
-          *   The latest block number originating from the responder.
-          * @param eventNum
-          *   The latest event number originating from the responder.
           * @param ack
           *   If provided, a block acknowledgment originating from the responder after the requested
           *   [[AckNum]].
@@ -325,23 +313,29 @@ object PeerLiaison {
           *   [[LedgerEventNum]].
           */
         final case class NewMsgBatch(
-            id: Batch.Id,
-            ackNum: AckBlock.Number,
-            blockNum: Block.Number,
-            eventNum: LedgerEventId.Number,
+            batchNum: Batch.Number,
             ack: Option[AckBlock],
             block: Option[Block.Next],
             events: List[LedgerEvent]
-        ) {
-            def nextGetMsgBatch = GetMsgBatch(
-              id.increment,
-              ackNum,
-              blockNum,
-              eventNum
-            )
-        }
+        )
     }
 
-    def apply(config: Config, connections: ConnectionsPending): IO[PeerLiaison] =
-        IO(new PeerLiaison(config, connections) {})
+    object Batch {
+        type Number = Number.Number
+
+        object Number {
+            opaque type Number = Int
+
+            def apply(i: Int): Number = i
+
+            given Conversion[Number, Int] = identity
+
+            given Ordering[Number] with {
+                override def compare(x: Number, y: Number): Int =
+                    x.compare(y)
+            }
+
+            extension (self: Number) def increment: Number = Number(self + 1)
+        }
+    }
 }
