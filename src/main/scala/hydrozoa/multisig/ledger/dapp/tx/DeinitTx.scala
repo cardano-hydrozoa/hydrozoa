@@ -11,6 +11,7 @@ import monocle.{Focus, Lens}
 import scala.Function.const
 import scalus.cardano.ledger.{Coin as OldCoin, KeepRaw, Sized, Transaction, TransactionOutput, Value}
 import scalus.cardano.txbuilder.*
+import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
 
 /** The Deinit tx in the multisig regime acts mostly the same way the eponymous tx in the rule-based
@@ -29,10 +30,11 @@ import scalus.cardano.txbuilder.TransactionBuilderStep.*
   *   - The fees are paid from the treasury, reducing the equity. To calculate the fees the outputs
   *     amounts recalculated after the fees are calculated.
   */
-case class DeinitTx(
+final case class DeinitTx(
     override val residualTreasurySpent: ResidualTreasuryUtxo,
     override val tx: Transaction,
-    override val txLens: Lens[DeinitTx, Transaction] = Focus[DeinitTx](_.tx)
+    override val txLens: Lens[DeinitTx, Transaction] = Focus[DeinitTx](_.tx),
+    override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
 ) extends Tx[DeinitTx],
       ResidualTreasuryUtxo.Spent
 

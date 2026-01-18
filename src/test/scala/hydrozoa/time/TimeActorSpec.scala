@@ -1,5 +1,3 @@
 package hydrozoa.time
 
-class TimeActorSpec {
-
-}
+class TimeActorSpec {}

@@ -96,10 +96,11 @@ object InitializationTx {
         val createTreasury: Send = Send(
           Babbage(
             headNativeScript.mkAddress(env.network),
-            value = Value(
-              initialDeposit,
-              MultiAsset(SortedMap(headNativeScript.policyId -> SortedMap(headTokenName -> 1L)))
-            ),
+            value = initialTreasury +
+                Value(
+                  Coin.zero,
+                  MultiAsset(SortedMap(headNativeScript.policyId -> SortedMap(headTokenName -> 1L)))
+                ),
             datumOption = Some(Inline(MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum.toData))
           )
         )
@@ -442,7 +443,7 @@ object InitializationTx {
         validityEnd: QuantizedInstant,
         spentUtxos: SpentUtxos,
         headNativeScript: HeadMultisigScript,
-        initialDeposit: Coin,
+        initialTreasury: Value,
         tokenNames: TokenNames,
         // The amount of coin to cover the minAda for the vote UTxOs and collateral
         // utxos in the fallback transaction (inclusive of the max fallback tx fee)

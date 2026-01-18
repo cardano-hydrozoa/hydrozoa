@@ -7,17 +7,14 @@ import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.SpentUtxos
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.{Fallback, Initialization}
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming.default
-import hydrozoa.multisig.ledger.dapp.tx.{InitializationTx, Metadata as MD, Tx, TxTiming, minInitTreasuryAda}
+import hydrozoa.multisig.ledger.dapp.tx.{InitializationTx, Tx, TxTiming, minInitTreasuryAda, Metadata as MD}
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.dapp.state.VoteDatum
-import hydrozoa.{ensureMinAda, maxNonPlutusTxFee, given}
+import hydrozoa.{L1, Output, UtxoId, UtxoSetL1, ensureMinAda, maxNonPlutusTxFee, given}
 import io.bullet.borer.Cbor
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.{Gen, Prop, Properties, Test}
-import scala.collection.immutable.SortedMap
-import scala.collection.mutable
-import scala.concurrent.duration.{FiniteDuration, HOURS}
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.address.*
@@ -32,37 +29,72 @@ import test.*
 import test.Generators.Hydrozoa.*
 import test.TransactionChain.observeTxChain
 
+import scala.collection.immutable.SortedMap
+import scala.collection.mutable
+import scala.concurrent.duration.{FiniteDuration, HOURS}
+
 object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
     import Prop.forAll
+
     override def overrideParameters(p: Test.Parameters): Test.Parameters = {
         p.withMinSuccessfulTests(1_000)
     }
 
-    // TODO: make the spentUtxos contain arbitrary assets, not just ada.
+    /** TODO: make the spentUtxos contain arbitrary assets, not just ada.
+      *
+      * @param txTiming
+      * @param mbUtxosAvailable
+      *   When set, this limits what the generator can pick as seed/funding utxos. When None a
+      *   random utxos will be used.
+      */
     def genArgs(
-        txTiming: TxTiming = default(testTxBuilderEnvironment.slotConfig)
+        txTiming: TxTiming = default(testTxBuilderEnvironment.slotConfig),
+        mbUtxosAvailable: Option[Map[TestPeer, UtxoSetL1]] = None
     ): Gen[(InitializationTxSeq.Builder.Args, NonEmptyList[TestPeer])] =
         for {
             peers <- genTestPeers()
+            prime = peers.head
 
-            // We make sure that the seed utxo has at least enough for the treasury and multisig witness UTxO, plus
-            // a max non-plutus fee
-            seedUtxo <- genAdaOnlyPubKeyUtxo(
-              peers.head,
-              minimumCoin = minInitTreasuryAda
-                  + Coin(maxNonPlutusTxFee(testProtocolParams).value * 2)
-            )
-                .map(x => Utxo(x._1, x._2))
-            otherSpentUtxos <- Gen
-                .listOf(genAdaOnlyPubKeyUtxo(peers.head))
-                .map(_.map(x => Utxo(x._1, x._2)))
+            (seedUtxo, fundingUtxos) <- mbUtxosAvailable match {
+                case Some(utxos) =>
+                    for {
+                        // Random prime peer's utxo
+                        seedUtxo <- Gen
+                            .oneOf(utxos(prime))
+                            .map(u => Utxo(u._1.untagged, u._2.untagged))
+                        rest = (utxos.values
+                            .map(_.untagged)
+                            .foldLeft(
+                              Map.empty[UtxoId[L1], Output[L1]]
+                            )((l, r) => l ++ r) - UtxoId[L1](seedUtxo.input)).toList
+                        // Some random utxos
+                        fundingUtxos <- Gen
+                            .someOf(rest)
+                            .flatMap(l => l.map(u => Utxo(u._1.untagged, u._2.untagged)).toList)
+                    } yield (seedUtxo, fundingUtxos)
 
-            spentUtxos = NonEmptyList(seedUtxo, otherSpentUtxos)
+                case None =>
+                    for {
+                        // We make sure that the seed utxo has at least enough for the treasury and multisig witness UTxO, plus
+                        // a max non-plutus fee
+                        seedUtxo <- genAdaOnlyPubKeyUtxo(
+                          prime,
+                          minimumCoin = minInitTreasuryAda
+                              + Coin(maxNonPlutusTxFee(testProtocolParams).value * 2)
+                        ).map(x => Utxo(x._1, x._2))
 
-            // Initial deposit must be at least enough for the minAda of the treasury, and no more than the
+                        fundingUtxos <- Gen
+                            .listOf(genAdaOnlyPubKeyUtxo(prime))
+                            .map(_.map(x => Utxo(x._1, x._2)))
+                    } yield (seedUtxo, fundingUtxos)
+            }
+
+            spentUtxos = NonEmptyList(seedUtxo, fundingUtxos)
+
+            // Initial treasury must be at least enough for the minAda of the treasury, and no more than the
             // sum of the seed utxos, while leaving enough left for the estimated fee and the minAda of the change
             // output
-            initialDeposit <- Gen
+            initialTreasuryCoin <- Gen
                 .choose(
                   minInitTreasuryAda.value,
                   sumUtxoValues(spentUtxos.toList).coin.value
@@ -71,16 +103,18 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                 )
                 .map(Coin(_))
 
-            // Use [Preview.zeroTime..now] as the initialization timestamp
-            initializedOn <- Gen.choose(
+            initialTreasury = Value(initialTreasuryCoin)
+
+            // Use [Preview.zeroTime..now] as the block zero creation time
+            blockZeroCreationTime <- Gen.choose(
               java.time.Instant.ofEpochMilli(testTxBuilderEnvironment.slotConfig.zeroTime),
               java.time.Instant.now()
             )
 
         } yield (
           InitializationTxSeq.Builder.Args(
-            spentUtxos = SpentUtxos(seedUtxo, otherSpentUtxos),
-            initialDeposit = initialDeposit,
+            spentUtxos = SpentUtxos(seedUtxo, fundingUtxos),
+            initialTreasury = initialTreasury,
             peers = peers.map(_.wallet.exportVerificationKeyBytes),
             env = testTxBuilderEnvironment,
             evaluator = testEvaluator,
@@ -91,7 +125,8 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
             votingDuration =
                 FiniteDuration(24, HOURS).quantize(testTxBuilderEnvironment.slotConfig),
             txTiming = txTiming,
-            initializedOn = initializedOn.quantize(testTxBuilderEnvironment.slotConfig)
+            blockZeroCreationTime =
+                blockZeroCreationTime.quantize(testTxBuilderEnvironment.slotConfig)
           ),
           peers
         )
@@ -217,9 +252,10 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                           ))
                 )
 
+                // TODO use >= over the whole Value
                 props.append(
-                  "treasury utxo contains at least initial deposit" |:
-                      (iTx.treasuryProduced.asUtxo.output.value.coin >= initialDeposit)
+                  "treasury utxo contains at least initial treasury" |:
+                      (iTx.treasuryProduced.asUtxo.output.value.coin >= initialTreasury.coin)
                 )
 
                 props.append(
@@ -309,10 +345,11 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                         utxoId = TransactionInput(iTx.tx.id, 0),
                         address = expectedHeadNativeScript.mkAddress(env.network),
                         datum = MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum,
-                        value = Value(
-                          initialDeposit,
-                          MultiAsset(SortedMap(hns.policyId -> SortedMap(headTokenName -> 1L)))
-                        )
+                        value = initialTreasury +
+                            Value(
+                              Coin.zero,
+                              MultiAsset(SortedMap(hns.policyId -> SortedMap(headTokenName -> 1L)))
+                            )
                       ),
                       multisigRegimeWitness = MultisigRegimeUtxo(
                         multisigRegimeTokenName = expectedMulitsigRegimeTokenName,
@@ -338,7 +375,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                       resolver = mockResolver,
                       slotConfig = config.env.slotConfig,
                       txTiming = txTiming,
-                      initializationRequestTimestamp = args.initializedOn
+                      initializationRequestTimestamp = args.blockZeroCreationTime
                     )
 
                     "Semantic transaction parsed from generic transaction in unexpected way." +
@@ -564,7 +601,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                       evaluator = args.evaluator,
                       validators = args.validators,
                       resolver = mockResolver,
-                      initializationRequestTimestamp = args.initializedOn,
+                      initializationRequestTimestamp = args.blockZeroCreationTime,
                       txTiming = TxTiming.default(testTxBuilderEnvironment.slotConfig)
                     )
 

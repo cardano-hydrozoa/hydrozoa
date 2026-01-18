@@ -16,13 +16,15 @@ import scalus.builtin.{ByteString, platform}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.txbuilder.*
+import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend, ValidityEndSlot}
 
 final case class DepositTx private (
     depositProduced: DepositUtxo,
     validityEnd: QuantizedInstant,
     override val tx: Transaction,
-    override val txLens: Lens[DepositTx, Transaction] = Focus[DepositTx](_.tx)
+    override val txLens: Lens[DepositTx, Transaction] = Focus[DepositTx](_.tx),
+    override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
 ) extends Tx[DepositTx]
 
 object DepositTx {
