@@ -23,8 +23,8 @@ import scalus.cardano.ledger.SlotConfig
   */
 object MultisigRegimeManager {
     final case class Config(
-        peerId: Peer.Number,
-        peers: List[Peer.Number],
+        peerId: Peer.Id,
+        peers: List[Peer.Id],
         cardanoBackend: CardanoBackend[IO],
         initializationTx: InitializationTx,
         fallbackTx: FallbackTx,
@@ -63,8 +63,6 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
                     Config(
                       lastKnownBlock = ???,
                       peerId = config.peerId,
-                      numberOfPeers = ???,
-                      blockLeadTurn = ???,
                       recoveredMempool = BlockWeaver.Mempool.empty,
                       jointLedger = ???,
                       slotConfig = ???

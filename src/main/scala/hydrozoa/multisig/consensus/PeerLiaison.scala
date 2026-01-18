@@ -275,8 +275,8 @@ object PeerLiaison {
     type MaxEvents = Int
 
     final case class Config(
-        ownPeerId: Peer.Number,
-        remotePeerId: Peer.Number,
+        ownPeerId: Peer.Id,
+        remotePeerId: Peer.Id,
         maxLedgerEventsPerBatch: MaxEvents = 25
     )
 

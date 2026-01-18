@@ -15,7 +15,7 @@ import scala.collection.immutable.Queue
   * the consensus system.
   */
 object EventSequencer {
-    final case class Config(peerId: Peer.Number)
+    final case class Config(peerId: Peer.Id)
 
     final case class ConnectionsPending(
         blockWeaver: Deferred[IO, BlockWeaver.Handle],
@@ -64,7 +64,7 @@ trait EventSequencer(config: Config, connections: ConnectionsPending) extends Ac
             case x: SubmitLedgerEvent =>
                 for {
                     newNum <- state.enqueueDeferredEventOutcome(x.deferredEventOutcome)
-                    newId = LedgerEventId(config.peerId, newNum)
+                    newId = LedgerEventId(config.peerId.peerNum, newNum)
                     // FIXME: fill in
                     newEvent: LedgerEvent = ???
                     _ <- (subs.newLedgerEvent ! newEvent).parallel
