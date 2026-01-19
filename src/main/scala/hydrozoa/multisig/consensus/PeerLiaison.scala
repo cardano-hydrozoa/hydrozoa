@@ -116,8 +116,6 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
                 event <- this.qEvent.get.map(_.isEmpty)
             } yield ack && block && event
 
-        // TODO: instead of incrementing, set nEvent/nAck/nBlock to the corresponding number
-        //  of the event/ack/block being appended. Also, check that the increment is positive and as expected.
         @targetName("append")
         infix def :+(x: RemoteBroadcast): IO[Unit] =
             x match {
@@ -128,7 +126,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
                         _ <-
                             if nEvent.increment == nY then { IO.pure(()) }
                             else { IO.raiseError(Error("Bad LedgerEvent increment.")) }
-                        _ <- this.nEvent.update(_.increment)
+                        _ <- this.nEvent.set(nY)
                         _ <- this.qEvent.update(_ :+ y)
                     } yield ()
                 case y: AckBlock =>
@@ -146,9 +144,9 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
                         nBlock <- this.nBlock.get
                         nY = y.blockNum
                         _ <-
-                            if ??? == nY then { IO.pure(()) }
+                            if config.ownPeerId.nextLeaderBlock(nBlock) == nY then { IO.pure(()) }
                             else { IO.raiseError(Error("Bad Block.Next increment.")) }
-                        _ <- this.nBlock.update(_.increment)
+                        _ <- this.nBlock.set(nY)
                         _ <- this.qBlock.update(_ :+ y)
                     } yield ()
             }
@@ -217,8 +215,8 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
           * @param maxEvents
           *   the maximum number of ledger events to include in the [[NewMsgBatch]].
           */
-        // TODO: if the [[GetMsgBatch]] bounds are lower than the queued messages, then the comm actor will need to
-        // query the database to properly respond. Currently, we just respond as if no messages are available to send.
+        // FIXME: if the [[GetMsgBatch]] bounds are lower than the queued messages, then the comm actor will need to
+        //   query the database to properly respond. Currently, we just respond as if no messages are available to send.
         def buildNewMsgBatch(
             batchReq: GetMsgBatch,
             maxEvents: MaxEvents
