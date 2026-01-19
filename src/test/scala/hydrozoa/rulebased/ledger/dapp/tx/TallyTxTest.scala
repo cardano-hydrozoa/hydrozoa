@@ -159,7 +159,6 @@ def genTallyTxRecipe(
       removedVoteUtxo = removedVoteUtxo,
       treasuryUtxo = treasuryUtxo,
       collateralUtxo = Utxo[L1](UtxoId(collateralUtxo._1), Output(collateralUtxo._2)),
-      validityEndSlot = Slot(200),
       network = testNetwork,
       protocolParams = testProtocolParams,
       evaluator = testEvaluator,

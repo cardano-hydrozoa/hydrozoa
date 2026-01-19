@@ -1,7 +1,9 @@
 package hydrozoa.rulebased.ledger.dapp.tx
 
 import cats.data.NonEmptyList
+import cats.effect.unsafe.implicits.global
 import hydrozoa.*
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.cip67DisputeTokenPrefix
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
 import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryValidator}
@@ -132,12 +134,11 @@ def genVoteTxRecipe(
       collateralUtxo = Utxo[L1](UtxoId(collateralUtxo._1), Output(collateralUtxo._2)),
       blockHeader = blockHeader,
       signatures = signatures,
-      // TODO: now sure how to do that properly
-      validityEndSlot = Slot(200),
       network = testNetwork,
       protocolParams = testProtocolParams,
       evaluator = testEvaluator,
-      validators = nonSigningValidators
+      validators = nonSigningValidators,
+      validityEnd = realTimeQuantizedInstant(testTxBuilderEnvironment.slotConfig).unsafeRunSync()
     )
 
 @nowarn("msg=unused value")

@@ -7,6 +7,7 @@ import cats.syntax.all.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.*
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.backend.cardano
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
@@ -27,8 +28,8 @@ import hydrozoa.rulebased.ledger.dapp.utxo.{OwnVoteUtxo, RuleBasedTreasuryUtxo, 
 import scala.concurrent.duration.FiniteDuration
 import scala.util.{Failure, Success, Try}
 import scalus.builtin.Data.fromData
+import scalus.cardano.ledger.DatumOption
 import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.{DatumOption, Slot}
 import scalus.cardano.txbuilder.SomeBuildError
 
 // QUESTION: The `OwnVoteUtxo` type is pretty sparse. Should I augment it directly, or did we want to keep
@@ -59,8 +60,6 @@ final case class DisputeActor(
     collateralUtxo: hydrozoa.Utxo[L1],
     blockHeader: OnchainBlockHeader,
     signatures: List[HeaderSignature],
-    // FIXME: this needs to be set individually for each tx.
-    validityEndSlot: Slot,
     ownPeerPkh: VerificationKeyBytes,
     config: Tx.Builder.Config,
     tokenNames: TokenNames,
@@ -68,7 +67,8 @@ final case class DisputeActor(
     cardanoBackend: CardanoBackend[IO],
     utxosToWithdrawL2: UtxoSetL2,
     receiveTimeout: FiniteDuration,
-    rbrmRef: ActorRef[IO, RuleBasedRegimeManager.Requests.Request]
+    rbrmRef: ActorRef[IO, RuleBasedRegimeManager.Requests.Request],
+    votingDeadline: QuantizedInstant
 ) extends Actor[IO, DisputeActor.Requests.Request] {
 
     private val handleDisputeRes: IO[Either[DisputeActor.Error.Error, Unit]] = {
@@ -99,10 +99,10 @@ final case class DisputeActor(
                       collateralUtxo = collateralUtxo,
                       blockHeader = blockHeader,
                       signatures = signatures,
-                      validityEndSlot = validityEndSlot,
                       network = config.env.network,
                       protocolParams = config.env.protocolParams,
                       evaluator = config.evaluator,
+                      validityEnd = votingDeadline,
                       validators = config.validators
                     )
                     for {
@@ -126,7 +126,6 @@ final case class DisputeActor(
                       removedVoteUtxo = TallyVoteUtxo(otherUtxos.tail.head._1),
                       treasuryUtxo = treasuryUtxo,
                       collateralUtxo = collateralUtxo,
-                      validityEndSlot = validityEndSlot,
                       network = config.env.network,
                       protocolParams = config.env.protocolParams,
                       evaluator = config.evaluator,
@@ -146,7 +145,6 @@ final case class DisputeActor(
                       talliedVoteUtxo = TallyVoteUtxo(lastVoteUtxo.head._1),
                       treasuryUtxo = treasuryUtxo,
                       collateralUtxo = collateralUtxo,
-                      validityEndSlot = validityEndSlot,
                       network = config.env.network,
                       protocolParams = config.env.protocolParams,
                       evaluator = config.evaluator,

@@ -22,6 +22,7 @@ import scalus.ledger.api.v3.TokenName
 import scalus.prelude as scalus
 import supranational.blst.Scalar
 import test.*
+import test.Generators.Hydrozoa.genAdaOnlyPubKeyUtxo
 
 /** Generator for resolved treasury UTXO with resolved datum */
 def genResolvedTreasuryUtxo(
@@ -149,17 +150,25 @@ def genWithdrawTxRecipe: Gen[WithdrawTx.Recipe] =
             Value(Coin(20_000_000L))
         adjustedTreasuryUtxo = treasuryUtxo.copy(value = sufficientTreasuryValue)
 
-        // Generate validity slot
-        validityEndSlot <- Gen.choose(100L, 1000L)
+        feeUtxo <- genAdaOnlyPubKeyUtxo(peer = peers.head, minimumCoin = Coin.ada(5))
+
     } yield WithdrawTx.Recipe(
       treasuryUtxo = adjustedTreasuryUtxo,
       withdrawals = withdrawals,
       membershipProof = membershipProof,
-      validityEndSlot = validityEndSlot,
       network = testNetwork,
       protocolParams = testProtocolParams,
       evaluator = testEvaluator,
-      validators = nonSigningValidators.filterNot(_ == FeesOkValidator)
+      validators = nonSigningValidators.filterNot(_ == FeesOkValidator),
+      feeUtxos = UtxoSet[L1](
+        Map(
+          (
+            UtxoIdL1(feeUtxo.input),
+            Output[L1](feeUtxo.output.asInstanceOf[TransactionOutput.Babbage])
+          )
+        )
+      ),
+      changeAddress = peers.head.address(testNetwork)
     )
 
 @nowarn("msg=unused value")

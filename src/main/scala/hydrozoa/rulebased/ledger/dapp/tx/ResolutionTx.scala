@@ -17,7 +17,7 @@ import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.{Utxo as _, *}
 import scalus.cardano.txbuilder.Datum.DatumInlined
 import scalus.cardano.txbuilder.ScriptSource.PlutusScriptValue
-import scalus.cardano.txbuilder.TransactionBuilderStep.{AddCollateral, Send, Spend, ValidityEndSlot}
+import scalus.cardano.txbuilder.TransactionBuilderStep.{AddCollateral, Send, Spend}
 import scalus.cardano.txbuilder.{ChangeOutputDiffHandler, SomeBuildError, ThreeArgumentPlutusScriptWitness, TransactionBuilder}
 
 final case class ResolutionTx(
@@ -33,7 +33,6 @@ object ResolutionTx {
         talliedVoteUtxo: TallyVoteUtxo,
         treasuryUtxo: RuleBasedTreasuryUtxo,
         collateralUtxo: Utxo[L1],
-        validityEndSlot: Slot,
         network: Network,
         protocolParams: ProtocolParams,
         evaluator: PlutusScriptEvaluator,
@@ -158,7 +157,6 @@ object ResolutionTx {
                       )
                     ),
                     AddCollateral(collateralUtxo.toScalus),
-                    ValidityEndSlot(recipe.validityEndSlot.slot)
                   )
                 )
 

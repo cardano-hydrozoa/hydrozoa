@@ -8,7 +8,7 @@ import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{ResolvedDatum, RuleBa
 import hydrozoa.rulebased.ledger.dapp.utxo.RuleBasedTreasuryUtxo
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
-import scalus.cardano.address.Network
+import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
@@ -16,7 +16,7 @@ import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.Datum.DatumInlined
 import scalus.cardano.txbuilder.ScriptSource.PlutusScriptValue
-import scalus.cardano.txbuilder.TransactionBuilderStep.{Send, Spend, ValidityEndSlot}
+import scalus.cardano.txbuilder.TransactionBuilderStep.{Send, Spend}
 import scalus.ledger.api.v3.{TxId, TxOutRef}
 import scalus.prelude.List as SList
 
@@ -34,7 +34,11 @@ object WithdrawTx {
         // NB: The order doesn't matter in the recipe, since either all withdrawals should make it to the tx.
         withdrawals: UtxoSetL2,
         membershipProof: IArray[Byte],
-        validityEndSlot: Long,
+        /** In the withdrawal tx, utxos have to be provided exogenously to pay the fees. Must be
+          * pubkey
+          */
+        feeUtxos: UtxoSetL1,
+        changeAddress: ShelleyAddress,
         network: Network,
         protocolParams: ProtocolParams,
         evaluator: PlutusScriptEvaluator,
@@ -128,6 +132,15 @@ object WithdrawTx {
                         Set.empty
                       )
                     ),
+                    // Create the empty change utxo
+                    Send(
+                      Babbage(
+                        address = changeAddress,
+                        value = Value.zero,
+                        datumOption = None,
+                        scriptRef = None
+                      )
+                    ),
                     // Send the remaining treasury back
                     Send(
                       Babbage(
@@ -136,12 +149,15 @@ object WithdrawTx {
                         datumOption = Some(Inline(newTreasuryDatum.toData)),
                         scriptRef = None
                       )
-                    ),
-                    ValidityEndSlot(validityEndSlot)
+                    )
                   )
                       ++
                           // Outputs for withdrawals
                           withdrawalOutputs.map(Send(_))
+                          // Spend the fee utxos
+                          ++ feeUtxos.toList.map((ti, to) =>
+                              Spend(scalus.cardano.ledger.Utxo(ti, to), PubKeyWitness)
+                          )
                 )
 
             finalized <- context

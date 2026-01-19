@@ -2,6 +2,7 @@ package hydrozoa.rulebased.ledger.dapp.tx
 
 import cats.implicits.*
 import hydrozoa.*
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.protocol.types.AckBlock.HeaderSignature
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{DisputeRedeemer, OnchainBlockHeader, VoteRedeemer}
@@ -37,7 +38,7 @@ object VoteTx {
         collateralUtxo: Utxo[L1],
         blockHeader: OnchainBlockHeader,
         signatures: List[HeaderSignature],
-        validityEndSlot: Slot,
+        validityEnd: QuantizedInstant,
         network: Network,
         protocolParams: ProtocolParams,
         evaluator: PlutusScriptEvaluator,
@@ -138,7 +139,7 @@ object VoteTx {
                     ),
                     ReferenceOutput(SUtxo(recipe.treasuryUtxo.asTuple)),
                     AddCollateral(recipe.collateralUtxo.toScalus),
-                    ValidityEndSlot(recipe.validityEndSlot.slot)
+                    ValidityEndSlot(recipe.validityEnd.toSlot.slot)
                   )
                 )
 

@@ -15,14 +15,24 @@ import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{MembershipProof, RuleBasedTreasuryDatum}
 import hydrozoa.rulebased.ledger.dapp.tx.WithdrawTx
 import hydrozoa.rulebased.ledger.dapp.utxo.RuleBasedTreasuryUtxo
-import hydrozoa.{L1, L2, Utxo, UtxoSet, UtxoSetL1, UtxoSetL2, rulebased}
+import hydrozoa.{L1, L2, Utxo, UtxoSet, UtxoSetL1, UtxoSetL2, VerificationKeyBytes, rulebased}
 import scala.concurrent.duration.FiniteDuration
+import scalus.cardano.address.ShelleyPaymentPart.Key
+import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart}
 import scalus.cardano.txbuilder.SomeBuildError
 
 case class LiquidationActor(
     utxosToWithdraw: UtxoSetL2,
     receiveTimeout: FiniteDuration,
     cardanoBackend: CardanoBackend[IO],
+    /** The PKH of the wallet that will pay for withdrawal TX fees and receive the change NOTE: The
+      * is no coin selection algorithm right now. This means that:
+      *   - This wallet MUST NOT contain anything but ADA-only utxos
+      *   - Every utxo at this address will be spent at each withdrawal transaction
+      *   - All ADA left-overs will be sent back to this address. Do NOT use this address for
+      *     anything else. Do NOT set the delegation part for this address
+      */
+    withdrawalFeePkh: VerificationKeyBytes,
     config: Tx.Builder.Config,
     headMultisigScript: HeadMultisigScript,
     tokenNames: TokenNames
@@ -63,15 +73,28 @@ case class LiquidationActor(
                       utxosToWithdraw.toList
                           .filter((id, output) => isMember(membershipProof, Utxo[L2](id, output)))
                     )
+
+                walletAddress = ShelleyAddress(
+                  network = config.env.network,
+                  payment = Key(withdrawalFeePkh.verKeyHash),
+                  delegation = ShelleyDelegationPart.Null
+                )
+                feeUtxos <- EitherT(
+                  cardanoBackend.utxosAt(
+                    address = walletAddress
+                  )
+                )
+
                 recipe = WithdrawTx.Recipe(
                   treasuryUtxo = treasuryUtxoAndDatum._1,
                   withdrawals = UtxoSet[L2](utxosNotWithdrawn),
                   membershipProof = IArray.from(membershipProof.bytes),
-                  validityEndSlot = ???,
                   network = config.env.network,
                   protocolParams = config.env.protocolParams,
                   evaluator = config.evaluator,
-                  validators = config.validators
+                  validators = config.validators,
+                  changeAddress = walletAddress,
+                  feeUtxos = feeUtxos
                 )
 
                 withdrawTx <- WithdrawTx.build(recipe) match {
