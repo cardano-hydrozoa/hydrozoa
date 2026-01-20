@@ -1,12 +1,12 @@
 package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.data.NonEmptyList
+import hydrozoa.config.HeadConfig.Fields.{HasCardanoInfo, HasEvaluator, HasHeadAddress, HasHeadMultisigScript, HasMultisigRegimeUtxo, HasTallyFeeAllowance, HasTokenNames, HasVotingDuration, *}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
-import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
-import hydrozoa.multisig.ledger.dapp.tx.{Metadata as _, *}
-import hydrozoa.multisig.ledger.dapp.utxo.MultisigTreasuryUtxo
+import hydrozoa.multisig.ledger.dapp.tx.{HasValidators, Metadata as _, *}
+import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.dapp.state.VoteDatum as VD
 import hydrozoa.{VerificationKeyBytes, ensureMinAda, maxNonPlutusTxFee, given}
@@ -28,12 +28,18 @@ final case class InitializationTxSeq(initializationTx: InitializationTx, fallbac
 object InitializationTxSeq {
 
     sealed trait ParseError
+
     case class InitializationTxParseError(wrapped: InitializationTx.ParseError) extends ParseError
+
     case class FallbackTxBuildError(wrapped: SomeBuildError) extends ParseError
+
     case class FallbackTxMismatch(expected: FallbackTx, actual: Transaction) extends ParseError
+
     case object FallbackTxValidityStartIsMissing extends ParseError
+
     case class FallbackTxValidityStartError(lowerPossible: Slot, upperPossible: Slot, actual: Slot)
         extends ParseError
+
     case class TTLValidityStartGapError(difference: Slot, actual: Slot) extends ParseError
 
     /** Given two transaction that should form a valid Initialization-Fallback Transaction Sequence,
@@ -89,28 +95,51 @@ object InitializationTxSeq {
                 .left
                 .map(InitializationTxParseError(_))
 
-            config = Tx.Builder.Config(
-              headNativeScript = HeadMultisigScript(peerKeys),
-              multisigRegimeUtxo = iTx.multisigRegimeWitness,
-              tokenNames = iTx.tokenNames,
-              env = env,
-              evaluator = evaluator,
-              validators = validators
-            )
+            thisEvaluator = evaluator
+            thisValidators = validators
+            config = new HasCardanoInfo
+                with HasEvaluator
+                with HasHeadMultisigScript
+                with HasMultisigRegimeUtxo
+                with HasTallyFeeAllowance
+                with HasTokenNames
+                with HasVotingDuration
+                with HasValidators
+                with HasHeadAddress {
+                override def cardanoInfo: CardanoInfo = env
+
+                override def evaluator: PlutusScriptEvaluator = thisEvaluator
+
+                /** The parameterized head multisig script pertaining to this hydrozoa head
+                  */
+                override def headMultisigScript: HeadMultisigScript = HeadMultisigScript(peerKeys)
+
+                override def multisigRegimeUtxo: MultisigRegimeUtxo = iTx.multisigRegimeWitness
+
+                override def tallyFeeAllowance: Coin = expectedTallyFeeAllowance
+
+                override def tokenNames: CIP67.TokenNames = iTx.tokenNames
+
+                override def votingDuration: QuantizedFiniteDuration = expectedVotingDuration
+
+                override def validators: Seq[Validator] = thisValidators
+
+                override def headAddress: ShelleyAddress =
+                    headMultisigScript.mkAddress(cardanoInfo.network)
+            }
 
             fallbackValidityStartSlot <- fallbackTx.body.value.validityStartSlot
                 .toRight(FallbackTxValidityStartIsMissing)
                 .map(Slot.apply)
 
             ftxRecipe = FallbackTx.Recipe(
-              config = config,
               treasuryUtxoSpent = iTx.treasuryProduced,
-              tallyFeeAllowance = expectedTallyFeeAllowance,
-              votingDuration = expectedVotingDuration,
-              // Time checks are done for the whole sequence later on, see down below.
               validityStart = fallbackValidityStartSlot
             )
-            expectedFallbackTx <- FallbackTx.build(ftxRecipe).left.map(FallbackTxBuildError(_))
+            expectedFallbackTx <- FallbackTx
+                .build(config, ftxRecipe)
+                .left
+                .map(FallbackTxBuildError(_))
 
             _ <-
                 if expectedFallbackTx.tx == fallbackTx then Right(())
@@ -143,24 +172,24 @@ object InitializationTxSeq {
     }
 
     /* OUTLINE:
-         The HMRW utxo is of a fixed size -- it has no datum and a fixed amount of tokens.
-         However, those tokens depend on the size of the vote utxos and collateral utxos that are in the fallback
-         transaction.
+       The HMRW utxo is of a fixed size -- it has no datum and a fixed amount of tokens.
+       However, those tokens depend on the size of the vote utxos and collateral utxos that are in the fallback
+       transaction.
 
-         Thus, there is a pseudo-dependency for building the initialization transaction -- we want to know the
-         size of the outputs of the fallback tx, but we don't actually need to construct the full fallback transaction.
-         We only need to construct its transaction outputs.
+       Thus, there is a pseudo-dependency for building the initialization transaction -- we want to know the
+       size of the outputs of the fallback tx, but we don't actually need to construct the full fallback transaction.
+       We only need to construct its transaction outputs.
 
-         The two options I thought of for doing this was:
+       The two options I thought of for doing this was:
 
-         - (1) Make a fallback "partial result" that returns the ada amount needed for the HRMW utxo and a callback to
-           finish the transaction.
-         - (2) Duplicate a little bit of work and construct the utxos in this builder as well as in the fallback tx
-           builder.
+       - (1) Make a fallback "partial result" that returns the ada amount needed for the HRMW utxo and a callback to
+         finish the transaction.
+       - (2) Duplicate a little bit of work and construct the utxos in this builder as well as in the fallback tx
+         builder.
 
-          I settled on (2) because it was the quickest to get running, while simplifying the fallback tx builder and
-           allowing it to be reused in the settlement tx sequence builder with identical semantics (just pass in the
-           treasury).
+        I settled on (2) because it was the quickest to get running, while simplifying the fallback tx builder and
+         allowing it to be reused in the settlement tx sequence builder with identical semantics (just pass in the
+         treasury).
      */
     object Builder {
 
@@ -285,25 +314,45 @@ object InitializationTxSeq {
                     .left
                     .map(InitializationTxError(_))
 
-                config = Tx.Builder.Config(
-                  headNativeScript = hns,
-                  multisigRegimeUtxo = initializationTx.multisigRegimeWitness,
-                  tokenNames = initializationTx.tokenNames,
-                  env = args.env,
-                  evaluator = args.evaluator,
-                  validators = args.validators
-                )
+                config: FallbackTx.Config = new HasCardanoInfo
+                    with HasEvaluator
+                    with HasHeadMultisigScript
+                    with HasMultisigRegimeUtxo
+                    with HasTallyFeeAllowance
+                    with HasTokenNames
+                    with HasVotingDuration
+                    with HasValidators
+                    with HasHeadAddress {
+                    override def cardanoInfo: CardanoInfo = args.env
+
+                    override def headAddress: ShelleyAddress =
+                        headMultisigScript.mkAddress(cardanoInfo.network)
+
+                    override def evaluator: PlutusScriptEvaluator = args.evaluator
+
+                    /** The parameterized head multisig script pertaining to this hydrozoa head
+                      */
+                    override def headMultisigScript: HeadMultisigScript = hns
+
+                    override def multisigRegimeUtxo: MultisigRegimeUtxo =
+                        initializationTx.multisigRegimeWitness
+
+                    override def tallyFeeAllowance: Coin = args.tallyFeeAllowance
+
+                    override def tokenNames: CIP67.TokenNames = initializationTx.tokenNames
+
+                    override def votingDuration: QuantizedFiniteDuration = args.votingDuration
+
+                    override def validators: Seq[Validator] = args.validators
+                }
 
                 fallbackTxRecipe = FallbackTx.Recipe(
-                  config = config,
                   treasuryUtxoSpent = initializationTx.treasuryProduced,
-                  tallyFeeAllowance = args.tallyFeeAllowance,
-                  votingDuration = args.votingDuration,
-                  validityStart = fallbackTxValidityStart.toSlot
+                  validityStart = fallbackTxValidityStart.toSlot,
                 )
 
                 fallbackTx <- FallbackTx
-                    .build(fallbackTxRecipe)
+                    .build(config, fallbackTxRecipe)
                     .left
                     .map(FallbackTxError(_))
 
@@ -314,7 +363,9 @@ object InitializationTxSeq {
         sealed trait Error extends Throwable
 
         case class FallbackPRError(e: SomeBuildError) extends Error
+
         case class InitializationTxError(e: SomeBuildError) extends Error
+
         case class FallbackTxError(e: SomeBuildError) extends Error
 
         final case class Args(

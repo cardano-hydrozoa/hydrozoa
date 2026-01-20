@@ -1,17 +1,15 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
+import hydrozoa.config.HeadConfig.Fields.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
-import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
-import hydrozoa.multisig.ledger.dapp.utxo.MultisigRegimeUtxo
 import monocle.Lens
 import scala.Function.const
 import scalus.cardano.address.ShelleyAddress
+import scalus.cardano.ledger.Transaction
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.ledger.{PlutusScriptEvaluator, Transaction}
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
-import scalus.cardano.txbuilder.{ChangeOutputDiffHandler, Environment, SomeBuildError, TransactionBuilder}
+import scalus.cardano.txbuilder.{ChangeOutputDiffHandler, SomeBuildError, TransactionBuilder}
 import sourcecode.*
 
 trait Tx[Self <: Tx[Self]] { self: Self =>
@@ -51,7 +49,12 @@ object Tx {
     }
 
     trait Builder {
-        def config: Builder.Config
+        def config: Tx.Builder.Config
+
+        extension (txbc: Tx.Builder.Config) {
+            def headAddress: ShelleyAddress =
+                txbc.headMultisigScript.mkAddress(txbc.cardanoInfo.network)
+        }
 
         final def finish(
             txBuilderContext: TransactionBuilder.Context
@@ -59,9 +62,9 @@ object Tx {
             // Try to build, balance, and validate the resulting transaction
             txBuilderContext
                 .finalizeContext(
-                  protocolParams = config.env.protocolParams,
+                  protocolParams = config.cardanoInfo.protocolParams,
                   diffHandler = ChangeOutputDiffHandler(
-                    protocolParams = config.env.protocolParams,
+                    protocolParams = config.cardanoInfo.protocolParams,
                     changeOutputIdx = 0
                   ).changeOutputDiffHandler,
                   evaluator = config.evaluator,
@@ -115,16 +118,18 @@ object Tx {
             def ctx: TransactionBuilder.Context
         }
 
-        final case class Config(
-            headNativeScript: HeadMultisigScript,
-            multisigRegimeUtxo: MultisigRegimeUtxo,
-            tokenNames: TokenNames,
-            env: Environment,
-            evaluator: PlutusScriptEvaluator,
-            validators: Seq[Validator]
-        ) {
-            lazy val headAddress: ShelleyAddress = headNativeScript.mkAddress(env.network)
-        }
+        type Config =
+            HasHeadMultisigScript & HasMultisigRegimeUtxo &
+                // FIXME: TokenNames can be derived from the other fields, but I'm not
+                // sure of the best way to make it accessible given what we're coming from
+                HasTokenNames & HasCardanoInfo &
+                // NOTE: I'm debating whether or not HasValidators should be part of the config.
+                // We don't necessarily want the validators passed around the same to each transaction, but everything else
+                // in this config DOES stay static.
+                HasValidators & HasEvaluator &
+                // FIXME: Head address can be derived from the other fields, but I'm not sure
+                // the best way to make it accessible given what we're coming from
+                HasHeadAddress
 
         object Incremental {
 
@@ -157,4 +162,8 @@ object Tx {
 
 trait HasResolvedUtxos {
     def resolvedUtxos: ResolvedUtxos
+}
+
+trait HasValidators {
+    def validators: Seq[Validator]
 }

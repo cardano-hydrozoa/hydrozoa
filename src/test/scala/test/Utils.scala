@@ -1,4 +1,5 @@
 package test
+import hydrozoa.config.HeadConfig.Fields.HasCardanoInfo
 import hydrozoa.multisig.ledger.VirtualLedgerM
 import scala.language.postfixOps
 import scalus.cardano.address.Network
@@ -64,11 +65,14 @@ val testTxBuilderEnvironment: CardanoInfo = CardanoInfo(
   network = testNetwork
 )
 
-def testVirtualLedgerConfig(slot: SlotNo): VirtualLedgerM.Config = VirtualLedgerM.Config(
-  slotConfig = testTxBuilderEnvironment.slotConfig,
-  protocolParams = testTxBuilderEnvironment.protocolParams,
-  network = testNetwork
-)
+def testVirtualLedgerConfig(slot: SlotNo): VirtualLedgerM.Config =
+    new HasCardanoInfo {
+        val cardanoInfo = CardanoInfo(
+          slotConfig = testTxBuilderEnvironment.slotConfig,
+          protocolParams = testTxBuilderEnvironment.protocolParams,
+          network = testNetwork
+        )
+    }
 
 // Get the minAda for an Ada only pubkey utxo
 def minPubkeyAda(params: ProtocolParams = blockfrost544Params): Coin = {

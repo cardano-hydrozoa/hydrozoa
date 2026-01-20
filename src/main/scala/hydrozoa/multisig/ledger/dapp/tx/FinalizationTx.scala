@@ -4,7 +4,7 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toQuantizedI
 import hydrozoa.multisig.ledger.dapp.tx.FinalizationTx.{MergedDeinit, WithDeinit}
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, HasCtx, explain}
 import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq
-import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo, ResidualTreasuryUtxo, RolloutUtxo}
+import hydrozoa.multisig.ledger.dapp.utxo.{MultisigTreasuryUtxo, ResidualTreasuryUtxo, RolloutUtxo}
 import hydrozoa.multisig.protocol.types.Block
 import hydrozoa.prebalancedLovelaceDiffHandler
 import monocle.Focus.focus
@@ -133,7 +133,6 @@ object FinalizationTx {
           */
         def upgrade(
             config: Tx.Builder.Config,
-            multisigUtxoToSpend: MultisigRegimeUtxo
         )(args: Args.Some): BuildErrorOr[args.Result] = {
 
             val ctx = args.input.ctx
@@ -147,7 +146,7 @@ object FinalizationTx {
 
             val residualTreasuryOutput = TransactionOutput.apply(
               treasuryOutput.address,
-              treasuryOutput.value + multisigUtxoToSpend.value
+              treasuryOutput.value + config.multisigRegimeUtxo.value
             )
 
             val ctxUpgraded: TransactionBuilder.Context =
@@ -159,7 +158,7 @@ object FinalizationTx {
 
             // Additional step - spend multisig regime utxo
             val spendMultisigRegimeUtxoStep =
-                Spend(multisigUtxoToSpend.asUtxo, config.headNativeScript.witness)
+                Spend(config.multisigRegimeUtxo.asUtxo, config.headMultisigScript.witness)
 
             for {
                 ctx <- TransactionBuilder
@@ -167,13 +166,13 @@ object FinalizationTx {
                     .explain(const("Could not modify (upgrade) settlement tx"))
 
                 diffHandler = new ChangeOutputDiffHandler(
-                  config.env.protocolParams,
+                  config.cardanoInfo.protocolParams,
                   treasuryOutputIndex
                 ).changeOutputDiffHandler
 
                 rebalanced <- ctx
                     .finalizeContext(
-                      config.env.protocolParams,
+                      config.cardanoInfo.protocolParams,
                       diffHandler,
                       config.evaluator,
                       config.validators
@@ -183,7 +182,7 @@ object FinalizationTx {
             } yield {
                 val residualTreasuryUtxo = ResidualTreasuryUtxo.apply(
                   treasuryTokenName = args.input.transaction.treasurySpent.treasuryTokenName,
-                  multisigRegimeTokenName = multisigUtxoToSpend.multisigRegimeTokenName,
+                  multisigRegimeTokenName = config.multisigRegimeUtxo.multisigRegimeTokenName,
                   utxoId = TransactionInput(rebalanced.transaction.id, treasuryOutputIndex),
                   // FIXME: Shall we be more specific about which outputs have which addresses?
                   address = residualTreasuryOutput.address.asInstanceOf[ShelleyAddress],
@@ -330,7 +329,7 @@ object FinalizationTx {
                     deinitTx.tx.body.value.outputs.toList.map(o => Send(o.value))
                 val mintSteps = deinitTx.tx.body.value.mint.get.assets.toList
                     .flatMap(p =>
-                        p._2.map(a => MintStep(p._1, a._1, a._2, config.headNativeScript.witness))
+                        p._2.map(a => MintStep(p._1, a._1, a._2, config.headMultisigScript.witness))
                     )
                 val feeStep = Fee(originalTx.body.value.fee + deinitTx.tx.body.value.fee)
 
@@ -339,14 +338,15 @@ object FinalizationTx {
                         .modify(ctxUpgraded, deinitOutputSteps ++ mintSteps :+ feeStep)
                     res <- ctx
                         .finalizeContext(
-                          config.env.protocolParams,
+                          config.cardanoInfo.protocolParams,
                           prebalancedLovelaceDiffHandler,
                           config.evaluator,
                           config.validators
                         )
                 } yield res
 
-                val separateResult = mkSeparateResult(majorVersionProduced, config.env.slotConfig)
+                val separateResult =
+                    mkSeparateResult(majorVersionProduced, config.cardanoInfo.slotConfig)
 
                 Right(
                   res match {
@@ -354,7 +354,7 @@ object FinalizationTx {
                           mkMergedResult(
                             ctx.transaction,
                             majorVersionProduced,
-                            config.env.slotConfig
+                            config.cardanoInfo.slotConfig
                           )
                       case Left(
                             SomeBuildError.ValidationError(e: InvalidTransactionSizeException, ctx)

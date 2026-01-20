@@ -4,6 +4,7 @@ import cats.*
 import cats.data.*
 import cats.effect.IO
 import cats.implicits.*
+import hydrozoa.config.HeadConfig.Fields.HasCardanoInfo
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.VirtualLedgerM.Error.{CborParseError, TransactionInvalidError}
 import hydrozoa.multisig.ledger.dapp.tx.Tx
@@ -14,7 +15,6 @@ import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.{KzgCommitment,
 import hydrozoa.{emptyContext, given}
 import io.bullet.borer.Cbor
 import monocle.syntax.all.*
-import scalus.cardano.address.Network
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.rules.{Context, State as ScalusState, UtxoEnv}
 
@@ -132,20 +132,18 @@ object VirtualLedgerM {
 
     sealed trait Error
 
-    final case class Config(
-        slotConfig: SlotConfig = SlotConfig.Mainnet,
-        protocolParams: ProtocolParams,
-        network: Network
-    ) {
+    type Config = HasCardanoInfo
+
+    extension (ci: CardanoInfo) {
 
         /** Turn into an L1 context with zero fee and an empty CertState
           *
           * @return
           */
-        def toL1Context(time: QuantizedInstant, slotConfig: SlotConfig): Context = Context(
+        def toL1Context(time: QuantizedInstant): Context = Context(
           fee = Coin(0),
-          env = UtxoEnv(time.toSlot.slot, protocolParams, CertState.empty, network),
-          slotConfig = slotConfig
+          env = UtxoEnv(time.toSlot.slot, ci.protocolParams, CertState.empty, ci.network),
+          slotConfig = ci.slotConfig
         )
     }
 
@@ -158,19 +156,15 @@ object VirtualLedgerM {
     object Config:
         val empty: Config = Config.fromL1Context(emptyContext)
 
-        def fromTxBuilderConfig(txbc: Tx.Builder.Config): Config = Config(
-          slotConfig = txbc.env.slotConfig,
-          protocolParams = txbc.env.protocolParams,
-          network = txbc.env.network
-        )
-
         /** Project an L1 context into an L2 context
           */
-        private def fromL1Context(l1Context: Context): Config = Config(
-          slotConfig = l1Context.slotConfig,
-          protocolParams = l1Context.env.params,
-          network = l1Context.env.network
-        )
+        private def fromL1Context(l1Context: Context): Config = new Config {
+            val cardanoInfo: CardanoInfo = CardanoInfo(
+              slotConfig = l1Context.slotConfig,
+              protocolParams = l1Context.env.params,
+              network = l1Context.env.network
+            )
+        }
 
     object State {
 
@@ -214,7 +208,7 @@ object VirtualLedgerM {
             for {
                 oldState <- jl.state.get
                 res = action.run(
-                  VirtualLedgerM.Config.fromTxBuilderConfig(jl.config),
+                  jl.config,
                   oldState.virtualLedgerState
                 )
                 b <- res match {

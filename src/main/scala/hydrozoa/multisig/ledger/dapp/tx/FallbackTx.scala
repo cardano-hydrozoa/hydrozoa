@@ -1,8 +1,9 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
+import hydrozoa.config.HeadConfig.Fields.{HasTallyFeeAllowance, HasVotingDuration}
 import hydrozoa.ensureMinAda
-import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, toQuantizedInstant}
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toQuantizedInstant}
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.Fallback
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
@@ -71,24 +72,26 @@ Fallback tx spec:
 // NOTE TO SELF: The multisig witness utxo is a FIXED SIZE utxo. We know the amount in it -- it is
 // maxNonPlutusTxFee + the vote allowance + the collateral allowance
 object FallbackTx {
-    def build(recipe: Recipe): Either[SomeBuildError, FallbackTx] = {
+    type Config = Tx.Builder.Config & HasTallyFeeAllowance & HasVotingDuration
+    def build[Config <: FallbackTx.Config](
+        config: Config,
+        recipe: Recipe
+    ): Either[SomeBuildError, FallbackTx] = {
         import recipe.*
         import config.*
-        import env.*
-        import tokenNames.*
         //////////////////////////////////////
         // Pre-processing
 
         val multisigDatum: MultisigTreasuryUtxo.Datum = treasuryUtxoSpent.datum
 
-        val hns = headNativeScript
+        val hns = headMultisigScript
 
         val newTreasuryDatum = UnresolvedDatum(
           headMp = hns.policyId,
-          disputeId = voteTokenName.bytes,
+          disputeId = config.tokenNames.voteTokenName.bytes,
           peers = SList.from(hns.requiredSigners.map(_.hash)),
           peersN = hns.numSigners,
-          deadlineVoting = recipe.votingDuration.finiteDuration.toMillis,
+          deadlineVoting = config.votingDuration.finiteDuration.toMillis,
           versionMajor = multisigDatum.versionMajor.toInt,
           params = multisigDatum.paramsHash,
           // TODO: pull in N first elements of G2 CRS
@@ -100,17 +103,17 @@ object FallbackTx {
           SortedMap(
             (
               hns.policyId,
-              SortedMap((voteTokenName, amount))
+              SortedMap((tokenNames.voteTokenName, amount))
             )
           )
         )
 
         def mkVoteUtxo(datum: Data): TransactionOutput = Babbage(
-          address = DisputeResolutionScript.address(network),
-          value = Value(recipe.tallyFeeAllowance, mkVoteToken(1)),
+          address = DisputeResolutionScript.address(config.cardanoInfo.network),
+          value = Value(config.tallyFeeAllowance, mkVoteToken(1)),
           datumOption = Some(Inline(datum)),
           scriptRef = None
-        ).ensureMinAda(env.protocolParams)
+        ).ensureMinAda(cardanoInfo.protocolParams)
 
         val defaultVoteUtxo = mkVoteUtxo(VD.default(treasuryUtxoSpent.datum.commit).toData)
 
@@ -127,14 +130,14 @@ object FallbackTx {
                   .map(es =>
                       Babbage(
                         address = ShelleyAddress(
-                          network = env.network,
+                          network = cardanoInfo.network,
                           payment = ShelleyPaymentPart.Key(es.hash),
                           delegation = Null
                         ),
-                        value = Value(recipe.tallyFeeAllowance),
+                        value = Value(config.tallyFeeAllowance),
                         datumOption = None,
                         scriptRef = None
-                      ).ensureMinAda(env.protocolParams)
+                      ).ensureMinAda(cardanoInfo.protocolParams)
                   )
                   .toList
             )
@@ -156,7 +159,7 @@ object FallbackTx {
 
         val mintVoteTokens = Mint(
           hns.policyId,
-          assetName = voteTokenName,
+          assetName = tokenNames.voteTokenName,
           amount = hns.numSigners + 1L,
           witness = NativeScriptWitness(NativeScriptAttached, Set.empty)
         )
@@ -166,7 +169,7 @@ object FallbackTx {
 
         val createCollateralUtxos: NonEmptyList[Send] = collateralUtxos.map(Send(_))
 
-        val disputeTreasuryAddress = RuleBasedTreasuryScript.address(network)
+        val disputeTreasuryAddress = RuleBasedTreasuryScript.address(cardanoInfo.network)
         val createDisputeTreasury = Send(
           Babbage(
             address = disputeTreasuryAddress,
@@ -179,7 +182,7 @@ object FallbackTx {
         val setMetaData = ModifyAuxiliaryData(_ =>
             Some(
               MD.apply(
-                Fallback(RuleBasedTreasuryScript.address(network))
+                Fallback(RuleBasedTreasuryScript.address(cardanoInfo.network))
               )
             )
         )
@@ -202,21 +205,23 @@ object FallbackTx {
         }
 
         for {
-            unbalanced <- TransactionBuilder.build(network = network, steps = steps)
+            unbalanced <- TransactionBuilder.build(network = cardanoInfo.network, steps = steps)
             finalized <- unbalanced.finalizeContext(
-              protocolParams = protocolParams,
+              protocolParams = cardanoInfo.protocolParams,
               // We balance the excess to the treasury. This will _not_ be pre-balanced, because the
               // HMRW Utxo contains extra ada to account for _any_ fallback transaction fee.
-              diffHandler = new ChangeOutputDiffHandler(protocolParams, 0).changeOutputDiffHandler,
+              diffHandler = new ChangeOutputDiffHandler(
+                cardanoInfo.protocolParams,
+                0
+              ).changeOutputDiffHandler,
               evaluator = evaluator,
-              validators = validators
+              validators = config.validators
             )
         } yield {
             val txId = finalized.transaction.id
             FallbackTx(
               // This is safe since we always set it
-              validityStart =
-                  Slot(setStartSlot.slot).toQuantizedInstant(recipe.config.env.slotConfig),
+              validityStart = Slot(setStartSlot.slot).toQuantizedInstant(cardanoInfo.slotConfig),
               treasurySpent = treasuryUtxoSpent,
               treasuryProduced = RuleBasedTreasuryUtxo(
                 utxoId = TransactionInput(txId, 0),
@@ -229,7 +234,7 @@ object FallbackTx {
                 utxoId = TransactionInput(txId, 1),
                 address = headAddress,
                 value = spendHMRW.utxo.output.value,
-                script = headNativeScript
+                script = headMultisigScript
               ),
               producedDefaultVoteUtxo =
                   Utxo(TransactionInput(txId, 1), createDefaultVoteUtxo.output),
@@ -249,7 +254,7 @@ object FallbackTx {
                   .zipWithIndex
                   .map(outputsZipped => {
                       val output = outputsZipped._1
-                      val actualIndex = outputsZipped._2 + 2 + headNativeScript.numSigners
+                      val actualIndex = outputsZipped._2 + 2 + headMultisigScript.numSigners
                       Utxo(
                         TransactionInput(txId, actualIndex),
                         output
@@ -262,15 +267,10 @@ object FallbackTx {
 
     // TODO: rename to args for consistency?
     case class Recipe(
-        config: Tx.Builder.Config,
         treasuryUtxoSpent: MultisigTreasuryUtxo,
-        tallyFeeAllowance: Coin,
-        // Voting duration from head parameters.
-        // TODO: see https://github.com/cardano-hydrozoa/hydrozoa/issues/129//
-        votingDuration: QuantizedFiniteDuration,
         // This is specified in slots rather than in the millis, since the builder
         // is used in fallback tx parsing, and we have to be able to specify precisely
         // the slot we see in the incoming exogenous fallback tx.
-        validityStart: Slot
+        validityStart: Slot,
     )
 }

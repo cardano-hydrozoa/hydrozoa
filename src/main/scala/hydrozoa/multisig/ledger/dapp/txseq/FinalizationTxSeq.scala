@@ -1,7 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.data.NonEmptyVector
-import hydrozoa.config.EquityShares
+import hydrozoa.config.HeadConfig.Fields.HasTxTiming
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.dapp
 import hydrozoa.multisig.ledger.dapp.tx
@@ -9,7 +9,7 @@ import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.tx.FinalizationTx.Builder.Args.toArgs1
 import hydrozoa.multisig.ledger.dapp.tx.FinalizationTx.Builder.PartialResult
 import hydrozoa.multisig.ledger.dapp.tx.SettlementTx.Builder.Args as SingleArgs
-import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo}
+import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
@@ -47,6 +47,8 @@ enum FinalizationTxSeq {
 
 object FinalizationTxSeq {
 
+    type Config = DeinitTx.Config & HasTxTiming
+
     extension (finalizationTxSeq: FinalizationTxSeq)
 
         def mbRollouts: List[RolloutTx] = finalizationTxSeq match {
@@ -65,11 +67,11 @@ object FinalizationTxSeq {
     import Builder.*
 
     final case class Builder(
-        config: Tx.Builder.Config
+        config: FinalizationTxSeq.Config
     ) {
         def build(args: Args): Either[Builder.Error, FinalizationTxSeq] = {
 
-            val upgrade = FinalizationTx.Builder.upgrade(config, args.multisigRegimeUtxoToSpend)
+            val upgrade = FinalizationTx.Builder.upgrade(config)
 
             NonEmptyVector.fromVector(args.payoutObligationsRemaining) match {
 
@@ -78,7 +80,7 @@ object FinalizationTxSeq {
                         // SettlementTx, but with no deposits
                         settlementTxRes <- SettlementTx.Builder
                             .NoPayouts(config)
-                            .build(args.toArgsNoPayouts)
+                            .build(args = args.toArgsNoPayouts(config.txTiming))
                             .left
                             .map(Builder.Error.SettlementError(_))
 
@@ -97,7 +99,6 @@ object FinalizationTxSeq {
                         deinitTx <- DeinitTx.Builder
                             .apply(
                               finalizationPartial.residualTreasuryProduced,
-                              args.equityShares,
                               config
                             )
                             .build
@@ -127,7 +128,7 @@ object FinalizationTxSeq {
                         // SettlementTx, but with no deposits
                         settlementTxRes <- SettlementTx.Builder
                             .WithPayouts(config)
-                            .build(args.toArgsWithPayouts(rolloutTxSeqPartial))
+                            .build(args.toArgsWithPayouts(rolloutTxSeqPartial, config.txTiming))
                             .left
                             .map(Error.SettlementError(_))
 
@@ -144,7 +145,6 @@ object FinalizationTxSeq {
                         deinitTx <- DeinitTx.Builder
                             .apply(
                               finalizationPartial.residualTreasuryProduced,
-                              args.equityShares,
                               config
                             )
                             .build
@@ -207,14 +207,11 @@ object FinalizationTxSeq {
             majorVersionProduced: Block.Version.Major,
             treasuryToSpend: MultisigTreasuryUtxo,
             payoutObligationsRemaining: Vector[Payout.Obligation],
-            multisigRegimeUtxoToSpend: MultisigRegimeUtxo,
-            equityShares: EquityShares,
             competingFallbackValidityStart: QuantizedInstant,
             blockCreatedOn: QuantizedInstant,
-            txTiming: TxTiming
         ) extends Payout.Obligation.Many.Remaining {
 
-            def toArgsNoPayouts: SingleArgs.NoPayouts =
+            def toArgsNoPayouts(txTiming: TxTiming): SingleArgs.NoPayouts =
                 SingleArgs.NoPayouts(
                   majorVersionProduced = majorVersionProduced,
                   treasuryToSpend = treasuryToSpend,
@@ -224,7 +221,8 @@ object FinalizationTxSeq {
                 )
 
             def toArgsWithPayouts(
-                rolloutTxSeqPartial: RolloutTxSeq.Builder.PartialResult
+                rolloutTxSeqPartial: RolloutTxSeq.Builder.PartialResult,
+                txTiming: TxTiming
             ): SingleArgs.WithPayouts = SingleArgs.WithPayouts(
               majorVersionProduced = majorVersionProduced,
               treasuryToSpend = treasuryToSpend,

@@ -1,10 +1,13 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.*
+import hydrozoa.config.HeadConfig.Fields.*
+import hydrozoa.lib.cardano.scalus.QuantizedTime
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, quantize}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
+import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq
-import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigTreasuryUtxo}
+import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.Block as HBlock
 import java.time.Instant
@@ -18,6 +21,7 @@ import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.LedgerToPlutusTranslation.getValue
 import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger.rules.STS
 import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
 import scalus.ledger.api.v1
 import scalus.ledger.api.v1.Value.valueOrd
@@ -136,8 +140,8 @@ def genSettlementTxSeqBuilder(
     )
 
     for {
-        (config, peers) <- genTxBuilderConfigAndPeers()
-        hns = config.headNativeScript
+        (txBuilderConfig, peers) <- genTxBuilderConfigAndPeers()
+        hns = txBuilderConfig.headMultisigScript
         majorVersion <- Gen.posNum[Int]
 
         genDeposit = genDepositUtxo(
@@ -161,19 +165,40 @@ def genSettlementTxSeqBuilder(
             case None      => Gen.listOfN(48, Arbitrary.arbitrary[Byte]).map(IArray.from(_))
             case Some(kzg) => Gen.const(kzg)
         }
+
+        settlementTxSeqConfig = new HasTxTiming
+            with HasTallyFeeAllowance
+            with HasVotingDuration
+            with HasHeadAddress
+            with HasHeadMultisigScript
+            with HasMultisigRegimeUtxo
+            with HasTokenNames
+            with HasCardanoInfo
+            with HasValidators
+            with HasEvaluator {
+            val txTiming: TxTiming = TxTiming.default(txBuilderConfig.cardanoInfo.slotConfig)
+            val tallyFeeAllowance: Coin = Coin.ada(2)
+            val votingDuration: QuantizedTime.QuantizedFiniteDuration =
+                FiniteDuration(24, HOURS).quantize(testTxBuilderEnvironment.slotConfig)
+            val headAddress: ShelleyAddress = hns.mkAddress(txBuilderConfig.cardanoInfo.network)
+            val headMultisigScript: HeadMultisigScript = hns
+            val multisigRegimeUtxo: MultisigRegimeUtxo = txBuilderConfig.multisigRegimeUtxo
+            val tokenNames: CIP67.TokenNames = txBuilderConfig.tokenNames
+            val cardanoInfo: CardanoInfo = txBuilderConfig.cardanoInfo
+            val validators: Seq[STS.Validator] = txBuilderConfig.validators
+            val evaluator: PlutusScriptEvaluator = txBuilderConfig.evaluator
+        }
+
     } yield (
-      SettlementTxSeq.Builder(config),
+      SettlementTxSeq.Builder(settlementTxSeqConfig),
       SettlementTxSeq.Builder.Args(
         kzgCommitment = kzg,
         majorVersionProduced = HBlock.Version.Major(majorVersion),
         depositsToSpend = deposits,
         payoutObligationsRemaining = payouts,
         treasuryToSpend = utxo,
-        tallyFeeAllowance = Coin.ada(2),
-        votingDuration = FiniteDuration(24, HOURS).quantize(testTxBuilderEnvironment.slotConfig),
         competingFallbackValidityStart = fallbackValidityStart,
         blockCreatedOn = blockCreatedOn,
-        txTiming = txTiming
       ),
       peers
     )
@@ -191,12 +216,8 @@ def genNextSettlementTxSeqBuilder(
     fallbackValidityStart: QuantizedInstant,
     blockCreatedOn: QuantizedInstant,
     majorVersion: Int,
-    headNativeScript: HeadMultisigScript,
-    builderConfig: Tx.Builder.Config,
-    txTiming: TxTiming,
+    builderConfig: SettlementTxSeq.Config,
     estimatedFee: Coin = Coin(5_000_000L),
-    params: ProtocolParams = blockfrost544Params,
-    network: Network = testNetwork,
     // If passed, the kzg commitment will be set to the value.
     // If not, its randomly generated
     kzgCommitment: Option[KzgCommitment] = None
@@ -212,16 +233,17 @@ def genNextSettlementTxSeqBuilder(
     )
 
     val genDeposit = genDepositUtxo(
-      network = network,
-      params = params,
-      headAddress = Some(headNativeScript.mkAddress(network))
+      network = builderConfig.cardanoInfo.network,
+      params = builderConfig.cardanoInfo.protocolParams,
+      headAddress =
+          Some(builderConfig.headMultisigScript.mkAddress(builderConfig.cardanoInfo.network))
     )
 
     given Ord[v1.Value] = valueOrd
 
     for {
         deposits <- genHelper(genDeposit)
-        payouts <- genHelper(genPayoutObligation(network))
+        payouts <- genHelper(genPayoutObligation(builderConfig.cardanoInfo.network))
         prefixes = (payouts.length to 0 by -1).map(payouts.take)
         infimum = prefixes
             .find(prefix =>
@@ -245,11 +267,8 @@ def genNextSettlementTxSeqBuilder(
         depositsToSpend = deposits,
         payoutObligationsRemaining = infimum,
         treasuryToSpend = treasuryToSpend,
-        tallyFeeAllowance = Coin.ada(2),
-        votingDuration = FiniteDuration(24, HOURS).quantize(testTxBuilderEnvironment.slotConfig),
         competingFallbackValidityStart = fallbackValidityStart,
         blockCreatedOn = blockCreatedOn,
-        txTiming = txTiming
       ),
     )
 }

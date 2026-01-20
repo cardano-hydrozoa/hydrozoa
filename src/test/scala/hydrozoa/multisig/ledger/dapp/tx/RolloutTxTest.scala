@@ -17,7 +17,7 @@ class RolloutTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
     val genLastBuilder: Gen[(RolloutTx.Builder.Last, RolloutTx.Builder.Args.Last)] =
         for {
             config <- genTxConfig()
-            genPayouts = genPayoutObligation(config.env.network)
+            genPayouts = genPayoutObligation(config.cardanoInfo.network)
             // We want to test small, medium, and large, so we do it with frequency
             payouts <-
                 Gen.frequency(
@@ -32,7 +32,7 @@ class RolloutTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
     val genNotLastBuilder: Gen[(RolloutTx.Builder.NotLast, RolloutTx.Builder.Args.NotLast)] =
         for {
             config <- genTxConfig()
-            payouts <- GenOther.nonEmptyVectorOf(genPayoutObligation(config.env.network))
+            payouts <- GenOther.nonEmptyVectorOf(genPayoutObligation(config.cardanoInfo.network))
             rolloutSpentVal <- Arbitrary.arbitrary[Coin].map(Value(_))
         } yield (
           RolloutTx.Builder.NotLast(config),
@@ -58,12 +58,12 @@ class RolloutTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
 
                 val unsignedSize = pr.get.ctx.transaction.toCbor.length
                 val withDummySigners = addDummySignatures(
-                  pr.get.builder.config.headNativeScript.numSigners,
+                  pr.get.builder.config.headMultisigScript.numSigners,
                   pr.get.ctx.transaction
                 )
                 val signedSize = withDummySigners.toCbor.length
 
-                val maxSize = builder.config.env.protocolParams.maxTxSize
+                val maxSize = builder.config.cardanoInfo.protocolParams.maxTxSize
                 assert(
                   signedSize <= maxSize,
                   "\n\t\tPartial result size with dummy signatures is too big: " +

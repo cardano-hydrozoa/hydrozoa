@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyVector
+import hydrozoa.config.HeadConfig.Fields.HasHeadAddress
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explain, explainAppendConst, explainConst}
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
@@ -23,6 +24,7 @@ sealed trait RolloutTx extends Tx[RolloutTx], RolloutUtxo.Spent, RolloutUtxo.MbP
 }
 
 object RolloutTx {
+    type Config = Tx.Builder.Config & HasHeadAddress
 
     /** The last rollout tx in the sequence. It spends a rollout utxo, but it doesn't produce a
       * rollout utxo.
@@ -52,7 +54,7 @@ object RolloutTx {
     import BuilderOps.*
 
     object Builder {
-        final case class Last(override val config: Tx.Builder.Config)
+        final case class Last(override val config: RefundTx.Config)
             extends Builder[RolloutTx.Last] {
 
             override type ArgsType = Args.Last
@@ -118,7 +120,7 @@ object RolloutTx {
                         .explain(const("Could not add rollout to context"))
                     finished <- addedRolloutInput
                         .finalizeContext(
-                          protocolParams = builder.config.env.protocolParams,
+                          protocolParams = builder.config.cardanoInfo.protocolParams,
                           diffHandler = prebalancedLovelaceDiffHandler,
                           evaluator = builder.config.evaluator,
                           validators = builder.config.validators
@@ -146,7 +148,7 @@ object RolloutTx {
             final case class First[T <: RolloutTx](
                 override val builder: Builder[T],
                 override val ctx: TransactionBuilder.Context,
-                override val inputValueNeeded: Value
+                override val inputValueNeeded: Value,
             ) extends PartialResult[T]
 
             /** A non-first [[RolloutTx]] in the sequence. As such, it has at least one
@@ -256,7 +258,7 @@ object RolloutTx {
             for {
                 ctx <- TransactionBuilder
                     .build(
-                      config.env.network,
+                      config.cardanoInfo.network,
                       BasePessimistic.commonSteps(config) ++ RolloutOutput
                           .mbSendRollout(config, args.mbRolloutOutputValue)
                           .toList
@@ -325,26 +327,26 @@ object RolloutTx {
 
     private object BuilderOps {
         object BasePessimistic {
-            def commonSteps(config: Tx.Builder.Config): List[TransactionBuilderStep] =
+            def commonSteps(config: RolloutTx.Config): List[TransactionBuilderStep] =
                 List(stepRolloutMetadata(config), stepReferenceHNS(config))
 
-            private def stepRolloutMetadata(config: Tx.Builder.Config): ModifyAuxiliaryData =
+            private def stepRolloutMetadata(config: RolloutTx.Config): ModifyAuxiliaryData =
                 ModifyAuxiliaryData(_ => Some(MD(MD.Rollout(headAddress = config.headAddress))))
 
-            private def stepReferenceHNS(config: Tx.Builder.Config) =
+            private def stepReferenceHNS(config: RolloutTx.Config) =
                 ReferenceOutput(config.multisigRegimeUtxo.asUtxo)
 
         }
 
         object RolloutOutput {
             def mbSendRollout(
-                config: Tx.Builder.Config,
+                config: RolloutTx.Config,
                 mbRolloutOutputValue: Option[Value]
             ): Option[Send] =
                 mbRolloutOutputValue.map(x => Send(rolloutOutput(config, x)))
 
             private def rolloutOutput(
-                config: Tx.Builder.Config,
+                config: RolloutTx.Config,
                 rolloutOutputValue: Value
             ): TxOutput.Babbage = {
                 TxOutput.Babbage(
@@ -358,10 +360,10 @@ object RolloutTx {
 
         object SpendRollout {
             def spendRollout(
-                config: Tx.Builder.Config,
+                config: RolloutTx.Config,
                 resolvedUtxo: Utxo
             ): Spend =
-                Spend(resolvedUtxo, config.headNativeScript.witness)
+                Spend(resolvedUtxo, config.headMultisigScript.witness)
         }
 
         object Placeholder {
@@ -375,7 +377,7 @@ object RolloutTx {
             ): BuildErrorOr[Value] = {
                 // The deficit in the inputs to the transaction prior to adding the placeholder
                 val valueNeeded =
-                    Placeholder.inputValueNeeded(ctx, builder.config.env.protocolParams)
+                    Placeholder.inputValueNeeded(ctx, builder.config.cardanoInfo.protocolParams)
                 trialFinishLoop(builder, ctx, valueNeeded)
             }
 
@@ -390,7 +392,7 @@ object RolloutTx {
                     // TODO: move out of loop
                     addedPlaceholderRolloutInput <- TransactionBuilder.modify(ctx, placeholder)
                     res <- addedPlaceholderRolloutInput.finalizeContext(
-                      builder.config.env.protocolParams,
+                      builder.config.cardanoInfo.protocolParams,
                       prebalancedLovelaceDiffHandler,
                       builder.config.evaluator,
                       List(TransactionSizeValidator)

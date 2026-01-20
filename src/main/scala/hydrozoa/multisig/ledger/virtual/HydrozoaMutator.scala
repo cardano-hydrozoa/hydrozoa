@@ -1,7 +1,7 @@
 package hydrozoa.multisig.ledger.virtual
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.VirtualLedgerM
-import hydrozoa.multisig.ledger.VirtualLedgerM.{Config, State}
+import hydrozoa.multisig.ledger.VirtualLedgerM.{Config, State, toL1Context}
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import scalus.cardano.ledger.AuxiliaryData.Metadata
@@ -24,7 +24,7 @@ object HydrozoaTransactionMutator {
         // A helper for mapping the error type and applying arguments
         def helper(v: Validator): Either[String | TransactionException, Unit] =
             v.validate(
-              context.toL1Context(time, context.slotConfig),
+              context.cardanoInfo.toL1Context(time),
               L1State(utxos = state.activeUtxos),
               event
             )
@@ -55,7 +55,7 @@ object HydrozoaTransactionMutator {
             // Upstream mutators
             state <-
                 PlutusScriptsTransactionMutator.transit(
-                  context.toL1Context(time, context.slotConfig),
+                  context.cardanoInfo.toL1Context(time),
                   state.toScalusState,
                   event
                 )

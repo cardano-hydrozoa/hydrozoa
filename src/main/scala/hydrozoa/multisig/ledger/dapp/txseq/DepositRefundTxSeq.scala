@@ -2,7 +2,7 @@ package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.data.NonEmptyList
 import hydrozoa.lib.cardano.scalus.QuantizedTime.toEpochQuantizedInstant
-import hydrozoa.multisig.ledger.dapp.tx.{DepositTx, RefundTx, Tx, TxTiming}
+import hydrozoa.multisig.ledger.dapp.tx.{DepositTx, RefundTx, Tx}
 import hydrozoa.multisig.ledger.dapp.txseq.DepositRefundTxSeq.ParseError.VirtualOutputRefScriptInvalid
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.virtual.GenesisObligation
@@ -31,16 +31,17 @@ object DepositRefundTxSeq {
         }
     }
 
+    // TODO: Curry this so we can partially apply?
     final case class Builder(
-        config: Tx.Builder.Config,
+        config: DepositTx.Config,
         refundInstructions: DepositUtxo.Refund.Instructions,
         refundValue: Value,
         utxosFunding: NonEmptyList[Utxo],
         virtualOutputs: NonEmptyList[GenesisObligation],
         donationToTreasury: Coin,
         changeAddress: ShelleyAddress,
-        txTiming: TxTiming
     ) {
+        import config.*
         def build: Either[Builder.Error, DepositRefundTxSeq] = for {
             partialRefundTx <- RefundTx.Builder
                 .PostDated(config, refundInstructions, refundValue)
@@ -55,8 +56,7 @@ object DepositRefundTxSeq {
                   utxosFunding,
                   virtualOutputs,
                   donationToTreasury,
-                  changeAddress,
-                  txTiming = txTiming
+                  changeAddress
                 )
                 .build()
                 .left
@@ -108,7 +108,7 @@ object DepositRefundTxSeq {
                   depositTx.validityEnd + txTiming.depositMaturityDuration + txTiming.depositAbsorptionDuration + txTiming.silenceDuration
                       == refundTx.startTime
                       && refundTx.startTime == depositTx.depositProduced.datum.refundInstructions.startTime
-                          .toEpochQuantizedInstant(config.env.slotConfig),
+                          .toEpochQuantizedInstant(config.cardanoInfo.slotConfig),
                   (),
                   Builder.Error.TimingIncoherence // we don't return a DepositRefundTxSeq, because it's not valid
                 )
@@ -152,78 +152,84 @@ object DepositRefundTxSeq {
         refundTxBytes: Tx.Serialized,
         virtualOutputsBytes: Array[Byte],
         donationToTreasury: Coin,
-        config: Tx.Builder.Config,
-        txTiming: TxTiming,
-    ): Either[ParseError, DepositRefundTxSeq] = for {
-        virtualOutputs: NonEmptyList[GenesisObligation] <- for {
-            parsed <- Cbor
-                .decode(virtualOutputsBytes)
-                .to[List[TransactionOutput]]
-                .valueTry
-                .toEither
+        config: DepositTx.Config,
+    ): Either[ParseError, DepositRefundTxSeq] = {
+        import config.*
+        for {
+            virtualOutputs: NonEmptyList[GenesisObligation] <- for {
+                parsed <- Cbor
+                    .decode(virtualOutputsBytes)
+                    .to[List[TransactionOutput]]
+                    .valueTry
+                    .toEither
+                    .left
+                    .map(ParseError.VirtualOutputs(_))
+                nonEmpty <- NonEmptyList.fromList(parsed).toRight(ParseError.NoVirtualOutputs)
+                // This whole inner traverse could probably be factored out just to parse a genesis obligation from
+                // a transaction output
+                genesisObligations <- nonEmpty.traverse(GenesisObligation.fromTransactionOutput)
+            } yield genesisObligations
+
+            virtualValue = Value.combine(virtualOutputs.toList.map(vo => Value(vo.l2OutputValue)))
+
+            depositTx <- DepositTx
+                .parse(
+                  txBytes = depositTxBytes,
+                  config = config,
+                  virtualOutputs = virtualOutputs,
+                )
                 .left
-                .map(ParseError.VirtualOutputs(_))
-            nonEmpty <- NonEmptyList.fromList(parsed).toRight(ParseError.NoVirtualOutputs)
-            // This whole inner traverse could probably be factored out just to parse a genesis obligation from
-            // a transaction output
-            genesisObligations <- nonEmpty.traverse(GenesisObligation.fromTransactionOutput)
-        } yield genesisObligations
+                .map(ParseError.Deposit(_))
 
-        virtualValue = Value.combine(virtualOutputs.toList.map(vo => Value(vo.l2OutputValue)))
+            refundTxAny <- RefundTx
+                .parse(refundTxBytes, config.cardanoInfo)
+                .left
+                .map(ParseError.Refund(_))
+            refundTx <- refundTxAny match {
+                case tx: RefundTx.PostDated => Right(tx)
+                case _                      => Left(ParseError.RefundNotPostDated)
+            }
 
-        depositTx <- DepositTx
-            .parse(
-              txBytes = depositTxBytes,
-              config = config,
-              virtualOutputs = virtualOutputs,
-              txTiming = txTiming
-            )
-            .left
-            .map(ParseError.Deposit(_))
+            depositUtxo = depositTx.depositProduced
+            depositValue = depositUtxo.l1OutputValue
 
-        refundTxAny <- RefundTx.parse(refundTxBytes, config.env).left.map(ParseError.Refund(_))
-        refundTx <- refundTxAny match {
-            case tx: RefundTx.PostDated => Right(tx)
-            case _                      => Left(ParseError.RefundNotPostDated)
-        }
+            refundInstructions = depositUtxo.l1OutputDatum.refundInstructions
+            refundFee = refundTx.tx.body.value.fee
+            refundValue = depositValue - Value(refundFee)
 
-        depositUtxo = depositTx.depositProduced
-        depositValue = depositUtxo.l1OutputValue
+            expectedDepositValue = virtualValue + Value(donationToTreasury + refundFee)
 
-        refundInstructions = depositUtxo.l1OutputDatum.refundInstructions
-        refundFee = refundTx.tx.body.value.fee
-        refundValue = depositValue - Value(refundFee)
+            expectedRefundTx <- RefundTx.Builder
+                .PostDated(config, refundInstructions, refundValue)
+                .partialResult
+                .flatMap(_.complete(depositUtxo, config))
+                .left
+                .map(ParseError.ExpectedRefundBuildError(_))
 
-        expectedDepositValue = virtualValue + Value(donationToTreasury + refundFee)
-
-        expectedRefundTx <- RefundTx.Builder
-            .PostDated(config, refundInstructions, refundValue)
-            .partialResult
-            .flatMap(_.complete(depositUtxo, config))
-            .left
-            .map(ParseError.ExpectedRefundBuildError(_))
-
-        _ <- Either.cond(
-          depositValue == expectedDepositValue,
-          (),
-          ParseError.DepositValueMismatch(depositValue, expectedDepositValue)
-        )
-
-        _ <- Either.cond(
-          refundTx.focus(_.tx.witnessSet).replace(TransactionWitnessSet.empty) == expectedRefundTx,
-          (),
-          ParseError.RefundTxMismatch(refundTx, expectedRefundTx)
-        )
-
-        _ <- Either
-            .cond(
-              depositTx.validityEnd + txTiming.depositMaturityDuration + txTiming.depositAbsorptionDuration + txTiming.silenceDuration
-                  == refundTx.startTime
-                  && refundTx.startTime == depositTx.depositProduced.datum.refundInstructions.startTime
-                      .toEpochQuantizedInstant(config.env.slotConfig),
+            _ <- Either.cond(
+              depositValue == expectedDepositValue,
               (),
-              ParseError.TimingIncoherence // we don't return a DepositRefundTxSeq, because it's not valid
+              ParseError.DepositValueMismatch(depositValue, expectedDepositValue)
             )
 
-    } yield DepositRefundTxSeq(depositTx, refundTx)
+            _ <- Either.cond(
+              refundTx
+                  .focus(_.tx.witnessSet)
+                  .replace(TransactionWitnessSet.empty) == expectedRefundTx,
+              (),
+              ParseError.RefundTxMismatch(refundTx, expectedRefundTx)
+            )
+
+            _ <- Either
+                .cond(
+                  depositTx.validityEnd + txTiming.depositMaturityDuration + txTiming.depositAbsorptionDuration + txTiming.silenceDuration
+                      == refundTx.startTime
+                      && refundTx.startTime == depositTx.depositProduced.datum.refundInstructions.startTime
+                          .toEpochQuantizedInstant(config.cardanoInfo.slotConfig),
+                  (),
+                  ParseError.TimingIncoherence // we don't return a DepositRefundTxSeq, because it's not valid
+                )
+
+        } yield DepositRefundTxSeq(depositTx, refundTx)
+    }
 }

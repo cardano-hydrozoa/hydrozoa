@@ -2,9 +2,13 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.*
 import hydrozoa.*
+import hydrozoa.config.EquityShares
+import hydrozoa.config.HeadConfig.Fields.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, quantize}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
+import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
+import hydrozoa.multisig.ledger.dapp.txseq
 import hydrozoa.multisig.ledger.dapp.txseq.FinalizationTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
@@ -18,6 +22,7 @@ import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
+import scalus.cardano.ledger.rules.STS
 import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
 import test.*
 import test.Generators.Hydrozoa.*
@@ -90,7 +95,7 @@ def genStandaloneFinalizationTxSeqBuilder(
 
     for {
         res <- genTxBuilderConfigAndPeers()
-        (config, peers) = res
+        (txBuilderConfig, peers) = res
 
         majorVersion <- Gen.posNum[Int]
 
@@ -99,7 +104,7 @@ def genStandaloneFinalizationTxSeqBuilder(
             .map(_.utxo.value.coin)
             .fold(Coin.zero)(_ + _)
 
-        headAddress = config.headNativeScript.mkAddress(network)
+        headAddress = txBuilderConfig.headMultisigScript.mkAddress(network)
 
         treasuryUtxo <- genTreasuryUtxo(
           headAddress = Some(headAddress),
@@ -113,26 +118,38 @@ def genStandaloneFinalizationTxSeqBuilder(
             case None      => Gen.listOfN(48, Arbitrary.arbitrary[Byte]).map(IArray.from(_))
             case Some(kzg) => Gen.const(kzg)
         }
+        finalizationTxSeqConfig = new HasTxTiming
+            with HasEquityShares
+            with HasHeadMultisigScript
+            with HasMultisigRegimeUtxo
+            with HasTokenNames
+            with HasCardanoInfo
+            with HasValidators
+            with HasEvaluator
+            with HasHeadAddress {
+            val headMultisigScript: HeadMultisigScript = ???
+            val txTiming: TxTiming = TxTiming.default(cardanoInfo.slotConfig)
+            val equityShares: EquityShares = equityShares
+            val multisigRegimeUtxo: MultisigRegimeUtxo = txBuilderConfig.multisigRegimeUtxo
+            val tokenNames: TokenNames = txBuilderConfig.tokenNames
+            val cardanoInfo: CardanoInfo = txBuilderConfig.cardanoInfo
+            val validators: Seq[STS.Validator] = nonSigningNonValidityChecksValidators
+            val evaluator: PlutusScriptEvaluator = txBuilderConfig.evaluator
+            val headAddress: ShelleyAddress = headAddress
+        }
+
     } yield (
-      FinalizationTxSeq.Builder(config = config),
+      FinalizationTxSeq.Builder(config = finalizationTxSeqConfig),
       FinalizationTxSeq.Builder.Args(
         majorVersionProduced = HBlock.Version.Major(majorVersion),
         treasuryToSpend = treasuryUtxo,
         payoutObligationsRemaining = payouts,
-        multisigRegimeUtxoToSpend = MultisigRegimeUtxo.apply(
-          config.tokenNames.multisigRegimeTokenName,
-          config.multisigRegimeUtxo.input,
-          config.multisigRegimeUtxo.output,
-          config.headNativeScript
-        ),
-        equityShares = shares,
         competingFallbackValidityStart = Instant
             .ofEpochMilli(System.currentTimeMillis() + 3_600_000)
             .quantize(testTxBuilderEnvironment.slotConfig),
         blockCreatedOn = Instant
             .ofEpochMilli(System.currentTimeMillis())
             .quantize(testTxBuilderEnvironment.slotConfig),
-        txTiming = TxTiming.default(config.env.slotConfig)
       ),
       peers
     )
@@ -143,12 +160,9 @@ def genFinalizationTxSeqBuilder(
     majorVersion: Int,
     fallbackValidityStart: QuantizedInstant,
     blockCreatedOn: QuantizedInstant,
-    txTiming: TxTiming,
-    config: Tx.Builder.Config,
+    config: txseq.FinalizationTxSeq.Config,
     peers: NonEmptyList[TestPeer],
     estimatedFeesAndEquity: Coin = Coin(50_000_000L),
-    params: ProtocolParams = blockfrost544Params,
-    network: Network = testNetwork,
     // If passed, the kzg commitment will be set to the value.
     // If not, its randomly generated
     kzgCommitment: Option[KzgCommitment] = None
@@ -167,7 +181,9 @@ def genFinalizationTxSeqBuilder(
                 yield Left(next :: tails)
         }
 
-        payouts <- Gen.sequence(coins.map(l => genKnownCoinPayoutObligation(network, Coin(l))))
+        payouts <- Gen.sequence(
+          coins.map(l => genKnownCoinPayoutObligation(config.cardanoInfo.network, Coin(l)))
+        )
 
         shares <- genEquityShares(peers)
 
@@ -181,16 +197,8 @@ def genFinalizationTxSeqBuilder(
         majorVersionProduced = HBlock.Version.Major(majorVersion),
         treasuryToSpend = treasuryToSpend,
         payoutObligationsRemaining = payouts.asScala.toVector,
-        multisigRegimeUtxoToSpend = MultisigRegimeUtxo.apply(
-          config.tokenNames.multisigRegimeTokenName,
-          config.multisigRegimeUtxo.input,
-          config.multisigRegimeUtxo.output,
-          config.headNativeScript
-        ),
-        equityShares = shares,
         competingFallbackValidityStart = fallbackValidityStart,
         blockCreatedOn = blockCreatedOn,
-        txTiming = txTiming
       )
     )
 }
