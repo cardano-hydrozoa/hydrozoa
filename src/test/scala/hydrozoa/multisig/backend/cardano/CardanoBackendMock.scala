@@ -5,6 +5,7 @@ import cats.data.State
 import cats.effect.{IO, Ref}
 import cats.syntax.all.catsSyntaxFlatMapOps
 import cats.~>
+import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.multisig.backend.cardano.CardanoBackend.GetTxInfo
 import hydrozoa.{L1, Output, UtxoIdL1, UtxoSet, UtxoSetL1}
 import scalus.cardano.address.ShelleyAddress
@@ -36,14 +37,17 @@ class CardanoBackendMock private (
 
     override def utxosAt(
         address: ShelleyAddress
-    ): State[MockState, Either[CardanoBackend.Error, UtxoSetL1]] = for {
-        state: MockState <- get
-        ret: UtxoSetL1 = UtxoSet(
-          state.ledgerState.utxos
-              .filter((_, o) => o.address == address)
-              .map((in, out) => UtxoIdL1(in) -> Output[L1](out.asInstanceOf[Babbage]))
-        )
-    } yield Right(ret)
+    ): State[MockState, Either[CardanoBackend.Error, UtxoSetL1]] = {
+        println("utxosAt")
+        for {
+            state: MockState <- get
+            ret: UtxoSetL1 = UtxoSet(
+              state.ledgerState.utxos
+                  .filter((_, o) => o.address == address)
+                  .map((in, out) => UtxoIdL1(in) -> Output[L1](out.asInstanceOf[Babbage]))
+            )
+        } yield Right(ret)
+    }
 
     override def utxosAt(
         address: ShelleyAddress,
@@ -72,7 +76,10 @@ class CardanoBackendMock private (
         ret = GetTxInfo.Response(state.knownTxs.contains(txHash))
     } yield Right(ret)
 
-    override def submitTx(tx: Transaction): State[MockState, Either[CardanoBackend.Error, Unit]] =
+    override def submitTx(tx: Transaction): State[MockState, Either[CardanoBackend.Error, Unit]] = {
+        println(s"submitTx: ${tx.id}")
+        println(s"submitTx: ${HexUtil.encodeHexString(tx.toCbor)}")
+
         for {
             state: MockState <- get
             ret <-
@@ -81,7 +88,8 @@ class CardanoBackendMock private (
                 then pure(Right(()))
                 else
                     mutator.transit(context, state.ledgerState, tx) match {
-                        case Left(err) => pure(Left(Error.InvalidTx(err.explain)))
+                        case Left(err) =>
+                            pure(Left(Error.InvalidTx(err.explain)))
                         case Right(newLedgerState) =>
                             set(
                               state.copy(
@@ -91,6 +99,7 @@ class CardanoBackendMock private (
                             ) >> pure(Right(()))
                     }
         } yield ret
+    }
 }
 
 object CardanoBackendMock {

@@ -34,7 +34,7 @@ final case class DeinitTx(
     override val residualTreasurySpent: ResidualTreasuryUtxo,
     override val tx: Transaction,
     override val txLens: Lens[DeinitTx, Transaction] = Focus[DeinitTx](_.tx),
-    override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
+    override val resolvedUtxos: ResolvedUtxos
 ) extends Tx[DeinitTx],
       ResidualTreasuryUtxo.Spent
 
@@ -46,7 +46,11 @@ object DeinitTx:
         config: Tx.Builder.Config
     ) {
         def postProcess(ctx: TransactionBuilder.Context): DeinitTx =
-            DeinitTx(residualTreasuryToSpend, ctx.transaction)
+            DeinitTx(
+              residualTreasurySpent = residualTreasuryToSpend,
+              tx = ctx.transaction,
+              resolvedUtxos = ctx.resolvedUtxos
+            )
 
         private val steps = Steps(residualTreasuryToSpend, equityShares, config)
 

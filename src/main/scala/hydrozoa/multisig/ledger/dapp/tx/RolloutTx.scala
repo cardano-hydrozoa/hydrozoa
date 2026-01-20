@@ -33,7 +33,7 @@ object RolloutTx {
         override val rolloutSpent: RolloutUtxo,
         override val txLens: Lens[RolloutTx, Transaction] =
             Focus[Last](_.tx).asInstanceOf[Lens[RolloutTx, Transaction]],
-        override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
+        override val resolvedUtxos: ResolvedUtxos
     ) extends RolloutTx
 
     /** A rollout tx preceding the last one in the sequence. It both spends and produces a rollout
@@ -469,7 +469,8 @@ object RolloutTx {
             def last(ctx: TransactionBuilder.Context): RolloutTx.Last = {
                 RolloutTx.Last(
                   rolloutSpent = PostProcess.unsafeGetRolloutSpent(ctx),
-                  tx = ctx.transaction
+                  tx = ctx.transaction,
+                  resolvedUtxos = ctx.resolvedUtxos
                 )
             }
 

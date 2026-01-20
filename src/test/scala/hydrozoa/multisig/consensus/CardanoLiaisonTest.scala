@@ -2,35 +2,40 @@ package hydrozoa.multisig.consensus
 
 import cats.*
 import cats.data.NonEmptyList
+import cats.effect.IO
+import cats.effect.testkit.TestControl
 import cats.effect.unsafe.implicits.*
-import cats.effect.{IO, Ref}
 import cats.syntax.all.*
+import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.test.TestKit
 import com.suprnation.actor.{ActorSystem, test as _}
-import hydrozoa.lib.cardano.scalus.QuantizedTime.toQuantizedInstant
-import hydrozoa.multisig.backend.cardano.CardanoBackend.GetTxInfo
-import hydrozoa.multisig.backend.cardano.{CardanoBackend, yaciTestSauceGenesis}
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toQuantizedInstant}
+import hydrozoa.lib.cardano.scalus.given
+import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState, yaciTestSauceGenesis}
+import hydrozoa.multisig.consensus.BlockWeaver.Request
 import hydrozoa.multisig.consensus.CardanoLiaison.{FinalBlockConfirmed, MajorBlockConfirmed}
+import hydrozoa.multisig.consensus.CardanoLiaisonTest.BlockEffectsSignedChain.*
 import hydrozoa.multisig.consensus.CardanoLiaisonTest.Rollback.SettlementTiming
-import hydrozoa.multisig.consensus.CardanoLiaisonTest.Skeleton.*
+import hydrozoa.multisig.consensus.CardanoLiaisonTest.Rollback.SettlementTiming.*
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.Config
-import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, RolloutTx, Tx, TxTiming, genFinalizationTxSeqBuilder, genNextSettlementTxSeqBuilder}
-import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, InitializationTxSeq, InitializationTxSeqTest, RolloutTxSeq, SettlementTxSeq}
-import hydrozoa.multisig.protocol.types.Block
-import hydrozoa.{L1, Output, UtxoId, UtxoIdL1, UtxoSet, UtxoSetL1}
+import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, FinalizationTx, RolloutTx, SettlementTx, Tx, TxTiming, genFinalizationTxSeqBuilder, genNextSettlementTxSeqBuilder}
+import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, InitializationTxSeq, InitializationTxSeqTest, SettlementTxSeq}
+import hydrozoa.multisig.protocol.types.{Block, BlockEffectsSigned}
+import hydrozoa.{L1, Output, UtxoId, UtxoSet, UtxoSetL1, attachVKeyWitnesses}
+import java.util.concurrent.TimeUnit
+import monocle.Focus.focus
 import org.scalacheck.*
 import org.scalacheck.Gen.{choose, tailRecM}
 import org.scalacheck.Prop.forAll
-import scalus.cardano.address.ShelleyAddress
+import scala.concurrent.duration.{DurationInt, FiniteDuration}
+import scala.jdk.CollectionConverters.*
+import scala.math.Ordered.orderingToOrdered
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import test.Generators.Hydrozoa.*
 import test.{TestPeer, testNetwork, testTxBuilderEnvironment}
-
-import scala.concurrent.duration.DurationInt
-import scala.jdk.CollectionConverters.*
 
 object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
 
@@ -41,12 +46,19 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
         // .withInitialSeed(Seed.fromBase64("SEAube5f5bBsTlLeYTuh3am1vO5iJvmzNRFEXSOlXlD=").get)
     }
 
-    // TODO: use BlockEffects as BlockEffectChain
-    // TODO: use ConsensusActor.BlockConfirmed? These are supposed to contain SIGNED effects.
-    // TODO: use (SettlementTxSeq, FallbackTx) not Result
-    type Skeleton = (InitializationTxSeq, List[SettlementTxSeq.Builder.Result], FinalizationTxSeq)
+    /** This is the "skeleton" of the Hydrozoa transactions (see diagrams to get an idea what it
+      * looks like). After introducing [[BlockEffectsSigned]] we use it rather than tx sequences
+      * which are unwieldy and were designed to use with the tx builders.
+      *
+      * TODO: case class?
+      */
+    type BlockEffectsSignedChain = (
+        BlockEffectsSigned.Initial,
+        List[BlockEffectsSigned.Major],
+        BlockEffectsSigned.Final
+    )
 
-    object Skeleton:
+    object BlockEffectsSignedChain:
 
         // TODO: figure out why this fails with (minSettlements=1, maxSettlements=1)
         // TODO: this gives no result sometimes
@@ -59,26 +71,43 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
             maxSettlements: Int = 25,
             mkTxTiming: SlotConfig => TxTiming = TxTiming.default,
             slotConfig: SlotConfig = testTxBuilderEnvironment.slotConfig
-        ): Gen[Skeleton] = for {
+        ): Gen[BlockEffectsSignedChain] = for {
 
             // Init tx is generated using the available set of utxos.
             txTiming <- Gen.const(mkTxTiming(slotConfig))
-            (args, peers) <- InitializationTxSeqTest.genArgs(
+            (initialArgs, peers) <- InitializationTxSeqTest.genArgs(
               txTiming = txTiming,
               mbUtxosAvailable = Some(yaciTestSauceGenesis(testNetwork))
             )
 
-            // init tx
+            // Initial block effects
             initializationTxSeq = InitializationTxSeq.Builder
-                .build(args)
+                .build(initialArgs)
                 .fold(e => throw RuntimeException(e.toString), x => x)
             initializationTx = initializationTxSeq.initializationTx
+            fallbackTx = initializationTxSeq.fallbackTx
+
+            initTxWitnesses: List[VKeyWitness] =
+                peers.map(p => p.wallet.createTxKeyWitness(initializationTx.tx)).toList
+            fallbackTxWitnesses: List[VKeyWitness] =
+                peers.map(p => p.wallet.createTxKeyWitness(fallbackTx.tx)).toList
+
+            initialBlockEffectsSigned: BlockEffectsSigned.Initial = BlockEffectsSigned.Initial(
+              blockNum = Block.Number.zero,
+              initialSigned = initializationTx.txLens.modify(tx =>
+                  attachVKeyWitnesses(tx, initTxWitnesses)
+              )(initializationTx),
+              fallbackSigned = fallbackTx.txLens.modify(tx =>
+                  attachVKeyWitnesses(tx, fallbackTxWitnesses)
+              )(fallbackTx)
+            )
+
             initializationTreasuryProduced = initializationTx.treasuryProduced
-            initializationFallbackValidityStart = initializationTxSeq.fallbackTx.validityStart
+            initializationFallbackValidityStart = fallbackTx.validityStart
 
             // multisig regime utxo
             hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
-            tokenNames = TokenNames(args.spentUtxos.seedUtxo.input)
+            tokenNames = TokenNames(initialArgs.spentUtxos.seedUtxo.input)
             multisigWitnessUtxo <- genFakeMultisigWitnessUtxo(
               hns,
               testTxBuilderEnvironment.network,
@@ -95,72 +124,108 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
               headNativeScript = hns,
               multisigRegimeUtxo = initializationTx.multisigRegimeWitness,
               tokenNames = tokenNames,
-              env = args.env,
-              evaluator = args.evaluator,
-              validators = args.validators
+              env = initialArgs.env,
+              evaluator = initialArgs.evaluator,
+              validators = initialArgs.validators
             )
 
             numOfSettlements <- choose(minSettlements, maxSettlements)
 
-            (settlementTxSeqs, lastSettlementBlockTimestamp, fallbackValidityStart) <- tailRecM(
-              (
-                initializationTreasuryProduced,
-                args.blockZeroCreationTime,
-                initializationFallbackValidityStart,
-                List.empty: List[SettlementTxSeq.Builder.Result],
-                1
-              )
-            ) {
-                case (
-                      treasuryToSpend,
-                      previousBlockTimestamp,
-                      fallbackValidityStart,
-                      acc,
-                      settlementNum
-                    ) =>
-                    if settlementNum > numOfSettlements
-                    then
-                        Gen.const(
-                          Right((acc.reverse, previousBlockTimestamp, fallbackValidityStart))
-                        )
-                    else
-                        for {
-                            // TODO: Implement Gen.Choose[QuantizedInstant]
-                            blockCreatedOnL <- Gen.choose(
-                              (previousBlockTimestamp + 10.seconds).toSlot.slot,
-                              (fallbackValidityStart - txTiming.silenceDuration - 10.seconds).toSlot.slot
+            (majorBlocksEffectsSigned, lastSettlementBlockTimestamp, fallbackValidityStart) <-
+                tailRecM(
+                  (
+                    initializationTreasuryProduced,
+                    initialArgs.blockZeroCreationTime,
+                    initializationFallbackValidityStart,
+                    List.empty: List[BlockEffectsSigned.Major],
+                    1
+                  )
+                ) {
+                    case (
+                          treasuryToSpend,
+                          previousBlockTimestamp,
+                          fallbackValidityStart,
+                          acc,
+                          settlementNum
+                        ) =>
+                        if settlementNum > numOfSettlements
+                        then
+                            Gen.const(
+                              Right((acc.reverse, previousBlockTimestamp, fallbackValidityStart))
                             )
-                            blockCreatedOn = Slot(blockCreatedOnL).toQuantizedInstant(slotConfig)
-                            settlementBuilderAndArgs <- genNextSettlementTxSeqBuilder(
-                              treasuryToSpend,
-                              fallbackValidityStart,
-                              blockCreatedOn,
-                              settlementNum,
-                              hns,
-                              config,
-                              txTiming
-                            )
-                            (builder, args) = settlementBuilderAndArgs
-                            seq = builder
-                                .build(args)
-                                .fold(e => throw RuntimeException(e.toString), x => x)
-                            nextTreasuryToSpend = seq.settlementTxSeq.settlementTx.treasuryProduced
-                            fallbackValidityStart = seq.fallbackTx.validityStart
+                        else
+                            for {
+                                blockCreatedOn <- Gen.choose(
+                                  previousBlockTimestamp + 10.seconds,
+                                  fallbackValidityStart - txTiming.silenceDuration - 10.seconds
+                                )
+                                settlementBuilderAndArgs <- genNextSettlementTxSeqBuilder(
+                                  treasuryToSpend,
+                                  fallbackValidityStart,
+                                  blockCreatedOn,
+                                  settlementNum,
+                                  hns,
+                                  config,
+                                  txTiming
+                                )
+                                (builder, args) = settlementBuilderAndArgs
+                                result = builder
+                                    .build(args)
+                                    .fold(e => throw RuntimeException(e.toString), x => x)
 
-                        } yield Left(
-                          (
-                            nextTreasuryToSpend,
-                            blockCreatedOn,
-                            fallbackValidityStart,
-                            seq :: acc,
-                            settlementNum + 1
-                          )
-                        )
-            }
+                                settlementTx = result.settlementTxSeq.settlementTx
+                                settlementTxWitnesses: List[VKeyWitness] =
+                                    peers
+                                        .map(p => p.wallet.createTxKeyWitness(settlementTx.tx))
+                                        .toList
+
+                                fallbackTx = result.fallbackTx
+                                fallbackTxWitnesses: List[VKeyWitness] =
+                                    peers
+                                        .map(p => p.wallet.createTxKeyWitness(fallbackTx.tx))
+                                        .toList
+
+                                rolloutTxs = result.settlementTxSeq.mbRollouts
+                                rolloutTxWitnesses: List[List[VKeyWitness]] =
+                                    rolloutTxs.map(r =>
+                                        peers.map(p => p.wallet.createTxKeyWitness(r.tx)).toList
+                                    )
+
+                                blockEffects: BlockEffectsSigned.Major =
+                                    BlockEffectsSigned.Major(
+                                      blockNum = Block.Number(settlementNum),
+                                      settlementSigned = settlementTx.txLens.modify(tx =>
+                                          attachVKeyWitnesses(tx, settlementTxWitnesses)
+                                      )(settlementTx),
+                                      fallbackSigned = fallbackTx.txLens.modify(tx =>
+                                          attachVKeyWitnesses(tx, fallbackTxWitnesses)
+                                      )(fallbackTx),
+                                      rolloutsSigned = rolloutTxs
+                                          .zip(rolloutTxWitnesses)
+                                          .map((r, ws) =>
+                                              r.txLens.modify(tx => attachVKeyWitnesses(tx, ws))(r)
+                                          ),
+                                      postDatedRefundsSigned = List.empty
+                                    )
+
+                                nextTreasuryToSpend =
+                                    settlementTx.treasuryProduced
+                                fallbackValidityStart = result.fallbackTx.validityStart
+
+                            } yield Left(
+                              (
+                                nextTreasuryToSpend,
+                                blockCreatedOn,
+                                fallbackValidityStart,
+                                blockEffects :: acc,
+                                settlementNum + 1
+                              )
+                            )
+                }
 
             // Finalization seq
             lastSettlementTreasury =
-                settlementTxSeqs.last.settlementTxSeq.settlementTx.treasuryProduced
+                majorBlocksEffectsSigned.last.settlementSigned.treasuryProduced
 
             finalizationBlockCreatedOnL <- Gen.choose(
               (lastSettlementBlockTimestamp + 10.seconds).toSlot.slot,
@@ -169,79 +234,90 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
             finalizationBlockCreatedOn = Slot(finalizationBlockCreatedOnL).toQuantizedInstant(
               slotConfig
             )
-            finalizationTxSeqBuilderAndArgs <- genFinalizationTxSeqBuilder(
+
+            finalBlockNum = numOfSettlements + 1
+
+            (builder, finalArgs) <- genFinalizationTxSeqBuilder(
               lastSettlementTreasury,
-              numOfSettlements + 1,
+              finalBlockNum,
               fallbackValidityStart,
               finalizationBlockCreatedOn,
               txTiming,
               config,
               peers
             )
-            (builder, fArgs) = finalizationTxSeqBuilderAndArgs
-            finalizationTxSeq = builder.build(fArgs)
+
+            // Run the builder
+            finalizationTxSeq = builder
+                .build(finalArgs)
+                .fold(e => throw RuntimeException(e.toString), x => x)
+
+            finalizationTx = finalizationTxSeq.finalizationTx
+            finalizationTxWitnesses: List[VKeyWitness] =
+                peers
+                    .map(p => p.wallet.createTxKeyWitness(finalizationTx.tx))
+                    .toList
+
+            rolloutTxs = finalizationTxSeq.mbRollouts
+            rolloutTxWitnesses: List[List[VKeyWitness]] =
+                rolloutTxs.map(r => peers.map(p => p.wallet.createTxKeyWitness(r.tx)).toList)
+
+            mbDeinitTx = finalizationTxSeq.mbDeinit
+            deinitTxWitnesses: List[VKeyWitness] =
+                mbDeinitTx
+                    .map(deinitTx =>
+                        peers
+                            .map(p => p.wallet.createTxKeyWitness(deinitTx.tx))
+                            .toList
+                    )
+                    .getOrElse(List.empty)
+
+            finalBlockEffectsSigned: BlockEffectsSigned.Final = BlockEffectsSigned.Final(
+              blockNum = Block.Number(finalBlockNum),
+              rolloutsSigned = rolloutTxs
+                  .zip(rolloutTxWitnesses)
+                  .map((r, ws) => r.txLens.modify(tx => attachVKeyWitnesses(tx, ws))(r)),
+              mbDeinitSigned = mbDeinitTx.map(d =>
+                  d.txLens.modify(tx => attachVKeyWitnesses(tx, deinitTxWitnesses))(d)
+              ),
+              finalizationSigned = finalizationTx.txLens.modify(tx =>
+                  attachVKeyWitnesses(tx, finalizationTxWitnesses)
+              )(finalizationTx),
+            )
 
         } yield (
-          initializationTxSeq,
-          settlementTxSeqs,
-          finalizationTxSeq.fold(e => throw RuntimeException(e.toString), x => x)
+          initialBlockEffectsSigned,
+          majorBlocksEffectsSigned,
+          finalBlockEffectsSigned
         )
 
-        extension (skeleton: Skeleton)
+        extension (skeleton: BlockEffectsSignedChain)
 
             /** Returns all happy path txs of the skeleton, i.e. all but post dated fallback txs. */
             def happyPathTxs: Set[Transaction] = {
 
-                def settlementTxs(r: SettlementTxSeq.Builder.Result): List[Transaction] =
-                    r.settlementTxSeq match {
-                        case SettlementTxSeq.NoRollouts(settlementTx) => List(settlementTx.tx)
-                        case SettlementTxSeq.WithRollouts(settlementTx, rolloutTxSeq) =>
-                            settlementTx.tx +: rolloutTxSeq.mbRollouts.map(_.tx)
-                    }
+                // def settlementTxs(r: SettlementTxSeq.Builder.Result): List[Transaction] =
+                //    r.settlementTxSeq match {
+                //        case SettlementTxSeq.NoRollouts(settlementTx) => List(settlementTx.tx)
+                //        case SettlementTxSeq.WithRollouts(settlementTx, rolloutTxSeq) =>
+                //            settlementTx.tx +: rolloutTxSeq.mbRollouts.map(_.tx)
+                //    }
 
-                def finalizationTxs(seq: FinalizationTxSeq): List[Transaction] = seq match {
-                    case FinalizationTxSeq.Monolithic(finalizationTx) =>
-                        List(finalizationTx.tx)
-                    case FinalizationTxSeq.WithDeinit(finalizationTx, deinitTx) =>
-                        List(finalizationTx.tx, deinitTx.tx)
-                    case FinalizationTxSeq.WithRollouts(finalizationTx, rolloutTxSeq) =>
-                        finalizationTx.tx +: rolloutTxSeq.mbRollouts.map(_.tx)
-                    case FinalizationTxSeq.WithDeinitAndRollouts(
-                          finalizationTx,
-                          deinitTx,
-                          rolloutTxSeq
-                        ) =>
-                        finalizationTx.tx +: rolloutTxSeq.mbRollouts.map(_.tx) :+ deinitTx.tx
-                }
+                def finalizationTxs(effects: BlockEffectsSigned.Final): List[Transaction] =
+                    List(effects.finalizationSigned.tx)
+                        ++ effects.rolloutsSigned.map(_.tx)
+                        ++ effects.mbDeinitSigned.map(_.tx).toList
 
-                (
-                  (skeleton._1.initializationTx.tx
-                      +: skeleton._2.flatMap(settlementTxs))
-                      ++ finalizationTxs(skeleton._3)
-                ).toSet
+                ((skeleton._1.initialSigned.tx
+                    +: skeleton._2.map(_.settlementSigned.tx))
+                    ++ finalizationTxs(skeleton._3)).toSet
             }
 
             /** All backbone transactions from the skeleton. */
             def backboneTxs: List[Tx[?]] =
-                (skeleton._1.initializationTx +: skeleton._2.map(
-                  _.settlementTxSeq.settlementTx
-                )) ++
-                    {
-                        skeleton._3 match {
-                            case FinalizationTxSeq.Monolithic(finalizationTx) =>
-                                List(finalizationTx)
-                            case FinalizationTxSeq.WithDeinit(finalizationTx, deinitTx) =>
-                                List(finalizationTx, deinitTx)
-                            case FinalizationTxSeq.WithRollouts(finalizationTx, _) =>
-                                List(finalizationTx)
-                            case FinalizationTxSeq.WithDeinitAndRollouts(
-                                  finalizationTx,
-                                  deinitTx,
-                                  _
-                                ) =>
-                                List(finalizationTx, deinitTx)
-                        }
-                    }
+                (skeleton._1.initialSigned +: skeleton._2.map(_.settlementSigned)) ++
+                    List(skeleton._3.finalizationSigned)
+                    ++ skeleton._3.mbDeinitSigned.toList
 
             /** Returns the competing fallback transaction if it exists for a backbone node
               * identified by tx hash.
@@ -256,8 +332,8 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                     .map(_.tx.id)
                     .zip(
                       // There is no (None) fallback txs for the initialization tx and the deinit tx
-                      List(None, Some(skeleton._1.fallbackTx)) ++ skeleton._2.map(node =>
-                          Some(node.fallbackTx)
+                      List(None, Some(skeleton._1.fallbackSigned)) ++ skeleton._2.map(node =>
+                          Some(node.fallbackSigned)
                       ) ++ List(None)
                     )
                     .find(_._1 == backbonePoint)
@@ -265,15 +341,13 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
             }
 
             // The common structure for the initialization tx, settlement txs, and the finalization tx
-            // with the linked rollouts (where applicable,otherwise None)
+            // with the linked rollouts (where applicable, otherwise None)
             private def backboneNodesWithRollouts: List[(TransactionHash, List[RolloutTx])] = {
-                (skeleton._1.initializationTx.tx.id -> List.empty)
+                (skeleton._1.initialSigned.tx.id -> List.empty)
                     +:
                         skeleton._2
-                            .map(node =>
-                                node.settlementTxSeq.settlementTx.tx.id -> node.settlementTxSeq.mbRollouts
-                            )
-                        :+ skeleton._3.finalizationTx.tx.id -> skeleton._3.mbRollouts
+                            .map(node => node.settlementSigned.tx.id -> node.rolloutsSigned)
+                        :+ skeleton._3.finalizationSigned.tx.id -> skeleton._3.rolloutsSigned
             }
 
             /** @param backbonePoint
@@ -300,89 +374,51 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                     .filter(_._2.nonEmpty)
                     .map(_._2.map(_.tx))
 
-            def earliestTtl: Slot =
-                // TODO: for now we use initialization tx ttl, see the comment on `ttl` field
-                skeleton._1.initializationTx.validityEnd.toSlot
+            def earliestTtl: QuantizedInstant =
+                skeleton._1.initialSigned.validityEnd
 
             def dumpSkeletonInfo: Unit =
 
                 println("--------- Hydrozoa L1 effects chain sample --------- ")
 
-                val initSeq = skeleton._1
-                val initTx = initSeq.initializationTx
+                val initTx = skeleton._1.initialSigned
 
                 println(s"Initialization  tx: ${initTx.tx.id}, TTL: ${initTx.validityEnd}")
 
-                val fallbackTx = initSeq.fallbackTx
+                val fallbackTx = skeleton._1.fallbackSigned
                 println(
                   s"\t=> Fallback 0 tx: ${fallbackTx.tx.id}, validity start: ${fallbackTx.validityStart}"
                 )
 
                 // Settlements
-                skeleton._2.foreach(settlement => {
-                    val fallbackTx = settlement.fallbackTx
-                    settlement.settlementTxSeq match {
-                        case SettlementTxSeq.NoRollouts(settlementTx) => {
-                            println(
-                              s"Settlement ${settlementTx.majorVersionProduced}: " +
-                                  s"${settlementTx.tx.id}, TTL: ${settlementTx.validityEnd}"
-                            )
-                            println(
-                              s"\t=> Fallback ${settlementTx.majorVersionProduced}: " +
-                                  s"${fallbackTx.tx.id}, validity start: ${fallbackTx.validityStart}"
-                            )
-                        }
-                        case SettlementTxSeq.WithRollouts(settlementTx, rolloutTxSeq) =>
-                            println(
-                              s"Settlement ${settlementTx.majorVersionProduced}: " +
-                                  s"${settlementTx.tx.id}, TTL: ${settlementTx.validityEnd}, " +
-                                  s"deposits: ${settlementTx.depositsSpent.length}, " +
-                                  s"rollouts: ${rolloutTxSeq.notLast.length + 1}"
-                            )
-                            val rollouts: Vector[RolloutTx] =
-                                rolloutTxSeq.notLast :+ rolloutTxSeq.last
-                            rollouts.foreach(r => println(s"\t\t - rollout: ${r.tx.id}"))
-                            println(
-                              s"\t=> Fallback ${settlementTx.majorVersionProduced}: " +
-                                  s"${fallbackTx.tx.id}, validity start: ${fallbackTx.validityStart}"
-                            )
-                    }
+                skeleton._2.foreach(effects => {
+                    val fallbackTx = effects.fallbackSigned
+
+                    println(
+                      s"Settlement block ${effects.blockNum}: " +
+                          s"${effects.settlementSigned.tx.id}, TTL: ${effects.settlementSigned.validityEnd}, " +
+                          s"deposits: ${effects.settlementSigned.depositsSpent.length}, " +
+                          s"rollouts: ${effects.rolloutsSigned.size}"
+                    )
+
+                    effects.rolloutsSigned.foreach(r => println(s"\t\t - rollout: ${r.tx.id}"))
+                    println(
+                      s"\t=> Fallback block ${effects.blockNum}: " +
+                          s"${fallbackTx.tx.id}, validity start: ${fallbackTx.validityStart}"
+                    )
                 })
 
                 // Finalization
-                skeleton._3 match {
-                    case FinalizationTxSeq.Monolithic(finalizationTx) =>
-                        println(
-                          s"Monolithic finalization: ${finalizationTx.tx.id}, TTL: ${finalizationTx.validityEnd}"
-                        )
-                    case FinalizationTxSeq.WithDeinit(finalizationTx, deinitTx) =>
-                        println(
-                          s"Finalization: ${finalizationTx.tx.id}, TTL: ${finalizationTx.validityEnd}"
-                        )
-                        println(s"Deinit: ${deinitTx.tx.id}")
-                    case FinalizationTxSeq.WithRollouts(finalizationTx, rolloutTxSeq) =>
-                        println(
-                          s"Finalization: ${finalizationTx.tx.id}, TTL: ${finalizationTx.validityEnd}" +
-                              s", rollouts: ${rolloutTxSeq.notLast.length + 1}"
-                        )
-                        val rollouts: Vector[RolloutTx] = rolloutTxSeq.notLast :+ rolloutTxSeq.last
-                        rollouts.foreach(r => println(s"\t\t - rollout: ${r.tx.id}"))
-                    case FinalizationTxSeq.WithDeinitAndRollouts(
-                          finalizationTx,
-                          deinitTx,
-                          rolloutTxSeq
-                        ) =>
-                        println(
-                          s"Finalization: ${finalizationTx.tx.id}, TTL: ${finalizationTx.validityEnd}" +
-                              s", rollouts: ${rolloutTxSeq.notLast.length + 1}"
-                        )
-                        val rollouts: Vector[RolloutTx] = rolloutTxSeq.notLast :+ rolloutTxSeq.last
-                        rollouts.foreach(r => println(s"\t\t - rollout: ${r.tx.id}"))
-                        println(s"Deinit: ${deinitTx.tx.id}")
-                }
+                println(
+                  s"Finalization: ${skeleton._3.finalizationSigned.tx.id}, TTL: ${skeleton._3.finalizationSigned.validityEnd}" +
+                      s", rollouts: ${skeleton._3.rolloutsSigned.size}"
+                )
+                skeleton._3.rolloutsSigned.foreach(r => println(s"\t\t - rollout: ${r.tx.id}"))
+                skeleton._3.mbDeinitSigned.foreach(d => println(s"Deinit: ${d.tx.id}"))
+
                 println("--------- END of Hydrozoa L1 effects chain sample --------- ")
 
-    end Skeleton
+    end BlockEffectsSignedChain
 
     object Rollback:
 
@@ -405,7 +441,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
             /** Lost rollout txs that come before the first rolled back backbone tx. */
             txsLostPreviousRollout: Set[TransactionHash],
             /** The rollback time, i.e. the time when rollback was done. */
-            rollbackTime: Slot,
+            rollbackTime: QuantizedInstant,
             // The tx id of the competing fallback transaction and timing relation.
             // It's not defined if only deinit tx or the whole skeleton was rolled back.
             // TODO: do we use the second element of the tuple in the liaison?
@@ -413,7 +449,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
             mbFallback: Option[(TransactionHash, SettlementTiming)]
         )
 
-        def genRollback(skeleton: Skeleton): Gen[Rollback] =
+        def genRollback(skeleton: BlockEffectsSignedChain): Gen[Rollback] =
             import SettlementTiming.*
 
             for {
@@ -453,6 +489,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                 //
                 backboneTx = skeleton.backboneTxs.find(_.tx.id == rollbackBackbonePoint).get
 
+                // TODO: revise this part - it can be done by one big PM over the type of backboneTx
                 slotAndMbFallback <-
                     skeleton.competingFallbackFor(rollbackBackbonePoint) match {
                         // We have a settlement/finalization and need to decide on the timing
@@ -464,27 +501,40 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                             ).flatMap {
                                 case BeforeBackboneTtlExpires =>
                                     // should exist, may absent only for deinit which is handled in `case None`
-                                    val ttl = backboneTx.tx.body.value.ttl.get
-                                    Gen.choose(ttl - 1000, ttl)
-                                        .flatMap(slot =>
-                                            (slot, Some(fallbackTx.tx.id, BeforeBackboneTtlExpires))
-                                        )
-                                case WithinSilencePeriod =>
-                                    val ttl = backboneTx.tx.body.value.ttl.get
-                                    val fallbackValidityStart = fallbackTx.validityStart.toSlot.slot
-                                    Gen.choose(ttl, fallbackValidityStart)
-                                        .flatMap(slot =>
-                                            (slot, Some(fallbackTx.tx.id, WithinSilencePeriod))
-                                        )
-                                case AfterFallbackBecomesValid =>
-                                    val fallbackValidityStart = fallbackTx.validityStart.toSlot.slot
-                                    Gen.choose(fallbackValidityStart, fallbackValidityStart + 1000)
-                                        .flatMap(slot =>
+                                    val validityEnd: QuantizedInstant = backboneTx match {
+                                        case s: SettlementTx   => s.validityEnd
+                                        case f: FinalizationTx => f.validityEnd
+                                        case _ => ??? // never happens, rewrite the outer match
+                                    }
+                                    Gen.choose(validityEnd - 1000.seconds, validityEnd - 20.seconds)
+                                        .flatMap(instant =>
                                             (
-                                              slot,
-                                              Some(fallbackTx.tx.id, AfterFallbackBecomesValid)
+                                              instant,
+                                              Some(fallbackTx.tx.id, BeforeBackboneTtlExpires)
                                             )
                                         )
+                                case WithinSilencePeriod =>
+                                    val validityEnd: QuantizedInstant = backboneTx match {
+                                        case s: SettlementTx   => s.validityEnd
+                                        case f: FinalizationTx => f.validityEnd
+                                        case _ => ??? // never happens, rewrite the outer match
+                                    }
+                                    val fallbackValidityStart = fallbackTx.validityStart
+                                    Gen.choose(validityEnd, fallbackValidityStart)
+                                        .flatMap(instant =>
+                                            (instant, Some(fallbackTx.tx.id, WithinSilencePeriod))
+                                        )
+                                case AfterFallbackBecomesValid =>
+                                    val fallbackValidityStart = fallbackTx.validityStart
+                                    Gen.choose(
+                                      fallbackValidityStart,
+                                      fallbackValidityStart + 1000.seconds
+                                    ).flatMap(instant =>
+                                        (
+                                          instant,
+                                          Some(fallbackTx.tx.id, AfterFallbackBecomesValid)
+                                        )
+                                    )
                             }
                         // The rollback point points to the initialization ot deinit
                         case None => {
@@ -492,23 +542,23 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                             // is valid or not valid.
                             // This doesn't affect deinit since it doesn't have validity range.
                             val earliestTtl = skeleton.earliestTtl
-                            Gen.choose(earliestTtl.slot - 1000, earliestTtl.slot + 1000)
-                                .flatMap(slot => (slot, None))
+                            Gen.choose(earliestTtl - 1000.seconds, earliestTtl + 1000.seconds)
+                                .flatMap(instant => (instant, None))
                         }
                     }
             } yield mkRollback(
               skeleton,
               rollbackBackbonePoint,
               rollbackRolloutSeqPoints,
-              Slot(slotAndMbFallback._1),
+              slotAndMbFallback._1,
               slotAndMbFallback._2
             )
 
         def mkRollback(
-            skeleton: Skeleton,
+            skeleton: BlockEffectsSignedChain,
             rollbackBackbonePoint: TransactionHash,
             rollbackRolloutPoints: List[TransactionHash],
-            rollbackTime: Slot,
+            rollbackTime: QuantizedInstant,
             mbFallback: Option[(TransactionHash, SettlementTiming)]
         ): Rollback = {
             // Backbone
@@ -557,14 +607,14 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
     // }
 
     // Test skeletons against which the (multiple) properties are checked.
-    val testSkeletons: Seq[Skeleton] =
+    val testSkeletons: Seq[BlockEffectsSignedChain] =
         List(
           (3, 3), // short skeleton for fast feedback loop
           // (20, 20) // more realistic skeleton
         ).flatMap((min, max) => {
             // val seed = Seed.fromBase64("SEAube5f5bBsTlLeYTuh3am1vO5iJvmzNRFEXSOlXlD=").get
             // val params = Gen.Parameters.default.withInitialSeed(seed)
-            val sample = Skeleton
+            val sample = BlockEffectsSignedChain
                 .genL1BlockEffectsChain(min, max)
                 .sample // apply(params, params.initialSeed.get)
             dumpSkeletonInfo(sample.get)
@@ -577,8 +627,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
         })
     }
 
-    def mkRollbackAreHandled(skeleton: Skeleton): Prop = {
-        import SettlementTiming.*
+    def mkRollbackAreHandled(skeleton: BlockEffectsSignedChain): Prop = {
 
         forAll(Rollback.genRollback(skeleton)) { rollback =>
 
@@ -592,170 +641,206 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                   s"\ndepth: ${rollback.mbFallback}"
             )
 
-            val result: IO[Prop] = for {
-                system <- ActorSystem[IO]("Cardano Liaison SUT").allocated.map(_._1)
-
-                cardanoBackendMock = CardanoBackendMockWithState(
-                  rollback.utxos
-                )
-
-                config = CardanoLiaison.Config(
-                  ???,
-                  skeleton._1.initializationTx,
-                  skeleton._1.fallbackTx,
-                  100.millis,
-                  slotConfig = testTxBuilderEnvironment.slotConfig,
-                  blockWeaver = ???
-                )
-
-                cardanoLiaison = new CardanoLiaison(
-                  config,
-                  Ref.unsafe[IO, CardanoLiaison.State](CardanoLiaison.State.initialState(config))
-                )
-
-                // Use protected handlers directly to present all effects
-                _ <- skeleton._2.traverse_(s =>
-                    cardanoLiaison.handleMajorBlockL1Effects(
-                      MajorBlockConfirmed(
-                        blockNum =
-                            Block.Number(s.settlementTxSeq.settlementTx.majorVersionProduced),
-                        settlementSigned = s.settlementTxSeq.settlementTx,
-                        rolloutsSigned = s.settlementTxSeq.mbRollouts,
-                        fallbackSigned = s.fallbackTx
-                      )
-                    )
-                )
-
-                _ <- cardanoLiaison.handleFinalBlockL1Effects(
-                  FinalBlockConfirmed(
-                    blockNum = Block.Number(skeleton._3.finalizationTx.majorVersionProduced),
-                    finalizationSigned = skeleton._3.finalizationTx,
-                    rolloutsSigned = skeleton._3.mbRollouts,
-                    mbDeinitSigned = skeleton._3.mbDeinit
+            val program = TestControl.executeEmbed {
+                // NB: always do long sleeps before starting the actor system
+                IO.sleep(
+                  // Skip to the rollback time
+                  FiniteDuration.apply(
+                    rollback.rollbackTime.instant.toEpochMilli,
+                    TimeUnit.MILLISECONDS
                   )
-                )
+                ) >>
+                    ActorSystem[IO]("Cardano Liaison SUT").use { system =>
+                        for {
+                            now <- IO.realTimeInstant
+                            _ <- IO.println(s"now=$now")
 
-                cardanoLiaisonActor <-
-                    // TODO: uncomment if you want to see all msgs passing
-                    // system.actorOfWithDebug(
-                    system.actorOf(cardanoLiaison)
+                            state = MockState.apply(rollback.utxos.asScalus)
+                            cardanoBackend <- CardanoBackendMock.mockIO(state)
 
-                expectedTxs = rollback.mbFallback match {
-                    // Settlement/finalization tx is involved, we need to analyze
-                    // timing
-                    case Some(fallback, timing) =>
-                        timing match {
-                            case BeforeBackboneTtlExpires =>
-                                rollback.txsLost ++ rollback.txsLostPreviousRollout
-                            case WithinSilencePeriod => rollback.txsLostPreviousRollout
-                            case AfterFallbackBecomesValid =>
-                                Set(fallback) ++ rollback.txsLostPreviousRollout
-                        }
-                    // This can happen in two cases
-                    //   - only deinit was rolled back
-                    //   - or all the effects were rolled  back
-                    case None =>
-                        rollback.txsLost.size match {
-                            // Only deinit
-                            case 1 => rollback.txsLost ++ rollback.txsLostPreviousRollout
-                            // All effects
-                            case _ =>
-                                if rollback.rollbackTime > skeleton.earliestTtl
-                                then rollback.txsLostPreviousRollout
-                                else rollback.txsLost ++ rollback.txsLostPreviousRollout
-                        }
-                }
+                            blockWeaver <- system.actorOf(new BlockWeaverMock)
 
-                _ <- IO.println(s"===> Expected txs: ${expectedTxs}")
+                            config = CardanoLiaison.Config(
+                              cardanoBackend,
+                              skeleton._1.initialSigned,
+                              skeleton._1.fallbackSigned,
+                              // TODO: this now doesn't affect anything
+                              100.millis,
+                              slotConfig = testTxBuilderEnvironment.slotConfig,
+                              blockWeaver = blockWeaver
+                            )
 
-                _ <- awaitCond(
-                  p = cardanoBackendMock.getGetStateCounter.map(_ >= 2),
-                  max = 10.seconds,
-                  interval = 100.millis,
-                  message = "Cardano liaison didn't come its full circle"
-                )
+                            cardanoLiaison <- CardanoLiaison.apply(config)
 
-                check <- awaitCond(
-                  p = cardanoBackendMock.getKnownTxs.map(_ == expectedTxs),
-                  max = 10.second,
-                  interval = 100.millis,
-                  message = "the list of known transaction should match the list of expected txs"
-                ) >> IO.pure(Prop.proved)
+                            // Use protected handlers directly to present all effects
+                            _ <- skeleton._2.traverse_(s =>
+                                cardanoLiaison.handleMajorBlockL1Effects(
+                                  MajorBlockConfirmed(
+                                    blockNum = s.blockNum,
+                                    settlementSigned = s.settlementSigned,
+                                    rolloutsSigned = s.rolloutsSigned,
+                                    fallbackSigned = s.fallbackSigned
+                                  )
+                                )
+                            )
 
-                _ <- system.terminate()
+                            _ <- cardanoLiaison.handleFinalBlockL1Effects(
+                              FinalBlockConfirmed(
+                                blockNum =
+                                    // This is technically correct in that particular case, but it's not nice
+                                    Block.Number(
+                                      skeleton._3.finalizationSigned.majorVersionProduced
+                                    ),
+                                finalizationSigned = skeleton._3.finalizationSigned,
+                                rolloutsSigned = skeleton._3.rolloutsSigned,
+                                mbDeinitSigned = skeleton._3.mbDeinitSigned
+                              )
+                            )
 
-            } yield check
+                            cardanoLiaisonActor <-
+                                // TODO: uncomment if you want to see all msgs passing
+                                // system.actorOfWithDebug(
+                                system.actorOf(cardanoLiaison)
 
-            // result.unsafeRunSync()
-            Prop.falsified
+                            expectedTxs = rollback.mbFallback match {
+                                // Settlement/finalization tx is involved, we need to analyze
+                                // timing
+                                case Some(fallback, timing) =>
+                                    timing match {
+                                        case BeforeBackboneTtlExpires =>
+                                            rollback.txsLost ++ rollback.txsLostPreviousRollout
+                                        case WithinSilencePeriod => rollback.txsLostPreviousRollout
+                                        case AfterFallbackBecomesValid =>
+                                            Set(fallback) ++ rollback.txsLostPreviousRollout
+                                    }
+                                // This can happen in two cases
+                                //   - only deinit was rolled back
+                                //   - or all the effects were rolled  back
+                                case None =>
+                                    import hydrozoa.lib.cardano.scalus.QuantizedTime.given
+
+                                    rollback.txsLost.size match {
+                                        // Only deinit
+                                        case 1 =>
+                                            rollback.txsLost ++ rollback.txsLostPreviousRollout
+                                        // All effects
+                                        case _ =>
+                                            if rollback.rollbackTime > skeleton.earliestTtl
+                                            then rollback.txsLostPreviousRollout
+                                            else rollback.txsLost ++ rollback.txsLostPreviousRollout
+                                    }
+                            }
+
+                            _ <- IO.println(s"===> Expected txs: ${expectedTxs}")
+
+                            // TODO: decide how to handle Timeout
+                            //  It's not working under TestControl because of the way ReceiveTimeout is implemented
+                            // _ <- awaitCond(
+                            //  p = cardanoBackendMock.getGetStateCounter.map(_ >= 2),
+                            //  max = 10.seconds,
+                            //  interval = 100.millis,
+                            //  message = "Cardano liaison didn't come its full circle"
+                            // )
+
+                            // My current solution is to do it explicitly
+                            _ <- cardanoLiaisonActor ! CardanoLiaison.Timeout
+                            _ <- cardanoLiaisonActor ! CardanoLiaison.Timeout
+
+                            // This awaitCond is not needed anymore, the result should be
+                            // immediately available since the liaison and the cardano
+                            // backend talks to each other synchronously.
+                            check <- awaitCond(
+                              p = IO
+                                  .traverse(expectedTxs.toList)(cardanoBackend.getTxInfo)
+                                  .flatMap(l => IO.println(l) >> IO.pure(l))
+                                  .flatMap(l =>
+                                      IO.pure(
+                                        l.map(_.fold(_ => false, _.isKnown)).foldLeft(true)(_ && _)
+                                      )
+                                  ),
+                              max = 1.second,
+                              interval = 1.second,
+                              message =
+                                  "the list of known transaction in the mock should match the list of expected txs"
+                            ) >> IO.pure(Prop.proved)
+
+                        } yield check
+                    }
+            }
+
+            program.unsafeRunSync()
         }
+
     }
 
-    /** The simplest version of L1 mock that remembers ids of txs submitted and can be used to check
-      * the target state by the list of transactions that should be known to L1. Also, it tracks the
-      * number of [[GetCardanoHeadState]] requests so tests can check that the cardano liaison came
-      * its full cycle.
-      *
-      * @param utxoIds
-      *   utxos ids for the response for [[GetCardanoState]], goes unchanged even a tx is submitted
-      *   for simplicity's sake
-      * @param currentSlot
-      *   the slot for the response for [[GetCardanoState]], goes unchanged as well
-      */
-    class CardanoBackendMockWithState(utxoIds: Set[UtxoIdL1]) extends CardanoBackend[IO]:
+    /// ** The simplest version of L1 mock that remembers ids of txs submitted and can be used to check
+    //  * the target state by the list of transactions that should be known to L1. Also, it tracks the
+    //  * number of [[GetCardanoHeadState]] requests so tests can check that the cardano liaison came
+    //  * its full cycle.
+    //  *
+    //  * @param utxoIds
+    //  *   utxos ids for the response for [[GetCardanoState]], goes unchanged even a tx is submitted
+    //  *   for simplicity's sake
+    //  * @param currentSlot
+    //  *   the slot for the response for [[GetCardanoState]], goes unchanged as well
+    //  */
+    // class CardanoBackendMockWithState(utxoIds: Set[UtxoIdL1]) extends CardanoBackend[IO]:
+    //
+    //    val knownTxs: Ref[IO, Set[TransactionHash]] = Ref.unsafe(Set.empty)
+    //    val getStateCounter: Ref[IO, Int] = Ref.unsafe(0)
+    //
+    //    def getKnownTxs: IO[Set[TransactionHash]] = knownTxs.get
+    //    def getGetStateCounter: IO[Int] = getStateCounter.get
+    //
+    //    override def utxosAt(address: ShelleyAddress): IO[Either[CardanoBackend.Error, UtxoSetL1]] =
+    //        ???
+    //
+    //    override def utxosAt(
+    //        address: ShelleyAddress,
+    //        asset: (PolicyId, AssetName)
+    //    ): IO[Either[CardanoBackend.Error, UtxoSetL1]] = ???
+    //
+    //    override def getTxInfo(
+    //        txHash: TransactionHash
+    //    ): IO[Either[CardanoBackend.Error, GetTxInfo.Response]] = ???
+    //
+    //    override def submitTx(tx: Transaction): IO[Either[CardanoBackend.Error, Unit]] = ???
+    //
+    //    // override def receive: Receive[IO, Request] = PartialFunction.fromFunction(receiveTotal)
+    //    //
+    //    // private def receiveTotal(req: Request): IO[Unit] = req match {
+    //    //    case req: SyncRequest.Any =>
+    //    //        req.request match {
+    //    //            case x: GetCardanoHeadState.type => x.handleSync(req, getCardanoHeadState)
+    //    //            case x: GetTxInfo                => x.handleSync(req, getTxInfo)
+    //    //        }
+    //    //    case x: SubmitL1Effects => submitL1Effects(x)
+    //    // }
+    //    //
+    //    // private def submitL1Effects(r: SubmitL1Effects): IO[Unit] = for {
+    //    //    txIds <- IO.pure(r.txs.map(_.id))
+    //    //    _ <- IO.println(s"submitL1Effects: ${txIds}")
+    //    //    _ <- knownTxs.update(s => s ++ txIds)
+    //    // } yield ()
+    //    //
+    //    // private def getCardanoHeadState(
+    //    //    r: GetCardanoHeadState.type
+    //    // ): EitherT[IO, CardanoBackendError, GetCardanoHeadState.Response] = for {
+    //    //    _ <- EitherT.right(
+    //    //      IO.println("getCardanoHeadState") >>
+    //    //          getStateCounter.update(_ + 1)
+    //    //    )
+    //    // } yield GetCardanoHeadState.Response(utxoIds, currentSlot)
+    //    //
+    //    // private def getTxInfo(r: GetTxInfo): EitherT[IO, CardanoBackendError, GetTxInfo.Response] =
+    //    //    for {
+    //    //        txs <- EitherT.right(
+    //    //          IO.println(s"getTxInfo txId: ${r.txHash}") >>
+    //    //              knownTxs.get
+    //    //        )
+    //    //    } yield GetTxInfo.Response(txs.contains(r.txHash))
 
-        val knownTxs: Ref[IO, Set[TransactionHash]] = Ref.unsafe(Set.empty)
-        val getStateCounter: Ref[IO, Int] = Ref.unsafe(0)
-
-        def getKnownTxs: IO[Set[TransactionHash]] = knownTxs.get
-        def getGetStateCounter: IO[Int] = getStateCounter.get
-
-        override def utxosAt(address: ShelleyAddress): IO[Either[CardanoBackend.Error, UtxoSetL1]] =
-            ???
-
-        override def utxosAt(
-            address: ShelleyAddress,
-            asset: (PolicyId, AssetName)
-        ): IO[Either[CardanoBackend.Error, UtxoSetL1]] = ???
-
-        override def getTxInfo(
-            txHash: TransactionHash
-        ): IO[Either[CardanoBackend.Error, GetTxInfo.Response]] = ???
-
-        override def submitTx(tx: Transaction): IO[Either[CardanoBackend.Error, Unit]] = ???
-
-        // override def receive: Receive[IO, Request] = PartialFunction.fromFunction(receiveTotal)
-        //
-        // private def receiveTotal(req: Request): IO[Unit] = req match {
-        //    case req: SyncRequest.Any =>
-        //        req.request match {
-        //            case x: GetCardanoHeadState.type => x.handleSync(req, getCardanoHeadState)
-        //            case x: GetTxInfo                => x.handleSync(req, getTxInfo)
-        //        }
-        //    case x: SubmitL1Effects => submitL1Effects(x)
-        // }
-        //
-        // private def submitL1Effects(r: SubmitL1Effects): IO[Unit] = for {
-        //    txIds <- IO.pure(r.txs.map(_.id))
-        //    _ <- IO.println(s"submitL1Effects: ${txIds}")
-        //    _ <- knownTxs.update(s => s ++ txIds)
-        // } yield ()
-        //
-        // private def getCardanoHeadState(
-        //    r: GetCardanoHeadState.type
-        // ): EitherT[IO, CardanoBackendError, GetCardanoHeadState.Response] = for {
-        //    _ <- EitherT.right(
-        //      IO.println("getCardanoHeadState") >>
-        //          getStateCounter.update(_ + 1)
-        //    )
-        // } yield GetCardanoHeadState.Response(utxoIds, currentSlot)
-        //
-        // private def getTxInfo(r: GetTxInfo): EitherT[IO, CardanoBackendError, GetTxInfo.Response] =
-        //    for {
-        //        txs <- EitherT.right(
-        //          IO.println(s"getTxInfo txId: ${r.txHash}") >>
-        //              knownTxs.get
-        //        )
-        //    } yield GetTxInfo.Response(txs.contains(r.txHash))
-
+    class BlockWeaverMock extends Actor[IO, BlockWeaver.Request] {
+        override def receive: Receive[IO, BlockWeaver.Request] = _ => IO.pure(())
+    }
 }

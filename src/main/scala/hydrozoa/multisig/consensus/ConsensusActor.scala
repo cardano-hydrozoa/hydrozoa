@@ -4,11 +4,11 @@ import cats.effect.{IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
-import hydrozoa.multisig.ledger.dapp.tx.{DeinitTx, FallbackTx, FinalizationTx, RefundTx, RolloutTx, SettlementTx, Tx}
+import hydrozoa.multisig.ledger.dapp.tx.{DeinitTx, RefundTx, RolloutTx, Tx}
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.types.AckBlock.HeaderSignature.given
 import hydrozoa.multisig.protocol.types.AckBlock.{HeaderSignature, TxSignature}
-import hydrozoa.multisig.protocol.types.{AckBlock, AugmentedBlock, Block, Peer}
+import hydrozoa.multisig.protocol.types.{AckBlock, AugmentedBlock, Block, BlockEffectsSigned, Peer}
 import hydrozoa.{VerificationKeyBytes, attachVKeyWitnesses}
 import scala.Function.tupled
 import scala.util.control.NonFatal
@@ -358,7 +358,8 @@ class ConsensusActor(
     // ===================================
     sealed trait BlockConfirmed {
         def block: Block.Next
-        val finalizationRequested: Boolean
+        def effects: BlockEffectsSigned.Next
+        def finalizationRequested: Boolean
 
         final lazy val blockNum: Block.Number = block.blockNum
 
@@ -368,16 +369,18 @@ class ConsensusActor(
               finalizationRequested = finalizationRequested
             )
 
-        // TODO: refactor liaison, fill in the holes
         final lazy val mbCardanoLiaisonEffects
             : Option[CardanoLiaison.MajorBlockConfirmed | CardanoLiaison.FinalBlockConfirmed] =
             this match {
                 case BlockConfirmed.Major(
                       _,
-                      fallbackSigned,
-                      rolloutsSigned,
-                      _,
-                      settlementSigned,
+                      BlockEffectsSigned.Major(
+                        _,
+                        settlementSigned,
+                        fallbackSigned,
+                        rolloutsSigned,
+                        _,
+                      ),
                       _
                     ) =>
                     Some(
@@ -388,7 +391,16 @@ class ConsensusActor(
                         fallbackSigned = fallbackSigned
                       )
                     )
-                case BlockConfirmed.Final(_, rolloutsSigned, deinitSigned, finalizationSigned, _) =>
+                case BlockConfirmed.Final(
+                      _,
+                      BlockEffectsSigned.Final(
+                        _,
+                        rolloutsSigned,
+                        deinitSigned,
+                        finalizationSigned
+                      ),
+                      _
+                    ) =>
                     Some(
                       CardanoLiaison.FinalBlockConfirmed(
                         blockNum = blockNum,
@@ -417,29 +429,19 @@ class ConsensusActor(
 
         final case class Minor(
             override val block: Block.Minor,
-            // Verified header signatures
-            headerSignatures: Set[HeaderSignature],
-            // Fully signed txs
-            postDatedRefundsSigned: List[RefundTx.PostDated],
+            override val effects: BlockEffectsSigned.Minor,
             override val finalizationRequested: Boolean
         ) extends BlockConfirmed
 
         final case class Major(
             override val block: Block.Major,
-            // Fully signed txs
-            fallbackSigned: FallbackTx,
-            rolloutsSigned: List[RolloutTx],
-            postDatedRefundsSigned: List[RefundTx.PostDated],
-            settlementSigned: SettlementTx,
+            override val effects: BlockEffectsSigned.Major,
             override val finalizationRequested: Boolean
         ) extends BlockConfirmed
 
         final case class Final(
             override val block: Block.Final,
-            // Fully signed txs
-            rolloutsSigned: List[RolloutTx],
-            mbDeinitSigned: Option[DeinitTx],
-            finalizationSigned: FinalizationTx,
+            override val effects: BlockEffectsSigned.Final,
             override val finalizationRequested: Boolean = false
         ) extends BlockConfirmed
 
@@ -807,8 +809,12 @@ class ConsensusActor(
                 } yield Right(
                   BlockConfirmed.Minor(
                     block = block,
-                    headerSignatures = vksAndSigs.map(_._2).toSet,
-                    postDatedRefundsSigned = postDatedRefundsSigned,
+                    effects = BlockEffectsSigned.Minor(
+                      blockNum = block.header.blockNum,
+                      header = block.header,
+                      headerSignatures = vksAndSigs.map(_._2).toSet,
+                      postDatedRefundsSigned = postDatedRefundsSigned,
+                    ),
                     finalizationRequested = finalizationRequested
                   ) -> postponedNextBlockOwnAck
                 )
@@ -1030,10 +1036,13 @@ class ConsensusActor(
                 } yield Right(
                   BlockConfirmed.Major(
                     block = augBlock.block,
-                    fallbackSigned = fallbackTxSigned,
-                    rolloutsSigned = rolloutsSigned,
-                    postDatedRefundsSigned = postDatedRefundsSigned,
-                    settlementSigned = settlementTxSigned,
+                    effects = BlockEffectsSigned.Major(
+                      blockNum = augBlock.block.header.blockNum,
+                      settlementSigned = settlementTxSigned,
+                      fallbackSigned = fallbackTxSigned,
+                      rolloutsSigned = rolloutsSigned,
+                      postDatedRefundsSigned = postDatedRefundsSigned,
+                    ),
                     finalizationRequested = finalizationRequested
                   ),
                   postponedNextBlockOwnAck
@@ -1228,15 +1237,19 @@ class ConsensusActor(
                             } yield Some(deinitSigned)
                     }
                 } yield Right(
-                  BlockConfirmed.Final(
-                    block = augBlock.block,
-                    rolloutsSigned = rolloutsSigned,
-                    finalizationSigned = finalizationSigned,
-                    mbDeinitSigned = mbDeinitSigned
-                  ),
-                  None
+                  (
+                    BlockConfirmed.Final(
+                      block = augBlock.block,
+                      effects = BlockEffectsSigned.Final(
+                        blockNum = augBlock.block.header.blockNum,
+                        rolloutsSigned = rolloutsSigned,
+                        mbDeinitSigned = mbDeinitSigned,
+                        finalizationSigned = finalizationSigned
+                      )
+                    ),
+                    None
+                  )
                 )
-
         }
 
         enum CollectingError extends Throwable:

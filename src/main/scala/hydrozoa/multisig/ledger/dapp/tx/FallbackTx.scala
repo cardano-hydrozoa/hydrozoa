@@ -42,7 +42,7 @@ final case class FallbackTx(
     producedCollateralUtxos: NonEmptyList[Utxo],
     override val tx: Transaction,
     override val txLens: Lens[FallbackTx, Transaction] = Focus[FallbackTx](_.tx),
-    override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
+    override val resolvedUtxos: ResolvedUtxos
 ) extends HasValidityStart,
     // TODO: shall we add separate raw-type traits for that?
     Tx[FallbackTx] {
@@ -258,7 +258,8 @@ object FallbackTx {
                         output
                       )
                   }),
-              tx = finalized.transaction
+              tx = finalized.transaction,
+              resolvedUtxos = finalized.resolvedUtxos
             )
         }
     }

@@ -7,7 +7,7 @@ import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.SpentUtxos
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.{Fallback, Initialization}
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming.default
-import hydrozoa.multisig.ledger.dapp.tx.{InitializationTx, Tx, TxTiming, minInitTreasuryAda, Metadata as MD}
+import hydrozoa.multisig.ledger.dapp.tx.{InitializationTx, Metadata as MD, Tx, TxTiming, minInitTreasuryAda}
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.dapp.state.VoteDatum
@@ -15,6 +15,9 @@ import hydrozoa.{L1, Output, UtxoId, UtxoSetL1, ensureMinAda, maxNonPlutusTxFee,
 import io.bullet.borer.Cbor
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.{Gen, Prop, Properties, Test}
+import scala.collection.immutable.SortedMap
+import scala.collection.mutable
+import scala.concurrent.duration.{FiniteDuration, HOURS}
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.address.*
@@ -28,10 +31,6 @@ import scalus.ledger.api.v1.PubKeyHash
 import test.*
 import test.Generators.Hydrozoa.*
 import test.TransactionChain.observeTxChain
-
-import scala.collection.immutable.SortedMap
-import scala.collection.mutable
-import scala.concurrent.duration.{FiniteDuration, HOURS}
 
 object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
     import Prop.forAll
