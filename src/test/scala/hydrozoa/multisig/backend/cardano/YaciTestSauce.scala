@@ -3,7 +3,6 @@ package hydrozoa.multisig.backend.cardano
 import hydrozoa.{L1, Output, UtxoIdL1, UtxoSet, UtxoSetL1}
 import scalus.builtin.ByteString
 import scalus.cardano.address.Network
-import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{Blake2b_256, Hash, HashPurpose, TransactionInput, TransactionOutput, Value}
 import test.TestPeer
 import test.TestPeer.*
@@ -106,7 +105,6 @@ def yaciTestSauceGenesis(network: Network): Map[TestPeer, UtxoSetL1] =
               Output[L1](
                 TransactionOutput
                     .Babbage(address = mkAddress(peer), value = Value.lovelace(10_000_000_000L))
-                    .asInstanceOf[Babbage]
               )
             )
     ).toMap

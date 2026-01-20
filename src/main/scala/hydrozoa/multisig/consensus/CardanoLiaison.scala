@@ -448,7 +448,7 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
             // we should address it somehow.
             case backboneEffectId @ (blockNum, 0) =>
 
-                println(s"backboneEffectId: $backboneEffectId")
+                println(s"mkDirectAction: backboneEffectId: $backboneEffectId")
 
                 val happyPathEffect = state.happyPathEffects(backboneEffectId)
                 // May absent for phony "deinit" block number
@@ -528,6 +528,8 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
 
             // Rollout tx
             case rolloutTx @ (blockNum, _notZero) =>
+                println(s"mkDirectAction: rolloutEffectId: $rolloutTx")
+
                 val nextBackboneTx = blockNum.increment -> 0
                 val effectTxs =
                     state.happyPathEffects.range(rolloutTx, nextBackboneTx).toSeq.map(_._2)

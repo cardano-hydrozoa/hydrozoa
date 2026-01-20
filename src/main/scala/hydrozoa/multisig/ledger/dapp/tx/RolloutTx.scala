@@ -47,7 +47,7 @@ object RolloutTx {
         override val rolloutProduced: RolloutUtxo,
         override val txLens: Lens[RolloutTx, Transaction] =
             Focus[NotLast](_.tx).asInstanceOf[Lens[RolloutTx, Transaction]],
-        override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
+        override val resolvedUtxos: ResolvedUtxos
     ) extends RolloutTx,
           RolloutUtxo.Produced
 
@@ -364,7 +364,7 @@ object RolloutTx {
                 config: Tx.Builder.Config,
                 resolvedUtxo: Utxo
             ): Spend =
-                Spend(resolvedUtxo, config.headNativeScript.witness)
+                Spend(resolvedUtxo, config.headNativeScript.witnessAttached)
         }
 
         object Placeholder {
@@ -495,7 +495,8 @@ object RolloutTx {
                 RolloutTx.NotLast(
                   rolloutSpent = PostProcess.unsafeGetRolloutSpent(ctx),
                   rolloutProduced = RolloutUtxo(rolloutProduced),
-                  tx = tx
+                  tx = tx,
+                  resolvedUtxos = ctx.resolvedUtxos
                 )
             }
 

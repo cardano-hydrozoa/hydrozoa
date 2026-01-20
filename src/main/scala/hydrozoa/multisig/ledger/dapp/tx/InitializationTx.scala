@@ -22,7 +22,6 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.txbuilder.*
-import scalus.cardano.txbuilder.ScriptSource.NativeScriptValue
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, ModifyAuxiliaryData, Send, Spend, ValidityEndSlot}
 
@@ -77,17 +76,14 @@ object InitializationTx {
           headNativeScript.script.scriptHash,
           headTokenName,
           1,
-          NativeScriptWitness(
-            NativeScriptValue(headNativeScript.script),
-            headNativeScript.requiredSigners
-          )
+          headNativeScript.witnessValue
         )
 
         val mintMRToken = Mint(
           headNativeScript.script.scriptHash,
           mrTokenName,
           1,
-          headNativeScript.witness
+          headNativeScript.witnessAttached
         )
         val hmrwOutput =
             Babbage(headAddress, mrValue, None, Some(ScriptRef(headNativeScript.script)))

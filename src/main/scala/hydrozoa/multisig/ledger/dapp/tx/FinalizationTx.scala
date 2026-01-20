@@ -159,7 +159,7 @@ object FinalizationTx {
 
             // Additional step - spend multisig regime utxo
             val spendMultisigRegimeUtxoStep =
-                Spend(multisigUtxoToSpend.asUtxo, config.headNativeScript.witness)
+                Spend(multisigUtxoToSpend.asUtxo, config.headNativeScript.witnessAttached)
 
             for {
                 ctx <- TransactionBuilder
@@ -330,7 +330,9 @@ object FinalizationTx {
                     deinitTx.tx.body.value.outputs.toList.map(o => Send(o.value))
                 val mintSteps = deinitTx.tx.body.value.mint.get.assets.toList
                     .flatMap(p =>
-                        p._2.map(a => MintStep(p._1, a._1, a._2, config.headNativeScript.witness))
+                        p._2.map(a =>
+                            MintStep(p._1, a._1, a._2, config.headNativeScript.witnessAttached)
+                        )
                     )
                 val feeStep = Fee(originalTx.body.value.fee + deinitTx.tx.body.value.fee)
 

@@ -144,7 +144,7 @@ object FallbackTx {
 
         ////////////////////////////////////////////////////
         // Define steps
-        val spendHMRW: Spend = Spend(config.multisigRegimeUtxo.asUtxo, hns.witness)
+        val spendHMRW: Spend = Spend(config.multisigRegimeUtxo.asUtxo, hns.witnessAttached)
 
         val spendMultisigTreasury: Spend =
             Spend(treasuryUtxoSpent.asUtxo, NativeScriptWitness(NativeScriptAttached, Set.empty))

@@ -9,7 +9,7 @@ import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.Timelock.{AllOf, Signature}
 import scalus.cardano.ledger.{Hash, *}
-import scalus.cardano.txbuilder.ScriptSource.NativeScriptAttached
+import scalus.cardano.txbuilder.ScriptSource.{NativeScriptAttached, NativeScriptValue}
 import scalus.cardano.txbuilder.{ExpectedSigner, NativeScriptWitness}
 
 case class HeadMultisigScript(private val script0: Script.Native) {
@@ -38,9 +38,17 @@ case class HeadMultisigScript(private val script0: Script.Native) {
     }
     val numSigners: Int = requiredSigners.toSeq.size
 
-    val witness: NativeScriptWitness = NativeScriptWitness(
+    // use when the multisig witness utxo id not available
+    val witnessValue: NativeScriptWitness = NativeScriptWitness(
+      scriptSource = NativeScriptValue(script),
+      additionalSigners = requiredSigners
+    )
+
+    // use when referencing the multisig witness utxo
+    // or after [[witnessValue]] has been used within a tx
+    val witnessAttached: NativeScriptWitness = NativeScriptWitness(
       scriptSource = NativeScriptAttached,
-      additionalSigners = requiredSigners.toSet
+      additionalSigners = requiredSigners
     )
 
 }

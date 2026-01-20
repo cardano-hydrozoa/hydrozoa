@@ -61,11 +61,15 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                         seedUtxo <- Gen
                             .oneOf(utxos(prime))
                             .map(u => Utxo(u._1.untagged, u._2.untagged))
-                        rest = (utxos.values
+                        // Utxos of the other peers
+                        rest = utxos.view
+                            .filterKeys(peers.tail.contains)
+                            .values
                             .map(_.untagged)
                             .foldLeft(
                               Map.empty[UtxoId[L1], Output[L1]]
-                            )((l, r) => l ++ r) - UtxoId[L1](seedUtxo.input)).toList
+                            )((l, r) => l ++ r)
+                            .toList
                         // Some random utxos
                         fundingUtxos <- Gen
                             .someOf(rest)

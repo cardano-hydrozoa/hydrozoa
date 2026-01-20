@@ -90,16 +90,10 @@ object DeinitTx:
     ) {
 
         def commonSteps: List[TransactionBuilderStep] =
-            List(
-              stepReferenceHNS,
-              spendTreasury
-            ) ++ burnHeadTokens
-
-        private def stepReferenceHNS =
-            ReferenceOutput(config.multisigRegimeUtxo.asUtxo)
+            spendTreasury +: burnHeadTokens
 
         private def spendTreasury =
-            Spend(residualTreasuryToSpend.asUtxo, config.headNativeScript.witness)
+            Spend(residualTreasuryToSpend.asUtxo, config.headNativeScript.witnessValue)
 
         private def burnHeadTokens = {
             List(
@@ -111,7 +105,7 @@ object DeinitTx:
                     config.headNativeScript.policyId,
                     _,
                     -1L,
-                    config.headNativeScript.witness
+                    config.headNativeScript.witnessAttached
                   )
                 )
         }
