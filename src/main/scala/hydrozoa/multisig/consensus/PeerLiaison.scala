@@ -211,9 +211,11 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
                 current <- this.currentlyRequesting.get
                 nextBatchNum = current.batchNum.increment
                 nextAckNum = current.ackNum.increment
-                nextBlockNum = config.ownPeerId.nextLeaderBlock(current.blockNum)
+                nextBlockNum = config.remotePeerId.nextLeaderBlock(current.blockNum)
                 nextEventNum = current.eventNum.increment
 
+                correctBatchNum = current.batchNum == receivedBatch.batchNum
+                
                 // Received ack num (if any) is the increment of the requested ack num
                 correctAckNum = ack.forall(x =>
                     x.id.peerNum == config.remotePeerId.peerNum &&
@@ -235,7 +237,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
                             .withPartial(false)
                             .forall(x => x.head.precedes(x(1)))
             } yield
-                if correctAckNum && correctBlockNum && correctReceivedEventIds then
+                if correctBatchNum && correctAckNum && correctBlockNum && correctReceivedEventIds then
                     GetMsgBatch(
                       batchNum = nextBatchNum,
                       ackNum = ack.fold(current.ackNum)(_.id.ackNum),
