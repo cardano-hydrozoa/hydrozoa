@@ -3,28 +3,14 @@ package hydrozoa.multisig.consensus
 import cats.effect.{Deferred, IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
+import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
-import hydrozoa.multisig.consensus.EventSequencer.{Config, ConnectionsPending}
+import hydrozoa.multisig.consensus.EventSequencer.Request.*
+import hydrozoa.multisig.consensus.EventSequencer.{Config, ConnectionsPending, Request}
+import hydrozoa.multisig.ledger.dapp.tx.RefundTx
 import hydrozoa.multisig.protocol.*
-import hydrozoa.multisig.protocol.ConsensusProtocol.*
-import hydrozoa.multisig.protocol.ConsensusProtocol.EventSequencer.*
-import hydrozoa.multisig.protocol.types.{LedgerEvent, LedgerEventId, Peer}
+import hydrozoa.multisig.protocol.types.{Block, LedgerEvent, LedgerEventId, Peer}
 import scala.collection.immutable.Queue
-
-/** Event sequencer receives local submissions of new ledger events and emits them sequentially into
-  * the consensus system.
-  */
-object EventSequencer {
-    final case class Config(peerId: Peer.Id)
-
-    final case class ConnectionsPending(
-        blockWeaver: Deferred[IO, BlockWeaver.Handle],
-        peerLiaisons: Deferred[IO, List[PeerLiaison.Handle]]
-    )
-
-    def apply(config: Config, connections: ConnectionsPending): IO[EventSequencer] =
-        IO(new EventSequencer(config, connections) {})
-}
 
 trait EventSequencer(config: Config, connections: ConnectionsPending) extends Actor[IO, Request] {
     private val subscribers = Ref.unsafe[IO, Option[Subscribers]](None)
@@ -61,15 +47,17 @@ trait EventSequencer(config: Config, connections: ConnectionsPending) extends Ac
 
     private def receiveTotal(req: Request, subs: Subscribers): IO[Unit] =
         req match {
-            case x: SubmitLedgerEvent =>
+            case x: LedgerEvent =>
                 for {
-                    newNum <- state.enqueueDeferredEventOutcome(x.deferredEventOutcome)
+                    newNum <- state.nextLedgerEventNum()
                     newId = LedgerEventId(config.peerId.peerNum, newNum)
-                    // FIXME: fill in
-                    newEvent: LedgerEvent = ???
+                    newEvent: LedgerEvent = x match {
+                        case y: LedgerEvent.TxL2Event       => y.copy(eventId = newId)
+                        case y: LedgerEvent.RegisterDeposit => y.copy(eventId = newId)
+                    }
                     _ <- (subs.newLedgerEvent ! newEvent).parallel
                 } yield ()
-            case x: ConfirmBlock =>
+            case x: BlockConfirmed =>
                 // Complete the deferred ledger event outcomes confirmed by the block and remove them from queue
                 ???
         }
@@ -81,17 +69,42 @@ trait EventSequencer(config: Config, connections: ConnectionsPending) extends Ac
               Queue()
             )
 
-        def enqueueDeferredEventOutcome(
-            eventOutcome: Deferred[IO, Unit]
-        ): IO[LedgerEventId.Number] =
+        def nextLedgerEventNum(): IO[LedgerEventId.Number] =
             for {
                 newNum <- nLedgerEvent.updateAndGet(x => x.increment)
-                _ <- localRequests.update(q => q :+ (newNum -> eventOutcome))
+                // FIXME:
+//                _ <- localRequests.update(q => q :+ (newNum -> eventOutcome))
             } yield newNum
 
         def completeDeferredEventOutcomes(
             eventOutcomes: List[(LedgerEventId.Number, Unit)]
         ): IO[Unit] =
             ???
+    }
+}
+
+/** Event sequencer receives local submissions of new ledger events and emits them sequentially into
+  * the consensus system.
+  */
+object EventSequencer {
+    def apply(config: Config, connections: ConnectionsPending): IO[EventSequencer] =
+        IO(new EventSequencer(config, connections) {})
+
+    final case class Config(peerId: Peer.Id)
+
+    final case class ConnectionsPending(
+        blockWeaver: Deferred[IO, BlockWeaver.Handle],
+        peerLiaisons: Deferred[IO, List[PeerLiaison.Handle]]
+    )
+
+    type Handle = ActorRef[IO, Request]
+
+    type Request = LedgerEvent | BlockConfirmed
+
+    object Request {
+        final case class BlockConfirmed(
+            block: Block.Next,
+            mbPostDatedRefundsSigned: List[RefundTx.PostDated]
+        )
     }
 }

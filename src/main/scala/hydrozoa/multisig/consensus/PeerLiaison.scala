@@ -171,7 +171,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
         //   query the database to properly respond. Currently, we just respond as if no messages are available to send.
         def buildNewMsgBatch(
             batchReq: GetMsgBatch,
-            maxEvents: MaxEvents
+            maxEvents: Int
         ): IO[Either[ExtractNewMsgBatchError, NewMsgBatch]] =
             (for {
                 nAck <- this.nAck.get
@@ -215,7 +215,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
                 nextEventNum = current.eventNum.increment
 
                 correctBatchNum = current.batchNum == receivedBatch.batchNum
-                
+
                 // Received ack num (if any) is the increment of the requested ack num
                 correctAckNum = ack.forall(x =>
                     x.id.peerNum == config.remotePeerId.peerNum &&
@@ -237,7 +237,8 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
                             .withPartial(false)
                             .forall(x => x.head.precedes(x(1)))
             } yield
-                if correctBatchNum && correctAckNum && correctBlockNum && correctReceivedEventIds then
+                if correctBatchNum && correctAckNum && correctBlockNum && correctReceivedEventIds
+                then
                     GetMsgBatch(
                       batchNum = nextBatchNum,
                       ackNum = ack.fold(current.ackNum)(_.id.ackNum),
@@ -258,12 +259,10 @@ object PeerLiaison {
     def apply(config: Config, connections: ConnectionsPending): IO[PeerLiaison] =
         IO(new PeerLiaison(config, connections) {})
 
-    type MaxEvents = Int
-
     final case class Config(
         ownPeerId: Peer.Id,
         remotePeerId: Peer.Id,
-        maxLedgerEventsPerBatch: MaxEvents = 25
+        maxLedgerEventsPerBatch: Int = 25
     )
 
     final case class ConnectionsPending(

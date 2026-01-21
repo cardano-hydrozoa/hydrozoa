@@ -5,7 +5,6 @@ import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.multisig.ledger.dapp.tx.{DeinitTx, FallbackTx, FinalizationTx, RefundTx, RolloutTx, SettlementTx, Tx}
-import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.types.AckBlock.HeaderSignature.given
 import hydrozoa.multisig.protocol.types.AckBlock.{HeaderSignature, TxSignature}
 import hydrozoa.multisig.protocol.types.{AckBlock, AugmentedBlock, Block, Peer}
@@ -250,7 +249,7 @@ object ConsensusActor:
         peerLiaison: PeerLiaison.Handle,
         blockWeaver: BlockWeaver.Handle,
         cardanoLiaison: CardanoLiaison.Handle,
-        eventSequencer: EventSequencer.EventSequencerRef,
+        eventSequencer: EventSequencer.Handle,
     )
 
     // ===================================
@@ -358,6 +357,8 @@ class ConsensusActor(
     // ===================================
     sealed trait BlockConfirmed {
         def block: Block.Next
+        def postDatedRefundsSigned: List[RefundTx.PostDated]
+
         val finalizationRequested: Boolean
 
         final lazy val blockNum: Block.Number = block.blockNum
@@ -410,7 +411,11 @@ class ConsensusActor(
         //  - blockNum
         //  - events with flags
         //  - post-dated refunds
-        final lazy val sequencerEvents: EventSequencer.ConfirmBlock = ???
+        final lazy val sequencerEvents: EventSequencer.Request.BlockConfirmed =
+            EventSequencer.Request.BlockConfirmed(
+              block = this.block,
+              mbPostDatedRefundsSigned = this.postDatedRefundsSigned
+            )
     }
 
     object BlockConfirmed:
@@ -420,7 +425,7 @@ class ConsensusActor(
             // Verified header signatures
             headerSignatures: Set[HeaderSignature],
             // Fully signed txs
-            postDatedRefundsSigned: List[RefundTx.PostDated],
+            override val postDatedRefundsSigned: List[RefundTx.PostDated],
             override val finalizationRequested: Boolean
         ) extends BlockConfirmed
 
@@ -429,7 +434,7 @@ class ConsensusActor(
             // Fully signed txs
             fallbackSigned: FallbackTx,
             rolloutsSigned: List[RolloutTx],
-            postDatedRefundsSigned: List[RefundTx.PostDated],
+            override val postDatedRefundsSigned: List[RefundTx.PostDated],
             settlementSigned: SettlementTx,
             override val finalizationRequested: Boolean
         ) extends BlockConfirmed
@@ -441,7 +446,9 @@ class ConsensusActor(
             mbDeinitSigned: Option[DeinitTx],
             finalizationSigned: FinalizationTx,
             override val finalizationRequested: Boolean = false
-        ) extends BlockConfirmed
+        ) extends BlockConfirmed {
+            override def postDatedRefundsSigned: List[RefundTx.PostDated] = List()
+        }
 
     // ===================================
     // State extension methods

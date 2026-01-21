@@ -72,7 +72,7 @@ object LedgerEvent {
     final case class RegisterDeposit(
         depositTxBytes: Array[Byte],
         refundTxBytes: Array[Byte],
-        eventId: LedgerEventId,
+        override val eventId: LedgerEventId,
         virtualOutputsBytes: Array[Byte],
         donationToTreasury: Coin,
         txTiming: TxTiming,
