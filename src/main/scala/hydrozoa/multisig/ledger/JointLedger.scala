@@ -3,10 +3,10 @@ package hydrozoa.multisig.ledger
 import cats.effect.{IO, Ref}
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
-import hydrozoa.UtxoIdL1
 import hydrozoa.config.EquityShares
 import hydrozoa.lib.actor.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, toEpochQuantizedInstant}
+import hydrozoa.multisig.consensus.ConsensusActor
 import hydrozoa.multisig.ledger.DappLedgerM.runDappLedgerM
 import hydrozoa.multisig.ledger.JointLedger.*
 import hydrozoa.multisig.ledger.JointLedger.Requests.*
@@ -18,11 +18,13 @@ import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.{GenesisObligation, L2EventGenesis}
 import hydrozoa.multisig.protocol.types.*
+import hydrozoa.multisig.protocol.types.AckBlock.{BlockAckSet, TxSignature}
 import hydrozoa.multisig.protocol.types.Block.*
 import hydrozoa.multisig.protocol.types.LedgerEvent.*
 import hydrozoa.multisig.protocol.types.LedgerEventId.ValidityFlag
 import hydrozoa.multisig.protocol.types.LedgerEventId.ValidityFlag.{Invalid, Valid}
 import hydrozoa.multisig.protocol.{ConsensusProtocol, types}
+import hydrozoa.{UtxoIdL1, Wallet}
 import monocle.Focus.focus
 import scala.collection.immutable.Queue
 import scala.math.Ordered.orderingToOrdered
@@ -38,9 +40,10 @@ private case class TransientFields(
 // NOTE: Joint ledger is created by the MultisigManager.
 // NOTE: As of 2025-11-16, George says BlockWeaver should be the ONLY actor calling the joint ledger
 final case class JointLedger(
+    // TODO: use .Handle
     peerLiaisons: Seq[ActorRef[IO, ConsensusProtocol.PeerLiaison.Request]],
-    // private val cardanoLiaison
-    // private val blockSigner
+    consensusActor: ConsensusActor.Handle,
+    wallet: Wallet,
     //// Static config fields
     // in head config
     initialBlockTime: QuantizedInstant,
@@ -442,7 +445,7 @@ final case class JointLedger(
                 }
 
             _ <- checkReferenceBlock(referenceBlock, augmentedBlock)
-            _ <- sendAugmentedBlock(augmentedBlock)
+            _ <- handledAugmentedBlock(augmentedBlock)
         } yield ()
     }
 
@@ -509,21 +512,99 @@ final case class JointLedger(
             }
 
             _ <- checkReferenceBlock(referenceBlock, augmentedBlock)
-            _ <- sendAugmentedBlock(augmentedBlock)
+            _ <- handledAugmentedBlock(augmentedBlock)
 
         } yield ()
     }
 
-    // when a block is finished, we:
-    //   - send Aug block to block signer along with the L1 effects settlementTxSeq, etc. for signing locally
-    //     (signatures subsequently passed to peer liaison for circulation and block weaver and to the )
-    //   - sends block itself to peer liaison for circulation
-    //   - sends just L1 effects to cardano liaison
-    private def sendAugmentedBlock(augmentedBlock: AugmentedBlock.Next): IO[Unit] =
+    /** When a block is finished, we handle it by:
+      *   - sending the pure block to peer liaisons for circulation
+      *   - sending the augmented block with effects to the consensus actor
+      *   - signing block's effects and producing our own set of acks
+      *   - sending block's ack(s) to the consensus actor
+      */
+    private def handledAugmentedBlock(augmentedBlock: AugmentedBlock.Next): IO[Unit] =
         for {
-            // _ <- blockSigner ! augmentedBlock
-            _ <- IO.parSequence(peerLiaisons.map(_ ! augmentedBlock.blockNext))
+            _ <- IO.parSequence(peerLiaisons.map(_ ! augmentedBlock.blockAsNext))
+            _ <- consensusActor ! augmentedBlock
+            ackSet <- signBlockEffects(augmentedBlock.blockAsNext.blockNum, augmentedBlock.effects)
+            _ <- IO.traverse_(ackSet.asList)(ack => consensusActor ! ack)
         } yield ()
+
+    private def signBlockEffects[E <: BlockEffects](
+        blockNum: Block.Number,
+        effects: E
+    ): IO[AckSetFor[E]] = (effects match {
+        case minor: BlockEffects.Minor =>
+            val headerSignature = wallet.createHeaderSignature(minor.header.mkMessage)
+            val refundSignatures =
+                minor.postDatedRefunds
+                    .map(r => wallet.createTxKeyWitness(r.tx))
+                    .map(TxSignature.apply)
+            IO.pure(
+              AckBlock.Minor(
+                id = ???,
+                blockNum = blockNum,
+                headerSignature = headerSignature,
+                postDatedRefunds = refundSignatures,
+                // TODO: ???
+                finalizationRequested = false
+              )
+            )
+        case major: BlockEffects.Major =>
+            val fallbackSignature = TxSignature.apply(wallet.createTxKeyWitness(major.fallback.tx))
+            val rolloutSignatures =
+                major.rollouts
+                    .map(r => wallet.createTxKeyWitness(r.tx))
+                    .map(TxSignature.apply)
+            val refundSignatures =
+                major.postDatedRefunds
+                    .map(r => wallet.createTxKeyWitness(r.tx))
+                    .map(TxSignature.apply)
+            val settlementSignature =
+                TxSignature.apply(wallet.createTxKeyWitness(major.settlement.tx))
+
+            IO.pure(
+              BlockAckSet.Major(
+                AckBlock.Major1(
+                  id = ???,
+                  blockNum = blockNum,
+                  fallback = fallbackSignature,
+                  rollouts = rolloutSignatures,
+                  postDatedRefunds = refundSignatures,
+                  // TODO: ???
+                  finalizationRequested = false
+                ),
+                AckBlock.Major2(id = ???, blockNum = blockNum, settlement = settlementSignature)
+              )
+            )
+        case f: BlockEffects.Final =>
+            val rolloutSignatures =
+                f.rollouts
+                    .map(r => wallet.createTxKeyWitness(r.tx))
+                    .map(TxSignature.apply)
+            val deinitSignature =
+                f.deinit.map(deinit => TxSignature.apply(wallet.createTxKeyWitness(deinit.tx)))
+
+            val finalizationSignature =
+                TxSignature.apply(wallet.createTxKeyWitness(f.finalization.tx))
+
+            IO.pure(
+              BlockAckSet.Final(
+                AckBlock.Final1(
+                  id = ???,
+                  blockNum = blockNum,
+                  rollouts = rolloutSignatures,
+                  deinit = deinitSignature
+                ),
+                AckBlock.Final2(
+                  id = ???,
+                  blockNum = blockNum,
+                  finalization = finalizationSignature
+                )
+              )
+            )
+    }).asInstanceOf[IO[AckSetFor[E]]]
 
     private def checkReferenceBlock(
         expectedBlock: Option[Block],
@@ -579,6 +660,13 @@ object JointLedger {
     type Handle = ActorRef[IO, Requests.Request]
 
     final case class CompleteBlockError() extends Throwable
+
+    // Match type to map BlockEffects to their corresponding AckSet types
+    type AckSetFor[E <: BlockEffects] <: AckBlock.BlockAckSet = E match {
+        case BlockEffects.Minor => AckBlock.Minor
+        case BlockEffects.Major => AckBlock.BlockAckSet.Major
+        case BlockEffects.Final => AckBlock.BlockAckSet.Final
+    }
 
     object Requests {
         type Request =

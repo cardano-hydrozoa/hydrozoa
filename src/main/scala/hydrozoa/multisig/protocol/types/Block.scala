@@ -73,7 +73,6 @@ object Block {
 
     enum Header(val blockType: Type) extends HeaderFields.Mandatory {
         case Initial(
-            // TODO: this seems to be the same as `initializedOn`
             override val timeCreation: QuantizedInstant,
             override val commitment: KzgCommitment
         ) extends Header(Type.Initial), HeaderFields.InitialHeaderFields, HeaderFields.Commitment

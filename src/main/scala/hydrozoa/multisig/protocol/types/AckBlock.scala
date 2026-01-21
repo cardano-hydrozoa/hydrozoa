@@ -5,50 +5,66 @@ import cats.syntax.all.*
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.multisig.protocol.types.AckBlock.Fields.*
 import scalus.builtin.ByteString
+import scalus.cardano.ledger.VKeyWitness
 
 type AckBlockId = AckBlock.Id
 
-enum AckBlock:
+sealed trait AckBlock {
     def id: AckBlock.Id
     def blockNum: Block.Number
+}
 
-    case Minor(
+object AckBlock {
+
+    final case class Minor(
         override val id: AckBlock.Id,
         override val blockNum: Block.Number,
         override val headerSignature: AckBlock.HeaderSignature,
         override val postDatedRefunds: List[AckBlock.TxSignature],
-        override val finalizationRequested: Boolean
-    ) extends AckBlock, MinorHeaderSignature, Refunds.PostDated, FinalizationRequested
+        override val finalizationRequested: Boolean,
+    ) extends AckBlock
+        with MinorHeaderSignature
+        with Refunds.PostDated
+        with FinalizationRequested
+        with BlockAckSet {
+        override def asList: List[AckBlock] = List(this)
+    }
 
-    case Major1(
+    final case class Major1(
         override val id: AckBlock.Id,
         override val blockNum: Block.Number,
         override val fallback: AckBlock.TxSignature,
         override val rollouts: List[AckBlock.TxSignature],
         override val postDatedRefunds: List[AckBlock.TxSignature],
         override val finalizationRequested: Boolean
-    ) extends AckBlock, Rollouts, Fallback, Refunds.PostDated, FinalizationRequested
+    ) extends AckBlock
+        with Rollouts
+        with Fallback
+        with Refunds.PostDated
+        with FinalizationRequested
 
-    case Major2(
+    final case class Major2(
         override val id: AckBlock.Id,
         override val blockNum: Block.Number,
         override val settlement: AckBlock.TxSignature
-    ) extends AckBlock, Settlement
+    ) extends AckBlock
+        with Settlement
 
-    case Final1(
+    final case class Final1(
         override val id: AckBlock.Id,
         override val blockNum: Block.Number,
         override val rollouts: List[AckBlock.TxSignature],
         override val deinit: Option[AckBlock.TxSignature]
-    ) extends AckBlock, Rollouts, Deinit
+    ) extends AckBlock
+        with Rollouts
+        with Deinit
 
-    case Final2(
+    final case class Final2(
         override val id: AckBlock.Id,
         override val blockNum: Block.Number,
         override val finalization: AckBlock.TxSignature
-    ) extends AckBlock, Finalization
-
-object AckBlock {
+    ) extends AckBlock
+        with Finalization
 
     type Id = Id.Id
     type Number = Number.Number
@@ -135,6 +151,9 @@ object AckBlock {
 
         def apply(signature: IArray[Byte]): TxSignature = signature
 
+        def apply(witness: VKeyWitness): TxSignature =
+            IArray.from(witness.signature.bytes)
+
         given Conversion[TxSignature, IArray[Byte]] = identity
 
         given Conversion[TxSignature, Array[Byte]] = sig => IArray.genericWrapArray(sig).toArray
@@ -164,4 +183,20 @@ object AckBlock {
         extension (signature: HeaderSignature) def untagged: IArray[Byte] = identity(signature)
 
     type HeaderSignature = HeaderSignature.HeaderSignature
+
+    // ===================================
+    // Ack sets
+    // ===================================
+
+    trait BlockAckSet:
+        def asList: List[AckBlock]
+
+    object BlockAckSet:
+        case class Major(ack1: Major1, ack2: Major2) extends BlockAckSet {
+            override def asList: List[AckBlock] = List(ack1, ack2)
+        }
+        case class Final(ack1: Final1, ack2: Final2) extends BlockAckSet {
+            override def asList: List[AckBlock] = List(ack1, ack2)
+        }
+
 }

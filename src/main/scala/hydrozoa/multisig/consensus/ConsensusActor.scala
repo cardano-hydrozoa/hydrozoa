@@ -557,7 +557,7 @@ class ConsensusActor(
         // ===================================
 
         private def msgBlockNum(msg: AugmentedBlock.Next | AckBlock): Block.Number = msg match {
-            case augBlock: AugmentedBlock.Next => augBlock.block.id
+            case augBlock: AugmentedBlock.Next => augBlock.blockAsNext.id
             case ack: AckBlock                 => ack.blockNum
         }
 

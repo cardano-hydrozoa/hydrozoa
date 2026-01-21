@@ -571,7 +571,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
 
                 val signedTxs: Vector[Transaction] =
                     testPeers.foldLeft(Vector(iTx.tx, fbTx.tx))((txsToSign, peer) =>
-                        txsToSign.map(tx => signTx(peer, tx))
+                        txsToSign.map(tx => peer.signTx(tx))
                     )
 
                 val observationRes =
