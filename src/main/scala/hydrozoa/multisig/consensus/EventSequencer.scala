@@ -5,14 +5,17 @@ import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
+import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.EventSequencer.Request.*
-import hydrozoa.multisig.consensus.EventSequencer.{Config, ConnectionsPending, Request}
+import hydrozoa.multisig.consensus.EventSequencer.{Config, Request}
+import hydrozoa.multisig.consensus.PeerLiaison.Handle
 import hydrozoa.multisig.ledger.dapp.tx.RefundTx
 import hydrozoa.multisig.protocol.*
 import hydrozoa.multisig.protocol.types.{Block, LedgerEvent, LedgerEventId, Peer}
 import scala.collection.immutable.Queue
 
-trait EventSequencer(config: Config, connections: ConnectionsPending) extends Actor[IO, Request] {
+trait EventSequencer(config: Config, pendingConnections: MultisigRegimeManager.PendingConnections)
+    extends Actor[IO, Request] {
     private val subscribers = Ref.unsafe[IO, Option[Subscribers]](None)
     private val state = State()
 
@@ -22,12 +25,11 @@ trait EventSequencer(config: Config, connections: ConnectionsPending) extends Ac
 
     override def preStart: IO[Unit] =
         for {
-            blockWeaver <- connections.blockWeaver.get
-            peerLiaisons <- connections.peerLiaisons.get
+            connections <- pendingConnections.get
             _ <- subscribers.set(
               Some(
                 Subscribers(
-                  newLedgerEvent = blockWeaver :: peerLiaisons
+                  newLedgerEvent = connections.blockWeaver :: connections.peerLiaisons
                 )
               )
             )
@@ -87,8 +89,11 @@ trait EventSequencer(config: Config, connections: ConnectionsPending) extends Ac
   * the consensus system.
   */
 object EventSequencer {
-    def apply(config: Config, connections: ConnectionsPending): IO[EventSequencer] =
-        IO(new EventSequencer(config, connections) {})
+    def apply(
+        config: Config,
+        pendingConnections: MultisigRegimeManager.PendingConnections
+    ): IO[EventSequencer] =
+        IO(new EventSequencer(config, pendingConnections) {})
 
     final case class Config(peerId: Peer.Id)
 

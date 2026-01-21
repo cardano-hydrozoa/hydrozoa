@@ -6,6 +6,7 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.UtxoIdL1
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant}
+import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.BlockWeaver.PollResults
 import hydrozoa.multisig.ledger.dapp.tx.*
@@ -46,7 +47,10 @@ object CardanoLiaison:
         initializationTx: InitializationTx,
         initializationFallbackTx: FallbackTx,
         receiveTimeout: FiniteDuration,
-        slotConfig: SlotConfig,
+        slotConfig: SlotConfig
+    )
+
+    final case class Connections(
         blockWeaver: BlockWeaver.Handle
     )
 
@@ -142,18 +146,30 @@ object CardanoLiaison:
     type Request = MajorBlockConfirmed | FinalBlockConfirmed | Timeout.type
     type Handle = ActorRef[IO, Request]
 
-    def apply(config: Config): IO[CardanoLiaison] = for {
+    def apply(
+        config: Config,
+        pendingConnections: MultisigRegimeManager.PendingConnections
+    ): IO[CardanoLiaison] = for {
         stateRef <- Ref[IO].of(State.initialState(config))
-    } yield new CardanoLiaison(config, stateRef)
+    } yield new CardanoLiaison(config, pendingConnections, stateRef)
 
 end CardanoLiaison
 
-class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLiaison.State])
-    extends Actor[IO, CardanoLiaison.Request]:
+class CardanoLiaison(
+    config: CardanoLiaison.Config,
+    pendingConnections: MultisigRegimeManager.PendingConnections,
+    stateRef: Ref[IO, CardanoLiaison.State]
+) extends Actor[IO, CardanoLiaison.Request]:
     import CardanoLiaison.*
+
+    private val connections = Ref.unsafe[IO, Option[CardanoLiaison.Connections]](None)
 
     override def preStart: IO[Unit] =
         for {
+            allConnections <- pendingConnections.get
+            _ <- connections.set(
+              Some(CardanoLiaison.Connections(blockWeaver = allConnections.blockWeaver))
+            )
             _ <- context.setReceiveTimeout(config.receiveTimeout, CardanoLiaison.Timeout)
         } yield ()
 
@@ -288,7 +304,16 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
                     utxoIds <- IO.pure(l1State.untagged.keySet)
                     // This may not the ideal place to have it. Every time we get a new head state, we
                     // forward it to the block weaver.
-                    _ <- config.blockWeaver ! PollResults(utxoIds)
+                    conn <- this.connections.get.flatMap(
+                      _.fold(
+                        IO.raiseError(
+                          java.lang.Error(
+                            "Consensus Actor is missing its connections to other actors."
+                          )
+                        )
+                      )(IO.pure)
+                    )
+                    _ <- conn.blockWeaver ! PollResults(utxoIds)
 
                     // 2. Based on the local state, find all due actions
                     state <- stateRef.get

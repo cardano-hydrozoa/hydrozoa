@@ -577,13 +577,15 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                   skeleton._1.initializationTx,
                   skeleton._1.fallbackTx,
                   100.millis,
-                  slotConfig = testTxBuilderEnvironment.slotConfig,
-                  blockWeaver = ???
+                  slotConfig = testTxBuilderEnvironment.slotConfig
                 )
 
                 cardanoLiaison = new CardanoLiaison(
-                  config,
-                  Ref.unsafe[IO, CardanoLiaison.State](CardanoLiaison.State.initialState(config))
+                  config = config,
+                  pendingConnections = ???,
+                  stateRef = Ref.unsafe[IO, CardanoLiaison.State](
+                    CardanoLiaison.State.initialState(config)
+                  ),
                 )
 
                 // Use protected handlers directly to present all effects

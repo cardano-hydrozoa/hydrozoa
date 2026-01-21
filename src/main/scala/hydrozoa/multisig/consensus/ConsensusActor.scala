@@ -5,6 +5,7 @@ import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
+import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.ledger.dapp.tx.{DeinitTx, FallbackTx, FinalizationTx, RefundTx, RolloutTx, SettlementTx, Tx}
 import hydrozoa.multisig.protocol.types.AckBlock.HeaderSignature.given
 import hydrozoa.multisig.protocol.types.AckBlock.{HeaderSignature, TxSignature}
@@ -244,8 +245,9 @@ object ConsensusActor:
 
         /** Requests that haven't been handled, initially empty. */
         recoveredRequests: Seq[Request] = Seq.empty,
+    )
 
-        // Actors
+    final case class Connections(
         peerLiaisons: List[PeerLiaison.Handle],
         blockWeaver: BlockWeaver.Handle,
         cardanoLiaison: CardanoLiaison.Handle,
@@ -276,22 +278,43 @@ object ConsensusActor:
 
     type Handle = ActorRef[IO, Request]
 
-    def apply(config: Config): IO[ConsensusActor] =
+    def apply(
+        config: Config,
+        pendingConnections: MultisigRegimeManager.PendingConnections
+    ): IO[ConsensusActor] =
         for {
             stateRef <- Ref[IO].of(State.mkInitialState)
-        } yield new ConsensusActor(config = config, stateRef = stateRef)
+        } yield new ConsensusActor(
+          config = config,
+          pendingConnections = pendingConnections,
+          stateRef = stateRef
+        )
 
 end ConsensusActor
 
 class ConsensusActor(
     config: ConsensusActor.Config,
+    pendingConnections: MultisigRegimeManager.PendingConnections,
     stateRef: Ref[IO, ConsensusActor.State]
 ) extends Actor[IO, ConsensusActor.Request]:
     import ConsensusActor.*
     import ConsensusCell.*
 
+    private val connections = Ref.unsafe[IO, Option[ConsensusActor.Connections]](None)
+
     override def preStart: IO[Unit] =
         for {
+            allConnections <- pendingConnections.get
+            _ <- connections.set(
+              Some(
+                ConsensusActor.Connections(
+                  peerLiaisons = allConnections.peerLiaisons,
+                  blockWeaver = allConnections.blockWeaver,
+                  cardanoLiaison = allConnections.cardanoLiaison,
+                  eventSequencer = allConnections.eventSequencer
+                )
+              )
+            )
             _ <- IO.traverse_(config.recoveredRequests)(receive)
         } yield ()
 
@@ -626,18 +649,26 @@ class ConsensusActor(
         private def completeCell(
             blockConfirmed: BlockConfirmed,
             mbAck: Option[AckBlock]
-        ): IO[Unit] =
+        ): IO[Unit] = {
             for {
+                conn <- this.connections.get.flatMap(
+                  _.fold(
+                    IO.raiseError(
+                      java.lang.Error("Consensus Actor is missing its connections to other actors.")
+                    )
+                  )(IO.pure)
+                )
                 // Handle the confirmed block
-                _ <- config.blockWeaver ! blockConfirmed.toBlockWeaver
-                _ <- IO.traverse_(blockConfirmed.mbToCardanoLiaison)(config.cardanoLiaison ! _)
-                _ <- config.eventSequencer ! blockConfirmed.toEventSequencer
-                _ <- (config.peerLiaisons ! blockConfirmed.toPeerLiaison).parallel
+                _ <- conn.blockWeaver ! blockConfirmed.toBlockWeaver
+                _ <- IO.traverse_(blockConfirmed.mbToCardanoLiaison)(conn.cardanoLiaison ! _)
+                _ <- conn.eventSequencer ! blockConfirmed.toEventSequencer
+                _ <- (conn.peerLiaisons ! blockConfirmed.toPeerLiaison).parallel
                 // Announce the ack if present
                 _ <- mbAck.traverse_(announceAck)
                 // Remove the cell
                 _ <- stateRef.set(state.copy(cells = state.cells - blockConfirmed.blockNum))
             } yield ()
+        }
 
         /** Broadcasts an ack to peer liaisons for distribution to other peers.
           *

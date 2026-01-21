@@ -4,16 +4,21 @@ import cats.effect.{Deferred, IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
+import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.PeerLiaison.*
 import hydrozoa.multisig.consensus.PeerLiaison.Request.*
 import hydrozoa.multisig.protocol.types.*
 import scala.collection.immutable.Queue
 
-trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor[IO, Request] {
-    private val subscribers = Ref.unsafe[IO, Option[Subscribers]](None)
+trait PeerLiaison(
+    config: Config,
+    pendingLocalConnections: MultisigRegimeManager.PendingConnections,
+    pendingRemotePeerLiaison: PendingRemotePeerLiaison
+) extends Actor[IO, Request] {
+    private val connections = Ref.unsafe[IO, Option[Connections]](None)
     private val state = State()
 
-    private final case class Subscribers(
+    private final case class Connections(
         ackBlock: AckBlock.Subscriber,
         newBlock: Block.Subscriber,
         newLedgerEvent: LedgerEvent.Subscriber,
@@ -22,17 +27,16 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
 
     override def preStart: IO[Unit] =
         for {
-            blockWeaver <- connections.blockWeaver.get
-            consensusActor <- connections.consensusActor.get
+            allConnections <- pendingLocalConnections.get
             // This means that the comm actor will not start receiving until it is connected to its
             // remote counterpart:
-            remotePeerLiaison <- connections.remotePeerLiaison.get
-            _ <- subscribers.set(
+            remotePeerLiaison <- pendingRemotePeerLiaison.get
+            _ <- connections.set(
               Some(
-                Subscribers(
-                  ackBlock = consensusActor,
-                  newBlock = blockWeaver,
-                  newLedgerEvent = blockWeaver,
+                Connections(
+                  ackBlock = allConnections.consensusActor,
+                  newBlock = allConnections.blockWeaver,
+                  newLedgerEvent = allConnections.blockWeaver,
                   remotePeerLiaison = remotePeerLiaison
                 )
               )
@@ -40,7 +44,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
         } yield ()
 
     override def receive: Receive[IO, Request] = PartialFunction.fromFunction(req =>
-        subscribers.get.flatMap {
+        connections.get.flatMap {
             case Some(subs) =>
                 this.receiveTotal(req, subs)
             case _ =>
@@ -52,7 +56,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
         }
     )
 
-    private def receiveTotal(req: Request, subs: Subscribers): IO[Unit] =
+    private def receiveTotal(req: Request, subs: Connections): IO[Unit] =
         req match {
             case x: RemoteBroadcast =>
                 for {
@@ -273,8 +277,12 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
   *   - Responds to the counterpart's requests for communication batches.
   */
 object PeerLiaison {
-    def apply(config: Config, connections: ConnectionsPending): IO[PeerLiaison] =
-        IO(new PeerLiaison(config, connections) {})
+    def apply(
+        config: Config,
+        pendingLocalConnections: MultisigRegimeManager.PendingConnections,
+        pendingRemotePeerLiaison: PendingRemotePeerLiaison
+    ): IO[PeerLiaison] =
+        IO(new PeerLiaison(config, pendingLocalConnections, pendingRemotePeerLiaison) {})
 
     final case class Config(
         ownPeerId: Peer.Id,
@@ -287,6 +295,8 @@ object PeerLiaison {
         consensusActor: Deferred[IO, ConsensusActor.Handle],
         remotePeerLiaison: Deferred[IO, PeerLiaison.Handle]
     )
+
+    type PendingRemotePeerLiaison = Deferred[IO, PeerLiaison.Handle]
 
     type Handle = ActorRef[IO, Request]
 
