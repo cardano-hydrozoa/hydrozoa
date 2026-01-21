@@ -4,6 +4,7 @@ import cats.effect.{IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
+import com.suprnation.typelevel.actors.syntax.BroadcastOps
 import hydrozoa.multisig.ledger.dapp.tx.{DeinitTx, FallbackTx, FinalizationTx, RefundTx, RolloutTx, SettlementTx, Tx}
 import hydrozoa.multisig.protocol.types.AckBlock.HeaderSignature.given
 import hydrozoa.multisig.protocol.types.AckBlock.{HeaderSignature, TxSignature}
@@ -245,8 +246,7 @@ object ConsensusActor:
         recoveredRequests: Seq[Request] = Seq.empty,
 
         // Actors
-        // TODO: should be many - a liaison per peer
-        peerLiaison: PeerLiaison.Handle,
+        peerLiaisons: List[PeerLiaison.Handle],
         blockWeaver: BlockWeaver.Handle,
         cardanoLiaison: CardanoLiaison.Handle,
         eventSequencer: EventSequencer.Handle,
@@ -363,14 +363,14 @@ class ConsensusActor(
 
         final lazy val blockNum: Block.Number = block.blockNum
 
-        final lazy val weaverConfirmation: BlockWeaver.BlockConfirmed =
+        final lazy val toBlockWeaver: BlockWeaver.BlockConfirmed =
             BlockWeaver.BlockConfirmed(
               blockNumber = blockNum,
               finalizationRequested = finalizationRequested
             )
 
         // TODO: refactor liaison, fill in the holes
-        final lazy val mbCardanoLiaisonEffects
+        final lazy val mbToCardanoLiaison
             : Option[CardanoLiaison.MajorBlockConfirmed | CardanoLiaison.FinalBlockConfirmed] =
             this match {
                 case BlockConfirmed.Major(
@@ -401,21 +401,14 @@ class ConsensusActor(
                 case _ => None
             }
 
-        final lazy val mbFinalBlockConfirmation: Option[Unit] =
-            this match {
-                case _: BlockConfirmed.Final => Some(())
-                case _                       => None
-            }
-
-        // TODO: types are not defined yet
-        //  - blockNum
-        //  - events with flags
-        //  - post-dated refunds
-        final lazy val sequencerEvents: EventSequencer.Request.BlockConfirmed =
+        final lazy val toEventSequencer: EventSequencer.Request.BlockConfirmed =
             EventSequencer.Request.BlockConfirmed(
               block = this.block,
               mbPostDatedRefundsSigned = this.postDatedRefundsSigned
             )
+
+        final lazy val toPeerLiaison: PeerLiaison.Request.BlockConfirmed =
+            PeerLiaison.Request.BlockConfirmed(this.block)
     }
 
     object BlockConfirmed:
@@ -636,14 +629,12 @@ class ConsensusActor(
         ): IO[Unit] =
             for {
                 // Handle the confirmed block
-                _ <- config.blockWeaver ! blockConfirmed.weaverConfirmation
-                _ <- IO.traverse_(blockConfirmed.mbCardanoLiaisonEffects)(config.cardanoLiaison ! _)
-                _ <- config.eventSequencer ! blockConfirmed.sequencerEvents
+                _ <- config.blockWeaver ! blockConfirmed.toBlockWeaver
+                _ <- IO.traverse_(blockConfirmed.mbToCardanoLiaison)(config.cardanoLiaison ! _)
+                _ <- config.eventSequencer ! blockConfirmed.toEventSequencer
+                _ <- (config.peerLiaisons ! blockConfirmed.toPeerLiaison).parallel
                 // Announce the ack if present
                 _ <- mbAck.traverse_(announceAck)
-                // Signal the peer liaison if that is the final block confirmation
-                // TODO: fill in the hole once we have a type for that
-                _ <- IO.traverse_(blockConfirmed.mbFinalBlockConfirmation)(???)
                 // Remove the cell
                 _ <- stateRef.set(state.copy(cells = state.cells - blockConfirmed.blockNum))
             } yield ()
@@ -1263,6 +1254,10 @@ class ConsensusActor(
                     s"Round for block $blockNum already has an augmented block"
                 case UnexpectedPeer(peer) =>
                     s"Unexpected peer number: $peer"
+                case PostponedAckAlreadySet =>
+                    "Postponed Ack is already set"
+                case UnexpectedPosponedAck =>
+                    "Unexpected postponed ack"
             }
 
         // TODO: add block numbers / peer numbers

@@ -84,6 +84,12 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
                     _ <- x.block.traverse_(subs.newBlock ! _)
                     _ <- x.events.traverse_(subs.newLedgerEvent ! _)
                 } yield ()
+
+            // TODO: when the final block is confirmed, inform the counterpart that
+            //   we no longer need to receive any blocks, acks, or events from them.
+            //   When both sides have received the final confirmed block, the connection can be closed and
+            //   the peer liaison can terminate.
+            case x: BlockConfirmed => state.dequeueConfirmed(x)
         }
 
     private final class State {
@@ -158,17 +164,21 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
         case object OutOfBoundsGetMsgBatch extends ExtractNewMsgBatchError
 
         /** Construct a [[NewMsgBatch]] containing acks, blocks, and events starting '''after''' the
-          * numbers indicated in a [[GetMsgBatch]] request, up to the configured limits. The state
-          * is modified to keep only acks, blocks, and events with numbers '''after''' those
-          * provided in the returned [[NewMsgBatch]].
+          * numbers indicated in a [[GetMsgBatch]] request, up to the configured limits.
           *
           * @param batchReq
           *   the [[GetMsgBatch]] request
           * @param maxEvents
           *   the maximum number of ledger events to include in the [[NewMsgBatch]].
+          *
+          * Note: if the [[GetMsgBatch]] bounds are lower than the queued messages, then the comm
+          * actor would need to query the database to properly respond. Currently, we just respond
+          * as if no messages are available to send. However, this should can only happen in rare
+          * recovery scenarios because we don't remove elements from the outbox queues until they
+          * are confirmed in blocks. Until the persistence system is implemented, such
+          * [[GetMsgBatch]] requests will be ignored.
           */
-        // FIXME: if the [[GetMsgBatch]] bounds are lower than the queued messages, then the comm actor will need to
-        //   query the database to properly respond. Currently, we just respond as if no messages are available to send.
+
         def buildNewMsgBatch(
             batchReq: GetMsgBatch,
             maxEvents: Int
@@ -186,17 +196,10 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
 
                 _ <- this.queuesAreEmpty.ifM(IO.raiseError(EmptyNewMsgBatch), IO.unit)
 
-                mAck <- this.qAck.modify(q =>
-                    val dropped = q.dropWhile(_.id._2 <= batchReq.ackNum)
-                    dropped.dequeueOption.fold((dropped, None))((x, xs) => (xs, Some(x)))
-                )
-                mBlock <- this.qBlock.modify(q =>
-                    val dropped = q.dropWhile(_.id <= batchReq.blockNum)
-                    dropped.dequeueOption.fold((dropped, None))((x, xs) => (xs, Some(x)))
-                )
-                events <- this.qEvent.modify(q =>
-                    val dropped = q.dropWhile(_.eventId._2 <= batchReq.eventNum)
-                    dropped.splitAt(maxEvents).swap
+                mAck <- this.qAck.get.map(_.dropWhile(_.id._2 <= batchReq.ackNum).headOption)
+                mBlock <- this.qBlock.get.map(_.dropWhile(_.id <= batchReq.blockNum).headOption)
+                events <- this.qEvent.get.map(
+                  _.dropWhile(_.eventId._2 <= batchReq.eventNum).take(maxEvents)
                 )
             } yield NewMsgBatch(
               batchNum = batchReq.batchNum,
@@ -204,6 +207,20 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
               block = mBlock,
               events = events.toList
             )).attemptNarrow
+
+        def dequeueConfirmed(x: BlockConfirmed): IO[Unit] = {
+            import x.*
+            val blockNum: Block.Number = block.blockNum
+            val ackNum: AckBlock.Number = AckBlock.Number.neededToConfirm(block)
+            val eventNum: LedgerEventId.Number = block.body.events.collect {
+                case x if x._1.peerNum == config.ownPeerId.peerNum => x._1.eventNum
+            }.max
+            for {
+                _ <- this.qAck.update(q => q.dropWhile(_.id._2 <= ackNum))
+                _ <- this.qBlock.update(q => q.dropWhile(_.id <= blockNum))
+                _ <- this.qEvent.update(q => q.dropWhile(_.eventId.eventNum <= eventNum))
+            } yield ()
+        }
 
         def verifyBatchAndGetNext(receivedBatch: NewMsgBatch): IO[GetMsgBatch] = {
             import receivedBatch.{ack, block, events}
@@ -273,7 +290,7 @@ object PeerLiaison {
 
     type Handle = ActorRef[IO, Request]
 
-    type Request = RemoteBroadcast | GetMsgBatch | NewMsgBatch
+    type Request = RemoteBroadcast | GetMsgBatch | NewMsgBatch | BlockConfirmed
 
     object Request {
         type RemoteBroadcast = AckBlock | Block.Next | LedgerEvent
@@ -326,6 +343,10 @@ object PeerLiaison {
             ack: Option[AckBlock],
             block: Option[Block.Next],
             events: List[LedgerEvent]
+        )
+
+        final case class BlockConfirmed(
+            block: Block.Next
         )
     }
 
