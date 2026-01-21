@@ -144,10 +144,7 @@ object InitializationTx {
             finalized <- unbalanced
                 .finalizeContext(
                   protocolParams = recipe.env.protocolParams,
-                  diffHandler = new ChangeOutputDiffHandler(
-                    recipe.env.protocolParams,
-                    2
-                  ).changeOutputDiffHandler,
+                  diffHandler = Change.changeOutputDiffHandler(_, _, recipe.env.protocolParams, 2),
                   evaluator = recipe.evaluator,
                   validators = recipe.validators
                 )

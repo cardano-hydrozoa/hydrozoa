@@ -9,9 +9,9 @@ import scala.Function.const
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.ledger.{PlutusScriptEvaluator, Transaction}
+import scalus.cardano.ledger.{CardanoInfo, PlutusScriptEvaluator, Transaction}
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
-import scalus.cardano.txbuilder.{ChangeOutputDiffHandler, Environment, SomeBuildError, TransactionBuilder}
+import scalus.cardano.txbuilder.{Change, SomeBuildError, TransactionBuilder}
 import sourcecode.*
 
 trait Tx[Self <: Tx[Self]] { self: Self =>
@@ -60,10 +60,7 @@ object Tx {
             txBuilderContext
                 .finalizeContext(
                   protocolParams = config.env.protocolParams,
-                  diffHandler = ChangeOutputDiffHandler(
-                    protocolParams = config.env.protocolParams,
-                    changeOutputIdx = 0
-                  ).changeOutputDiffHandler,
+                  diffHandler = Change.changeOutputDiffHandler(_, _, config.env.protocolParams, 0),
                   evaluator = config.evaluator,
                   validators = config.validators
                 )
@@ -119,7 +116,7 @@ object Tx {
             headNativeScript: HeadMultisigScript,
             multisigRegimeUtxo: MultisigRegimeUtxo,
             tokenNames: TokenNames,
-            env: Environment,
+            env: CardanoInfo,
             evaluator: PlutusScriptEvaluator,
             validators: Seq[Validator]
         ) {

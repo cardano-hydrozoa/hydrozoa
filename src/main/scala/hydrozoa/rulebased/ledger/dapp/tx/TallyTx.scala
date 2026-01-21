@@ -16,7 +16,7 @@ import scalus.cardano.ledger.{Utxo as SUtxo, *}
 import scalus.cardano.txbuilder.Datum.DatumInlined
 import scalus.cardano.txbuilder.ScriptSource.PlutusScriptValue
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
-import scalus.cardano.txbuilder.{ChangeOutputDiffHandler, SomeBuildError, ThreeArgumentPlutusScriptWitness, TransactionBuilder}
+import scalus.cardano.txbuilder.{Change, SomeBuildError, ThreeArgumentPlutusScriptWitness, TransactionBuilder}
 
 final case class TallyTx(
     continuingVoteUtxo: TallyVoteUtxo,
@@ -147,10 +147,7 @@ object TallyTx {
             finalized <- context
                 .finalizeContext(
                   protocolParams = protocolParams,
-                  diffHandler = new ChangeOutputDiffHandler(
-                    protocolParams,
-                    0
-                  ).changeOutputDiffHandler,
+                  diffHandler = Change.changeOutputDiffHandler(_, _, protocolParams, 0),
                   evaluator = evaluator,
                   validators = validators
                 )

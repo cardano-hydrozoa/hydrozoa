@@ -133,7 +133,7 @@ object VirtualLedgerM {
     sealed trait Error
 
     final case class Config(
-        slotConfig: SlotConfig = SlotConfig.Mainnet,
+        slotConfig: SlotConfig = SlotConfig.mainnet,
         protocolParams: ProtocolParams,
         network: Network
     ) {

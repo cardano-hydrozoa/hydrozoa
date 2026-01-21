@@ -147,10 +147,7 @@ object WithdrawTx {
             finalized <- context
                 .finalizeContext(
                   protocolParams = protocolParams,
-                  diffHandler = new ChangeOutputDiffHandler(
-                    protocolParams,
-                    0
-                  ).changeOutputDiffHandler,
+                  diffHandler = Change.changeOutputDiffHandler(_, _, protocolParams, 0),
                   evaluator = evaluator,
                   validators = validators
                 )

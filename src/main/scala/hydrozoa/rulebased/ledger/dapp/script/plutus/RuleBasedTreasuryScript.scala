@@ -12,7 +12,7 @@ import scalus.*
 import scalus.builtin.*
 import scalus.builtin.Builtins.*
 import scalus.builtin.ByteString.hex
-import scalus.builtin.ToData.toData
+import scalus.builtin.Data.toData
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.{Language, Script}

@@ -166,10 +166,7 @@ object FinalizationTx {
                     .modify(ctxUpgraded, List(spendMultisigRegimeUtxoStep))
                     .explain(const("Could not modify (upgrade) settlement tx"))
 
-                diffHandler = new ChangeOutputDiffHandler(
-                  config.env.protocolParams,
-                  treasuryOutputIndex
-                ).changeOutputDiffHandler
+                diffHandler = Change.changeOutputDiffHandler(_, _, config.env.protocolParams, treasuryOutputIndex)
 
                 rebalanced <- ctx
                     .finalizeContext(

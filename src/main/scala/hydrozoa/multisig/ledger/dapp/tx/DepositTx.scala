@@ -102,10 +102,7 @@ object DepositTx {
                 finalized <- ctx
                     .finalizeContext(
                       config.env.protocolParams,
-                      diffHandler = new ChangeOutputDiffHandler(
-                        config.env.protocolParams,
-                        1
-                      ).changeOutputDiffHandler,
+                      diffHandler = Change.changeOutputDiffHandler(_, _, config.env.protocolParams, 1),
                       evaluator = config.evaluator,
                       validators = config.validators
                     )

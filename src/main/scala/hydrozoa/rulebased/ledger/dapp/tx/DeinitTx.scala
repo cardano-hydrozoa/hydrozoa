@@ -51,7 +51,7 @@ object DeinitTx {
         voteDeposit: Coin,
         shares: EquityShares,
         collateralUtxo: Utxo[L1],
-        env: Environment,
+        env: CardanoInfo,
         evaluator: PlutusScriptEvaluator,
         validators: Seq[Validator]
     )
@@ -201,10 +201,7 @@ object DeinitTx {
             finalized <- context
                 .finalizeContext(
                   protocolParams = env.protocolParams,
-                  diffHandler = new ChangeOutputDiffHandler(
-                    env.protocolParams,
-                    0 // the collateral sent back
-                  ).changeOutputDiffHandler,
+                  diffHandler = Change.changeOutputDiffHandler(_, _, env.protocolParams, 0), // the collateral sent back
                   evaluator = evaluator,
                   validators = validators
                 )

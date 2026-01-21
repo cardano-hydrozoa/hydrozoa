@@ -3,9 +3,7 @@
 //  DockerPlugin
 //)
 
-// Locally-built scalus version with the fix from https://github.com/scalus3/scalus/pull/172 applied.
-// Previous version tracking scalus:main was "0.13.0+387-8e7c3b8e-SNAPSHOT" 
-val scalusVersion = "0.14.1"
+val scalusVersion = "0.14.2"
 val bloxbeanVersion = "0.7.1"
 
 //Compile / mainClass := Some("hydrozoa.HydrozoaNode")

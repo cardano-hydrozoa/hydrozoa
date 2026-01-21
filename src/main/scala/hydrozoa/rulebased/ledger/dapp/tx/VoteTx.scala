@@ -148,10 +148,7 @@ object VoteTx {
             finalized <- context
                 .finalizeContext(
                   protocolParams = recipe.protocolParams,
-                  diffHandler = new ChangeOutputDiffHandler(
-                    recipe.protocolParams,
-                    0
-                  ).changeOutputDiffHandler,
+                  diffHandler = Change.changeOutputDiffHandler(_, _, recipe.protocolParams, 0),
                   evaluator = recipe.evaluator,
                   validators = recipe.validators
                 )
