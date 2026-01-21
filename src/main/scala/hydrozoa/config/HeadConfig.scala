@@ -1,7 +1,7 @@
 package hydrozoa.config
 
 import hydrozoa.*
-import hydrozoa.config.HeadConfigError.{NonUniqueVerificationKey, SharesMustSumToOne}
+import hydrozoa.config.HeadConfigError.{EquitySharesError, NonUniqueVerificationKey}
 import hydrozoa.lib.cardano.value.coin.Coin
 import spire.implicits.*
 import spire.math.{Rational, UByte}
@@ -75,11 +75,14 @@ object HeadConfig:
             val section = peerSectionMap(i)
             id -> (section.payoutAddress, section.equityShare)
         )
-        contingencyDepositsAndEquityShares <- EquityShares.apply(
-          peersShares,
-          collectiveContingency,
-          individualContingency
-        )
+        contingencyDepositsAndEquityShares <- EquityShares
+            .apply(
+              peersShares,
+              collectiveContingency,
+              individualContingency
+            )
+            .left
+            .map(EquitySharesError(_))
     } yield {
 
         HeadConfig(
@@ -95,15 +98,16 @@ end HeadConfig
 enum HeadConfigError:
     case NonUniqueVerificationKey(duplicates: Set[VerificationKeyBytes])
     case TooManyPeers(count: Int)
-    case SharesMustSumToOne(total: Rational)
+    case EquitySharesError(wrapped: EquityShares.Error)
     case TooSmallCollateralDeposit(peer: UByte, minimal: Coin, actual: Coin)
     case TooSmallVoteDeposit(peer: UByte, minimal: Coin, actual: Coin)
 
     def explain: String = this match
         case NonUniqueVerificationKey(duplicates) =>
             s"A duplicate verification key(s) found: ${duplicates.map(_.bytes.toHex)}"
-        case TooManyPeers(count)       => s"Too many peers: $count, maximum allowed is 255"
-        case SharesMustSumToOne(total) => s"Shares do not sum up to one, got total: $total"
+        case TooManyPeers(count) => s"Too many peers: $count, maximum allowed is 255"
+        case EquitySharesError(EquityShares.Error.SharesMustSumToOne(total)) =>
+            s"Shares do not sum up to one, got total: $total"
         case TooSmallCollateralDeposit(peer, minimal, actual) =>
             s"The peer ${peer} has too small collateral deposit: ${actual}, minimal is: {minimal}"
         case TooSmallVoteDeposit(peer, minimal, actual) =>

@@ -34,18 +34,21 @@ case class PeerEquityShare(
 
 object EquityShares:
 
+    enum Error:
+        case SharesMustSumToOne(total: Rational)
+
     def apply(
         shares: Map[UByte, (AddressL1, Rational)],
         collectiveContingency: CollectiveContingency,
         individualContingency: IndividualContingency
-    ): Either[HeadConfigError, EquityShares] = {
+    ): Either[EquityShares.Error, EquityShares] = {
         import collectiveContingency.*
         import individualContingency.*
 
         val sharesSum = shares.values.map(_._2).sum
         for {
             // Check sum(quity shares) = 1
-            _ <- Either.cond(sharesSum === r"1", (), HeadConfigError.SharesMustSumToOne(sharesSum))
+            _ <- Either.cond(sharesSum === r"1", (), Error.SharesMustSumToOne(sharesSum))
 
             collateralUtxo = collateralDeposit +~ voteTxFee
             voteUtxo = voteDeposit +~ tallyTxFee

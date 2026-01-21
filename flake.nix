@@ -37,6 +37,7 @@
           packages = with pkgs; [
             ammonite # modernized scala repl: https://ammonite.io/
             async-profiler # Low-overhead profiler for the JVM: https://github.com/async-profiler/async-profiler
+            bloop # faster incremental compilation
             jdk
             just # command runner, similar to `make`
             ltex-ls # Language server for markdown: https://github.com/valentjn/ltex-ls
