@@ -1,17 +1,17 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
+import hydrozoa.config.HeadConfig
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
-import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
-import hydrozoa.multisig.ledger.dapp.utxo.MultisigRegimeUtxo
 import monocle.Lens
+
 import scala.Function.const
 import scalus.cardano.address.ShelleyAddress
+import scalus.cardano.ledger.Transaction
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
+import scalus.cardano.ledger.rules.{AllInputsMustBeInUtxoValidator, EmptyInputsValidator, FeesOkValidator, InputsAndReferenceInputsDisjointValidator, MissingOrExtraScriptHashesValidator, OutputsHaveNotEnoughCoinsValidator, OutputsHaveTooBigValueStorageSizeValidator, OutsideForecastValidator, OutsideValidityIntervalValidator, TransactionSizeValidator, ValueNotConservedUTxOValidator}
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.ledger.{PlutusScriptEvaluator, Transaction}
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
-import scalus.cardano.txbuilder.{ChangeOutputDiffHandler, Environment, SomeBuildError, TransactionBuilder}
+import scalus.cardano.txbuilder.{ChangeOutputDiffHandler, SomeBuildError, TransactionBuilder}
 import sourcecode.*
 
 trait Tx[Self <: Tx[Self]] { self: Self =>
@@ -39,6 +39,27 @@ trait HasValidityEnd {
 }
 
 object Tx {
+    val nonSigningValidators: Seq[Validator] =
+        // These validators are all the ones from the CardanoMutator that could be checked on an unsigned transaction
+        List(
+            EmptyInputsValidator,
+            InputsAndReferenceInputsDisjointValidator,
+            AllInputsMustBeInUtxoValidator,
+            ValueNotConservedUTxOValidator,
+            // VerifiedSignaturesInWitnessesValidator,
+            // MissingKeyHashesValidator
+            MissingOrExtraScriptHashesValidator,
+            TransactionSizeValidator,
+            FeesOkValidator,
+            OutputsHaveNotEnoughCoinsValidator,
+            OutputsHaveTooBigValueStorageSizeValidator,
+            OutsideValidityIntervalValidator,
+            OutsideForecastValidator
+        )
+
+    val nonSigningNonValidityChecksValidators: Seq[Validator] = nonSigningValidators
+      .filterNot(_.isInstanceOf[OutsideValidityIntervalValidator.type])
+
     type Serialized = Array[Byte]
 
     /** A result that includes additional information besides the built transaction.
@@ -51,21 +72,24 @@ object Tx {
     }
 
     trait Builder {
-        def config: Builder.Config
+        def config: HeadConfig
+        def validators : Seq[Validator]
+        
 
         final def finish(
-            txBuilderContext: TransactionBuilder.Context
+            txBuilderContext: TransactionBuilder.Context,
+            validators: Seq[Validator] = nonSigningNonValidityChecksValidators
         ): Either[SomeBuildError, TransactionBuilder.Context] =
             // Try to build, balance, and validate the resulting transaction
             txBuilderContext
                 .finalizeContext(
-                  protocolParams = config.env.protocolParams,
+                  protocolParams = config.cardanoInfo.protocolParams,
                   diffHandler = ChangeOutputDiffHandler(
-                    protocolParams = config.env.protocolParams,
+                    protocolParams = config.cardanoInfo.protocolParams,
                     changeOutputIdx = 0
                   ).changeOutputDiffHandler,
                   evaluator = config.evaluator,
-                  validators = config.validators
+                  validators = validators
                 )
     }
 
@@ -114,18 +138,7 @@ object Tx {
         trait HasCtx {
             def ctx: TransactionBuilder.Context
         }
-
-        final case class Config(
-            headNativeScript: HeadMultisigScript,
-            multisigRegimeUtxo: MultisigRegimeUtxo,
-            tokenNames: TokenNames,
-            env: Environment,
-            evaluator: PlutusScriptEvaluator,
-            validators: Seq[Validator]
-        ) {
-            lazy val headAddress: ShelleyAddress = headNativeScript.mkAddress(env.network)
-        }
-
+        
         object Incremental {
 
             /** Replace an [[InvalidTransactionSizeException]] with some other value.
@@ -157,4 +170,8 @@ object Tx {
 
 trait HasResolvedUtxos {
     def resolvedUtxos: ResolvedUtxos
+}
+
+trait HasValidators {
+    def validators: Seq[Validator]
 }

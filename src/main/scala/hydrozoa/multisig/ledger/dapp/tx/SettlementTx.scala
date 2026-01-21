@@ -92,7 +92,7 @@ object SettlementTx {
                 args: ArgsType,
                 state: State[SettlementTx.NoPayouts]
             ): BuildErrorOr[ResultType] = Right(
-              Complete.completeNoPayouts(args, state, config.env.slotConfig)
+              Complete.completeNoPayouts(args, state, config.cardanoInfo.slotConfig)
             )
         }
 
@@ -114,7 +114,12 @@ object SettlementTx {
                   args.rolloutTxSeqPartial
                 )
                 (finished, mergeResult) = mergeTrial
-            } yield Complete.completeWithPayouts(args, finished, mergeResult, config.env.slotConfig)
+            } yield Complete.completeWithPayouts(
+              args,
+              finished,
+              mergeResult,
+              config.cardanoInfo.slotConfig
+            )
 
         }
 
@@ -221,7 +226,7 @@ object SettlementTx {
                 BasePessimistic.steps(config, args)
             for {
                 ctx <- TransactionBuilder
-                    .build(config.env.network, steps)
+                    .build(config.cardanoInfo.network, steps)
                     .explainConst("base pessimistic build failed")
                 addedPessimisticRollout <- BasePessimistic.mbApplySendRollout(
                   args.treasuryToSpend,
@@ -274,7 +279,7 @@ object SettlementTx {
                   deposit.toUtxo,
                   NativeScriptWitness(
                     NativeScriptAttached,
-                    config.headNativeScript.requiredSigners
+                    config.headMultisigScript.requiredSigners
                   )
                 )
                 for {
@@ -318,7 +323,7 @@ object SettlementTx {
                 config: Tx.Builder.Config,
                 treasuryToSpend: MultisigTreasuryUtxo
             ): Spend =
-                Spend(treasuryToSpend.asUtxo, config.headNativeScript.witness)
+                Spend(treasuryToSpend.asUtxo, config.headMultisigScript.witness)
 
             private def sendTreasury(args: Args): Send =
                 Send(treasuryOutput(args))

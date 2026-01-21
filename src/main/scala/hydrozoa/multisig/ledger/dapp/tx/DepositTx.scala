@@ -1,20 +1,22 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
+import hydrozoa.config.HeadConfig
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, quantizeLosslessUnsafe, toEpochQuantizedInstant}
 import hydrozoa.lib.cardano.scalus.ledger.api.TransactionOutputEncoders.given
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.explainConst
-import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.virtual.GenesisObligation
 import io.bullet.borer.{Cbor, Encoder}
 import monocle.{Focus, Lens}
+
 import scala.util.{Failure, Success, Try}
 import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, platform}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
+import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend, ValidityEndSlot}
 
@@ -27,14 +29,15 @@ final case class DepositTx private (
 
 object DepositTx {
     final case class Builder(
-        override val config: Tx.Builder.Config,
+        override val config: HeadConfig,
+        override val validators : Seq[Validator],
         partialRefundTx: RefundTx.Builder.PartialResult[RefundTx.PostDated],
         utxosFunding: NonEmptyList[Utxo],
         virtualOutputs: NonEmptyList[GenesisObligation],
         donationToTreasury: Coin,
         changeAddress: ShelleyAddress,
-        txTiming: TxTiming
     ) extends Tx.Builder {
+        import config.*
         def build(): Either[(SomeBuildError, String), DepositTx] = {
             import partialRefundTx.refundInstructions
 
@@ -84,7 +87,7 @@ object DepositTx {
 
             val validityEndQuantizedInstant =
                 partialRefundTx.refundInstructions.startTime.toEpochQuantizedInstant(
-                  config.env.slotConfig
+                  config.cardanoInfo.slotConfig
                 )
                     - txTiming.depositAbsorptionDuration
                     - txTiming.depositMaturityDuration
@@ -94,20 +97,20 @@ object DepositTx {
             for {
                 ctx <- TransactionBuilder
                     .build(
-                      config.env.network,
+                      config.cardanoInfo.network,
                       spendUtxosFunding ++ List(stepRefundMetadata, sendDeposit, sendChange, ttl)
                     )
                     .explainConst("building unbalanced deposit tx failed")
 
                 finalized <- ctx
                     .finalizeContext(
-                      config.env.protocolParams,
+                      config.cardanoInfo.protocolParams,
                       diffHandler = new ChangeOutputDiffHandler(
-                        config.env.protocolParams,
+                        config.cardanoInfo.protocolParams,
                         1
                       ).changeOutputDiffHandler,
                       evaluator = config.evaluator,
-                      validators = config.validators
+                      validators = validators
                     )
                     .explainConst("balancing deposit tx failed")
 
@@ -150,11 +153,10 @@ object DepositTx {
       */
     def parse(
         txBytes: Tx.Serialized,
-        config: Tx.Builder.Config,
-        txTiming: TxTiming,
+        config: HeadConfig,
         virtualOutputs: NonEmptyList[GenesisObligation]
     ): Either[ParseError, DepositTx] = {
-        given ProtocolVersion = config.env.protocolParams.protocolVersion
+        given ProtocolVersion = config.cardanoInfo.protocolParams.protocolVersion
         given OriginalCborByteArray = OriginalCborByteArray(txBytes)
 
         val virtualOutputsList = virtualOutputs.toList
@@ -191,9 +193,9 @@ object DepositTx {
 
                     validityEnd <- Try {
                         val ttlSlot = tx.body.value.ttl.get
-                        val ttlPosixMillis = config.env.slotConfig.slotToTime(ttlSlot)
+                        val ttlPosixMillis = config.cardanoInfo.slotConfig.slotToTime(ttlSlot)
                         val instant = java.time.Instant.ofEpochMilli(ttlPosixMillis)
-                        instant.quantizeLosslessUnsafe(config.env.slotConfig)
+                        instant.quantizeLosslessUnsafe(config.cardanoInfo.slotConfig)
                     } match {
                         case Failure(exception) => Left(ValidityEndParseError(exception))
                         case Success(v)         => Right(v)
@@ -204,9 +206,9 @@ object DepositTx {
                           Utxo(TransactionInput(tx.id, depositUtxoIx), depositOutput.value),
                           config.headAddress,
                           virtualOutputs,
-                          absorptionStart = validityEnd + txTiming.depositMaturityDuration,
+                          absorptionStart = validityEnd + config.txTiming.depositMaturityDuration,
                           absorptionEnd =
-                              validityEnd + txTiming.depositMaturityDuration + txTiming.depositAbsorptionDuration
+                              validityEnd + config.txTiming.depositMaturityDuration + config.txTiming.depositAbsorptionDuration
                         )
                         .left
                         .map(DepositUtxoError(_))

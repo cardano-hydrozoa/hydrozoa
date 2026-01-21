@@ -20,7 +20,7 @@ class RolloutTxSeqBuilderTest extends AnyFunSuite with ScalaCheckPropertyChecks 
             payouts <- Gen
                 .containerOfN[Vector, Payout.Obligation](
                   160,
-                  genPayoutObligation(config.env.network)
+                  genPayoutObligation(config.cardanoInfo.network)
                 )
                 .map(NonEmptyVector.fromVectorUnsafe)
         } yield (RolloutTxSeq.Builder(config), payouts)

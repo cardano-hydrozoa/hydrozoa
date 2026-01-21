@@ -7,7 +7,9 @@ import cats.effect.{IO, Ref}
 import cats.syntax.all.*
 import com.suprnation.actor.test.TestKit
 import com.suprnation.actor.{ActorSystem, test as _}
-import hydrozoa.lib.cardano.scalus.QuantizedTime.toQuantizedInstant
+import hydrozoa.config.EquityShares
+import hydrozoa.config.HeadConfig.Fields.*
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, toQuantizedInstant}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.backend.cardano.CardanoBackend.GetTxInfo
 import hydrozoa.multisig.consensus.CardanoLiaison.{FinalBlockConfirmed, MajorBlockConfirmed}
@@ -15,9 +17,9 @@ import hydrozoa.multisig.consensus.CardanoLiaisonTest.Rollback.SettlementTiming
 import hydrozoa.multisig.consensus.CardanoLiaisonTest.Skeleton.*
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
-import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.Config
-import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, RolloutTx, Tx, TxTiming, genFinalizationTxSeqBuilder, genNextSettlementTxSeqBuilder}
+import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, HasValidators, RolloutTx, TxTiming, genFinalizationTxSeqBuilder, genNextSettlementTxSeqBuilder}
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, InitializationTxSeq, InitializationTxSeqTest, RolloutTxSeq, SettlementTxSeq}
+import hydrozoa.multisig.ledger.dapp.utxo.MultisigRegimeUtxo
 import hydrozoa.multisig.protocol.types.Block
 import hydrozoa.{UtxoIdL1, UtxoSetL1}
 import org.scalacheck.*
@@ -27,6 +29,7 @@ import scala.concurrent.duration.DurationInt
 import scala.jdk.CollectionConverters.*
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
+import scalus.cardano.ledger.rules.STS
 import test.Generators.Hydrozoa.*
 import test.{TestPeer, testTxBuilderEnvironment}
 
@@ -48,6 +51,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
         // TODO: figure out why this fails with (minSettlements=1, maxSettlements=1)
         // TODO: this gives no result sometimes
         // TODO: this is always very slow
+
         /** Generates the "skeleton", i.e. random chain of happy-path transactions and fallbacks
           * with requested parameters.
           */
@@ -83,14 +87,29 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
             initializationFallbackValidityStart = initializationTxSeq.fallbackTx.validityStart
 
             // This config is used in the settlement and finalization builders
-            config = Config(
-              headNativeScript = hns,
-              multisigRegimeUtxo = initializationTx.multisigRegimeWitness,
-              tokenNames = tokenNames,
-              env = args.env,
-              evaluator = args.evaluator,
-              validators = args.validators
-            )
+            config = new HasHeadMultisigScript
+                with HasMultisigRegimeUtxo
+                with HasTokenNames
+                with HasCardanoInfo
+                with HasValidators
+                with HasEvaluator
+                with HasHeadAddress
+                with HasTxTiming
+                with HasEquityShares
+                with HasTallyFeeAllowance
+                with HasVotingDuration {
+                val headMultisigScript: HeadMultisigScript = hns
+                val multisigRegimeUtxo: MultisigRegimeUtxo = initializationTx.multisigRegimeWitness
+                val tokenNames: TokenNames = tokenNames
+                val cardanoInfo: CardanoInfo = args.env
+                val evaluator: PlutusScriptEvaluator = args.evaluator
+                val validators: Seq[STS.Validator] = args.validators
+                val txTiming: TxTiming = TxTiming.default(args.env.slotConfig)
+                val equityShares: EquityShares = ???
+                val tallyFeeAllowance: Coin = ???
+                val votingDuration: QuantizedFiniteDuration = ???
+                val headAddress = hns.mkAddress(cardanoInfo.network)
+            }
 
             numOfSettlements <- choose(minSettlements, maxSettlements)
 
@@ -128,9 +147,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                               fallbackValidityStart,
                               blockCreatedOn,
                               settlementNum,
-                              hns,
-                              config,
-                              txTiming
+                              config
                             )
                             (builder, args) = settlementBuilderAndArgs
                             seq = builder
@@ -168,7 +185,6 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
               numOfSettlements + 1,
               fallbackValidityStart,
               finalizationBlockCreatedOn,
-              txTiming,
               config,
               peers
             )
@@ -219,23 +235,22 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
             def backboneTxs: List[Transaction] =
                 (skeleton._1.initializationTx.tx +: skeleton._2.map(
                   _.settlementTxSeq.settlementTx.tx
-                )) ++
-                    {
-                        skeleton._3 match {
-                            case FinalizationTxSeq.Monolithic(finalizationTx) =>
-                                List(finalizationTx.tx)
-                            case FinalizationTxSeq.WithDeinit(finalizationTx, deinitTx) =>
-                                List(finalizationTx.tx, deinitTx.tx)
-                            case FinalizationTxSeq.WithRollouts(finalizationTx, _) =>
-                                List(finalizationTx.tx)
-                            case FinalizationTxSeq.WithDeinitAndRollouts(
-                                  finalizationTx,
-                                  deinitTx,
-                                  _
-                                ) =>
-                                List(finalizationTx.tx, deinitTx.tx)
-                        }
+                )) ++ {
+                    skeleton._3 match {
+                        case FinalizationTxSeq.Monolithic(finalizationTx) =>
+                            List(finalizationTx.tx)
+                        case FinalizationTxSeq.WithDeinit(finalizationTx, deinitTx) =>
+                            List(finalizationTx.tx, deinitTx.tx)
+                        case FinalizationTxSeq.WithRollouts(finalizationTx, _) =>
+                            List(finalizationTx.tx)
+                        case FinalizationTxSeq.WithDeinitAndRollouts(
+                              finalizationTx,
+                              deinitTx,
+                              _
+                            ) =>
+                            List(finalizationTx.tx, deinitTx.tx)
                     }
+                }
 
             /** Returns the competing fallback transaction if it exists for a backbone node
               * identified by tx hash.
@@ -387,8 +402,10 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
             utxoIds: Set[UtxoIdL1],
             // NB: this field can be used for debugging purposes, it's not used directly in the tests
             txsSurvived: Set[TransactionHash],
+
             /** Lost backbone txs and rollout txs that sprout off them. */
             txsLost: Set[TransactionHash],
+
             /** Lost rollout txs that beside before the first rolled back backbone tx. */
             txsLostPreviousRollout: Set[TransactionHash],
             // The slot number (as of the rollback is completed)
@@ -680,6 +697,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
         val getStateCounter: Ref[IO, Int] = Ref.unsafe(0)
 
         def getKnownTxs: IO[Set[TransactionHash]] = knownTxs.get
+
         def getGetStateCounter: IO[Int] = getStateCounter.get
 
         override def utxosAt(address: ShelleyAddress): IO[Either[CardanoBackend.Error, UtxoSetL1]] =
@@ -696,38 +714,38 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
 
         override def submitTx(tx: Transaction): IO[Either[CardanoBackend.Error, Unit]] = ???
 
-        // override def receive: Receive[IO, Request] = PartialFunction.fromFunction(receiveTotal)
-        //
-        // private def receiveTotal(req: Request): IO[Unit] = req match {
-        //    case req: SyncRequest.Any =>
-        //        req.request match {
-        //            case x: GetCardanoHeadState.type => x.handleSync(req, getCardanoHeadState)
-        //            case x: GetTxInfo                => x.handleSync(req, getTxInfo)
-        //        }
-        //    case x: SubmitL1Effects => submitL1Effects(x)
-        // }
-        //
-        // private def submitL1Effects(r: SubmitL1Effects): IO[Unit] = for {
-        //    txIds <- IO.pure(r.txs.map(_.id))
-        //    _ <- IO.println(s"submitL1Effects: ${txIds}")
-        //    _ <- knownTxs.update(s => s ++ txIds)
-        // } yield ()
-        //
-        // private def getCardanoHeadState(
-        //    r: GetCardanoHeadState.type
-        // ): EitherT[IO, CardanoBackendError, GetCardanoHeadState.Response] = for {
-        //    _ <- EitherT.right(
-        //      IO.println("getCardanoHeadState") >>
-        //          getStateCounter.update(_ + 1)
-        //    )
-        // } yield GetCardanoHeadState.Response(utxoIds, currentSlot)
-        //
-        // private def getTxInfo(r: GetTxInfo): EitherT[IO, CardanoBackendError, GetTxInfo.Response] =
-        //    for {
-        //        txs <- EitherT.right(
-        //          IO.println(s"getTxInfo txId: ${r.txHash}") >>
-        //              knownTxs.get
-        //        )
-        //    } yield GetTxInfo.Response(txs.contains(r.txHash))
+    // override def receive: Receive[IO, Request] = PartialFunction.fromFunction(receiveTotal)
+    //
+    // private def receiveTotal(req: Request): IO[Unit] = req match {
+    //    case req: SyncRequest.Any =>
+    //        req.request match {
+    //            case x: GetCardanoHeadState.type => x.handleSync(req, getCardanoHeadState)
+    //            case x: GetTxInfo                => x.handleSync(req, getTxInfo)
+    //        }
+    //    case x: SubmitL1Effects => submitL1Effects(x)
+    // }
+    //
+    // private def submitL1Effects(r: SubmitL1Effects): IO[Unit] = for {
+    //    txIds <- IO.pure(r.txs.map(_.id))
+    //    _ <- IO.println(s"submitL1Effects: ${txIds}")
+    //    _ <- knownTxs.update(s => s ++ txIds)
+    // } yield ()
+    //
+    // private def getCardanoHeadState(
+    //    r: GetCardanoHeadState.type
+    // ): EitherT[IO, CardanoBackendError, GetCardanoHeadState.Response] = for {
+    //    _ <- EitherT.right(
+    //      IO.println("getCardanoHeadState") >>
+    //          getStateCounter.update(_ + 1)
+    //    )
+    // } yield GetCardanoHeadState.Response(utxoIds, currentSlot)
+    //
+    // private def getTxInfo(r: GetTxInfo): EitherT[IO, CardanoBackendError, GetTxInfo.Response] =
+    //    for {
+    //        txs <- EitherT.right(
+    //          IO.println(s"getTxInfo txId: ${r.txHash}") >>
+    //              knownTxs.get
+    //        )
+    //    } yield GetTxInfo.Response(txs.contains(r.txHash))
 
 }

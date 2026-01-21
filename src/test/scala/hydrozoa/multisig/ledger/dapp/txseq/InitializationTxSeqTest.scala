@@ -1,13 +1,14 @@
 package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.data.NonEmptyList
+import hydrozoa.config.HeadConfig.Fields.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.SpentUtxos
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.{Fallback, Initialization}
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming.default
-import hydrozoa.multisig.ledger.dapp.tx.{InitializationTx, Metadata as MD, Tx, TxTiming, minInitTreasuryAda}
+import hydrozoa.multisig.ledger.dapp.tx.{HasValidators, InitializationTx, Metadata as MD, TxTiming, minInitTreasuryAda}
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.dapp.state.VoteDatum
@@ -26,7 +27,7 @@ import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.rules.{Context, State}
+import scalus.cardano.ledger.rules.{Context, STS, State}
 import scalus.ledger.api.v1.PubKeyHash
 import test.*
 import test.Generators.Hydrozoa.*
@@ -139,22 +140,25 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                 val expectedHeadNativeScript =
                     HeadMultisigScript(testPeers.map(_.wallet.exportVerificationKeyBytes))
                 val iTxOutputs: Seq[TransactionOutput] = iTx.tx.body.value.outputs.map(_.value)
-                val config = Tx.Builder.Config(
-                  headNativeScript = expectedHeadNativeScript,
-                  multisigRegimeUtxo = multisigRegimeUtxo,
-                  tokenNames = iTx.tokenNames,
-                  env = testTxBuilderEnvironment,
-                  evaluator = testEvaluator,
-                  validators = nonSigningValidators
-                )
-                val hns = config.headNativeScript
+                val config = new HasHeadMultisigScript
+                    with HasMultisigRegimeUtxo
+                    with HasTokenNames
+                    with HasCardanoInfo
+                    with HasEvaluator
+                    with HasValidators {
+                    val headMultisigScript: HeadMultisigScript = expectedHeadNativeScript
+                    val multisigRegimeUtxo: MultisigRegimeUtxo = multisigRegimeUtxo
+                    val tokenNames: CIP67.TokenNames = iTx.tokenNames
+                    val cardanoInfo: CardanoInfo = testTxBuilderEnvironment
+                    val evaluator: PlutusScriptEvaluator = testEvaluator
+                    val validators: Seq[STS.Validator] = nonSigningValidators
+                }
+                val hns = config.headMultisigScript
                 val disputeResolutionAddress = ShelleyAddress(
-                  network = config.env.network,
+                  network = config.cardanoInfo.network,
                   payment = ShelleyPaymentPart.Script(DisputeResolutionScript.compiledScriptHash),
                   delegation = Null
                 )
-
-                import config.tokenNames.*
 
                 // ===================================
                 // Initialization tx props
@@ -311,7 +315,11 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                         datum = MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum,
                         value = Value(
                           initialDeposit,
-                          MultiAsset(SortedMap(hns.policyId -> SortedMap(headTokenName -> 1L)))
+                          MultiAsset(
+                            SortedMap(
+                              hns.policyId -> SortedMap(config.tokenNames.headTokenName -> 1L)
+                            )
+                          )
                         )
                       ),
                       multisigRegimeWitness = MultisigRegimeUtxo(
@@ -336,7 +344,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                       expectedNetwork = testNetwork,
                       tx = iTx.tx,
                       resolver = mockResolver,
-                      slotConfig = config.env.slotConfig,
+                      slotConfig = config.cardanoInfo.slotConfig,
                       txTiming = txTiming,
                       initializationRequestTimestamp = args.initializedOn
                     )
@@ -372,7 +380,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                           SortedMap(
                             hns.policyId -> SortedMap(
                               expectedMulitsigRegimeTokenName -> -1L,
-                              voteTokenName -> (peers.length.toLong + 1L)
+                              config.tokenNames.voteTokenName -> (peers.length.toLong + 1L)
                             )
                           )
                         )
@@ -407,7 +415,9 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                           tallyFeeAllowance,
                           MultiAsset(
                             SortedMap(
-                              config.headNativeScript.policyId -> SortedMap(voteTokenName -> 1)
+                              config.headMultisigScript.policyId -> SortedMap(
+                                config.tokenNames.voteTokenName -> 1
+                              )
                             )
                           )
                         ),
@@ -415,14 +425,16 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                           Inline(VoteDatum.default(multisigTreasuryUtxo.datum.commit).toData)
                         ),
                         scriptRef = None
-                      ).ensureMinAda(config.env.protocolParams)
+                      ).ensureMinAda(config.cardanoInfo.protocolParams)
                     )
                     fbTxBody.outputs(1).value == defaultVoteUtxo.output
                 })
 
                 props.append("vote utxos created per peer" |: {
                     val pkhs = NonEmptyList.fromListUnsafe(
-                      config.headNativeScript.requiredSigners.map(es => PubKeyHash(es.hash)).toList
+                      config.headMultisigScript.requiredSigners
+                          .map(es => PubKeyHash(es.hash))
+                          .toList
                     )
                     val datums = VoteDatum(pkhs)
                     val expectedPeerVoteOutputs = datums.map(d =>
@@ -432,17 +444,17 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                             tallyFeeAllowance,
                             MultiAsset(
                               SortedMap(
-                                hns.policyId -> SortedMap(voteTokenName -> 1L)
+                                hns.policyId -> SortedMap(config.tokenNames.voteTokenName -> 1L)
                               )
                             )
                           ),
                           datumOption = Some(Inline(d.toData)),
                           scriptRef = None
-                        ).ensureMinAda(config.env.protocolParams)
+                        ).ensureMinAda(config.cardanoInfo.protocolParams)
                     )
                     val actualPeerVoteOutputs = NonEmptyList.fromListUnsafe(
                       fbTxBody.outputs
-                          .slice(2, config.headNativeScript.numSigners + 2)
+                          .slice(2, config.headMultisigScript.numSigners + 2)
                           .toList
                           .map(_.value)
                     )
@@ -462,7 +474,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                 )
 
                 props.append("collateral utxos created per peer" |: {
-                    val sortedKeys = config.headNativeScript.requiredSigners
+                    val sortedKeys = config.headMultisigScript.requiredSigners
                         .map(_.hash)
                         .toList
                         .sorted(using Hash.Ordering)
@@ -470,7 +482,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                       sortedKeys
                           .map(key =>
                               ShelleyAddress(
-                                network = config.env.network,
+                                network = config.cardanoInfo.network,
                                 payment = Key(key),
                                 delegation = Null
                               )
@@ -487,7 +499,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                     )
                     val actualCollateralUtxos = NonEmptyList.fromListUnsafe(
                       fbTxBody.outputs
-                          .drop(2 + config.headNativeScript.numSigners)
+                          .drop(2 + config.headMultisigScript.numSigners)
                           .map(_.value)
                           .toList
                     )

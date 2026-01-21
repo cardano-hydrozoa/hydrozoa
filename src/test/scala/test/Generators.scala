@@ -1,6 +1,7 @@
 package test
 
 import cats.data.{NonEmptyList, NonEmptyVector}
+import hydrozoa.config.HeadConfig.Fields.*
 import hydrozoa.lib.cardano.value.coin.Distribution
 import hydrozoa.lib.cardano.value.coin.Distribution.NormalizedWeights
 import hydrozoa.multisig.ledger.VirtualLedgerM
@@ -8,7 +9,7 @@ import hydrozoa.multisig.ledger.VirtualLedgerM.{Config, State}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
-import hydrozoa.multisig.ledger.dapp.tx.Tx
+import hydrozoa.multisig.ledger.dapp.tx.{HasValidators, Tx}
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.{GenesisObligation, L2EventTransaction}
@@ -87,14 +88,21 @@ object Generators {
                   Some(tokenNames.multisigRegimeTokenName)
                 )
             } yield (
-              Tx.Builder.Config(
-                headNativeScript = hns,
-                multisigRegimeUtxo = multisigWitnessUtxo,
-                tokenNames = tokenNames,
-                env = env,
-                evaluator = evaluator,
-                validators = validators
-              ),
+              new HasHeadMultisigScript
+                  with HasMultisigRegimeUtxo
+                  with HasTokenNames
+                  with HasCardanoInfo
+                  with HasEvaluator
+                  with HasValidators
+                  with HasHeadAddress {
+                  val headMultisigScript: HeadMultisigScript = hns
+                  val multisigRegimeUtxo: MultisigRegimeUtxo = multisigWitnessUtxo
+                  val tokenNames: TokenNames = tokenNames
+                  val cardanoInfo: CardanoInfo = env
+                  val evaluator: PlutusScriptEvaluator = evaluator
+                  val validators: Seq[Validator] = validators
+                  val headAddress: ShelleyAddress = hns.mkAddress(cardanoInfo.network)
+              },
               peers
             )
 
@@ -368,8 +376,8 @@ object Generators {
         /** Generate a treasury utxo according to a builder config */
         def genTreasuryUtxo(config: Tx.Builder.Config): Gen[MultisigTreasuryUtxo] =
             genTreasuryUtxo(
-              network = config.env.network,
-              params = config.env.protocolParams,
+              network = config.cardanoInfo.network,
+              params = config.cardanoInfo.protocolParams,
               headAddress = Some(config.headAddress),
               coin = None
             )

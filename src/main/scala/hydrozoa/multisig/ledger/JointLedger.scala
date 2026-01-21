@@ -4,16 +4,16 @@ import cats.effect.{IO, Ref}
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.UtxoIdL1
-import hydrozoa.config.EquityShares
+import hydrozoa.config.HeadConfig
 import hydrozoa.lib.actor.*
-import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, toEpochQuantizedInstant}
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant}
 import hydrozoa.multisig.ledger.DappLedgerM.runDappLedgerM
 import hydrozoa.multisig.ledger.JointLedger.*
 import hydrozoa.multisig.ledger.JointLedger.Requests.*
 import hydrozoa.multisig.ledger.VirtualLedgerM.runVirtualLedgerM
-import hydrozoa.multisig.ledger.dapp.tx.{Tx, TxTiming}
+import hydrozoa.multisig.ledger.dapp.tx.HasValidators
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
-import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo}
+import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.{GenesisObligation, L2EventGenesis}
@@ -24,10 +24,11 @@ import hydrozoa.multisig.protocol.types.LedgerEventId.ValidityFlag
 import hydrozoa.multisig.protocol.types.LedgerEventId.ValidityFlag.{Invalid, Valid}
 import hydrozoa.multisig.protocol.{ConsensusProtocol, types}
 import monocle.Focus.focus
+
 import scala.collection.immutable.Queue
 import scala.math.Ordered.orderingToOrdered
 import scalus.builtin.{ByteString, platform}
-import scalus.cardano.ledger.{AssetName, Coin, TransactionHash}
+import scalus.cardano.ledger.TransactionHash
 
 // Fields of a work-in-progress block, with an additional field for dealing with withdrawn utxos
 private case class TransientFields(
@@ -39,37 +40,21 @@ private case class TransientFields(
 // NOTE: As of 2025-11-16, George says BlockWeaver should be the ONLY actor calling the joint ledger
 final case class JointLedger(
     peerLiaisons: Seq[ActorRef[IO, ConsensusProtocol.PeerLiaison.Request]],
-    // private val cardanoLiaison
-    // private val blockSigner
-    //// Static config fields
-    // in head config
-    initialBlockTime: QuantizedInstant,
-    // derived
-    initialBlockKzg: KzgCommitment,
-    // derived
-    config: Tx.Builder.Config,
-    // in head config
-    txTiming: TxTiming,
-    // in head config
-    tallyFeeAllowance: Coin,
-    // in head config
-    equityShares: EquityShares,
-    // derived from init tx (which is in the config)
-    multisigRegimeUtxo: MultisigRegimeUtxo,
-    // in head config (move into TxTiming)
-    votingDuration: QuantizedFiniteDuration,
-    // derived from init tx (which is in the config)
-    treasuryTokenName: AssetName,
-    // derived from init tx (which is in the config)
-    initialTreasury: MultisigTreasuryUtxo,
-    initialFallbackValidityStart: QuantizedInstant
+    config: HeadConfig
 ) extends Actor[IO, Requests.Request] {
+    import config.{slotConfig,
+      startTime, 
+      initialKzgCommitment,
+      initialFallbackValidityStart, 
+      initialTreasury, 
+      txTiming,
+     multisigRegimeUtxo}
 
     val state: Ref[IO, JointLedger.State] =
         Ref.unsafe[IO, JointLedger.State](
           Done(
             producedBlock = Block.Initial(
-              Block.Header.Initial(timeCreation = initialBlockTime, commitment = initialBlockKzg)
+              Block.Header.Initial(timeCreation = startTime, commitment = initialKzgCommitment)
             ),
             lastFallbackValidityStart = initialFallbackValidityStart,
             dappLedgerState = DappLedgerM.State(initialTreasury, Queue.empty),
@@ -328,15 +313,12 @@ final case class JointLedger(
                     nextKzg = nextKzg,
                     validDeposits = validDeposits,
                     payoutObligations = payoutObligations,
-                    tallyFeeAllowance = this.tallyFeeAllowance,
-                    votingDuration = this.votingDuration,
                     immatureDeposits = immatureDeposits,
                     blockCreatedOn = blockCreatedOn,
                     competingFallbackValidityStart = blockCreatedOn
                         + txTiming.minSettlementDuration
                         + txTiming.inactivityMarginDuration
                         + txTiming.silenceDuration,
-                    txTiming = txTiming
                   ),
                   onSuccess = IO.pure
                 )
@@ -368,7 +350,7 @@ final case class JointLedger(
                 )((acc, deposit) =>
                     val depositValidityEnd =
                         deposit._2.datum.refundInstructions.startTime
-                            .toEpochQuantizedInstant(config.env.slotConfig)
+                            .toEpochQuantizedInstant(slotConfig)
                             - txTiming.depositMaturityDuration
                             - txTiming.depositAbsorptionDuration
                             - txTiming.silenceDuration
@@ -465,13 +447,11 @@ final case class JointLedger(
               DappLedgerM.finalizeLedger(
                 payoutObligationsRemaining = p.nextBlockData.blockWithdrawnUtxos,
                 multisigRegimeUtxoToSpend = multisigRegimeUtxo,
-                equityShares = equityShares,
                 blockCreatedOn = p.startTime,
                 competingFallbackValidityStart = p.startTime
                     + txTiming.minSettlementDuration
                     + txTiming.inactivityMarginDuration
                     + txTiming.silenceDuration,
-                txTiming = txTiming
               ),
               onSuccess = IO.pure
             )
@@ -577,7 +557,6 @@ final case class JointLedger(
 object JointLedger {
 
     type Handle = ActorRef[IO, Requests.Request]
-
     final case class CompleteBlockError() extends Throwable
 
     object Requests {

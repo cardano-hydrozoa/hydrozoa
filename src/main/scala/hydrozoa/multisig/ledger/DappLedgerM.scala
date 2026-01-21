@@ -3,8 +3,8 @@ package hydrozoa.multisig.ledger
 import cats.data.*
 import cats.effect.IO
 import cats.syntax.all.*
-import hydrozoa.config.EquityShares
-import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
+import hydrozoa.config.HeadConfig
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger
 import hydrozoa.multisig.ledger.DappLedgerM.Error.{AbsorptionPeriodExpired, ParseError, SettlementTxSeqBuilderError}
 import hydrozoa.multisig.ledger.dapp.tx.*
@@ -16,14 +16,14 @@ import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.LedgerEvent.RegisterDeposit
 import hydrozoa.multisig.protocol.types.{Block, LedgerEventId}
 import monocle.syntax.all.*
+
 import scala.collection.immutable.Queue
 import scala.language.implicitConversions
 import scala.math.Ordered.orderingToOrdered
-import scalus.cardano.ledger.*
 
 private type E[A] = Either[DappLedgerM.Error, A]
 private type S[A] = cats.data.StateT[E, DappLedgerM.State, A]
-private type RT[A] = ReaderT[S, Tx.Builder.Config, A]
+private type RT[A] = ReaderT[S, HeadConfig, A]
 
 /** DappLedgerM defines an opaque monad stack for manipulating the [[State]] of the dApp ledger.
   * It's constructor and eliminator methods are private so that it cannot be used in unintended
@@ -41,12 +41,9 @@ case class DappLedgerM[A] private (private val unDappLedger: RT[A]) {
         DappLedgerM(this.unDappLedger.flatMap(a => f(a).unDappLedger))
 
     /** Use [[runDappLedgerM()]] instead
-      * @param config
-      * @param initialState
-      * @return
       */
     private def run(
-        config: Tx.Builder.Config,
+        config: HeadConfig,
         initialState: DappLedgerM.State
     ): Either[DappLedgerM.Error, (DappLedgerM.State, A)] =
         this.unDappLedger.run(config).run(initialState)
@@ -57,7 +54,7 @@ object DappLedgerM {
 
     /** Extract the transaction builder configuration from a [[DappLedgerM]]
       */
-    private val ask: DappLedgerM[Tx.Builder.Config] =
+    private val ask: DappLedgerM[HeadConfig] =
         DappLedgerM(Kleisli.ask)
 
     /** Obtain the current state from a [[DappLedgerM]]
@@ -93,7 +90,6 @@ object DappLedgerM {
                       config = config,
                       virtualOutputsBytes = virtualOutputsBytes,
                       donationToTreasury = donationToTreasury,
-                      txTiming = txTiming
                     )
                     .left
                     .map(ParseError(_))
@@ -122,12 +118,9 @@ object DappLedgerM {
         nextKzg: KzgCommitment,
         validDeposits: Queue[(LedgerEventId, DepositUtxo)],
         payoutObligations: Vector[Payout.Obligation],
-        tallyFeeAllowance: Coin,
-        votingDuration: QuantizedFiniteDuration,
         immatureDeposits: Queue[(LedgerEventId, DepositUtxo)],
         blockCreatedOn: QuantizedInstant,
         competingFallbackValidityStart: QuantizedInstant,
-        txTiming: TxTiming
     ): DappLedgerM[SettleLedger.Result] = {
 
         for {
@@ -141,11 +134,8 @@ object DappLedgerM {
               treasuryToSpend = state.treasury,
               depositsToSpend = Vector.from(validDeposits.map(_._2).toList),
               payoutObligationsRemaining = payoutObligations,
-              tallyFeeAllowance = tallyFeeAllowance,
-              votingDuration = votingDuration,
               competingFallbackValidityStart = competingFallbackValidityStart,
               blockCreatedOn = blockCreatedOn,
-              txTiming = txTiming
             )
 
             settlementTxSeqRes <- lift(
@@ -191,10 +181,8 @@ object DappLedgerM {
     def finalizeLedger(
         payoutObligationsRemaining: Vector[Payout.Obligation],
         multisigRegimeUtxoToSpend: MultisigRegimeUtxo,
-        equityShares: EquityShares,
         blockCreatedOn: QuantizedInstant,
         competingFallbackValidityStart: QuantizedInstant,
-        txTiming: TxTiming
     ): DappLedgerM[FinalizationTxSeq] = {
         for {
             s <- get
@@ -204,11 +192,8 @@ object DappLedgerM {
                   Block.Version.Major(s.treasury.datum.versionMajor.toInt).increment,
               treasuryToSpend = s.treasury,
               payoutObligationsRemaining = payoutObligationsRemaining,
-              multisigRegimeUtxoToSpend = multisigRegimeUtxoToSpend,
-              equityShares = equityShares,
               competingFallbackValidityStart = competingFallbackValidityStart,
               blockCreatedOn = blockCreatedOn,
-              txTiming = txTiming
             )
             ftxSeq <- lift(
               FinalizationTxSeq
