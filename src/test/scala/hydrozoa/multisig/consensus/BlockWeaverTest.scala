@@ -33,15 +33,16 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
 
         val peers = p.pick(genTestPeers(), "test peers")
         val peer = p.pick(Gen.oneOf(peers.toList))
-        // See comment in the BlockWeaver.Config
-        val turn = p.pick(Gen.choose(1, peers.size), "block lead turn")
+        val peerId = Peer.Id(peer.ordinal, peers.size)
 
         // Either the initialization block or any arbitrary block
         val lastKnownBlock =
-            p.pick(
-              Gen.frequency(
-                5 -> Gen.const(0),
-                5 -> Gen.choose(1, Int.MaxValue)
+            Block.Number(
+              p.pick(
+                Gen.frequency(
+                  5 -> Gen.const(0),
+                  5 -> Gen.choose(1, Int.MaxValue)
+                )
               )
             )
 
@@ -60,10 +61,8 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
 
         // Weaver's config
         val config = BlockWeaver.Config(
-          lastKnownBlock = Block.Number(lastKnownBlock),
-          peerId = Peer.Number(peer.ordinal),
-          numberOfPeers = peers.size,
-          blockLeadTurn = turn,
+          lastKnownBlock = lastKnownBlock,
+          peerId = peerId,
           recoveredMempool = BlockWeaver.Mempool.apply(events),
           jointLedger = jointLedgerMockActor,
           slotConfig = testTxBuilderEnvironment.slotConfig
@@ -74,12 +73,12 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
 
         def aroundNow(other: Instant): Boolean = {
             val now = p.runIO(realTimeQuantizedInstant(slotConfig = config.slotConfig))
-            now.instant.toEpochMilli - (10.second.toMillis) < other.toEpochMilli &&
-            now.instant.toEpochMilli + (10.second.toMillis) > other.toEpochMilli
+            now.instant.toEpochMilli - 10.second.toMillis < other.toEpochMilli &&
+            now.instant.toEpochMilli + 10.second.toMillis > other.toEpochMilli
         }
 
         // If the next block is the peer's turn...
-        p.pre((lastKnownBlock + 1) % peers.size == config.blockLeadTurn)
+        p.pre(peerId.isLeader(lastKnownBlock.increment))
 
         // then ...
         p.assert(
@@ -110,7 +109,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
 
             val peers = p.pick(genTestPeers(), "test peers")
             val peer = peers.head
-            val turn = 1
+            val peerId = Peer.Id(peer.ordinal, peers.size)
             val lastKnownBlock = 0
 
             // Joint ledger mock
@@ -122,9 +121,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
             // Weaver's config
             val config = BlockWeaver.Config(
               lastKnownBlock = Block.Number(lastKnownBlock),
-              peerId = Peer.Number(peer.ordinal),
-              numberOfPeers = peers.size,
-              blockLeadTurn = turn,
+              peerId = peerId,
               recoveredMempool = BlockWeaver.Mempool.empty,
               jointLedger = jointLedgerMockActor,
               slotConfig = testTxBuilderEnvironment.slotConfig
@@ -159,6 +156,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
 
             val peers = p.pick(genTestPeers(), "test peers")
             val peer = p.pick(Gen.oneOf(peers.toList))
+            val peerId = Peer.Id(peer.ordinal, peers.size)
 
             // See comment in the BlockWeaver.Config
             val turn = p.pick(Gen.choose(1, peers.size), "block lead turn")
@@ -173,9 +171,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
             val roundsCompleted = p.pick(Gen.choose(100, 1000))
             val config = BlockWeaver.Config(
               lastKnownBlock = Block.Number(turn + roundsCompleted * peers.size - 1),
-              peerId = Peer.Number(peer.ordinal),
-              numberOfPeers = peers.size,
-              blockLeadTurn = turn,
+              peerId = peerId,
               recoveredMempool = BlockWeaver.Mempool.empty,
               jointLedger = jointLedgerMockActor,
               slotConfig = testTxBuilderEnvironment.slotConfig
@@ -216,6 +212,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
         // blocks (since we don't want its leader StartBlock gets into our way).
         val peers = p.pick(genTestPeers(4), "test peers")
         val peer = p.pick(Gen.oneOf(peers.toList), "own peer")
+        val peerId = Peer.Id(peer.ordinal, peers.size)
         // See comment in the BlockWeaver.Config
         val turn = p.pick(Gen.choose(2, peers.size), "block lead turn")
 
@@ -232,9 +229,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
           // This is next block after a peer's turn, so we have at least 3 blocks
           // following that the SUT weaver is guaranteed to handle as a follower.
           lastKnownBlock = lastKnownBlock,
-          peerId = Peer.Number(peer.ordinal),
-          numberOfPeers = peers.size,
-          blockLeadTurn = turn,
+          peerId = peerId,
           recoveredMempool = BlockWeaver.Mempool.empty,
           jointLedger = jointLedgerMockActor,
           slotConfig = testTxBuilderEnvironment.slotConfig
@@ -317,7 +312,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
                   } yield ()).start.void
 
                   _ <- expectMsgs(jointLedgerMockActor, 10.seconds)(
-                    (List(
+                    List(
                       StartBlock(firstBlock.header.blockNum, firstBlock.header.timeCreation)
                     )
                         ++ firstBlockEvents
@@ -328,7 +323,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
                           StartBlock(secondBlock.header.blockNum, secondBlock.header.timeCreation)
                         )
                         ++ secondBlockEvents
-                        ++ List(CompleteBlockRegular(Some(secondBlock), Set.empty)))*
+                        ++ List(CompleteBlockRegular(Some(secondBlock), Set.empty))*
                   )
               } yield ()
             )

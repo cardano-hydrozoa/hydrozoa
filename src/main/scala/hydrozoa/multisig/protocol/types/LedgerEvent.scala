@@ -36,6 +36,10 @@ object LedgerEventId {
         def peerNum: Peer.Number = Peer.Number(self._1)
         def eventNum: Number = Number(self._2)
 
+        def precedes(other: Id): Boolean =
+            self.peerNum == other.peerNum &&
+                self.eventNum.increment == other.eventNum
+
     type Number = Number.Number
 
     object Number {
@@ -68,7 +72,7 @@ object LedgerEvent {
     final case class RegisterDeposit(
         depositTxBytes: Array[Byte],
         refundTxBytes: Array[Byte],
-        eventId: LedgerEventId,
+        override val eventId: LedgerEventId,
         virtualOutputsBytes: Array[Byte],
         donationToTreasury: Coin,
         txTiming: TxTiming,
