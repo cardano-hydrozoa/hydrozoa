@@ -5,7 +5,7 @@ import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
-import hydrozoa.multisig.ledger.dapp.tx.{DeinitTx, FallbackTx, FinalizationTx, RefundTx, RolloutTx, SettlementTx, Tx}
+import hydrozoa.multisig.ledger.dapp.tx.{DeinitTx, RefundTx, RolloutTx, Tx}
 import hydrozoa.multisig.protocol.types.AckBlock.HeaderSignature.given
 import hydrozoa.multisig.protocol.types.AckBlock.{HeaderSignature, TxSignature}
 import hydrozoa.multisig.protocol.types.{AckBlock, AugmentedBlock, Block, BlockEffectsSigned, Peer}
@@ -357,7 +357,9 @@ class ConsensusActor(
     // ===================================
     sealed trait BlockConfirmed {
         def block: Block.Next
+
         def effects: BlockEffectsSigned.Next
+
         val finalizationRequested: Boolean
 
         final lazy val blockNum: Block.Number = block.blockNum
@@ -414,7 +416,7 @@ class ConsensusActor(
         final lazy val toEventSequencer: EventSequencer.Request.BlockConfirmed =
             EventSequencer.Request.BlockConfirmed(
               block = this.block,
-              mbPostDatedRefundsSigned = this.postDatedRefundsSigned
+              mbPostDatedRefundsSigned = this.effects.postDatedRefundsSigned
             )
 
         final lazy val toPeerLiaison: PeerLiaison.Request.BlockConfirmed =
@@ -439,9 +441,7 @@ class ConsensusActor(
             override val block: Block.Final,
             override val effects: BlockEffectsSigned.Final,
             override val finalizationRequested: Boolean = false
-        ) extends BlockConfirmed {
-            override def postDatedRefundsSigned: List[RefundTx.PostDated] = List()
-        }
+        ) extends BlockConfirmed
 
     // ===================================
     // State extension methods

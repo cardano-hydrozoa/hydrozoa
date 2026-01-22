@@ -50,4 +50,9 @@ object BlockEffectsSigned:
 
     type Next = Minor | Major | Final
 
-    // TODO: do we need raw-types stuff?
+    extension (self: Next)
+        def postDatedRefundsSigned: List[RefundTx.PostDated] = self match {
+            case minor: Minor => minor.postDatedRefundsSigned
+            case major: Major => major.postDatedRefundsSigned
+            case _            => List.empty
+        }
