@@ -17,7 +17,7 @@ object RequiresBlockfrostApiKey extends Tag("requires-blockfrost-api-key")
   * to test you have to pur it into .env file in the root of the project (or from where you run this
   * test suite:
   *
-  * ```
+  * ```hex
   * BLOCKFROST_API_KEY=preview...
   * ```
   */
@@ -156,6 +156,43 @@ class CardanoBackendBlockfrostTest extends AnyFunSuite {
         )
         print(ret)
         assert(ret.isLeft)
+    }
+
+    test("Fetch txs with specific asset 1", RequiresBlockfrostApiKey) {
+        val ret = runWithKey(key =>
+            for {
+                backend <- CardanoBackendBlockfrost(Left(Network.PREVIEW), key)
+                policyId = Hash.scriptHash(
+                  ByteString.fromHex("ee492ffb3dd3fb15231920d1db1f66671add1dc48b165f5006a565bd")
+                )
+                // assetName = AssetName.empty
+                assetName = AssetName.fromHex("53656e696f72426f6e64546f6b656e")
+                txOnList = TransactionHash.fromHex(
+                  "5c22219ef5bebe66b07942ee0dd3c32c0affac529e71b087ee9167dbb637eadc"
+                )
+                txIds <- backend.assetTxs((policyId, assetName), txOnList)
+            } yield txIds
+        )
+        println(ret)
+        assert(ret.isRight && ret.exists(set => set.size == 13))
+    }
+
+    test("Fetch txs - empty results", RequiresBlockfrostApiKey) {
+        val ret = runWithKey(key =>
+            for {
+                backend <- CardanoBackendBlockfrost(Left(Network.PREVIEW), key)
+                policyId = Hash.scriptHash(
+                  ByteString.fromHex("ee492ffb3dd3fb15231920d1db1f66671add1dc48b165f5006a565bd")
+                )
+                randomAssetName = AssetName.fromHex("deadbeef")
+                someTx = TransactionHash.fromHex(
+                  "5c22219ef5bebe66b07942ee0dd3c32c0affac529e71b087ee9167dbb637eadc"
+                )
+                txIds <- backend.assetTxs((policyId, randomAssetName), someTx)
+            } yield txIds
+        )
+        println(ret)
+        assert(ret.isRight && ret.exists(set => set.isEmpty))
     }
 }
 
