@@ -168,7 +168,10 @@ object JointLedgerTestHelpers {
             jointLedger <- PropertyM.run(
               system.actorOf(
                 JointLedger(
+                  peerId = Peer.Number(peers.head.ordinal),
                   peerLiaisons = Seq.empty,
+                  consensusActor = ???,
+                  wallet = ???,
                   tallyFeeAllowance = Coin.ada(2),
                   initialBlockTime = initializedOn,
                   initialBlockKzg = KzgCommitment.empty,
@@ -264,7 +267,7 @@ object JointLedgerTestHelpers {
             pollResults: Set[UtxoIdL1]
         ): JLTest[Unit] =
             completeBlockRegular(
-              CompleteBlockRegular(referenceBlock, pollResults: Set[UtxoIdL1])
+              CompleteBlockRegular(referenceBlock, pollResults: Set[UtxoIdL1], false)
             )
 
         def completeBlockFinal(req: CompleteBlockFinal): JLTest[Unit] =
@@ -392,8 +395,8 @@ object JointLedgerTestHelpers {
 
                 req =
                     RegisterDeposit(
-                      depositTxBytes = signTx(peer, depositRefundTxSeq.depositTx.tx).toCbor,
-                      refundTxBytes = signTx(peer, depositRefundTxSeq.refundTx.tx).toCbor,
+                      depositTxBytes = peer.signTx(depositRefundTxSeq.depositTx.tx).toCbor,
+                      refundTxBytes = peer.signTx(depositRefundTxSeq.refundTx.tx).toCbor,
                       donationToTreasury = Coin.zero,
                       virtualOutputsBytes = virtualOutputsBytes,
                       eventId = eventId,

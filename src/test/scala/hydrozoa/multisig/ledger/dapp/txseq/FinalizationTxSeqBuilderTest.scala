@@ -60,7 +60,7 @@ class FinalizationTxSeqBuilderTest extends AnyFunSuite with ScalaCheckPropertyCh
 
                         val signedTxs: Vector[Transaction] =
                             peers.foldLeft(unsignedTxsAndUtxos._1)((txsToSign, peer) =>
-                                txsToSign.map(tx => signTx(peer, tx))
+                                txsToSign.map(tx => peer.signTx(tx))
                             )
 
                         observeTxChain(signedTxs)(

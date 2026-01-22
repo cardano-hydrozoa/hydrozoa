@@ -11,42 +11,49 @@ import hydrozoa.multisig.protocol.types.AckBlock.HeaderSignature
   *
   * @param blockType
   */
-enum BlockEffectsSigned(val blockType: Block.Type) {
-
+sealed trait BlockEffectsSigned {
+    def blockType: Block.Type
     def blockNum: Block.Number
+}
 
-    case Initial(
+object BlockEffectsSigned {
+
+    final case class Initial(
         override val blockNum: Block.Number,
         initialSigned: InitializationTx,
         fallbackSigned: FallbackTx,
-    ) extends BlockEffectsSigned(Block.Type.Initial)
+    ) extends BlockEffectsSigned {
+        override val blockType: Block.Type = Block.Type.Initial
+    }
 
-    case Minor(
+    final case class Minor(
         override val blockNum: Block.Number,
         header: Block.Header.Minor,
         // Verified header signatures
         headerSignatures: Set[HeaderSignature],
         postDatedRefundsSigned: List[RefundTx.PostDated],
-    ) extends BlockEffectsSigned(Block.Type.Minor)
+    ) extends BlockEffectsSigned {
+        override val blockType: Block.Type = Block.Type.Minor
+    }
 
-    case Major(
+    final case class Major(
         override val blockNum: Block.Number,
         settlementSigned: SettlementTx,
         fallbackSigned: FallbackTx,
         rolloutsSigned: List[RolloutTx],
         postDatedRefundsSigned: List[RefundTx.PostDated],
-    ) extends BlockEffectsSigned(Block.Type.Major)
+    ) extends BlockEffectsSigned {
+        override val blockType: Block.Type = Block.Type.Major
+    }
 
-    case Final(
+    final case class Final(
         override val blockNum: Block.Number,
         rolloutsSigned: List[RolloutTx],
         mbDeinitSigned: Option[DeinitTx],
         finalizationSigned: FinalizationTx,
-    ) extends BlockEffectsSigned(Block.Type.Final)
-}
-
-object BlockEffectsSigned:
-    import BlockEffectsSigned.*
+    ) extends BlockEffectsSigned {
+        override val blockType: Block.Type = Block.Type.Final
+    }
 
     type Next = Minor | Major | Final
 
@@ -56,3 +63,4 @@ object BlockEffectsSigned:
             case major: Major => major.postDatedRefundsSigned
             case _            => List.empty
         }
+}

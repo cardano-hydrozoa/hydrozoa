@@ -413,7 +413,7 @@ object Generators {
                       )
                     )
 
-            } yield L2EventTransaction(signTx(peer, txUnsigned))
+            } yield L2EventTransaction(peer.signTx(txUnsigned))
 
         /** Generate an "attack" that, given a context, state, and L2EventTransaction, returns a
           * tuple containing:

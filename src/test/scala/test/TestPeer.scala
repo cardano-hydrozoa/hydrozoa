@@ -6,8 +6,6 @@ import com.bloxbean.cardano.client.common.model.Network as BBNetwork
 import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath
 import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath.createExternalAddressDerivationPathForAccount
 import hydrozoa.*
-import hydrozoa.multisig.ledger.dapp.token.CIP67
-import hydrozoa.multisig.ledger.virtual.L2EventTransaction
 import org.scalacheck.Gen
 import scala.collection.mutable
 import scalus.builtin.Builtins.blake2b_224
@@ -16,26 +14,23 @@ import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.ArbitraryInstances.*
-import scalus.cardano.ledger.AuxiliaryData.Metadata
-import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{Coin, Hash, KeepRaw, Metadatum, Sized, TaggedSortedSet, Transaction as STransaction, TransactionBody, TransactionInput, TransactionOutput, TransactionWitnessSet, Value, Word64}
+import scalus.cardano.ledger.{Hash, Transaction as STransaction}
 
-// TODO: remove ix and use .ordinal
-enum TestPeer(@annotation.unused ix: Int) derives CanEqual:
-    case Alice extends TestPeer(0)
-    case Bob extends TestPeer(1)
-    case Carol extends TestPeer(2)
-    case Daniella extends TestPeer(3)
-    case Erin extends TestPeer(4)
-    case Frank extends TestPeer(5)
-    case Gustavo extends TestPeer(6)
-    case Hector extends TestPeer(7)
-    case Isabel extends TestPeer(8)
-    case Julia extends TestPeer(9)
+enum TestPeer derives CanEqual:
+    case Alice
+    case Bob
+    case Carol
+    case Daniella
+    case Erin
+    case Frank
+    case Gustavo
+    case Hector
+    case Isabel
+    case Julia
 
-    def compareTo(another: TestPeer): Int = this.toString.compareTo(another.toString)
+    // def compareTo(another: TestPeer): Int = this.ordinal.compareTo(another.ordinal)
 
-    def account: Account = TestPeer.account(this)
+    def account: Account = TestPeer.mkAccount(this)
 
     def wallet: Wallet = TestPeer.mkWallet(this)
 
@@ -66,92 +61,50 @@ object TestPeer:
             Wallet(
               peer.toString,
               WalletModuleBloxbean,
-              account(peer).hdKeyPair().getPublicKey,
-              account(peer).hdKeyPair().getPrivateKey
+              mkAccount(peer).hdKeyPair().getPublicKey,
+              mkAccount(peer).hdKeyPair().getPrivateKey
             )
         )
 
     private val addressCache: mutable.Map[TestPeer, (ShelleyPaymentPart, ShelleyDelegationPart)] =
         mutable.Map.empty.withDefault(peer =>
             (
-              Key(Hash(blake2b_224(ByteString.fromArray(account(peer).publicKeyBytes())))),
+              Key(Hash(blake2b_224(ByteString.fromArray(mkAccount(peer).publicKeyBytes())))),
               Null
             )
         )
 
-    def account(peer: TestPeer): Account = accountCache.cache(peer)
+    def mkAccount(peer: TestPeer): Account = accountCache.useOrCreate(peer)
 
-    def mkWallet(peer: TestPeer): Wallet = walletCache.cache(peer)
+    def mkWallet(peer: TestPeer): Wallet = walletCache.useOrCreate(peer)
 
     def mkWalletId(peer: TestPeer): WalletId = WalletId(peer.toString)
 
     def address(network: Network)(peer: TestPeer): ShelleyAddress = address(peer, network)
 
     def address(peer: TestPeer, network: Network): ShelleyAddress = {
-        val (payment, delegation) = addressCache.cache(peer)
+        val (payment, delegation) = addressCache.useOrCreate(peer)
         ShelleyAddress(network, payment, delegation)
     }
 
-extension [K, V](map: mutable.Map[K, V])
-    def cache(key: K): V = map.get(key) match {
-        case None =>
-            val missing = map.default(key)
-            @annotation.unused
-            val _ = map.put(key, missing)
-            missing
-        case Some(value) => value
-    }
+    extension [K, V](map: mutable.Map[K, V])
+        def useOrCreate(key: K): V = map.get(key) match {
+            case None =>
+                val missing = map.default(key)
+                @annotation.unused
+                val _ = map.put(key, missing)
+                missing
+            case Some(value) => value
+        }
 
-def signTx(peer: TestPeer, txUnsigned: STransaction): STransaction =
-    val keyWitness = TestPeer.mkWallet(peer).createTxKeyWitness(txUnsigned)
-    attachVKeyWitnesses(txUnsigned, List(keyWitness))
+    extension (peer: TestPeer)
+        def signTx(txUnsigned: STransaction): STransaction =
+            val keyWitness = peer.wallet.signTx(txUnsigned)
+            attachVKeyWitnesses(txUnsigned, List(keyWitness))
 
-/** Creates a pubkey transaction yielding a single UTxO from a set of inputs */
-def l2EventTransactionFromInputsAndPeer(
-    inputs: TaggedSortedSet[TransactionInput],
-    utxoSet: Map[TransactionInput, TransactionOutput],
-    inPeer: TestPeer,
-    outPeer: TestPeer,
-    network: Network = testNetwork
-): L2EventTransaction = {
-
-    val totalVal: Value = inputs.toSeq.foldLeft(Value.zero)((v, ti) => v + utxoSet(ti).value)
-
-    val txBody: TransactionBody = TransactionBody(
-      inputs = inputs,
-      outputs = IndexedSeq(
-        Babbage(
-          address = TestPeer.address(outPeer, network),
-          value = totalVal,
-          datumOption = None,
-          scriptRef = None
-        )
-      ).map(b => Sized(b.asInstanceOf[TransactionOutput])),
-      fee = Coin(0L)
-    )
-
-    val txUnsigned: STransaction =
-        STransaction(
-          body = KeepRaw(txBody),
-          witnessSet = TransactionWitnessSet.empty,
-          isValid = false,
-          auxiliaryData = Some(
-            KeepRaw(
-              Metadata(
-                Map(
-                  Word64(CIP67.Tags.head) ->
-                      Metadatum.List(IndexedSeq(Metadatum.Int(2)))
-                )
-              )
-            )
-          )
-        )
-
-    L2EventTransaction(signTx(inPeer, txUnsigned))
-}
-
-/////////////////////////////
+// ===================================
 // Generators
+// ===================================
 
 val genTestPeer: Gen[TestPeer] =
     Gen.oneOf(

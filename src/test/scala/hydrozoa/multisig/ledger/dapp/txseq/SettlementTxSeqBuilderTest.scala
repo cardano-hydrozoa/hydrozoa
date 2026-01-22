@@ -63,7 +63,7 @@ object SettlementTxSeqBuilderTest extends Properties("SettlementTxSeq") {
 
                         val signedTxs: Vector[Transaction] =
                             peers.foldLeft(unsignedTxsAndUtxos._1)((txsToSign, peer) =>
-                                txsToSign.map(tx => signTx(peer, tx))
+                                txsToSign.map(tx => peer.signTx(tx))
                             )
 
                         val res = observeTxChain(signedTxs)(
