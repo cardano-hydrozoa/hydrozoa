@@ -171,7 +171,7 @@ object CommonGenerators {
     ): List[HeaderSignature] = {
         // TODO: use Header.Minor.mkMessage
         val bs = blockHeader.toData |> serialiseData |> (_.bytes) |> IArray.from
-        peers.toList.map(peer => peer.wallet.createHeaderSignature(bs))
+        peers.toList.map(peer => peer.wallet.signMsg(bs))
     }
 
     /** Generator for Shelley address */

@@ -547,10 +547,10 @@ final case class JointLedger(
         localFinalization: Boolean
     ): IO[BlockAckSet] = effects match {
         case minor: BlockEffects.Minor =>
-            val headerSignature = wallet.createHeaderSignature(minor.header.mkMessage)
+            val headerSignature = wallet.signMsg(minor.header.mkMessage)
             val refundSignatures =
                 minor.postDatedRefunds
-                    .map(r => wallet.createTxKeyWitness(r.tx))
+                    .map(r => wallet.signTx(r.tx))
                     .map(TxSignature.apply)
 
             IO.pure(
@@ -563,17 +563,17 @@ final case class JointLedger(
               )
             )
         case major: BlockEffects.Major =>
-            val fallbackSignature = TxSignature.apply(wallet.createTxKeyWitness(major.fallback.tx))
+            val fallbackSignature = TxSignature.apply(wallet.signTx(major.fallback.tx))
             val rolloutSignatures =
                 major.rollouts
-                    .map(r => wallet.createTxKeyWitness(r.tx))
+                    .map(r => wallet.signTx(r.tx))
                     .map(TxSignature.apply)
             val refundSignatures =
                 major.postDatedRefunds
-                    .map(r => wallet.createTxKeyWitness(r.tx))
+                    .map(r => wallet.signTx(r.tx))
                     .map(TxSignature.apply)
             val settlementSignature =
-                TxSignature.apply(wallet.createTxKeyWitness(major.settlement.tx))
+                TxSignature.apply(wallet.signTx(major.settlement.tx))
             val secondAckNumber = neededToConfirm(header)
 
             IO.pure(
@@ -596,13 +596,13 @@ final case class JointLedger(
         case f: BlockEffects.Final =>
             val rolloutSignatures =
                 f.rollouts
-                    .map(r => wallet.createTxKeyWitness(r.tx))
+                    .map(r => wallet.signTx(r.tx))
                     .map(TxSignature.apply)
             val deinitSignature =
-                f.deinit.map(deinit => TxSignature.apply(wallet.createTxKeyWitness(deinit.tx)))
+                f.deinit.map(deinit => TxSignature.apply(wallet.signTx(deinit.tx)))
 
             val finalizationSignature =
-                TxSignature.apply(wallet.createTxKeyWitness(f.finalization.tx))
+                TxSignature.apply(wallet.signTx(f.finalization.tx))
             val secondAckNumber = neededToConfirm(header)
 
             IO.pure(

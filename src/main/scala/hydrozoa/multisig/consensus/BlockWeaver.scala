@@ -103,11 +103,11 @@ object BlockWeaver:
     object PollResults:
         val empty: PollResults = PollResults(Set.empty)
 
-    object finalizationLocallyTriggeredTriggered
+    object FinalizationLocallyTriggered
 
     type Handle = ActorRef[IO, Request]
     type Request = LedgerEvent | Block.Next | BlockConfirmed | PollResults |
-        finalizationLocallyTriggeredTriggered.type
+        FinalizationLocallyTriggered.type
 
     def apply(config: Config): IO[BlockWeaver] = for {
         stateRef <- Ref[IO].of(State.mkInitialState)
@@ -200,8 +200,8 @@ end BlockWeaver
   * @param pollResultsRef
   * @param finalizationLocallyTriggeredRef
   *   This ref initialized with false value intially and gets true value upon receiving
-  *   [[finalizationLocallyTriggeredTriggered]]. Regardless the peers' role for the current block,
-  *   that causes the eponymous flag `finalizationLocallyTriggeredRef` in the next
+  *   [[FinalizationLocallyTriggered]]. Regardless the peers' role for the current block, that
+  *   causes the eponymous flag `finalizationLocallyTriggeredRef` in the next
   *   [[CompleteBlockRegular]] be set to true. This tells the joint ledger to set up the
   *   finalization flag `finalizationRequested` in the peer's ack, so the leader of the next block
   *   observe it in their [[BlockWeaver.BlockConfirmed]] and produce the final block.
@@ -228,11 +228,11 @@ class BlockWeaver(
 
     private def receiveTotal(req: Request): IO[Unit] =
         req match {
-            case msg: LedgerEvent                      => handleLedgerEvent(msg)
-            case b: Block.Next                         => handleNewBlock(b)
-            case bc: BlockConfirmed                    => handleBlockConfirmed(bc)
-            case pr: PollResults                       => handlePollResults(pr)
-            case finalizationLocallyTriggeredTriggered => finalizationLocallyTriggeredRef.set(true)
+            case msg: LedgerEvent             => handleLedgerEvent(msg)
+            case b: Block.Next                => handleNewBlock(b)
+            case bc: BlockConfirmed           => handleBlockConfirmed(bc)
+            case pr: PollResults              => handlePollResults(pr)
+            case finalizationLocallyTriggered => finalizationLocallyTriggeredRef.set(true)
         }
 
     // ===================================

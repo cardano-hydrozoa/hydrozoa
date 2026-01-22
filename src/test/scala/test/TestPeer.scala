@@ -99,7 +99,7 @@ object TestPeer:
 
     extension (peer: TestPeer)
         def signTx(txUnsigned: STransaction): STransaction =
-            val keyWitness = peer.wallet.createTxKeyWitness(txUnsigned)
+            val keyWitness = peer.wallet.signTx(txUnsigned)
             attachVKeyWitnesses(txUnsigned, List(keyWitness))
 
 // ===================================

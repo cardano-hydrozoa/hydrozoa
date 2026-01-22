@@ -6,13 +6,13 @@ import com.bloxbean.cardano.client.crypto.bip32.key.{HdPrivateKey, HdPublicKey}
 import com.bloxbean.cardano.client.crypto.config.CryptoConfiguration
 import com.bloxbean.cardano.client.transaction.util.TransactionBytes
 import hydrozoa.multisig.protocol.types.AckBlock.HeaderSignature
+
 import scala.language.implicitConversions
 import scalus.builtin.ByteString
 import scalus.builtin.JVMPlatformSpecific.signEd25519
 import scalus.cardano.ledger.{Transaction, VKeyWitness}
 
 /*
-
 Cardano adopted BIP-32: Hierarchical Deterministic Wallets in the form of Ed25529-BIP32:
 https://github.com/input-output-hk/adrestia/raw/bdf00e4e7791d610d273d227be877bc6dd0dbcfb/user-guide/static/Ed25519_BIP.pdf
 
@@ -64,15 +64,16 @@ class Wallet(
     def exportVerificationKeyBytes: VerificationKeyBytes = verificationKeysBytes
 
     // TODO: it might be useful to have a method that returns the signature only
-    def createTxKeyWitness(tx: Transaction): VKeyWitness =
-        walletModule.createTxKeyWitness(tx, verificationKey, signingKey)
+    def signTx(tx: Transaction): VKeyWitness =
+        walletModule.signTx(tx, verificationKey, signingKey)
+
+    // TODO: use more abstract return type
+    def signMsg(msg: IArray[Byte]): HeaderSignature =
+        walletModule.signMsg(msg, signingKey)
 
     def getWalletId: WalletId = WalletId(getName)
 
     def getName: String = name
-
-    def createHeaderSignature(msg: IArray[Byte]): HeaderSignature =
-        walletModule.createHeaderSignature(msg, signingKey)
 
 trait WalletModule:
 
@@ -81,17 +82,18 @@ trait WalletModule:
 
     def exportVerificationKeyBytes(publicKey: VerificationKey): VerificationKeyBytes
 
-    def createTxKeyWitness(
+    def signTx(
         tx: Transaction,
         verificationKey: VerificationKey,
         signingKey: SigningKey
     ): VKeyWitness
 
-    def createHeaderSignature(
+    def signMsg(
         msg: IArray[Byte],
         signingKey: SigningKey
     ): HeaderSignature
 
+// TODO: this may be moved to test
 object WalletModuleBloxbean extends WalletModule:
 
     protected val signingProvider: SigningProvider = CryptoConfiguration.INSTANCE.getSigningProvider
@@ -104,7 +106,7 @@ object WalletModuleBloxbean extends WalletModule:
     ): VerificationKeyBytes =
         VerificationKeyBytes(ByteString.fromArray(verificationKey.getKeyData))
 
-    override def createTxKeyWitness(
+    override def signTx(
         tx: Transaction,
         verificationKey: VerificationKey,
         signingKey: SigningKey
@@ -118,7 +120,7 @@ object WalletModuleBloxbean extends WalletModule:
           vkey = ByteString.fromArray(verificationKey.getKeyData)
         )
 
-    override def createHeaderSignature(
+    override def signMsg(
         msg: IArray[Byte],
         signingKey: SigningKey
     ): HeaderSignature =
@@ -135,13 +137,13 @@ object WalletModuleScalus extends WalletModule:
     override def exportVerificationKeyBytes(publicKey: VerificationKey): VerificationKeyBytes =
         VerificationKeyBytes(publicKey)
 
-    override def createTxKeyWitness(
+    override def signTx(
         tx: Transaction,
         verificationKey: VerificationKey,
         signingKey: SigningKey
     ): VKeyWitness = VKeyWitness(verificationKey, signEd25519(signingKey, tx.id))
 
-    override def createHeaderSignature(
+    override def signMsg(
         msg: IArray[Byte],
         signingKey: SigningKey
     ): HeaderSignature = {
