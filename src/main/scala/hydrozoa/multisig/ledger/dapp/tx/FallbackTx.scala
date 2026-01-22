@@ -23,6 +23,7 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.ScriptSource.NativeScriptAttached
+import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, *}
 import scalus.ledger.api.v1.PubKeyHash
 import scalus.prelude.List as SList
@@ -40,7 +41,8 @@ final case class FallbackTx(
     producedPeerVoteUtxos: NonEmptyList[Utxo],
     producedCollateralUtxos: NonEmptyList[Utxo],
     override val tx: Transaction,
-    override val txLens: Lens[FallbackTx, Transaction] = Focus[FallbackTx](_.tx)
+    override val txLens: Lens[FallbackTx, Transaction] = Focus[FallbackTx](_.tx),
+    override val resolvedUtxos: ResolvedUtxos
 ) extends HasValidityStart,
     // TODO: shall we add separate raw-type traits for that?
     Tx[FallbackTx] {
@@ -142,7 +144,7 @@ object FallbackTx {
 
         ////////////////////////////////////////////////////
         // Define steps
-        val spendHMRW: Spend = Spend(config.multisigRegimeUtxo.asUtxo, hns.witness)
+        val spendHMRW: Spend = Spend(config.multisigRegimeUtxo.asUtxo, hns.witnessAttached)
 
         val spendMultisigTreasury: Spend =
             Spend(treasuryUtxoSpent.asUtxo, NativeScriptWitness(NativeScriptAttached, Set.empty))
@@ -256,7 +258,8 @@ object FallbackTx {
                         output
                       )
                   }),
-              tx = finalized.transaction
+              tx = finalized.transaction,
+              resolvedUtxos = finalized.resolvedUtxos
             )
         }
     }

@@ -162,7 +162,7 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
             handleMajorBlockL1Effects(effects) >> runEffects
         case effects: FinalBlockConfirmed =>
             handleFinalBlockL1Effects(effects) >> runEffects
-        case CardanoLiaison.Timeout => runEffects
+        case CardanoLiaison.Timeout => IO.println("Timeout") >> runEffects
     }
 
     // ===================================
@@ -358,11 +358,15 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
                     _ <- IO.println("\nLiaison's actions:")
                     _ <- actionsToSubmit.traverse_(a => IO.println(s"\t- ${a.msg}"))
 
-                    _ <- IO.whenA(actionsToSubmit.nonEmpty)(
-                      IO.traverse_(actionsToSubmit.flatMap(actionTxs).toList)(
-                        config.cardanoBackend.submitTx
-                      )
-                    )
+                    submitRet <-
+                        if actionsToSubmit.nonEmpty then
+                            IO.traverse(actionsToSubmit.flatMap(actionTxs).toList)(
+                              config.cardanoBackend.submitTx
+                            )
+                        else IO.pure(List.empty)
+
+                    // Submission errors are ignored, but just dumped here
+                    _ <- IO.println(submitRet)
 
                 } yield ()
         }
@@ -444,7 +448,7 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
             // we should address it somehow.
             case backboneEffectId @ (blockNum, 0) =>
 
-                println(s"backboneEffectId: $backboneEffectId")
+                println(s"mkDirectAction: backboneEffectId: $backboneEffectId")
 
                 val happyPathEffect = state.happyPathEffects(backboneEffectId)
                 // May absent for phony "deinit" block number
@@ -524,6 +528,8 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
 
             // Rollout tx
             case rolloutTx @ (blockNum, _notZero) =>
+                println(s"mkDirectAction: rolloutEffectId: $rolloutTx")
+
                 val nextBackboneTx = blockNum.increment -> 0
                 val effectTxs =
                     state.happyPathEffects.range(rolloutTx, nextBackboneTx).toSeq.map(_._2)

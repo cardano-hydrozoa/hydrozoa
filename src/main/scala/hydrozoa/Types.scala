@@ -122,26 +122,26 @@ type TxIx = TxIx.TxIx
 ///////////////////////////////////////////////////////////////////
 // Output
 
-// TODO: Unsound in general
 object Output:
-    opaque type Output[L <: AnyLayer] = Babbage
-    def apply[L <: AnyLayer](o: Babbage): Output[L] = o
-    given [L <: AnyLayer]: Conversion[Output[L], Babbage] = identity
-    extension [L <: AnyLayer](output: Output[L]) def untagged: Babbage = identity(output)
+    opaque type Output[L <: AnyLayer] = TransactionOutput
+    def apply[L <: AnyLayer](o: TransactionOutput): Output[L] = o
+    given [L <: AnyLayer]: Conversion[Output[L], TransactionOutput] = identity
+    extension [L <: AnyLayer](output: Output[L]) def untagged: TransactionOutput = identity(output)
 
 type Output[L <: AnyLayer] = Output.Output[L]
 type OutputL1 = Output.Output[L1]
 type OutputL2 = Output.Output[L2]
 
 object OutputNoTokens:
-    opaque type OutputNoTokens[L <: AnyLayer] = Babbage
-    def apply[L <: AnyLayer](o: Babbage): OutputNoTokens[L] = {
+    opaque type OutputNoTokens[L <: AnyLayer] = TransactionOutput
+    def apply[L <: AnyLayer](o: TransactionOutput): OutputNoTokens[L] = {
         require(o.value.assets == MultiAsset.empty)
         o
     }
-    given [L <: AnyLayer]: Conversion[OutputNoTokens[L], Babbage] = identity
+    given [L <: AnyLayer]: Conversion[OutputNoTokens[L], TransactionOutput] = identity
     given [L <: AnyLayer]: Conversion[OutputNoTokens[L], Output[L]] = identity
-    extension [L <: AnyLayer](output: OutputNoTokens[L]) def untagged: Babbage = identity(output)
+    extension [L <: AnyLayer](output: OutputNoTokens[L])
+        def untagged: TransactionOutput = identity(output)
 
 type OutputNoTokens[L <: AnyLayer] = OutputNoTokens.OutputNoTokens[L]
 
@@ -207,7 +207,7 @@ object UtxoSet:
     extension [L <: AnyLayer](
         utxoSet: UtxoSet[L]
     )
-        def asScalus: Map[TransactionInput, Babbage] =
+        def asScalus: Map[TransactionInput, TransactionOutput] =
             utxoSet.untagged.map((k, v) => (k.untagged, v.untagged))
     extension [L <: AnyLayer](utxoSet: UtxoSet[L])
         def untagged: Map[UtxoId[L], Output[L]] = identity(utxoSet)
@@ -237,7 +237,7 @@ extension (utxo: UTxO)
       * @return
       */
     def unsafeAsL2: UtxoSet[L2] =
-        UtxoSet[L2](utxo.map((ti, to) => UtxoId[L2](ti) -> Output[L2](to.asInstanceOf[Babbage])))
+        UtxoSet[L2](utxo.map((ti, to) => UtxoId[L2](ti) -> Output[L2](to)))
 
 ////////////////////////////////////////////////////////////////////////////////////////
 // Keys

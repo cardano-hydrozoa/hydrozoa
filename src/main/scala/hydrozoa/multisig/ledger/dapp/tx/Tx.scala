@@ -14,7 +14,7 @@ import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.{ChangeOutputDiffHandler, Environment, SomeBuildError, TransactionBuilder}
 import sourcecode.*
 
-trait Tx[Self <: Tx[Self]] { self: Self =>
+trait Tx[Self <: Tx[Self]] extends HasResolvedUtxos { self: Self =>
     def tx: Transaction
 
     /** Lens for accessing the transaction field. Implementations should use:

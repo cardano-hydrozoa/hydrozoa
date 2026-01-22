@@ -19,6 +19,7 @@ import scalus.cardano.ledger.utils.TxBalance
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.ScriptSource.NativeScriptAttached
 import scalus.cardano.txbuilder.SomeBuildError.*
+import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, ReferenceOutput, Send, Spend, ValidityStartSlot}
 
 sealed trait RefundTx {
@@ -34,12 +35,14 @@ object RefundTx {
     // TODO: shall we keep it for now?
     final case class Immediate(override val tx: Transaction) extends RefundTx, Tx[Immediate] {
         override val txLens: Lens[Immediate, Transaction] = Focus[Immediate](_.tx)
+        override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
     }
 
     final case class PostDated(override val tx: Transaction, startTime: QuantizedInstant)
         extends RefundTx,
           Tx[PostDated] {
         override val txLens: Lens[PostDated, Transaction] = Focus[PostDated](_.tx)
+        override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
     }
 
     object Builder {

@@ -107,10 +107,10 @@ object JointLedgerTestHelpers {
 
             spentUtxos = NonEmptyList(seedUtxo, otherSpentUtxos)
 
-            // Initial deposit must be at least enough for the minAda of the treasury, and no more than the
-            // sum of the seed utxos, while leaving enough left for the estimated fee and the minAda of the change
+            // Initial treasury must be at least enough for the minAda of the treasury, and no more than the
+            // sum of the seed+funding utxos, while leaving enough left for the estimated fee and the minAda of the change
             // output
-            initialDeposit <- PropertyM.pick[IO, Coin](
+            initialTreasuryCoin <- PropertyM.pick[IO, Coin](
               Gen
                   .choose(
                     minInitTreasuryAda.value,
@@ -119,8 +119,10 @@ object JointLedgerTestHelpers {
                         - minPubkeyAda().value
                   )
                   .map(Coin(_))
-                  .label("Initialization: initial deposit")
+                  .label("Initialization: initial treasury coin")
             )
+
+            initialTreasury = Value(initialTreasuryCoin)
 
             txTiming = TxTiming.default(testTxBuilderEnvironment.slotConfig)
 
@@ -131,7 +133,7 @@ object JointLedgerTestHelpers {
             initTxArgs =
                 InitializationTxSeq.Builder.Args(
                   spentUtxos = SpentUtxos(seedUtxo, otherSpentUtxos),
-                  initialDeposit = initialDeposit,
+                  initialTreasury = initialTreasury,
                   peers = peers.map(_.wallet.exportVerificationKeyBytes),
                   env = testTxBuilderEnvironment,
                   evaluator = testEvaluator,
@@ -142,7 +144,7 @@ object JointLedgerTestHelpers {
                   votingDuration =
                       FiniteDuration(24, HOURS).quantize(testTxBuilderEnvironment.slotConfig),
                   txTiming = txTiming,
-                  initializedOn = initializedOn
+                  blockZeroCreationTime = initializedOn
                 )
 
             hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))

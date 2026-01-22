@@ -14,6 +14,7 @@ import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeExceptio
 import scalus.cardano.ledger.rules.TransactionSizeValidator
 import scalus.cardano.ledger.utils.TxBalance
 import scalus.cardano.ledger.{Coin, ProtocolParams, Transaction, TransactionHash, TransactionInput, TransactionOutput as TxOutput, Utxo, Value}
+import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, ReferenceOutput, Send, Spend}
 import scalus.cardano.txbuilder.{SomeBuildError, TransactionBuilder, TransactionBuilderStep, TxBalancingError}
 
@@ -31,7 +32,8 @@ object RolloutTx {
         override val tx: Transaction,
         override val rolloutSpent: RolloutUtxo,
         override val txLens: Lens[RolloutTx, Transaction] =
-            Focus[Last](_.tx).asInstanceOf[Lens[RolloutTx, Transaction]]
+            Focus[Last](_.tx).asInstanceOf[Lens[RolloutTx, Transaction]],
+        override val resolvedUtxos: ResolvedUtxos
     ) extends RolloutTx
 
     /** A rollout tx preceding the last one in the sequence. It both spends and produces a rollout
@@ -44,7 +46,8 @@ object RolloutTx {
         override val rolloutSpent: RolloutUtxo,
         override val rolloutProduced: RolloutUtxo,
         override val txLens: Lens[RolloutTx, Transaction] =
-            Focus[NotLast](_.tx).asInstanceOf[Lens[RolloutTx, Transaction]]
+            Focus[NotLast](_.tx).asInstanceOf[Lens[RolloutTx, Transaction]],
+        override val resolvedUtxos: ResolvedUtxos
     ) extends RolloutTx,
           RolloutUtxo.Produced
 
@@ -361,7 +364,7 @@ object RolloutTx {
                 config: Tx.Builder.Config,
                 resolvedUtxo: Utxo
             ): Spend =
-                Spend(resolvedUtxo, config.headNativeScript.witness)
+                Spend(resolvedUtxo, config.headNativeScript.witnessAttached)
         }
 
         object Placeholder {
@@ -466,7 +469,8 @@ object RolloutTx {
             def last(ctx: TransactionBuilder.Context): RolloutTx.Last = {
                 RolloutTx.Last(
                   rolloutSpent = PostProcess.unsafeGetRolloutSpent(ctx),
-                  tx = ctx.transaction
+                  tx = ctx.transaction,
+                  resolvedUtxos = ctx.resolvedUtxos
                 )
             }
 
@@ -491,7 +495,8 @@ object RolloutTx {
                 RolloutTx.NotLast(
                   rolloutSpent = PostProcess.unsafeGetRolloutSpent(ctx),
                   rolloutProduced = RolloutUtxo(rolloutProduced),
-                  tx = tx
+                  tx = tx,
+                  resolvedUtxos = ctx.resolvedUtxos
                 )
             }
 

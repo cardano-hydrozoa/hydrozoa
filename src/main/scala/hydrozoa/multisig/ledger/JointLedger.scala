@@ -252,7 +252,7 @@ final case class JointLedger(
 
         } yield AugmentedBlock.Minor(
           nextBlock,
-          BlockEffects.Minor(nextBlock.id, List.empty)
+          BlockEffects.Minor(nextBlock.id, nextBlock.header, List.empty)
         )
 
         def augmentedBlockMajor(

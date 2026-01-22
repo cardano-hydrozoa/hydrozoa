@@ -2,18 +2,18 @@ package hydrozoa.multisig.protocol.types
 
 import hydrozoa.multisig.ledger.dapp.tx.*
 
+/** [[BlockEffects]] ALWAYS contains UNSIGNED transactions. Compare to [[BlockEffectsSigned]].
+  * Informally: "things that potentially need to be sent out to affect the outside world, usually
+  * needing to be signed beforehand".
+  *
+  * @param blockType
+  */
 enum BlockEffects(val blockType: Block.Type) {
     def id: Block.Number
 
-//    // TODO: This is not used anywhere currently.
-//    case Initial(
-//        override val id: Block.Number,
-//        override val initialization: InitializationTx,
-//        override val fallback: FallbackTx
-//    ) extends BlockEffects(Block.Type.Initial), BlockEffects.Fields.Initial
-
     case Minor(
         override val id: Block.Number,
+        override val header: Block.Header.Minor,
         override val postDatedRefunds: List[RefundTx.PostDated]
     ) extends BlockEffects(Block.Type.Minor), BlockEffects.Fields.Minor
 
@@ -40,7 +40,9 @@ object BlockEffects {
     object Fields {
         sealed trait Initial extends Initialization, Fallback
 
-        sealed trait Minor extends Refunds.PostDated
+        sealed trait Minor extends Refunds.PostDated {
+            def header: Block.Header.Minor
+        }
 
         sealed trait Major extends Settlement, Rollouts, Fallback, Refunds.PostDated
 
