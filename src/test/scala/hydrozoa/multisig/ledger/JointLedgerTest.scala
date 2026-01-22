@@ -153,10 +153,10 @@ object JointLedgerTestHelpers {
             initTx <- PropertyM.run(InitializationTxSeq.Builder.build(initTxArgs).liftTo[IO])
 
             config = Tx.Builder.Config(
-              headNativeScript = hns,
-              multisigRegimeUtxo = initTx.initializationTx.multisigRegimeWitness,
+              headMultisigScript = hns,
+              multisigRegimeUtxo = initTx.initializationTx.multisigRegimeUtxo,
               tokenNames = initTx.initializationTx.tokenNames,
-              env = TestUtil.testEnvironment,
+              cardanoInfo = TestUtil.testEnvironment,
               evaluator = testEvaluator,
               validators = nonSigningNonValidityChecksValidators
             )
@@ -376,7 +376,7 @@ object JointLedgerTestHelpers {
                   condition = {
                       depositRefundTxSeq.refundTx.tx.body.value.validityStartSlot.isDefined
                       && Slot(depositRefundTxSeq.refundTx.tx.body.value.validityStartSlot.get)
-                          .toQuantizedInstant(env.config.env.slotConfig)
+                          .toQuantizedInstant(env.config.cardanoInfo.slotConfig)
                           ==
                           depositRefundTxSeq.depositTx.validityEnd
                           + env.txTiming.depositMaturityDuration
@@ -580,7 +580,10 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               seqAndReq <- deposit(
                 validityEnd =
                     blockStartTime - env.txTiming.depositMaturityDuration - env.txTiming.depositAbsorptionDuration -
-                        FiniteDuration(env.config.env.slotConfig.slotLength, TimeUnit.MILLISECONDS),
+                        FiniteDuration(
+                          env.config.cardanoInfo.slotConfig.slotLength,
+                          TimeUnit.MILLISECONDS
+                        ),
                 LedgerEventId(0, 1),
                 blockStartTime
               )

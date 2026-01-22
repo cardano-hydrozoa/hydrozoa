@@ -99,7 +99,7 @@ def genStandaloneFinalizationTxSeqBuilder(
             .map(_.utxo.value.coin)
             .fold(Coin.zero)(_ + _)
 
-        headAddress = config.headNativeScript.mkAddress(network)
+        headAddress = config.headMultisigScript.mkAddress(network)
 
         treasuryUtxo <- genTreasuryUtxo(
           headAddress = Some(headAddress),
@@ -123,7 +123,7 @@ def genStandaloneFinalizationTxSeqBuilder(
           config.tokenNames.multisigRegimeTokenName,
           config.multisigRegimeUtxo.input,
           config.multisigRegimeUtxo.output,
-          config.headNativeScript
+          config.headMultisigScript
         ),
         equityShares = shares,
         competingFallbackValidityStart = Instant
@@ -132,7 +132,7 @@ def genStandaloneFinalizationTxSeqBuilder(
         blockCreatedOn = Instant
             .ofEpochMilli(System.currentTimeMillis())
             .quantize(testTxBuilderEnvironment.slotConfig),
-        txTiming = TxTiming.default(config.env.slotConfig)
+        txTiming = TxTiming.default(config.cardanoInfo.slotConfig)
       ),
       peers
     )
@@ -185,7 +185,7 @@ def genFinalizationTxSeqBuilder(
           config.tokenNames.multisigRegimeTokenName,
           config.multisigRegimeUtxo.input,
           config.multisigRegimeUtxo.output,
-          config.headNativeScript
+          config.headMultisigScript
         ),
         equityShares = shares,
         competingFallbackValidityStart = fallbackValidityStart,

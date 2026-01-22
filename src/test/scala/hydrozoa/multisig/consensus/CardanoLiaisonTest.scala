@@ -19,7 +19,6 @@ import hydrozoa.multisig.consensus.CardanoLiaisonTest.Rollback.SettlementTiming
 import hydrozoa.multisig.consensus.CardanoLiaisonTest.Rollback.SettlementTiming.*
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
-import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.Config
 import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, FinalizationTx, RolloutTx, SettlementTx, Tx, TxTiming, genFinalizationTxSeqBuilder, genNextSettlementTxSeqBuilder}
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, InitializationTxSeq, InitializationTxSeqTest, SettlementTxSeq}
 import hydrozoa.multisig.protocol.types.{Block, BlockEffectsSigned}
@@ -122,10 +121,10 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
 
             // This config is used in the settlement and finalization builders
             config = Config(
-              headNativeScript = hns,
-              multisigRegimeUtxo = initializationTx.multisigRegimeWitness,
+              headMultisigScript = hns,
+              multisigRegimeUtxo = initializationTx.multisigRegimeUtxo,
               tokenNames = tokenNames,
-              env = initialArgs.env,
+              cardanoInfo = initialArgs.env,
               evaluator = initialArgs.evaluator,
               validators = initialArgs.validators
             )

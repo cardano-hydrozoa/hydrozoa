@@ -88,10 +88,10 @@ object Generators {
                 )
             } yield (
               Tx.Builder.Config(
-                headNativeScript = hns,
+                headMultisigScript = hns,
                 multisigRegimeUtxo = multisigWitnessUtxo,
                 tokenNames = tokenNames,
-                env = env,
+                cardanoInfo = env,
                 evaluator = evaluator,
                 validators = validators
               ),
@@ -368,8 +368,8 @@ object Generators {
         /** Generate a treasury utxo according to a builder config */
         def genTreasuryUtxo(config: Tx.Builder.Config): Gen[MultisigTreasuryUtxo] =
             genTreasuryUtxo(
-              network = config.env.network,
-              params = config.env.protocolParams,
+              network = config.cardanoInfo.network,
+              params = config.cardanoInfo.protocolParams,
               headAddress = Some(config.headAddress),
               coin = None
             )

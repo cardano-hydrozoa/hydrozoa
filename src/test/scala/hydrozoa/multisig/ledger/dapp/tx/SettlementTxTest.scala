@@ -137,7 +137,7 @@ def genSettlementTxSeqBuilder(
 
     for {
         (config, peers) <- genTxBuilderConfigAndPeers()
-        hns = config.headNativeScript
+        hns = config.headMultisigScript
         majorVersion <- Gen.posNum[Int]
 
         genDeposit = genDepositUtxo(

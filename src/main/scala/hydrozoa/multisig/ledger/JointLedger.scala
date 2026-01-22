@@ -12,7 +12,9 @@ import hydrozoa.multisig.ledger.DappLedgerM.runDappLedgerM
 import hydrozoa.multisig.ledger.JointLedger.*
 import hydrozoa.multisig.ledger.JointLedger.Requests.*
 import hydrozoa.multisig.ledger.VirtualLedgerM.runVirtualLedgerM
-import hydrozoa.multisig.ledger.dapp.tx.{Tx, TxTiming}
+import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
+import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
+import hydrozoa.multisig.ledger.dapp.tx.TxTiming
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
@@ -28,7 +30,7 @@ import monocle.Focus.focus
 import scala.collection.immutable.Queue
 import scala.math.Ordered.orderingToOrdered
 import scalus.builtin.{ByteString, platform}
-import scalus.cardano.ledger.{AssetName, Coin, TransactionHash}
+import scalus.cardano.ledger.{CardanoInfo, Coin, TransactionHash}
 
 // Fields of a work-in-progress block, with an additional field for dealing with withdrawn utxos
 private case class TransientFields(
@@ -42,38 +44,20 @@ final case class JointLedger(
     peerLiaisons: Seq[ActorRef[IO, PeerLiaison.Request]],
     // private val cardanoLiaison
     // private val blockSigner
-    //// Static config fields
-    // in head config
-    initialBlockTime: QuantizedInstant,
-    // derived
-    initialBlockKzg: KzgCommitment,
-    // derived
-    config: Tx.Builder.Config,
-    // in head config
-    txTiming: TxTiming,
-    // in head config
-    tallyFeeAllowance: Coin,
-    // in head config
-    equityShares: EquityShares,
-    // derived from init tx (which is in the config)
-    multisigRegimeUtxo: MultisigRegimeUtxo,
-    // in head config (move into TxTiming)
-    votingDuration: QuantizedFiniteDuration,
-    // derived from init tx (which is in the config)
-    treasuryTokenName: AssetName,
-    // derived from init tx (which is in the config)
-    initialTreasury: MultisigTreasuryUtxo,
-    initialFallbackValidityStart: QuantizedInstant
+    config: JointLedger.Config
 ) extends Actor[IO, Requests.Request] {
 
     val state: Ref[IO, JointLedger.State] =
         Ref.unsafe[IO, JointLedger.State](
           Done(
             producedBlock = Block.Initial(
-              Block.Header.Initial(timeCreation = initialBlockTime, commitment = initialBlockKzg)
+              Block.Header.Initial(
+                timeCreation = config.initialBlockTime,
+                commitment = config.initialBlockKzg
+              )
             ),
-            lastFallbackValidityStart = initialFallbackValidityStart,
-            dappLedgerState = DappLedgerM.State(initialTreasury, Queue.empty),
+            lastFallbackValidityStart = config.initialFallbackValidityStart,
+            dappLedgerState = DappLedgerM.State(config.initialTreasury, Queue.empty),
             virtualLedgerState = VirtualLedgerM.State.empty
           )
         )
@@ -329,15 +313,12 @@ final case class JointLedger(
                     nextKzg = nextKzg,
                     validDeposits = validDeposits,
                     payoutObligations = payoutObligations,
-                    tallyFeeAllowance = this.tallyFeeAllowance,
-                    votingDuration = this.votingDuration,
                     immatureDeposits = immatureDeposits,
                     blockCreatedOn = blockCreatedOn,
                     competingFallbackValidityStart = blockCreatedOn
-                        + txTiming.minSettlementDuration
-                        + txTiming.inactivityMarginDuration
-                        + txTiming.silenceDuration,
-                    txTiming = txTiming
+                        + config.txTiming.minSettlementDuration
+                        + config.txTiming.inactivityMarginDuration
+                        + config.txTiming.silenceDuration,
                   ),
                   onSuccess = IO.pure
                 )
@@ -346,6 +327,7 @@ final case class JointLedger(
                 _ <- this.runVirtualLedgerM(VirtualLedgerM.applyGenesisEvent(genesisEvent))
             } yield settleLedgerRes
 
+        import config.txTiming
         for {
             producing <- unsafeGetProducing
 
@@ -369,7 +351,7 @@ final case class JointLedger(
                 )((acc, deposit) =>
                     val depositValidityEnd =
                         deposit._2.datum.refundInstructions.startTime
-                            .toEpochQuantizedInstant(config.env.slotConfig)
+                            .toEpochQuantizedInstant(config.cardanoInfo.slotConfig)
                             - txTiming.depositMaturityDuration
                             - txTiming.depositAbsorptionDuration
                             - txTiming.silenceDuration
@@ -407,7 +389,7 @@ final case class JointLedger(
             // For a description of timing, see GitHub issue #296
             forceUpgradeToMajor: Boolean =
                 // First block is always major
-                initialFallbackValidityStart == producing.competingFallbackValidityStart ||
+                config.initialFallbackValidityStart == producing.competingFallbackValidityStart ||
                     // Upgrade if we are too close to fallback
                     (txTiming.minSettlementDuration >=
                         // FIXME: This time handling is a bit wonky because of the java <> scala mix
@@ -459,20 +441,18 @@ final case class JointLedger(
     //   - Send a panic to the multisig regime manager in a suicide note
     def completeBlockFinal(args: CompleteBlockFinal): IO[Unit] = {
         import args.*
+        import config.txTiming
         for {
             p <- unsafeGetProducing
 
             finalizationTxSeq <- this.runDappLedgerM(
               DappLedgerM.finalizeLedger(
                 payoutObligationsRemaining = p.nextBlockData.blockWithdrawnUtxos,
-                multisigRegimeUtxoToSpend = multisigRegimeUtxo,
-                equityShares = equityShares,
                 blockCreatedOn = p.startTime,
                 competingFallbackValidityStart = p.startTime
                     + txTiming.minSettlementDuration
                     + txTiming.inactivityMarginDuration
                     + txTiming.silenceDuration,
-                txTiming = txTiming
               ),
               onSuccess = IO.pure
             )
@@ -578,6 +558,21 @@ final case class JointLedger(
 object JointLedger {
 
     type Handle = ActorRef[IO, Requests.Request]
+
+    case class Config(
+        initialBlockTime: QuantizedInstant,
+        cardanoInfo: CardanoInfo,
+        initialBlockKzg: KzgCommitment,
+        txTiming: TxTiming,
+        headMultisigScript: HeadMultisigScript,
+        tallyFeeAllowance: Coin,
+        equityShares: EquityShares,
+        multisigRegimeUtxo: MultisigRegimeUtxo,
+        votingDuration: QuantizedFiniteDuration,
+        initialTreasury: MultisigTreasuryUtxo,
+        tokenNames: TokenNames,
+        initialFallbackValidityStart: QuantizedInstant
+    )
 
     final case class CompleteBlockError() extends Throwable
 

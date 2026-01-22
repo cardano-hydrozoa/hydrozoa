@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toQuantizedInstant}
+import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.FinalizationTx.{MergedDeinit, WithDeinit}
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, HasCtx, explain}
 import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq
@@ -13,6 +14,7 @@ import monocle.{Focus, Lens}
 import scala.Function.const
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
+import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.{ResolvedUtxos, unsafeCtxTxOutputsL, unsafeCtxTxReferenceInputsL}
@@ -32,6 +34,15 @@ sealed trait FinalizationTx
 }
 
 object FinalizationTx {
+
+    case class Config(
+        cardanoInfo: CardanoInfo,
+        headMultisigScript: HeadMultisigScript,
+        multisigRegimeUtxo: MultisigRegimeUtxo
+    ) {
+        def evaluator: PlutusScriptEvaluator =
+            PlutusScriptEvaluator(cardanoInfo, EvaluateAndComputeCost)
+    }
 
     sealed trait Monolithic extends FinalizationTx
 
@@ -132,8 +143,7 @@ object FinalizationTx {
           *   - SettlementTx.WithRollouts -> FinalizationTx1.WithRollouts
           */
         def upgrade(
-            config: Tx.Builder.Config,
-            multisigUtxoToSpend: MultisigRegimeUtxo
+            config: Config,
         )(args: Args.Some): BuildErrorOr[args.Result] = {
 
             val ctx = args.input.ctx
@@ -147,7 +157,7 @@ object FinalizationTx {
 
             val residualTreasuryOutput = TransactionOutput.apply(
               treasuryOutput.address,
-              treasuryOutput.value + multisigUtxoToSpend.value
+              treasuryOutput.value + config.multisigRegimeUtxo.value
             )
 
             val ctxUpgraded: TransactionBuilder.Context =
@@ -159,7 +169,7 @@ object FinalizationTx {
 
             // Additional step - spend multisig regime utxo
             val spendMultisigRegimeUtxoStep =
-                Spend(multisigUtxoToSpend.asUtxo, config.headNativeScript.witnessAttached)
+                Spend(config.multisigRegimeUtxo.asUtxo, config.headMultisigScript.witnessAttached)
 
             for {
                 ctx <- TransactionBuilder
@@ -167,23 +177,23 @@ object FinalizationTx {
                     .explain(const("Could not modify (upgrade) settlement tx"))
 
                 diffHandler = new ChangeOutputDiffHandler(
-                  config.env.protocolParams,
+                  config.cardanoInfo.protocolParams,
                   treasuryOutputIndex
                 ).changeOutputDiffHandler
 
                 rebalanced <- ctx
                     .finalizeContext(
-                      config.env.protocolParams,
+                      config.cardanoInfo.protocolParams,
                       diffHandler,
                       config.evaluator,
-                      config.validators
+                      Tx.Validators.nonSigningNonValidityChecksValidators
                     )
                     .explain(const("Could not finalize context for finalization partial result"))
 
             } yield {
                 val residualTreasuryUtxo = ResidualTreasuryUtxo.apply(
                   treasuryTokenName = args.input.transaction.treasurySpent.treasuryTokenName,
-                  multisigRegimeTokenName = multisigUtxoToSpend.multisigRegimeTokenName,
+                  multisigRegimeTokenName = config.multisigRegimeUtxo.multisigRegimeTokenName,
                   utxoId = TransactionInput(rebalanced.transaction.id, treasuryOutputIndex),
                   // FIXME: Shall we be more specific about which outputs have which addresses?
                   address = residualTreasuryOutput.address.asInstanceOf[ShelleyAddress],
@@ -295,7 +305,7 @@ object FinalizationTx {
             final def complete(
                 deinitTx: DeinitTx,
                 majorVersionProduced: Block.Version.Major,
-                config: Tx.Builder.Config,
+                config: FinalizationTx.Config
             ): BuildErrorOr[Result] =
 
                 /** TODO: update
@@ -331,7 +341,7 @@ object FinalizationTx {
                 val mintSteps = deinitTx.tx.body.value.mint.get.assets.toList
                     .flatMap(p =>
                         p._2.map(a =>
-                            MintStep(p._1, a._1, a._2, config.headNativeScript.witnessAttached)
+                            MintStep(p._1, a._1, a._2, config.headMultisigScript.witnessAttached)
                         )
                     )
                 val feeStep = Fee(originalTx.body.value.fee + deinitTx.tx.body.value.fee)
@@ -341,14 +351,15 @@ object FinalizationTx {
                         .modify(ctxUpgraded, deinitOutputSteps ++ mintSteps :+ feeStep)
                     res <- ctx
                         .finalizeContext(
-                          config.env.protocolParams,
+                          config.cardanoInfo.protocolParams,
                           prebalancedLovelaceDiffHandler,
                           config.evaluator,
-                          config.validators
+                          Tx.Validators.nonSigningValidators
                         )
                 } yield res
 
-                val separateResult = mkSeparateResult(majorVersionProduced, config.env.slotConfig)
+                val separateResult =
+                    mkSeparateResult(majorVersionProduced, config.cardanoInfo.slotConfig)
 
                 Right(
                   res match {
@@ -356,7 +367,7 @@ object FinalizationTx {
                           mkMergedResult(
                             ctx.transaction,
                             majorVersionProduced,
-                            config.env.slotConfig
+                            config.cardanoInfo.slotConfig
                           )
                       case Left(
                             SomeBuildError.ValidationError(e: InvalidTransactionSizeException, ctx)

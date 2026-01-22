@@ -37,27 +37,6 @@ val evaluator = PlutusScriptEvaluator(
 
 val testEvaluator: PlutusScriptEvaluator = evaluator
 
-val nonSigningValidators: Seq[Validator] =
-    // These validators are all the ones from the CardanoMutator that could be checked on an unsigned transaction
-    List(
-      EmptyInputsValidator,
-      InputsAndReferenceInputsDisjointValidator,
-      AllInputsMustBeInUtxoValidator,
-      ValueNotConservedUTxOValidator,
-      // VerifiedSignaturesInWitnessesValidator,
-      // MissingKeyHashesValidator
-      MissingOrExtraScriptHashesValidator,
-      TransactionSizeValidator,
-      FeesOkValidator,
-      OutputsHaveNotEnoughCoinsValidator,
-      OutputsHaveTooBigValueStorageSizeValidator,
-      OutsideValidityIntervalValidator,
-      OutsideForecastValidator
-    )
-
-val nonSigningNonValidityChecksValidators: Seq[Validator] = nonSigningValidators
-    .filterNot(_.isInstanceOf[OutsideValidityIntervalValidator.type])
-
 val testTxBuilderEnvironment: CardanoInfo = CardanoInfo(
   protocolParams = testProtocolParams,
   slotConfig = slotConfig(testNetwork),

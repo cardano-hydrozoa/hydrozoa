@@ -99,9 +99,9 @@ def genDepositRecipe(
             address = LedgerToPlutusTranslation.getAddress(refundAddr),
             datum = SOption.None,
             // TODO: move to propertyM
-            startTime = realTimeQuantizedInstant(config.env.slotConfig).unsafeRunSync()
+            startTime = realTimeQuantizedInstant(config.cardanoInfo.slotConfig).unsafeRunSync()
           ),
-          slotConfig = config.env.slotConfig
+          slotConfig = config.cardanoInfo.slotConfig
         )
 
     } yield DepositTx.Builder(
@@ -111,7 +111,7 @@ def genDepositRecipe(
       virtualOutputs = virtualOutputs,
       donationToTreasury = Coin(0), // TODO: generate non-zero
       changeAddress = depositor.address(testNetwork),
-      txTiming = TxTiming.default(config.env.slotConfig)
+      txTiming = TxTiming.default(config.cardanoInfo.slotConfig)
     )
 
 class DepositTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
