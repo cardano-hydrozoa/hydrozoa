@@ -1,6 +1,6 @@
 package hydrozoa.multisig.consensus
 
-import cats.effect.{Deferred, IO, Ref}
+import cats.effect.{IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
@@ -12,51 +12,45 @@ import scala.collection.immutable.Queue
 
 trait PeerLiaison(
     config: Config,
-    pendingLocalConnections: MultisigRegimeManager.PendingConnections,
-    pendingRemotePeerLiaison: PendingRemotePeerLiaison
+    pendingConnections: MultisigRegimeManager.PendingConnections | PeerLiaison.Connections,
 ) extends Actor[IO, Request] {
     private val connections = Ref.unsafe[IO, Option[Connections]](None)
     private val state = State()
 
-    private final case class Connections(
-        ackBlock: AckBlock.Subscriber,
-        newBlock: Block.Subscriber,
-        newLedgerEvent: LedgerEvent.Subscriber,
-        remotePeerLiaison: PeerLiaison.Handle
-    )
-
-    override def preStart: IO[Unit] =
-        for {
-            allConnections <- pendingLocalConnections.get
-            // This means that the comm actor will not start receiving until it is connected to its
-            // remote counterpart:
-            remotePeerLiaison <- pendingRemotePeerLiaison.get
-            _ <- connections.set(
-              Some(
-                Connections(
-                  ackBlock = allConnections.consensusActor,
-                  newBlock = allConnections.blockWeaver,
-                  newLedgerEvent = allConnections.blockWeaver,
-                  remotePeerLiaison = remotePeerLiaison
-                )
-              )
+    private def getConnections: IO[Connections] = for {
+        mConn <- this.connections.get
+        conn <- mConn.fold(
+          IO.raiseError(
+            java.lang.Error(
+              "Peer liaison is missing its connections to other actors."
             )
-        } yield ()
+          )
+        )(IO.pure)
+    } yield conn
 
-    override def receive: Receive[IO, Request] = PartialFunction.fromFunction(req =>
-        connections.get.flatMap {
-            case Some(subs) =>
-                this.receiveTotal(req, subs)
-            case _ =>
-                IO.raiseError(
-                  Error(
-                    "Impossible: Comm actor is receiving before its preStart provided subscribers."
+    private def initializeConnections: IO[Unit] = pendingConnections match {
+        case x: MultisigRegimeManager.PendingConnections =>
+            for {
+                _connections <- x.get
+                _ <- connections.set(
+                  Some(
+                    Connections(
+                      blockWeaver = _connections.blockWeaver,
+                      consensusActor = _connections.consensusActor,
+                      remotePeerLiaison = _connections.remotePeerLiaisons(config.remotePeerId)
+                    )
                   )
                 )
-        }
-    )
+            } yield ()
+        case x: PeerLiaison.Connections => connections.set(Some(x))
+    }
 
-    private def receiveTotal(req: Request, subs: Connections): IO[Unit] =
+    override def preStart: IO[Unit] = initializeConnections
+
+    override def receive: Receive[IO, Request] =
+        PartialFunction.fromFunction(req => getConnections.flatMap(receiveTotal(req, _)))
+
+    private def receiveTotal(req: Request, conn: Connections): IO[Unit] =
         req match {
             case x: RemoteBroadcast =>
                 for {
@@ -65,14 +59,14 @@ trait PeerLiaison(
                     // Check whether the next batch must be sent immediately, and then turn off the flag regardless.
                     mbBatchReq <- state.dischargeSendNextBatchImmediately
                     // Pretend we just received the cached batch request that we need to send immediately (if any)
-                    _ <- mbBatchReq.fold(IO.unit)(batchReq => receiveTotal(batchReq, subs))
+                    _ <- mbBatchReq.fold(IO.unit)(batchReq => receiveTotal(batchReq, conn))
                 } yield ()
             case x: GetMsgBatch =>
                 for {
                     eNewBatch <- state.buildNewMsgBatch(x, config.maxLedgerEventsPerBatch)
                     _ <- eNewBatch match {
                         case Right(newBatch) =>
-                            subs.remotePeerLiaison ! newBatch
+                            conn.remotePeerLiaison ! newBatch
                         case Left(state.EmptyNewMsgBatch) =>
                             state.sendNextBatchImmediatelyUponNewMsg(x)
                         case Left(state.OutOfBoundsGetMsgBatch) =>
@@ -83,10 +77,10 @@ trait PeerLiaison(
             case x: NewMsgBatch =>
                 for {
                     next: GetMsgBatch <- state.verifyBatchAndGetNext(x)
-                    _ <- subs.remotePeerLiaison ! next
-                    _ <- x.ack.traverse_(subs.ackBlock ! _)
-                    _ <- x.block.traverse_(subs.newBlock ! _)
-                    _ <- x.events.traverse_(subs.newLedgerEvent ! _)
+                    _ <- conn.remotePeerLiaison ! next
+                    _ <- x.ack.traverse_(conn.consensusActor ! _)
+                    _ <- x.block.traverse_(conn.blockWeaver ! _)
+                    _ <- x.events.traverse_(conn.blockWeaver ! _)
                 } yield ()
 
             // TODO: when the final block is confirmed, inform the counterpart that
@@ -280,9 +274,8 @@ object PeerLiaison {
     def apply(
         config: Config,
         pendingLocalConnections: MultisigRegimeManager.PendingConnections,
-        pendingRemotePeerLiaison: PendingRemotePeerLiaison
     ): IO[PeerLiaison] =
-        IO(new PeerLiaison(config, pendingLocalConnections, pendingRemotePeerLiaison) {})
+        IO(new PeerLiaison(config, pendingLocalConnections) {})
 
     final case class Config(
         ownPeerId: Peer.Id,
@@ -290,13 +283,12 @@ object PeerLiaison {
         maxLedgerEventsPerBatch: Int = 25
     )
 
-    final case class ConnectionsPending(
-        blockWeaver: Deferred[IO, BlockWeaver.Handle],
-        consensusActor: Deferred[IO, ConsensusActor.Handle],
-        remotePeerLiaison: Deferred[IO, PeerLiaison.Handle]
-    )
-
-    type PendingRemotePeerLiaison = Deferred[IO, PeerLiaison.Handle]
+    final case class Connections(
+        blockWeaver: BlockWeaver.Handle,
+        consensusActor: ConsensusActor.Handle,
+        remotePeerLiaison: PeerLiaison.Handle
+    ) extends MultisigRegimeManager.Connections.BlockWeaver,
+          MultisigRegimeManager.Connections.ConsensusActor
 
     type Handle = ActorRef[IO, Request]
 

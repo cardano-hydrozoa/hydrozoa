@@ -248,11 +248,14 @@ object ConsensusActor:
     )
 
     final case class Connections(
-        peerLiaisons: List[PeerLiaison.Handle],
-        blockWeaver: BlockWeaver.Handle,
-        cardanoLiaison: CardanoLiaison.Handle,
-        eventSequencer: EventSequencer.Handle,
-    )
+        override val blockWeaver: BlockWeaver.Handle,
+        override val cardanoLiaison: CardanoLiaison.Handle,
+        override val eventSequencer: EventSequencer.Handle,
+        override val peerLiaisons: List[PeerLiaison.Handle],
+    ) extends MultisigRegimeManager.Connections.BlockWeaver,
+          MultisigRegimeManager.Connections.CardanoLiaison,
+          MultisigRegimeManager.Connections.EventSequencer,
+          MultisigRegimeManager.Connections.PeerLiaisons
 
     // ===================================
     // Actor's state
@@ -294,7 +297,7 @@ end ConsensusActor
 
 class ConsensusActor(
     config: ConsensusActor.Config,
-    pendingConnections: MultisigRegimeManager.PendingConnections,
+    pendingConnections: MultisigRegimeManager.PendingConnections | ConsensusActor.Connections,
     stateRef: Ref[IO, ConsensusActor.State]
 ) extends Actor[IO, ConsensusActor.Request]:
     import ConsensusActor.*
@@ -302,19 +305,38 @@ class ConsensusActor(
 
     private val connections = Ref.unsafe[IO, Option[ConsensusActor.Connections]](None)
 
+    private def getConnections: IO[Connections] = for {
+        mConn <- this.connections.get
+        conn <- mConn.fold(
+          IO.raiseError(
+            java.lang.Error(
+              "Consensus Actor is missing its connections to other actors."
+            )
+          )
+        )(IO.pure)
+    } yield conn
+
+    private def initializeConnections: IO[Unit] = pendingConnections match {
+        case x: MultisigRegimeManager.PendingConnections =>
+            for {
+                _connections <- x.get
+                _ <- connections.set(
+                  Some(
+                    ConsensusActor.Connections(
+                      blockWeaver = _connections.blockWeaver,
+                      cardanoLiaison = _connections.cardanoLiaison,
+                      eventSequencer = _connections.eventSequencer,
+                      peerLiaisons = _connections.peerLiaisons
+                    )
+                  )
+                )
+            } yield ()
+        case x: ConsensusActor.Connections => connections.set(Some(x))
+    }
+
     override def preStart: IO[Unit] =
         for {
-            allConnections <- pendingConnections.get
-            _ <- connections.set(
-              Some(
-                ConsensusActor.Connections(
-                  peerLiaisons = allConnections.peerLiaisons,
-                  blockWeaver = allConnections.blockWeaver,
-                  cardanoLiaison = allConnections.cardanoLiaison,
-                  eventSequencer = allConnections.eventSequencer
-                )
-              )
-            )
+            _ <- initializeConnections
             _ <- IO.traverse_(config.recoveredRequests)(receive)
         } yield ()
 
@@ -344,7 +366,7 @@ class ConsensusActor(
       * checking whether it's an own acknowledgement and if so scheduling its announcement. This is
       * done differently for different types of acks:
       *   - for [[RoundOneOwnAck]] it's done here right when we receive them
-      *   - for [[RoundTwoOwnAck] it's done in the corresponding cells later on
+      *   - for [[RoundTwoOwnAck]] it's done in the corresponding cells later on
       *
       * @param ack
       *   an arbitrary ack, whether own one or someone else's one
@@ -651,13 +673,7 @@ class ConsensusActor(
             mbAck: Option[AckBlock]
         ): IO[Unit] = {
             for {
-                conn <- this.connections.get.flatMap(
-                  _.fold(
-                    IO.raiseError(
-                      java.lang.Error("Consensus Actor is missing its connections to other actors.")
-                    )
-                  )(IO.pure)
-                )
+                conn <- getConnections
                 // Handle the confirmed block
                 _ <- conn.blockWeaver ! blockConfirmed.toBlockWeaver
                 _ <- IO.traverse_(blockConfirmed.mbToCardanoLiaison)(conn.cardanoLiaison ! _)

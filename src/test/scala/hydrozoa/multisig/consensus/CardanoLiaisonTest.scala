@@ -580,12 +580,9 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                   slotConfig = testTxBuilderEnvironment.slotConfig
                 )
 
-                cardanoLiaison = new CardanoLiaison(
+                cardanoLiaison <- CardanoLiaison(
                   config = config,
                   pendingConnections = ???,
-                  stateRef = Ref.unsafe[IO, CardanoLiaison.State](
-                    CardanoLiaison.State.initialState(config)
-                  ),
                 )
 
                 // Use protected handlers directly to present all effects

@@ -166,20 +166,25 @@ object JointLedgerTestHelpers {
             jointLedger <- PropertyM.run(
               system.actorOf(
                 JointLedger(
-                  peerLiaisons = Seq.empty,
-                  tallyFeeAllowance = Coin.ada(2),
-                  initialBlockTime = initializedOn,
-                  initialBlockKzg = KzgCommitment.empty,
-                  equityShares = equityShares,
-                  multisigRegimeUtxo = config.multisigRegimeUtxo,
-                  votingDuration =
-                      FiniteDuration(24, HOURS).quantize(testTxBuilderEnvironment.slotConfig),
-                  treasuryTokenName = config.tokenNames.headTokenName,
-                  initialTreasury = initTx.initializationTx.treasuryProduced,
-                  config = config,
-                  txTiming = txTiming,
-                  initialFallbackValidityStart =
-                      initializedOn + txTiming.minSettlementDuration + txTiming.inactivityMarginDuration + txTiming.silenceDuration
+                  JointLedger.Config(
+                    tallyFeeAllowance = Coin.ada(2),
+                    initialBlockTime = initializedOn,
+                    initialBlockKzg = KzgCommitment.empty,
+                    equityShares = equityShares,
+                    multisigRegimeUtxo = config.multisigRegimeUtxo,
+                    votingDuration =
+                        FiniteDuration(24, HOURS).quantize(testTxBuilderEnvironment.slotConfig),
+                    treasuryTokenName = config.tokenNames.headTokenName,
+                    initialTreasury = initTx.initializationTx.treasuryProduced,
+                    txBuilderConfig = config,
+                    txTiming = txTiming,
+                    initialFallbackValidityStart =
+                        initializedOn + txTiming.minSettlementDuration + txTiming.inactivityMarginDuration + txTiming.silenceDuration
+                  ),
+                  JointLedger.Connections(
+                    consensusActor = ???,
+                    peerLiaisons = List()
+                  )
                 )
               )
             )

@@ -3,11 +3,13 @@ package hydrozoa.multisig.ledger
 import cats.effect.{IO, Ref}
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
+import com.suprnation.typelevel.actors.syntax.BroadcastOps
 import hydrozoa.UtxoIdL1
 import hydrozoa.config.EquityShares
 import hydrozoa.lib.actor.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, toEpochQuantizedInstant}
-import hydrozoa.multisig.consensus.PeerLiaison
+import hydrozoa.multisig.MultisigRegimeManager
+import hydrozoa.multisig.consensus.{ConsensusActor, PeerLiaison}
 import hydrozoa.multisig.ledger.DappLedgerM.runDappLedgerM
 import hydrozoa.multisig.ledger.JointLedger.*
 import hydrozoa.multisig.ledger.JointLedger.Requests.*
@@ -39,32 +41,12 @@ private case class TransientFields(
 // NOTE: Joint ledger is created by the MultisigManager.
 // NOTE: As of 2025-11-16, George says BlockWeaver should be the ONLY actor calling the joint ledger
 final case class JointLedger(
-    peerLiaisons: Seq[ActorRef[IO, PeerLiaison.Request]],
-    // private val cardanoLiaison
-    // private val blockSigner
-    //// Static config fields
-    // in head config
-    initialBlockTime: QuantizedInstant,
-    // derived
-    initialBlockKzg: KzgCommitment,
-    // derived
-    config: Tx.Builder.Config,
-    // in head config
-    txTiming: TxTiming,
-    // in head config
-    tallyFeeAllowance: Coin,
-    // in head config
-    equityShares: EquityShares,
-    // derived from init tx (which is in the config)
-    multisigRegimeUtxo: MultisigRegimeUtxo,
-    // in head config (move into TxTiming)
-    votingDuration: QuantizedFiniteDuration,
-    // derived from init tx (which is in the config)
-    treasuryTokenName: AssetName,
-    // derived from init tx (which is in the config)
-    initialTreasury: MultisigTreasuryUtxo,
-    initialFallbackValidityStart: QuantizedInstant
+    config: Config,
+    pendingConnections: MultisigRegimeManager.PendingConnections | JointLedger.Connections,
 ) extends Actor[IO, Requests.Request] {
+    import config.*
+
+    private val connections = Ref.unsafe[IO, Option[Connections]](None)
 
     val state: Ref[IO, JointLedger.State] =
         Ref.unsafe[IO, JointLedger.State](
@@ -77,6 +59,33 @@ final case class JointLedger(
             virtualLedgerState = VirtualLedgerM.State.empty
           )
         )
+
+    private def getConnections: IO[Connections] = for {
+        mConn <- this.connections.get
+        conn <- mConn.fold(
+          IO.raiseError(
+            java.lang.Error(
+              "Joint ledger is missing its connections to other actors."
+            )
+          )
+        )(IO.pure)
+    } yield conn
+
+    private def initializeConnections: IO[Unit] = pendingConnections match {
+        case x: MultisigRegimeManager.PendingConnections =>
+            for {
+                _connections <- x.get
+                _ <- connections.set(
+                  Some(
+                    Connections(
+                      consensusActor = _connections.consensusActor,
+                      peerLiaisons = _connections.peerLiaisons
+                    )
+                  )
+                )
+            } yield ()
+        case x: JointLedger.Connections => connections.set(Some(x))
+    }
 
     // TODO: Refactor to use "become" and use different receive functions
 
@@ -112,6 +121,8 @@ final case class JointLedger(
             case d: Done => IO.pure(d)
         }
     } yield p
+
+    override def preStart: IO[Unit] = initializeConnections
 
     // TODO: PartialFunction.fromFunction is a noop here
     override def receive: Receive[IO, Requests.Request] = PartialFunction.fromFunction {
@@ -312,7 +323,7 @@ final case class JointLedger(
                   genesisObligations,
                   TransactionHash.fromByteString(
                     platform.blake2b_256(
-                      config.tokenNames.headTokenName.bytes ++
+                      txBuilderConfig.tokenNames.headTokenName.bytes ++
                           ByteString.fromBigIntBigEndian(
                             BigInt(treasuryToSpend.datum.versionMajor.toInt + 1)
                           )
@@ -329,8 +340,8 @@ final case class JointLedger(
                     nextKzg = nextKzg,
                     validDeposits = validDeposits,
                     payoutObligations = payoutObligations,
-                    tallyFeeAllowance = this.tallyFeeAllowance,
-                    votingDuration = this.votingDuration,
+                    tallyFeeAllowance = tallyFeeAllowance,
+                    votingDuration = votingDuration,
                     immatureDeposits = immatureDeposits,
                     blockCreatedOn = blockCreatedOn,
                     competingFallbackValidityStart = blockCreatedOn
@@ -369,7 +380,7 @@ final case class JointLedger(
                 )((acc, deposit) =>
                     val depositValidityEnd =
                         deposit._2.datum.refundInstructions.startTime
-                            .toEpochQuantizedInstant(config.env.slotConfig)
+                            .toEpochQuantizedInstant(txBuilderConfig.env.slotConfig)
                             - txTiming.depositMaturityDuration
                             - txTiming.depositAbsorptionDuration
                             - txTiming.silenceDuration
@@ -523,7 +534,8 @@ final case class JointLedger(
     private def sendAugmentedBlock(augmentedBlock: AugmentedBlock.Next): IO[Unit] =
         for {
             // _ <- blockSigner ! augmentedBlock
-            _ <- IO.parSequence(peerLiaisons.map(_ ! augmentedBlock.blockNext))
+            conn <- getConnections
+            _ <- (conn.peerLiaisons ! augmentedBlock.blockNext).parallel
         } yield ()
 
     private def checkReferenceBlock(
@@ -579,6 +591,39 @@ object JointLedger {
 
     type Handle = ActorRef[IO, Requests.Request]
 
+    final case class Config(
+        // private val cardanoLiaison
+        // private val blockSigner
+        //// Static config fields
+        // in head config
+        initialBlockTime: QuantizedInstant,
+        // derived
+        initialBlockKzg: KzgCommitment,
+        // derived
+        txBuilderConfig: Tx.Builder.Config,
+        // in head config
+        txTiming: TxTiming,
+        // in head config
+        tallyFeeAllowance: Coin,
+        // in head config
+        equityShares: EquityShares,
+        // derived from init tx (which is in the config)
+        multisigRegimeUtxo: MultisigRegimeUtxo,
+        // in head config (move into TxTiming)
+        votingDuration: QuantizedFiniteDuration,
+        // derived from init tx (which is in the config)
+        treasuryTokenName: AssetName,
+        // derived from init tx (which is in the config)
+        initialTreasury: MultisigTreasuryUtxo,
+        initialFallbackValidityStart: QuantizedInstant
+    )
+
+    final case class Connections(
+        override val consensusActor: ConsensusActor.Handle,
+        override val peerLiaisons: List[PeerLiaison.Handle]
+    ) extends MultisigRegimeManager.Connections.ConsensusActor,
+          MultisigRegimeManager.Connections.PeerLiaisons
+
     final case class CompleteBlockError() extends Throwable
 
     object Requests {
@@ -593,6 +638,9 @@ object JointLedger {
         )
 
         /** @param referenceBlock
+          *   provided by the BlockWeaver when it is in follower mode. When the joint ledger is
+          *   finished reproducing the block, it compares against this reference block to determine
+          *   whether the leader properly constructed the original block.
           * @param pollResults
           *   there are two reasons to have it here:
           *   - pollResults are always absent upon weaver's start time. Passing it here may improve

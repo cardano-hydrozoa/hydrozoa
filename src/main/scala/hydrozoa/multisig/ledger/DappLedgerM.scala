@@ -287,7 +287,7 @@ object DappLedgerM {
         ): IO[B] =
             for {
                 oldState <- jl.state.get
-                res = action.run(jl.config, oldState.dappLedgerState)
+                res = action.run(jl.config.txBuilderConfig, oldState.dappLedgerState)
                 b <- res match {
                     case Left(error) => onFailure(error)
                     case Right(newState, a) =>

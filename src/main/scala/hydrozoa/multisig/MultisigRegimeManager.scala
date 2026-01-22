@@ -39,9 +39,9 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
                       lastKnownBlock = ???,
                       peerId = config.peerId,
                       recoveredMempool = BlockWeaver.Mempool.empty,
-                      jointLedger = ???,
                       slotConfig = ???
-                    )
+                    ),
+                    pendingConnections
                   )
                 )
 
@@ -80,26 +80,22 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
             // FIXME
             jointLedger <- context.actorOf(???)
 
-            localPeerLiaisonsPendingRemoteActors <-
+            localPeerLiaisons <-
                 config.peers
                     .filterNot(_ == config.peerId)
                     .traverse(pid =>
                         for {
-                            pendingRemotePeerLiaison <- Deferred[IO, PeerLiaison.Handle]
                             localPeerLiaison <- context.actorOf(
                               PeerLiaison(
                                 PeerLiaison.Config(
                                   ownPeerId = config.peerId,
                                   remotePeerId = pid
                                 ),
-                                pendingConnections,
-                                pendingRemotePeerLiaison
+                                pendingConnections
                               )
                             )
-                        } yield (localPeerLiaison, pendingRemotePeerLiaison)
+                        } yield localPeerLiaison
                     )
-
-            localPeerLiaisons = localPeerLiaisonsPendingRemoteActors.map(_._1)
 
             _ <- pendingConnections.complete(
               MultisigRegimeManager.Connections(
@@ -109,6 +105,8 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
                 eventSequencer = eventSequencer,
                 jointLedger = jointLedger,
                 peerLiaisons = localPeerLiaisons,
+                // FIXME:
+                remotePeerLiaisons = ???
               )
             )
 
@@ -124,8 +122,6 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
               eventSequencer,
               TerminatedChild(Actors.EventSequencer, eventSequencer)
             )
-
-            // TODO: Store the deferred remote comm actor refs (cas._2) for later
         } yield ()
 
     override def receive: Receive[IO, Request] =
@@ -169,16 +165,33 @@ object MultisigRegimeManager {
         slotConfig: SlotConfig
     )
 
-    type PendingConnections = Deferred[IO, Connections]
-
     final case class Connections(
-        blockWeaver: BlockWeaver.Handle,
-        cardanoLiaison: CardanoLiaison.Handle,
-        consensusActor: ConsensusActor.Handle,
-        eventSequencer: EventSequencer.Handle,
-        jointLedger: JointLedger.Handle,
-        peerLiaisons: List[PeerLiaison.Handle],
-    )
+        override val blockWeaver: BlockWeaver.Handle,
+        override val cardanoLiaison: CardanoLiaison.Handle,
+        override val consensusActor: ConsensusActor.Handle,
+        override val eventSequencer: EventSequencer.Handle,
+        override val jointLedger: JointLedger.Handle,
+        override val peerLiaisons: List[PeerLiaison.Handle],
+        override val remotePeerLiaisons: Map[Peer.Id, PeerLiaison.Handle],
+    ) extends Connections.BlockWeaver,
+          Connections.CardanoLiaison,
+          Connections.ConsensusActor,
+          Connections.EventSequencer,
+          Connections.JointLedger,
+          Connections.PeerLiaisons,
+          Connections.RemotePeerLiaisons
+
+    object Connections {
+        trait BlockWeaver { def blockWeaver: BlockWeaver.Handle }
+        trait CardanoLiaison { def cardanoLiaison: CardanoLiaison.Handle }
+        trait ConsensusActor { def consensusActor: ConsensusActor.Handle }
+        trait EventSequencer { def eventSequencer: EventSequencer.Handle }
+        trait JointLedger { def jointLedger: JointLedger.Handle }
+        trait PeerLiaisons { def peerLiaisons: List[PeerLiaison.Handle] }
+        trait RemotePeerLiaisons { def remotePeerLiaisons: Map[Peer.Id, PeerLiaison.Handle] }
+    }
+
+    type PendingConnections = Deferred[IO, Connections]
 
     def apply(config: Config): IO[MultisigRegimeManager] =
         IO(new MultisigRegimeManager(config) {})

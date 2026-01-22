@@ -214,7 +214,7 @@ object VirtualLedgerM {
             for {
                 oldState <- jl.state.get
                 res = action.run(
-                  VirtualLedgerM.Config.fromTxBuilderConfig(jl.config),
+                  VirtualLedgerM.Config.fromTxBuilderConfig(jl.config.txBuilderConfig),
                   oldState.virtualLedgerState
                 )
                 b <- res match {

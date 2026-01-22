@@ -1,8 +1,6 @@
 package hydrozoa.multisig.protocol.types
 
-import cats.effect.IO
 import cats.syntax.all.*
-import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.multisig.protocol.types.AckBlock.Fields.*
 import scalus.builtin.ByteString
 
@@ -52,7 +50,6 @@ object AckBlock {
 
     type Id = Id.Id
     type Number = Number.Number
-    type Subscriber = ActorRef[IO, AckBlock]
 
     object Fields {
         sealed trait MinorHeaderSignature {

@@ -41,6 +41,11 @@ import scalus.cardano.ledger.{SlotConfig, Transaction, TransactionHash, Transact
   *     towards the known target state.
   */
 object CardanoLiaison:
+    def apply(
+        config: Config,
+        pendingConnections: MultisigRegimeManager.PendingConnections | CardanoLiaison.Connections
+    ): IO[CardanoLiaison] =
+        IO(new CardanoLiaison(config, pendingConnections) {})
 
     final case class Config(
         cardanoBackend: CardanoBackend[IO],
@@ -51,8 +56,8 @@ object CardanoLiaison:
     )
 
     final case class Connections(
-        blockWeaver: BlockWeaver.Handle
-    )
+        override val blockWeaver: BlockWeaver.Handle
+    ) extends MultisigRegimeManager.Connections.BlockWeaver
 
     // ===================================
     // Actor's Internal state
@@ -146,30 +151,42 @@ object CardanoLiaison:
     type Request = MajorBlockConfirmed | FinalBlockConfirmed | Timeout.type
     type Handle = ActorRef[IO, Request]
 
-    def apply(
-        config: Config,
-        pendingConnections: MultisigRegimeManager.PendingConnections
-    ): IO[CardanoLiaison] = for {
-        stateRef <- Ref[IO].of(State.initialState(config))
-    } yield new CardanoLiaison(config, pendingConnections, stateRef)
-
 end CardanoLiaison
 
-class CardanoLiaison(
+trait CardanoLiaison(
     config: CardanoLiaison.Config,
-    pendingConnections: MultisigRegimeManager.PendingConnections,
-    stateRef: Ref[IO, CardanoLiaison.State]
+    pendingConnections: MultisigRegimeManager.PendingConnections | CardanoLiaison.Connections,
 ) extends Actor[IO, CardanoLiaison.Request]:
     import CardanoLiaison.*
 
     private val connections = Ref.unsafe[IO, Option[CardanoLiaison.Connections]](None)
 
+    private val stateRef = Ref.unsafe[IO, CardanoLiaison.State](State.initialState(config))
+
+    private def getConnections: IO[Connections] = this.connections.get.flatMap(
+      _.fold(
+        IO.raiseError(
+          java.lang.Error(
+            "Consensus Actor is missing its connections to other actors."
+          )
+        )
+      )(IO.pure)
+    )
+
+    private def initializeConnections: IO[Unit] = pendingConnections match {
+        case x: MultisigRegimeManager.PendingConnections =>
+            for {
+                _connections <- x.get
+                _ <- connections.set(
+                  Some(CardanoLiaison.Connections(blockWeaver = _connections.blockWeaver))
+                )
+            } yield ()
+        case x: CardanoLiaison.Connections => connections.set(Some(x))
+    }
+
     override def preStart: IO[Unit] =
         for {
-            allConnections <- pendingConnections.get
-            _ <- connections.set(
-              Some(CardanoLiaison.Connections(blockWeaver = allConnections.blockWeaver))
-            )
+            _ <- initializeConnections
             _ <- context.setReceiveTimeout(config.receiveTimeout, CardanoLiaison.Timeout)
         } yield ()
 
@@ -304,15 +321,7 @@ class CardanoLiaison(
                     utxoIds <- IO.pure(l1State.untagged.keySet)
                     // This may not the ideal place to have it. Every time we get a new head state, we
                     // forward it to the block weaver.
-                    conn <- this.connections.get.flatMap(
-                      _.fold(
-                        IO.raiseError(
-                          java.lang.Error(
-                            "Consensus Actor is missing its connections to other actors."
-                          )
-                        )
-                      )(IO.pure)
-                    )
+                    conn <- getConnections
                     _ <- conn.blockWeaver ! PollResults(utxoIds)
 
                     // 2. Based on the local state, find all due actions
