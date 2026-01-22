@@ -122,7 +122,7 @@ object AckBlock {
 
         extension (self: Id)
             def increment: Id = Id(self._1, self._2 + 1)
-            // TODO: rename peerId (or rename all peerId to peerNum
+            // TODO: rename peerId (or rename all peerId to peerNum)
             def peerNum: Peer.Number = Peer.Number(self._1)
             def ackNum: Number = Number(self._2)
     }
@@ -137,8 +137,7 @@ object AckBlock {
           *   - Minor blocks each need only one ack and don't increment the major version.
           *   - Major and final blocks each need two acks and do increment the major version.
           */
-        def neededToConfirm(block: Block.Next): Number =
-            import block.header
+        def neededToConfirm(header: Block.Header): Number =
             header.blockNum + header.blockVersion.major
 
         given Conversion[Number, Int] = identity
@@ -148,7 +147,9 @@ object AckBlock {
                 x.compare(y)
         }
 
-        extension (self: Number) def increment: Number = Number(self + 1)
+        extension (self: Number)
+            def increment: Number = Number(self + 1)
+            def decrement: Number = Number(self - 1)
     }
 
     // ===================================

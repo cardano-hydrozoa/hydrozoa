@@ -63,3 +63,4 @@ object BlockEffectsSigned {
             case major: Major => major.postDatedRefundsSigned
             case _            => List.empty
         }
+}

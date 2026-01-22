@@ -14,7 +14,6 @@ import hydrozoa.multisig.ledger.dapp.tx.*
 sealed trait BlockEffects {
     def blockType: Block.Type
     def id: Block.Number
-    type AckSet <: AckBlock.BlockAckSet
 }
 
 object BlockEffects {
@@ -25,7 +24,6 @@ object BlockEffects {
         postDatedRefunds: List[RefundTx.PostDated]
     ) extends BlockEffects {
         override val blockType: Block.Type = Block.Type.Minor
-        override type AckSet = AckBlock.Minor
     }
 
     final case class Major(
@@ -36,7 +34,6 @@ object BlockEffects {
         postDatedRefunds: List[RefundTx.PostDated]
     ) extends BlockEffects {
         override val blockType: Block.Type = Block.Type.Major
-        override type AckSet = AckBlock.BlockAckSet.Major
     }
 
     final case class Final(
@@ -46,7 +43,5 @@ object BlockEffects {
         deinit: Option[DeinitTx]
     ) extends BlockEffects {
         override val blockType: Block.Type = Block.Type.Final
-        override type AckSet = AckBlock.BlockAckSet.Final
     }
-
 }

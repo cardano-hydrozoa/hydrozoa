@@ -103,13 +103,22 @@ object BlockWeaver:
     object PollResults:
         val empty: PollResults = PollResults(Set.empty)
 
+    object finalizationLocallyTriggeredTriggered
+
     type Handle = ActorRef[IO, Request]
-    type Request = LedgerEvent | Block.Next | BlockConfirmed | PollResults
+    type Request = LedgerEvent | Block.Next | BlockConfirmed | PollResults |
+        finalizationLocallyTriggeredTriggered.type
 
     def apply(config: Config): IO[BlockWeaver] = for {
         stateRef <- Ref[IO].of(State.mkInitialState)
         pollResultsRef <- Ref[IO].of(PollResults.empty)
-    } yield new BlockWeaver(config = config, stateRef = stateRef, pollResultsRef = pollResultsRef)
+        finalizationLocallyTriggeredRef <- Ref[IO].of(false)
+    } yield new BlockWeaver(
+      config = config,
+      stateRef = stateRef,
+      pollResultsRef = pollResultsRef,
+      finalizationLocallyTriggeredRef = finalizationLocallyTriggeredRef
+    )
 
     // ===================================
     // Immutable mempool state
@@ -186,11 +195,23 @@ object BlockWeaver:
     }
 end BlockWeaver
 
+/** @param config
+  * @param stateRef
+  * @param pollResultsRef
+  * @param finalizationLocallyTriggeredRef
+  *   This ref initialized with false value intially and gets true value upon receiving
+  *   [[finalizationLocallyTriggeredTriggered]]. Regardless the peers' role for the current block,
+  *   that causes the eponymous flag `finalizationLocallyTriggeredRef` in the next
+  *   [[CompleteBlockRegular]] be set to true. This tells the joint ledger to set up the
+  *   finalization flag `finalizationRequested` in the peer's ack, so the leader of the next block
+  *   observe it in their [[BlockWeaver.BlockConfirmed]] and produce the final block.
+  */
 class BlockWeaver(
     private val config: BlockWeaver.Config,
     private val stateRef: Ref[IO, BlockWeaver.State],
     // Having this field separately rids of the need to weave it through state changes.
-    private val pollResultsRef: Ref[IO, BlockWeaver.PollResults]
+    private val pollResultsRef: Ref[IO, BlockWeaver.PollResults],
+    private val finalizationLocallyTriggeredRef: Ref[IO, Boolean]
 ) extends Actor[IO, BlockWeaver.Request]:
     import BlockWeaver.*
 
@@ -207,10 +228,11 @@ class BlockWeaver(
 
     private def receiveTotal(req: Request): IO[Unit] =
         req match {
-            case msg: LedgerEvent   => handleLedgerEvent(msg)
-            case b: Block.Next      => handleNewBlock(b)
-            case bc: BlockConfirmed => handleBlockConfirmed(bc)
-            case pr: PollResults    => handlePollResults(pr)
+            case msg: LedgerEvent                      => handleLedgerEvent(msg)
+            case b: Block.Next                         => handleNewBlock(b)
+            case bc: BlockConfirmed                    => handleBlockConfirmed(bc)
+            case pr: PollResults                       => handlePollResults(pr)
+            case finalizationLocallyTriggeredTriggered => finalizationLocallyTriggeredRef.set(true)
         }
 
     // ===================================
@@ -232,14 +254,20 @@ class BlockWeaver(
                     for {
                         // Pass-through to the joint ledger
                         _ <- config.jointLedger ! event
+
                         // Complete the first block immediately
-                        pollResults <- pollResultsRef.get
-                        _ <- IO.whenA(leader.isFirstBlock) {
+                        _ <- IO.whenA(leader.isFirstBlock)(for {
+                            pollResults <- pollResultsRef.get
+                            finalizationLocallyTriggered <- finalizationLocallyTriggeredRef.get
                             // It's always CompleteBlockRegular since we haven't
                             // seen any confirmations so far.
-                            (config.jointLedger ! CompleteBlockRegular(None, pollResults.utxos))
-                                >> switchToIdle(blockNumber.increment)
-                        }
+                            _ <- config.jointLedger ! CompleteBlockRegular(
+                              None,
+                              pollResults.utxos,
+                              finalizationLocallyTriggered
+                            )
+                            _ <- switchToIdle(blockNumber.increment)
+                        } yield ())
                     } yield ()
 
                 case awaiting @ Awaiting(block, eventIdAwaited, mempool) =>
@@ -316,19 +344,41 @@ class BlockWeaver(
         } yield ()
     }
 
+    /** When completing a refernce block, we decide upon the type of completion message
+      * CompleteBlockRegular/CompleteBlockFinal based on the type of the block only.
+      *
+      * `finalizationLocallyTriggered` is passed only if [[CompleteBlockRegular]] was chosen to
+      * force the joint ledger to produce an acknowledgement with `finalizationRequested` flag set.
+      *
+      * @param block
+      * @return
+      */
     private def completeReferenceBlock(block: Block.Next): IO[Unit] = for {
         pollResults <- pollResultsRef.get
+        finalizationLocallyTriggered <- finalizationLocallyTriggeredRef.get
         completeBlock <- block match {
             case _: Block.Minor =>
-                IO.pure(CompleteBlockRegular(Some(block), pollResults.utxos))
+                IO.pure(
+                  CompleteBlockRegular(Some(block), pollResults.utxos, finalizationLocallyTriggered)
+                )
             case _: Block.Major =>
-                IO.pure(CompleteBlockRegular(Some(block), pollResults.utxos))
+                IO.pure(
+                  CompleteBlockRegular(Some(block), pollResults.utxos, finalizationLocallyTriggered)
+                )
             case _: Block.Final =>
                 IO.pure(CompleteBlockFinal(Some(block)))
         }
         _ <- config.jointLedger ! completeBlock
     } yield ()
 
+    /** This one a bit cumbersome due to the presence of TWO finalization flags being used in this
+      * function:
+      *   - The `finalizationLocallyTriggered` flag that indicates that a finalization API was
+      *     called locally sets the flag in `CompleteBlockRegular` to ask joint ledger add
+      *     finalization flag to the ack.
+      *   - the `blockConfirmed.finalizationRequested` forces [[CompleteBlockFinal]] so joint ledger
+      *     is to produce a final block immediately.
+      */
     private def handleBlockConfirmed(blockConfirmed: BlockConfirmed): IO[Unit] = {
         for {
             // _ <- IO.println("handleBlockConfirmed")
@@ -339,11 +389,18 @@ class BlockWeaver(
                     IO.whenA(blockConfirmed.blockNumber.increment == blockNumber)
                     for {
                         pollResults <- pollResultsRef.get
+                        finalizationLocallyTriggered <- finalizationLocallyTriggeredRef.get
+
                         // Finish the current block immediately
                         _ <- config.jointLedger !
                             (if blockConfirmed.finalizationRequested
                              then CompleteBlockFinal(None)
-                             else CompleteBlockRegular(None, pollResults.utxos))
+                             else
+                                 CompleteBlockRegular(
+                                   None,
+                                   pollResults.utxos,
+                                   finalizationLocallyTriggered
+                                 ))
                         // Switch to Idle
                         _ <- switchToIdle(blockNumber.increment)
                     } yield ()

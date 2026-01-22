@@ -142,7 +142,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
                     _ <- system.waitForIdle()
                     _ <- expectMsgPF(jointLedgerMockActor, 5.seconds) {
                         // The first block cannot be final
-                        case CompleteBlockRegular(None, _) => ()
+                        case CompleteBlockRegular(None, _, false) => ()
                     }
                 } yield ())
               )
@@ -317,13 +317,13 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
                     )
                         ++ firstBlockEvents
                         ++ List(
-                          CompleteBlockRegular(Some(firstBlock), Set.empty)
+                          CompleteBlockRegular(Some(firstBlock), Set.empty, false)
                         )
                         ++ List(
                           StartBlock(secondBlock.header.blockNum, secondBlock.header.timeCreation)
                         )
                         ++ secondBlockEvents
-                        ++ List(CompleteBlockRegular(Some(secondBlock), Set.empty))*
+                        ++ List(CompleteBlockRegular(Some(secondBlock), Set.empty, false))*
                   )
               } yield ()
             )

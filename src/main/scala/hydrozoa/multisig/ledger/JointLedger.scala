@@ -6,8 +6,7 @@ import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.config.EquityShares
 import hydrozoa.lib.actor.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, toEpochQuantizedInstant}
-import hydrozoa.multisig.consensus.PeerLiaison
-import hydrozoa.multisig.consensus.ConsensusActor
+import hydrozoa.multisig.consensus.{ConsensusActor, PeerLiaison}
 import hydrozoa.multisig.ledger.DappLedgerM.runDappLedgerM
 import hydrozoa.multisig.ledger.JointLedger.*
 import hydrozoa.multisig.ledger.JointLedger.Requests.*
@@ -20,6 +19,7 @@ import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.{GenesisObligation, L2EventGenesis}
 import hydrozoa.multisig.protocol.types
 import hydrozoa.multisig.protocol.types.*
+import hydrozoa.multisig.protocol.types.AckBlock.Number.neededToConfirm
 import hydrozoa.multisig.protocol.types.AckBlock.{BlockAckSet, TxSignature}
 import hydrozoa.multisig.protocol.types.Block.*
 import hydrozoa.multisig.protocol.types.LedgerEvent.*
@@ -41,6 +41,8 @@ private case class TransientFields(
 // NOTE: Joint ledger is created by the MultisigManager.
 // NOTE: As of 2025-11-16, George says BlockWeaver should be the ONLY actor calling the joint ledger
 final case class JointLedger(
+    /** Own peer number */
+    peerId: Peer.Number,
     // TODO: use .Handle
     peerLiaisons: Seq[ActorRef[IO, PeerLiaison.Request]],
     consensusActor: ConsensusActor.Handle,
@@ -446,7 +448,7 @@ final case class JointLedger(
                 }
 
             _ <- checkReferenceBlock(referenceBlock, augmentedBlock)
-            _ <- handledAugmentedBlock(augmentedBlock)
+            _ <- handledAugmentedBlock(augmentedBlock, finalizationLocallyTriggered)
         } yield ()
     }
 
@@ -513,43 +515,51 @@ final case class JointLedger(
             }
 
             _ <- checkReferenceBlock(referenceBlock, augmentedBlock)
-            _ <- handledAugmentedBlock(augmentedBlock)
+            _ <- handledAugmentedBlock(augmentedBlock, false)
 
         } yield ()
     }
 
     /** When a block is finished, we handle it by:
-      *   - sending the pure block to peer liaisons for circulation
+      *   - sending the pure (with no effects) block to peer liaisons for circulation
       *   - sending the augmented block with effects to the consensus actor
       *   - signing block's effects and producing our own set of acks
       *   - sending block's ack(s) to the consensus actor
       */
-    private def handledAugmentedBlock(augmentedBlock: AugmentedBlock.Next): IO[Unit] =
+    private def handledAugmentedBlock(
+        augmentedBlock: AugmentedBlock.Next,
+        localFinalization: Boolean
+    ): IO[Unit] =
         for {
             _ <- IO.parSequence(peerLiaisons.map(_ ! augmentedBlock.blockAsNext))
             _ <- consensusActor ! augmentedBlock
-            ackSet <- signBlockEffects(augmentedBlock.blockAsNext.blockNum, augmentedBlock.effects)
+            ackSet <- signBlockEffects(
+              augmentedBlock.blockAsNext.header,
+              augmentedBlock.effects,
+              localFinalization
+            )
             _ <- IO.traverse_(ackSet.asList)(ack => consensusActor ! ack)
         } yield ()
 
-    private def signBlockEffects[E <: BlockEffects](
-        blockNum: Block.Number,
-        effects: E
-    ): IO[AckSetFor[E]] = (effects match {
+    private def signBlockEffects(
+        header: Block.Header,
+        effects: BlockEffects,
+        localFinalization: Boolean
+    ): IO[BlockAckSet] = effects match {
         case minor: BlockEffects.Minor =>
             val headerSignature = wallet.createHeaderSignature(minor.header.mkMessage)
             val refundSignatures =
                 minor.postDatedRefunds
                     .map(r => wallet.createTxKeyWitness(r.tx))
                     .map(TxSignature.apply)
+
             IO.pure(
               AckBlock.Minor(
-                id = ???,
-                blockNum = blockNum,
+                id = AckBlock.Id.apply(peerId, neededToConfirm(header)),
+                blockNum = header.blockNum,
                 headerSignature = headerSignature,
                 postDatedRefunds = refundSignatures,
-                // TODO: ???
-                finalizationRequested = false
+                finalizationRequested = localFinalization
               )
             )
         case major: BlockEffects.Major =>
@@ -564,19 +574,23 @@ final case class JointLedger(
                     .map(TxSignature.apply)
             val settlementSignature =
                 TxSignature.apply(wallet.createTxKeyWitness(major.settlement.tx))
+            val secondAckNumber = neededToConfirm(header)
 
             IO.pure(
               BlockAckSet.Major(
                 AckBlock.Major1(
-                  id = ???,
-                  blockNum = blockNum,
+                  id = AckBlock.Id.apply(peerId, secondAckNumber.decrement),
+                  blockNum = header.blockNum,
                   fallback = fallbackSignature,
                   rollouts = rolloutSignatures,
                   postDatedRefunds = refundSignatures,
-                  // TODO: ???
-                  finalizationRequested = false
+                  finalizationRequested = localFinalization
                 ),
-                AckBlock.Major2(id = ???, blockNum = blockNum, settlement = settlementSignature)
+                AckBlock.Major2(
+                  id = AckBlock.Id.apply(peerId, secondAckNumber),
+                  blockNum = header.blockNum,
+                  settlement = settlementSignature
+                )
               )
             )
         case f: BlockEffects.Final =>
@@ -589,23 +603,24 @@ final case class JointLedger(
 
             val finalizationSignature =
                 TxSignature.apply(wallet.createTxKeyWitness(f.finalization.tx))
+            val secondAckNumber = neededToConfirm(header)
 
             IO.pure(
               BlockAckSet.Final(
                 AckBlock.Final1(
-                  id = ???,
-                  blockNum = blockNum,
+                  id = AckBlock.Id.apply(peerId, secondAckNumber.decrement),
+                  blockNum = header.blockNum,
                   rollouts = rolloutSignatures,
                   deinit = deinitSignature
                 ),
                 AckBlock.Final2(
-                  id = ???,
-                  blockNum = blockNum,
+                  id = AckBlock.Id.apply(peerId, secondAckNumber),
+                  blockNum = header.blockNum,
                   finalization = finalizationSignature
                 )
               )
             )
-    }).asInstanceOf[IO[AckSetFor[E]]]
+    }
 
     private def checkReferenceBlock(
         expectedBlock: Option[Block],
@@ -662,13 +677,6 @@ object JointLedger {
 
     final case class CompleteBlockError() extends Throwable
 
-    // Match type to map BlockEffects to their corresponding AckSet types
-    type AckSetFor[E <: BlockEffects] <: AckBlock.BlockAckSet = E match {
-        case BlockEffects.Minor => AckBlock.Minor
-        case BlockEffects.Major => AckBlock.BlockAckSet.Major
-        case BlockEffects.Final => AckBlock.BlockAckSet.Final
-    }
-
     object Requests {
         type Request =
             // RegisterDeposit is exactly the DappLedger type, we're simply forwarding it through.
@@ -683,13 +691,17 @@ object JointLedger {
         /** @param referenceBlock
           * @param pollResults
           *   there are two reasons to have it here:
-          *   - pollResults are always absent upon weaver's start time. Passing it here may improve
-          *     things.
+          *   - pollResults are absent upon weaver's start time. Passing it here may improve things.
           *   - pollResults are needed only when we are finishing a regular (non-final) block.
+          * @param finalizationLocallyTriggered
+          *   this flag indicates that head finalization request was received LOCALLY and the next
+          *   block should be the final block which is indicated by setting the flag
+          *   `finalizationRequested` in the block acknowledgement
           */
         case class CompleteBlockRegular(
             referenceBlock: Option[Block],
-            pollResults: Set[UtxoIdL1]
+            pollResults: Set[UtxoIdL1],
+            finalizationLocallyTriggered: Boolean
         )
 
         case class CompleteBlockFinal(
