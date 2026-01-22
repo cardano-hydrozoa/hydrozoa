@@ -245,7 +245,7 @@ object InitializationTxSeq {
             // Validity ranges
             // ===================================
             val initializationTxValidityEnd =
-                args.initializedOn + args.txTiming.minSettlementDuration +
+                args.blockZeroCreationTime + args.txTiming.minSettlementDuration +
                     args.txTiming.inactivityMarginDuration
 
             val fallbackTxValidityStart =
@@ -270,7 +270,7 @@ object InitializationTxSeq {
               validityEnd = initializationTxValidityEnd,
               spentUtxos = args.spentUtxos,
               headNativeScript = hns,
-              initialDeposit = args.initialDeposit,
+              initialTreasury = args.initialTreasury,
               tokenNames = tokenNames,
               hmrwCoin = multisigRegimeWitnessCoin,
               env = args.env,
@@ -317,23 +317,22 @@ object InitializationTxSeq {
         case class InitializationTxError(e: SomeBuildError) extends Error
         case class FallbackTxError(e: SomeBuildError) extends Error
 
+        // TODO: this is getting cumbersome, review
         final case class Args(
             spentUtxos: InitializationTx.SpentUtxos,
-            initialDeposit: Coin,
+            initialTreasury: Value,
             peers: NonEmptyList[VerificationKeyBytes],
             env: CardanoInfo,
             evaluator: PlutusScriptEvaluator,
             validators: Seq[Validator],
             initializationTxChangePP: ShelleyPaymentPart,
             tallyFeeAllowance: Coin,
-            // TODO: use FiniteDuration?
             // TODO: move to TxTiming?
             votingDuration: QuantizedFiniteDuration,
             txTiming: TxTiming,
-            // This is the zero point against which we calculate validity
-            // ranges. For initialization tx it corresponds to the time
-            // an initialization request was received.
-            initializedOn: QuantizedInstant
+            // Block zero creation time is the "zero point" against which we calculate validity
+            // ranges. It's a value peers agree on before opening a head.
+            blockZeroCreationTime: QuantizedInstant
         )
     }
 }

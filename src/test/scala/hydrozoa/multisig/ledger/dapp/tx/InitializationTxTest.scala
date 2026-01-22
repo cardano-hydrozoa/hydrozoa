@@ -79,7 +79,7 @@ val genInitTxRecipe: Gen[InitializationTx.Recipe] =
         // Initial deposit must be at least enough for the minAda of the treasury, and no more than the
         // sum of the seed utxos, while leaving enough left for the estimated fee and the minAda of the change
         // output
-        initialDeposit <- Gen
+        initialTreasuryCoin <- Gen
             .choose(
               minInitTreasuryAda.value,
               sumUtxoValues(spentUtxos.toList).coin.value
@@ -88,6 +88,8 @@ val genInitTxRecipe: Gen[InitializationTx.Recipe] =
             )
             .map(Coin(_))
 
+        initialTreasury = Value(initialTreasuryCoin)
+
         hmrwCoin <- Arbitrary.arbitrary[Coin]
 
     } yield InitializationTx.Recipe(
@@ -95,7 +97,7 @@ val genInitTxRecipe: Gen[InitializationTx.Recipe] =
           .unsafeRunSync() + 10.minutes, // FIXME: Generate
       spentUtxos = SpentUtxos(seedUtxo, otherSpentUtxos),
       headNativeScript = hns,
-      initialDeposit = initialDeposit,
+      initialTreasury = initialTreasury,
       tokenNames = tokenNames,
       hmrwCoin = hmrwCoin,
       env = testTxBuilderEnvironment,

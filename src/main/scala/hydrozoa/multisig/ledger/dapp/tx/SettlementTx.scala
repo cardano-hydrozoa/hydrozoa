@@ -318,7 +318,7 @@ object SettlementTx {
                 config: Tx.Builder.Config,
                 treasuryToSpend: MultisigTreasuryUtxo
             ): Spend =
-                Spend(treasuryToSpend.asUtxo, config.headNativeScript.witness)
+                Spend(treasuryToSpend.asUtxo, config.headNativeScript.witnessAttached)
 
             private def sendTreasury(args: Args): Send =
                 Send(treasuryOutput(args))
