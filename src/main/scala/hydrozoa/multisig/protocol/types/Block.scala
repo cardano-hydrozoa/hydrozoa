@@ -199,17 +199,7 @@ object Block {
         }
     }
 
-    // NOTE: (Peter, 2025-12-09) George has some comments on these in his Deposit/Refund branch.
-    // In addition to those, we should also note that ledgerEventsRequired should contain an entry for _every_ peer,
-    // regardless of if the peer submitted any _new_ events in this block; if there's no new events for a given peer,
-    // the ledgerEventsRequired entry should match that of the previous block.
-    //
-    // But one block "property" is that every valid block should have `ledgerEventsRequired` entries that are
-    // equal to the greatest entry in any of the List fields, if such an entry exists, and equal to the entry in the
-    // previous block otherwise.
-    enum Body {
-        case Initial extends Body
-
+    enum Body extends BodyFields.Events {
         case Minor(
             override val events: List[(LedgerEventId, ValidityFlag)],
             override val depositsRefunded: List[LedgerEventId]

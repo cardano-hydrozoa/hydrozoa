@@ -27,37 +27,28 @@ import scalus.cardano.ledger.SlotConfig
   */
 object BlockWeaver:
 
+    /** Configuration for the block weaver actor.
+      *
+      * @param lastKnownBlock
+      *   Normally this is always the initial block, the only block known to the head upfront. In *
+      *   the case of recovery it may be any block that was fully finished and synced to the *
+      *   persistence.
+      * @param peerId
+      *   this peer's own ID, which is used to determine the block numbers for which it should be
+      *   leader.
+      * @param recoveredMempool
+      *   Recovered mempool, i.e., all ledger events outstanding the indices of the last known *
+      *   block. Upon initialization is always an empty set by definition.
+      *
+      * @param jointLedger
+      *   handle for the joint ledger, to whom the block weaver will send messages.
+      * @param slotConfig
+      *   the slot configuration.
+      */
     final case class Config(
-        /** Normally this is always the initial block, the only block known to the head upfront. In
-          * the case of recovery it may be any block that was fully finished and synced to the
-          * persistence.
-          */
         lastKnownBlock: Block.Number,
-
-        /** Own peer number */
-        peerId: Peer.Number,
-
-        /** This is needed for [[isLeaderForBlock]] function, the total number of peers in the head.
-          *
-          * Invariant: >= 1
-          *
-          * TODO: likely we are going to move it to the head config
-          */
-        numberOfPeers: Int,
-
-        /** Round-robin peer's turn. see [[isLeaderForBlock]] function.
-          *
-          * Invariant: blockLeadTurn ∈ [1, numberOfPeers]
-          *
-          * TODO: likely we are going to move it to the head config
-          */
-        blockLeadTurn: Int,
-
-        /** Recovered mempool, i.e., all ledger events outstanding the indices of the last known
-          * block. Upon initialization is always an empty set by definition.
-          *
-          * TODO: shall we use just Seq[LedgerEvent here] not to expose Mempool?
-          */
+        peerId: Peer.Id,
+        // TODO: shall we use just Seq[LedgerEvent here] not to expose Mempool?
         recoveredMempool: Mempool,
         jointLedger: JointLedger.Handle,
         slotConfig: SlotConfig
@@ -450,7 +441,7 @@ class BlockWeaver(
         nextBlockNum: Block.Number,
         mempool: Mempool = Mempool.empty
     ): IO[Unit] =
-        if isLeaderForBlock(nextBlockNum)
+        if config.peerId.isLeader(nextBlockNum)
         then
             for {
                 // _ <- IO.println(s"becoming leader for block: $nextBlockNum")
@@ -462,19 +453,6 @@ class BlockWeaver(
                 _ <- stateRef.set(Leader(nextBlockNum))
             } yield ()
         else stateRef.set(Idle(mempool))
-
-    /** Determines whether the weaver is a leader for a block n:
-      *   - The leader for block n = 1 is those that has blockLeadTurn = 1
-      *   - ...
-      *   - The leader for block n = numberOfPeers is that with blockLeadTurn = numberOfPeers
-      *   - .. and so on and so forth
-      *
-      * @param blockNumber
-      *   the number of the block, n ∈ [1 .. inf). Technically it's defined for block number 0,
-      *   pointing to the last peer, but we don't need it in practice.
-      */
-    private def isLeaderForBlock(blockNumber: Block.Number): Boolean =
-        blockNumber % config.numberOfPeers == config.blockLeadTurn % config.numberOfPeers
 
     private def handlePollResults(pollResults: PollResults): IO[Unit] =
         pollResultsRef.set(pollResults)

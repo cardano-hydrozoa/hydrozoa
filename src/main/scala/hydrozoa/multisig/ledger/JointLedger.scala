@@ -6,6 +6,7 @@ import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.config.EquityShares
 import hydrozoa.lib.actor.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, toEpochQuantizedInstant}
+import hydrozoa.multisig.consensus.PeerLiaison
 import hydrozoa.multisig.consensus.ConsensusActor
 import hydrozoa.multisig.ledger.DappLedgerM.runDappLedgerM
 import hydrozoa.multisig.ledger.JointLedger.*
@@ -17,13 +18,13 @@ import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, Mult
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.{GenesisObligation, L2EventGenesis}
+import hydrozoa.multisig.protocol.types
 import hydrozoa.multisig.protocol.types.*
 import hydrozoa.multisig.protocol.types.AckBlock.{BlockAckSet, TxSignature}
 import hydrozoa.multisig.protocol.types.Block.*
 import hydrozoa.multisig.protocol.types.LedgerEvent.*
 import hydrozoa.multisig.protocol.types.LedgerEventId.ValidityFlag
 import hydrozoa.multisig.protocol.types.LedgerEventId.ValidityFlag.{Invalid, Valid}
-import hydrozoa.multisig.protocol.{ConsensusProtocol, types}
 import hydrozoa.{UtxoIdL1, Wallet}
 import monocle.Focus.focus
 import scala.collection.immutable.Queue
@@ -41,7 +42,7 @@ private case class TransientFields(
 // NOTE: As of 2025-11-16, George says BlockWeaver should be the ONLY actor calling the joint ledger
 final case class JointLedger(
     // TODO: use .Handle
-    peerLiaisons: Seq[ActorRef[IO, ConsensusProtocol.PeerLiaison.Request]],
+    peerLiaisons: Seq[ActorRef[IO, PeerLiaison.Request]],
     consensusActor: ConsensusActor.Handle,
     wallet: Wallet,
     //// Static config fields

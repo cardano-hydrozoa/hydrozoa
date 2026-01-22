@@ -132,6 +132,15 @@ object AckBlock {
 
         def apply(i: Int): Number = i
 
+        /** The given block will be confirmed when AckBlocks with this AckBlock.Number are received
+          * from all peers. It is equal to the block number plus the major version number because:
+          *   - Minor blocks each need only one ack and don't increment the major version.
+          *   - Major and final blocks each need two acks and do increment the major version.
+          */
+        def neededToConfirm(block: Block.Next): Number =
+            import block.header
+            header.blockNum + header.blockVersion.major
+
         given Conversion[Number, Int] = identity
 
         given Ordering[Number] with {
