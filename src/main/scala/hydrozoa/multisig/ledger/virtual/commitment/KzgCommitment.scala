@@ -1,9 +1,10 @@
 package hydrozoa.multisig.ledger.virtual.commitment
 
+import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
 import java.math.BigInteger
 import scalus.builtin.Builtins.{blake2b_224, serialiseData}
-import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
+import scalus.builtin.{BLS12_381_G1_Element, ByteString}
 import scalus.cardano.ledger.*
 import scalus.ledger.api.v3.TxInInfo
 import scalus.prelude.List as SList
@@ -12,10 +13,15 @@ import scalus.|>
 import supranational.blst.{P1, Scalar}
 
 object KzgCommitment {
-    def empty: KzgCommitment = calculateCommitment(hashToScalar(Map.empty))
 
     // WARNING: you can't just `==` IArray, because it doesn't compare on the value of the elements.
     type KzgCommitment = IArray[Byte]
+
+    extension (self: KzgCommitment)
+        def asByteString: ByteString = ByteString.fromArray(IArray.genericWrapArray(self).toArray)
+        def asG1Element: BLS12_381_G1_Element = BLS12_381_G1_Element(self.asByteString)
+
+    def empty: KzgCommitment = calculateCommitment(hashToScalar(Map.empty))
 
     def hashToScalar(utxo: Utxos): SList[Scalar] =
 
@@ -37,6 +43,10 @@ object KzgCommitment {
 
         // println(s"utxos hashes: ${scalars.map(e => BigInt.apply(e.to_bendian()))}")
         scalars
+
+    extension (self: Scalar)
+        def asScalusScalar: ScalusScalar =
+            ScalusScalar.fromByteStringBigEndianUnsafe(ByteString.fromArray(self.to_bendian()))
 
     /** Calculates the commitment for the pairing-based accumulator.
       *

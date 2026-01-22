@@ -6,7 +6,6 @@ import com.bloxbean.cardano.client.crypto.bip32.key.{HdPrivateKey, HdPublicKey}
 import com.bloxbean.cardano.client.crypto.config.CryptoConfiguration
 import com.bloxbean.cardano.client.transaction.util.TransactionBytes
 import hydrozoa.multisig.protocol.types.AckBlock.HeaderSignature
-
 import scala.language.implicitConversions
 import scalus.builtin.ByteString
 import scalus.builtin.JVMPlatformSpecific.signEd25519
