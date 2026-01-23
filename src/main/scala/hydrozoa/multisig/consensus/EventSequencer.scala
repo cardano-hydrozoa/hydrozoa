@@ -1,51 +1,58 @@
 package hydrozoa.multisig.consensus
 
-import cats.effect.{Deferred, IO, Ref}
+import cats.effect.{IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
+import hydrozoa.multisig.MultisigRegimeManager
+import hydrozoa.multisig.consensus.EventSequencer.*
 import hydrozoa.multisig.consensus.EventSequencer.Request.*
-import hydrozoa.multisig.consensus.EventSequencer.{Config, ConnectionsPending, Request}
+import hydrozoa.multisig.consensus.PeerLiaison.Handle
 import hydrozoa.multisig.ledger.dapp.tx.RefundTx
 import hydrozoa.multisig.protocol.*
 import hydrozoa.multisig.protocol.types.{Block, LedgerEvent, LedgerEventId, Peer}
-import scala.collection.immutable.Queue
 
-trait EventSequencer(config: Config, connections: ConnectionsPending) extends Actor[IO, Request] {
-    private val subscribers = Ref.unsafe[IO, Option[Subscribers]](None)
+trait EventSequencer(
+    config: Config,
+    pendingConnections: MultisigRegimeManager.PendingConnections | EventSequencer.Connections
+) extends Actor[IO, Request] {
+    private val connections = Ref.unsafe[IO, Option[EventSequencer.Connections]](None)
     private val state = State()
 
-    private final case class Subscribers(
-        newLedgerEvent: List[LedgerEvent.Subscriber]
-    )
-
-    override def preStart: IO[Unit] =
-        for {
-            blockWeaver <- connections.blockWeaver.get
-            peerLiaisons <- connections.peerLiaisons.get
-            _ <- subscribers.set(
-              Some(
-                Subscribers(
-                  newLedgerEvent = blockWeaver :: peerLiaisons
-                )
-              )
+    private def getConnections: IO[Connections] = for {
+        mConn <- this.connections.get
+        conn <- mConn.fold(
+          IO.raiseError(
+            java.lang.Error(
+              "Event sequencer is missing its connections to other actors."
             )
-        } yield ()
+          )
+        )(IO.pure)
+    } yield conn
+
+    private def initializeConnections: IO[Unit] = pendingConnections match {
+        case x: MultisigRegimeManager.PendingConnections =>
+            for {
+                _connections <- x.get
+                _ <- connections.set(
+                  Some(
+                    Connections(
+                      blockWeaver = _connections.blockWeaver,
+                      peerLiaisons = _connections.peerLiaisons
+                    )
+                  )
+                )
+            } yield ()
+        case x: EventSequencer.Connections => connections.set(Some(x))
+    }
+
+    override def preStart: IO[Unit] = initializeConnections
 
     override def receive: Receive[IO, Request] =
-        PartialFunction.fromFunction(req =>
-            subscribers.get.flatMap {
-                case Some(subs) =>
-                    this.receiveTotal(req, subs)
-                case _ =>
-                    Error(
-                      "Impossible: Ledger event actor is receiving before its preStart provided subscribers."
-                    ).raiseError
-            }
-        )
+        PartialFunction.fromFunction(req => getConnections.flatMap(receiveTotal(req, _)))
 
-    private def receiveTotal(req: Request, subs: Subscribers): IO[Unit] =
+    private def receiveTotal(req: Request, conn: Connections): IO[Unit] =
         req match {
             case x: LedgerEvent =>
                 for {
@@ -55,7 +62,8 @@ trait EventSequencer(config: Config, connections: ConnectionsPending) extends Ac
                         case y: LedgerEvent.TxL2Event       => y.copy(eventId = newId)
                         case y: LedgerEvent.RegisterDeposit => y.copy(eventId = newId)
                     }
-                    _ <- (subs.newLedgerEvent ! newEvent).parallel
+                    _ <- conn.blockWeaver ! newEvent
+                    _ <- (conn.peerLiaisons ! newEvent).parallel
                 } yield ()
             case x: BlockConfirmed =>
                 // Complete the deferred ledger event outcomes confirmed by the block and remove them from queue
@@ -64,10 +72,10 @@ trait EventSequencer(config: Config, connections: ConnectionsPending) extends Ac
 
     private final class State {
         private val nLedgerEvent = Ref.unsafe[IO, LedgerEventId.Number](LedgerEventId.Number(0))
-        private val localRequests =
-            Ref.unsafe[IO, Queue[(LedgerEventId.Number, Deferred[IO, Unit])]](
-              Queue()
-            )
+//        private val localRequests =
+//            Ref.unsafe[IO, Queue[(LedgerEventId.Number, Deferred[IO, Unit])]](
+//              Queue()
+//            )
 
         def nextLedgerEventNum(): IO[LedgerEventId.Number] =
             for {
@@ -87,14 +95,17 @@ trait EventSequencer(config: Config, connections: ConnectionsPending) extends Ac
   * the consensus system.
   */
 object EventSequencer {
-    def apply(config: Config, connections: ConnectionsPending): IO[EventSequencer] =
-        IO(new EventSequencer(config, connections) {})
+    def apply(
+        config: Config,
+        pendingConnections: MultisigRegimeManager.PendingConnections
+    ): IO[EventSequencer] =
+        IO(new EventSequencer(config, pendingConnections) {})
 
     final case class Config(peerId: Peer.Id)
 
-    final case class ConnectionsPending(
-        blockWeaver: Deferred[IO, BlockWeaver.Handle],
-        peerLiaisons: Deferred[IO, List[PeerLiaison.Handle]]
+    final case class Connections(
+        blockWeaver: BlockWeaver.Handle,
+        peerLiaisons: List[PeerLiaison.Handle]
     )
 
     type Handle = ActorRef[IO, Request]

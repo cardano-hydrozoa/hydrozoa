@@ -64,12 +64,13 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
           lastKnownBlock = lastKnownBlock,
           peerId = peerId,
           recoveredMempool = BlockWeaver.Mempool.apply(events),
-          jointLedger = jointLedgerMockActor,
           slotConfig = testTxBuilderEnvironment.slotConfig
         )
 
+        val connections = BlockWeaver.Connections(jointLedgerMockActor)
+
         // Weaver
-        val _ = p.runIO(system.actorOf(BlockWeaver(config)))
+        val _ = p.runIO(system.actorOf(BlockWeaver(config, connections)))
 
         def aroundNow(other: Instant): Boolean = {
             val now = p.runIO(realTimeQuantizedInstant(slotConfig = config.slotConfig))
@@ -123,12 +124,13 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
               lastKnownBlock = Block.Number(lastKnownBlock),
               peerId = peerId,
               recoveredMempool = BlockWeaver.Mempool.empty,
-              jointLedger = jointLedgerMockActor,
               slotConfig = testTxBuilderEnvironment.slotConfig
             )
 
+            val connections = BlockWeaver.Connections(jointLedgerMockActor)
+
             // Weaver
-            val weaverActor = p.runIO(system.actorOf(BlockWeaver(config)))
+            val weaverActor = p.runIO(system.actorOf(BlockWeaver(config, connections)))
 
             val _ = p.runIO(system.waitForIdle())
 
@@ -173,12 +175,13 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
               lastKnownBlock = Block.Number(turn + roundsCompleted * peers.size - 1),
               peerId = peerId,
               recoveredMempool = BlockWeaver.Mempool.empty,
-              jointLedger = jointLedgerMockActor,
               slotConfig = testTxBuilderEnvironment.slotConfig
             )
 
+            val connections = BlockWeaver.Connections(jointLedgerMockActor)
+
             // Weaver
-            val weaverActor = p.runIO(system.actorOf(BlockWeaver(config)))
+            val weaverActor = p.runIO(system.actorOf(BlockWeaver(config, connections)))
 
             // Any random events
             val events: Seq[LedgerEvent] =
@@ -231,12 +234,13 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
           lastKnownBlock = lastKnownBlock,
           peerId = peerId,
           recoveredMempool = BlockWeaver.Mempool.empty,
-          jointLedger = jointLedgerMockActor,
           slotConfig = testTxBuilderEnvironment.slotConfig
         )
 
+        val connections = BlockWeaver.Connections(jointLedgerMockActor)
+
         // Weaver
-        val weaverActor = p.runIO(system.actorOf(BlockWeaver(config)))
+        val weaverActor = p.runIO(system.actorOf(BlockWeaver(config, connections)))
 
         // Random ledger events
         val eventsTotal = p.pick(Gen.choose(5, 100), "total number of events")

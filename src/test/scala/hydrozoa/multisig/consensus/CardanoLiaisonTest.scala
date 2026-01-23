@@ -675,11 +675,12 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                               skeleton._1.initialSigned,
                               skeleton._1.fallbackSigned,
                               100.millis,
-                              slotConfig = testTxBuilderEnvironment.slotConfig,
-                              blockWeaver = blockWeaver
+                              slotConfig = testTxBuilderEnvironment.slotConfig
                             )
 
-                            cardanoLiaison <- CardanoLiaison.apply(config)
+                            connections = CardanoLiaison.Connections(blockWeaver)
+
+                            cardanoLiaison <- CardanoLiaison.apply(config, connections)
 
                             // Use protected handlers directly to present all effects
                             _ <- skeleton._2.traverse_(s =>

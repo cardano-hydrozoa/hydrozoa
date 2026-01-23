@@ -1,8 +1,6 @@
 package hydrozoa.multisig.protocol.types
 
-import cats.effect.IO
 import cats.syntax.all.*
-import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.LedgerEventId.ValidityFlag
@@ -45,8 +43,6 @@ enum Block {
 }
 
 object Block {
-    type Subscriber = ActorRef[IO, Block.Next]
-
     type Next = Block.Minor | Block.Major | Block.Final
 
     extension (next: Next)

@@ -1,8 +1,6 @@
 package hydrozoa.multisig.protocol.types
 
-import cats.effect.IO
 import cats.syntax.all.*
-import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming
 import scalus.cardano.ledger.Coin
@@ -78,8 +76,4 @@ object LedgerEvent {
         txTiming: TxTiming,
         blockStartTime: QuantizedInstant
     ) extends LedgerEvent
-
-    // TODO: do we still need it?
-    type Subscriber = ActorRef[IO, LedgerEvent]
-
 }
