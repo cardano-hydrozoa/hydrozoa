@@ -1,58 +1,56 @@
 package hydrozoa.multisig.consensus
 
-import cats.effect.{Deferred, IO, Ref}
+import cats.effect.{IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
+import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.PeerLiaison.*
 import hydrozoa.multisig.consensus.PeerLiaison.Request.*
 import hydrozoa.multisig.protocol.types.*
 import scala.collection.immutable.Queue
 
-trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor[IO, Request] {
-    private val subscribers = Ref.unsafe[IO, Option[Subscribers]](None)
+trait PeerLiaison(
+    config: Config,
+    pendingConnections: MultisigRegimeManager.PendingConnections | PeerLiaison.Connections,
+) extends Actor[IO, Request] {
+    private val connections = Ref.unsafe[IO, Option[Connections]](None)
     private val state = State()
 
-    private final case class Subscribers(
-        ackBlock: AckBlock.Subscriber,
-        newBlock: Block.Subscriber,
-        newLedgerEvent: LedgerEvent.Subscriber,
-        remotePeerLiaison: PeerLiaison.Handle
-    )
-
-    override def preStart: IO[Unit] =
-        for {
-            blockWeaver <- connections.blockWeaver.get
-            consensusActor <- connections.consensusActor.get
-            // This means that the comm actor will not start receiving until it is connected to its
-            // remote counterpart:
-            remotePeerLiaison <- connections.remotePeerLiaison.get
-            _ <- subscribers.set(
-              Some(
-                Subscribers(
-                  ackBlock = consensusActor,
-                  newBlock = blockWeaver,
-                  newLedgerEvent = blockWeaver,
-                  remotePeerLiaison = remotePeerLiaison
-                )
-              )
+    private def getConnections: IO[Connections] = for {
+        mConn <- this.connections.get
+        conn <- mConn.fold(
+          IO.raiseError(
+            java.lang.Error(
+              "Peer liaison is missing its connections to other actors."
             )
-        } yield ()
+          )
+        )(IO.pure)
+    } yield conn
 
-    override def receive: Receive[IO, Request] = PartialFunction.fromFunction(req =>
-        subscribers.get.flatMap {
-            case Some(subs) =>
-                this.receiveTotal(req, subs)
-            case _ =>
-                IO.raiseError(
-                  Error(
-                    "Impossible: Comm actor is receiving before its preStart provided subscribers."
+    private def initializeConnections: IO[Unit] = pendingConnections match {
+        case x: MultisigRegimeManager.PendingConnections =>
+            for {
+                _connections <- x.get
+                _ <- connections.set(
+                  Some(
+                    Connections(
+                      blockWeaver = _connections.blockWeaver,
+                      consensusActor = _connections.consensusActor,
+                      remotePeerLiaison = _connections.remotePeerLiaisons(config.remotePeerId)
+                    )
                   )
                 )
-        }
-    )
+            } yield ()
+        case x: PeerLiaison.Connections => connections.set(Some(x))
+    }
 
-    private def receiveTotal(req: Request, subs: Subscribers): IO[Unit] =
+    override def preStart: IO[Unit] = initializeConnections
+
+    override def receive: Receive[IO, Request] =
+        PartialFunction.fromFunction(req => getConnections.flatMap(receiveTotal(req, _)))
+
+    private def receiveTotal(req: Request, conn: Connections): IO[Unit] =
         req match {
             case x: RemoteBroadcast =>
                 for {
@@ -61,14 +59,14 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
                     // Check whether the next batch must be sent immediately, and then turn off the flag regardless.
                     mbBatchReq <- state.dischargeSendNextBatchImmediately
                     // Pretend we just received the cached batch request that we need to send immediately (if any)
-                    _ <- mbBatchReq.fold(IO.unit)(batchReq => receiveTotal(batchReq, subs))
+                    _ <- mbBatchReq.fold(IO.unit)(batchReq => receiveTotal(batchReq, conn))
                 } yield ()
             case x: GetMsgBatch =>
                 for {
                     eNewBatch <- state.buildNewMsgBatch(x, config.maxLedgerEventsPerBatch)
                     _ <- eNewBatch match {
                         case Right(newBatch) =>
-                            subs.remotePeerLiaison ! newBatch
+                            conn.remotePeerLiaison ! newBatch
                         case Left(state.EmptyNewMsgBatch) =>
                             state.sendNextBatchImmediatelyUponNewMsg(x)
                         case Left(state.OutOfBoundsGetMsgBatch) =>
@@ -79,10 +77,10 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
             case x: NewMsgBatch =>
                 for {
                     next: GetMsgBatch <- state.verifyBatchAndGetNext(x)
-                    _ <- subs.remotePeerLiaison ! next
-                    _ <- x.ack.traverse_(subs.ackBlock ! _)
-                    _ <- x.block.traverse_(subs.newBlock ! _)
-                    _ <- x.events.traverse_(subs.newLedgerEvent ! _)
+                    _ <- conn.remotePeerLiaison ! next
+                    _ <- x.ack.traverse_(conn.consensusActor ! _)
+                    _ <- x.block.traverse_(conn.blockWeaver ! _)
+                    _ <- x.events.traverse_(conn.blockWeaver ! _)
                 } yield ()
 
             // TODO: when the final block is confirmed, inform the counterpart that
@@ -211,7 +209,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
         def dequeueConfirmed(x: BlockConfirmed): IO[Unit] = {
             import x.*
             val blockNum: Block.Number = block.blockNum
-            val ackNum: AckBlock.Number = AckBlock.Number.neededToConfirm(block)
+            val ackNum: AckBlock.Number = AckBlock.Number.neededToConfirm(block.header)
             val eventNum: LedgerEventId.Number = block.body.events.collect {
                 case x if x._1.peerNum == config.ownPeerId.peerNum => x._1.eventNum
             }.max
@@ -273,8 +271,11 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
   *   - Responds to the counterpart's requests for communication batches.
   */
 object PeerLiaison {
-    def apply(config: Config, connections: ConnectionsPending): IO[PeerLiaison] =
-        IO(new PeerLiaison(config, connections) {})
+    def apply(
+        config: Config,
+        pendingLocalConnections: MultisigRegimeManager.PendingConnections,
+    ): IO[PeerLiaison] =
+        IO(new PeerLiaison(config, pendingLocalConnections) {})
 
     final case class Config(
         ownPeerId: Peer.Id,
@@ -282,10 +283,10 @@ object PeerLiaison {
         maxLedgerEventsPerBatch: Int = 25
     )
 
-    final case class ConnectionsPending(
-        blockWeaver: Deferred[IO, BlockWeaver.Handle],
-        consensusActor: Deferred[IO, ConsensusActor.Handle],
-        remotePeerLiaison: Deferred[IO, PeerLiaison.Handle]
+    final case class Connections(
+        blockWeaver: BlockWeaver.Handle,
+        consensusActor: ConsensusActor.Handle,
+        remotePeerLiaison: PeerLiaison.Handle
     )
 
     type Handle = ActorRef[IO, Request]

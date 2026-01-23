@@ -88,9 +88,9 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
             fallbackTx = initializationTxSeq.fallbackTx
 
             initTxWitnesses: List[VKeyWitness] =
-                peers.map(p => p.wallet.createTxKeyWitness(initializationTx.tx)).toList
+                peers.map(p => p.wallet.signTx(initializationTx.tx)).toList
             fallbackTxWitnesses: List[VKeyWitness] =
-                peers.map(p => p.wallet.createTxKeyWitness(fallbackTx.tx)).toList
+                peers.map(p => p.wallet.signTx(fallbackTx.tx)).toList
 
             initialBlockEffectsSigned: BlockEffectsSigned.Initial = BlockEffectsSigned.Initial(
               blockNum = Block.Number.zero,
@@ -176,20 +176,19 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                                 settlementTx = result.settlementTxSeq.settlementTx
                                 settlementTxWitnesses: List[VKeyWitness] =
                                     peers
-                                        .map(p => p.wallet.createTxKeyWitness(settlementTx.tx))
+                                        .map(p => p.wallet.signTx(settlementTx.tx))
                                         .toList
 
                                 fallbackTx = result.fallbackTx
                                 fallbackTxWitnesses: List[VKeyWitness] =
                                     peers
-                                        .map(p => p.wallet.createTxKeyWitness(fallbackTx.tx))
+                                        .map(p => p.wallet.signTx(fallbackTx.tx))
                                         .toList
 
                                 rolloutTxs = result.settlementTxSeq.mbRollouts
                                 rolloutTxWitnesses: List[List[VKeyWitness]] =
-                                    rolloutTxs.map(r =>
-                                        peers.map(p => p.wallet.createTxKeyWitness(r.tx)).toList
-                                    )
+                                    rolloutTxs
+                                        .map(r => peers.map(p => p.wallet.signTx(r.tx)).toList)
 
                                 blockEffects: BlockEffectsSigned.Major =
                                     BlockEffectsSigned.Major(
@@ -255,19 +254,19 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
             finalizationTx = finalizationTxSeq.finalizationTx
             finalizationTxWitnesses: List[VKeyWitness] =
                 peers
-                    .map(p => p.wallet.createTxKeyWitness(finalizationTx.tx))
+                    .map(p => p.wallet.signTx(finalizationTx.tx))
                     .toList
 
             rolloutTxs = finalizationTxSeq.mbRollouts
             rolloutTxWitnesses: List[List[VKeyWitness]] =
-                rolloutTxs.map(r => peers.map(p => p.wallet.createTxKeyWitness(r.tx)).toList)
+                rolloutTxs.map(r => peers.map(p => p.wallet.signTx(r.tx)).toList)
 
             mbDeinitTx = finalizationTxSeq.mbDeinit
             deinitTxWitnesses: List[VKeyWitness] =
                 mbDeinitTx
                     .map(deinitTx =>
                         peers
-                            .map(p => p.wallet.createTxKeyWitness(deinitTx.tx))
+                            .map(p => p.wallet.signTx(deinitTx.tx))
                             .toList
                     )
                     .getOrElse(List.empty)
@@ -675,11 +674,12 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                               skeleton._1.initialSigned,
                               skeleton._1.fallbackSigned,
                               100.millis,
-                              slotConfig = testTxBuilderEnvironment.slotConfig,
-                              blockWeaver = blockWeaver
+                              slotConfig = testTxBuilderEnvironment.slotConfig
                             )
 
-                            cardanoLiaison <- CardanoLiaison.apply(config)
+                            connections = CardanoLiaison.Connections(blockWeaver)
+
+                            cardanoLiaison <- CardanoLiaison.apply(config, connections)
 
                             // Use protected handlers directly to present all effects
                             _ <- skeleton._2.traverse_(s =>

@@ -168,20 +168,27 @@ object JointLedgerTestHelpers {
             jointLedger <- PropertyM.run(
               system.actorOf(
                 JointLedger(
-                  peerLiaisons = Seq.empty,
-                  tallyFeeAllowance = Coin.ada(2),
-                  initialBlockTime = initializedOn,
-                  initialBlockKzg = KzgCommitment.empty,
-                  equityShares = equityShares,
-                  multisigRegimeUtxo = config.multisigRegimeUtxo,
-                  votingDuration =
-                      FiniteDuration(24, HOURS).quantize(testTxBuilderEnvironment.slotConfig),
-                  treasuryTokenName = config.tokenNames.headTokenName,
-                  initialTreasury = initTx.initializationTx.treasuryProduced,
-                  config = config,
-                  txTiming = txTiming,
-                  initialFallbackValidityStart =
-                      initializedOn + txTiming.minSettlementDuration + txTiming.inactivityMarginDuration + txTiming.silenceDuration
+                  JointLedger.Config(
+                    peerId = Peer.Id(peers.head.ordinal, peers.size),
+                    wallet = ???,
+                    tallyFeeAllowance = Coin.ada(2),
+                    initialBlockTime = initializedOn,
+                    initialBlockKzg = KzgCommitment.empty,
+                    equityShares = equityShares,
+                    multisigRegimeUtxo = config.multisigRegimeUtxo,
+                    votingDuration =
+                        FiniteDuration(24, HOURS).quantize(testTxBuilderEnvironment.slotConfig),
+                    treasuryTokenName = config.tokenNames.headTokenName,
+                    initialTreasury = initTx.initializationTx.treasuryProduced,
+                    txBuilderConfig = config,
+                    txTiming = txTiming,
+                    initialFallbackValidityStart =
+                        initializedOn + txTiming.minSettlementDuration + txTiming.inactivityMarginDuration + txTiming.silenceDuration
+                  ),
+                  JointLedger.Connections(
+                    consensusActor = ???,
+                    peerLiaisons = List()
+                  )
                 )
               )
             )
@@ -264,7 +271,7 @@ object JointLedgerTestHelpers {
             pollResults: Set[UtxoIdL1]
         ): JLTest[Unit] =
             completeBlockRegular(
-              CompleteBlockRegular(referenceBlock, pollResults: Set[UtxoIdL1])
+              CompleteBlockRegular(referenceBlock, pollResults: Set[UtxoIdL1], false)
             )
 
         def completeBlockFinal(req: CompleteBlockFinal): JLTest[Unit] =
@@ -392,8 +399,8 @@ object JointLedgerTestHelpers {
 
                 req =
                     RegisterDeposit(
-                      depositTxBytes = signTx(peer, depositRefundTxSeq.depositTx.tx).toCbor,
-                      refundTxBytes = signTx(peer, depositRefundTxSeq.refundTx.tx).toCbor,
+                      depositTxBytes = peer.signTx(depositRefundTxSeq.depositTx.tx).toCbor,
+                      refundTxBytes = peer.signTx(depositRefundTxSeq.refundTx.tx).toCbor,
                       donationToTreasury = Coin.zero,
                       virtualOutputsBytes = virtualOutputsBytes,
                       eventId = eventId,

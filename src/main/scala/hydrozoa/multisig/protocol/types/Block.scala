@@ -1,8 +1,6 @@
 package hydrozoa.multisig.protocol.types
 
-import cats.effect.IO
 import cats.syntax.all.*
-import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.LedgerEventId.ValidityFlag
@@ -45,11 +43,15 @@ enum Block {
 }
 
 object Block {
-    type Subscriber = ActorRef[IO, Block.Next]
-
     type Next = Block.Minor | Block.Major | Block.Final
 
     extension (next: Next)
+
+        def header: Block.Header = next match {
+            case b: Block.Minor => b.header
+            case b: Block.Major => b.header
+            case b: Block.Final => b.header
+        }
 
         def blockNum: Block.Number = next match {
             case b: Block.Minor => b.id
@@ -73,7 +75,6 @@ object Block {
 
     enum Header(val blockType: Type) extends HeaderFields.Mandatory {
         case Initial(
-            // TODO: this seems to be the same as `initializedOn`
             override val timeCreation: QuantizedInstant,
             override val commitment: KzgCommitment
         ) extends Header(Type.Initial), HeaderFields.InitialHeaderFields, HeaderFields.Commitment
