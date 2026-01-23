@@ -6,8 +6,9 @@ import com.bloxbean.cardano.client.api.model.{Result, Utxo}
 import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.backend.blockfrost.common.Constants
 import com.bloxbean.cardano.client.backend.blockfrost.service.BFBackendService
+import com.bloxbean.cardano.client.backend.model.AssetTransactionContent
 import com.bloxbean.cardano.client.quicktx.TxResult
-import hydrozoa.multisig.backend.cardano.CardanoBackend.Error.Unknown
+import hydrozoa.multisig.backend.cardano.CardanoBackend.Error.Unexpected
 import hydrozoa.multisig.backend.cardano.CardanoBackend.GetTxInfo
 import hydrozoa.{L1, OutputL1, UtxoIdL1, UtxoSet, UtxoSetL1}
 import scala.collection.mutable
@@ -21,29 +22,28 @@ class CardanoBackendBlockfrost private (
 ) extends CardanoBackend[IO] {
 
     override def utxosAt(address: ShelleyAddress): IO[Either[CardanoBackend.Error, UtxoSetL1]] =
-        utxosAtWith(page =>
-            // TODO: is it safe to use .get here?
+        paginate(page =>
             backendService.getUtxoService
                 .getUtxos(address.toBech32.get, pageSize, page, OrderEnum.asc)
-        )
+        ).map(ret => ret.map(utxos => UtxoSet[L1](utxos.map(convert).toMap)))
 
     override def utxosAt(
         address: ShelleyAddress,
         asset: (PolicyId, AssetName)
     ): IO[Either[CardanoBackend.Error, UtxoSetL1]] = {
         val unit = s"${asset._1.toHex}${asset._2.bytes.toHex}"
-        utxosAtWith(page =>
-            // TODO: is it safe to use .get here?
+        paginate(page =>
             backendService.getUtxoService
                 .getUtxos(address.toBech32.get, unit, pageSize, page, OrderEnum.asc)
-        )
+        ).map(ret => ret.map(utxos => UtxoSet[L1](utxos.map(convert).toMap)))
     }
 
-    private def utxosAtWith(
-        apiCall: Int => Result[java.util.List[Utxo]]
-    ): IO[Either[CardanoBackend.Error, UtxoSetL1]] =
+    private def paginate[A](
+        apiCall: Int => Result[java.util.List[A]],
+        mbStopPred: Option[A => Boolean] = None
+    ): IO[Either[CardanoBackend.Error, List[A]]] =
         IO {
-            val utxos: mutable.Buffer[Utxo] = mutable.Buffer.empty
+            val elems: mutable.Buffer[A] = mutable.Buffer.empty
             var page: Int = 1
 
             while {
@@ -51,20 +51,27 @@ class CardanoBackendBlockfrost private (
                 if result.isSuccessful then {
                     result.getValue.asScala.toList match {
                         case Nil => false
-                        case someUtxos =>
-                            utxos.addAll(someUtxos)
+                        case someElems =>
+                            val toAdd = mbStopPred.fold(someElems)(stopPred =>
+                                someElems.takeWhile(e => !stopPred(e))
+                            )
+                            elems.addAll(toAdd)
                             page = page + 1
-                            true
+                            toAdd.sizeIs == someElems.size
                     }
                 } else {
-                    throw RuntimeException(
-                      s"error while trying to fetch page $page: ${result.getResponse}"
-                    )
+                    // Blockfrost replies with HTTP 404 when there is no elements on the list
+                    if result.code() == 404
+                    then false
+                    else
+                        throw RuntimeException(
+                          s"Non-404 error while trying to fetch page $page: ${result.getResponse}"
+                        )
                 }
             } do ()
-            Right(UtxoSet[L1](utxos.map(utxo => convert(utxo)).toMap))
+            Right(elems.toList)
         }.handleError(e =>
-            Left(Unknown(s"${e.getMessage}, caused by: ${
+            Left(Unexpected(s"${e.getMessage}, caused by: ${
                     if e.getCause != null then e.getCause.getMessage else "N/A"
                 }"))
         )
@@ -151,24 +158,66 @@ class CardanoBackendBlockfrost private (
         txHash: TransactionHash
     ): IO[Either[CardanoBackend.Error, GetTxInfo.Response]] =
         IO {
-            val result = backendService.getTransactionService.getTransaction(txHash.toHex)
-            if result.isSuccessful then Right(GetTxInfo.Response(true))
-            else Right(GetTxInfo.Response(false))
+            val txResult = backendService.getTransactionService.getTransaction(txHash.toHex)
+            if !txResult.isSuccessful then Right(GetTxInfo.Response(false))
+            else
+                val redeemersResult =
+                    backendService.getTransactionService.getTransactionRedeemers(txHash.toHex)
+                if !redeemersResult.isSuccessful then Right(GetTxInfo.Response(true, List.empty))
+                else
+                    import scalus.builtin.{ByteString, Data}
+                    import io.bullet.borer.Cbor
+                    import scala.jdk.CollectionConverters.*
+                    import com.bloxbean.cardano.client.plutus.spec.RedeemerTag
+
+                    val spendingRedeemersData = redeemersResult.getValue.asScala
+                        .filter(_.getPurpose == RedeemerTag.Spend)
+                        .flatMap { redeemer =>
+                            val datumCborResult = backendService.getScriptService
+                                .getScriptDatumCbor(redeemer.getDatumHash)
+                            if datumCborResult.isSuccessful then
+                                scala.util.Try {
+                                    val datumBytes =
+                                        ByteString.fromHex(datumCborResult.getValue.getCbor)
+                                    Cbor.decode(datumBytes.bytes).to[Data].value
+                                }.toOption
+                            else None
+                        }
+                        .toList
+
+                    Right(GetTxInfo.Response(true, spendingRedeemersData))
 
         }.handleError(e =>
-            Left(Unknown(s"${e.getMessage}, caused by: ${
+            Left(Unexpected(s"${e.getMessage}, caused by: ${
                     if e.getCause != null then e.getCause.getMessage else "N/A"
                 }"))
         )
+
+    override def assetTxs(
+        asset: (PolicyId, AssetName),
+        after: TransactionHash
+    ): IO[Either[CardanoBackend.Error, List[TransactionHash]]] =
+        val unit = s"${asset._1.toHex}${asset._2.bytes.toHex}"
+        val hex = after.toHex
+        paginate(
+          page =>
+              backendService.getAssetService.getTransactions(
+                unit,
+                pageSize,
+                page,
+                OrderEnum.desc
+              ),
+          Some((c: AssetTransactionContent) => { c.getTxHash == hex })
+        ).map(ret => ret.map(content => content.map(e => TransactionHash.fromHex(e.getTxHash))))
 
     override def submitTx(tx: Transaction): IO[Either[CardanoBackend.Error, Unit]] =
         IO {
             backendService.getTransactionService.submitTransaction(tx.toCbor) match {
                 case result: TxResult if result.isSuccessful => Right(())
-                case result: TxResult                        => Left(Unknown(result.getResponse))
+                case result: TxResult                        => Left(Unexpected(result.getResponse))
             }
         }.handleError(e =>
-            Left(Unknown(s"${e.getMessage}, caused by: ${
+            Left(Unexpected(s"${e.getMessage}, caused by: ${
                     if e.getCause != null then e.getCause.getMessage else "N/A"
                 }"))
         )
