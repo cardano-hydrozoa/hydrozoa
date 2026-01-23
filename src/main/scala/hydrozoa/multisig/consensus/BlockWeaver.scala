@@ -58,8 +58,8 @@ object BlockWeaver:
     )
 
     final case class Connections(
-        override val jointLedger: JointLedger.Handle
-    ) extends MultisigRegimeManager.Connections.JointLedger
+        jointLedger: JointLedger.Handle
+    )
 
     // ===================================
     // Weaver internal state

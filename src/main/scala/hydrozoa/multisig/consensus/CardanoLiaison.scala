@@ -56,8 +56,8 @@ object CardanoLiaison:
     )
 
     final case class Connections(
-        override val blockWeaver: BlockWeaver.Handle
-    ) extends MultisigRegimeManager.Connections.BlockWeaver
+        blockWeaver: BlockWeaver.Handle
+    )
 
     // ===================================
     // Actor's Internal state

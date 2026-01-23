@@ -166,30 +166,14 @@ object MultisigRegimeManager {
     )
 
     final case class Connections(
-        override val blockWeaver: BlockWeaver.Handle,
-        override val cardanoLiaison: CardanoLiaison.Handle,
-        override val consensusActor: ConsensusActor.Handle,
-        override val eventSequencer: EventSequencer.Handle,
-        override val jointLedger: JointLedger.Handle,
-        override val peerLiaisons: List[PeerLiaison.Handle],
-        override val remotePeerLiaisons: Map[Peer.Id, PeerLiaison.Handle],
-    ) extends Connections.BlockWeaver,
-          Connections.CardanoLiaison,
-          Connections.ConsensusActor,
-          Connections.EventSequencer,
-          Connections.JointLedger,
-          Connections.PeerLiaisons,
-          Connections.RemotePeerLiaisons
-
-    object Connections {
-        trait BlockWeaver { def blockWeaver: BlockWeaver.Handle }
-        trait CardanoLiaison { def cardanoLiaison: CardanoLiaison.Handle }
-        trait ConsensusActor { def consensusActor: ConsensusActor.Handle }
-        trait EventSequencer { def eventSequencer: EventSequencer.Handle }
-        trait JointLedger { def jointLedger: JointLedger.Handle }
-        trait PeerLiaisons { def peerLiaisons: List[PeerLiaison.Handle] }
-        trait RemotePeerLiaisons { def remotePeerLiaisons: Map[Peer.Id, PeerLiaison.Handle] }
-    }
+        blockWeaver: BlockWeaver.Handle,
+        cardanoLiaison: CardanoLiaison.Handle,
+        consensusActor: ConsensusActor.Handle,
+        eventSequencer: EventSequencer.Handle,
+        jointLedger: JointLedger.Handle,
+        peerLiaisons: List[PeerLiaison.Handle],
+        remotePeerLiaisons: Map[Peer.Id, PeerLiaison.Handle],
+    )
 
     type PendingConnections = Deferred[IO, Connections]
 

@@ -248,14 +248,11 @@ object ConsensusActor:
     )
 
     final case class Connections(
-        override val blockWeaver: BlockWeaver.Handle,
-        override val cardanoLiaison: CardanoLiaison.Handle,
-        override val eventSequencer: EventSequencer.Handle,
-        override val peerLiaisons: List[PeerLiaison.Handle],
-    ) extends MultisigRegimeManager.Connections.BlockWeaver,
-          MultisigRegimeManager.Connections.CardanoLiaison,
-          MultisigRegimeManager.Connections.EventSequencer,
-          MultisigRegimeManager.Connections.PeerLiaisons
+        blockWeaver: BlockWeaver.Handle,
+        cardanoLiaison: CardanoLiaison.Handle,
+        eventSequencer: EventSequencer.Handle,
+        peerLiaisons: List[PeerLiaison.Handle],
+    )
 
     // ===================================
     // Actor's state

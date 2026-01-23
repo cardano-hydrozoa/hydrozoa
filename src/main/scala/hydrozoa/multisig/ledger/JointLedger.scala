@@ -713,10 +713,9 @@ object JointLedger {
     )
 
     final case class Connections(
-        override val consensusActor: ConsensusActor.Handle,
-        override val peerLiaisons: List[PeerLiaison.Handle]
-    ) extends MultisigRegimeManager.Connections.ConsensusActor,
-          MultisigRegimeManager.Connections.PeerLiaisons
+        consensusActor: ConsensusActor.Handle,
+        peerLiaisons: List[PeerLiaison.Handle]
+    )
 
     final case class CompleteBlockError() extends Throwable
 

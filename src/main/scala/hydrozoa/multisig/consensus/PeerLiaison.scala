@@ -287,8 +287,7 @@ object PeerLiaison {
         blockWeaver: BlockWeaver.Handle,
         consensusActor: ConsensusActor.Handle,
         remotePeerLiaison: PeerLiaison.Handle
-    ) extends MultisigRegimeManager.Connections.BlockWeaver,
-          MultisigRegimeManager.Connections.ConsensusActor
+    )
 
     type Handle = ActorRef[IO, Request]
 

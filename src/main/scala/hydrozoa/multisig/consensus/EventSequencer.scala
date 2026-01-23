@@ -104,10 +104,9 @@ object EventSequencer {
     final case class Config(peerId: Peer.Id)
 
     final case class Connections(
-        override val blockWeaver: BlockWeaver.Handle,
-        override val peerLiaisons: List[PeerLiaison.Handle]
-    ) extends MultisigRegimeManager.Connections.BlockWeaver,
-          MultisigRegimeManager.Connections.PeerLiaisons
+        blockWeaver: BlockWeaver.Handle,
+        peerLiaisons: List[PeerLiaison.Handle]
+    )
 
     type Handle = ActorRef[IO, Request]
 
