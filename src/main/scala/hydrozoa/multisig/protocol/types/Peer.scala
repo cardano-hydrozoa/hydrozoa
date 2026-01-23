@@ -40,15 +40,15 @@ object Peer {
                 else leaderBlockThisRound + nPeers
             Block.Number(result)
         }
+    }
 
-        given Ordering[Peer.Id] with {
-            override def compare(x: Peer.Id, y: Peer.Id): Int = {
-                require(
-                  x.nPeers == y.nPeers,
-                  "Peer IDs must agree on the total number of peers to be comparable."
-                )
-                x.peerNum.compare(y.peerNum)
-            }
+    given Ordering[Peer.Id] with {
+        override def compare(x: Peer.Id, y: Peer.Id): Int = {
+            require(
+              x.nPeers == y.nPeers,
+              "Peer IDs must agree on the total number of peers to be comparable."
+            )
+            x.peerNum.toInt.compare(y.peerNum.toInt)
         }
     }
 

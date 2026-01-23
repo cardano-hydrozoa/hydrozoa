@@ -1,35 +1,34 @@
 package hydrozoa.config
 
 import cats.data.NonEmptyList
-import hydrozoa.*
-import hydrozoa.config.HeadConfigError.*
+import hydrozoa.config.HeadConfig.Error.*
+import hydrozoa.config.HeadConfig.{HeadInstance, HeadParameters, InitialBlock, OwnPeer, PrivateNodeSettings}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
-import hydrozoa.multisig.ledger.dapp.tx.TxTiming
+import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, InitializationTx, TxTiming}
 import hydrozoa.multisig.ledger.dapp.txseq.InitializationTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
+import hydrozoa.multisig.protocol.types.Peer
+import hydrozoa.{AddressL1, VerificationKeyBytes, Wallet}
+import scala.collection.immutable.TreeMap
 import scala.concurrent.duration.FiniteDuration
 import scala.util.Try
+import scalus.cardano.address.Network
 import scalus.cardano.address.Network.{Mainnet, Testnet}
-import scalus.cardano.address.{Network, ShelleyAddress}
-import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
-import scalus.cardano.ledger.{AssetName, CardanoInfo, Coin, PlutusScriptEvaluator, ProtocolParams, SlotConfig, Transaction}
+import scalus.cardano.ledger.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import spire.math.{Rational, UByte}
-
-// ===================================
-// Raw config
-// ===================================
 
 /** Raw config -- What gets parsed from file. Probably YAML */
 // TODO: Move everything from "Assumptions.scala"
 // QUESTION: Do we want a separate type to bridge "this is valid yaml" and "this is valid data for the HeadConfig
-// smart constructor"?
-
+// smart constructor"? Or do we just want to define yaml parsing for each of these types? I'm in favor of the latter
 case class RawConfig(
-    ownPeer: PeerSection,
+    // OwnPeer (need private key), equity/contigency payout address, equity share
+    // QUESTION: does it make sense to change the rational to PeerEquityShare?
+    ownPeer: (OwnPeer, AddressL1, Rational),
     otherPeers: List[PeerSection],
     receiveTimeout: FiniteDuration,
     initializationTxBytes: Array[Byte],
@@ -40,11 +39,12 @@ case class RawConfig(
     txTiming: TxTiming,
     startTime: QuantizedInstant,
     // In order to validate the initialization tx seq, we need a resolved utxo set. Since the
-    // actual utxos to-be-spent might be part of a larger tx chain, we can't just uses a resolver like
+    // actual utxos to-be-spent might be part of a larger tx chain, we can't just use a resolver like
     // blockfrost to query the chain. Thus, we pass in the UTxOs directly.
     resolvedUtxosForInitialization: ResolvedUtxos,
     // FIXME: I guess we need both the public and private key?
-    withdrawalFeePkh: VerificationKeyBytes
+    withdrawalFeeWallet: Wallet,
+    pollingPeriod: FiniteDuration
 
     // Augmented Initial block
     // Creation time
@@ -64,86 +64,20 @@ case class PeerSection(
     equityShare: Rational
 )
 
-// ===================================
-// Head config (parsed)
-// ===================================
-
-/** Fully parsed head config.
+/** NOTE: All constructors for case classes in this object are private[config]. They MUST be
+  * constructed by parsing a [[RawConfig]] in order to maintain internal coherence.
   */
-// TODO: Put initial block on its own, and then the "head parameters", check that the treasury's hashed parameters
-// match the given head parameters
-
-/** This is the "complete" config that the node uses. Individual components (actors, tx builders,
-  * etc.) use polymorphic variants of this parameterized on individual fields via `HasXYZ` traits.
-  * The idea is that this entire object can be passed around, while only giving individual
-  * components access to the parts that concern them.
-  */
-// NOTE: this constructor is private on purpose. There are MANY dependencies on the fields in this configuration.
-// You should ONLY build this view HeadConfig.parse.
-//
-// The arguments to the constructor are the pieces of data that are _parsed and validated_ from the RawConfig.
-// The methods within the body are fields that can be _derived_ safely from the validated data in the constructor.
-// TODO: This can be made opaque by given a bound
-case class HeadConfig private (
-    verificationKeys: Map[UByte, VerificationKeyBytes],
-    // Collective contingency
-    collectiveContingency: CollectiveContingency,
-    // Individual contingency (every peer has the same contingency)
-    individualContingency: IndividualContingency,
-    // Peers shares
-    equityShares: EquityShares,
-    receiveTimeout: FiniteDuration,
-    txTiming: TxTiming,
-    startTime: QuantizedInstant,
-    ownPeerPkh: VerificationKeyBytes,
-    cardanoInfo: CardanoInfo,
-    withdrawalFeePkh: VerificationKeyBytes,
-    initializationTxSeq: InitializationTxSeq,
-    votingDuration: QuantizedFiniteDuration,
-    tallyFeeAllowance: Coin
-) {
-    def headAddress: ShelleyAddress = headMultisigScript.mkAddress(network)
-
-    // Should we parse this instead of doing fromListUnsafe?
-    def headMultisigScript: HeadMultisigScript =
-        HeadMultisigScript(NonEmptyList.fromListUnsafe(verificationKeys.values.toList))
-
-    def tokenNames: TokenNames = initializationTxSeq.initializationTx.tokenNames
-
-    def multisigRegimeUtxo: MultisigRegimeUtxo =
-        initializationTxSeq.initializationTx.multisigRegimeUtxo
-
-    def initialFallbackValidityStart: QuantizedInstant =
-        initializationTxSeq.fallbackTx.validityStart
-
-    def initialKzgCommitment: KzgCommitment =
-        IArray.from(initializationTxSeq.initializationTx.treasuryProduced.datum.commit.bytes)
-
-    def initialTreasury: MultisigTreasuryUtxo =
-        initializationTxSeq.initializationTx.treasuryProduced
-
-    def treasuryTokenName: AssetName = tokenNames.headTokenName
-
-    def slotConfig: SlotConfig = cardanoInfo.slotConfig
-
-    // TODO: Remove. We only need CardanoInfo in the config.
-    //    The tx builders can create the Plutus script evaluator on-demand, with the mode they want.
-    def evaluator: PlutusScriptEvaluator = PlutusScriptEvaluator(
-      cardanoInfo,
-      mode = EvaluateAndComputeCost
-    )
-
-    def network: Network = cardanoInfo.network
-}
-
-// TODO: Make another config "NodeConfig" which should include node-specific information (blockfrost api key,
-// peer private key)
-
 object HeadConfig {
 
     /** Smart constructor for HeadConfig */
-    def parse(rawConfig: RawConfig): Either[HeadConfigError, HeadConfig] =
-        val peers = rawConfig.otherPeers.prepended(rawConfig.ownPeer)
+    def parse(rawConfig: RawConfig): Either[Error, HeadConfig] =
+        val peers = rawConfig.otherPeers.prepended(
+          PeerSection(
+            verificationKeyBytes = rawConfig.ownPeer._1.wallet.exportVerificationKeyBytes,
+            payoutAddress = rawConfig.ownPeer._2,
+            equityShare = rawConfig.ownPeer._3
+          )
+        )
         for {
             // Check key uniqueness
             keysUnique <- {
@@ -154,14 +88,14 @@ object HeadConfig {
                 Either.cond(
                   duplicates.isEmpty,
                   sortedVKs,
-                  NonUniqueVerificationKey(duplicates.keys.toSet)
+                  Error.NonUniqueVerificationKey(duplicates.keys.toSet)
                 )
             }
             // Check number of peers
             _ <- Either.cond(
               keysUnique.sizeIs < 255,
               (),
-              HeadConfigError.TooManyPeers(keysUnique.length)
+              Error.TooManyPeers(keysUnique.length)
             )
             // Attach indices to verification keys
             verificationKeys = keysUnique.zipWithIndex.map((k, i) => (UByte.apply(i), k)).toMap
@@ -230,39 +164,189 @@ object HeadConfig {
                 .left
                 .map(InitializationTxSeqParseError(_))
 
-            headConfig: HeadConfig = HeadConfig(
-              verificationKeys = verificationKeys,
-              collectiveContingency = collectiveContingency,
-              individualContingency = individualContingency,
-              equityShares = contingencyDepositsAndEquityShares,
-              txTiming = rawConfig.txTiming,
-              cardanoInfo = cardanoInfo,
-              initializationTxSeq = initializationTxSeq,
-              receiveTimeout = rawConfig.receiveTimeout,
+            initialBlock = InitialBlock(
               startTime = rawConfig.startTime,
-              ownPeerPkh = rawConfig.ownPeer.verificationKeyBytes,
-              withdrawalFeePkh = rawConfig.withdrawalFeePkh,
-              votingDuration = rawConfig.votingDuration,
-              tallyFeeAllowance = rawConfig.tallyFeeAllowance
+              initializationTxSeq = initializationTxSeq
+            )
+
+            headParameters = HeadParameters(
+              headPeers = HeadPeers(
+                TreeMap.from(
+                  verificationKeys.map((id, pubKey) =>
+                      (Peer.Id(id.toInt, verificationKeys.size), pubKey)
+                  )
+                )
+              ),
+              multisigRegimeSettings = MultisigRegimeSettings(
+                txTiming = rawConfig.txTiming
+              ),
+              ruleBasedRegimeSettings = RuleBasedRegimeSettings(
+                votingDuration = rawConfig.votingDuration
+              ),
+              fallbackSettings = FallbackSettings(
+                collectiveContingency,
+                individualContingency,
+                rawConfig.tallyFeeAllowance
+              )
+            )
+
+            privateNodeSettings = PrivateNodeSettings(
+              ownPeer = rawConfig.ownPeer._1,
+              multisigRegimeOperationalSettings =
+                  MultisigRegimeOperationalSettings(rawConfig.pollingPeriod),
+              liquidationActorOperationalSettings = LiquidationActorOperationalSettings(
+                withdrawalFeeWallet = rawConfig.withdrawalFeeWallet,
+                pollingPeriod = rawConfig.pollingPeriod
+              )
+            )
+
+            headConfig: HeadConfig = HeadConfig(
+              initialBlock = initialBlock,
+              cardanoInfo = cardanoInfo,
+              headParameters = headParameters,
+              privateNodeSettings = privateNodeSettings
             )
         } yield headConfig
+
+    enum Error extends Throwable {
+        case NonUniqueVerificationKey(duplicates: Set[VerificationKeyBytes])
+        case TooManyPeers(count: Int)
+        case SharesMustSumToOne(total: Rational)
+        case TooSmallCollateralDeposit(peer: UByte, minimal: Coin, actual: Coin)
+        case TooSmallVoteDeposit(peer: UByte, minimal: Coin, actual: Coin)
+        case CborDeserializationFailed(msg: String, bytes: Array[Byte], error: Throwable)
+        case InitializationTxSeqParseError(wrapped: InitializationTxSeq.ParseError)
+
+        def explain: String = this match
+            case NonUniqueVerificationKey(duplicates) =>
+                s"A duplicate verification key(s) found: ${duplicates.map(_.bytes.toHex)}"
+            case TooManyPeers(count)       => s"Too many peers: $count, maximum allowed is 255"
+            case SharesMustSumToOne(total) => s"Shares do not sum up to one, got total: $total"
+            case TooSmallCollateralDeposit(peer, minimal, actual) =>
+                s"The peer ${peer} has too small collateral deposit: ${actual}, minimal is: {minimal}"
+            case TooSmallVoteDeposit(peer, minimal, actual) =>
+                s"The peer ${peer} has too small vote deposit: ${actual}, minimal is: {minimal}"
+    }
+
+    final case class HeadParameters private[config] (
+        headPeers: HeadPeers,
+        multisigRegimeSettings: MultisigRegimeSettings,
+        ruleBasedRegimeSettings: RuleBasedRegimeSettings,
+        fallbackSettings: FallbackSettings
+    )
+
+    final case class PrivateNodeSettings private[config] (
+        ownPeer: OwnPeer,
+        multisigRegimeOperationalSettings: MultisigRegimeOperationalSettings,
+        liquidationActorOperationalSettings: LiquidationActorOperationalSettings
+    )
+
+    final case class OwnPeer private[config] (
+        peerId: Peer.Id,
+        wallet: Wallet
+    )
+
+    final case class InitialBlock private[config] (
+        startTime: QuantizedInstant,
+        initializationTxSeq: InitializationTxSeq
+    ) {
+        def initialFallbackTx: FallbackTx = initializationTxSeq.fallbackTx
+
+        def initialKzgCommitment: KzgCommitment = IArray.from(initialTreasury.datum.commit.bytes)
+
+        def initialTreasury: MultisigTreasuryUtxo = initializationTx.treasuryProduced
+
+        def tokenNames: TokenNames = initializationTx.tokenNames
+
+        def multisigRegimeUtxo: MultisigRegimeUtxo = initializationTx.multisigRegimeUtxo
+
+        def initializationTx: InitializationTx = initializationTxSeq.initializationTx
+    }
+
+    /** A Hydrozoa head is uniquely identified on the L1 blockchain by the L1's network, the head's
+      * multisig script, and the head's token names.
+      *
+      * Additionally, the head's multisig regime utxo, if it exists, is a stable indicator that the
+      * head exists and is in the multisig regime.
+      */
+    final case class HeadInstance private[config] (
+        network: Network,
+        headMultisigScript: HeadMultisigScript,
+        tokenNames: TokenNames,
+        multisigRegimeUtxo: MultisigRegimeUtxo
+    )
+
+    final case class HeadPeers private[config] (
+        peerKeys: TreeMap[Peer.Id, VerificationKeyBytes]
+    ) {
+        def headMultisigScript: HeadMultisigScript =
+            HeadMultisigScript(NonEmptyList.fromListUnsafe(peerKeys.values.toList))
+    }
+
+    final case class MultisigRegimeSettings private[config] (
+        txTiming: TxTiming
+    )
+
+    final case class RuleBasedRegimeSettings private[config] (
+        votingDuration: QuantizedFiniteDuration
+    )
+
+    /** Settings for the fallback into the rule-based regime. These settings define the individual
+      * and collective deposits collected from the peers at head initialization to ensure that the
+      * head can always fallback to the rule-based regime and resolve the dispute.
+      *
+      * @param collectiveContingency
+      *   the collective deposit from all peers to cover common expenses
+      * @param individualContingency
+      *   the individual deposit from each peer to cover individual expenses
+      */
+    final case class FallbackSettings private[config] (
+        collectiveContingency: CollectiveContingency,
+        individualContingency: IndividualContingency,
+        tallyFeeAllowance: Coin
+    )
+
+    /** Settings for the liquidation actor
+      *
+      * @param withdrawalFeeWallet
+      *   the wallet with which the liquidation actor will fund the fees for rule-based withdrawal
+      *   transactions.
+      * @param pollingPeriod
+      *   when idle, the liquidation actor waits this long before polling the Cardano backend again.
+      */
+    final case class LiquidationActorOperationalSettings private[config] (
+        withdrawalFeeWallet: Wallet,
+        pollingPeriod: FiniteDuration
+    )
+
+    /** @param pollingPeriod
+      *   When idle, the Cardano Liaison waits this long before polling the Cardano backend again.
+      */
+    final case class MultisigRegimeOperationalSettings private[config] (
+        pollingPeriod: FiniteDuration
+    )
 }
 
-enum HeadConfigError:
-    case NonUniqueVerificationKey(duplicates: Set[VerificationKeyBytes])
-    case TooManyPeers(count: Int)
-    case SharesMustSumToOne(total: Rational)
-    case TooSmallCollateralDeposit(peer: UByte, minimal: Coin, actual: Coin)
-    case TooSmallVoteDeposit(peer: UByte, minimal: Coin, actual: Coin)
-    case CborDeserializationFailed(msg: String, bytes: Array[Byte], error: Throwable)
-    case InitializationTxSeqParseError(wrapped: InitializationTxSeq.ParseError)
-
-    def explain: String = this match
-        case NonUniqueVerificationKey(duplicates) =>
-            s"A duplicate verification key(s) found: ${duplicates.map(_.bytes.toHex)}"
-        case TooManyPeers(count)       => s"Too many peers: $count, maximum allowed is 255"
-        case SharesMustSumToOne(total) => s"Shares do not sum up to one, got total: $total"
-        case TooSmallCollateralDeposit(peer, minimal, actual) =>
-            s"The peer ${peer} has too small collateral deposit: ${actual}, minimal is: {minimal}"
-        case TooSmallVoteDeposit(peer, minimal, actual) =>
-            s"The peer ${peer} has too small vote deposit: ${actual}, minimal is: {minimal}"
+/** @param initialBlock
+  *   the initial block with which the peers have agreed to start the head
+  * @param cardanoInfo
+  *   the blockchain settings of the Cardano blockchain network on which the head is deployed
+  * @param headParameters
+  *   the parameters of the head -- these get hashed and committed in the treasury utxo.
+  * @param privateNodeSettings
+  *   the settings that the hydrozoa node's user has defined for his own node. These also include
+  *   the peer's private key for hydrozoa consensus.
+  */
+final case class HeadConfig private[config] (
+    initialBlock: InitialBlock,
+    cardanoInfo: CardanoInfo,
+    headParameters: HeadParameters,
+    privateNodeSettings: PrivateNodeSettings
+) {
+    def headInstance: HeadInstance = HeadInstance(
+      network = cardanoInfo.network,
+      headMultisigScript = headParameters.headPeers.headMultisigScript,
+      tokenNames = initialBlock.tokenNames,
+      multisigRegimeUtxo = initialBlock.multisigRegimeUtxo
+    )
+}
