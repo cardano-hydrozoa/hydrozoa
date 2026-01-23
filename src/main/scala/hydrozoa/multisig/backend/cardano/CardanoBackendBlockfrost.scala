@@ -158,9 +158,34 @@ class CardanoBackendBlockfrost private (
         txHash: TransactionHash
     ): IO[Either[CardanoBackend.Error, GetTxInfo.Response]] =
         IO {
-            val result = backendService.getTransactionService.getTransaction(txHash.toHex)
-            if result.isSuccessful then Right(GetTxInfo.Response(true))
-            else Right(GetTxInfo.Response(false))
+            val txResult = backendService.getTransactionService.getTransaction(txHash.toHex)
+            if !txResult.isSuccessful then Right(GetTxInfo.Response(false))
+            else
+                val redeemersResult =
+                    backendService.getTransactionService.getTransactionRedeemers(txHash.toHex)
+                if !redeemersResult.isSuccessful then Right(GetTxInfo.Response(true, List.empty))
+                else
+                    import scalus.builtin.{ByteString, Data}
+                    import io.bullet.borer.Cbor
+                    import scala.jdk.CollectionConverters.*
+                    import com.bloxbean.cardano.client.plutus.spec.RedeemerTag
+
+                    val spendingRedeemersData = redeemersResult.getValue.asScala
+                        .filter(_.getPurpose == RedeemerTag.Spend)
+                        .flatMap { redeemer =>
+                            val datumCborResult = backendService.getScriptService
+                                .getScriptDatumCbor(redeemer.getDatumHash)
+                            if datumCborResult.isSuccessful then
+                                scala.util.Try {
+                                    val datumBytes =
+                                        ByteString.fromHex(datumCborResult.getValue.getCbor)
+                                    Cbor.decode(datumBytes.bytes).to[Data].value
+                                }.toOption
+                            else None
+                        }
+                        .toList
+
+                    Right(GetTxInfo.Response(true, spendingRedeemersData))
 
         }.handleError(e =>
             Left(Unexpected(s"${e.getMessage}, caused by: ${
