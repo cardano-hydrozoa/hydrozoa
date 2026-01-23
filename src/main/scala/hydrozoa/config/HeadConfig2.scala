@@ -8,12 +8,11 @@ import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, InitializationTx, TxTiming}
 import hydrozoa.multisig.ledger.dapp.txseq.InitializationTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
-import hydrozoa.{VerificationKeyBytes, Wallet}
 import hydrozoa.multisig.protocol.types.Peer
+import hydrozoa.{VerificationKeyBytes, Wallet}
+import scala.collection.immutable.TreeMap
 import scalus.cardano.address.Network
 import scalus.cardano.ledger.{CardanoInfo, Coin}
-
-import scala.collection.immutable.TreeMap
 
 private object HeadConfig2 {
 

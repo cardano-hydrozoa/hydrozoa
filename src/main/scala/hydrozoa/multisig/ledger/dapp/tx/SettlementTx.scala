@@ -59,10 +59,13 @@ object SettlementTx {
                 // Balancing and fees
                 finished <- addedDeposits.ctx
                     .finalizeContext(
-                      protocolParams = ???,
-                      diffHandler = ???,
-                      evaluator = ???,
-                      validators = ???
+                      protocolParams = config.cardanoInfo.protocolParams,
+                      diffHandler = new ChangeOutputDiffHandler(
+                        config.cardanoInfo.protocolParams,
+                        0
+                      ).changeOutputDiffHandler,
+                      evaluator = PlutusScriptEvaluator(config.cardanoInfo, EvaluateAndComputeCost),
+                      validators = Tx.Validators.nonSigningValidators
                     )
                     .explainConst("finishing settlement tx failed")
 
@@ -175,7 +178,7 @@ object SettlementTx {
                 def steps(args: Args): List[TransactionBuilderStep] =
                     List(
                       stepSettlementMetadata,
-                      referenceHNS,
+                      referenceHMS,
                       consumeTreasury(args.treasuryToSpend),
                       sendTreasury(args),
                       validityEndSlot(args.validityEnd.toSlot),
@@ -184,7 +187,7 @@ object SettlementTx {
                 private def stepSettlementMetadata: ModifyAuxiliaryData =
                     ModifyAuxiliaryData(_ => Some(MD(Settlement(headAddress = config.headAddress))))
 
-                private def referenceHNS =
+                private def referenceHMS =
                     ReferenceOutput(config.multisigRegimeUtxo.asUtxo)
 
                 private def validityEndSlot(slot: Slot): ValidityEndSlot =

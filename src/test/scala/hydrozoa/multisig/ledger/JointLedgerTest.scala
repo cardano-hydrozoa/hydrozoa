@@ -16,8 +16,9 @@ import hydrozoa.multisig.ledger.JointLedgerTestHelpers.*
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Requests.{completeBlockRegular, getState, startBlockNow}
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Scenarios.{deposit, unsafeGetDone, unsafeGetProducing}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
+import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.SpentUtxos
-import hydrozoa.multisig.ledger.dapp.tx.{Tx, TxTiming, minInitTreasuryAda}
+import hydrozoa.multisig.ledger.dapp.tx.{TxTiming, minInitTreasuryAda}
 import hydrozoa.multisig.ledger.dapp.txseq.{DepositRefundTxSeq, InitializationTxSeq}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo}
 import hydrozoa.multisig.ledger.virtual.L2EventGenesis
@@ -28,25 +29,21 @@ import hydrozoa.multisig.protocol.types.LedgerEvent.RegisterDeposit
 import hydrozoa.multisig.protocol.types.LedgerEventId.ValidityFlag.{Invalid, Valid}
 import hydrozoa.rulebased.ledger.dapp.tx.genEquityShares
 import hydrozoa.{UtxoIdL1, maxNonPlutusTxFee}
-import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import io.bullet.borer.Cbor
-
 import java.util.concurrent.TimeUnit
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.PropertyM.monadForPropM
 import org.scalacheck.{Gen, Prop, PropertyM, *}
-
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.{DurationInt, FiniteDuration, HOURS}
 import scalus.builtin.ByteString
 import scalus.cardano.address.ShelleyPaymentPart.Key
-import scalus.cardano.ledger.{AddrKeyHash, Coin, Utxo, Block as _, *}
+import scalus.cardano.ledger.{AddrKeyHash, Block as _, Coin, Utxo, *}
 import scalus.prelude.Option as SOption
-import scalus.testing.kit.TestUtil
+import test.*
 import test.Generators.Hydrozoa.{genAdaOnlyPubKeyUtxo, *}
 import test.Generators.Other.genCoinDistributionWithMinAdaUtxo
 import test.TestM.*
-import test.*
 
 /** This object contains component-specific helpers to utilize the TestM type.
   *

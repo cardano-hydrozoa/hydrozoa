@@ -24,13 +24,11 @@ import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, InitializationTxS
 import hydrozoa.multisig.protocol.types.{Block, BlockEffectsSigned}
 import hydrozoa.rulebased.ledger.dapp.tx.genEquityShares
 import hydrozoa.{L1, Output, UtxoId, UtxoSet, UtxoSetL1, attachVKeyWitnesses}
-
 import java.util.concurrent.TimeUnit
 import monocle.Focus.focus
 import org.scalacheck.*
 import org.scalacheck.Gen.{choose, tailRecM}
 import org.scalacheck.Prop.forAll
-
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scala.jdk.CollectionConverters.*
 import scala.math.Ordered.orderingToOrdered

@@ -3,6 +3,7 @@ package hydrozoa.multisig.ledger.dapp.tx
 import cats.data.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, quantize}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
+import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
@@ -10,7 +11,6 @@ import hydrozoa.multisig.protocol.types.Block as HBlock
 import java.time.Instant
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
-import scala.concurrent.duration.{FiniteDuration, HOURS}
 import scalus.builtin.Data.toData
 import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.*
@@ -24,9 +24,9 @@ import scalus.ledger.api.v1.Value.valueOrd
 import scalus.prelude.Ord.<=
 import scalus.prelude.{Option as SOption, Ord}
 import test.*
-import test.Generators.Hydrozoa.*
+import test.Generators.Hydrozoa.{genFakeMultisigWitnessUtxo, *}
 import test.Generators.Other
-import test.TestPeer.Alice
+import test.TestPeer.{Alice, mkWallet}
 
 def genDepositDatum(network: Network = testNetwork): Gen[DepositUtxo.Datum] = {
     for {
@@ -112,7 +112,6 @@ def genDepositUtxo(
 
 /** Generate a "standalone" settlement tx. */
 def genSettlementTxSeqBuilder(
-    config: SettlementTxSeq.Config,
     estimatedFee: Coin = Coin(5_000_000L),
     params: ProtocolParams = blockfrost544Params,
     network: Network = testNetwork,
@@ -138,13 +137,20 @@ def genSettlementTxSeqBuilder(
 
     for {
         peers <- genTestPeers()
-        hns = config.headMultisigScript
+        hms = HeadMultisigScript(peers.map(mkWallet(_).exportVerificationKeyBytes))
+        seedUtxo <- arbitrary[TransactionInput]
+        tokenNames = TokenNames(seedUtxo)
+        mw <- genFakeMultisigWitnessUtxo(
+          hms,
+          network,
+          Some(tokenNames.multisigRegimeTokenName)
+        )
         majorVersion <- Gen.posNum[Int]
 
         genDeposit = genDepositUtxo(
           network = network,
           params = params,
-          headAddress = Some(hns.mkAddress(network))
+          headAddress = Some(hms.mkAddress(network))
         )
         deposits <- genHelper(genDeposit)
 
@@ -153,7 +159,7 @@ def genSettlementTxSeqBuilder(
             .map(_.utxo.value.coin)
             .fold(Coin.zero)(_ + _)
         utxo <- genTreasuryUtxo(
-          headAddress = Some(hns.mkAddress(network)),
+          headAddress = Some(hms.mkAddress(network)),
           network = network,
           coin = Some(payoutAda + Coin(1_000_000_000L))
         )
@@ -162,6 +168,16 @@ def genSettlementTxSeqBuilder(
             case None      => Gen.listOfN(48, Arbitrary.arbitrary[Byte]).map(IArray.from(_))
             case Some(kzg) => Gen.const(kzg)
         }
+
+        config = SettlementTxSeq.Config(
+          headMultisigScript = hms,
+          multisigRegimeUtxo = mw,
+          tokenNames = ???,
+          votingDuration = ???,
+          txTiming = ???,
+          tallyFeeAllowance = ???,
+          cardanoInfo = ???
+        )
     } yield (
       SettlementTxSeq.Builder(config),
       SettlementTxSeq.Builder.Args(

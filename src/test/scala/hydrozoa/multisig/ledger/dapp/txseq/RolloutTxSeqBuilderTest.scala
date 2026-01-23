@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.data.NonEmptyVector
+import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import org.scalacheck.{Arbitrary, Gen}
@@ -11,19 +12,28 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{TransactionHash, TransactionInput, Utxo}
 import test.*
 import test.Generators.Hydrozoa.*
+import test.TestPeer.mkWallet
 
 class RolloutTxSeqBuilderTest extends AnyFunSuite with ScalaCheckPropertyChecks {
 
     val genBuilder: Gen[(RolloutTxSeq.Builder, NonEmptyVector[Payout.Obligation])] =
         for {
-            (config, _) <- genTxBuilderConfigAndPeers()
             payouts <- Gen
                 .containerOfN[Vector, Payout.Obligation](
                   160,
-                  genPayoutObligation(config.cardanoInfo.network)
+                  genPayoutObligation(testTxBuilderCardanoInfo.network)
                 )
                 .map(NonEmptyVector.fromVectorUnsafe)
-        } yield (RolloutTxSeq.Builder(config), payouts)
+            peers <- genTestPeers()
+            hms = HeadMultisigScript(peers.map(mkWallet(_).exportVerificationKeyBytes))
+            mw <- genFakeMultisigWitnessUtxo(
+              hms,
+              testTxBuilderCardanoInfo.network
+            )
+        } yield (
+          RolloutTxSeq.Builder(RolloutTxSeq.Config(testTxBuilderCardanoInfo, mw, hms)),
+          payouts
+        )
 
     test("Build partial rollout seq") {
         forAll(genBuilder)((builder, payouts) => assert(builder.buildPartial(payouts).isRight))
@@ -36,7 +46,7 @@ class RolloutTxSeqBuilderTest extends AnyFunSuite with ScalaCheckPropertyChecks 
                 txId = Arbitrary.arbitrary[TransactionHash].sample.get
                 input = TransactionInput(txId, 0)
                 output = Babbage(
-                  address = builder.config.headAddress,
+                  address = builder.rolloutTxConfig.headAddress,
                   value = pr.firstOrOnly.inputValueNeeded
                 )
                 rolloutUtxo = RolloutUtxo(Utxo(input, output))

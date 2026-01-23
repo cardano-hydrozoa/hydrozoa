@@ -1,11 +1,10 @@
 package test
 import hydrozoa.multisig.ledger.VirtualLedgerM
+import hydrozoa.multisig.ledger.dapp.tx.TxTiming
 import scala.language.postfixOps
 import scalus.cardano.address.Network
 import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.rules.*
-import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
 import scalus.uplc.eval.ExBudget
 import test.TestPeer.Alice
@@ -42,6 +41,9 @@ val testTxBuilderCardanoInfo: CardanoInfo = CardanoInfo(
   slotConfig = slotConfig(testNetwork),
   network = testNetwork
 )
+
+val testTxTiming: TxTiming =
+    TxTiming.default(testTxBuilderCardanoInfo.slotConfig)
 
 def testVirtualLedgerConfig(slot: SlotNo): VirtualLedgerM.Config =
     VirtualLedgerM.Config(testTxBuilderCardanoInfo)

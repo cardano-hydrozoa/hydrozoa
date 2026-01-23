@@ -13,7 +13,7 @@ object PeerProperty extends Properties("Peer/RoundRobin") {
 
     private val genSmallInt = Gen.choose(0, 200)
 
-    property("Peer ID correctly calculates round-robin leadership schedule") =
+    val _ = property("Peer ID correctly calculates round-robin leadership schedule") =
         forAll(genSmallInt, genSmallInt, genSmallInt) { (x, y, z) =>
             val peerNum = x.abs
             val nPeers = x.abs + y.abs + 1

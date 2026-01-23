@@ -19,7 +19,7 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.txbuilder.TransactionBuilder
 import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
 import scalus.prelude.Option as SOption
-import scalus.testing.kit.TestUtil.{genByteStringOfN, testEnvironment}
+import scalus.testing.kit.TestUtil.genByteStringOfN
 import test.*
 import test.Generators.Hydrozoa.*
 import test.TestPeer.Alice
@@ -84,12 +84,6 @@ def genDepositRecipe(
                 ).coin > minPubkeyAda() + depositAmount.coin + estimatedFee
             )
 
-        config: Tx.Builder.Config <- genTxConfig(
-          testEnvironment,
-          testEvaluator,
-          nonSigningNonValidityChecksValidators
-        )
-
         refundAddr <- genPubkeyAddress()
 
         partialRefundTx = RefundTx.Builder.PartialResult.PostDated(
@@ -99,19 +93,21 @@ def genDepositRecipe(
             address = LedgerToPlutusTranslation.getAddress(refundAddr),
             datum = SOption.None,
             // TODO: move to propertyM
-            startTime = realTimeQuantizedInstant(config.cardanoInfo.slotConfig).unsafeRunSync()
+            startTime =
+                realTimeQuantizedInstant(testTxBuilderCardanoInfo.slotConfig).unsafeRunSync()
           ),
-          slotConfig = config.cardanoInfo.slotConfig
+          slotConfig = testTxBuilderCardanoInfo.slotConfig
         )
 
+        depositConfig = DepositTx.Config(testTxBuilderCardanoInfo, headAddress, testTxTiming)
+
     } yield DepositTx.Builder(
-      config = config,
+      config = depositConfig,
       partialRefundTx = partialRefundTx,
       utxosFunding = fundingUtxos,
       virtualOutputs = virtualOutputs,
       donationToTreasury = Coin(0), // TODO: generate non-zero
       changeAddress = depositor.address(testNetwork),
-      txTiming = TxTiming.default(config.cardanoInfo.slotConfig)
     )
 
 class DepositTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
@@ -151,7 +147,6 @@ class DepositTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
                     DepositTx.parse(
                       depositTx.tx.toCbor,
                       depositTxBuilder.config,
-                      TxTiming.default(testTxBuilderCardanoInfo.slotConfig),
                       depositTx.depositProduced.virtualOutputs
                     ) match {
                         case Left(e) =>

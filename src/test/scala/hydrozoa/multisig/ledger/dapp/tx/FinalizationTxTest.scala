@@ -22,6 +22,7 @@ import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
 import test.*
 import test.Generators.Hydrozoa.*
 import test.Generators.Other
+import test.TestPeer.mkWallet
 
 val genMultisigRegimeTokenName: Gen[AssetName] =
     for {
@@ -71,7 +72,6 @@ def genMultisigRegimeUtxo(
     )
 
 def genStandaloneFinalizationTxSeqBuilder(
-    config: FinalizationTxSeq.Config,
     estimatedFee: Coin = Coin(5_000_000L),
     params: ProtocolParams = blockfrost544Params,
     network: Network = testNetwork,
@@ -91,6 +91,11 @@ def genStandaloneFinalizationTxSeqBuilder(
 
     for {
         peers <- genTestPeers()
+        hms = HeadMultisigScript(peers.map(mkWallet(_).exportVerificationKeyBytes))
+        mw <- genFakeMultisigWitnessUtxo(
+          hms,
+          testTxBuilderCardanoInfo.network
+        )
 
         majorVersion <- Gen.posNum[Int]
 
@@ -99,7 +104,7 @@ def genStandaloneFinalizationTxSeqBuilder(
             .map(_.utxo.value.coin)
             .fold(Coin.zero)(_ + _)
 
-        headAddress = config.headMultisigScript.mkAddress(network)
+        headAddress = hms.mkAddress(network)
 
         treasuryUtxo <- genTreasuryUtxo(
           headAddress = Some(headAddress),
@@ -114,7 +119,9 @@ def genStandaloneFinalizationTxSeqBuilder(
             case Some(kzg) => Gen.const(kzg)
         }
     } yield (
-      FinalizationTxSeq.Builder(config = config),
+      FinalizationTxSeq.Builder(config =
+          FinalizationTxSeq.Config(testTxTiming, mw, testTxBuilderCardanoInfo, hms, shares)
+      ),
       FinalizationTxSeq.Builder.Args(
         majorVersionProduced = HBlock.Version.Major(majorVersion),
         treasuryToSpend = treasuryUtxo,

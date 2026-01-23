@@ -31,6 +31,7 @@ object SettlementTxSeqBuilderTest extends Properties("SettlementTxSeq") {
       "Observe settlement tx seq",
       None
     ) = {
+
         val gen = genSettlementTxSeqBuilder()
         val props = mutable.Buffer.empty[Prop]
 
