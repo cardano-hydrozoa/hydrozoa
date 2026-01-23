@@ -209,7 +209,7 @@ trait PeerLiaison(
         def dequeueConfirmed(x: BlockConfirmed): IO[Unit] = {
             import x.*
             val blockNum: Block.Number = block.blockNum
-            val ackNum: AckBlock.Number = AckBlock.Number.neededToConfirm(block)
+            val ackNum: AckBlock.Number = AckBlock.Number.neededToConfirm(block.header)
             val eventNum: LedgerEventId.Number = block.body.events.collect {
                 case x if x._1.peerNum == config.ownPeerId.peerNum => x._1.eventNum
             }.max

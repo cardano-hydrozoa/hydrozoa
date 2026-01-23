@@ -47,6 +47,12 @@ object Block {
 
     extension (next: Next)
 
+        def header: Block.Header = next match {
+            case b: Block.Minor => b.header
+            case b: Block.Major => b.header
+            case b: Block.Final => b.header
+        }
+
         def blockNum: Block.Number = next match {
             case b: Block.Minor => b.id
             case b: Block.Major => b.id
@@ -69,7 +75,6 @@ object Block {
 
     enum Header(val blockType: Type) extends HeaderFields.Mandatory {
         case Initial(
-            // TODO: this seems to be the same as `initializedOn`
             override val timeCreation: QuantizedInstant,
             override val commitment: KzgCommitment
         ) extends Header(Type.Initial), HeaderFields.InitialHeaderFields, HeaderFields.Commitment
