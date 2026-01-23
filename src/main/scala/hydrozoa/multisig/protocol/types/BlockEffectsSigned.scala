@@ -19,7 +19,7 @@ sealed trait BlockEffectsSigned {
 object BlockEffectsSigned {
 
     final case class Initial(
-        override val blockNum: Block.Number,
+        override val blockNum: Block.Number = Block.Number.zero,
         initialSigned: InitializationTx,
         fallbackSigned: FallbackTx,
     ) extends BlockEffectsSigned {

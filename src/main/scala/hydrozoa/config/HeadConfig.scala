@@ -2,7 +2,7 @@ package hydrozoa.config
 
 import cats.data.NonEmptyList
 import hydrozoa.config.HeadConfig.Error.*
-import hydrozoa.config.HeadConfig.{HeadInstance, HeadParameters, InitialBlock, OwnPeer, PrivateNodeSettings}
+import hydrozoa.config.HeadConfig.{HeadInstanceL1, HeadParameters, InitialBlock, OwnPeer, PrivateNodeSettings}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
@@ -10,7 +10,7 @@ import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, InitializationTx, TxTiming}
 import hydrozoa.multisig.ledger.dapp.txseq.InitializationTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
-import hydrozoa.multisig.protocol.types.Peer
+import hydrozoa.multisig.protocol.types.{BlockEffectsSigned, Peer}
 import hydrozoa.{AddressL1, VerificationKeyBytes, Wallet}
 import scala.collection.immutable.TreeMap
 import scala.concurrent.duration.FiniteDuration
@@ -166,7 +166,10 @@ object HeadConfig {
 
             initialBlock = InitialBlock(
               startTime = rawConfig.startTime,
-              initializationTxSeq = initializationTxSeq
+              effects = BlockEffectsSigned.Initial(
+                initialSigned = initializationTxSeq.initializationTx,
+                fallbackSigned = initializationTxSeq.fallbackTx
+              )
             )
 
             headParameters = HeadParameters(
@@ -248,9 +251,9 @@ object HeadConfig {
 
     final case class InitialBlock private[config] (
         startTime: QuantizedInstant,
-        initializationTxSeq: InitializationTxSeq
+        effects: BlockEffectsSigned.Initial
     ) {
-        def initialFallbackTx: FallbackTx = initializationTxSeq.fallbackTx
+        def initialFallbackTx: FallbackTx = effects.fallbackSigned
 
         def initialKzgCommitment: KzgCommitment = IArray.from(initialTreasury.datum.commit.bytes)
 
@@ -260,7 +263,7 @@ object HeadConfig {
 
         def multisigRegimeUtxo: MultisigRegimeUtxo = initializationTx.multisigRegimeUtxo
 
-        def initializationTx: InitializationTx = initializationTxSeq.initializationTx
+        def initializationTx: InitializationTx = effects.initialSigned
     }
 
     /** A Hydrozoa head is uniquely identified on the L1 blockchain by the L1's network, the head's
@@ -269,7 +272,7 @@ object HeadConfig {
       * Additionally, the head's multisig regime utxo, if it exists, is a stable indicator that the
       * head exists and is in the multisig regime.
       */
-    final case class HeadInstance private[config] (
+    final case class HeadInstanceL1 private[config] (
         network: Network,
         headMultisigScript: HeadMultisigScript,
         tokenNames: TokenNames,
@@ -343,7 +346,7 @@ final case class HeadConfig private[config] (
     headParameters: HeadParameters,
     privateNodeSettings: PrivateNodeSettings
 ) {
-    def headInstance: HeadInstance = HeadInstance(
+    def headInstance: HeadInstanceL1 = HeadInstanceL1(
       network = cardanoInfo.network,
       headMultisigScript = headParameters.headPeers.headMultisigScript,
       tokenNames = initialBlock.tokenNames,
