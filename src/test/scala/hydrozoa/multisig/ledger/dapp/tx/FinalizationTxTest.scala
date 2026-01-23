@@ -22,6 +22,7 @@ import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
 import test.*
 import test.Generators.Hydrozoa.*
 import test.Generators.Other
+import test.TestPeer.mkWallet
 
 val genMultisigRegimeTokenName: Gen[AssetName] =
     for {
@@ -89,8 +90,12 @@ def genStandaloneFinalizationTxSeqBuilder(
     )
 
     for {
-        res <- genTxBuilderConfigAndPeers()
-        (config, peers) = res
+        peers <- genTestPeers()
+        hms = HeadMultisigScript(peers.map(mkWallet(_).exportVerificationKeyBytes))
+        mw <- genFakeMultisigWitnessUtxo(
+          hms,
+          testTxBuilderCardanoInfo.network
+        )
 
         majorVersion <- Gen.posNum[Int]
 
@@ -99,7 +104,7 @@ def genStandaloneFinalizationTxSeqBuilder(
             .map(_.utxo.value.coin)
             .fold(Coin.zero)(_ + _)
 
-        headAddress = config.headNativeScript.mkAddress(network)
+        headAddress = hms.mkAddress(network)
 
         treasuryUtxo <- genTreasuryUtxo(
           headAddress = Some(headAddress),
@@ -114,37 +119,31 @@ def genStandaloneFinalizationTxSeqBuilder(
             case Some(kzg) => Gen.const(kzg)
         }
     } yield (
-      FinalizationTxSeq.Builder(config = config),
+      FinalizationTxSeq.Builder(config =
+          FinalizationTxSeq.Config(testTxTiming, mw, testTxBuilderCardanoInfo, hms, shares)
+      ),
       FinalizationTxSeq.Builder.Args(
         majorVersionProduced = HBlock.Version.Major(majorVersion),
         treasuryToSpend = treasuryUtxo,
         payoutObligationsRemaining = payouts,
-        multisigRegimeUtxoToSpend = MultisigRegimeUtxo.apply(
-          config.tokenNames.multisigRegimeTokenName,
-          config.multisigRegimeUtxo.input,
-          config.multisigRegimeUtxo.output,
-          config.headNativeScript
-        ),
-        equityShares = shares,
         competingFallbackValidityStart = Instant
             .ofEpochMilli(System.currentTimeMillis() + 3_600_000)
-            .quantize(testTxBuilderEnvironment.slotConfig),
+            .quantize(testTxBuilderCardanoInfo.slotConfig),
         blockCreatedOn = Instant
             .ofEpochMilli(System.currentTimeMillis())
-            .quantize(testTxBuilderEnvironment.slotConfig),
-        txTiming = TxTiming.default(config.env.slotConfig)
+            .quantize(testTxBuilderCardanoInfo.slotConfig)
       ),
       peers
     )
 }
 
 def genFinalizationTxSeqBuilder(
+    config: FinalizationTxSeq.Config,
     treasuryToSpend: MultisigTreasuryUtxo,
     majorVersion: Int,
     fallbackValidityStart: QuantizedInstant,
     blockCreatedOn: QuantizedInstant,
     txTiming: TxTiming,
-    config: Tx.Builder.Config,
     peers: NonEmptyList[TestPeer],
     estimatedFeesAndEquity: Coin = Coin(50_000_000L),
     params: ProtocolParams = blockfrost544Params,
@@ -169,8 +168,6 @@ def genFinalizationTxSeqBuilder(
 
         payouts <- Gen.sequence(coins.map(l => genKnownCoinPayoutObligation(network, Coin(l))))
 
-        shares <- genEquityShares(peers)
-
         kzg: KzgCommitment <- kzgCommitment match {
             case None      => Gen.listOfN(48, Arbitrary.arbitrary[Byte]).map(IArray.from(_))
             case Some(kzg) => Gen.const(kzg)
@@ -181,16 +178,8 @@ def genFinalizationTxSeqBuilder(
         majorVersionProduced = HBlock.Version.Major(majorVersion),
         treasuryToSpend = treasuryToSpend,
         payoutObligationsRemaining = payouts.asScala.toVector,
-        multisigRegimeUtxoToSpend = MultisigRegimeUtxo.apply(
-          config.tokenNames.multisigRegimeTokenName,
-          config.multisigRegimeUtxo.input,
-          config.multisigRegimeUtxo.output,
-          config.headNativeScript
-        ),
-        equityShares = shares,
         competingFallbackValidityStart = fallbackValidityStart,
-        blockCreatedOn = blockCreatedOn,
-        txTiming = txTiming
+        blockCreatedOn = blockCreatedOn
       )
     )
 }

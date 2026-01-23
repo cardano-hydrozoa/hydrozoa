@@ -2,13 +2,15 @@ package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.data.NonEmptyVector
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
+import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
+import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx
-import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, RolloutTx, SettlementTx, Tx, TxTiming}
-import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigTreasuryUtxo}
+import hydrozoa.multisig.ledger.dapp.tx.*
+import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.Block
-import scalus.cardano.ledger.Coin
+import scalus.cardano.ledger.{CardanoInfo, Coin}
 import scalus.cardano.txbuilder.SomeBuildError
 
 enum SettlementTxSeq {
@@ -26,6 +28,16 @@ enum SettlementTxSeq {
 
 object SettlementTxSeq {
 
+    case class Config(
+        headMultisigScript: HeadMultisigScript,
+        multisigRegimeUtxo: MultisigRegimeUtxo,
+        tokenNames: TokenNames,
+        votingDuration: QuantizedFiniteDuration,
+        txTiming: TxTiming,
+        tallyFeeAllowance: Coin,
+        cardanoInfo: CardanoInfo
+    )
+
     extension (settlementTxSeq: SettlementTxSeq)
 
         def mbRollouts: List[RolloutTx] = settlementTxSeq match {
@@ -36,29 +48,46 @@ object SettlementTxSeq {
     import Builder.*
 
     final case class Builder(
-        config: Tx.Builder.Config
+        config: SettlementTxSeq.Config
     ) {
         def build(args: Args): Either[Builder.Error, Builder.Result] = {
+            lazy val settlementTxConfig: SettlementTx.Config = SettlementTx.Config(
+              cardanoInfo = config.cardanoInfo,
+              headMultisigScript = config.headMultisigScript,
+              multisigRegimeUtxo = config.multisigRegimeUtxo
+            )
+            lazy val ftxConfig = FallbackTx.Config(
+              headMultisigScript = config.headMultisigScript,
+              multisigRegimeUtxo = config.multisigRegimeUtxo,
+              tallyFeeAllowance = config.tallyFeeAllowance,
+              tokenNames = config.tokenNames,
+              votingDuration = config.votingDuration,
+              cardanoInfo = config.cardanoInfo
+            )
+            lazy val rolloutTxSeqConfig = RolloutTxSeq.Config(
+              cardanoInfo = config.cardanoInfo,
+              headMultisigScript = config.headMultisigScript,
+              multisigRegimeUtxo = config.multisigRegimeUtxo
+            )
+
             NonEmptyVector.fromVector(args.payoutObligationsRemaining) match {
                 case None =>
+
                     for {
                         settlementTx <- SettlementTx.Builder
-                            .NoPayouts(config)
-                            .build(args.toArgsNoPayouts)
+                            .NoPayouts(settlementTxConfig)
+                            .build(args.toArgsNoPayouts(config.txTiming))
                             .left
                             .map(Builder.Error.SettlementError(_))
 
                         ftxRecipe = FallbackTx.Recipe(
-                          config = config,
                           treasuryUtxoSpent = settlementTx.transaction.treasuryProduced,
-                          tallyFeeAllowance = args.tallyFeeAllowance,
-                          votingDuration = args.votingDuration,
                           validityStart = (args.blockCreatedOn
-                              + args.txTiming.minSettlementDuration
-                              + args.txTiming.inactivityMarginDuration).toSlot
+                              + config.txTiming.minSettlementDuration
+                              + config.txTiming.inactivityMarginDuration).toSlot
                         )
                         fallbackTx <- FallbackTx
-                            .build(ftxRecipe)
+                            .build(ftxConfig, ftxRecipe)
                             .left
                             .map(Builder.Error.FallbackError(_))
                     } yield Builder.Result(
@@ -68,16 +97,17 @@ object SettlementTxSeq {
                       depositsToSpend = settlementTx.depositsToSpend
                     )
                 case Some(nePayouts) =>
+
                     for {
                         rolloutTxSeqPartial <- RolloutTxSeq
-                            .Builder(config)
+                            .Builder(rolloutTxSeqConfig)
                             .buildPartial(nePayouts)
                             .left
                             .map(Error.RolloutSeqError(_))
 
                         settlementTxRes <- SettlementTx.Builder
-                            .WithPayouts(config)
-                            .build(args.toArgsWithPayouts(rolloutTxSeqPartial))
+                            .WithPayouts(settlementTxConfig)
+                            .build(args.toArgsWithPayouts(rolloutTxSeqPartial, config.txTiming))
                             .left
                             .map(Error.SettlementError(_))
 
@@ -96,17 +126,14 @@ object SettlementTxSeq {
                             }
 
                         ftxRecipe = FallbackTx.Recipe(
-                          config = config,
                           treasuryUtxoSpent = settlementTxRes.transaction.treasuryProduced,
-                          tallyFeeAllowance = args.tallyFeeAllowance,
-                          votingDuration = args.votingDuration,
                           validityStart = (args.blockCreatedOn
-                              + args.txTiming.minSettlementDuration
-                              + args.txTiming.inactivityMarginDuration
-                              + args.txTiming.silenceDuration).toSlot
+                              + config.txTiming.minSettlementDuration
+                              + config.txTiming.inactivityMarginDuration
+                              + config.txTiming.silenceDuration).toSlot
                         )
                         fallbackTx <- FallbackTx
-                            .build(ftxRecipe)
+                            .build(config = ftxConfig, recipe = ftxRecipe)
                             .left
                             .map(Builder.Error.FallbackError(_))
                     } yield Result(
@@ -140,16 +167,13 @@ object SettlementTxSeq {
             depositsToSpend: Vector[DepositUtxo],
             payoutObligationsRemaining: Vector[Payout.Obligation],
             kzgCommitment: KzgCommitment,
-            tallyFeeAllowance: Coin,
-            votingDuration: QuantizedFiniteDuration,
             competingFallbackValidityStart: QuantizedInstant,
             blockCreatedOn: QuantizedInstant,
-            txTiming: TxTiming
         )
         // TODO: confirm: this one is not needed
         // extends SingleArgs(kzgCommitment),
             extends Payout.Obligation.Many.Remaining {
-            def toArgsNoPayouts: SingleArgs.NoPayouts =
+            def toArgsNoPayouts(txTiming: TxTiming): SingleArgs.NoPayouts =
                 SingleArgs.NoPayouts(
                   majorVersionProduced = majorVersionProduced,
                   kzgCommitment = kzgCommitment,
@@ -159,7 +183,8 @@ object SettlementTxSeq {
                 )
 
             def toArgsWithPayouts(
-                rolloutTxSeqPartial: RolloutTxSeq.Builder.PartialResult
+                rolloutTxSeqPartial: RolloutTxSeq.Builder.PartialResult,
+                txTiming: TxTiming
             ): SingleArgs.WithPayouts = SingleArgs.WithPayouts(
               majorVersionProduced = majorVersionProduced,
               treasuryToSpend = treasuryToSpend,

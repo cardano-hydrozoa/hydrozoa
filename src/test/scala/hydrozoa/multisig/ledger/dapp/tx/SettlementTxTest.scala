@@ -3,6 +3,7 @@ package hydrozoa.multisig.ledger.dapp.tx
 import cats.data.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, quantize}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
+import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
@@ -10,7 +11,6 @@ import hydrozoa.multisig.protocol.types.Block as HBlock
 import java.time.Instant
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
-import scala.concurrent.duration.{FiniteDuration, HOURS}
 import scalus.builtin.Data.toData
 import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.*
@@ -24,9 +24,9 @@ import scalus.ledger.api.v1.Value.valueOrd
 import scalus.prelude.Ord.<=
 import scalus.prelude.{Option as SOption, Ord}
 import test.*
-import test.Generators.Hydrozoa.*
+import test.Generators.Hydrozoa.{genFakeMultisigWitnessUtxo, *}
 import test.Generators.Other
-import test.TestPeer.Alice
+import test.TestPeer.{Alice, mkWallet}
 
 def genDepositDatum(network: Network = testNetwork): Gen[DepositUtxo.Datum] = {
     for {
@@ -49,7 +49,7 @@ def genDepositDatum(network: Network = testNetwork): Gen[DepositUtxo.Datum] = {
         address = refundAddress,
         datum = refundDatum,
         startTime = QuantizedInstant(
-          testTxBuilderEnvironment.slotConfig,
+          testTxBuilderCardanoInfo.slotConfig,
           java.time.Instant.ofEpochMilli(deadline.toLong)
         )
       )
@@ -93,15 +93,15 @@ def genDepositUtxo(
                 // Generate some offset to the "zero slot" time.
                 // This is necessary because scalus can't currently support negative numbers as slots
                 Instant.ofEpochMilli(
-                  testTxBuilderEnvironment.slotConfig
-                      .slotToTime(testTxBuilderEnvironment.slotConfig.zeroSlot)
+                  testTxBuilderCardanoInfo.slotConfig
+                      .slotToTime(testTxBuilderCardanoInfo.slotConfig.zeroSlot)
                       + offsetFromZero
                 )
             )
         // The end is SPECIFIED as the start, plus the deposit absorption duration. If you need to pass in
         // a non-default tx timing in the future, feel free.
-        absorptionEnd = absorptionStart.quantize(testTxBuilderEnvironment.slotConfig)
-            + TxTiming.default(testTxBuilderEnvironment.slotConfig).depositAbsorptionDuration
+        absorptionEnd = absorptionStart.quantize(testTxBuilderCardanoInfo.slotConfig)
+            + TxTiming.default(testTxBuilderCardanoInfo.slotConfig).depositAbsorptionDuration
     } yield DepositUtxo(
       l1Input = txId,
       l1OutputAddress = headAddress_,
@@ -120,10 +120,10 @@ def genSettlementTxSeqBuilder(
     kzgCommitment: Option[KzgCommitment] = None,
     fallbackValidityStart: QuantizedInstant = java.time.Instant
         .ofEpochMilli(java.time.Instant.now().toEpochMilli + 3_600_000)
-        .quantize(testTxBuilderEnvironment.slotConfig),
+        .quantize(testTxBuilderCardanoInfo.slotConfig),
     blockCreatedOn: QuantizedInstant =
-        java.time.Instant.now().quantize(testTxBuilderEnvironment.slotConfig),
-    txTiming: TxTiming = TxTiming.default(testTxBuilderEnvironment.slotConfig)
+        java.time.Instant.now().quantize(testTxBuilderCardanoInfo.slotConfig),
+    txTiming: TxTiming = TxTiming.default(testTxBuilderCardanoInfo.slotConfig)
 ): Gen[(SettlementTxSeq.Builder, SettlementTxSeq.Builder.Args, NonEmptyList[TestPeer])] = {
     // A helper to generator empty, small, medium, large (up to 1000)
     def genHelper[T](gen: Gen[T]): Gen[Vector[T]] = Gen.sized(size =>
@@ -136,14 +136,21 @@ def genSettlementTxSeqBuilder(
     )
 
     for {
-        (config, peers) <- genTxBuilderConfigAndPeers()
-        hns = config.headNativeScript
+        peers <- genTestPeers()
+        hms = HeadMultisigScript(peers.map(mkWallet(_).exportVerificationKeyBytes))
+        seedUtxo <- arbitrary[TransactionInput]
+        tokenNames = TokenNames(seedUtxo)
+        mw <- genFakeMultisigWitnessUtxo(
+          hms,
+          network,
+          Some(tokenNames.multisigRegimeTokenName)
+        )
         majorVersion <- Gen.posNum[Int]
 
         genDeposit = genDepositUtxo(
           network = network,
           params = params,
-          headAddress = Some(hns.mkAddress(network))
+          headAddress = Some(hms.mkAddress(network))
         )
         deposits <- genHelper(genDeposit)
 
@@ -152,7 +159,7 @@ def genSettlementTxSeqBuilder(
             .map(_.utxo.value.coin)
             .fold(Coin.zero)(_ + _)
         utxo <- genTreasuryUtxo(
-          headAddress = Some(hns.mkAddress(network)),
+          headAddress = Some(hms.mkAddress(network)),
           network = network,
           coin = Some(payoutAda + Coin(1_000_000_000L))
         )
@@ -161,6 +168,16 @@ def genSettlementTxSeqBuilder(
             case None      => Gen.listOfN(48, Arbitrary.arbitrary[Byte]).map(IArray.from(_))
             case Some(kzg) => Gen.const(kzg)
         }
+
+        config = SettlementTxSeq.Config(
+          headMultisigScript = hms,
+          multisigRegimeUtxo = mw,
+          tokenNames = ???,
+          votingDuration = ???,
+          txTiming = ???,
+          tallyFeeAllowance = ???,
+          cardanoInfo = ???
+        )
     } yield (
       SettlementTxSeq.Builder(config),
       SettlementTxSeq.Builder.Args(
@@ -169,11 +186,8 @@ def genSettlementTxSeqBuilder(
         depositsToSpend = deposits,
         payoutObligationsRemaining = payouts,
         treasuryToSpend = utxo,
-        tallyFeeAllowance = Coin.ada(2),
-        votingDuration = FiniteDuration(24, HOURS).quantize(testTxBuilderEnvironment.slotConfig),
         competingFallbackValidityStart = fallbackValidityStart,
-        blockCreatedOn = blockCreatedOn,
-        txTiming = txTiming
+        blockCreatedOn = blockCreatedOn
       ),
       peers
     )
@@ -187,12 +201,12 @@ def genSettlementTxSeqBuilder(
   *   the version of the next block
   */
 def genNextSettlementTxSeqBuilder(
+    config: SettlementTxSeq.Config,
     treasuryToSpend: MultisigTreasuryUtxo,
     fallbackValidityStart: QuantizedInstant,
     blockCreatedOn: QuantizedInstant,
     majorVersion: Int,
     headNativeScript: HeadMultisigScript,
-    builderConfig: Tx.Builder.Config,
     txTiming: TxTiming,
     estimatedFee: Coin = Coin(5_000_000L),
     params: ProtocolParams = blockfrost544Params,
@@ -238,18 +252,15 @@ def genNextSettlementTxSeqBuilder(
             case Some(kzg) => Gen.const(kzg)
         }
     } yield (
-      SettlementTxSeq.Builder(builderConfig),
+      SettlementTxSeq.Builder(config),
       SettlementTxSeq.Builder.Args(
         kzgCommitment = kzg,
         majorVersionProduced = HBlock.Version.Major(majorVersion),
         depositsToSpend = deposits,
         payoutObligationsRemaining = infimum,
         treasuryToSpend = treasuryToSpend,
-        tallyFeeAllowance = Coin.ada(2),
-        votingDuration = FiniteDuration(24, HOURS).quantize(testTxBuilderEnvironment.slotConfig),
         competingFallbackValidityStart = fallbackValidityStart,
-        blockCreatedOn = blockCreatedOn,
-        txTiming = txTiming
+        blockCreatedOn = blockCreatedOn
       ),
     )
 }

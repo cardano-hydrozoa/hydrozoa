@@ -7,8 +7,6 @@ import hydrozoa.multisig.ledger.VirtualLedgerM
 import hydrozoa.multisig.ledger.VirtualLedgerM.{Config, State}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
-import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
-import hydrozoa.multisig.ledger.dapp.tx.Tx
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.{GenesisObligation, L2EventTransaction}
@@ -30,7 +28,6 @@ import scalus.cardano.ledger.ArbitraryInstances.{*, given}
 import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.{Babbage, valueLens}
-import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
 import scalus.prelude.Option as SOption
 import scalus.|>
@@ -67,42 +64,6 @@ object Generators {
               (someFrequency, genByteStringData.map(data => SOption.Some(Inline(data)))),
               (noneFrequency, SOption.None)
             )
-
-        /** Generates the general configuration for a hydrozoa (non-init) transaction, and returns
-          * the set of peers to use for signing.
-          */
-        def genTxBuilderConfigAndPeers(
-            env: CardanoInfo = testTxBuilderEnvironment,
-            evaluator: PlutusScriptEvaluator = testEvaluator,
-            validators: Seq[Validator] = nonSigningNonValidityChecksValidators
-        ): Gen[(Tx.Builder.Config, NonEmptyList[TestPeer])] =
-            for {
-                peers <- genTestPeers()
-                hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
-                seedUtxo <- arbitrary[TransactionInput]
-                tokenNames = TokenNames(seedUtxo)
-                multisigWitnessUtxo <- genFakeMultisigWitnessUtxo(
-                  hns,
-                  env.network,
-                  Some(tokenNames.multisigRegimeTokenName)
-                )
-            } yield (
-              Tx.Builder.Config(
-                headNativeScript = hns,
-                multisigRegimeUtxo = multisigWitnessUtxo,
-                tokenNames = tokenNames,
-                env = env,
-                evaluator = evaluator,
-                validators = validators
-              ),
-              peers
-            )
-
-        def genTxConfig(
-            env: CardanoInfo = testTxBuilderEnvironment,
-            evaluator: PlutusScriptEvaluator = testEvaluator,
-            validators: Seq[Validator] = nonSigningValidators
-        ): Gen[Tx.Builder.Config] = genTxBuilderConfigAndPeers(env, evaluator, validators).map(_._1)
 
         val genHeadTokenName: Gen[AssetName] =
             for {
@@ -366,13 +327,17 @@ object Generators {
             )
 
         /** Generate a treasury utxo according to a builder config */
-        def genTreasuryUtxo(config: Tx.Builder.Config): Gen[MultisigTreasuryUtxo] =
+        def genTreasuryUtxo(peers: NonEmptyList[TestPeer]): Gen[MultisigTreasuryUtxo] = {
+            val headMultisigScript = HeadMultisigScript(
+              peers.map(_.wallet.exportVerificationKeyBytes)
+            )
             genTreasuryUtxo(
-              network = config.env.network,
-              params = config.env.protocolParams,
-              headAddress = Some(config.headAddress),
+              network = testTxBuilderCardanoInfo.network,
+              params = testTxBuilderCardanoInfo.protocolParams,
+              headAddress = Some(headMultisigScript.mkAddress(testTxBuilderCardanoInfo.network)),
               coin = None
             )
+        }
 
         /** Given a set of inputs event, construct a withdrawal event attempting to withdraw all
           * inputs with the given key to a single output

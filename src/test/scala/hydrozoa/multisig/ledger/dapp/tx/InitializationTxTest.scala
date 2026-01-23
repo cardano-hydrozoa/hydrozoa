@@ -1,8 +1,6 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
-import cats.effect.unsafe.implicits.global
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.maxNonPlutusTxFee
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
@@ -11,7 +9,6 @@ import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.SpentUtxos
 import hydrozoa.multisig.ledger.dapp.utxo.MultisigTreasuryUtxo
 import org.scalacheck.{Arbitrary, Gen}
 import scala.collection.immutable.SortedMap
-import scala.concurrent.duration.DurationInt
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.address.*
@@ -83,7 +80,7 @@ val genInitTxRecipe: Gen[InitializationTx.Recipe] =
             .choose(
               minInitTreasuryAda.value,
               sumUtxoValues(spentUtxos.toList).coin.value
-                  - maxNonPlutusTxFee(testTxBuilderEnvironment.protocolParams).value
+                  - maxNonPlutusTxFee(testTxBuilderCardanoInfo.protocolParams).value
                   - minPubkeyAda().value
             )
             .map(Coin(_))
@@ -93,15 +90,8 @@ val genInitTxRecipe: Gen[InitializationTx.Recipe] =
         hmrwCoin <- Arbitrary.arbitrary[Coin]
 
     } yield InitializationTx.Recipe(
-      validityEnd = realTimeQuantizedInstant(testTxBuilderEnvironment.slotConfig)
-          .unsafeRunSync() + 10.minutes, // FIXME: Generate
       spentUtxos = SpentUtxos(seedUtxo, otherSpentUtxos),
-      headNativeScript = hns,
       initialTreasury = initialTreasury,
-      tokenNames = tokenNames,
       hmrwCoin = hmrwCoin,
-      env = testTxBuilderEnvironment,
-      evaluator = testEvaluator,
-      validators = nonSigningValidators,
       changePP = Key(AddrKeyHash.fromByteString(ByteString.fill(28, 1.toByte)))
     )

@@ -1,18 +1,21 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant, toQuantizedInstant}
+import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explainConst}
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
-import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
+import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo}
 import hydrozoa.{Utxo as _, prebalancedLovelaceDiffHandler, *}
 import monocle.{Focus, Lens}
 import scala.annotation.tailrec
 import scala.language.implicitConversions
 import scala.util.{Failure, Success}
 import scalus.builtin.ByteString
+import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
+import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.rules.TransactionSizeValidator
 import scalus.cardano.ledger.utils.TxBalance
@@ -31,6 +34,15 @@ sealed trait RefundTx {
 }
 
 object RefundTx {
+    final case class Config(
+        multisigRegimeUtxo: MultisigRegimeUtxo,
+        headMultisigScript: HeadMultisigScript,
+        cardanoInfo: CardanoInfo
+    ) {
+        def evaluator: PlutusScriptEvaluator =
+            PlutusScriptEvaluator(cardanoInfo, EvaluateAndComputeCost)
+        def headAddress: ShelleyAddress = headMultisigScript.mkAddress(cardanoInfo.network)
+    }
 
     // TODO: shall we keep it for now?
     final case class Immediate(override val tx: Transaction) extends RefundTx, Tx[Immediate] {
@@ -47,7 +59,7 @@ object RefundTx {
 
     object Builder {
         final case class Immediate(
-            override val config: Tx.Builder.Config,
+            override val config: RefundTx.Config,
             override val refundInstructions: DepositUtxo.Refund.Instructions,
             override val refundValue: Value
         ) extends Builder[RefundTx.Immediate] {
@@ -63,12 +75,16 @@ object RefundTx {
         }
 
         final case class PostDated(
-            override val config: Tx.Builder.Config,
+            override val config: RefundTx.Config,
             override val refundInstructions: DepositUtxo.Refund.Instructions,
             override val refundValue: Value,
         ) extends Builder[RefundTx.PostDated] {
             override val mValidityStart: Some[QuantizedInstant] =
-                Some(refundInstructions.startTime.toEpochQuantizedInstant(config.env.slotConfig))
+                Some(
+                  refundInstructions.startTime.toEpochQuantizedInstant(
+                    config.cardanoInfo.slotConfig
+                  )
+                )
             override val stepRefundMetadata =
                 ModifyAuxiliaryData(_ => Some(MD(MD.Refund(headAddress = config.headAddress))))
 
@@ -76,7 +92,12 @@ object RefundTx {
                 ctx: TransactionBuilder.Context,
                 valueNeeded: Value
             ): PartialResult.PostDated =
-                PartialResult.PostDated(ctx, valueNeeded, refundInstructions, config.env.slotConfig)
+                PartialResult.PostDated(
+                  ctx,
+                  valueNeeded,
+                  refundInstructions,
+                  config.cardanoInfo.slotConfig
+                )
         }
 
         sealed trait PartialResult[T <: RefundTx]
@@ -87,7 +108,7 @@ object RefundTx {
 
             final def complete(
                 depositSpent: DepositUtxo,
-                config: Tx.Builder.Config
+                config: RefundTx.Config
             ): BuildErrorOr[T] = for {
                 addedDepositSpent <- TransactionBuilder
                     .modify(
@@ -97,7 +118,7 @@ object RefundTx {
                           depositSpent.toUtxo,
                           NativeScriptWitness(
                             NativeScriptAttached,
-                            config.headNativeScript.requiredSigners
+                            config.headMultisigScript.requiredSigners
                           )
                         )
                       )
@@ -105,10 +126,10 @@ object RefundTx {
                     .explainConst("adding real spend deposit failed.")
                 finalized <- addedDepositSpent
                     .finalizeContext(
-                      config.env.protocolParams,
+                      config.cardanoInfo.protocolParams,
                       prebalancedLovelaceDiffHandler,
                       config.evaluator,
-                      config.validators
+                      Tx.Validators.nonSigningNonValidityChecksValidators
                     )
                     .explainConst("finalizing partial result completion failed")
             } yield postProcess(finalized)
@@ -147,7 +168,8 @@ object RefundTx {
         }
     }
 
-    trait Builder[T <: RefundTx] extends Tx.Builder {
+    trait Builder[T <: RefundTx] {
+        def config: RefundTx.Config
         import BuilderOps.*
 
         def refundInstructions: DepositUtxo.Refund.Instructions
@@ -174,17 +196,17 @@ object RefundTx {
             val sendRefund = Send(refundOutput)
 
             val setValidity = ValidityStartSlot(
-              config.env.slotConfig.timeToSlot(refundInstructions.startTime.toLong)
+              config.cardanoInfo.slotConfig.timeToSlot(refundInstructions.startTime.toLong)
             )
 
             val steps = List(stepRefundMetadata, stepReferenceHNS, setValidity, sendRefund)
 
             for {
                 ctx <- TransactionBuilder
-                    .build(config.env.network, steps)
+                    .build(config.cardanoInfo.network, steps)
                     .explainConst("adding base refund steps failed")
 
-                valueNeeded = Placeholder.inputValueNeeded(ctx, config.env.protocolParams)
+                valueNeeded = Placeholder.inputValueNeeded(ctx, config.cardanoInfo.protocolParams)
 
                 valueNeededWithFee <- trialFinishLoop(ctx, valueNeeded)
             } yield mkPartialResult(ctx, valueNeededWithFee)
@@ -215,13 +237,13 @@ object RefundTx {
                       spendDeposit,
                       NativeScriptWitness(
                         NativeScriptAttached,
-                        config.headNativeScript.requiredSigners
+                        config.headMultisigScript.requiredSigners
                       )
                     )
                   )
                 )
                 res <- addedSpendDeposit.finalizeContext(
-                  config.env.protocolParams,
+                  config.cardanoInfo.protocolParams,
                   prebalancedLovelaceDiffHandler,
                   config.evaluator,
                   List(TransactionSizeValidator)

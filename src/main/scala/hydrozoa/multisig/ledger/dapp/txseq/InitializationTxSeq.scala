@@ -17,8 +17,8 @@ import scalus.cardano.address.*
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
+import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.ledger.api.v1.PubKeyHash
@@ -26,6 +26,18 @@ import scalus.ledger.api.v1.PubKeyHash
 final case class InitializationTxSeq(initializationTx: InitializationTx, fallbackTx: FallbackTx)
 
 object InitializationTxSeq {
+    case class Config(
+        tallyFeeAllowance: Coin,
+        votingDuration: QuantizedFiniteDuration,
+        cardanoInfo: CardanoInfo,
+        peerKeys: NonEmptyList[VerificationKeyBytes],
+        startTime: QuantizedInstant,
+        txTiming: TxTiming
+    ) {
+        def evaluator: PlutusScriptEvaluator =
+            PlutusScriptEvaluator(cardanoInfo, EvaluateAndComputeCost)
+        def headMultisigScript = HeadMultisigScript(peerKeys)
+    }
 
     sealed trait ParseError
     case class InitializationTxParseError(wrapped: InitializationTx.ParseError) extends ParseError
@@ -55,21 +67,18 @@ object InitializationTxSeq {
       * @param env
       * @param evaluator
       * @param validators
-      * @param resolver
+      * @param resolvedUtxos
       * @return
       */
     def parse(
         transactionSequence: (Transaction, Transaction),
-        expectedNetwork: Network,
+        tallyFeeAllowance: Coin,
+        votingDuration: QuantizedFiniteDuration,
+        cardanoInfo: CardanoInfo,
         peerKeys: NonEmptyList[VerificationKeyBytes],
-        expectedTallyFeeAllowance: Coin,
-        expectedVotingDuration: QuantizedFiniteDuration,
-        env: CardanoInfo,
-        evaluator: PlutusScriptEvaluator,
-        validators: Seq[Validator],
-        resolver: Seq[TransactionInput] => ResolvedUtxos,
-        initializationRequestTimestamp: QuantizedInstant,
-        txTiming: TxTiming
+        startTime: QuantizedInstant,
+        txTiming: TxTiming,
+        resolvedUtxos: ResolvedUtxos,
     ): Either[ParseError, InitializationTxSeq] = {
 
         val initializationTx = transactionSequence._1
@@ -78,39 +87,38 @@ object InitializationTxSeq {
         for {
             iTx <- InitializationTx
                 .parse(
-                  peerKeys,
-                  expectedNetwork = expectedNetwork,
+                  peerKeys = peerKeys,
+                  cardanoInfo = cardanoInfo,
+                  txTiming = txTiming,
+                  startTime = startTime,
                   tx = initializationTx,
-                  resolver = resolver,
-                  slotConfig = env.slotConfig,
-                  initializationRequestTimestamp = initializationRequestTimestamp,
-                  txTiming = txTiming
+                  resolvedUtxos = resolvedUtxos
                 )
                 .left
                 .map(InitializationTxParseError(_))
-
-            config = Tx.Builder.Config(
-              headNativeScript = HeadMultisigScript(peerKeys),
-              multisigRegimeUtxo = iTx.multisigRegimeWitness,
-              tokenNames = iTx.tokenNames,
-              env = env,
-              evaluator = evaluator,
-              validators = validators
-            )
 
             fallbackValidityStartSlot <- fallbackTx.body.value.validityStartSlot
                 .toRight(FallbackTxValidityStartIsMissing)
                 .map(Slot.apply)
 
+            ftxConfig = FallbackTx.Config(
+              headMultisigScript = HeadMultisigScript(peerKeys),
+              multisigRegimeUtxo = iTx.multisigRegimeUtxo,
+              tokenNames = iTx.tokenNames,
+              tallyFeeAllowance = tallyFeeAllowance,
+              cardanoInfo = cardanoInfo,
+              votingDuration = votingDuration
+            )
+
             ftxRecipe = FallbackTx.Recipe(
-              config = config,
               treasuryUtxoSpent = iTx.treasuryProduced,
-              tallyFeeAllowance = expectedTallyFeeAllowance,
-              votingDuration = expectedVotingDuration,
               // Time checks are done for the whole sequence later on, see down below.
               validityStart = fallbackValidityStartSlot
             )
-            expectedFallbackTx <- FallbackTx.build(ftxRecipe).left.map(FallbackTxBuildError(_))
+            expectedFallbackTx <- FallbackTx
+                .build(ftxConfig, ftxRecipe)
+                .left
+                .map(FallbackTxBuildError(_))
 
             _ <-
                 if expectedFallbackTx.tx == fallbackTx then Right(())
@@ -164,10 +172,10 @@ object InitializationTxSeq {
      */
     object Builder {
 
-        def build(args: Args): Either[Error, InitializationTxSeq] = {
+        def build(args: Args, config: Config): Either[Error, InitializationTxSeq] = {
             val tokenNames = CIP67.TokenNames(args.spentUtxos.seedUtxo.input)
             val disputeResolutionAddress = ShelleyAddress(
-              network = args.env.network,
+              network = config.cardanoInfo.network,
               payment = ShelleyPaymentPart.Script(DisputeResolutionScript.compiledScriptHash),
               delegation = Null
             )
@@ -179,7 +187,7 @@ object InitializationTxSeq {
             // ===================================
 
             // Construct head native script directly from the list of peers
-            val hns = HeadMultisigScript(args.peers)
+            val hms = HeadMultisigScript(config.peerKeys)
 
             // ===================================
             // Init Treasury
@@ -192,7 +200,7 @@ object InitializationTxSeq {
             def mkVoteToken(amount: Long): MultiAsset = MultiAsset(
               SortedMap(
                 (
-                  hns.policyId,
+                  hms.policyId,
                   SortedMap((voteTokenName, amount))
                 )
               )
@@ -200,10 +208,10 @@ object InitializationTxSeq {
 
             def mkVoteUtxo(datum: Data): TransactionOutput = Babbage(
               address = disputeResolutionAddress,
-              value = Value(args.tallyFeeAllowance, mkVoteToken(1)),
+              value = Value(config.tallyFeeAllowance, mkVoteToken(1)),
               datumOption = Some(Inline(datum)),
               scriptRef = None
-            ).ensureMinAda(args.env.protocolParams)
+            ).ensureMinAda(config.cardanoInfo.protocolParams)
 
             val initDefaultVoteUtxo: TransactionOutput = mkVoteUtxo(
               VD.default(initTreasuryDatum.commit).toData
@@ -212,7 +220,7 @@ object InitializationTxSeq {
             val peerVoteUtxos: NonEmptyList[TransactionOutput] = {
                 val datums = VD(
                   NonEmptyList.fromListUnsafe(
-                    hns.requiredSigners.map(x => PubKeyHash(x.hash)).toList
+                    hms.requiredSigners.map(x => PubKeyHash(x.hash)).toList
                   )
                 )
                 datums.map(datum => mkVoteUtxo(datum.toData))
@@ -224,18 +232,18 @@ object InitializationTxSeq {
 
             def collateralUtxos: NonEmptyList[TransactionOutput] = {
                 NonEmptyList.fromListUnsafe(
-                  hns.requiredSigners
+                  hms.requiredSigners
                       .map(es =>
                           Babbage(
                             address = ShelleyAddress(
-                              network = args.env.network,
+                              network = config.cardanoInfo.network,
                               payment = ShelleyPaymentPart.Key(es.hash),
                               delegation = Null
                             ),
-                            value = Value(args.tallyFeeAllowance),
+                            value = Value(config.tallyFeeAllowance),
                             datumOption = None,
                             scriptRef = None
-                          ).ensureMinAda(args.env.protocolParams)
+                          ).ensureMinAda(config.cardanoInfo.protocolParams)
                       )
                       .toList
                 )
@@ -245,11 +253,11 @@ object InitializationTxSeq {
             // Validity ranges
             // ===================================
             val initializationTxValidityEnd =
-                args.blockZeroCreationTime + args.txTiming.minSettlementDuration +
-                    args.txTiming.inactivityMarginDuration
+                config.startTime + config.txTiming.minSettlementDuration +
+                    config.txTiming.inactivityMarginDuration
 
             val fallbackTxValidityStart =
-                initializationTxValidityEnd + args.txTiming.silenceDuration
+                initializationTxValidityEnd + config.txTiming.silenceDuration
 
             // ===================================
             // Init Tx
@@ -257,53 +265,49 @@ object InitializationTxSeq {
 
             val multisigRegimeWitnessCoin: Coin =
                 Coin(
-                  maxNonPlutusTxFee(args.env.protocolParams).value
+                  maxNonPlutusTxFee(config.cardanoInfo.protocolParams).value
                       + initDefaultVoteUtxo.value.coin.value
                       + peerVoteUtxos.map(_.value.coin.value).toList.sum
                       + collateralUtxos.map(_.value.coin.value).toList.sum
                 )
 
+            val initializationTxConfig = InitializationTx.Config(
+              peerKeys = config.peerKeys,
+              cardanoInfo = config.cardanoInfo,
+              txTiming = config.txTiming,
+              startTime = config.startTime,
+              tokenNames = tokenNames
+            )
+
             val initializationTxRecipe = InitializationTx.Recipe(
-              // NOTE: We must have
-              //  0 > zeroSlot + (ttl - zeroTime) / slotLength
-              // Otherwise slot conversion will fail
-              validityEnd = initializationTxValidityEnd,
-              spentUtxos = args.spentUtxos,
-              headNativeScript = hns,
-              initialTreasury = args.initialTreasury,
-              tokenNames = tokenNames,
               hmrwCoin = multisigRegimeWitnessCoin,
-              env = args.env,
-              evaluator = args.evaluator,
-              validators = args.validators,
+              spentUtxos = args.spentUtxos,
+              initialTreasury = args.initialTreasury,
               changePP = args.initializationTxChangePP
             )
 
             for {
                 initializationTx <- InitializationTx
-                    .build(initializationTxRecipe)
+                    .build(initializationTxConfig, initializationTxRecipe)
                     .left
                     .map(InitializationTxError(_))
 
-                config = Tx.Builder.Config(
-                  headNativeScript = hns,
-                  multisigRegimeUtxo = initializationTx.multisigRegimeWitness,
+                fallbackConfig = FallbackTx.Config(
+                  headMultisigScript = hms,
+                  tallyFeeAllowance = config.tallyFeeAllowance,
+                  multisigRegimeUtxo = initializationTx.multisigRegimeUtxo,
                   tokenNames = initializationTx.tokenNames,
-                  env = args.env,
-                  evaluator = args.evaluator,
-                  validators = args.validators
+                  cardanoInfo = config.cardanoInfo,
+                  votingDuration = config.votingDuration
                 )
 
                 fallbackTxRecipe = FallbackTx.Recipe(
-                  config = config,
                   treasuryUtxoSpent = initializationTx.treasuryProduced,
-                  tallyFeeAllowance = args.tallyFeeAllowance,
-                  votingDuration = args.votingDuration,
                   validityStart = fallbackTxValidityStart.toSlot
                 )
 
                 fallbackTx <- FallbackTx
-                    .build(fallbackTxRecipe)
+                    .build(fallbackConfig, fallbackTxRecipe)
                     .left
                     .map(FallbackTxError(_))
 
@@ -321,18 +325,7 @@ object InitializationTxSeq {
         final case class Args(
             spentUtxos: InitializationTx.SpentUtxos,
             initialTreasury: Value,
-            peers: NonEmptyList[VerificationKeyBytes],
-            env: CardanoInfo,
-            evaluator: PlutusScriptEvaluator,
-            validators: Seq[Validator],
             initializationTxChangePP: ShelleyPaymentPart,
-            tallyFeeAllowance: Coin,
-            // TODO: move to TxTiming?
-            votingDuration: QuantizedFiniteDuration,
-            txTiming: TxTiming,
-            // Block zero creation time is the "zero point" against which we calculate validity
-            // ranges. It's a value peers agree on before opening a head.
-            blockZeroCreationTime: QuantizedInstant
         )
     }
 }

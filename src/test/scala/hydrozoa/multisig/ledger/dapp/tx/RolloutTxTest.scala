@@ -1,5 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.tx
+import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
+import hydrozoa.multisig.ledger.joint.obligation.Payout
 import org.scalacheck.*
 import org.scalacheck.Gen.Parameters
 import org.scalacheck.rng.Seed
@@ -12,12 +14,15 @@ import scalus.cardano.txbuilder.addDummySignatures
 import test.*
 import test.Generators.Hydrozoa.*
 import test.Generators.Other as GenOther
+import test.TestPeer.mkWallet
 
 class RolloutTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
+    private val genPayouts: Gen[Payout.Obligation] = genPayoutObligation(
+      testTxBuilderCardanoInfo.network
+    )
+
     val genLastBuilder: Gen[(RolloutTx.Builder.Last, RolloutTx.Builder.Args.Last)] =
         for {
-            config <- genTxConfig()
-            genPayouts = genPayoutObligation(config.env.network)
             // We want to test small, medium, and large, so we do it with frequency
             payouts <-
                 Gen.frequency(
@@ -25,17 +30,29 @@ class RolloutTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
                   (7, Gen.sized(size => GenOther.nonEmptyVectorOfN(size * 3 + 1, genPayouts))),
                   (2, Gen.sized(size => GenOther.nonEmptyVectorOfN(size * 6 + 1, genPayouts)))
                 )
+            peers <- genTestPeers()
+            hms = HeadMultisigScript(peers.map(mkWallet(_).exportVerificationKeyBytes))
+            mw <- genFakeMultisigWitnessUtxo(
+              hms,
+              testTxBuilderCardanoInfo.network
+            )
+
         } yield (
-          RolloutTx.Builder.Last(config),
+          RolloutTx.Builder.Last(RolloutTx.Config(testTxBuilderCardanoInfo, mw, hms)),
           RolloutTx.Builder.Args.Last(payouts)
         )
     val genNotLastBuilder: Gen[(RolloutTx.Builder.NotLast, RolloutTx.Builder.Args.NotLast)] =
         for {
-            config <- genTxConfig()
-            payouts <- GenOther.nonEmptyVectorOf(genPayoutObligation(config.env.network))
+            payouts <- GenOther.nonEmptyVectorOf(genPayouts)
             rolloutSpentVal <- Arbitrary.arbitrary[Coin].map(Value(_))
+            peers <- genTestPeers()
+            hms = HeadMultisigScript(peers.map(mkWallet(_).exportVerificationKeyBytes))
+            mw <- genFakeMultisigWitnessUtxo(
+              hms,
+              testTxBuilderCardanoInfo.network
+            )
         } yield (
-          RolloutTx.Builder.NotLast(config),
+          RolloutTx.Builder.NotLast(RolloutTx.Config(testTxBuilderCardanoInfo, mw, hms)),
           RolloutTx.Builder.Args.NotLast(payouts, rolloutSpentVal)
         )
 
@@ -58,12 +75,12 @@ class RolloutTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
 
                 val unsignedSize = pr.get.ctx.transaction.toCbor.length
                 val withDummySigners = addDummySignatures(
-                  pr.get.builder.config.headNativeScript.numSigners,
+                  pr.get.builder.config.headMultisigScript.numSigners,
                   pr.get.ctx.transaction
                 )
                 val signedSize = withDummySigners.toCbor.length
 
-                val maxSize = builder.config.env.protocolParams.maxTxSize
+                val maxSize = builder.config.cardanoInfo.protocolParams.maxTxSize
                 assert(
                   signedSize <= maxSize,
                   "\n\t\tPartial result size with dummy signatures is too big: " +

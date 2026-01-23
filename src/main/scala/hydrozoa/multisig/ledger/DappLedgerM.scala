@@ -7,6 +7,8 @@ import hydrozoa.config.EquityShares
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
 import hydrozoa.multisig.ledger
 import hydrozoa.multisig.ledger.DappLedgerM.Error.{AbsorptionPeriodExpired, ParseError, SettlementTxSeqBuilderError}
+import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
+import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.txseq
 import hydrozoa.multisig.ledger.dapp.txseq.{DepositRefundTxSeq, FinalizationTxSeq, SettlementTxSeq}
@@ -23,7 +25,7 @@ import scalus.cardano.ledger.*
 
 private type E[A] = Either[DappLedgerM.Error, A]
 private type S[A] = cats.data.StateT[E, DappLedgerM.State, A]
-private type RT[A] = ReaderT[S, Tx.Builder.Config, A]
+private type RT[A] = ReaderT[S, DappLedgerM.Config, A]
 
 /** DappLedgerM defines an opaque monad stack for manipulating the [[State]] of the dApp ledger.
   * It's constructor and eliminator methods are private so that it cannot be used in unintended
@@ -46,7 +48,7 @@ case class DappLedgerM[A] private (private val unDappLedger: RT[A]) {
       * @return
       */
     private def run(
-        config: Tx.Builder.Config,
+        config: DappLedgerM.Config,
         initialState: DappLedgerM.State
     ): Either[DappLedgerM.Error, (DappLedgerM.State, A)] =
         this.unDappLedger.run(config).run(initialState)
@@ -54,10 +56,20 @@ case class DappLedgerM[A] private (private val unDappLedger: RT[A]) {
 }
 
 object DappLedgerM {
+    case class Config(
+        txTiming: TxTiming,
+        equityShares: EquityShares,
+        multisigRegimeUtxo: MultisigRegimeUtxo,
+        headMultisigScript: HeadMultisigScript,
+        cardanoInfo: CardanoInfo,
+        tokenNames: TokenNames,
+        votingDuration: QuantizedFiniteDuration,
+        tallyFeeAllowance: Coin,
+    )
 
     /** Extract the transaction builder configuration from a [[DappLedgerM]]
       */
-    private val ask: DappLedgerM[Tx.Builder.Config] =
+    private val ask: DappLedgerM[DappLedgerM.Config] =
         DappLedgerM(Kleisli.ask)
 
     /** Obtain the current state from a [[DappLedgerM]]
@@ -85,15 +97,20 @@ object DappLedgerM {
         import req.*
         for {
             config <- ask
+            depositRefundTxSeqConfig = DepositRefundTxSeq.Config(
+              txTiming = config.txTiming,
+              cardanoInfo = config.cardanoInfo,
+              headMultisigScript = config.headMultisigScript,
+              multisigRegimeUtxo = config.multisigRegimeUtxo
+            )
             parseRes =
                 DepositRefundTxSeq
                     .parse(
                       depositTxBytes = depositTxBytes,
                       refundTxBytes = refundTxBytes,
-                      config = config,
+                      config = depositRefundTxSeqConfig,
                       virtualOutputsBytes = virtualOutputsBytes,
                       donationToTreasury = donationToTreasury,
-                      txTiming = txTiming
                     )
                     .left
                     .map(ParseError(_))
@@ -122,12 +139,9 @@ object DappLedgerM {
         nextKzg: KzgCommitment,
         validDeposits: Queue[(LedgerEventId, DepositUtxo)],
         payoutObligations: Vector[Payout.Obligation],
-        tallyFeeAllowance: Coin,
-        votingDuration: QuantizedFiniteDuration,
         immatureDeposits: Queue[(LedgerEventId, DepositUtxo)],
         blockCreatedOn: QuantizedInstant,
         competingFallbackValidityStart: QuantizedInstant,
-        txTiming: TxTiming
     ): DappLedgerM[SettleLedger.Result] = {
 
         for {
@@ -141,16 +155,23 @@ object DappLedgerM {
               treasuryToSpend = state.treasury,
               depositsToSpend = Vector.from(validDeposits.map(_._2).toList),
               payoutObligationsRemaining = payoutObligations,
-              tallyFeeAllowance = tallyFeeAllowance,
-              votingDuration = votingDuration,
               competingFallbackValidityStart = competingFallbackValidityStart,
               blockCreatedOn = blockCreatedOn,
-              txTiming = txTiming
             )
 
             settlementTxSeqRes <- lift(
               SettlementTxSeq
-                  .Builder(config)
+                  .Builder(
+                    SettlementTxSeq.Config(
+                      headMultisigScript = config.headMultisigScript,
+                      multisigRegimeUtxo = config.multisigRegimeUtxo,
+                      tokenNames = config.tokenNames,
+                      votingDuration = config.votingDuration,
+                      txTiming = config.txTiming,
+                      tallyFeeAllowance = config.tallyFeeAllowance,
+                      cardanoInfo = config.cardanoInfo
+                    )
+                  )
                   .build(args)
                   .left
                   .map(SettlementTxSeqBuilderError.apply)
@@ -190,11 +211,8 @@ object DappLedgerM {
     // TODO (fund14): add Refund.Immediates to the return type
     def finalizeLedger(
         payoutObligationsRemaining: Vector[Payout.Obligation],
-        multisigRegimeUtxoToSpend: MultisigRegimeUtxo,
-        equityShares: EquityShares,
         blockCreatedOn: QuantizedInstant,
         competingFallbackValidityStart: QuantizedInstant,
-        txTiming: TxTiming
     ): DappLedgerM[FinalizationTxSeq] = {
         for {
             s <- get
@@ -204,15 +222,20 @@ object DappLedgerM {
                   Block.Version.Major(s.treasury.datum.versionMajor.toInt).increment,
               treasuryToSpend = s.treasury,
               payoutObligationsRemaining = payoutObligationsRemaining,
-              multisigRegimeUtxoToSpend = multisigRegimeUtxoToSpend,
-              equityShares = equityShares,
               competingFallbackValidityStart = competingFallbackValidityStart,
               blockCreatedOn = blockCreatedOn,
-              txTiming = txTiming
             )
             ftxSeq <- lift(
               FinalizationTxSeq
-                  .Builder(config)
+                  .Builder(
+                    FinalizationTxSeq.Config(
+                      txTiming = config.txTiming,
+                      multisigRegimeUtxo = config.multisigRegimeUtxo,
+                      cardanoInfo = config.cardanoInfo,
+                      headMultisigScript = config.headMultisigScript,
+                      equityShares = config.equityShares
+                    )
+                  )
                   .build(args)
                   .left
                   .map(Error.FinalizationTxSeqBuilderError.apply)
@@ -284,10 +307,20 @@ object DappLedgerM {
                 // FIXME: type the exception better
                 throw new RuntimeException(s"Error running DappLedgerM: $e"),
             onSuccess: A => IO[B]
-        ): IO[B] =
+        ): IO[B] = {
+            val dappLedgerMConfig: DappLedgerM.Config = DappLedgerM.Config(
+              txTiming = jl.config.txTiming,
+              equityShares = jl.config.equityShares,
+              headMultisigScript = jl.config.headMultisigScript,
+              multisigRegimeUtxo = jl.config.multisigRegimeUtxo,
+              cardanoInfo = jl.config.cardanoInfo,
+              tokenNames = jl.config.tokenNames,
+              votingDuration = jl.config.votingDuration,
+              tallyFeeAllowance = jl.config.tallyFeeAllowance
+            )
             for {
                 oldState <- jl.state.get
-                res = action.run(jl.config.txBuilderConfig, oldState.dappLedgerState)
+                res = action.run(dappLedgerMConfig, oldState.dappLedgerState)
                 b <- res match {
                     case Left(error) => onFailure(error)
                     case Right(newState, a) =>
@@ -302,5 +335,6 @@ object DappLedgerM {
                         } yield b
                 }
             } yield b
+        }
     }
 }
