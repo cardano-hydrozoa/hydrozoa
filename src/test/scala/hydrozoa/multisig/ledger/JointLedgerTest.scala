@@ -19,7 +19,7 @@ import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.SpentUtxos
 import hydrozoa.multisig.ledger.dapp.tx.{Tx, TxTiming, minInitTreasuryAda}
 import hydrozoa.multisig.ledger.dapp.txseq.{DepositRefundTxSeq, InitializationTxSeq}
-import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
+import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo}
 import hydrozoa.multisig.ledger.virtual.L2EventGenesis
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.*
@@ -28,22 +28,25 @@ import hydrozoa.multisig.protocol.types.LedgerEvent.RegisterDeposit
 import hydrozoa.multisig.protocol.types.LedgerEventId.ValidityFlag.{Invalid, Valid}
 import hydrozoa.rulebased.ledger.dapp.tx.genEquityShares
 import hydrozoa.{UtxoIdL1, maxNonPlutusTxFee}
+import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import io.bullet.borer.Cbor
+
 import java.util.concurrent.TimeUnit
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.PropertyM.monadForPropM
 import org.scalacheck.{Gen, Prop, PropertyM, *}
+
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.{DurationInt, FiniteDuration, HOURS}
 import scalus.builtin.ByteString
 import scalus.cardano.address.ShelleyPaymentPart.Key
-import scalus.cardano.ledger.{AddrKeyHash, Block as _, Coin, Utxo, *}
+import scalus.cardano.ledger.{AddrKeyHash, Coin, Utxo, Block as _, *}
 import scalus.prelude.Option as SOption
 import scalus.testing.kit.TestUtil
 import test.Generators.Hydrozoa.{genAdaOnlyPubKeyUtxo, *}
 import test.Generators.Other.genCoinDistributionWithMinAdaUtxo
 import test.TestM.*
-import test.{nonSigningNonValidityChecksValidators, *}
+import test.*
 
 /** This object contains component-specific helpers to utilize the TestM type.
   *
@@ -75,9 +78,10 @@ object JointLedgerTestHelpers {
         peers: NonEmptyList[TestPeer],
         actorSystem: ActorSystem[IO],
         initTx: InitializationTxSeq, // Move to HeadConfig
-        config: Tx.Builder.Config, // Move to HeadConfig
         jointLedger: ActorRef[IO, JointLedger.Requests.Request],
-        txTiming: TxTiming // Move to HeadConfig
+        txTiming: TxTiming, // Move to HeadConfig
+        tokenNames: TokenNames,
+        multisigRegimeUtxo: MultisigRegimeUtxo
     )
 
     // TODO: Right now, this generates everything. In the future, we can provide arguments like
@@ -115,7 +119,7 @@ object JointLedgerTestHelpers {
                   .choose(
                     minInitTreasuryAda.value,
                     sumUtxoValues(spentUtxos.toList).coin.value
-                        - maxNonPlutusTxFee(testTxBuilderEnvironment.protocolParams).value
+                        - maxNonPlutusTxFee(testTxBuilderCardanoInfo.protocolParams).value
                         - minPubkeyAda().value
                   )
                   .map(Coin(_))
@@ -124,46 +128,44 @@ object JointLedgerTestHelpers {
 
             initialTreasury = Value(initialTreasuryCoin)
 
-            txTiming = TxTiming.default(testTxBuilderEnvironment.slotConfig)
+            txTiming = TxTiming.default(testTxBuilderCardanoInfo.slotConfig)
 
-            initializedOn <- PropertyM.run(
-              realTimeQuantizedInstant(testTxBuilderEnvironment.slotConfig)
+            startTime <- PropertyM.run(
+              realTimeQuantizedInstant(testTxBuilderCardanoInfo.slotConfig)
+            )
+
+            initTxConfig = InitializationTxSeq.Config(
+              tallyFeeAllowance = Coin.ada(2),
+              votingDuration =
+                  FiniteDuration(24, HOURS).quantize(testTxBuilderCardanoInfo.slotConfig),
+              cardanoInfo = testTxBuilderCardanoInfo,
+              peerKeys = peers.map(_.wallet.exportVerificationKeyBytes),
+              startTime = startTime,
+              txTiming = txTiming
             )
 
             initTxArgs =
                 InitializationTxSeq.Builder.Args(
                   spentUtxos = SpentUtxos(seedUtxo, otherSpentUtxos),
                   initialTreasury = initialTreasury,
-                  peers = peers.map(_.wallet.exportVerificationKeyBytes),
-                  env = testTxBuilderEnvironment,
-                  evaluator = testEvaluator,
-                  validators = nonSigningNonValidityChecksValidators,
                   initializationTxChangePP =
                       Key(AddrKeyHash.fromByteString(ByteString.fill(28, 1.toByte))),
-                  tallyFeeAllowance = Coin.ada(2),
-                  votingDuration =
-                      FiniteDuration(24, HOURS).quantize(testTxBuilderEnvironment.slotConfig),
-                  txTiming = txTiming,
-                  blockZeroCreationTime = initializedOn
                 )
 
-            hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
+            headMultisigScript = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
 
             system <- PropertyM.run(ActorSystem[IO]("DappLedger").allocated.map(_._1))
-            initTx <- PropertyM.run(InitializationTxSeq.Builder.build(initTxArgs).liftTo[IO])
-
-            config = Tx.Builder.Config(
-              headMultisigScript = hns,
-              multisigRegimeUtxo = initTx.initializationTx.multisigRegimeUtxo,
-              tokenNames = initTx.initializationTx.tokenNames,
-              cardanoInfo = TestUtil.testEnvironment,
-              evaluator = testEvaluator,
-              validators = nonSigningNonValidityChecksValidators
+            initTx <- PropertyM.run(
+              InitializationTxSeq.Builder.build(initTxArgs, initTxConfig).liftTo[IO]
             )
 
             equityShares <- PropertyM.pick[IO, EquityShares](
               genEquityShares(peers).label("Equity shares")
             )
+
+            multisigRegimeUtxo = initTx.initializationTx.multisigRegimeUtxo
+
+            tokenNames = initTx.initializationTx.tokenNames
 
             jointLedger <- PropertyM.run(
               system.actorOf(
@@ -172,18 +174,19 @@ object JointLedgerTestHelpers {
                     peerId = Peer.Id(peers.head.ordinal, peers.size),
                     wallet = ???,
                     tallyFeeAllowance = Coin.ada(2),
-                    initialBlockTime = initializedOn,
+                    tokenNames = tokenNames,
+                    headMultisigScript = headMultisigScript,
+                    cardanoInfo = testTxBuilderCardanoInfo,
+                    initialBlockTime = startTime,
                     initialBlockKzg = KzgCommitment.empty,
                     equityShares = equityShares,
-                    multisigRegimeUtxo = config.multisigRegimeUtxo,
+                    multisigRegimeUtxo = multisigRegimeUtxo,
                     votingDuration =
-                        FiniteDuration(24, HOURS).quantize(testTxBuilderEnvironment.slotConfig),
-                    treasuryTokenName = config.tokenNames.headTokenName,
+                        FiniteDuration(24, HOURS).quantize(testTxBuilderCardanoInfo.slotConfig),
                     initialTreasury = initTx.initializationTx.treasuryProduced,
-                    txBuilderConfig = config,
                     txTiming = txTiming,
                     initialFallbackValidityStart =
-                        initializedOn + txTiming.minSettlementDuration + txTiming.inactivityMarginDuration + txTiming.silenceDuration
+                        startTime + txTiming.minSettlementDuration + txTiming.inactivityMarginDuration + txTiming.silenceDuration
                   ),
                   JointLedger.Connections(
                     consensusActor = ???,
@@ -197,9 +200,10 @@ object JointLedgerTestHelpers {
           peers,
           system,
           initTx,
-          config,
           jointLedger,
-          txTiming
+          txTiming,
+          tokenNames,
+          multisigRegimeUtxo
         )
     }
 
@@ -232,7 +236,7 @@ object JointLedgerTestHelpers {
         /** Start the block at the current real time */
         def startBlockNow(blockNum: Block.Number): JLTest[QuantizedInstant] =
             for {
-                startTime <- lift(realTimeQuantizedInstant(testTxBuilderEnvironment.slotConfig))
+                startTime <- lift(realTimeQuantizedInstant(testTxBuilderCardanoInfo.slotConfig))
                 _ <- startBlock(blockNum, startTime)
             } yield startTime
 
@@ -356,8 +360,19 @@ object JointLedgerTestHelpers {
 
                 utxosFundingValue = Value.combine(utxosFunding.toList.map(_._2.value))
 
+                headMultisigScript = HeadMultisigScript(
+                  env.peers.map(_.wallet.exportVerificationKeyBytes)
+                )
+
+                depositRefundSeqConfig = DepositRefundTxSeq.Config(
+                  txTiming = env.txTiming,
+                  cardanoInfo = testTxBuilderCardanoInfo,
+                  headMultisigScript = headMultisigScript,
+                  multisigRegimeUtxo = env.multisigRegimeUtxo
+                )
+
                 depositRefundSeqBuilder = DepositRefundTxSeq.Builder(
-                  config = env.config,
+                  config = depositRefundSeqConfig,
                   refundInstructions = DepositUtxo.Refund.Instructions(
                     LedgerToPlutusTranslation.getAddress(peer.address()),
                     SOption.None,
@@ -371,7 +386,6 @@ object JointLedgerTestHelpers {
                   virtualOutputs = virtualOutputs,
                   changeAddress = peer.address(),
                   utxosFunding = utxosFunding,
-                  txTiming = env.txTiming
                 )
 
                 depositRefundTxSeq <- lift(depositRefundSeqBuilder.build.liftTo[IO])
@@ -383,7 +397,7 @@ object JointLedgerTestHelpers {
                   condition = {
                       depositRefundTxSeq.refundTx.tx.body.value.validityStartSlot.isDefined
                       && Slot(depositRefundTxSeq.refundTx.tx.body.value.validityStartSlot.get)
-                          .toQuantizedInstant(env.config.cardanoInfo.slotConfig)
+                          .toQuantizedInstant(testTxBuilderCardanoInfo.slotConfig)
                           ==
                           depositRefundTxSeq.depositTx.validityEnd
                           + env.txTiming.depositMaturityDuration
@@ -532,7 +546,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                     Queue.from(depositRefundTxSeq.depositTx.depositProduced.virtualOutputs.toList),
                     TransactionHash.fromByteString(
                       scalus.builtin.platform.blake2b_256(
-                        env.config.tokenNames.headTokenName.bytes ++
+                        env.tokenNames.headTokenName.bytes ++
                             ByteString.fromBigIntBigEndian(
                               BigInt(Full.unapply(majorBlock.header.blockVersion)._1)
                             )
@@ -588,7 +602,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                 validityEnd =
                     blockStartTime - env.txTiming.depositMaturityDuration - env.txTiming.depositAbsorptionDuration -
                         FiniteDuration(
-                          env.config.cardanoInfo.slotConfig.slotLength,
+                          testTxBuilderCardanoInfo.slotConfig.slotLength,
                           TimeUnit.MILLISECONDS
                         ),
                 LedgerEventId(0, 1),

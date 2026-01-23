@@ -37,17 +37,14 @@ val evaluator = PlutusScriptEvaluator(
 
 val testEvaluator: PlutusScriptEvaluator = evaluator
 
-val testTxBuilderEnvironment: CardanoInfo = CardanoInfo(
+val testTxBuilderCardanoInfo: CardanoInfo = CardanoInfo(
   protocolParams = testProtocolParams,
   slotConfig = slotConfig(testNetwork),
   network = testNetwork
 )
 
-def testVirtualLedgerConfig(slot: SlotNo): VirtualLedgerM.Config = VirtualLedgerM.Config(
-  slotConfig = testTxBuilderEnvironment.slotConfig,
-  protocolParams = testTxBuilderEnvironment.protocolParams,
-  network = testNetwork
-)
+def testVirtualLedgerConfig(slot: SlotNo): VirtualLedgerM.Config =
+    VirtualLedgerM.Config(testTxBuilderCardanoInfo)
 
 // Get the minAda for an Ada only pubkey utxo
 def minPubkeyAda(params: ProtocolParams = blockfrost544Params): Coin = {

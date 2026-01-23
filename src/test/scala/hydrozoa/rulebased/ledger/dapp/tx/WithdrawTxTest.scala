@@ -3,6 +3,7 @@ package hydrozoa.rulebased.ledger.dapp.tx
 import cats.data.NonEmptyList
 import hydrozoa.*
 import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
+import hydrozoa.multisig.ledger.dapp.tx.Tx.Validators.nonSigningValidators
 import hydrozoa.multisig.ledger.virtual.commitment.{KzgCommitment, TrustedSetup}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
 import hydrozoa.rulebased.ledger.dapp.script.plutus.{RuleBasedTreasuryScript, RuleBasedTreasuryValidator}
@@ -12,6 +13,7 @@ import hydrozoa.rulebased.ledger.dapp.utxo.RuleBasedTreasuryUtxo
 import org.scalacheck.{Arbitrary, Gen}
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
+
 import scala.annotation.nowarn
 import scalus.builtin.{BLS12_381_G1_Element, BLS12_381_G2_Element, ByteString}
 import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}

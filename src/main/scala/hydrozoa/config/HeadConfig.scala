@@ -126,6 +126,8 @@ case class HeadConfig private (
 
     def slotConfig: SlotConfig = cardanoInfo.slotConfig
 
+    // TODO: Remove. We only need CardanoInfo in the config.
+    //    The tx builders can create the Plutus script evaluator on-demand, with the mode they want.
     def evaluator: PlutusScriptEvaluator = PlutusScriptEvaluator(
       cardanoInfo,
       mode = EvaluateAndComputeCost

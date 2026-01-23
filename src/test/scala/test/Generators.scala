@@ -68,42 +68,6 @@ object Generators {
               (noneFrequency, SOption.None)
             )
 
-        /** Generates the general configuration for a hydrozoa (non-init) transaction, and returns
-          * the set of peers to use for signing.
-          */
-        def genTxBuilderConfigAndPeers(
-            env: CardanoInfo = testTxBuilderEnvironment,
-            evaluator: PlutusScriptEvaluator = testEvaluator,
-            validators: Seq[Validator] = nonSigningNonValidityChecksValidators
-        ): Gen[(Tx.Builder.Config, NonEmptyList[TestPeer])] =
-            for {
-                peers <- genTestPeers()
-                hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
-                seedUtxo <- arbitrary[TransactionInput]
-                tokenNames = TokenNames(seedUtxo)
-                multisigWitnessUtxo <- genFakeMultisigWitnessUtxo(
-                  hns,
-                  env.network,
-                  Some(tokenNames.multisigRegimeTokenName)
-                )
-            } yield (
-              Tx.Builder.Config(
-                headMultisigScript = hns,
-                multisigRegimeUtxo = multisigWitnessUtxo,
-                tokenNames = tokenNames,
-                cardanoInfo = env,
-                evaluator = evaluator,
-                validators = validators
-              ),
-              peers
-            )
-
-        def genTxConfig(
-            env: CardanoInfo = testTxBuilderEnvironment,
-            evaluator: PlutusScriptEvaluator = testEvaluator,
-            validators: Seq[Validator] = nonSigningValidators
-        ): Gen[Tx.Builder.Config] = genTxBuilderConfigAndPeers(env, evaluator, validators).map(_._1)
-
         val genHeadTokenName: Gen[AssetName] =
             for {
                 ti <- arbitrary[TransactionInput]
@@ -366,13 +330,17 @@ object Generators {
             )
 
         /** Generate a treasury utxo according to a builder config */
-        def genTreasuryUtxo(config: Tx.Builder.Config): Gen[MultisigTreasuryUtxo] =
+        def genTreasuryUtxo(peers: NonEmptyList[TestPeer]): Gen[MultisigTreasuryUtxo] = {
+            val headMultisigScript = HeadMultisigScript(
+              peers.map(_.wallet.exportVerificationKeyBytes)
+            )
             genTreasuryUtxo(
-              network = config.cardanoInfo.network,
-              params = config.cardanoInfo.protocolParams,
-              headAddress = Some(config.headAddress),
+              network = testTxBuilderCardanoInfo.network,
+              params = testTxBuilderCardanoInfo.protocolParams,
+              headAddress = Some(headMultisigScript.mkAddress(testTxBuilderCardanoInfo.network)),
               coin = None
             )
+        }
 
         /** Given a set of inputs event, construct a withdrawal event attempting to withdraw all
           * inputs with the given key to a single output

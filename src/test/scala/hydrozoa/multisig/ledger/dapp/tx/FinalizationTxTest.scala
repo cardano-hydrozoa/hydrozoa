@@ -71,6 +71,7 @@ def genMultisigRegimeUtxo(
     )
 
 def genStandaloneFinalizationTxSeqBuilder(
+    config: FinalizationTxSeq.Config,
     estimatedFee: Coin = Coin(5_000_000L),
     params: ProtocolParams = blockfrost544Params,
     network: Network = testNetwork,
@@ -89,8 +90,7 @@ def genStandaloneFinalizationTxSeqBuilder(
     )
 
     for {
-        res <- genTxBuilderConfigAndPeers()
-        (config, peers) = res
+        peers <- genTestPeers()
 
         majorVersion <- Gen.posNum[Int]
 
@@ -119,32 +119,24 @@ def genStandaloneFinalizationTxSeqBuilder(
         majorVersionProduced = HBlock.Version.Major(majorVersion),
         treasuryToSpend = treasuryUtxo,
         payoutObligationsRemaining = payouts,
-        multisigRegimeUtxoToSpend = MultisigRegimeUtxo.apply(
-          config.tokenNames.multisigRegimeTokenName,
-          config.multisigRegimeUtxo.input,
-          config.multisigRegimeUtxo.output,
-          config.headMultisigScript
-        ),
-        equityShares = shares,
         competingFallbackValidityStart = Instant
             .ofEpochMilli(System.currentTimeMillis() + 3_600_000)
-            .quantize(testTxBuilderEnvironment.slotConfig),
+            .quantize(testTxBuilderCardanoInfo.slotConfig),
         blockCreatedOn = Instant
             .ofEpochMilli(System.currentTimeMillis())
-            .quantize(testTxBuilderEnvironment.slotConfig),
-        txTiming = TxTiming.default(config.cardanoInfo.slotConfig)
+            .quantize(testTxBuilderCardanoInfo.slotConfig)
       ),
       peers
     )
 }
 
 def genFinalizationTxSeqBuilder(
+    config: FinalizationTxSeq.Config,
     treasuryToSpend: MultisigTreasuryUtxo,
     majorVersion: Int,
     fallbackValidityStart: QuantizedInstant,
     blockCreatedOn: QuantizedInstant,
     txTiming: TxTiming,
-    config: Tx.Builder.Config,
     peers: NonEmptyList[TestPeer],
     estimatedFeesAndEquity: Coin = Coin(50_000_000L),
     params: ProtocolParams = blockfrost544Params,
@@ -169,8 +161,6 @@ def genFinalizationTxSeqBuilder(
 
         payouts <- Gen.sequence(coins.map(l => genKnownCoinPayoutObligation(network, Coin(l))))
 
-        shares <- genEquityShares(peers)
-
         kzg: KzgCommitment <- kzgCommitment match {
             case None      => Gen.listOfN(48, Arbitrary.arbitrary[Byte]).map(IArray.from(_))
             case Some(kzg) => Gen.const(kzg)
@@ -181,16 +171,8 @@ def genFinalizationTxSeqBuilder(
         majorVersionProduced = HBlock.Version.Major(majorVersion),
         treasuryToSpend = treasuryToSpend,
         payoutObligationsRemaining = payouts.asScala.toVector,
-        multisigRegimeUtxoToSpend = MultisigRegimeUtxo.apply(
-          config.tokenNames.multisigRegimeTokenName,
-          config.multisigRegimeUtxo.input,
-          config.multisigRegimeUtxo.output,
-          config.headMultisigScript
-        ),
-        equityShares = shares,
         competingFallbackValidityStart = fallbackValidityStart,
-        blockCreatedOn = blockCreatedOn,
-        txTiming = txTiming
+        blockCreatedOn = blockCreatedOn
       )
     )
 }

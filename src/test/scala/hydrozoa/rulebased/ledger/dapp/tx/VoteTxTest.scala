@@ -2,6 +2,7 @@ package hydrozoa.rulebased.ledger.dapp.tx
 
 import cats.data.NonEmptyList
 import hydrozoa.*
+import hydrozoa.multisig.ledger.dapp.tx.Tx.Validators.nonSigningValidators
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.cip67DisputeTokenPrefix
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
 import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryValidator}
@@ -12,6 +13,7 @@ import hydrozoa.rulebased.ledger.dapp.utxo.OwnVoteUtxo
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
+
 import scala.annotation.nowarn
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData

@@ -22,18 +22,21 @@ import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, FinalizationTx, RolloutTx, SettlementTx, Tx, TxTiming, genFinalizationTxSeqBuilder, genNextSettlementTxSeqBuilder}
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, InitializationTxSeq, InitializationTxSeqTest, SettlementTxSeq}
 import hydrozoa.multisig.protocol.types.{Block, BlockEffectsSigned}
+import hydrozoa.rulebased.ledger.dapp.tx.genEquityShares
 import hydrozoa.{L1, Output, UtxoId, UtxoSet, UtxoSetL1, attachVKeyWitnesses}
+
 import java.util.concurrent.TimeUnit
 import monocle.Focus.focus
 import org.scalacheck.*
 import org.scalacheck.Gen.{choose, tailRecM}
 import org.scalacheck.Prop.forAll
+
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scala.jdk.CollectionConverters.*
 import scala.math.Ordered.orderingToOrdered
 import scalus.cardano.ledger.*
 import test.Generators.Hydrozoa.*
-import test.{TestPeer, testNetwork, testTxBuilderEnvironment}
+import test.{TestPeer, testNetwork, testTxBuilderCardanoInfo}
 
 object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
 
@@ -68,12 +71,12 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
             minSettlements: Int = 5,
             maxSettlements: Int = 25,
             mkTxTiming: SlotConfig => TxTiming = TxTiming.default,
-            slotConfig: SlotConfig = testTxBuilderEnvironment.slotConfig
+            slotConfig: SlotConfig = testTxBuilderCardanoInfo.slotConfig
         ): Gen[BlockEffectsSignedChain] = for {
 
             // Init tx is generated using the available set of utxos.
             txTiming <- Gen.const(mkTxTiming(slotConfig))
-            (initialArgs, peers) <- InitializationTxSeqTest.genArgs(
+            (initTxConfig, initialArgs, peers) <- InitializationTxSeqTest.genArgs(
               txTiming = txTiming,
               mbUtxosAvailable = Some(yaciTestSauceGenesis(testNetwork))
             )
@@ -82,7 +85,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
 
             // Initial block effects
             initializationTxSeq = InitializationTxSeq.Builder
-                .build(initialArgs)
+                .build(initialArgs, initTxConfig)
                 .fold(e => throw RuntimeException(e.toString), x => x)
             initializationTx = initializationTxSeq.initializationTx
             fallbackTx = initializationTxSeq.fallbackTx
@@ -110,7 +113,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
             tokenNames = TokenNames(initialArgs.spentUtxos.seedUtxo.input)
             multisigWitnessUtxo <- genFakeMultisigWitnessUtxo(
               hns,
-              testTxBuilderEnvironment.network,
+              testTxBuilderCardanoInfo.network,
               Some(tokenNames.multisigRegimeTokenName)
             )
 
@@ -119,14 +122,14 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
             // deposit utxos are added to the "genesis" utxos to allow the mock
             // handling settlement transactions.
 
-            // This config is used in the settlement and finalization builders
-            config = Config(
-              headMultisigScript = hns,
+            settlementTxSeqConfig = SettlementTxSeq.Config(
+              headMultisigScript = initTxConfig.headMultisigScript,
               multisigRegimeUtxo = initializationTx.multisigRegimeUtxo,
-              tokenNames = tokenNames,
-              cardanoInfo = initialArgs.env,
-              evaluator = initialArgs.evaluator,
-              validators = initialArgs.validators
+              tokenNames = initializationTx.tokenNames,
+              votingDuration = initTxConfig.votingDuration,
+              txTiming = initTxConfig.txTiming,
+              tallyFeeAllowance = initTxConfig.tallyFeeAllowance,
+              cardanoInfo = testTxBuilderCardanoInfo
             )
 
             numOfSettlements <- choose(minSettlements, maxSettlements)
@@ -135,7 +138,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                 tailRecM(
                   (
                     initializationTreasuryProduced,
-                    initialArgs.blockZeroCreationTime,
+                    initTxConfig.startTime,
                     initializationFallbackValidityStart,
                     List.empty: List[BlockEffectsSigned.Major],
                     1
@@ -160,12 +163,12 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                                   fallbackValidityStart - txTiming.silenceDuration - 10.seconds
                                 )
                                 settlementBuilderAndArgs <- genNextSettlementTxSeqBuilder(
+                                  settlementTxSeqConfig,
                                   treasuryToSpend,
                                   fallbackValidityStart,
                                   blockCreatedOn,
                                   settlementNum,
                                   hns,
-                                  config,
                                   txTiming
                                 )
                                 (builder, args) = settlementBuilderAndArgs
@@ -236,13 +239,23 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
 
             finalBlockNum = numOfSettlements + 1
 
+            equityShares <- genEquityShares(peers)
+
+            finalizationTxSeqConfig = FinalizationTxSeq.Config(
+              headMultisigScript = settlementTxSeqConfig.headMultisigScript,
+              multisigRegimeUtxo = settlementTxSeqConfig.multisigRegimeUtxo,
+              txTiming = settlementTxSeqConfig.txTiming,
+              cardanoInfo = testTxBuilderCardanoInfo,
+              equityShares = equityShares
+            )
+
             (builder, finalArgs) <- genFinalizationTxSeqBuilder(
+              finalizationTxSeqConfig,
               lastSettlementTreasury,
               finalBlockNum,
               fallbackValidityStart,
               finalizationBlockCreatedOn,
               txTiming,
-              config,
               peers
             )
 
@@ -674,7 +687,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                               skeleton._1.initialSigned,
                               skeleton._1.fallbackSigned,
                               100.millis,
-                              slotConfig = testTxBuilderEnvironment.slotConfig
+                              slotConfig = testTxBuilderCardanoInfo.slotConfig
                             )
 
                             connections = CardanoLiaison.Connections(blockWeaver)

@@ -19,7 +19,7 @@ import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
 import scala.util.Random
 import test.Generators.Hydrozoa.ArbitraryInstances.given
-import test.{genTestPeers, testTxBuilderEnvironment}
+import test.{genTestPeers, testTxBuilderCardanoInfo}
 
 object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
     override def overrideParameters(p: Test.Parameters): Test.Parameters = {
@@ -64,7 +64,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
           lastKnownBlock = lastKnownBlock,
           peerId = peerId,
           recoveredMempool = BlockWeaver.Mempool.apply(events),
-          slotConfig = testTxBuilderEnvironment.slotConfig
+          slotConfig = testTxBuilderCardanoInfo.slotConfig
         )
 
         val connections = BlockWeaver.Connections(jointLedgerMockActor)
@@ -124,7 +124,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
               lastKnownBlock = Block.Number(lastKnownBlock),
               peerId = peerId,
               recoveredMempool = BlockWeaver.Mempool.empty,
-              slotConfig = testTxBuilderEnvironment.slotConfig
+              slotConfig = testTxBuilderCardanoInfo.slotConfig
             )
 
             val connections = BlockWeaver.Connections(jointLedgerMockActor)
@@ -144,7 +144,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
                     _ <- system.waitForIdle()
                     _ <- expectMsgPF(jointLedgerMockActor, 5.seconds) {
                         // The first block cannot be final
-                        case CompleteBlockRegular(None, _, false) => ()
+                        case CompleteBlockRegular(None, _, _) => ()
                     }
                 } yield ())
               )
@@ -175,7 +175,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
               lastKnownBlock = Block.Number(turn + roundsCompleted * peers.size - 1),
               peerId = peerId,
               recoveredMempool = BlockWeaver.Mempool.empty,
-              slotConfig = testTxBuilderEnvironment.slotConfig
+              slotConfig = testTxBuilderCardanoInfo.slotConfig
             )
 
             val connections = BlockWeaver.Connections(jointLedgerMockActor)
@@ -234,7 +234,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
           lastKnownBlock = lastKnownBlock,
           peerId = peerId,
           recoveredMempool = BlockWeaver.Mempool.empty,
-          slotConfig = testTxBuilderEnvironment.slotConfig
+          slotConfig = testTxBuilderCardanoInfo.slotConfig
         )
 
         val connections = BlockWeaver.Connections(jointLedgerMockActor)
@@ -281,7 +281,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
                   _ <- IO.traverse_(immediateEvents)(weaverActor ! _)
 
                   // First block
-                  now <- realTimeQuantizedInstant(testTxBuilderEnvironment.slotConfig)
+                  now <- realTimeQuantizedInstant(testTxBuilderCardanoInfo.slotConfig)
                   firstBlock: Block.Next = Block.Minor(
                     Block.Header.Minor(
                       blockNum = lastKnownBlock.increment,
@@ -296,7 +296,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
                   )
 
                   // Second block
-                  newTime <- realTimeQuantizedInstant(testTxBuilderEnvironment.slotConfig)
+                  newTime <- realTimeQuantizedInstant(testTxBuilderCardanoInfo.slotConfig)
                   secondBlock: Block.Next = firstBlock.nextBlock(
                     Block.Body.Minor(
                       events = secondBlockEvents.map(e => (e.eventId, Valid)).toList,

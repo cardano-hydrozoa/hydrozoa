@@ -330,7 +330,7 @@ final case class JointLedger(
                   genesisObligations,
                   TransactionHash.fromByteString(
                     platform.blake2b_256(
-                      txBuilderConfig.tokenNames.headTokenName.bytes ++
+                      tokenNames.headTokenName.bytes ++
                           ByteString.fromBigIntBigEndian(
                             BigInt(treasuryToSpend.datum.versionMajor.toInt + 1)
                           )
@@ -385,7 +385,7 @@ final case class JointLedger(
                 )((acc, deposit) =>
                     val depositValidityEnd =
                         deposit._2.datum.refundInstructions.startTime
-                            .toEpochQuantizedInstant(txBuilderConfig.cardanoInfo.slotConfig)
+                            .toEpochQuantizedInstant(cardanoInfo.slotConfig)
                             - txTiming.depositMaturityDuration
                             - txTiming.depositAbsorptionDuration
                             - txTiming.silenceDuration
@@ -701,6 +701,11 @@ object JointLedger {
         initialTreasury: MultisigTreasuryUtxo,
         tokenNames: TokenNames,
         initialFallbackValidityStart: QuantizedInstant
+    )
+
+    final case class Connections(
+        consensusActor: ConsensusActor.Handle,
+        peerLiaisons: List[PeerLiaison.Handle]
     )
 
     final case class CompleteBlockError() extends Throwable

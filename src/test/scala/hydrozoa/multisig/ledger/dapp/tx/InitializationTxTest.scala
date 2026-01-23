@@ -83,7 +83,7 @@ val genInitTxRecipe: Gen[InitializationTx.Recipe] =
             .choose(
               minInitTreasuryAda.value,
               sumUtxoValues(spentUtxos.toList).coin.value
-                  - maxNonPlutusTxFee(testTxBuilderEnvironment.protocolParams).value
+                  - maxNonPlutusTxFee(testTxBuilderCardanoInfo.protocolParams).value
                   - minPubkeyAda().value
             )
             .map(Coin(_))
@@ -93,14 +93,14 @@ val genInitTxRecipe: Gen[InitializationTx.Recipe] =
         hmrwCoin <- Arbitrary.arbitrary[Coin]
 
     } yield InitializationTx.Recipe(
-      validityEnd = realTimeQuantizedInstant(testTxBuilderEnvironment.slotConfig)
+      validityEnd = realTimeQuantizedInstant(testTxBuilderCardanoInfo.slotConfig)
           .unsafeRunSync() + 10.minutes, // FIXME: Generate
       spentUtxos = SpentUtxos(seedUtxo, otherSpentUtxos),
       headNativeScript = hns,
       initialTreasury = initialTreasury,
       tokenNames = tokenNames,
       hmrwCoin = hmrwCoin,
-      env = testTxBuilderEnvironment,
+      env = testTxBuilderCardanoInfo,
       evaluator = testEvaluator,
       validators = nonSigningValidators,
       changePP = Key(AddrKeyHash.fromByteString(ByteString.fill(28, 1.toByte)))

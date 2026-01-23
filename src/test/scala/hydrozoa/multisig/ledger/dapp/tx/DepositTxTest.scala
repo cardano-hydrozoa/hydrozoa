@@ -50,7 +50,7 @@ def genDepositRecipe(
             datum = refundData,
             startTime = QuantizedInstant(
               instant = java.time.Instant.ofEpochMilli(deadline.toLong),
-              slotConfig = testTxBuilderEnvironment.slotConfig
+              slotConfig = testTxBuilderCardanoInfo.slotConfig
             )
           )
         )
@@ -151,7 +151,7 @@ class DepositTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
                     DepositTx.parse(
                       depositTx.tx.toCbor,
                       depositTxBuilder.config,
-                      TxTiming.default(testTxBuilderEnvironment.slotConfig),
+                      TxTiming.default(testTxBuilderCardanoInfo.slotConfig),
                       depositTx.depositProduced.virtualOutputs
                     ) match {
                         case Left(e) =>

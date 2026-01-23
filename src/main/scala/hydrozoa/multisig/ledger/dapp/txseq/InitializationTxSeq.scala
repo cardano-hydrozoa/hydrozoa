@@ -4,10 +4,9 @@ import cats.data.NonEmptyList
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
-import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.tx.{Metadata as _, *}
-import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
+import hydrozoa.multisig.ledger.dapp.utxo.MultisigTreasuryUtxo
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.dapp.state.VoteDatum as VD
 import hydrozoa.{VerificationKeyBytes, ensureMinAda, maxNonPlutusTxFee, given}
@@ -33,8 +32,6 @@ object InitializationTxSeq {
         cardanoInfo: CardanoInfo,
         peerKeys: NonEmptyList[VerificationKeyBytes],
         startTime: QuantizedInstant,
-        multisigRegimeUtxo: MultisigRegimeUtxo,
-        tokenNames: TokenNames,
         txTiming: TxTiming
     ) {
         def evaluator: PlutusScriptEvaluator =
