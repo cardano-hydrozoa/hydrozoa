@@ -60,10 +60,8 @@ object SettlementTx {
                 finished <- addedDeposits.ctx
                     .finalizeContext(
                       protocolParams = config.cardanoInfo.protocolParams,
-                      diffHandler = new ChangeOutputDiffHandler(
-                        config.cardanoInfo.protocolParams,
-                        0
-                      ).changeOutputDiffHandler,
+                      diffHandler = Change
+                          .changeOutputDiffHandler(_, _, config.cardanoInfo.protocolParams, 0),
                       evaluator = PlutusScriptEvaluator(config.cardanoInfo, EvaluateAndComputeCost),
                       validators = Tx.Validators.nonSigningValidators
                     )
@@ -87,10 +85,12 @@ object SettlementTx {
                 _ <- addedPessimisticRollout
                     .finalizeContext(
                       config.cardanoInfo.protocolParams,
-                      diffHandler = new ChangeOutputDiffHandler(
+                      diffHandler = Change.changeOutputDiffHandler(
+                        _,
+                        _,
                         protocolParams = config.cardanoInfo.protocolParams,
                         changeOutputIdx = 0
-                      ).changeOutputDiffHandler,
+                      ),
                       evaluator = config.evaluator,
                       validators = Tx.Validators.nonSigningValidators
                     )
@@ -158,10 +158,8 @@ object SettlementTx {
                     _ <- addedPessimisticRollout
                         .finalizeContext(
                           protocolParams = config.cardanoInfo.protocolParams,
-                          diffHandler = new ChangeOutputDiffHandler(
-                            config.cardanoInfo.protocolParams,
-                            0
-                          ).changeOutputDiffHandler,
+                          diffHandler = Change
+                              .changeOutputDiffHandler(_, _, config.cardanoInfo.protocolParams, 0),
                           evaluator = config.evaluator,
                           validators = Tx.Validators.nonSigningValidators
                         )
@@ -568,11 +566,12 @@ object SettlementTx {
               DepositUtxo.Many.Spent.Partition,
               HasCtx
 
-        trait Args(val kzgCommitment: KzgCommitment)
+        trait Args
             extends Block.Version.Major.Produced,
               MultisigTreasuryUtxo.ToSpend,
               DepositUtxo.Many.ToSpend,
               HasValidityEnd {
+            def kzgCommitment: KzgCommitment
             final def mbRolloutValue: Option[Value] =
                 this match {
                     case a: Args.WithPayouts =>
@@ -610,10 +609,8 @@ object SettlementTx {
                   (ctx: TransactionBuilder.Context) =>
                       ctx.finalizeContext(
                         config.cardanoInfo.protocolParams,
-                        diffHandler = new ChangeOutputDiffHandler(
-                          config.cardanoInfo.protocolParams,
-                          0
-                        ).changeOutputDiffHandler,
+                        diffHandler = Change
+                            .changeOutputDiffHandler(_, _, config.cardanoInfo.protocolParams, 0),
                         evaluator = config.evaluator,
                         validators = Tx.Validators.nonSigningValidators
                       ),
@@ -675,7 +672,7 @@ object SettlementTx {
                 // We want a better approach for this in the future
                 override val depositsToSpend: Vector[DepositUtxo],
                 override val validityEnd: QuantizedInstant
-            ) extends Args(kzgCommitment)
+            ) extends Args
 
             final case class WithPayouts(
                 override val kzgCommitment: KzgCommitment,
@@ -684,7 +681,7 @@ object SettlementTx {
                 override val depositsToSpend: Vector[DepositUtxo],
                 override val validityEnd: QuantizedInstant,
                 rolloutTxSeqPartial: RolloutTxSeq.Builder.PartialResult
-            ) extends Args(kzgCommitment)
+            ) extends Args
 
         }
     }

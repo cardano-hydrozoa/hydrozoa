@@ -110,10 +110,8 @@ object DepositTx {
                 finalized <- ctx
                     .finalizeContext(
                       config.cardanoInfo.protocolParams,
-                      diffHandler = new ChangeOutputDiffHandler(
-                        config.cardanoInfo.protocolParams,
-                        1
-                      ).changeOutputDiffHandler,
+                      diffHandler = Change
+                          .changeOutputDiffHandler(_, _, config.cardanoInfo.protocolParams, 1),
                       evaluator = config.evaluator,
                       validators = Tx.Validators.nonSigningNonValidityChecksValidators
                     )

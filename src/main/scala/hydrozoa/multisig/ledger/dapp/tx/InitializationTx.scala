@@ -162,10 +162,8 @@ object InitializationTx {
             finalized <- unbalanced
                 .finalizeContext(
                   protocolParams = config.cardanoInfo.protocolParams,
-                  diffHandler = new ChangeOutputDiffHandler(
-                    config.cardanoInfo.protocolParams,
-                    2
-                  ).changeOutputDiffHandler,
+                  diffHandler =
+                      Change.changeOutputDiffHandler(_, _, config.cardanoInfo.protocolParams, 2),
                   evaluator = config.evaluator,
                   validators = Tx.Validators.nonSigningNonValidityChecksValidators
                 )

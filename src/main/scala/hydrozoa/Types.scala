@@ -229,7 +229,7 @@ type UtxoSet[L <: AnyLayer] = UtxoSet.UtxoSet[L]
 type UtxoSetL1 = UtxoSet.UtxoSet[L1]
 type UtxoSetL2 = UtxoSet.UtxoSet[L2]
 
-extension (utxo: UTxO)
+extension (utxo: Utxos)
     /** Unsafe because it requires the developer to check:
       *   - That the UTxOs are indeed L2 UTxOs
       *   - Specifically, that the transaction outputs are Babbage outputs. This function will throw

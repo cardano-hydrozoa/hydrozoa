@@ -224,7 +224,7 @@ object FallbackTx {
               protocolParams = protocolParams,
               // We balance the excess to the treasury. This will _not_ be pre-balanced, because the
               // HMRW Utxo contains extra ada to account for _any_ fallback transaction fee.
-              diffHandler = new ChangeOutputDiffHandler(protocolParams, 0).changeOutputDiffHandler,
+              diffHandler = Change.changeOutputDiffHandler(_, _, protocolParams, 0),
               evaluator = evaluator,
               validators = Tx.Validators.nonSigningNonValidityChecksValidators
             )

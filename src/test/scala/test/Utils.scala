@@ -22,8 +22,8 @@ val testNetwork: Network = Mainnet
 val testProtocolParams: ProtocolParams = blockfrost544Params
 
 def slotConfig(network: Network): SlotConfig = network match {
-    case Network.Testnet  => SlotConfig.Preprod
-    case Network.Mainnet  => SlotConfig.Mainnet
+    case Network.Testnet  => SlotConfig.preprod
+    case Network.Mainnet  => SlotConfig.mainnet
     case Network.Other(v) => throw RuntimeException("This network is not supported in tests")
 }
 

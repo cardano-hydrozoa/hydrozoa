@@ -133,7 +133,7 @@ object FinalizationTx {
           *   - increase of residual treasury output value always be compensated by the removed
           *     datum
           *
-          * @param multisigUtxoToSpend
+          * @param config
           * @param args
           *   wrapper around [[SettlementTx]] with dependent Result
           * @return
@@ -162,8 +162,7 @@ object FinalizationTx {
 
             val ctxUpgraded: TransactionBuilder.Context =
                 ctx |> unsafeCtxTxOutputsL
-                    .refocus(_.index(treasuryOutputIndex))
-                    .replace(Sized.apply(residualTreasuryOutput))
+                    .modify(_.updated(treasuryOutputIndex, Sized.apply(residualTreasuryOutput)))
                     |> unsafeCtxTxReferenceInputsL
                         .replace(TaggedSortedSet.empty)
 
@@ -176,10 +175,12 @@ object FinalizationTx {
                     .modify(ctxUpgraded, List(spendMultisigRegimeUtxoStep))
                     .explain(const("Could not modify (upgrade) settlement tx"))
 
-                diffHandler = new ChangeOutputDiffHandler(
+                diffHandler = Change.changeOutputDiffHandler(
+                  _,
+                  _,
                   config.cardanoInfo.protocolParams,
                   treasuryOutputIndex
-                ).changeOutputDiffHandler
+                )
 
                 rebalanced <- ctx
                     .finalizeContext(
@@ -310,7 +311,7 @@ object FinalizationTx {
 
                 /** TODO: update
                   *
-                  * @param args
+                  * // @param args
                   * @return
                   *   Mapping:
                   *   - FinalizationTx2.NoPayouts -> FinalizationTx2.NoPayouts |

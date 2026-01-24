@@ -32,7 +32,7 @@ def attachVKeyWitnesses(tx: Transaction, witnesses: Iterable[VKeyWitness]): Tran
 // "Empty" values used for building up real values and for testing
 
 val emptyContext: Context =
-    Context(fee = Coin.zero, env = UtxoEnv.default, slotConfig = SlotConfig.Preprod)
+    Context(fee = Coin.zero, env = UtxoEnv.default, slotConfig = SlotConfig.preprod)
 
 /** Create a value with the specified policy id, asset name, and quantity (default 1) */
 def singleton(policyId: PolicyId, assetName: AssetName, quantity: Int = 1): Value = {
