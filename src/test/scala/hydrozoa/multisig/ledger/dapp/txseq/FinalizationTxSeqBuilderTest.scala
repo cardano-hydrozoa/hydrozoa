@@ -23,6 +23,7 @@ class FinalizationTxSeqBuilderTest extends AnyFunSuite with ScalaCheckPropertyCh
         }
     }
 
+    // See: https://github.com/cardano-hydrozoa/hydrozoa/pull/274
     ignore("Observe finalization tx seq") {
         val gen = genStandaloneFinalizationTxSeqBuilder()
 

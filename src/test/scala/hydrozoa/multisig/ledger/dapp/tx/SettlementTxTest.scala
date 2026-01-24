@@ -11,6 +11,7 @@ import hydrozoa.multisig.protocol.types.Block as HBlock
 import java.time.Instant
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
+import scala.concurrent.duration.{FiniteDuration, HOURS}
 import scalus.builtin.Data.toData
 import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.*
@@ -172,11 +173,13 @@ def genSettlementTxSeqBuilder(
         config = SettlementTxSeq.Config(
           headMultisigScript = hms,
           multisigRegimeUtxo = mw,
-          tokenNames = ???,
-          votingDuration = ???,
-          txTiming = ???,
-          tallyFeeAllowance = ???,
-          cardanoInfo = ???
+          tokenNames = tokenNames,
+          // TODO: verify
+          votingDuration = FiniteDuration(24, HOURS).quantize(testTxBuilderCardanoInfo.slotConfig),
+          txTiming = txTiming,
+          // TODO: verify
+          tallyFeeAllowance = Coin.ada(2),
+          cardanoInfo = testTxBuilderCardanoInfo
         )
     } yield (
       SettlementTxSeq.Builder(config),

@@ -113,7 +113,8 @@ class RolloutTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
       }
     )
 
-    ignore("Post-process last rollout tx partial result")(???)
+    // TODO: shall we add that?
+    // ignore("Post-process last rollout tx partial result")(???)
 
     test("Build Last Rollout Tx") {
         forAll(genLastBuilder) { (builder, args) =>
