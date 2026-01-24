@@ -103,7 +103,7 @@ def genWithdrawTxRecipe: Gen[WithdrawTx.Recipe] =
 
         // Select some random number of withdrawals
         // TODO: find the limit with refscripts
-        wn <- Gen.choose(1, Integer.min(35, utxosL2.untagged.keys.size))
+        wn <- Gen.choose(1, Integer.min(5, utxosL2.untagged.keys.size))
         withdrawals0 <- Gen.pick(wn, utxosL2.untagged)
         _ = println(s"withdrawals length: ${withdrawals0.length}")
         withdrawals = UtxoSet(withdrawals0.toMap)

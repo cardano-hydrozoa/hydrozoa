@@ -5,11 +5,14 @@ import cats.data.*
 import cats.effect.*
 import cats.effect.unsafe.implicits.*
 import cats.syntax.all.*
+import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.actor.{ActorSystem, test as _}
 import hydrozoa.config.EquityShares
 import hydrozoa.lib.cardano.scalus.QuantizedTime.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
+import hydrozoa.multisig.consensus.ConsensusActor
+import hydrozoa.multisig.consensus.ConsensusActor.Request
 import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.ledger.JointLedger.{Done, Producing}
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.*
@@ -164,12 +167,18 @@ object JointLedgerTestHelpers {
 
             tokenNames = initTx.initializationTx.tokenNames
 
+            consensusActorStub <- PropertyM.run(
+              system.actorOf(new Actor[IO, ConsensusActor.Request] {
+                  override def receive: Receive[IO, ConsensusActor.Request] = _ => IO.unit
+              })
+            )
+
             jointLedger <- PropertyM.run(
               system.actorOf(
                 JointLedger(
                   JointLedger.Config(
                     peerId = Peer.Id(peers.head.ordinal, peers.size),
-                    wallet = ???,
+                    wallet = peers.head.wallet,
                     tallyFeeAllowance = Coin.ada(2),
                     tokenNames = tokenNames,
                     headMultisigScript = headMultisigScript,
@@ -186,7 +195,7 @@ object JointLedgerTestHelpers {
                         startTime + txTiming.minSettlementDuration + txTiming.inactivityMarginDuration + txTiming.silenceDuration
                   ),
                   JointLedger.Connections(
-                    consensusActor = ???,
+                    consensusActor = consensusActorStub,
                     peerLiaisons = List()
                   )
                 )
