@@ -159,7 +159,7 @@ object VoteTx {
             Utxo[L1](
               UtxoId[L1](finalized.transaction.id, 0), // Vote output is at index 0
               Output[L1](
-                finalized.transaction.body.value.outputs(0).value.asInstanceOf[Babbage]
+                finalized.transaction.body.value.outputs(0).value
               ) // The updated vote output
             )
           ),

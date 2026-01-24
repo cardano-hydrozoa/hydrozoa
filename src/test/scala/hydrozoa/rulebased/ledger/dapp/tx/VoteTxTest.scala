@@ -2,6 +2,7 @@ package hydrozoa.rulebased.ledger.dapp.tx
 
 import cats.data.NonEmptyList
 import hydrozoa.*
+import hydrozoa.multisig.ledger.dapp.tx.Tx.Validators.nonSigningValidators
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.cip67DisputeTokenPrefix
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
 import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryValidator}

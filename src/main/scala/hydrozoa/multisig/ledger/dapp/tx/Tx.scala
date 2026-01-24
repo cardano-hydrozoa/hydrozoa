@@ -1,20 +1,17 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
-import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
-import hydrozoa.multisig.ledger.dapp.utxo.MultisigRegimeUtxo
 import monocle.Lens
 import scala.Function.const
-import scalus.cardano.address.ShelleyAddress
+import scalus.cardano.ledger.Transaction
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.ledger.{CardanoInfo, PlutusScriptEvaluator, Transaction}
+import scalus.cardano.ledger.rules.{AllInputsMustBeInUtxoValidator, EmptyInputsValidator, FeesOkValidator, InputsAndReferenceInputsDisjointValidator, MissingOrExtraScriptHashesValidator, OutputsHaveNotEnoughCoinsValidator, OutputsHaveTooBigValueStorageSizeValidator, OutsideForecastValidator, OutsideValidityIntervalValidator, TransactionSizeValidator, ValueNotConservedUTxOValidator}
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
-import scalus.cardano.txbuilder.{Change, SomeBuildError, TransactionBuilder}
+import scalus.cardano.txbuilder.{SomeBuildError, TransactionBuilder}
 import sourcecode.*
 
-trait Tx[Self <: Tx[Self]] { self: Self =>
+trait Tx[Self <: Tx[Self]] extends HasResolvedUtxos { self: Self =>
     def tx: Transaction
 
     /** Lens for accessing the transaction field. Implementations should use:
@@ -39,6 +36,30 @@ trait HasValidityEnd {
 }
 
 object Tx {
+    object Validators {
+
+        val nonSigningValidators: Seq[Validator] =
+            // These validators are all the ones from the CardanoMutator that could be checked on an unsigned transaction
+            List(
+              EmptyInputsValidator,
+              InputsAndReferenceInputsDisjointValidator,
+              AllInputsMustBeInUtxoValidator,
+              ValueNotConservedUTxOValidator,
+              // VerifiedSignaturesInWitnessesValidator,
+              // MissingKeyHashesValidator
+              MissingOrExtraScriptHashesValidator,
+              TransactionSizeValidator,
+              FeesOkValidator,
+              OutputsHaveNotEnoughCoinsValidator,
+              OutputsHaveTooBigValueStorageSizeValidator,
+              OutsideValidityIntervalValidator,
+              OutsideForecastValidator
+            )
+
+        val nonSigningNonValidityChecksValidators: Seq[Validator] = nonSigningValidators
+            .filterNot(_.isInstanceOf[OutsideValidityIntervalValidator.type])
+    }
+
     type Serialized = Array[Byte]
 
     /** A result that includes additional information besides the built transaction.
@@ -48,22 +69,6 @@ object Tx {
       */
     trait AugmentedResult[T] {
         def transaction: T
-    }
-
-    trait Builder {
-        def config: Builder.Config
-
-        final def finish(
-            txBuilderContext: TransactionBuilder.Context
-        ): Either[SomeBuildError, TransactionBuilder.Context] =
-            // Try to build, balance, and validate the resulting transaction
-            txBuilderContext
-                .finalizeContext(
-                  protocolParams = config.env.protocolParams,
-                  diffHandler = Change.changeOutputDiffHandler(_, _, config.env.protocolParams, 0),
-                  evaluator = config.evaluator,
-                  validators = config.validators
-                )
     }
 
     object Builder {
@@ -110,17 +115,6 @@ object Tx {
 
         trait HasCtx {
             def ctx: TransactionBuilder.Context
-        }
-
-        final case class Config(
-            headNativeScript: HeadMultisigScript,
-            multisigRegimeUtxo: MultisigRegimeUtxo,
-            tokenNames: TokenNames,
-            env: CardanoInfo,
-            evaluator: PlutusScriptEvaluator,
-            validators: Seq[Validator]
-        ) {
-            lazy val headAddress: ShelleyAddress = headNativeScript.mkAddress(env.network)
         }
 
         object Incremental {

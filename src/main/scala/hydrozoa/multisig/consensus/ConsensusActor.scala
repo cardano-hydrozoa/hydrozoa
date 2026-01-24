@@ -4,11 +4,12 @@ import cats.effect.{IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
-import hydrozoa.multisig.ledger.dapp.tx.{DeinitTx, FallbackTx, FinalizationTx, RefundTx, RolloutTx, SettlementTx, Tx}
-import hydrozoa.multisig.protocol.ConsensusProtocol.*
+import com.suprnation.typelevel.actors.syntax.BroadcastOps
+import hydrozoa.multisig.MultisigRegimeManager
+import hydrozoa.multisig.ledger.dapp.tx.{DeinitTx, RefundTx, RolloutTx, Tx}
 import hydrozoa.multisig.protocol.types.AckBlock.HeaderSignature.given
 import hydrozoa.multisig.protocol.types.AckBlock.{HeaderSignature, TxSignature}
-import hydrozoa.multisig.protocol.types.{AckBlock, AugmentedBlock, Block, Peer}
+import hydrozoa.multisig.protocol.types.{AckBlock, AugmentedBlock, Block, BlockEffectsSigned, Peer}
 import hydrozoa.{VerificationKeyBytes, attachVKeyWitnesses}
 import scala.Function.tupled
 import scala.util.control.NonFatal
@@ -244,13 +245,13 @@ object ConsensusActor:
 
         /** Requests that haven't been handled, initially empty. */
         recoveredRequests: Seq[Request] = Seq.empty,
+    )
 
-        // Actors
-        // TODO: should be many - a liaison per peer
-        peerLiaison: PeerLiaison.PeerLiaisonRef,
+    final case class Connections(
         blockWeaver: BlockWeaver.Handle,
         cardanoLiaison: CardanoLiaison.Handle,
-        eventSequencer: EventSequencer.EventSequencerRef,
+        eventSequencer: EventSequencer.Handle,
+        peerLiaisons: List[PeerLiaison.Handle],
     )
 
     // ===================================
@@ -277,22 +278,62 @@ object ConsensusActor:
 
     type Handle = ActorRef[IO, Request]
 
-    def apply(config: Config): IO[ConsensusActor] =
+    def apply(
+        config: Config,
+        pendingConnections: MultisigRegimeManager.PendingConnections
+    ): IO[ConsensusActor] =
         for {
             stateRef <- Ref[IO].of(State.mkInitialState)
-        } yield new ConsensusActor(config = config, stateRef = stateRef)
+        } yield new ConsensusActor(
+          config = config,
+          pendingConnections = pendingConnections,
+          stateRef = stateRef
+        )
 
 end ConsensusActor
 
 class ConsensusActor(
     config: ConsensusActor.Config,
+    pendingConnections: MultisigRegimeManager.PendingConnections | ConsensusActor.Connections,
     stateRef: Ref[IO, ConsensusActor.State]
 ) extends Actor[IO, ConsensusActor.Request]:
     import ConsensusActor.*
     import ConsensusCell.*
 
+    private val connections = Ref.unsafe[IO, Option[ConsensusActor.Connections]](None)
+
+    private def getConnections: IO[Connections] = for {
+        mConn <- this.connections.get
+        conn <- mConn.fold(
+          IO.raiseError(
+            java.lang.Error(
+              "Consensus Actor is missing its connections to other actors."
+            )
+          )
+        )(IO.pure)
+    } yield conn
+
+    private def initializeConnections: IO[Unit] = pendingConnections match {
+        case x: MultisigRegimeManager.PendingConnections =>
+            for {
+                _connections <- x.get
+                _ <- connections.set(
+                  Some(
+                    ConsensusActor.Connections(
+                      blockWeaver = _connections.blockWeaver,
+                      cardanoLiaison = _connections.cardanoLiaison,
+                      eventSequencer = _connections.eventSequencer,
+                      peerLiaisons = _connections.peerLiaisons
+                    )
+                  )
+                )
+            } yield ()
+        case x: ConsensusActor.Connections => connections.set(Some(x))
+    }
+
     override def preStart: IO[Unit] =
         for {
+            _ <- initializeConnections
             _ <- IO.traverse_(config.recoveredRequests)(receive)
         } yield ()
 
@@ -322,7 +363,7 @@ class ConsensusActor(
       * checking whether it's an own acknowledgement and if so scheduling its announcement. This is
       * done differently for different types of acks:
       *   - for [[RoundOneOwnAck]] it's done here right when we receive them
-      *   - for [[RoundTwoOwnAck] it's done in the corresponding cells later on
+      *   - for [[RoundTwoOwnAck]] it's done in the corresponding cells later on
       *
       * @param ack
       *   an arbitrary ack, whether own one or someone else's one
@@ -358,26 +399,31 @@ class ConsensusActor(
     // ===================================
     sealed trait BlockConfirmed {
         def block: Block.Next
+
+        def effects: BlockEffectsSigned.Next
+
         val finalizationRequested: Boolean
 
         final lazy val blockNum: Block.Number = block.blockNum
 
-        final lazy val weaverConfirmation: BlockWeaver.BlockConfirmed =
+        final lazy val toBlockWeaver: BlockWeaver.BlockConfirmed =
             BlockWeaver.BlockConfirmed(
               blockNumber = blockNum,
               finalizationRequested = finalizationRequested
             )
 
-        // TODO: refactor liaison, fill in the holes
-        final lazy val mbCardanoLiaisonEffects
+        final lazy val mbToCardanoLiaison
             : Option[CardanoLiaison.MajorBlockConfirmed | CardanoLiaison.FinalBlockConfirmed] =
             this match {
                 case BlockConfirmed.Major(
                       _,
-                      fallbackSigned,
-                      rolloutsSigned,
-                      _,
-                      settlementSigned,
+                      BlockEffectsSigned.Major(
+                        _,
+                        settlementSigned,
+                        fallbackSigned,
+                        rolloutsSigned,
+                        _,
+                      ),
                       _
                     ) =>
                     Some(
@@ -388,7 +434,16 @@ class ConsensusActor(
                         fallbackSigned = fallbackSigned
                       )
                     )
-                case BlockConfirmed.Final(_, rolloutsSigned, deinitSigned, finalizationSigned, _) =>
+                case BlockConfirmed.Final(
+                      _,
+                      BlockEffectsSigned.Final(
+                        _,
+                        rolloutsSigned,
+                        deinitSigned,
+                        finalizationSigned
+                      ),
+                      _
+                    ) =>
                     Some(
                       CardanoLiaison.FinalBlockConfirmed(
                         blockNum = blockNum,
@@ -400,46 +455,33 @@ class ConsensusActor(
                 case _ => None
             }
 
-        final lazy val mbFinalBlockConfirmation: Option[Unit] =
-            this match {
-                case _: BlockConfirmed.Final => Some(())
-                case _                       => None
-            }
+        final lazy val toEventSequencer: EventSequencer.Request.BlockConfirmed =
+            EventSequencer.Request.BlockConfirmed(
+              block = this.block,
+              mbPostDatedRefundsSigned = this.effects.postDatedRefundsSigned
+            )
 
-        // TODO: types are not defined yet
-        //  - blockNum
-        //  - events with flags
-        //  - post-dated refunds
-        final lazy val sequencerEvents: EventSequencer.ConfirmBlock = ???
+        final lazy val toPeerLiaison: PeerLiaison.Request.BlockConfirmed =
+            PeerLiaison.Request.BlockConfirmed(this.block)
     }
 
     object BlockConfirmed:
 
         final case class Minor(
             override val block: Block.Minor,
-            // Verified header signatures
-            headerSignatures: Set[HeaderSignature],
-            // Fully signed txs
-            postDatedRefundsSigned: List[RefundTx.PostDated],
+            override val effects: BlockEffectsSigned.Minor,
             override val finalizationRequested: Boolean
         ) extends BlockConfirmed
 
         final case class Major(
             override val block: Block.Major,
-            // Fully signed txs
-            fallbackSigned: FallbackTx,
-            rolloutsSigned: List[RolloutTx],
-            postDatedRefundsSigned: List[RefundTx.PostDated],
-            settlementSigned: SettlementTx,
+            override val effects: BlockEffectsSigned.Major,
             override val finalizationRequested: Boolean
         ) extends BlockConfirmed
 
         final case class Final(
             override val block: Block.Final,
-            // Fully signed txs
-            rolloutsSigned: List[RolloutTx],
-            mbDeinitSigned: Option[DeinitTx],
-            finalizationSigned: FinalizationTx,
+            override val effects: BlockEffectsSigned.Final,
             override val finalizationRequested: Boolean = false
         ) extends BlockConfirmed
 
@@ -555,7 +597,7 @@ class ConsensusActor(
         // ===================================
 
         private def msgBlockNum(msg: AugmentedBlock.Next | AckBlock): Block.Number = msg match {
-            case augBlock: AugmentedBlock.Next => augBlock.block.id
+            case augBlock: AugmentedBlock.Next => augBlock.blockAsNext.id
             case ack: AckBlock                 => ack.blockNum
         }
 
@@ -626,20 +668,20 @@ class ConsensusActor(
         private def completeCell(
             blockConfirmed: BlockConfirmed,
             mbAck: Option[AckBlock]
-        ): IO[Unit] =
+        ): IO[Unit] = {
             for {
+                conn <- getConnections
                 // Handle the confirmed block
-                _ <- config.blockWeaver ! blockConfirmed.weaverConfirmation
-                _ <- IO.traverse_(blockConfirmed.mbCardanoLiaisonEffects)(config.cardanoLiaison ! _)
-                _ <- config.eventSequencer ! blockConfirmed.sequencerEvents
+                _ <- conn.blockWeaver ! blockConfirmed.toBlockWeaver
+                _ <- IO.traverse_(blockConfirmed.mbToCardanoLiaison)(conn.cardanoLiaison ! _)
+                _ <- conn.eventSequencer ! blockConfirmed.toEventSequencer
+                _ <- (conn.peerLiaisons ! blockConfirmed.toPeerLiaison).parallel
                 // Announce the ack if present
                 _ <- mbAck.traverse_(announceAck)
-                // Signal the peer liaison if that is the final block confirmation
-                // TODO: fill in the hole once we have a type for that
-                _ <- IO.traverse_(blockConfirmed.mbFinalBlockConfirmation)(???)
                 // Remove the cell
                 _ <- stateRef.set(state.copy(cells = state.cells - blockConfirmed.blockNum))
             } yield ()
+        }
 
         /** Broadcasts an ack to peer liaisons for distribution to other peers.
           *
@@ -807,8 +849,12 @@ class ConsensusActor(
                 } yield Right(
                   BlockConfirmed.Minor(
                     block = block,
-                    headerSignatures = vksAndSigs.map(_._2).toSet,
-                    postDatedRefundsSigned = postDatedRefundsSigned,
+                    effects = BlockEffectsSigned.Minor(
+                      blockNum = block.header.blockNum,
+                      header = block.header,
+                      headerSignatures = vksAndSigs.map(_._2).toSet,
+                      postDatedRefundsSigned = postDatedRefundsSigned,
+                    ),
                     finalizationRequested = finalizationRequested
                   ) -> postponedNextBlockOwnAck
                 )
@@ -1030,10 +1076,13 @@ class ConsensusActor(
                 } yield Right(
                   BlockConfirmed.Major(
                     block = augBlock.block,
-                    fallbackSigned = fallbackTxSigned,
-                    rolloutsSigned = rolloutsSigned,
-                    postDatedRefundsSigned = postDatedRefundsSigned,
-                    settlementSigned = settlementTxSigned,
+                    effects = BlockEffectsSigned.Major(
+                      blockNum = augBlock.block.header.blockNum,
+                      settlementSigned = settlementTxSigned,
+                      fallbackSigned = fallbackTxSigned,
+                      rolloutsSigned = rolloutsSigned,
+                      postDatedRefundsSigned = postDatedRefundsSigned,
+                    ),
                     finalizationRequested = finalizationRequested
                   ),
                   postponedNextBlockOwnAck
@@ -1228,15 +1277,19 @@ class ConsensusActor(
                             } yield Some(deinitSigned)
                     }
                 } yield Right(
-                  BlockConfirmed.Final(
-                    block = augBlock.block,
-                    rolloutsSigned = rolloutsSigned,
-                    finalizationSigned = finalizationSigned,
-                    mbDeinitSigned = mbDeinitSigned
-                  ),
-                  None
+                  (
+                    BlockConfirmed.Final(
+                      block = augBlock.block,
+                      effects = BlockEffectsSigned.Final(
+                        blockNum = augBlock.block.header.blockNum,
+                        rolloutsSigned = rolloutsSigned,
+                        mbDeinitSigned = mbDeinitSigned,
+                        finalizationSigned = finalizationSigned
+                      )
+                    ),
+                    None
+                  )
                 )
-
         }
 
         enum CollectingError extends Throwable:
@@ -1256,6 +1309,10 @@ class ConsensusActor(
                     s"Round for block $blockNum already has an augmented block"
                 case UnexpectedPeer(peer) =>
                     s"Unexpected peer number: $peer"
+                case PostponedAckAlreadySet =>
+                    "Postponed Ack is already set"
+                case UnexpectedPosponedAck =>
+                    "Unexpected postponed ack"
             }
 
         // TODO: add block numbers / peer numbers

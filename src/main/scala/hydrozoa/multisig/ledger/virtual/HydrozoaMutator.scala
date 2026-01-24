@@ -24,7 +24,7 @@ object HydrozoaTransactionMutator {
         // A helper for mapping the error type and applying arguments
         def helper(v: Validator): Either[String | TransactionException, Unit] =
             v.validate(
-              context.toL1Context(time, context.slotConfig),
+              context.toL1Context(time, context.cardanoInfo.slotConfig),
               L1State(utxos = state.activeUtxos),
               event
             )
@@ -55,7 +55,7 @@ object HydrozoaTransactionMutator {
             // Upstream mutators
             state <-
                 PlutusScriptsTransactionMutator.transit(
-                  context.toL1Context(time, context.slotConfig),
+                  context.toL1Context(time, context.cardanoInfo.slotConfig),
                   state.toScalusState,
                   event
                 )

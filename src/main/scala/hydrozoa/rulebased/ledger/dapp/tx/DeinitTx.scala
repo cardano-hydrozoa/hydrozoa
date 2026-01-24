@@ -201,7 +201,12 @@ object DeinitTx {
             finalized <- context
                 .finalizeContext(
                   protocolParams = env.protocolParams,
-                  diffHandler = Change.changeOutputDiffHandler(_, _, env.protocolParams, 0), // the collateral sent back
+                  diffHandler = Change.changeOutputDiffHandler(
+                    _,
+                    _,
+                    env.protocolParams,
+                    0
+                  ), // the collateral sent back
                   evaluator = evaluator,
                   validators = validators
                 )

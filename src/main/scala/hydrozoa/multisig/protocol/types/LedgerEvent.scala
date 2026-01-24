@@ -1,8 +1,6 @@
 package hydrozoa.multisig.protocol.types
 
-import cats.effect.IO
 import cats.syntax.all.*
-import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming
 import scalus.cardano.ledger.Coin
@@ -36,6 +34,10 @@ object LedgerEventId {
         def peerNum: Peer.Number = Peer.Number(self._1)
         def eventNum: Number = Number(self._2)
 
+        def precedes(other: Id): Boolean =
+            self.peerNum == other.peerNum &&
+                self.eventNum.increment == other.eventNum
+
     type Number = Number.Number
 
     object Number {
@@ -68,14 +70,10 @@ object LedgerEvent {
     final case class RegisterDeposit(
         depositTxBytes: Array[Byte],
         refundTxBytes: Array[Byte],
-        eventId: LedgerEventId,
+        override val eventId: LedgerEventId,
         virtualOutputsBytes: Array[Byte],
         donationToTreasury: Coin,
         txTiming: TxTiming,
         blockStartTime: QuantizedInstant
     ) extends LedgerEvent
-
-    // TODO: do we still need it?
-    type Subscriber = ActorRef[IO, LedgerEvent]
-
 }

@@ -7,6 +7,7 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.UtxoIdL1
 import hydrozoa.lib.cardano.scalus.QuantizedTime.toEpochQuantizedInstant
+import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.protocol.types.Block.Number.first
@@ -26,41 +27,38 @@ import scalus.cardano.ledger.SlotConfig
   * There are several diagrams in the Hydrozoa docs that illustrate the work of the weaver.
   */
 object BlockWeaver:
+    def apply(
+        config: Config,
+        pendingConnections: MultisigRegimeManager.PendingConnections | BlockWeaver.Connections
+    ): IO[BlockWeaver] =
+        IO(new BlockWeaver(config = config, pendingConnections = pendingConnections) {})
 
+    /** Configuration for the block weaver actor.
+      *
+      * @param lastKnownBlock
+      *   Normally this is always the initial block, the only block known to the head upfront. In *
+      *   the case of recovery it may be any block that was fully finished and synced to the *
+      *   persistence.
+      * @param peerId
+      *   this peer's own ID, which is used to determine the block numbers for which it should be
+      *   leader.
+      * @param recoveredMempool
+      *   Recovered mempool, i.e., all ledger events outstanding the indices of the last known *
+      *   block. Upon initialization is always an empty set by definition.
+      *
+      * @param slotConfig
+      *   the slot configuration.
+      */
     final case class Config(
-        /** Normally this is always the initial block, the only block known to the head upfront. In
-          * the case of recovery it may be any block that was fully finished and synced to the
-          * persistence.
-          */
         lastKnownBlock: Block.Number,
-
-        /** Own peer number */
-        peerId: Peer.Number,
-
-        /** This is needed for [[isLeaderForBlock]] function, the total number of peers in the head.
-          *
-          * Invariant: >= 1
-          *
-          * TODO: likely we are going to move it to the head config
-          */
-        numberOfPeers: Int,
-
-        /** Round-robin peer's turn. see [[isLeaderForBlock]] function.
-          *
-          * Invariant: blockLeadTurn ∈ [1, numberOfPeers]
-          *
-          * TODO: likely we are going to move it to the head config
-          */
-        blockLeadTurn: Int,
-
-        /** Recovered mempool, i.e., all ledger events outstanding the indices of the last known
-          * block. Upon initialization is always an empty set by definition.
-          *
-          * TODO: shall we use just Seq[LedgerEvent here] not to expose Mempool?
-          */
+        peerId: Peer.Id,
+        // TODO: shall we use just Seq[LedgerEvent here] not to expose Mempool?
         recoveredMempool: Mempool,
-        jointLedger: JointLedger.Handle,
         slotConfig: SlotConfig
+    )
+
+    final case class Connections(
+        jointLedger: JointLedger.Handle
     )
 
     // ===================================
@@ -112,13 +110,11 @@ object BlockWeaver:
     object PollResults:
         val empty: PollResults = PollResults(Set.empty)
 
-    type Handle = ActorRef[IO, Request]
-    type Request = LedgerEvent | Block.Next | BlockConfirmed | PollResults
+    object FinalizationLocallyTriggered
 
-    def apply(config: Config): IO[BlockWeaver] = for {
-        stateRef <- Ref[IO].of(State.mkInitialState)
-        pollResultsRef <- Ref[IO].of(PollResults.empty)
-    } yield new BlockWeaver(config = config, stateRef = stateRef, pollResultsRef = pollResultsRef)
+    type Handle = ActorRef[IO, Request]
+    type Request = LedgerEvent | Block.Next | BlockConfirmed | PollResults |
+        FinalizationLocallyTriggered.type
 
     // ===================================
     // Immutable mempool state
@@ -195,13 +191,49 @@ object BlockWeaver:
     }
 end BlockWeaver
 
-class BlockWeaver(
-    private val config: BlockWeaver.Config,
-    private val stateRef: Ref[IO, BlockWeaver.State],
-    // Having this field separately rids of the need to weave it through state changes.
-    private val pollResultsRef: Ref[IO, BlockWeaver.PollResults]
+trait BlockWeaver(
+    config: BlockWeaver.Config,
+    pendingConnections: MultisigRegimeManager.PendingConnections | BlockWeaver.Connections
 ) extends Actor[IO, BlockWeaver.Request]:
     import BlockWeaver.*
+
+    private val stateRef = Ref.unsafe[IO, BlockWeaver.State](State.mkInitialState)
+
+    // Having this field separately rids of the need to weave it through state changes.
+    private val pollResultsRef = Ref.unsafe[IO, BlockWeaver.PollResults](PollResults.empty)
+
+    private val connections = Ref.unsafe[IO, Option[BlockWeaver.Connections]](None)
+
+    /** This ref initialized with false value intially and gets true value upon receiving
+      * [[FinalizationLocallyTriggered]]. Regardless the peers' role for the current block, that
+      * causes the eponymous flag `finalizationLocallyTriggeredRef` in the next
+      * [[CompleteBlockRegular]] be set to true. This tells the joint ledger to set up the
+      * finalization flag `finalizationRequested` in the peer's ack, so the leader of the next block
+      * observe it in their [[BlockWeaver.BlockConfirmed]] and produce the final block.
+      */
+    private val finalizationLocallyTriggeredRef = Ref.unsafe[IO, Boolean](false)
+
+    private def getConnections: IO[Connections] = for {
+        mConn <- this.connections.get
+        conn <- mConn.fold(
+          IO.raiseError(
+            java.lang.Error(
+              "Block weaver is missing its connections to other actors."
+            )
+          )
+        )(IO.pure)
+    } yield conn
+
+    private def initializeConnections: IO[Unit] = pendingConnections match {
+        case x: MultisigRegimeManager.PendingConnections =>
+            for {
+                _connections <- x.get
+                _ <- this.connections.set(
+                  Some(BlockWeaver.Connections(jointLedger = _connections.jointLedger))
+                )
+            } yield ()
+        case x: BlockWeaver.Connections => connections.set(Some(x))
+    }
 
     override def preStart: IO[Unit] =
         if config.lastKnownBlock.toInt == 0 then
@@ -209,17 +241,21 @@ class BlockWeaver(
               config.recoveredMempool.isEmpty,
               "panic: recovered mempool should be empty before the first block"
             )
-        switchToIdle(config.lastKnownBlock.increment, config.recoveredMempool)
+        for {
+            _ <- initializeConnections
+            _ <- switchToIdle(config.lastKnownBlock.increment, config.recoveredMempool)
+        } yield ()
 
     override def receive: Receive[IO, Request] =
         PartialFunction.fromFunction(receiveTotal)
 
     private def receiveTotal(req: Request): IO[Unit] =
         req match {
-            case msg: LedgerEvent   => handleLedgerEvent(msg)
-            case b: Block.Next      => handleNewBlock(b)
-            case bc: BlockConfirmed => handleBlockConfirmed(bc)
-            case pr: PollResults    => handlePollResults(pr)
+            case msg: LedgerEvent             => handleLedgerEvent(msg)
+            case b: Block.Next                => handleNewBlock(b)
+            case bc: BlockConfirmed           => handleBlockConfirmed(bc)
+            case pr: PollResults              => handlePollResults(pr)
+            case finalizationLocallyTriggered => finalizationLocallyTriggeredRef.set(true)
         }
 
     // ===================================
@@ -239,16 +275,23 @@ class BlockWeaver(
                     stateRef.set(Idle(mempool.add(event)))
                 case leader @ Leader(blockNumber) =>
                     for {
+                        conn <- getConnections
                         // Pass-through to the joint ledger
-                        _ <- config.jointLedger ! event
+                        _ <- conn.jointLedger ! event
+
                         // Complete the first block immediately
-                        pollResults <- pollResultsRef.get
-                        _ <- IO.whenA(leader.isFirstBlock) {
+                        _ <- IO.whenA(leader.isFirstBlock)(for {
+                            pollResults <- pollResultsRef.get
+                            finalizationLocallyTriggered <- finalizationLocallyTriggeredRef.get
                             // It's always CompleteBlockRegular since we haven't
                             // seen any confirmations so far.
-                            (config.jointLedger ! CompleteBlockRegular(None, pollResults.utxos))
-                                >> switchToIdle(blockNumber.increment)
-                        }
+                            _ <- conn.jointLedger ! CompleteBlockRegular(
+                              None,
+                              pollResults.utxos,
+                              finalizationLocallyTriggered
+                            )
+                            _ <- switchToIdle(blockNumber.increment)
+                        } yield ())
                     } yield ()
 
                 case awaiting @ Awaiting(block, eventIdAwaited, mempool) =>
@@ -297,8 +340,9 @@ class BlockWeaver(
             _ <- state match {
                 case Idle(mempool) =>
                     for {
+                        conn <- getConnections
                         // This is sort of ephemeral Follower state
-                        _ <- config.jointLedger ! StartBlock(
+                        _ <- conn.jointLedger ! StartBlock(
                           block.header.blockNum,
                           block.header.timeCreation
                         )
@@ -325,19 +369,42 @@ class BlockWeaver(
         } yield ()
     }
 
+    /** When completing a refernce block, we decide upon the type of completion message
+      * CompleteBlockRegular/CompleteBlockFinal based on the type of the block only.
+      *
+      * `finalizationLocallyTriggered` is passed only if [[CompleteBlockRegular]] was chosen to
+      * force the joint ledger to produce an acknowledgement with `finalizationRequested` flag set.
+      *
+      * @param block
+      * @return
+      */
     private def completeReferenceBlock(block: Block.Next): IO[Unit] = for {
         pollResults <- pollResultsRef.get
+        finalizationLocallyTriggered <- finalizationLocallyTriggeredRef.get
         completeBlock <- block match {
             case _: Block.Minor =>
-                IO.pure(CompleteBlockRegular(Some(block), pollResults.utxos))
+                IO.pure(
+                  CompleteBlockRegular(Some(block), pollResults.utxos, finalizationLocallyTriggered)
+                )
             case _: Block.Major =>
-                IO.pure(CompleteBlockRegular(Some(block), pollResults.utxos))
+                IO.pure(
+                  CompleteBlockRegular(Some(block), pollResults.utxos, finalizationLocallyTriggered)
+                )
             case _: Block.Final =>
                 IO.pure(CompleteBlockFinal(Some(block)))
         }
-        _ <- config.jointLedger ! completeBlock
+        conn <- getConnections
+        _ <- conn.jointLedger ! completeBlock
     } yield ()
 
+    /** This one a bit cumbersome due to the presence of TWO finalization flags being used in this
+      * function:
+      *   - The `finalizationLocallyTriggered` flag that indicates that a finalization API was
+      *     called locally sets the flag in `CompleteBlockRegular` to ask joint ledger add
+      *     finalization flag to the ack.
+      *   - the `blockConfirmed.finalizationRequested` forces [[CompleteBlockFinal]] so joint ledger
+      *     is to produce a final block immediately.
+      */
     private def handleBlockConfirmed(blockConfirmed: BlockConfirmed): IO[Unit] = {
         for {
             // _ <- IO.println("handleBlockConfirmed")
@@ -348,11 +415,19 @@ class BlockWeaver(
                     IO.whenA(blockConfirmed.blockNumber.increment == blockNumber)
                     for {
                         pollResults <- pollResultsRef.get
+                        finalizationLocallyTriggered <- finalizationLocallyTriggeredRef.get
+                        conn <- getConnections
+
                         // Finish the current block immediately
-                        _ <- config.jointLedger !
+                        _ <- conn.jointLedger !
                             (if blockConfirmed.finalizationRequested
                              then CompleteBlockFinal(None)
-                             else CompleteBlockRegular(None, pollResults.utxos))
+                             else
+                                 CompleteBlockRegular(
+                                   None,
+                                   pollResults.utxos,
+                                   finalizationLocallyTriggered
+                                 ))
                         // Switch to Idle
                         _ <- switchToIdle(blockNumber.increment)
                     } yield ()
@@ -409,10 +484,14 @@ class BlockWeaver(
                 case (e :: es, mempool) =>
                     mempool.findById(e) match {
                         case Some(event) =>
-                            (config.jointLedger ! event) >> IO.pure(Left(es, mempool.remove(e)))
+                            for {
+                                conn <- getConnections
+                                _ <- conn.jointLedger ! event
+                            } yield Left(es, mempool.remove(e))
                         case None =>
-                            // IO.println(s"new missing event: $e") >>
-                            IO.pure(Right(Some(e), mempool))
+                            for {
+                                _ <- IO.unit // IO.println(s"new missing event: $e")
+                            } yield Right(Some(e), mempool)
                     }
             }
 
@@ -450,31 +529,19 @@ class BlockWeaver(
         nextBlockNum: Block.Number,
         mempool: Mempool = Mempool.empty
     ): IO[Unit] =
-        if isLeaderForBlock(nextBlockNum)
+        if config.peerId.isLeader(nextBlockNum)
         then
             for {
+                conn <- getConnections
                 // _ <- IO.println(s"becoming leader for block: $nextBlockNum")
                 now <- IO.realTime.map(_.toEpochQuantizedInstant(config.slotConfig))
-                _ <- config.jointLedger ! StartBlock(nextBlockNum, now)
+                _ <- conn.jointLedger ! StartBlock(nextBlockNum, now)
                 _ <- IO.traverse_(mempool.receivingOrder)(event =>
-                    config.jointLedger ! mempool.findById(event).get
+                    conn.jointLedger ! mempool.findById(event).get
                 )
                 _ <- stateRef.set(Leader(nextBlockNum))
             } yield ()
         else stateRef.set(Idle(mempool))
-
-    /** Determines whether the weaver is a leader for a block n:
-      *   - The leader for block n = 1 is those that has blockLeadTurn = 1
-      *   - ...
-      *   - The leader for block n = numberOfPeers is that with blockLeadTurn = numberOfPeers
-      *   - .. and so on and so forth
-      *
-      * @param blockNumber
-      *   the number of the block, n ∈ [1 .. inf). Technically it's defined for block number 0,
-      *   pointing to the last peer, but we don't need it in practice.
-      */
-    private def isLeaderForBlock(blockNumber: Block.Number): Boolean =
-        blockNumber % config.numberOfPeers == config.blockLeadTurn % config.numberOfPeers
 
     private def handlePollResults(pollResults: PollResults): IO[Unit] =
         pollResultsRef.set(pollResults)

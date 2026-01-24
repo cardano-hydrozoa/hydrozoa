@@ -59,8 +59,6 @@ lazy val core = (project in file("."))
         "org.typelevel" %% "cats-effect" % "3.6.3",
         "com.github.suprnation.cats-actors" %% "cats-actors" % "2.0.1",
         "org.typelevel" %% "spire" % "0.18.0",
-        "com.lihaoyi" %% "sourcecode" % "0.3.0",
-        "org.typelevel" %% "spire" % "0.18.0",
         "org.scalactic" %% "scalactic" % "3.2.19",
         "org.typelevel" %% "cats-core" % "2.13.0",
         // "io.netty" % "netty-all" % "4.2.4.Final"
@@ -103,7 +101,8 @@ ThisBuild / scalacOptions ++= Seq(
   "-language:implicitConversions",
   "-Wvalue-discard",
   "-Wunused:all",
-  "-Wall"
+  "-Wall",
+  "-Yretain-trees",  // Essential for incremental compilation
 )
 
 // Add the Scalus compiler plugin
@@ -158,3 +157,4 @@ excludeFilter in Global := {
     val default = (excludeFilter in Global).value
     default || ".direnv" || ".bloop" || ".metals" || ".idea" || ".vscode"
 }
+

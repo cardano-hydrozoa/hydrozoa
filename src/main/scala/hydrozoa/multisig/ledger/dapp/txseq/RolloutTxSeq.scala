@@ -2,14 +2,16 @@ package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.data.{Kleisli, NonEmptyVector}
 import cats.syntax.all.*
+import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
+import hydrozoa.multisig.ledger.dapp.tx.RolloutTx
 import hydrozoa.multisig.ledger.dapp.tx.RolloutTx.Builder as SingleBuilder
 import hydrozoa.multisig.ledger.dapp.tx.RolloutTx.Builder.PartialResult as SinglePartialResult
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.BuildErrorOr
-import hydrozoa.multisig.ledger.dapp.tx.{RolloutTx, Tx}
 import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq.Builder.PartialResult.Many
-import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
+import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, RolloutUtxo}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import scala.annotation.tailrec
+import scalus.cardano.ledger.CardanoInfo
 import scalus.cardano.txbuilder.SomeBuildError
 
 /** A non-empty chain of rollout transactions in order of chaining.
@@ -28,6 +30,11 @@ final case class RolloutTxSeq(
 )
 
 object RolloutTxSeq {
+    case class Config(
+        cardanoInfo: CardanoInfo,
+        multisigRegimeUtxo: MultisigRegimeUtxo,
+        headMultisigScript: HeadMultisigScript
+    )
 
     extension (self: RolloutTxSeq)
         def mbRollouts: List[RolloutTx] = self.notLast.appended(self.last).toList
@@ -183,13 +190,18 @@ object RolloutTxSeq {
     }
 
     final case class Builder(
-        config: Tx.Builder.Config
+        config: RolloutTxSeq.Config
     ) {
 
         import Builder.*
 
-        lazy val singleBuilderLast = SingleBuilder.Last(config)
-        lazy val singleBuilderNotLast = SingleBuilder.NotLast(config)
+        val rolloutTxConfig = RolloutTx.Config(
+          cardanoInfo = config.cardanoInfo,
+          multisigRegimeUtxo = config.multisigRegimeUtxo,
+          headMultisigScript = config.headMultisigScript
+        )
+        lazy val singleBuilderLast = SingleBuilder.Last(rolloutTxConfig)
+        lazy val singleBuilderNotLast = SingleBuilder.NotLast(rolloutTxConfig)
 
         /** Builds a "partial result chain" of rollout transactions. This can either be a
           * [[Singleton]] chain or a [[Many]] chain. In the case of the latter, it tries to pack as
