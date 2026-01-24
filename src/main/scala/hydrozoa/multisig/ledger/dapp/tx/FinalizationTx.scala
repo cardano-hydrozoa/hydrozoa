@@ -162,8 +162,7 @@ object FinalizationTx {
 
             val ctxUpgraded: TransactionBuilder.Context =
                 ctx |> unsafeCtxTxOutputsL
-                    .refocus(_.index(treasuryOutputIndex))
-                    .replace(Sized.apply(residualTreasuryOutput))
+                    .modify(_.updated(treasuryOutputIndex, Sized.apply(residualTreasuryOutput)))
                     |> unsafeCtxTxReferenceInputsL
                         .replace(TaggedSortedSet.empty)
 
