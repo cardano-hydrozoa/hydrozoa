@@ -1,6 +1,8 @@
 package hydrozoa.multisig.ledger.block
 
-import hydrozoa.multisig.ledger.block.BlockHeader.Minor.Signature
+import hydrozoa.multisig.consensus.ack.{AckBlock, AckId, AckNumber}
+import hydrozoa.multisig.consensus.peer.PeerWallet
+import hydrozoa.multisig.ledger.block.BlockHeader.Minor.HeaderSignature
 import hydrozoa.multisig.ledger.dapp.tx.{DeinitTx, FallbackTx, FinalizationTx, InitializationTx, RefundTx, RolloutTx, SettlementTx}
 
 sealed trait Block extends Block.Section
@@ -35,8 +37,17 @@ object Block {
 
             override transparent inline def headerSerialized: BlockHeader.Minor.Onchain.Serialized =
                 effects.headerSerialized
-            override transparent inline def postDatedRefunds: List[RefundTx.PostDated] =
-                effects.postDatedRefunds
+            override transparent inline def postDatedRefundTxs: List[RefundTx.PostDated] =
+                effects.postDatedRefundTxs
+
+            def ack(wallet: PeerWallet, finalizationRequested: Boolean): AckBlock.Minor =
+                AckBlock.Minor(
+                  ackId = AckId(wallet, AckNumber.neededToConfirm(header)),
+                  blockNum = blockNum,
+                  header = wallet.mkMinorHeaderSignature(headerSerialized),
+                  postDatedRefundTxs = postDatedRefundTxs.map(_.tx).map(wallet.mkTxSignature),
+                  finalizationRequested = finalizationRequested
+                )
         }
 
         final case class Major(
@@ -51,8 +62,25 @@ object Block {
             override transparent inline def settlementTx: SettlementTx = effects.settlementTx
             override transparent inline def rolloutTxs: List[RolloutTx] = effects.rolloutTxs
             override transparent inline def fallbackTx: FallbackTx = effects.fallbackTx
-            override transparent inline def postDatedRefunds: List[RefundTx.PostDated] =
-                effects.postDatedRefunds
+            override transparent inline def postDatedRefundTxs: List[RefundTx.PostDated] =
+                effects.postDatedRefundTxs
+
+            def ack1(wallet: PeerWallet, finalizationRequested: Boolean): AckBlock.Major1 =
+                AckBlock.Major1(
+                  ackId = AckId(wallet, AckNumber.neededToConfirm(header).decrement),
+                  blockNum = blockNum,
+                  fallbackTx = wallet.mkTxSignature(fallbackTx.tx),
+                  rolloutTxs = rolloutTxs.map(_.tx).map(wallet.mkTxSignature),
+                  postDatedRefundTxs = postDatedRefundTxs.map(_.tx).map(wallet.mkTxSignature),
+                  finalizationRequested = finalizationRequested
+                )
+
+            def ack2(wallet: PeerWallet): AckBlock.Major2 =
+                AckBlock.Major2(
+                  ackId = AckId(wallet, AckNumber.neededToConfirm(header)),
+                  blockNum = blockNum,
+                  settlementTx = wallet.mkTxSignature(settlementTx.tx)
+                )
         }
 
         final case class Final(
@@ -66,7 +94,20 @@ object Block {
 
             override transparent inline def finalizationTx: FinalizationTx = effects.finalizationTx
             override transparent inline def rolloutTxs: List[RolloutTx] = effects.rolloutTxs
-            override transparent inline def mbDeinitTx: Option[DeinitTx] = effects.mbDeinitTx
+            override transparent inline def deinitTx: Option[DeinitTx] = effects.deinitTx
+
+            def ack1(wallet: PeerWallet): AckBlock.Final1 = AckBlock.Final1(
+              ackId = AckId(wallet, AckNumber.neededToConfirm(header).decrement),
+              blockNum = blockNum,
+              rolloutTxs = rolloutTxs.map(_.tx).map(wallet.mkTxSignature),
+              deinitTx = deinitTx.map(_.tx).map(wallet.mkTxSignature)
+            )
+
+            def ack2(wallet: PeerWallet): AckBlock.Final2 = AckBlock.Final2(
+              ackId = AckId(wallet, AckNumber.neededToConfirm(header)),
+              blockNum = blockNum,
+              finalizationTx = wallet.mkTxSignature(finalizationTx.tx)
+            )
         }
 
         type Next = Block.Unsigned & BlockType.Next
@@ -81,7 +122,7 @@ object Block {
             override val effects: BlockEffects.MultiSigned.Initial,
         ) extends Block.MultiSigned,
               BlockType.Initial,
-              BlockEffects.Initial.Section {
+              BlockEffects.MultiSigned.Initial.Section {
             override transparent inline def block: Block.MultiSigned.Initial = this
 
             override transparent inline def body: BlockBody.Initial.type = BlockBody.Initial
@@ -96,16 +137,15 @@ object Block {
             override val effects: BlockEffects.MultiSigned.Minor,
         ) extends Block.MultiSigned,
               BlockType.Minor,
-              BlockEffects.Minor.Section,
-              BlockHeader.Minor.MultiSigned.Section {
+              BlockEffects.MultiSigned.Minor.Section {
             override transparent inline def block: Block.MultiSigned.Minor = this
 
             override transparent inline def headerSerialized: BlockHeader.Minor.Onchain.Serialized =
                 effects.headerSerialized
-            override transparent inline def headerSignatures: List[Signature] =
-                effects.headerSignatures
-            override transparent inline def postDatedRefunds: List[RefundTx.PostDated] =
-                effects.postDatedRefunds
+            override transparent inline def headerMultiSig: List[HeaderSignature] =
+                effects.headerMultiSig
+            override transparent inline def postDatedRefundTxs: List[RefundTx.PostDated] =
+                effects.postDatedRefundTxs
         }
 
         final case class Major(
@@ -114,14 +154,14 @@ object Block {
             override val effects: BlockEffects.MultiSigned.Major,
         ) extends Block.MultiSigned,
               BlockType.Major,
-              BlockEffects.Major.Section {
+              BlockEffects.MultiSigned.Major.Section {
             override transparent inline def block: Block.MultiSigned.Major = this
 
             override transparent inline def settlementTx: SettlementTx = effects.settlementTx
             override transparent inline def rolloutTxs: List[RolloutTx] = effects.rolloutTxs
             override transparent inline def fallbackTx: FallbackTx = effects.fallbackTx
-            override transparent inline def postDatedRefunds: List[RefundTx.PostDated] =
-                effects.postDatedRefunds
+            override transparent inline def postDatedRefundTxs: List[RefundTx.PostDated] =
+                effects.postDatedRefundTxs
         }
 
         final case class Final(
@@ -130,12 +170,12 @@ object Block {
             override val effects: BlockEffects.MultiSigned.Final,
         ) extends Block.MultiSigned,
               BlockType.Final,
-              BlockEffects.Final.Section {
+              BlockEffects.MultiSigned.Final.Section {
             override transparent inline def block: Block.MultiSigned.Final = this
 
             override transparent inline def finalizationTx: FinalizationTx = effects.finalizationTx
             override transparent inline def rolloutTxs: List[RolloutTx] = effects.rolloutTxs
-            override transparent inline def mbDeinitTx: Option[DeinitTx] = effects.mbDeinitTx
+            override transparent inline def deinitTx: Option[DeinitTx] = effects.deinitTx
         }
 
         type Next = Block.MultiSigned & BlockType.Next

@@ -159,24 +159,25 @@ object BlockHeader {
             }
         }
 
-        type Signature = Signature.Signature
+        type HeaderSignature = HeaderSignature.HeaderSignature
 
-        object Signature:
-            opaque type Signature = IArray[Byte]
+        object HeaderSignature:
+            opaque type HeaderSignature = IArray[Byte]
 
-            def apply(signature: IArray[Byte]): Signature = signature
+            def apply(signature: IArray[Byte]): HeaderSignature = signature
 
-            given Conversion[Signature, IArray[Byte]] = identity
+            given Conversion[HeaderSignature, IArray[Byte]] = identity
 
-            given Conversion[Signature, Array[Byte]] = sig => IArray.genericWrapArray(sig).toArray
+            given Conversion[HeaderSignature, Array[Byte]] = sig =>
+                IArray.genericWrapArray(sig).toArray
 
-            given Conversion[Signature, ByteString] = sig => ByteString.fromArray(sig)
+            given Conversion[HeaderSignature, ByteString] = sig => ByteString.fromArray(sig)
 
-            extension (signature: Signature) def untagged: IArray[Byte] = identity(signature)
+            extension (signature: HeaderSignature) def untagged: IArray[Byte] = identity(signature)
 
         object MultiSigned {
-            trait Section extends BlockType.Minor, BlockHeader.Minor.Onchain.Serialized.Section {
-                def headerSignatures: List[BlockHeader.Minor.Signature]
+            trait Section extends BlockType.Minor {
+                def headerMultiSig: List[BlockHeader.Minor.HeaderSignature]
             }
         }
     }
