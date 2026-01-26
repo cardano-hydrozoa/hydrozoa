@@ -28,8 +28,9 @@ import hydrozoa.rulebased.ledger.dapp.utxo.{OwnVoteUtxo, RuleBasedTreasuryUtxo, 
 import scala.concurrent.duration.FiniteDuration
 import scala.util.{Failure, Success, Try}
 import scalus.builtin.Data.fromData
-import scalus.cardano.ledger.DatumOption
 import scalus.cardano.ledger.DatumOption.Inline
+import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
+import scalus.cardano.ledger.{CardanoInfo, DatumOption, PlutusScriptEvaluator}
 import scalus.cardano.txbuilder.SomeBuildError
 
 // QUESTION: The `OwnVoteUtxo` type is pretty sparse. Should I augment it directly, or did we want to keep
@@ -57,16 +58,12 @@ type VoteUtxoWithDatum = (hydrozoa.Utxo[L1], VoteDatum)
   *   - It throws an exception if multiple utxos with the treasury token are found.
   */
 final case class DisputeActor(
+    config: DisputeActor.Config,
     collateralUtxo: hydrozoa.Utxo[L1],
-    blockHeader: OnchainBlockHeader,
-    signatures: List[HeaderSignature],
-    ownPeerPkh: VerificationKeyBytes,
-    config: Tx.Builder.Config,
-    tokenNames: TokenNames,
-    headMultisigScript: HeadMultisigScript,
-    cardanoBackend: CardanoBackend[IO],
     utxosToWithdrawL2: UtxoSetL2,
-    receiveTimeout: FiniteDuration,
+    blockHeader: OnchainBlockHeader,
+    cardanoBackend: CardanoBackend[IO],
+    signatures: List[HeaderSignature],
     rbrmRef: ActorRef[IO, RuleBasedRegimeManager.Requests.Request],
     votingDeadline: QuantizedInstant
 ) extends Actor[IO, DisputeActor.Requests.Request] {
@@ -76,16 +73,16 @@ final case class DisputeActor(
             // Wrapped in EitherT because a Left doesn't signify an unrecoverable failure
             unparsedDisputeUtxos <- EitherT(
               cardanoBackend.utxosAt(
-                address = DisputeResolutionScript.address(config.env.network),
-                asset = (headMultisigScript.policyId, tokenNames.voteTokenName)
+                address = DisputeResolutionScript.address(config.cardanoInfo.network),
+                asset = (config.headMultisigScript.policyId, config.tokenNames.voteTokenName)
               )
             )
             disputeUtxos <- EitherT.liftF(parseDisputeUtxos(unparsedDisputeUtxos))
 
             unparsedTreasuryUtxo <- EitherT(
               cardanoBackend.utxosAt(
-                address = RuleBasedTreasuryScript.address(config.env.network),
-                asset = (headMultisigScript.policyId, tokenNames.headTokenName)
+                address = RuleBasedTreasuryScript.address(config.cardanoInfo.network),
+                asset = (config.headMultisigScript.policyId, config.tokenNames.headTokenName)
               )
             )
             treasuryUtxo <- parseRBTreasury(unparsedTreasuryUtxo)
@@ -94,16 +91,15 @@ final case class DisputeActor(
                 // Cast Vote
                 case (Some(ownVoteUtxo), _) =>
                     val recipe = VoteTx.Recipe(
-                      voteUtxo = OwnVoteUtxo(ownPeerPkh.verKeyHash, ownVoteUtxo._1),
+                      voteUtxo = OwnVoteUtxo(config.ownPeerPkh.verKeyHash, ownVoteUtxo._1),
                       treasuryUtxo = treasuryUtxo,
                       collateralUtxo = collateralUtxo,
                       blockHeader = blockHeader,
                       signatures = signatures,
-                      network = config.env.network,
-                      protocolParams = config.env.protocolParams,
+                      network = config.cardanoInfo.network,
+                      protocolParams = config.cardanoInfo.protocolParams,
                       evaluator = config.evaluator,
-                      validityEnd = votingDeadline,
-                      validators = config.validators
+                      validators = Tx.Validators.nonSigningValidators
                     )
                     for {
                         voteTx <- VoteTx.build(recipe) match {
@@ -126,10 +122,12 @@ final case class DisputeActor(
                       removedVoteUtxo = TallyVoteUtxo(otherUtxos.tail.head._1),
                       treasuryUtxo = treasuryUtxo,
                       collateralUtxo = collateralUtxo,
-                      network = config.env.network,
-                      protocolParams = config.env.protocolParams,
+                      network = config.cardanoInfo.network,
+                      protocolParams = config.cardanoInfo.protocolParams,
                       evaluator = config.evaluator,
-                      validators = config.validators
+                      // Since this tx isn't multisigned, I suppose this would be one of the few transactions
+                      // where we could actually use all of the validators?
+                      validators = Tx.Validators.nonSigningValidators
                     )
                     for {
                         tallyTx <- TallyTx.build(recipe) match {
@@ -145,10 +143,10 @@ final case class DisputeActor(
                       talliedVoteUtxo = TallyVoteUtxo(lastVoteUtxo.head._1),
                       treasuryUtxo = treasuryUtxo,
                       collateralUtxo = collateralUtxo,
-                      network = config.env.network,
-                      protocolParams = config.env.protocolParams,
+                      network = config.cardanoInfo.network,
+                      protocolParams = config.cardanoInfo.protocolParams,
                       evaluator = config.evaluator,
-                      validators = config.validators
+                      validators = Tx.Validators.nonSigningValidators
                     )
                     for {
                         resolutionTx <- ResolutionTx.build(recipe) match {
@@ -167,7 +165,7 @@ final case class DisputeActor(
         et.value
     }
 
-    override def preStart: IO[Unit] = context.setReceiveTimeout(receiveTimeout, ())
+    override def preStart: IO[Unit] = context.setReceiveTimeout(config.receiveTimeout, ())
 
     override def receive: Receive[IO, Requests.Request] = { case _: Requests.HandleDisputeRes =>
         handleDisputeRes
@@ -203,7 +201,7 @@ final case class DisputeActor(
 
             votePartition = voteUtxos.partition {
                 case (_, VoteDatum(_, _, VoteStatus.AwaitingVote(peerPkh))) =>
-                    peerPkh == ownPeerPkh
+                    peerPkh == config.ownPeerPkh
                 case _ => false
             }
         } yield (votePartition._1.headOption, votePartition._2)
@@ -230,6 +228,17 @@ final case class DisputeActor(
 }
 
 object DisputeActor {
+    case class Config(
+        ownPeerPkh: VerificationKeyBytes,
+        tokenNames: TokenNames,
+        headMultisigScript: HeadMultisigScript,
+        receiveTimeout: FiniteDuration,
+        cardanoInfo: CardanoInfo
+    ) {
+        def evaluator: PlutusScriptEvaluator =
+            PlutusScriptEvaluator(cardanoInfo, EvaluateAndComputeCost)
+    }
+
     type Handle = ActorRef[IO, Requests.Request]
 
     object Requests {

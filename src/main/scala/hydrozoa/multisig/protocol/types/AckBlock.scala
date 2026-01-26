@@ -1,58 +1,71 @@
 package hydrozoa.multisig.protocol.types
 
-import cats.effect.IO
 import cats.syntax.all.*
-import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.multisig.protocol.types.AckBlock.Fields.*
 import scalus.builtin.ByteString
+import scalus.cardano.ledger.VKeyWitness
 
 type AckBlockId = AckBlock.Id
 
-enum AckBlock:
+sealed trait AckBlock {
     def id: AckBlock.Id
     def blockNum: Block.Number
+}
 
-    case Minor(
+object AckBlock {
+
+    final case class Minor(
         override val id: AckBlock.Id,
         override val blockNum: Block.Number,
         override val headerSignature: AckBlock.HeaderSignature,
         override val postDatedRefunds: List[AckBlock.TxSignature],
-        override val finalizationRequested: Boolean
-    ) extends AckBlock, MinorHeaderSignature, Refunds.PostDated, FinalizationRequested
+        override val finalizationRequested: Boolean,
+    ) extends AckBlock
+        with MinorHeaderSignature
+        with Refunds.PostDated
+        with FinalizationRequested
+        with BlockAckSet {
+        override def asList: List[AckBlock] = List(this)
+    }
 
-    case Major1(
+    final case class Major1(
         override val id: AckBlock.Id,
         override val blockNum: Block.Number,
         override val fallback: AckBlock.TxSignature,
         override val rollouts: List[AckBlock.TxSignature],
         override val postDatedRefunds: List[AckBlock.TxSignature],
         override val finalizationRequested: Boolean
-    ) extends AckBlock, Rollouts, Fallback, Refunds.PostDated, FinalizationRequested
+    ) extends AckBlock
+        with Rollouts
+        with Fallback
+        with Refunds.PostDated
+        with FinalizationRequested
 
-    case Major2(
+    final case class Major2(
         override val id: AckBlock.Id,
         override val blockNum: Block.Number,
         override val settlement: AckBlock.TxSignature
-    ) extends AckBlock, Settlement
+    ) extends AckBlock
+        with Settlement
 
-    case Final1(
+    final case class Final1(
         override val id: AckBlock.Id,
         override val blockNum: Block.Number,
         override val rollouts: List[AckBlock.TxSignature],
         override val deinit: Option[AckBlock.TxSignature]
-    ) extends AckBlock, Rollouts, Deinit
+    ) extends AckBlock
+        with Rollouts
+        with Deinit
 
-    case Final2(
+    final case class Final2(
         override val id: AckBlock.Id,
         override val blockNum: Block.Number,
         override val finalization: AckBlock.TxSignature
-    ) extends AckBlock, Finalization
-
-object AckBlock {
+    ) extends AckBlock
+        with Finalization
 
     type Id = Id.Id
     type Number = Number.Number
-    type Subscriber = ActorRef[IO, AckBlock]
 
     object Fields {
         sealed trait MinorHeaderSignature {
@@ -106,7 +119,7 @@ object AckBlock {
 
         extension (self: Id)
             def increment: Id = Id(self._1, self._2 + 1)
-            // TODO: rename peerId (or rename all peerId to peerNum
+            // TODO: rename peerId (or rename all peerId to peerNum)
             def peerNum: Peer.Number = Peer.Number(self._1)
             def ackNum: Number = Number(self._2)
     }
@@ -116,6 +129,14 @@ object AckBlock {
 
         def apply(i: Int): Number = i
 
+        /** The given block will be confirmed when AckBlocks with this AckBlock.Number are received
+          * from all peers. It is equal to the block number plus the major version number because:
+          *   - Minor blocks each need only one ack and don't increment the major version.
+          *   - Major and final blocks each need two acks and do increment the major version.
+          */
+        def neededToConfirm(header: Block.Header): Number =
+            header.blockNum + header.blockVersion.major
+
         given Conversion[Number, Int] = identity
 
         given Ordering[Number] with {
@@ -123,7 +144,9 @@ object AckBlock {
                 x.compare(y)
         }
 
-        extension (self: Number) def increment: Number = Number(self + 1)
+        extension (self: Number)
+            def increment: Number = Number(self + 1)
+            def decrement: Number = Number(self - 1)
     }
 
     // ===================================
@@ -134,6 +157,9 @@ object AckBlock {
         opaque type TxSignature = IArray[Byte]
 
         def apply(signature: IArray[Byte]): TxSignature = signature
+
+        def apply(witness: VKeyWitness): TxSignature =
+            IArray.from(witness.signature.bytes)
 
         given Conversion[TxSignature, IArray[Byte]] = identity
 
@@ -164,4 +190,20 @@ object AckBlock {
         extension (signature: HeaderSignature) def untagged: IArray[Byte] = identity(signature)
 
     type HeaderSignature = HeaderSignature.HeaderSignature
+
+    // ===================================
+    // Ack sets
+    // ===================================
+
+    trait BlockAckSet:
+        def asList: List[AckBlock]
+
+    object BlockAckSet:
+        case class Major(ack1: Major1, ack2: Major2) extends BlockAckSet {
+            override def asList: List[AckBlock] = List(ack1, ack2)
+        }
+        case class Final(ack1: Final1, ack2: Final2) extends BlockAckSet {
+            override def asList: List[AckBlock] = List(ack1, ack2)
+        }
+
 }

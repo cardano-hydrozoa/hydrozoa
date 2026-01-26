@@ -19,11 +19,12 @@ import hydrozoa.{L1, L2, Utxo, UtxoSet, UtxoSetL1, UtxoSetL2, VerificationKeyByt
 import scala.concurrent.duration.FiniteDuration
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart}
+import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
+import scalus.cardano.ledger.{CardanoInfo, PlutusScriptEvaluator}
 import scalus.cardano.txbuilder.SomeBuildError
 
 case class LiquidationActor(
     utxosToWithdraw: UtxoSetL2,
-    receiveTimeout: FiniteDuration,
     cardanoBackend: CardanoBackend[IO],
     /** The PKH of the wallet that will pay for withdrawal TX fees and receive the change NOTE: The
       * is no coin selection algorithm right now. This means that:
@@ -32,12 +33,9 @@ case class LiquidationActor(
       *   - All ADA left-overs will be sent back to this address. Do NOT use this address for
       *     anything else. Do NOT set the delegation part for this address
       */
-    withdrawalFeePkh: VerificationKeyBytes,
-    config: Tx.Builder.Config,
-    headMultisigScript: HeadMultisigScript,
-    tokenNames: TokenNames
+    config: LiquidationActor.Config,
 ) extends Actor[IO, LiquidationActor.Requests.Request] {
-    override def preStart: IO[Unit] = context.setReceiveTimeout(receiveTimeout, ())
+    override def preStart: IO[Unit] = context.setReceiveTimeout(config.receiveTimeout, ())
 
     override def receive: Receive[IO, Requests.Request] = { case _: Requests.HandleLiquidation =>
         handleLiquidation
@@ -61,8 +59,8 @@ case class LiquidationActor(
             for {
                 unparsedTreasuryUtxos <- EitherT(
                   cardanoBackend.utxosAt(
-                    address = RuleBasedTreasuryScript.address(config.env.network),
-                    asset = (headMultisigScript.policyId, tokenNames.headTokenName)
+                    address = RuleBasedTreasuryScript.address(config.cardanoInfo.network),
+                    asset = (config.headMultisigScript.policyId, config.tokenNames.headTokenName)
                   )
                 )
                 treasuryUtxoAndDatum <- LiquidationActor.parseRBTreasury(unparsedTreasuryUtxos)
@@ -75,8 +73,8 @@ case class LiquidationActor(
                     )
 
                 walletAddress = ShelleyAddress(
-                  network = config.env.network,
-                  payment = Key(withdrawalFeePkh.verKeyHash),
+                  network = config.cardanoInfo.network,
+                  payment = Key(config.withdrawalFeePkh.verKeyHash),
                   delegation = ShelleyDelegationPart.Null
                 )
                 feeUtxos <- EitherT(
@@ -89,10 +87,10 @@ case class LiquidationActor(
                   treasuryUtxo = treasuryUtxoAndDatum._1,
                   withdrawals = UtxoSet[L2](utxosNotWithdrawn),
                   membershipProof = IArray.from(membershipProof.bytes),
-                  network = config.env.network,
-                  protocolParams = config.env.protocolParams,
+                  network = config.cardanoInfo.network,
+                  protocolParams = config.cardanoInfo.protocolParams,
                   evaluator = config.evaluator,
-                  validators = config.validators,
+                  validators = Tx.Validators.nonSigningNonValidityChecksValidators,
                   changeAddress = walletAddress,
                   feeUtxos = feeUtxos
                 )
@@ -110,6 +108,17 @@ case class LiquidationActor(
 }
 
 object LiquidationActor {
+    case class Config(
+        withdrawalFeePkh: VerificationKeyBytes,
+        receiveTimeout: FiniteDuration,
+        headMultisigScript: HeadMultisigScript,
+        tokenNames: TokenNames,
+        cardanoInfo: CardanoInfo
+    ) {
+        def evaluator: PlutusScriptEvaluator =
+            PlutusScriptEvaluator(cardanoInfo, EvaluateAndComputeCost)
+    }
+
     type Handle = ActorRef[IO, Requests.Request]
 
     object Requests {

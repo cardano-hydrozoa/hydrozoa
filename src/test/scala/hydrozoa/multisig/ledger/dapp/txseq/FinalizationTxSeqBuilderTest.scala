@@ -23,6 +23,7 @@ class FinalizationTxSeqBuilderTest extends AnyFunSuite with ScalaCheckPropertyCh
         }
     }
 
+    // See: https://github.com/cardano-hydrozoa/hydrozoa/pull/274
     ignore("Observe finalization tx seq") {
         val gen = genStandaloneFinalizationTxSeqBuilder()
 
@@ -60,7 +61,7 @@ class FinalizationTxSeqBuilderTest extends AnyFunSuite with ScalaCheckPropertyCh
 
                         val signedTxs: Vector[Transaction] =
                             peers.foldLeft(unsignedTxsAndUtxos._1)((txsToSign, peer) =>
-                                txsToSign.map(tx => signTx(peer, tx))
+                                txsToSign.map(tx => peer.signTx(tx))
                             )
 
                         observeTxChain(signedTxs)(

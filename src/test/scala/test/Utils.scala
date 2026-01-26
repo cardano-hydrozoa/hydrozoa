@@ -1,11 +1,10 @@
 package test
 import hydrozoa.multisig.ledger.VirtualLedgerM
+import hydrozoa.multisig.ledger.dapp.tx.TxTiming
 import scala.language.postfixOps
 import scalus.cardano.address.Network
 import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.rules.*
-import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
 import scalus.uplc.eval.ExBudget
 import test.TestPeer.Alice
@@ -23,8 +22,8 @@ val testNetwork: Network = Mainnet
 val testProtocolParams: ProtocolParams = blockfrost544Params
 
 def slotConfig(network: Network): SlotConfig = network match {
-    case Network.Testnet  => SlotConfig.Preprod
-    case Network.Mainnet  => SlotConfig.Mainnet
+    case Network.Testnet  => SlotConfig.preprod
+    case Network.Mainnet  => SlotConfig.mainnet
     case Network.Other(v) => throw RuntimeException("This network is not supported in tests")
 }
 
@@ -37,38 +36,17 @@ val evaluator = PlutusScriptEvaluator(
 
 val testEvaluator: PlutusScriptEvaluator = evaluator
 
-val nonSigningValidators: Seq[Validator] =
-    // These validators are all the ones from the CardanoMutator that could be checked on an unsigned transaction
-    List(
-      EmptyInputsValidator,
-      InputsAndReferenceInputsDisjointValidator,
-      AllInputsMustBeInUtxoValidator,
-      ValueNotConservedUTxOValidator,
-      // VerifiedSignaturesInWitnessesValidator,
-      // MissingKeyHashesValidator
-      MissingOrExtraScriptHashesValidator,
-      TransactionSizeValidator,
-      FeesOkValidator,
-      OutputsHaveNotEnoughCoinsValidator,
-      OutputsHaveTooBigValueStorageSizeValidator,
-      OutsideValidityIntervalValidator,
-      OutsideForecastValidator
-    )
-
-val nonSigningNonValidityChecksValidators: Seq[Validator] = nonSigningValidators
-    .filterNot(_.isInstanceOf[OutsideValidityIntervalValidator.type])
-
-val testTxBuilderEnvironment: CardanoInfo = CardanoInfo(
+val testTxBuilderCardanoInfo: CardanoInfo = CardanoInfo(
   protocolParams = testProtocolParams,
   slotConfig = slotConfig(testNetwork),
   network = testNetwork
 )
 
-def testVirtualLedgerConfig(slot: SlotNo): VirtualLedgerM.Config = VirtualLedgerM.Config(
-  slotConfig = testTxBuilderEnvironment.slotConfig,
-  protocolParams = testTxBuilderEnvironment.protocolParams,
-  network = testNetwork
-)
+val testTxTiming: TxTiming =
+    TxTiming.default(testTxBuilderCardanoInfo.slotConfig)
+
+def testVirtualLedgerConfig(slot: SlotNo): VirtualLedgerM.Config =
+    VirtualLedgerM.Config(testTxBuilderCardanoInfo)
 
 // Get the minAda for an Ada only pubkey utxo
 def minPubkeyAda(params: ProtocolParams = blockfrost544Params): Coin = {
@@ -82,6 +60,7 @@ def sumUtxoValues(utxos: Seq[Utxo]): Value =
     utxos.map(_._2.value).foldLeft(Value.zero)((acc: Value, v: Value) => acc + v)
 
 extension [E, A](e: Either[E, A])
+    // TODO: Remove this. We don't need this partiality in our lives.
     def get: A = e match {
         case Right(a) => a
     }

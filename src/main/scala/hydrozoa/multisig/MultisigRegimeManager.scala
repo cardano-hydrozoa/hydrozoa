@@ -4,35 +4,18 @@ import cats.*
 import cats.effect.{Deferred, IO}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
+import com.suprnation.actor.ActorRef.NoSendActorRef
 import com.suprnation.actor.SupervisorStrategy.Escalate
 import com.suprnation.actor.{OneForOneStrategy, SupervisionStrategy}
-import hydrozoa.multisig.MultisigRegimeManager.Config
+import hydrozoa.multisig.MultisigRegimeManager.*
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
+import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, InitializationTx}
-import hydrozoa.multisig.protocol.ConsensusProtocol
-import hydrozoa.multisig.protocol.ConsensusProtocol.Actors
-import hydrozoa.multisig.protocol.ManagerProtocol.Manager.*
 import hydrozoa.multisig.protocol.types.Peer
 import scala.concurrent.duration.DurationInt
 import scala.language.postfixOps
 import scalus.cardano.ledger.SlotConfig
-
-/** Multisig regime manager starts-up and monitors all the actors of the multisig regime.
-  */
-object MultisigRegimeManager {
-    final case class Config(
-        peerId: Peer.Number,
-        peers: List[Peer.Number],
-        cardanoBackend: CardanoBackend[IO],
-        initializationTx: InitializationTx,
-        fallbackTx: FallbackTx,
-        slotConfig: SlotConfig
-    )
-
-    def apply(config: Config): IO[MultisigRegimeManager] =
-        IO(new MultisigRegimeManager(config) {})
-}
 
 trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
 
@@ -47,90 +30,85 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
 
     override def preStart: IO[Unit] =
         for {
+            pendingConnections <- Deferred[IO, MultisigRegimeManager.Connections]
 
-            pendingBlockWeaver <- Deferred[IO, BlockWeaver.Handle]
-            pendingLocalPeerLiaisons <- Deferred[IO, List[ConsensusProtocol.PeerLiaison.Ref]]
-            pendingCardanoLiaison <- Deferred[IO, CardanoLiaison.Handle]
-            pendingEventSequencer <- Deferred[IO, ConsensusProtocol.EventSequencer.Ref]
-
-            blockWeaver <- {
-                import BlockWeaver.Config
+            blockWeaver <-
                 context.actorOf(
                   BlockWeaver(
-                    Config(
+                    BlockWeaver.Config(
                       lastKnownBlock = ???,
                       peerId = config.peerId,
-                      numberOfPeers = ???,
-                      blockLeadTurn = ???,
                       recoveredMempool = BlockWeaver.Mempool.empty,
-                      jointLedger = ???,
                       slotConfig = ???
-                    )
+                    ),
+                    pendingConnections
                   )
                 )
-            }
 
-            localPeerLiaisonsPendingRemoteActors <- {
-                import PeerLiaison.{Config, ConnectionsPending}
-                config.peers
-                    .filterNot(_ == config.peerId)
-                    .traverse(pid =>
-                        for {
-                            pendingRemotePeerLiaison <- Deferred[
-                              IO,
-                              ConsensusProtocol.PeerLiaison.Ref
-                            ]
-                            localPeerLiaison <- context.actorOf(
-                              PeerLiaison(
-                                Config(
-                                  peerId = config.peerId,
-                                  remotePeerId = pid
-                                ),
-                                ConnectionsPending(
-                                  blockWeaver = pendingBlockWeaver,
-                                  remotePeerLiaison = pendingRemotePeerLiaison
-                                )
-                              )
-                            )
-                        } yield (localPeerLiaison, pendingRemotePeerLiaison)
-                    )
-            }
-
-            localPeerLiaisons = localPeerLiaisonsPendingRemoteActors.map(_._1)
-
-            cardanoLiaison <- {
-                import CardanoLiaison.Config
+            cardanoLiaison <-
                 context.actorOf(
                   CardanoLiaison(
-                    Config(
+                    CardanoLiaison.Config(
                       cardanoBackend = config.cardanoBackend,
                       initializationTx = config.initializationTx,
                       initializationFallbackTx = config.fallbackTx,
                       receiveTimeout = 10.seconds,
-                      slotConfig = config.slotConfig,
-                      blockWeaver = blockWeaver
-                    )
+                      slotConfig = config.slotConfig
+                    ),
+                    pendingConnections
                   )
                 )
-            }
 
-            transactionSequencer <- {
-                import EventSequencer.{Config, ConnectionsPending}
-                context.actorOf(
-                  EventSequencer(
-                    Config(peerId = config.peerId),
-                    ConnectionsPending(
-                      blockWeaver = pendingBlockWeaver,
-                      peerLiaisons = pendingLocalPeerLiaisons
+            consensusActor <- context.actorOf(
+              ConsensusActor(
+                ConsensusActor.Config(
+                  peerId = ???,
+                  verificationKeys = ???,
+                  recoveredRequests = ???
+                ),
+                pendingConnections
+              )
+            )
+
+            eventSequencer <- context.actorOf(
+              EventSequencer(
+                EventSequencer.Config(peerId = config.peerId),
+                pendingConnections
+              )
+            )
+
+            // FIXME
+            jointLedger <- context.actorOf(???)
+
+            localPeerLiaisons <-
+                config.peers
+                    .filterNot(_ == config.peerId)
+                    .traverse(pid =>
+                        for {
+                            localPeerLiaison <- context.actorOf(
+                              PeerLiaison(
+                                PeerLiaison.Config(
+                                  ownPeerId = config.peerId,
+                                  remotePeerId = pid
+                                ),
+                                pendingConnections
+                              )
+                            )
+                        } yield localPeerLiaison
                     )
-                  )
-                )
-            }
 
-            _ <- pendingBlockWeaver.complete(blockWeaver)
-            _ <- pendingLocalPeerLiaisons.complete(localPeerLiaisons)
-            _ <- pendingCardanoLiaison.complete(cardanoLiaison)
-            _ <- pendingEventSequencer.complete(transactionSequencer)
+            _ <- pendingConnections.complete(
+              MultisigRegimeManager.Connections(
+                blockWeaver = blockWeaver,
+                cardanoLiaison = cardanoLiaison,
+                consensusActor = consensusActor,
+                eventSequencer = eventSequencer,
+                jointLedger = jointLedger,
+                peerLiaisons = localPeerLiaisons,
+                // FIXME:
+                remotePeerLiaisons = ???
+              )
+            )
 
             _ <- context.watch(blockWeaver, TerminatedChild(Actors.BlockWeaver, blockWeaver))
             _ <- localPeerLiaisons.traverse(r =>
@@ -141,11 +119,9 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
               TerminatedChild(Actors.CardanoLiaison, cardanoLiaison)
             )
             _ <- context.watch(
-              transactionSequencer,
-              TerminatedChild(Actors.EventSequencer, transactionSequencer)
+              eventSequencer,
+              TerminatedChild(Actors.EventSequencer, eventSequencer)
             )
-
-            // TODO: Store the deferred remote comm actor refs (cas._2) for later
         } yield ()
 
     override def receive: Receive[IO, Request] =
@@ -175,4 +151,51 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
             // TODO: Implement a way to receive a remote comm actor and connect it to its corresponding local comm actor
         }
 
+}
+
+/** Multisig regime manager starts-up and monitors all the actors of the multisig regime.
+  */
+object MultisigRegimeManager {
+    final case class Config(
+        peerId: Peer.Id,
+        peers: List[Peer.Id],
+        cardanoBackend: CardanoBackend[IO],
+        initializationTx: InitializationTx,
+        fallbackTx: FallbackTx,
+        slotConfig: SlotConfig
+    )
+
+    final case class Connections(
+        blockWeaver: BlockWeaver.Handle,
+        cardanoLiaison: CardanoLiaison.Handle,
+        consensusActor: ConsensusActor.Handle,
+        eventSequencer: EventSequencer.Handle,
+        jointLedger: JointLedger.Handle,
+        peerLiaisons: List[PeerLiaison.Handle],
+        remotePeerLiaisons: Map[Peer.Id, PeerLiaison.Handle],
+    )
+
+    type PendingConnections = Deferred[IO, Connections]
+
+    def apply(config: Config): IO[MultisigRegimeManager] =
+        IO(new MultisigRegimeManager(config) {})
+
+    /** Multisig regime's protocol for actor requests and responses. See diagram:
+      * [[https://app.excalidraw.com/s/9N3iw9j24UW/9eRJ7Dwu42X]]
+      */
+    enum Actors:
+        case BlockWeaver, CardanoLiaison, Consensus, JointLedger, PeerLiaison, EventSequencer
+
+    /** Requests received by the multisig regime manager. */
+    type Request = TerminatedChild | TerminatedDependency
+
+    type Children = Actors
+
+    enum Dependencies:
+        case CardanoBackend, Persistence
+
+    /** ==Multisig regime manager's messages== */
+    final case class TerminatedChild(childType: Actors, ref: NoSendActorRef[IO])
+
+    final case class TerminatedDependency(dependencyType: Dependencies, ref: NoSendActorRef[IO])
 }

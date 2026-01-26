@@ -2,7 +2,6 @@ package hydrozoa.rulebased.ledger.dapp.tx
 
 import cats.implicits.*
 import hydrozoa.*
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.protocol.types.AckBlock.HeaderSignature
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{DisputeRedeemer, OnchainBlockHeader, VoteRedeemer}
@@ -38,7 +37,6 @@ object VoteTx {
         collateralUtxo: Utxo[L1],
         blockHeader: OnchainBlockHeader,
         signatures: List[HeaderSignature],
-        validityEnd: QuantizedInstant,
         network: Network,
         protocolParams: ProtocolParams,
         evaluator: PlutusScriptEvaluator,
@@ -138,8 +136,7 @@ object VoteTx {
                       )
                     ),
                     ReferenceOutput(SUtxo(recipe.treasuryUtxo.asTuple)),
-                    AddCollateral(recipe.collateralUtxo.toScalus),
-                    ValidityEndSlot(recipe.validityEnd.toSlot.slot)
+                    AddCollateral(recipe.collateralUtxo.toScalus)
                   )
                 )
 
@@ -148,10 +145,7 @@ object VoteTx {
             finalized <- context
                 .finalizeContext(
                   protocolParams = recipe.protocolParams,
-                  diffHandler = new ChangeOutputDiffHandler(
-                    recipe.protocolParams,
-                    0
-                  ).changeOutputDiffHandler,
+                  diffHandler = Change.changeOutputDiffHandler(_, _, recipe.protocolParams, 0),
                   evaluator = recipe.evaluator,
                   validators = recipe.validators
                 )
@@ -162,7 +156,7 @@ object VoteTx {
             Utxo[L1](
               UtxoId[L1](finalized.transaction.id, 0), // Vote output is at index 0
               Output[L1](
-                finalized.transaction.body.value.outputs(0).value.asInstanceOf[Babbage]
+                finalized.transaction.body.value.outputs(0).value
               ) // The updated vote output
             )
           ),

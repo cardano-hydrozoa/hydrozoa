@@ -14,7 +14,6 @@ import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.{KzgCommitment,
 import hydrozoa.{emptyContext, given}
 import io.bullet.borer.Cbor
 import monocle.syntax.all.*
-import scalus.cardano.address.Network
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.rules.{Context, State as ScalusState, UtxoEnv}
 
@@ -133,9 +132,7 @@ object VirtualLedgerM {
     sealed trait Error
 
     final case class Config(
-        slotConfig: SlotConfig = SlotConfig.Mainnet,
-        protocolParams: ProtocolParams,
-        network: Network
+        cardanoInfo: CardanoInfo
     ) {
 
         /** Turn into an L1 context with zero fee and an empty CertState
@@ -144,7 +141,12 @@ object VirtualLedgerM {
           */
         def toL1Context(time: QuantizedInstant, slotConfig: SlotConfig): Context = Context(
           fee = Coin(0),
-          env = UtxoEnv(time.toSlot.slot, protocolParams, CertState.empty, network),
+          env = UtxoEnv(
+            time.toSlot.slot,
+            cardanoInfo.protocolParams,
+            CertState.empty,
+            cardanoInfo.network
+          ),
           slotConfig = slotConfig
         )
     }
@@ -158,18 +160,14 @@ object VirtualLedgerM {
     object Config:
         val empty: Config = Config.fromL1Context(emptyContext)
 
-        def fromTxBuilderConfig(txbc: Tx.Builder.Config): Config = Config(
-          slotConfig = txbc.env.slotConfig,
-          protocolParams = txbc.env.protocolParams,
-          network = txbc.env.network
-        )
-
         /** Project an L1 context into an L2 context
           */
         private def fromL1Context(l1Context: Context): Config = Config(
-          slotConfig = l1Context.slotConfig,
-          protocolParams = l1Context.env.params,
-          network = l1Context.env.network
+          CardanoInfo(
+            slotConfig = l1Context.slotConfig,
+            protocolParams = l1Context.env.params,
+            network = l1Context.env.network
+          )
         )
 
     object State {
@@ -210,11 +208,14 @@ object VirtualLedgerM {
                 // FIXME: Type the exception better
                 throw new RuntimeException(s"Error running VirtualLedgerM: $e"),
             onSuccess: A => IO[B] = IO.pure[B]
-        ): IO[B] =
+        ): IO[B] = {
+            val virtualLedgerMConfig: VirtualLedgerM.Config = VirtualLedgerM.Config(
+              jl.config.cardanoInfo
+            )
             for {
                 oldState <- jl.state.get
                 res = action.run(
-                  VirtualLedgerM.Config.fromTxBuilderConfig(jl.config),
+                  virtualLedgerMConfig,
                   oldState.virtualLedgerState
                 )
                 b <- res match {
@@ -231,5 +232,6 @@ object VirtualLedgerM {
                         } yield b
                 }
             } yield b
+        }
     }
 }

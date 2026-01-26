@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.utxo
 
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
+import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.asByteString
 import hydrozoa.multisig.protocol.types.Block
 import scala.util.Try
 import scalus.*
@@ -70,7 +71,7 @@ object MultisigTreasuryUtxo {
     // TODO: implement root hash
     def mkInitMultisigTreasuryDatum: Datum =
         Datum(
-          ByteString.fromArray(IArray.genericWrapArray(KzgCommitment.empty).toArray),
+          KzgCommitment.empty.asByteString,
           BigInt(Block.Version.Major(0).toLong),
           ByteString.empty
         )

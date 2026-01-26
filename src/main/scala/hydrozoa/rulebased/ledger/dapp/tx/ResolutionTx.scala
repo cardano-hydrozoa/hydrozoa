@@ -18,7 +18,7 @@ import scalus.cardano.ledger.{Utxo as _, *}
 import scalus.cardano.txbuilder.Datum.DatumInlined
 import scalus.cardano.txbuilder.ScriptSource.PlutusScriptValue
 import scalus.cardano.txbuilder.TransactionBuilderStep.{AddCollateral, Send, Spend}
-import scalus.cardano.txbuilder.{ChangeOutputDiffHandler, SomeBuildError, ThreeArgumentPlutusScriptWitness, TransactionBuilder}
+import scalus.cardano.txbuilder.{Change, SomeBuildError, ThreeArgumentPlutusScriptWitness, TransactionBuilder}
 
 final case class ResolutionTx(
     talliedVoteUtxo: TallyVoteUtxo,
@@ -163,10 +163,7 @@ object ResolutionTx {
             finalized <- context
                 .finalizeContext(
                   protocolParams = recipe.protocolParams,
-                  diffHandler = new ChangeOutputDiffHandler(
-                    recipe.protocolParams,
-                    0
-                  ).changeOutputDiffHandler,
+                  diffHandler = Change.changeOutputDiffHandler(_, _, recipe.protocolParams, 0),
                   evaluator = recipe.evaluator,
                   validators = recipe.validators
                 )

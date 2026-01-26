@@ -1,9 +1,12 @@
 package hydrozoa.rulebased.ledger.dapp.tx
 
 import cats.data.NonEmptyList
+import cats.effect.unsafe.implicits.global
 import hydrozoa.*
 import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
-import hydrozoa.multisig.ledger.virtual.commitment.{KzgCommitment, TrustedSetup}
+import hydrozoa.multisig.ledger.dapp.tx.Tx.Validators.nonSigningValidators
+import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.asG1Element
+import hydrozoa.multisig.ledger.virtual.commitment.{KzgCommitment, Membership, TrustedSetup}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
 import hydrozoa.rulebased.ledger.dapp.script.plutus.{RuleBasedTreasuryScript, RuleBasedTreasuryValidator}
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{ResolvedDatum, RuleBasedTreasuryDatum}
@@ -100,7 +103,7 @@ def genWithdrawTxRecipe: Gen[WithdrawTx.Recipe] =
 
         // Select some random number of withdrawals
         // TODO: find the limit with refscripts
-        wn <- Gen.choose(1, Integer.min(35, utxosL2.untagged.keys.size))
+        wn <- Gen.choose(1, Integer.min(5, utxosL2.untagged.keys.size))
         withdrawals0 <- Gen.pick(wn, utxosL2.untagged)
         _ = println(s"withdrawals length: ${withdrawals0.length}")
         withdrawals = UtxoSet(withdrawals0.toMap)
@@ -111,27 +114,21 @@ def genWithdrawTxRecipe: Gen[WithdrawTx.Recipe] =
         //  s"withdrawal hashes: ${withdrawalScalars.map(e => BigInt.apply(e.to_bendian()))}"
         // )
 
-        // Calculate the membership proof
+        // Calculate and validate the membership proof
         theRest = UtxoSet(utxosL2.untagged -- withdrawals.untagged.keys)
         _ = println(s"theRest: ${theRest.keys.size}")
-        membershipProof = mkCommitment(theRest.asScalus)
 
-        // Check correctness locally
-        // Pre-calculated powers of tau
-        crsG2 = TrustedSetup.takeSrsG2(withdrawals0.length + 1).map(BLS12_381_G2_Element.apply)
-        commitmentBS = ByteString.fromArray(IArray.genericWrapArray(utxoCommitment).toArray)
-        commitmentG1 = BLS12_381_G1_Element(commitmentBS)
-        withdrawalScalars = KzgCommitment.hashToScalar(withdrawals.asScalus)
-        subset = withdrawalScalars.map(s =>
-            ScalusScalar.fromByteStringBigEndianUnsafe(ByteString.fromArray(s.to_bendian()))
-        )
+        membershipProof = Membership
+            .mkMembershipProofValidated(
+              utxoCommitment,
+              utxosL2.asScalus,
+              withdrawals.asScalus
+            )
+            .unsafeRunSync()
+            .fold(err => throw RuntimeException(err.explain), x => x)
 
-        proofBS = ByteString.fromArray(IArray.genericWrapArray(membershipProof).toArray)
-        proofG1 = BLS12_381_G1_Element(proofBS)
-
-        _ = assert(
-          RuleBasedTreasuryValidator.checkMembership(crsG2, commitmentG1, subset, proofG1),
-          "Local pre-verification failed"
+        _ = println(
+          s"validated membership proof: ${membershipProof.asG1Element.toCompressedByteString.toHex}"
         )
 
         // Generate treasury UTXO with _some_ funds

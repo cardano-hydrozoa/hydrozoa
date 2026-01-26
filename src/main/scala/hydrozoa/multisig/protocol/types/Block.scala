@@ -1,8 +1,6 @@
 package hydrozoa.multisig.protocol.types
 
-import cats.effect.IO
 import cats.syntax.all.*
-import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.LedgerEventId.ValidityFlag
@@ -45,11 +43,15 @@ enum Block {
 }
 
 object Block {
-    type Subscriber = ActorRef[IO, Block.Next]
-
     type Next = Block.Minor | Block.Major | Block.Final
 
     extension (next: Next)
+
+        def header: Block.Header = next match {
+            case b: Block.Minor => b.header
+            case b: Block.Major => b.header
+            case b: Block.Final => b.header
+        }
 
         def blockNum: Block.Number = next match {
             case b: Block.Minor => b.id
@@ -73,7 +75,6 @@ object Block {
 
     enum Header(val blockType: Type) extends HeaderFields.Mandatory {
         case Initial(
-            // TODO: this seems to be the same as `initializedOn`
             override val timeCreation: QuantizedInstant,
             override val commitment: KzgCommitment
         ) extends Header(Type.Initial), HeaderFields.InitialHeaderFields, HeaderFields.Commitment
@@ -200,17 +201,7 @@ object Block {
         }
     }
 
-    // NOTE: (Peter, 2025-12-09) George has some comments on these in his Deposit/Refund branch.
-    // In addition to those, we should also note that ledgerEventsRequired should contain an entry for _every_ peer,
-    // regardless of if the peer submitted any _new_ events in this block; if there's no new events for a given peer,
-    // the ledgerEventsRequired entry should match that of the previous block.
-    //
-    // But one block "property" is that every valid block should have `ledgerEventsRequired` entries that are
-    // equal to the greatest entry in any of the List fields, if such an entry exists, and equal to the entry in the
-    // previous block otherwise.
-    enum Body {
-        case Initial extends Body
-
+    enum Body extends BodyFields.Events {
         case Minor(
             override val events: List[(LedgerEventId, ValidityFlag)],
             override val depositsRefunded: List[LedgerEventId]

@@ -31,6 +31,7 @@ object SettlementTxSeqBuilderTest extends Properties("SettlementTxSeq") {
       "Observe settlement tx seq",
       None
     ) = {
+
         val gen = genSettlementTxSeqBuilder()
         val props = mutable.Buffer.empty[Prop]
 
@@ -63,7 +64,7 @@ object SettlementTxSeqBuilderTest extends Properties("SettlementTxSeq") {
 
                         val signedTxs: Vector[Transaction] =
                             peers.foldLeft(unsignedTxsAndUtxos._1)((txsToSign, peer) =>
-                                txsToSign.map(tx => signTx(peer, tx))
+                                txsToSign.map(tx => peer.signTx(tx))
                             )
 
                         val res = observeTxChain(signedTxs)(

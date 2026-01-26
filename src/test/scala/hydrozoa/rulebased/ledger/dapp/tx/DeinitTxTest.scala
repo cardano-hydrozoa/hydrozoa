@@ -4,6 +4,7 @@ import cats.data.NonEmptyList
 import hydrozoa.*
 import hydrozoa.config.{CollectiveContingency, EquityShares, IndividualContingency}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
+import hydrozoa.multisig.ledger.dapp.tx.Tx.Validators.nonSigningValidators
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.cip67DisputeTokenPrefix
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
 import hydrozoa.rulebased.ledger.dapp.script.plutus.{RuleBasedTreasuryScript, RuleBasedTreasuryValidator}
@@ -155,7 +156,7 @@ def genSimpleDeinitTxRecipe: Gen[Recipe] =
           shares = shares,
           collateralUtxo = collateralUtxo,
           evaluator = testEvaluator,
-          env = testTxBuilderEnvironment,
+          env = testTxBuilderCardanoInfo,
           validators = nonSigningValidators
         )
     }
