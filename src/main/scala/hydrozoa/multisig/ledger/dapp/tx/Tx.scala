@@ -3,10 +3,11 @@ package hydrozoa.multisig.ledger.dapp.tx
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import monocle.Lens
 import scala.Function.const
-import scalus.cardano.ledger.Transaction
+import scalus.builtin.ByteString
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.rules.{AllInputsMustBeInUtxoValidator, EmptyInputsValidator, FeesOkValidator, InputsAndReferenceInputsDisjointValidator, MissingOrExtraScriptHashesValidator, OutputsHaveNotEnoughCoinsValidator, OutputsHaveTooBigValueStorageSizeValidator, OutsideForecastValidator, OutsideValidityIntervalValidator, TransactionSizeValidator, ValueNotConservedUTxOValidator}
+import scalus.cardano.ledger.{Transaction, VKeyWitness}
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.{SomeBuildError, TransactionBuilder}
 import sourcecode.*
@@ -144,6 +145,24 @@ object Tx {
             }
         }
     }
+
+    type Signature = Signature.Signature
+
+    object Signature:
+        opaque type Signature = IArray[Byte]
+
+        def apply(signature: IArray[Byte]): Signature = signature
+
+        def apply(witness: VKeyWitness): Signature =
+            IArray.from(witness.signature.bytes)
+
+        given Conversion[Signature, IArray[Byte]] = identity
+
+        given Conversion[Signature, Array[Byte]] = sig => IArray.genericWrapArray(sig).toArray
+
+        given Conversion[Signature, ByteString] = sig => ByteString.fromArray(sig)
+
+        extension (signature: Signature) def untagged: IArray[Byte] = identity(signature)
 }
 
 trait HasResolvedUtxos {
