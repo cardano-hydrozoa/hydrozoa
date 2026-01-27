@@ -54,8 +54,8 @@ import test.TestM.*
   *
   *   - A [[JLTest]] type alias over [[TestM]], to cut down on type signature noise
   *   - A [[TestR]] environment, specific to the joint ledger tests
-  *   - A [[defaultInitializer]] that initializers the TestR environment under which the joint leder
-  *     tests run
+  *   - A [[defaultInitializer]] that initializers the TestR environment under which the joint
+  *     ledger tests run
   *   - A [[Requests]] object that "thinly" lifts [[IO]] actor requests into [[JLTest]], which
   *     simplifies writing monadic code. "Thinly" here means that the defined functions don't
   *     _morally_ add additional effects.
