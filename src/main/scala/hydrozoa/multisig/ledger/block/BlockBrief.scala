@@ -1,6 +1,11 @@
 package hydrozoa.multisig.ledger.block
 
-sealed trait BlockBrief extends BlockBrief.Section
+sealed trait BlockBrief extends BlockBrief.Section {
+    def asUnsigned: this.type & BlockStatus.Unsigned =
+        this.asInstanceOf[this.type & BlockStatus.Unsigned]
+    def asMultiSigned: this.type & BlockStatus.MultiSigned =
+        this.asInstanceOf[this.type & BlockStatus.MultiSigned]
+}
 
 object BlockBrief {
     final case class Initial(
@@ -59,4 +64,10 @@ object BlockBrief {
         override transparent inline def depositsRefunded: List[LedgerEventId] =
             body.depositsRefunded
     }
+
+    object Section {
+        type Next = Section & BlockType.Next
+        type Intermediate = Section & BlockType.Intermediate
+    }
+
 }

@@ -5,7 +5,7 @@ import hydrozoa.multisig.ledger.dapp.tx.{DeinitTx, FallbackTx, FinalizationTx, I
 sealed trait BlockEffects extends BlockEffects.Section
 
 object BlockEffects {
-    sealed trait Unsigned extends BlockEffects
+    sealed trait Unsigned extends BlockEffects, BlockStatus.Unsigned
 
     object Unsigned {
         final case class Initial(
@@ -51,7 +51,7 @@ object BlockEffects {
         type Intermediate = BlockEffects.Unsigned & BlockType.Intermediate
     }
 
-    sealed trait MultiSigned extends BlockEffects
+    sealed trait MultiSigned extends BlockEffects, BlockStatus.MultiSigned
 
     object MultiSigned {
         final case class Initial(
@@ -114,9 +114,16 @@ object BlockEffects {
         }
     }
 
-    trait Section {
+    object Fields {
+        trait HasPostDatedRefundTxs {
+            def postDatedRefundTxs: List[RefundTx.PostDated]
+        }
+    }
+
+    import Fields.*
+
+    trait Section extends HasPostDatedRefundTxs {
         def effects: BlockEffects
-        def postDatedRefundTxs: List[RefundTx.PostDated]
     }
 
     object Initial {

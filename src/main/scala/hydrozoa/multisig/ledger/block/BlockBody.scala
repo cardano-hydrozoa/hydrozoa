@@ -5,7 +5,12 @@ import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.LedgerEventId
 import hydrozoa.multisig.protocol.types.LedgerEventId.ValidityFlag
 
-trait BlockBody extends BlockBody.Section
+trait BlockBody extends BlockBody.Section {
+    def asUnsigned: this.type & BlockStatus.Unsigned =
+        this.asInstanceOf[this.type & BlockStatus.Unsigned]
+    def asMultiSigned: this.type & BlockStatus.MultiSigned =
+        this.asInstanceOf[this.type & BlockStatus.MultiSigned]
+}
 
 object BlockBody {
     case object Initial extends BlockBody, BlockType.Initial {

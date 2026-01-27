@@ -18,13 +18,13 @@ import scalus.builtin.{ByteString, platform}
 import scalus.cardano.ledger.{TransactionHash, VKeyWitness}
 
 /** Round one own acks, which must be scheduled immediately upon receiving. There is no way to
-  * separate own akcs from others' acks at the type level, but this alias is those alias is used
+  * separate own acks from others' acks at the type level, but this alias is those alias is used
   * only for own acks that come from the joint ledger.
   */
 type RoundOneOwnAck = AckBlock.Minor | AckBlock.Major1 | AckBlock.Final1
 
-/** Round two akcs, which should be scheduled for announcing when the cell switches to round two.
-  * There is no way to separate own akcs from others' acks at the type level, but those alias is
+/** Round two acks, which should be scheduled for announcing when the cell switches to round two.
+  * There is no way to separate own acks from others' acks at the type level, but those alias is
   * used only for own acks that come from the joint ledger.
   */
 type RoundTwoOwnAck = AckBlock.Major2 | AckBlock.Final2
@@ -45,7 +45,7 @@ sealed trait ConsensusCell[+T]():
     type BlockType <: Block.Unsigned | Void
 
     /** Types of the acks the cell can handle, both round one and round two. The reason we need to
-      * have both is that round two akcs from some peers can come when the cell is still in the
+      * have both is that round two acks from some peers can come when the cell is still in the
       * round one.
       */
     type AckType <: AckBlock
@@ -59,7 +59,7 @@ sealed trait ConsensusCell[+T]():
     type RoundTwoOwnAckType <: RoundTwoOwnAck | Void
 
     /** Type of the final result */
-    type ResultType
+    type ResultType <: Block.MultiSigned.Next | Void
 
     /** Every cell corresponds to a particular block.
       */
@@ -87,6 +87,11 @@ sealed trait ConsensusCell[+T]():
       */
     def complete
         : IO[Either[(RoundTwoType, RoundTwoOwnAckType), (ResultType, Option[RoundOneOwnAck])]]
+
+object ConsensusCell {
+    sealed trait RoundOne[+T] extends ConsensusCell[T]
+    sealed trait RoundTwo[+T] extends ConsensusCell[T]
+}
 
 /** Trait for consensus cells that support postponing acks for the next block. This is applicable to
   * Minor blocks and Major blocks, but not Final blocks.
@@ -395,95 +400,6 @@ class ConsensusActor(
     } yield ()
 
     // ===================================
-    // Actor's internal results - confirmed blocks
-    // ===================================
-    sealed trait BlockConfirmed {
-        def blockBrief: BlockBrief.Next
-
-        def effects: BlockEffects.MultiSigned.Next
-
-        val finalizationRequested: Boolean
-
-        final lazy val blockNum: BlockNumber = blockBrief.blockNum
-
-        final lazy val toBlockWeaver: BlockWeaver.BlockConfirmed =
-            BlockWeaver.BlockConfirmed(
-              blockNumber = blockNum,
-              finalizationRequested = finalizationRequested
-            )
-
-        final lazy val mbToCardanoLiaison
-            : Option[CardanoLiaison.MajorBlockConfirmed | CardanoLiaison.FinalBlockConfirmed] =
-            this match {
-                case BlockConfirmed.Major(
-                      _,
-                      BlockEffects.MultiSigned.Major(
-                        settlementTx,
-                        rolloutsTxs,
-                        fallbackTx,
-                        postDatedRefundTxs,
-                      ),
-                      _
-                    ) =>
-                    Some(
-                      CardanoLiaison.MajorBlockConfirmed(
-                        blockNum = blockNum,
-                        settlementTx = settlementTx,
-                        rolloutTxs = rolloutsTxs,
-                        fallbackTx = fallbackTx
-                      )
-                    )
-                case BlockConfirmed.Final(
-                      _,
-                      BlockEffects.MultiSigned.Final(
-                        finalizationTx,
-                        rolloutTxs,
-                        deinitTx,
-                      ),
-                      _
-                    ) =>
-                    Some(
-                      CardanoLiaison.FinalBlockConfirmed(
-                        blockNum = blockNum,
-                        finalizationTx = finalizationTx,
-                        rolloutTxs = rolloutTxs,
-                        deinitTx = deinitTx
-                      )
-                    )
-                case _ => None
-            }
-
-        final lazy val toEventSequencer: EventSequencer.Request.BlockConfirmed =
-            EventSequencer.Request.BlockConfirmed(
-              blockBrief = this.blockBrief,
-              mbPostDatedRefundsSigned = this.effects.postDatedRefundTxs
-            )
-
-        final lazy val toPeerLiaison: PeerLiaison.Request.BlockConfirmed =
-            PeerLiaison.Request.BlockConfirmed(this.blockBrief)
-    }
-
-    object BlockConfirmed:
-
-        final case class Minor(
-            override val blockBrief: BlockBrief.Minor,
-            override val effects: BlockEffects.MultiSigned.Minor,
-            override val finalizationRequested: Boolean
-        ) extends BlockConfirmed
-
-        final case class Major(
-            override val blockBrief: BlockBrief.Major,
-            override val effects: BlockEffects.MultiSigned.Major,
-            override val finalizationRequested: Boolean
-        ) extends BlockConfirmed
-
-        final case class Final(
-            override val blockBrief: BlockBrief.Final,
-            override val effects: BlockEffects.MultiSigned.Final,
-            override val finalizationRequested: Boolean = false
-        ) extends BlockConfirmed
-
-    // ===================================
     // State extension methods
     // ===================================
 
@@ -527,7 +443,7 @@ class ConsensusActor(
                                 case Right(result, mbAck) =>
                                     // This cast is sound since the only alternative is Void
                                     completeCell(
-                                      result.asInstanceOf[BlockConfirmed],
+                                      result.asInstanceOf[Block.MultiSigned.Next],
                                       mbAck
                                     )
                             }
@@ -664,16 +580,20 @@ class ConsensusActor(
             stateRef.set(state.copy(cells = state.cells.updated(cell.blockNum, cell)))
 
         private def completeCell(
-            blockConfirmed: BlockConfirmed,
+            blockConfirmed: Block.MultiSigned.Next,
             mbAck: Option[AckBlock]
         ): IO[Unit] = {
             for {
                 conn <- getConnections
                 // Handle the confirmed block
-                _ <- conn.blockWeaver ! blockConfirmed.toBlockWeaver
-                _ <- IO.traverse_(blockConfirmed.mbToCardanoLiaison)(conn.cardanoLiaison ! _)
-                _ <- conn.eventSequencer ! blockConfirmed.toEventSequencer
-                _ <- (conn.peerLiaisons ! blockConfirmed.toPeerLiaison).parallel
+                _ <- conn.blockWeaver ! blockConfirmed
+                _ <- blockConfirmed match {
+                    case x: (Block.MultiSigned.Major | Block.MultiSigned.Final) =>
+                        conn.cardanoLiaison ! x
+                    case _ => IO.unit
+                }
+                _ <- conn.eventSequencer ! blockConfirmed
+                _ <- (conn.peerLiaisons ! blockConfirmed).parallel
                 // Announce the ack if present
                 _ <- mbAck.traverse_(announceAck)
                 // Remove the cell
@@ -767,7 +687,7 @@ class ConsensusActor(
             override type AckType = AckBlock.Minor
             override type RoundTwoType = Void
             override type RoundTwoOwnAckType = Void
-            override type ResultType = BlockConfirmed.Minor
+            override type ResultType = Block.MultiSigned.Minor
 
             override protected def withPostponedAck(ack: RoundOneOwnAck): MinorConsensusCell =
                 copy(postponedNextBlockOwnAck = Some(ack))
@@ -809,7 +729,7 @@ class ConsensusActor(
                 block.isDefined && acks.keys == config.verificationKeys.values
 
             override def complete
-                : IO[Either[(Void, Void), (BlockConfirmed.Minor, Option[RoundOneOwnAck])]] = {
+                : IO[Either[(Void, Void), (Block.MultiSigned.Minor, Option[RoundOneOwnAck])]] = {
 
                 def validateHeaderSignature(
                     msg: BlockHeader.Minor.Onchain.Serialized
@@ -845,7 +765,7 @@ class ConsensusActor(
                     finalizationRequested = acks.values
                         .foldLeft(false)(_ || _.finalizationRequested)
                 } yield Right(
-                  BlockConfirmed.Minor(
+                  Block.MultiSigned.Minor(
                     blockBrief = blockBrief,
                     effects = BlockEffects.MultiSigned.Minor(
                       headerSerialized = blockBrief.header.onchainMsg,
@@ -999,7 +919,7 @@ class ConsensusActor(
             override type AckType = AckBlock.Major2
             override type RoundTwoType = Void
             override type RoundTwoOwnAckType = Void
-            override type ResultType = BlockConfirmed.Major
+            override type ResultType = Block.MultiSigned.Major
 
             override protected def withPostponedAck(ack: RoundOneOwnAck): MajorRoundTwoCell =
                 copy(postponedNextBlockOwnAck = Some(ack))
@@ -1029,7 +949,7 @@ class ConsensusActor(
                 this.acks2.keySet == config.verificationKeys.values.toSet
 
             override def complete
-                : IO[Either[(Void, Void), (BlockConfirmed.Major, Option[RoundOneOwnAck])]] =
+                : IO[Either[(Void, Void), (Block.MultiSigned.Major, Option[RoundOneOwnAck])]] =
                 for {
 
                     // 1.Fallback
@@ -1073,7 +993,7 @@ class ConsensusActor(
                         .foldLeft(false)(_ || _.finalizationRequested)
 
                 } yield Right(
-                  BlockConfirmed.Major(
+                  Block.MultiSigned.Major(
                     blockBrief = block.blockBrief,
                     effects = BlockEffects.MultiSigned.Major(
                       settlementTx = settlementTxSigned,
@@ -1208,7 +1128,7 @@ class ConsensusActor(
             override type AckType = AckBlock.Final2
             override type RoundTwoType = Void
             override type RoundTwoOwnAckType = Void
-            override type ResultType = BlockConfirmed.Final
+            override type ResultType = Block.MultiSigned.Final
 
             override def applyBlock(block: Void): IO[FinalRoundTwoCell] =
                 IO.raiseError(
@@ -1235,7 +1155,7 @@ class ConsensusActor(
                 this.acks2.keySet == config.verificationKeys.values.toSet
 
             override def complete
-                : IO[Either[(Void, Void), (BlockConfirmed.Final, Option[RoundOneOwnAck])]] =
+                : IO[Either[(Void, Void), (Block.MultiSigned.Final, Option[RoundOneOwnAck])]] =
                 for {
 
                     // 1.Rollouts
@@ -1276,7 +1196,7 @@ class ConsensusActor(
                     }
                 } yield Right(
                   (
-                    BlockConfirmed.Final(
+                    Block.MultiSigned.Final(
                       blockBrief = block.blockBrief,
                       effects = BlockEffects.MultiSigned.Final(
                         rolloutTxs = rolloutsSigned,
@@ -1295,7 +1215,7 @@ class ConsensusActor(
             case UnexpectedBlock(blockNum: BlockNumber)
             case UnexpectedPeer(peer: PeerNumber)
             case PostponedAckAlreadySet
-            case UnexpectedPosponedAck
+            case UnexpectedPostponedAck
 
             def msg: String = this match {
                 case UnexpectedBlockNumber(roundBlockNumber, blockNumber) =>
@@ -1308,7 +1228,7 @@ class ConsensusActor(
                     s"Unexpected peer number: $peer"
                 case PostponedAckAlreadySet =>
                     "Postponed Ack is already set"
-                case UnexpectedPosponedAck =>
+                case UnexpectedPostponedAck =>
                     "Unexpected postponed ack"
             }
 

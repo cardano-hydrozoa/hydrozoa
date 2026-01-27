@@ -8,7 +8,7 @@ import hydrozoa.multisig.ledger.dapp.tx.{DeinitTx, FallbackTx, FinalizationTx, I
 sealed trait Block extends Block.Section
 
 object Block {
-    sealed trait Unsigned extends Block {
+    sealed trait Unsigned extends Block, BlockStatus.Unsigned {
         def acks(wallet: PeerWallet, finalizationRequested: Boolean): List[AckBlock]
     }
 
@@ -150,7 +150,7 @@ object Block {
                 self.blockBrief.asInstanceOf[BlockBrief.Next]
     }
 
-    trait MultiSigned extends Block
+    sealed trait MultiSigned extends Block, BlockStatus.MultiSigned, Fields.HasFinalizationRequested
 
     object MultiSigned {
         final case class Initial(
@@ -167,11 +167,14 @@ object Block {
             override transparent inline def initializationTx: InitializationTx =
                 effects.initializationTx
             override transparent inline def fallbackTx: FallbackTx = effects.fallbackTx
+
+            override transparent inline def finalizationRequested: Boolean = false
         }
 
         final case class Minor(
             override val blockBrief: BlockBrief.Minor,
             override val effects: BlockEffects.MultiSigned.Minor,
+            override val finalizationRequested: Boolean,
         ) extends Block.MultiSigned,
               BlockType.Minor,
               BlockEffects.MultiSigned.Minor.Section {
@@ -191,6 +194,7 @@ object Block {
         final case class Major(
             override val blockBrief: BlockBrief.Major,
             override val effects: BlockEffects.MultiSigned.Major,
+            override val finalizationRequested: Boolean,
         ) extends Block.MultiSigned,
               BlockType.Major,
               BlockEffects.MultiSigned.Major.Section {
@@ -220,11 +224,19 @@ object Block {
             override transparent inline def finalizationTx: FinalizationTx = effects.finalizationTx
             override transparent inline def rolloutTxs: List[RolloutTx] = effects.rolloutTxs
             override transparent inline def deinitTx: Option[DeinitTx] = effects.deinitTx
+
+            override transparent inline def finalizationRequested: Boolean = false
         }
 
         type Next = Block.MultiSigned & BlockType.Next
 
         type Intermediate = Block.MultiSigned & BlockType.Intermediate
+    }
+
+    object Fields {
+        trait HasFinalizationRequested {
+            def finalizationRequested: Boolean
+        }
     }
 
     trait Section extends BlockType, BlockBrief.Section, BlockEffects.Section {

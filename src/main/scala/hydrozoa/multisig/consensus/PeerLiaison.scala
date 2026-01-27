@@ -9,7 +9,7 @@ import hydrozoa.multisig.consensus.PeerLiaison.*
 import hydrozoa.multisig.consensus.PeerLiaison.Request.*
 import hydrozoa.multisig.consensus.ack.{AckBlock, AckId, AckNumber}
 import hydrozoa.multisig.consensus.peer.PeerId
-import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
+import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber, BlockStatus, BlockType}
 import hydrozoa.multisig.protocol.types.{LedgerEvent, LedgerEventId}
 import scala.collection.immutable.Queue
 
@@ -213,9 +213,8 @@ trait PeerLiaison(
 
         def dequeueConfirmed(x: BlockConfirmed): IO[Unit] = {
             import x.*
-            val blockNum: BlockNumber = blockBrief.blockNum
-            val ackNum: AckNumber = AckNumber.neededToConfirm(blockBrief.header)
-            val eventNum: LedgerEventId.Number = blockBrief.body.events.collect {
+            val ackNum: AckNumber = AckNumber.neededToConfirm(header)
+            val eventNum: LedgerEventId.Number = events.collect {
                 case x if x._1.peerNum == config.ownPeerId.peerNum => x._1.eventNum
             }.max
             for {
@@ -296,6 +295,16 @@ object PeerLiaison {
 
     type Handle = ActorRef[IO, Request]
 
+    type BlockConfirmed = BlockBrief.Section & BlockType.Next & BlockStatus.MultiSigned
+
+    object BlockConfirmed {
+
+        /** For testing purposes */
+        object Minimal {
+            def apply(x: BlockBrief.Next): BlockConfirmed = x.asMultiSigned
+        }
+    }
+
     type Request = RemoteBroadcast | GetMsgBatch | NewMsgBatch | BlockConfirmed
 
     object Request {
@@ -349,10 +358,6 @@ object PeerLiaison {
             ack: Option[AckBlock],
             blockBrief: Option[BlockBrief.Next],
             events: List[LedgerEvent]
-        )
-
-        final case class BlockConfirmed(
-            blockBrief: BlockBrief.Next
         )
     }
 

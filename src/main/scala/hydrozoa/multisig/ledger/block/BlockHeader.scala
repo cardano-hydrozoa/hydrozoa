@@ -4,7 +4,12 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.{KzgCommitment, asByteString}
 
-sealed trait BlockHeader extends BlockHeader.Section
+sealed trait BlockHeader extends BlockHeader.Section {
+    def asUnsigned: this.type & BlockStatus.Unsigned =
+        this.asInstanceOf[this.type & BlockStatus.Unsigned]
+    def asMultiSigned: this.type & BlockStatus.MultiSigned =
+        this.asInstanceOf[this.type & BlockStatus.MultiSigned]
+}
 
 object BlockHeader {
     final case class Initial(
@@ -60,14 +65,29 @@ object BlockHeader {
 
     type Intermediate = BlockHeader & BlockType.Intermediate
 
-    trait Section extends BlockType {
-        def header: BlockHeader
-        def blockNum: BlockNumber
-        def blockVersion: BlockVersion.Full
-        def startTime: QuantizedInstant
-        def endTime: QuantizedInstant
-        def kzgCommitment: KzgCommitment
+    object Fields {
+        trait HasBlockNum {
+            def blockNum: BlockNumber
+        }
 
+        trait HasBlockVersion {
+            def blockVersion: BlockVersion.Full
+        }
+
+        trait HasBlockTimes {
+            def startTime: QuantizedInstant
+            def endTime: QuantizedInstant
+        }
+
+        trait HasKzgCommitment {
+            def kzgCommitment: KzgCommitment
+        }
+    }
+
+    import Fields.*
+
+    trait Section extends BlockType, HasBlockNum, HasBlockVersion, HasBlockTimes, HasKzgCommitment {
+        def header: BlockHeader
         final transparent inline def nextHeaderMinor(
             newStartTime: QuantizedInstant,
             newEndTime: QuantizedInstant,

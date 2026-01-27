@@ -13,7 +13,6 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toQuantizedI
 import hydrozoa.lib.cardano.scalus.given
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.BlockWeaver.Request
-import hydrozoa.multisig.consensus.CardanoLiaison.{FinalBlockConfirmed, MajorBlockConfirmed}
 import hydrozoa.multisig.consensus.CardanoLiaisonTest.BlockEffectsSignedChain.*
 import hydrozoa.multisig.consensus.CardanoLiaisonTest.Rollback.SettlementTiming
 import hydrozoa.multisig.consensus.CardanoLiaisonTest.Rollback.SettlementTiming.*
@@ -32,7 +31,7 @@ import org.scalacheck.Prop.forAll
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scala.jdk.CollectionConverters.*
 import scala.math.Ordered.orderingToOrdered
-import scalus.cardano.ledger.*
+import scalus.cardano.ledger.{Block as _, BlockHeader as _, *}
 import test.Generators.Hydrozoa.*
 import test.{TestPeer, testNetwork, testTxBuilderCardanoInfo}
 
@@ -544,7 +543,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                                         )
                                     )
                             }
-                        case None => {
+                        case None =>
                             // The rollback point points to the initialization ot deinit
                             // Rollback time doesn't affect the deinit tx since it doesn't have validity range.
 
@@ -554,7 +553,6 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                             val earliestTtl = skeleton.earliestTtl
                             Gen.choose(earliestTtl - 1000.seconds, earliestTtl + 1000.seconds)
                                 .flatMap(instant => (instant, None))
-                        }
                     }
             } yield mkRollback(
               skeleton,
@@ -643,7 +641,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
         })
 
     testSkeletons.distinct.zipWithIndex.foreach { case (skeleton, idx) =>
-        include(new Properties(s"Skeleton ${idx}") {
+        include(new Properties(s"Skeleton $idx") {
             val _ = property("rollbacks are handled") = mkRollbackAreHandled(skeleton)
         })
     }
@@ -694,24 +692,21 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                             cardanoLiaison <- CardanoLiaison.apply(config, connections)
 
                             // Use protected handlers directly to present all effects
-                            _ <- skeleton._2.traverse_(s =>
+                            _ <- skeleton._2.zipWithIndex.traverse_((s, i) =>
                                 cardanoLiaison.handleMajorBlockL1Effects(
-                                  MajorBlockConfirmed(
-                                    blockNum = ???, // FIXME
+                                  CardanoLiaison.BlockConfirmed.Minimal.Major(
+                                    blockNum = BlockNumber(i + 1),
                                     settlementTx = s.settlementTx,
                                     rolloutTxs = s.rolloutTxs,
-                                    fallbackTx = s.fallbackTx
+                                    fallbackTx = s.fallbackTx,
+                                    postDatedRefundTxs = List(),
                                   )
                                 )
                             )
 
                             _ <- cardanoLiaison.handleFinalBlockL1Effects(
-                              FinalBlockConfirmed(
-                                blockNum =
-                                    // This is technically correct in that particular case, but it's not nice
-                                    BlockNumber(
-                                      skeleton._3.finalizationTx.majorVersionProduced
-                                    ),
+                              CardanoLiaison.BlockConfirmed.Minimal.Final(
+                                blockNum = BlockNumber(skeleton._2.length + 1),
                                 finalizationTx = skeleton._3.finalizationTx,
                                 rolloutTxs = skeleton._3.rolloutTxs,
                                 deinitTx = skeleton._3.deinitTx
@@ -752,7 +747,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                                     }
                             }
 
-                            _ <- IO.println(s"===> Expected txs: ${expectedTxs}")
+                            _ <- IO.println(s"===> Expected txs: $expectedTxs")
 
                             // Timeouts doesn't work under TestControl since the current implementation of
                             // [[ReceiveTimeout]] uses System.currentTimeMillis

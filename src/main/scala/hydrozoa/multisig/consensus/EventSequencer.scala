@@ -7,12 +7,12 @@ import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.EventSequencer.*
-import hydrozoa.multisig.consensus.EventSequencer.Request.*
 import hydrozoa.multisig.consensus.PeerLiaison.Handle
 import hydrozoa.multisig.consensus.peer.{PeerId, PeerNumber}
-import hydrozoa.multisig.ledger.block.BlockBrief
+import hydrozoa.multisig.ledger.block.{BlockBody, BlockEffects, BlockStatus}
 import hydrozoa.multisig.ledger.dapp.tx.RefundTx
 import hydrozoa.multisig.protocol.*
+import hydrozoa.multisig.protocol.types.LedgerEventId.ValidityFlag
 import hydrozoa.multisig.protocol.types.{LedgerEvent, LedgerEventId}
 
 trait EventSequencer(
@@ -112,12 +112,24 @@ object EventSequencer {
 
     type Handle = ActorRef[IO, Request]
 
-    type Request = LedgerEvent | BlockConfirmed
+    type BlockConfirmed = BlockBody.Section & BlockEffects.Fields.HasPostDatedRefundTxs &
+        BlockStatus.MultiSigned
 
-    object Request {
-        final case class BlockConfirmed(
-            blockBrief: BlockBrief.Next,
-            mbPostDatedRefundsSigned: List[RefundTx.PostDated]
-        )
+    object BlockConfirmed {
+
+        /** For unit/property testing. */
+        final case class Minimal(
+            override val body: BlockBody.Next,
+            // FIXME: How do we ensure these are signed?
+            override val postDatedRefundTxs: List[RefundTx.PostDated],
+        ) extends BlockBody.Section,
+              BlockEffects.Fields.HasPostDatedRefundTxs,
+              BlockStatus.MultiSigned {
+            override def events: List[(LedgerEventId, ValidityFlag)] = body.events
+            override def depositsAbsorbed: List[LedgerEventId] = body.depositsAbsorbed
+            override def depositsRefunded: List[LedgerEventId] = body.depositsAbsorbed
+        }
     }
+
+    type Request = LedgerEvent | BlockConfirmed
 }

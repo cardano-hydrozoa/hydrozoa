@@ -11,7 +11,7 @@ import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
-import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
+import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockHeader, BlockNumber, BlockStatus}
 import hydrozoa.multisig.protocol.types.{LedgerEvent, LedgerEventId}
 import scalus.cardano.ledger.SlotConfig
 
@@ -89,16 +89,6 @@ object BlockWeaver:
     // ===================================
     // Request + ActorRef + apply
     // ===================================
-
-    /** Block confirmation.
-      *
-      * @param blockNumber
-      */
-    final case class BlockConfirmed(
-        blockNumber: BlockNumber,
-        finalizationRequested: Boolean = false
-    )
-
     /** So-called "poll results" from the Cardano Liaison, i.e., a set of all utxos ids found at the
       * multisig head address.
       *
@@ -111,6 +101,20 @@ object BlockWeaver:
         val empty: PollResults = PollResults(Set.empty)
 
     object FinalizationLocallyTriggered
+
+    type BlockConfirmed = BlockHeader.Fields.HasBlockNum & Block.Fields.HasFinalizationRequested &
+        BlockStatus.MultiSigned
+
+    object BlockConfirmed {
+
+        /** For unit/property testing. */
+        final case class Minimal(
+            override val blockNum: BlockNumber,
+            override val finalizationRequested: Boolean,
+        ) extends BlockHeader.Fields.HasBlockNum,
+              Block.Fields.HasFinalizationRequested,
+              BlockStatus.MultiSigned
+    }
 
     type Handle = ActorRef[IO, Request]
     type Request = LedgerEvent | BlockBrief.Next | BlockConfirmed | PollResults |
@@ -411,33 +415,42 @@ trait BlockWeaver(
     private def handleBlockConfirmed(blockConfirmed: BlockConfirmed): IO[Unit] = {
         for {
             // _ <- IO.println("handleBlockConfirmed")
-            state <- stateRef.get
-            _ <- state match {
-                case Leader(blockNumber) =>
-                    // Iff the block confirmed is the previous block
-                    IO.whenA(blockConfirmed.blockNumber.increment == blockNumber)
+            _ <- blockConfirmed match {
+                case blockIntermediate: Block.MultiSigned.Intermediate =>
                     for {
-                        pollResults <- pollResultsRef.get
-                        finalizationLocallyTriggered <- finalizationLocallyTriggeredRef.get
-                        conn <- getConnections
+                        state <- stateRef.get
+                        _ <- state match {
+                            case Leader(blockNumber) =>
+                                // Iff the block confirmed is the previous block
+                                IO.whenA(blockIntermediate.blockNum.increment == blockNumber)
+                                for {
+                                    pollResults <- pollResultsRef.get
+                                    finalizationLocallyTriggered <-
+                                        finalizationLocallyTriggeredRef.get
+                                    conn <- getConnections
 
-                        // Finish the current block immediately
-                        _ <- conn.jointLedger !
-                            (if blockConfirmed.finalizationRequested
-                             then CompleteBlockFinal(None)
-                             else
-                                 CompleteBlockRegular(
-                                   None,
-                                   pollResults.utxos,
-                                   finalizationLocallyTriggered
-                                 ))
-                        // Switch to Idle
-                        _ <- switchToIdle(blockNumber.increment)
+                                    // Finish the current block immediately
+                                    _ <- conn.jointLedger !
+                                        (if blockIntermediate.finalizationRequested
+                                         then CompleteBlockFinal(None)
+                                         else
+                                             CompleteBlockRegular(
+                                               None,
+                                               pollResults.utxos,
+                                               finalizationLocallyTriggered
+                                             ))
+                                    // Switch to Idle
+                                    _ <- switchToIdle(blockNumber.increment)
+                                } yield ()
+                            case _ =>
+                                // This may happen, but we should ignore it since that signal is useless for the weaver
+                                // when the node is node a leader.
+                                IO.unit
+                        }
                     } yield ()
-                case _ =>
-                    // This may happen, but we should ignore it since that signal is useless for the weaver
-                    // when the node is node a leader.
-                    IO.pure(())
+                case _: Block.MultiSigned.Final =>
+                    // FIXME: Job done. Time for graceful shutdown?
+                    IO.unit
             }
         } yield ()
     }

@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.multisig.ledger.block.BlockStatus
 import monocle.Lens
 import scala.Function.const
 import scalus.cardano.ledger.Transaction
@@ -26,6 +27,12 @@ trait Tx[Self <: Tx[Self]] extends HasResolvedUtxos { self: Self =>
             this.tx == that.tx
         case _ => false
     }
+
+    def asUnsigned: this.type & BlockStatus.Unsigned =
+        this.asInstanceOf[this.type & BlockStatus.Unsigned]
+    def asMultiSigned: this.type & BlockStatus.MultiSigned =
+        this.asInstanceOf[this.type & BlockStatus.MultiSigned]
+
 }
 
 trait HasValidityStart:
