@@ -7,7 +7,6 @@ import cats.syntax.all.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.*
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.backend.cardano
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
@@ -16,7 +15,6 @@ import hydrozoa.multisig.ledger.dapp.tx.Tx
 import hydrozoa.multisig.protocol.types.AckBlock.HeaderSignature
 import hydrozoa.rulebased.DisputeActor.*
 import hydrozoa.rulebased.DisputeActor.Error.*
-import hydrozoa.rulebased.RuleBasedRegimeManager.Requests.Liquidate
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.OnchainBlockHeader
 import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
@@ -60,12 +58,9 @@ type VoteUtxoWithDatum = (hydrozoa.Utxo[L1], VoteDatum)
 final case class DisputeActor(
     config: DisputeActor.Config,
     collateralUtxo: hydrozoa.Utxo[L1],
-    utxosToWithdrawL2: UtxoSetL2,
     blockHeader: OnchainBlockHeader,
     cardanoBackend: CardanoBackend[IO],
     signatures: List[HeaderSignature],
-    rbrmRef: ActorRef[IO, RuleBasedRegimeManager.Requests.Request],
-    votingDeadline: QuantizedInstant
 ) extends Actor[IO, DisputeActor.Requests.Request] {
 
     private val handleDisputeRes: IO[Either[DisputeActor.Error.Error, Unit]] = {
@@ -131,7 +126,7 @@ final case class DisputeActor(
                     )
                     for {
                         tallyTx <- TallyTx.build(recipe) match {
-                            case Left(e)   => EitherT.liftT(IO.raiseError(TallyTxBuildError(e)))
+                            case Left(e)   => EitherT.liftF(IO.raiseError(TallyTxBuildError(e)))
                             case Right(tx) => EitherT.pure[IO, cardano.CardanoBackend.Error](tx)
                         }
                         _ <- EitherT(cardanoBackend.submitTx(tallyTx.tx))
@@ -155,10 +150,6 @@ final case class DisputeActor(
                         }
                         _ <- EitherT(cardanoBackend.submitTx(resolutionTx.tx))
                     } yield ()
-
-                // This case only matches in the returned list of vote utxos is empty.
-                // This means we're all done with dispute resolution; start liquidation
-                case (None, _) => EitherT.right(rbrmRef ! Liquidate)
             }
 
         } yield ()

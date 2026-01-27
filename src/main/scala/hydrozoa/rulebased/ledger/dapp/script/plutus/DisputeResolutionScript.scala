@@ -19,7 +19,6 @@ import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, Data, FromData, ToData}
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.{Language, Script}
-import scalus.ledger.api.v1.IntervalBoundType.Finite
 import scalus.ledger.api.v1.Value.+
 import scalus.ledger.api.v3.*
 import scalus.prelude.Option.{None, Some}
