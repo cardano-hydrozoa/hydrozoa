@@ -1,18 +1,22 @@
 package hydrozoa.multisig.backend.cardano
 
+import cats.data.EitherT
 import cats.effect.IO
+import cats.syntax.traverse.*
 import com.bloxbean.cardano.client.api.common.OrderEnum
 import com.bloxbean.cardano.client.api.model.{Result, Utxo}
 import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.backend.blockfrost.common.Constants
 import com.bloxbean.cardano.client.backend.blockfrost.service.BFBackendService
-import com.bloxbean.cardano.client.backend.model.AssetTransactionContent
+import com.bloxbean.cardano.client.backend.model.{AssetTransactionContent, ScriptDatumCbor, TxContentRedeemers, TxContentUtxo}
+import com.bloxbean.cardano.client.plutus.spec.RedeemerTag
 import com.bloxbean.cardano.client.quicktx.TxResult
-import hydrozoa.multisig.backend.cardano.CardanoBackend.Error.Unexpected
-import hydrozoa.multisig.backend.cardano.CardanoBackend.GetTxInfo
+import hydrozoa.multisig.backend.cardano.CardanoBackend.Error.*
 import hydrozoa.{L1, OutputL1, UtxoIdL1, UtxoSet, UtxoSetL1}
+import io.bullet.borer.Cbor
 import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
+import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger.{AssetName, PolicyId, Transaction, TransactionHash}
 
@@ -154,61 +158,181 @@ class CardanoBackendBlockfrost private (
         (utxoId, output)
     }
 
-    override def getTxInfo(
+    override def isTxKnown(
         txHash: TransactionHash
-    ): IO[Either[CardanoBackend.Error, GetTxInfo.Response]] =
+    ): IO[Either[CardanoBackend.Error, Boolean]] =
         IO {
-            val txResult = backendService.getTransactionService.getTransaction(txHash.toHex)
-            if !txResult.isSuccessful then Right(GetTxInfo.Response(false))
-            else
-                val redeemersResult =
-                    backendService.getTransactionService.getTransactionRedeemers(txHash.toHex)
-                if !redeemersResult.isSuccessful then Right(GetTxInfo.Response(true, List.empty))
+            val result = backendService.getTransactionService.getTransaction(txHash.toHex)
+            if result.isSuccessful then {
+                Right(true)
+            } else {
+                // Blockfrost replies with HTTP 404 when there is no such transaction
+                if result.code() == 404
+                then Right(false)
                 else
-                    import scalus.builtin.{ByteString, Data}
-                    import io.bullet.borer.Cbor
-                    import scala.jdk.CollectionConverters.*
-                    import com.bloxbean.cardano.client.plutus.spec.RedeemerTag
-
-                    val spendingRedeemersData = redeemersResult.getValue.asScala
-                        .filter(_.getPurpose == RedeemerTag.Spend)
-                        .flatMap { redeemer =>
-                            val datumCborResult = backendService.getScriptService
-                                .getScriptDatumCbor(redeemer.getDatumHash)
-                            if datumCborResult.isSuccessful then
-                                scala.util.Try {
-                                    val datumBytes =
-                                        ByteString.fromHex(datumCborResult.getValue.getCbor)
-                                    Cbor.decode(datumBytes.bytes).to[Data].value
-                                }.toOption
-                            else None
-                        }
-                        .toList
-
-                    Right(GetTxInfo.Response(true, spendingRedeemersData))
-
+                    throw RuntimeException(
+                      s"Non-404 error while trying to call Blockfrost ${result.getResponse}"
+                    )
+            }
         }.handleError(e =>
             Left(Unexpected(s"${e.getMessage}, caused by: ${
                     if e.getCause != null then e.getCause.getMessage else "N/A"
                 }"))
         )
 
-    override def assetTxs(
+    override def lastContinuingTxs(
         asset: (PolicyId, AssetName),
         after: TransactionHash
-    ): IO[Either[CardanoBackend.Error, List[TransactionHash]]] =
+    ): IO[Either[CardanoBackend.Error, List[(TransactionHash, Data)]]] =
         val unit = s"${asset._1.toHex}${asset._2.bytes.toHex}"
         val hex = after.toHex
-        paginate(
-          page =>
-              backendService.getAssetService.getTransactions(
-                unit,
-                pageSize,
-                page,
-                OrderEnum.desc
-              ),
-          Some((c: AssetTransactionContent) => { c.getTxHash == hex })
-        ).map(ret => ret.map(content => content.map(e => TransactionHash.fromHex(e.getTxHash))))
+        (for {
+            txIds <- EitherT(
+              paginate(
+                apiCall = page =>
+                    backendService.getAssetService.getTransactions(
+                      unit,
+                      pageSize,
+                      page,
+                      OrderEnum.desc
+                    ),
+                mbStopPred = Some((c: AssetTransactionContent) => {
+                    c.getTxHash == hex
+                })
+              ).map(ret =>
+                  ret.map(content => content.map(e => TransactionHash.fromHex(e.getTxHash)))
+              )
+            )
+
+            txRets <- txIds.traverse(txHash => EitherT(continuingInputRedeemer(txHash, unit)))
+
+        } yield txRets.flatten).value
+
+    /** Tries to treat a transaction as one having a continue output with the asset. Returns the tx
+      * hash -> the redeemer of the continuing input if a tx is good. Returns None if tx doesn't
+      * conform the pattern, i.e., an input is missing, an output is missing or the redeemer is
+      * missing. NB: Decoding redeemer error is thrown though.
+      *
+      * @param txHash
+      * @param unit
+      *   the asset unit string (policyId + assetName hex)
+      * @return
+      */
+    private def continuingInputRedeemer(
+        txHash: TransactionHash,
+        unit: String
+    ): IO[Either[CardanoBackend.Error, Option[(TransactionHash, Data)]]] = {
+        (for {
+            utxos <- EitherT(txUtxos(txHash))
+            inputIx <- EitherT.fromOption[IO](
+              opt = utxos.getInputs.asScala.zipWithIndex
+                  .find { (input, _) =>
+                      input.getAmount.asScala.exists(_.getUnit == unit)
+                  }
+                  .map(_._2),
+              ifNone = NoTxInputWithAsset(txHash, unit)
+            )
+            _ <- EitherT.fromOption[IO](
+              opt = utxos.getOutputs.asScala.find { output =>
+                  output.getAmount.asScala.exists(_.getUnit == unit)
+              },
+              ifNone = NoTxOutputWithAsset(txHash, unit)
+            )
+            redeemerInfo <- EitherT(txRedeemer(txHash, inputIx))
+
+            redeemerData <- EitherT(redeemerByHash(redeemerInfo.getDatumHash))
+
+            redeemer <- EitherT.fromOption[IO](
+              opt = scala.util.Try {
+                  val datumBytes =
+                      ByteString.fromHex(redeemerData.getCbor)
+                  Cbor.decode(datumBytes.bytes).to[Data].value
+              }.toOption,
+              ifNone = ErrorDecodingRedeemerCbor(redeemerData.getCbor)
+            )
+
+        } yield Some(txHash -> redeemer)).value.map {
+            // Some errors are ignored - there may be txs that doesn't conform
+            // the pattern.
+            case Left(NoTxInputWithAsset(_, _))       => Right(None)
+            case Left(NoTxOutputWithAsset(_, _))      => Right(None)
+            case Left(SpendingRedeemerNotFound(_, _)) => Right(None)
+            case other                                => other
+        }
+    }
+
+    private def txUtxos(txHash: TransactionHash): IO[Either[CardanoBackend.Error, TxContentUtxo]] =
+        IO.delay(backendService.getTransactionService.getTransactionUtxos(txHash.toHex))
+            .map(res =>
+                if res.isSuccessful then Right(res.getValue)
+                else
+                    Left(
+                      Unexpected(
+                        s"Unexpected exception while retrieving tx utxos: ${res.getResponse}"
+                      )
+                    )
+            )
+            .handleError(e =>
+                Left(
+                  Unexpected(
+                    s"Unexpected exception while retrieving tx utxos: ${e.getMessage}, caused by: ${
+                            if e.getCause != null then e.getCause.getMessage else "N/A"
+                        }"
+                  )
+                )
+            )
+
+    private def txRedeemer(
+        txHash: TransactionHash,
+        inputIx: Int
+    ): IO[Either[CardanoBackend.Error, TxContentRedeemers]] =
+        IO.delay(backendService.getTransactionService.getTransactionRedeemers(txHash.toHex))
+            .map(res =>
+                if res.isSuccessful
+                then
+                    res.getValue.asScala.toList
+                        .find(r => r.getTxIndex == inputIx && r.getPurpose == RedeemerTag.Spend)
+                        .toRight(SpendingRedeemerNotFound(txHash, inputIx))
+                else
+                    Left(
+                      Unexpected(
+                        s"Unexpected exception while retrieving tx redeemers: ${res.getResponse}"
+                      )
+                    )
+            )
+            .handleError(e =>
+                Left(
+                  Unexpected(
+                    s"Unexpected exception while retrieving tx redeemers: ${e.getMessage}, caused by: ${
+                            if e.getCause != null then e.getCause.getMessage else "N/A"
+                        }"
+                  )
+                )
+            )
+
+    private def redeemerByHash(
+        redeemerHash: String
+    ): IO[Either[CardanoBackend.Error, ScriptDatumCbor]] =
+        IO.delay(
+          backendService.getScriptService
+              .getScriptDatumCbor(redeemerHash)
+        ).map(res =>
+            if res.isSuccessful then Right(res.getValue)
+            else
+                Left(
+                  Unexpected(
+                    s"Unexpected exception while retrieving redeemer by its hash: ${res.getResponse}"
+                  )
+                )
+        ).handleError(e =>
+            Left(
+              Unexpected(
+                s"Unexpected exception while retrieving redeemer by its hash: ${e.getMessage}, caused by: ${
+                        if e.getCause != null then e.getCause.getMessage else "N/A"
+                    }"
+              )
+            )
+        )
 
     override def submitTx(tx: Transaction): IO[Either[CardanoBackend.Error, Unit]] =
         IO {

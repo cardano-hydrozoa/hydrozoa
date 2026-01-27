@@ -6,9 +6,9 @@ import cats.effect.{IO, Ref}
 import cats.syntax.all.catsSyntaxFlatMapOps
 import cats.~>
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
-import hydrozoa.multisig.backend.cardano.CardanoBackend.GetTxInfo
 import hydrozoa.{L1, Output, UtxoIdL1, UtxoSet, UtxoSetL1}
 import monocle.Focus.focus
+import scalus.builtin.Data
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.rules.STS.Mutator
 import scalus.cardano.ledger.rules.{CardanoMutator, Context, State as LedgerState}
@@ -71,37 +71,47 @@ class CardanoBackendMock private (
         } yield Right(ret)
     }
 
-    override def getTxInfo(
+    override def isTxKnown(
         txHash: TransactionHash
-    ): MockStateF[Either[CardanoBackend.Error, GetTxInfo.Response]] = for {
+    ): MockStateF[Either[CardanoBackend.Error, Boolean]] = for {
         state: MockState <- get
         isKnown = state.knownTxs.contains(txHash)
-        spendingRedeemersData = state.submittedTxs
-            .find(_.id == txHash)
-            .fold(List.empty) { tx =>
-                tx.witnessSet.redeemers.fold(List.empty)(
-                  _.value.toSeq
-                      .filter(_.tag == RedeemerTag.Spend)
-                      .map(_.data)
-                      .toList
-                )
-            }
-        ret = GetTxInfo.Response(isKnown, spendingRedeemersData)
-    } yield Right(ret)
+    } yield Right(isKnown)
 
-    override def assetTxs(
+    override def lastContinuingTxs(
         asset: (PolicyId, AssetName),
         after: TransactionHash
-    ): MockStateF[Either[Error, List[TransactionHash]]] = {
+    ): MockStateF[Either[Error, List[(TransactionHash, Data)]]] = {
 
         extension (v: Value)
             def contains(asset: (PolicyId, AssetName)): Boolean =
                 v.assets.assets.get(asset._1).flatMap(_.get(asset._2)).isDefined
 
-        def txContainsAsset(tx: Transaction, asset: (PolicyId, AssetName)): Boolean =
-            tx.body.value.outputs.exists(_.value.value.contains(asset)) ||
-                tx.body.value.mint
-                    .fold(false)(_.assets.get(asset._1).flatMap(_.get(asset._2)).isDefined)
+        def continuingInputRedeemer(
+            tx: Transaction,
+            asset: (PolicyId, AssetName),
+            utxos: Utxos
+        ): Option[Data] = {
+            // Find the input index that contains the asset
+            val inputWithAssetIdx = tx.body.value.inputs.toSeq.zipWithIndex
+                .find { (input, _) =>
+                    utxos.get(input).exists(_.value.contains(asset))
+                }
+                .map(_._2)
+
+            // Check if there's an output with the asset (continuing pattern)
+            val hasOutputWithAsset = tx.body.value.outputs.exists(_.value.value.contains(asset))
+
+            // Extract the redeemer for the spending input
+            for {
+                inputIx <- inputWithAssetIdx
+                _ <- if hasOutputWithAsset then Some(()) else None
+                redeemers <- tx.witnessSet.redeemers.map(_.value)
+                redeemer <- redeemers.toSeq.find { r =>
+                    r.tag == RedeemerTag.Spend && r.index.toInt == inputIx
+                }
+            } yield redeemer.data
+        }
 
         for {
             state: MockState <- get
@@ -109,8 +119,12 @@ class CardanoBackendMock private (
             allTxsReversed = state.submittedTxs.reverse
             // Take transactions after the 'after' transaction (excluding it)
             txsAfter = allTxsReversed.takeWhile(_.id != after)
-            // Filter for transactions containing the asset
-            result = txsAfter.filter(txContainsAsset(_, asset)).map(_.id)
+            // Extract transactions with continuing inputs (input + output with asset)
+            result = txsAfter.flatMap(tx =>
+                continuingInputRedeemer(tx, asset, state.ledgerState.utxos).map(redeemer =>
+                    tx.id -> redeemer
+                )
+            )
         } yield Right(result)
     }
 
@@ -196,16 +210,16 @@ object CardanoBackendMock {
                 ): IO[Either[CardanoBackend.Error, UtxoSetL1]] =
                     transformer(mock.utxosAt(address, asset))
 
-                override def getTxInfo(
+                override def isTxKnown(
                     txHash: TransactionHash
-                ): IO[Either[CardanoBackend.Error, GetTxInfo.Response]] =
-                    transformer(mock.getTxInfo(txHash))
+                ): IO[Either[CardanoBackend.Error, Boolean]] =
+                    transformer(mock.isTxKnown(txHash))
 
-                override def assetTxs(
+                override def lastContinuingTxs(
                     asset: (PolicyId, AssetName),
                     after: TransactionHash
-                ): IO[Either[CardanoBackend.Error, List[TransactionHash]]] =
-                    transformer(mock.assetTxs(asset, after))
+                ): IO[Either[CardanoBackend.Error, List[(TransactionHash, Data)]]] =
+                    transformer(mock.lastContinuingTxs(asset, after))
 
                 override def submitTx(tx: Transaction): IO[Either[CardanoBackend.Error, Unit]] =
                     transformer(mock.submitTx(tx))

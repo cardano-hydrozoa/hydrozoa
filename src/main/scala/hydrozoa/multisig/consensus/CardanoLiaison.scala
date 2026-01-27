@@ -369,7 +369,7 @@ trait CardanoLiaison(
                                     )
                                 case TargetState.Finalized(finalizationTxHash) =>
                                     for {
-                                        txResp <- config.cardanoBackend.getTxInfo(
+                                        txResp <- config.cardanoBackend.isTxKnown(
                                           finalizationTxHash
                                         )
                                         mbInitAction <- txResp match {
@@ -379,9 +379,9 @@ trait CardanoLiaison(
                                                       s"error when getting finalization tx info: ${err}"
                                                     )
                                                 } yield Seq.empty
-                                            case Right(txInfo) =>
+                                            case Right(isKnown) =>
                                                 IO.pure(
-                                                  if txInfo.isKnown then Seq.empty else initAction
+                                                  if isKnown then Seq.empty else initAction
                                                 )
                                         }
                                     } yield mbInitAction
