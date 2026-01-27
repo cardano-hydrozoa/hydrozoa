@@ -238,15 +238,15 @@ class CardanoBackendBlockfrost private (
               },
               ifNone = NoTxOutputWithAsset(txHash, unit)
             )
-            redeemerInfo <- EitherT(txRedeemer(txHash, inputIx))
+            redeemerInfo <- EitherT(txRedeemers(txHash, inputIx))
 
             redeemerData <- EitherT(redeemerByHash(redeemerInfo.getDatumHash))
 
             redeemer <- EitherT.fromOption[IO](
               opt = scala.util.Try {
-                  val datumBytes =
+                  val redeemerBytes =
                       ByteString.fromHex(redeemerData.getCbor)
-                  Cbor.decode(datumBytes.bytes).to[Data].value
+                  Cbor.decode(redeemerBytes.bytes).to[Data].value
               }.toOption,
               ifNone = ErrorDecodingRedeemerCbor(redeemerData.getCbor)
             )
@@ -282,7 +282,7 @@ class CardanoBackendBlockfrost private (
                 )
             )
 
-    private def txRedeemer(
+    private def txRedeemers(
         txHash: TransactionHash,
         inputIx: Int
     ): IO[Either[CardanoBackend.Error, TxContentRedeemers]] =

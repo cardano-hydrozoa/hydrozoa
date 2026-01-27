@@ -1,7 +1,6 @@
 package hydrozoa.rulebased.ledger.dapp.tx
 
 import cats.data.NonEmptyList
-import cats.effect.unsafe.implicits.global
 import hydrozoa.*
 import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Validators.nonSigningValidators
@@ -124,7 +123,6 @@ def genWithdrawTxRecipe: Gen[WithdrawTx.Recipe] =
               utxosL2.asScalus,
               withdrawals.asScalus
             )
-            .unsafeRunSync()
             .fold(err => throw RuntimeException(err.explain), x => x)
 
         _ = println(
