@@ -6,9 +6,9 @@ import cats.effect.{IO, Ref}
 import cats.syntax.all.catsSyntaxFlatMapOps
 import cats.~>
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
-import hydrozoa.multisig.backend.cardano.CardanoBackend.GetTxInfo
 import hydrozoa.{L1, Output, UtxoIdL1, UtxoSet, UtxoSetL1}
 import monocle.Focus.focus
+import scalus.builtin.Data
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.rules.STS.Mutator
 import scalus.cardano.ledger.rules.{CardanoMutator, Context, State as LedgerState}
@@ -71,28 +71,35 @@ class CardanoBackendMock private (
         } yield Right(ret)
     }
 
-    override def getTxInfo(
+    override def isTxKnown(
         txHash: TransactionHash
-    ): MockStateF[Either[CardanoBackend.Error, GetTxInfo.Response]] = for {
+    ): MockStateF[Either[CardanoBackend.Error, Boolean]] = for {
         state: MockState <- get
         isKnown = state.knownTxs.contains(txHash)
-        spendingRedeemersData = state.submittedTxs
-            .find(_.id == txHash)
-            .fold(List.empty) { tx =>
-                tx.witnessSet.redeemers.fold(List.empty)(
-                  _.value.toSeq
-                      .filter(_.tag == RedeemerTag.Spend)
-                      .map(_.data)
-                      .toList
-                )
-            }
-        ret = GetTxInfo.Response(isKnown, spendingRedeemersData)
-    } yield Right(ret)
+    } yield Right(isKnown)   
+    
+    //override def isTxKnown(
+    //    txHash: TransactionHash
+    //): MockStateF[Either[CardanoBackend.Error, Boolean]] = for {
+    //    state: MockState <- get
+    //    isKnown = state.knownTxs.contains(txHash)
+    //    spendingRedeemersData = state.submittedTxs
+    //        .find(_.id == txHash)
+    //        .fold(List.empty) { tx =>
+    //            tx.witnessSet.redeemers.fold(List.empty)(
+    //              _.value.toSeq
+    //                  .filter(_.tag == RedeemerTag.Spend)
+    //                  .map(_.data)
+    //                  .toList
+    //            )
+    //        }
+    //    ret = GetTxInfo.Response(isKnown, spendingRedeemersData)
+    //} yield Right(ret)
 
-    override def assetTxs(
+    override def lastContinuingTxs(
         asset: (PolicyId, AssetName),
         after: TransactionHash
-    ): MockStateF[Either[Error, List[TransactionHash]]] = {
+    ): MockStateF[Either[Error, List[(TransactionHash, Data)]]] = {
 
         extension (v: Value)
             def contains(asset: (PolicyId, AssetName)): Boolean =
@@ -110,7 +117,7 @@ class CardanoBackendMock private (
             // Take transactions after the 'after' transaction (excluding it)
             txsAfter = allTxsReversed.takeWhile(_.id != after)
             // Filter for transactions containing the asset
-            result = txsAfter.filter(txContainsAsset(_, asset)).map(_.id)
+            result = txsAfter.filter(txContainsAsset(_, asset)).map(tx => tx.id -> ???)
         } yield Right(result)
     }
 
@@ -196,16 +203,16 @@ object CardanoBackendMock {
                 ): IO[Either[CardanoBackend.Error, UtxoSetL1]] =
                     transformer(mock.utxosAt(address, asset))
 
-                override def getTxInfo(
+                override def isTxKnown(
                     txHash: TransactionHash
-                ): IO[Either[CardanoBackend.Error, GetTxInfo.Response]] =
-                    transformer(mock.getTxInfo(txHash))
+                ): IO[Either[CardanoBackend.Error, Boolean]] =
+                    transformer(mock.isTxKnown(txHash))
 
-                override def assetTxs(
+                override def lastContinuingTxs(
                     asset: (PolicyId, AssetName),
                     after: TransactionHash
-                ): IO[Either[CardanoBackend.Error, List[TransactionHash]]] =
-                    transformer(mock.assetTxs(asset, after))
+                ): IO[Either[CardanoBackend.Error, List[(TransactionHash, Data)]]] =
+                    transformer(mock.lastContinuingTxs(asset, after))
 
                 override def submitTx(tx: Transaction): IO[Either[CardanoBackend.Error, Unit]] =
                     transformer(mock.submitTx(tx))

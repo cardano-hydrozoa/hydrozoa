@@ -762,10 +762,10 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
 
                             check <- awaitCond(
                               p = IO
-                                  .traverse(expectedTxs.toList)(cardanoBackend.getTxInfo)
+                                  .traverse(expectedTxs.toList)(cardanoBackend.isTxKnown)
                                   .flatMap(l => IO.println(l) >> IO.pure(l))
                                   .flatMap(l =>
-                                      IO.pure(l.map(_.fold(_ => false, _.isKnown)).forall(identity))
+                                      IO.pure(l.map(_.fold(_ => false, b => b)).forall(identity))
                                   ),
                               max = 1.second,
                               interval = 1.second,
