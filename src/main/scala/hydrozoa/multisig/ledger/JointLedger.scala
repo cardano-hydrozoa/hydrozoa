@@ -240,7 +240,7 @@ final case class JointLedger(
     private def completeBlockRegular(args: CompleteBlockRegular): IO[Unit] = {
         import args.*
 
-        def augmentBlockMinor(
+        def mkBlockMinor(
             depositsRefunded: List[LedgerEventId]
         ): IO[Block.Unsigned.Minor] = for {
             p <- unsafeGetProducing
@@ -253,7 +253,7 @@ final case class JointLedger(
             }
 
             kzgCommit = p.virtualLedgerState.kzgCommitment
-            nextBlockBrief: BlockBrief.Minor = nextBlockBody.asNextBlockBrief(
+            nextBlockBrief: BlockBrief.Minor = nextBlockBody.mkNextBlockBrief(
               previousHeader = p.previousBlock.header,
               newStartTime = p.startTime,
               newEndTime = ???,
@@ -265,7 +265,7 @@ final case class JointLedger(
           BlockEffects.Unsigned.Minor(nextBlockBrief.header.onchainMsg, ???)
         )
 
-        def augmentedBlockMajor(
+        def mkBlockMajor(
             settleLedgerRes: DappLedgerM.SettleLedger.Result,
             refundedDeposits: List[LedgerEventId],
             absorbedDeposits: List[LedgerEventId]
@@ -285,7 +285,7 @@ final case class JointLedger(
                 kzgCommitment =
                     settleLedgerRes.settlementTxSeq.settlementTx.treasuryProduced.kzgCommitment
                 nextBlockBrief: BlockBrief.Major = nextBlockBody
-                    .asNextBlockBrief(
+                    .mkNextBlockBrief(
                       previousHeader = p.previousBlock.header,
                       newStartTime = p.startTime,
                       newEndTime = ???,
@@ -425,10 +425,10 @@ final case class JointLedger(
                 (eligibleForAbsorption.isEmpty && producing.nextBlockData.blockWithdrawnUtxos.isEmpty)
                     && (!forceUpgradeToMajor)
 
-            augmentedBlock <-
+            block <-
                 if isMinorBlock
                 then
-                    augmentBlockMinor(
+                    mkBlockMinor(
                       depositsRefunded = neverEligibleForAbsorption.toList.map(_._1)
                     )
                 else {
@@ -441,16 +441,16 @@ final case class JointLedger(
                             settlementRes.settlementTxSeq.settlementTx.depositsSpent
                                 .contains(deposit._2)
                         )
-                        augBlockMajor <- augmentedBlockMajor(
+                        blockMajor <- mkBlockMajor(
                           settleLedgerRes = settlementRes,
                           refundedDeposits = neverEligibleForAbsorption.toList.map(_._1),
                           absorbedDeposits = absorbedDeposits.toList.map(_._1)
                         )
-                    } yield augBlockMajor
+                    } yield blockMajor
                 }
 
-            _ <- checkReferenceBlock(referenceBlock, augmentedBlock)
-            _ <- handleAugmentedBlock(augmentedBlock, finalizationLocallyTriggered)
+            _ <- checkReferenceBlock(referenceBlockBrief, block)
+            _ <- handleBlock(block, finalizationLocallyTriggered)
         } yield ()
     }
 
@@ -482,7 +482,7 @@ final case class JointLedger(
               onSuccess = IO.pure
             )
 
-            augmentedBlock: Block.Unsigned.Final = {
+            block: Block.Unsigned.Final = {
                 import p.nextBlockData.*
                 val nextBlockBody: BlockBody.Final = BlockBody.Final(
                   events = events,
@@ -492,7 +492,7 @@ final case class JointLedger(
                 )
 
                 val nextBlock: BlockBrief.Final = nextBlockBody
-                    .asNextBlockBrief(
+                    .mkNextBlockBrief(
                       previousHeader = p.previousBlock.header,
                       newStartTime = p.startTime,
                       newEndTime = ???
@@ -512,32 +512,33 @@ final case class JointLedger(
                 Block.Unsigned.Final(nextBlock, blockEffects)
             }
 
-            _ <- checkReferenceBlock(referenceBlock, augmentedBlock)
-            _ <- handleAugmentedBlock(augmentedBlock, false)
+            _ <- checkReferenceBlock(referenceBlockBrief, block)
+            _ <- handleBlock(block, false)
 
         } yield ()
     }
 
     /** When a block is finished, we handle it by:
       *   - sending the pure (with no effects) block to peer liaisons for circulation
-      *   - sending the augmented block with effects to the consensus actor
+      *   - sending the block brief to the peer liaisons
+      *   - sending the block to the consensus actor
       *   - signing block's effects and producing our own set of acks
       *   - sending block's ack(s) to the consensus actor
       */
-    private def handleAugmentedBlock(
-        augmentedBlock: Block.Unsigned.Next,
+    private def handleBlock(
+        block: Block.Unsigned.Next,
         localFinalization: Boolean
     ): IO[Unit] =
         for {
             conn <- getConnections
-            acks = augmentedBlock.acks(wallet, localFinalization)
-            _ <- (conn.peerLiaisons ! augmentedBlock.blockBriefNext).parallel
-            _ <- conn.consensusActor ! augmentedBlock
+            acks = block.acks(wallet, localFinalization)
+            _ <- (conn.peerLiaisons ! block.blockBriefNext).parallel
+            _ <- conn.consensusActor ! block
             _ <- IO.traverse_(acks)(ack => conn.consensusActor ! ack)
         } yield ()
 
     private def checkReferenceBlock(
-        expectedBlock: Option[BlockBrief],
+        expectedBlockBrief: Option[BlockBrief],
         actualBlock: Block
     ): IO[Unit] = for {
         p <- unsafeGetProducing
@@ -548,7 +549,7 @@ final case class JointLedger(
                 case _ => p.competingFallbackValidityStart
             }
 
-        _ <- expectedBlock match {
+        _ <- expectedBlockBrief match {
             case Some(refBlock) if refBlock == actualBlock =>
                 state.set(
                   Done(
@@ -625,7 +626,7 @@ object JointLedger {
             blockCreationTime: QuantizedInstant
         )
 
-        /** @param referenceBlock
+        /** @param referenceBlockBrief
           *   provided by the BlockWeaver when it is in follower mode. When the joint ledger is
           *   finished reproducing the block, it compares against this reference block to determine
           *   whether the leader properly constructed the original block.
@@ -639,13 +640,13 @@ object JointLedger {
           *   `finalizationRequested` in the block acknowledgement
           */
         case class CompleteBlockRegular(
-            referenceBlock: Option[BlockBrief.Intermediate],
+            referenceBlockBrief: Option[BlockBrief.Intermediate],
             pollResults: Set[UtxoIdL1],
             finalizationLocallyTriggered: Boolean
         )
 
         case class CompleteBlockFinal(
-            referenceBlock: Option[BlockBrief.Final],
+            referenceBlockBrief: Option[BlockBrief.Final],
         )
 
         case object GetState extends SyncRequest[IO, GetState.type, State] {

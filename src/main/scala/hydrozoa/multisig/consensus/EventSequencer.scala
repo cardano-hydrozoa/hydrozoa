@@ -116,7 +116,7 @@ object EventSequencer {
 
     object Request {
         final case class BlockConfirmed(
-            block: BlockBrief.Next,
+            blockBrief: BlockBrief.Next,
             mbPostDatedRefundsSigned: List[RefundTx.PostDated]
         )
     }

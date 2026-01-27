@@ -23,7 +23,7 @@ object BlockBody {
         override transparent inline def body: BlockBody.Minor = this
         override transparent inline def depositsAbsorbed: List[LedgerEventId] = List()
 
-        transparent inline def asNextBlockBrief(
+        transparent inline def mkNextBlockBrief(
             previousHeader: BlockHeader,
             newStartTime: QuantizedInstant,
             newEndTime: QuantizedInstant,
@@ -42,7 +42,7 @@ object BlockBody {
           BlockType.Major {
         override transparent inline def body: BlockBody.Major = this
 
-        transparent inline def asNextBlockBrief(
+        transparent inline def mkNextBlockBrief(
             previousHeader: BlockHeader,
             newStartTime: QuantizedInstant,
             newEndTime: QuantizedInstant,
@@ -61,7 +61,7 @@ object BlockBody {
         override transparent inline def body: BlockBody.Final = this
         override transparent inline def depositsAbsorbed: List[LedgerEventId] = List()
 
-        transparent inline def asNextBlockBrief(
+        transparent inline def mkNextBlockBrief(
             previousHeader: BlockHeader,
             newStartTime: QuantizedInstant,
             newEndTime: QuantizedInstant

@@ -300,7 +300,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
                         events = secondBlockEvents.map(e => (e.eventId, Valid)).toList,
                         depositsRefunded = List.empty
                       )
-                      .asNextBlockBrief(
+                      .mkNextBlockBrief(
                         firstBlock.header,
                         newStartTime = newTime,
                         newEndTime = ???,

@@ -296,7 +296,7 @@ object JointLedgerTestHelpers {
             referenceBlock: Option[BlockBrief.Final],
         ): JLTest[Unit] =
             completeBlockFinal(
-              CompleteBlockFinal(referenceBlock = referenceBlock)
+              CompleteBlockFinal(referenceBlockBrief = referenceBlock)
             )
 
     }

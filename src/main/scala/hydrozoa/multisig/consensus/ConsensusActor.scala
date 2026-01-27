@@ -40,10 +40,9 @@ type RoundTwoOwnAck = AckBlock.Major2 | AckBlock.Final2
   */
 sealed trait ConsensusCell[+T]():
 
-    /** Type of the augmented block the cell can handle. May be Void if no augmented block is
-      * expected in round two.
+    /** Type of the block the cell can handle. May be Void if no block is expected in round two.
       */
-    type AugBlockType <: Block.Unsigned | Void
+    type BlockType <: Block.Unsigned | Void
 
     /** Types of the acks the cell can handle, both round one and round two. The reason we need to
       * have both is that round two akcs from some peers can come when the cell is still in the
@@ -66,12 +65,12 @@ sealed trait ConsensusCell[+T]():
       */
     def blockNum: BlockNumber
 
-    /** Handles an incoming augmented block, may throw.
-      * @param augBlock
+    /** Handles an incoming block, may throw.
+      * @param block
       * @return
       *   the updated cell
       */
-    def applyAugBlock(augBlock: AugBlockType): IO[T]
+    def applyBlock(block: BlockType): IO[T]
 
     /** Handles an incoming ack, may throw.
       * @param ack
@@ -128,7 +127,7 @@ sealed trait FinalConsensusCell[T] extends ConsensusCell[T]
   * ==Architecture==
   *
   * The actor maintains consensus cells (`ConsensusCell[T]`) for each block, where each cell tracks:
-  *   - The augmented block containing L2 transactions and effects
+  *   - The block containing L2 transactions and effects
   *   - Acknowledgments from all peers with their signatures
   *   - Progress through consensus rounds (1 or 2 rounds depending on block type)
   *
@@ -140,15 +139,15 @@ sealed trait FinalConsensusCell[T] extends ConsensusCell[T]
   *   - Complete when all peers have acknowledged
   *
   * '''Major Blocks''' (Two Rounds):
-  *   - Round 1: Collect augmented block and Major1 acks with fallback/rollout signatures (though
-  *     Major2 acks may come as well)
+  *   - Round 1: Collect block and Major1 acks with fallback/rollout signatures (though Major2 acks
+  *     may come as well)
   *   - Switch between `MajorRoundOneCell` and `MajorRoundTwoCell`, announcing own Major2 ack
   *   - Round 2: Collect Major2 acks with settlement signatures
   *   - Complete when all round 2 acks are collected
   *
   * '''Final Blocks''' (Two Rounds):
-  *   - Round 1: Collect augmented block and Final1 acks with rollout/deinit signatures (though
-  *     Final2 acks may come as well)
+  *   - Round 1: Collect block and Final1 acks with rollout/deinit signatures (though Final2 acks
+  *     may come as well)
   *   - Switch between `FinalRoundOneCell` and `FinalRoundTwoCell`, announcing own Final2 ack
   *   - Round 2: Collect Final2 acks with finalization signatures
   *   - Complete when all round 2 acks are collected
@@ -157,7 +156,7 @@ sealed trait FinalConsensusCell[T] extends ConsensusCell[T]
   *
   * The actor processes two types of messages:
   *
-  * '''Augmented Blocks''' (`Block.Unsigned.Next`):
+  * '''Blocks''' (`Block.Unsigned.Next`):
   *   - Received from the joint ledger when a new block is created
   *   - Stored in the appropriate consensus cell for the block number
   *   - Contains block and effects calculated by the joint ledger for a produced/validated block
@@ -184,8 +183,8 @@ sealed trait FinalConsensusCell[T] extends ConsensusCell[T]
   *
   * ==Cell Lifecycle==
   *
-  *   1. '''Spawn''': Cell created when first message (augmented block or ack) arrives for a block
-  *   2. '''Collect''': Accumulate augmented block and acks from all peers
+  *   1. '''Spawn''': Cell created when first message (block or ack) arrives for a block
+  *   2. '''Collect''': Accumulate block and acks from all peers
   *   3. '''Saturate''': Cell becomes saturated when all required data is present
   *   4. '''Complete''': Either switch to next round or produce final `BlockConfirmed` result
   *   5. '''Eliminate''': Remove cell from state after confirmation
@@ -218,7 +217,7 @@ sealed trait FinalConsensusCell[T] extends ConsensusCell[T]
   *
   * The actor supports recovery from crashes via `recoveredRequests` in config:
   *   - Replayed requests are processed during `preStart`
-  *   - Cells are reconstructed from replayed augmented blocks and acks
+  *   - Cells are reconstructed from replayed blocks and acks
   *   - Normal operation resumes after recovery completes
   *
   * ==Invariants==
@@ -339,24 +338,24 @@ class ConsensusActor(
         } yield ()
 
     override def receive: Receive[IO, Request] = {
-        case augBlock: Block.Unsigned.Next => handleAugBlock(augBlock)
-        case ack: AckBlock                 => handleAck(ack)
+        case block: Block.Unsigned.Next => handleBlock(block)
+        case ack: AckBlock              => handleAck(ack)
     }
 
     /** Since the ReqBlock messages are sent by the joint ledger actor directly, all we need to do
       * when receiving a new block is to store it in the proper cell. The consensus actor is
       * responsible for sending acks only.
       */
-    def handleAugBlock(augBlock: Block.Unsigned.Next): IO[Unit] = for {
+    def handleBlock(block: Block.Unsigned.Next): IO[Unit] = for {
         state <- stateRef.get
         // This is a bit annoying but Scala cannot infer types unless we PM explicitly
-        _ <- augBlock match {
+        _ <- block match {
             case minor: Block.Unsigned.Minor =>
-                state.withCellFor(minor)(_.applyAugBlock(minor))
+                state.withCellFor(minor)(_.applyBlock(minor))
             case major: Block.Unsigned.Major =>
-                state.withCellFor(major)(_.applyAugBlock(major))
+                state.withCellFor(major)(_.applyBlock(major))
             case final_ : Block.Unsigned.Final =>
-                state.withCellFor(final_)(_.applyAugBlock(final_))
+                state.withCellFor(final_)(_.applyBlock(final_))
         }
     } yield ()
 
@@ -399,13 +398,13 @@ class ConsensusActor(
     // Actor's internal results - confirmed blocks
     // ===================================
     sealed trait BlockConfirmed {
-        def block: BlockBrief.Next
+        def blockBrief: BlockBrief.Next
 
         def effects: BlockEffects.MultiSigned.Next
 
         val finalizationRequested: Boolean
 
-        final lazy val blockNum: BlockNumber = block.blockNum
+        final lazy val blockNum: BlockNumber = blockBrief.blockNum
 
         final lazy val toBlockWeaver: BlockWeaver.BlockConfirmed =
             BlockWeaver.BlockConfirmed(
@@ -456,30 +455,30 @@ class ConsensusActor(
 
         final lazy val toEventSequencer: EventSequencer.Request.BlockConfirmed =
             EventSequencer.Request.BlockConfirmed(
-              block = this.block,
+              blockBrief = this.blockBrief,
               mbPostDatedRefundsSigned = this.effects.postDatedRefundTxs
             )
 
         final lazy val toPeerLiaison: PeerLiaison.Request.BlockConfirmed =
-            PeerLiaison.Request.BlockConfirmed(this.block)
+            PeerLiaison.Request.BlockConfirmed(this.blockBrief)
     }
 
     object BlockConfirmed:
 
         final case class Minor(
-            override val block: BlockBrief.Minor,
+            override val blockBrief: BlockBrief.Minor,
             override val effects: BlockEffects.MultiSigned.Minor,
             override val finalizationRequested: Boolean
         ) extends BlockConfirmed
 
         final case class Major(
-            override val block: BlockBrief.Major,
+            override val blockBrief: BlockBrief.Major,
             override val effects: BlockEffects.MultiSigned.Major,
             override val finalizationRequested: Boolean
         ) extends BlockConfirmed
 
         final case class Final(
-            override val block: BlockBrief.Final,
+            override val blockBrief: BlockBrief.Final,
             override val effects: BlockEffects.MultiSigned.Final,
             override val finalizationRequested: Boolean = false
         ) extends BlockConfirmed
@@ -596,8 +595,8 @@ class ConsensusActor(
         // ===================================
 
         private def msgBlockNum(msg: Block.Unsigned.Next | AckBlock): BlockNumber = msg match {
-            case augBlock: Block.Unsigned.Next => augBlock.blockNum
-            case ack: AckBlock                 => ack.blockNum
+            case block: Block.Unsigned.Next => block.blockNum
+            case ack: AckBlock              => ack.blockNum
         }
 
         private def spawnCell(msg: Block.Unsigned.Next | AckBlock): IO[ConsensusFor[msg.type]] = {
@@ -749,22 +748,22 @@ class ConsensusActor(
         // Minor cell
         // ===================================
 
-        /** Minor block consensus, may start off by receiving a local augmented block (and local
-          * ack) or someone else's acknowledgment.
+        /** Minor block consensus, may start off by receiving a local block (and local ack) or
+          * someone else's acknowledgment.
           *
-          * @param augBlock
+          * @param block
           * @param acks
           */
         final case class MinorConsensusCell(
             override val blockNum: BlockNumber,
-            augBlock: Option[Block.Unsigned.Minor],
+            block: Option[Block.Unsigned.Minor],
             acks: Map[VerificationKeyBytes, AckBlock.Minor],
             postponedNextBlockOwnAck: Option[RoundOneOwnAck]
         ) extends ConsensusCell[MinorConsensusCell]
             with PostponedAckSupport[MinorConsensusCell] {
             import CollectingError.*
 
-            override type AugBlockType = Block.Unsigned.Minor
+            override type BlockType = Block.Unsigned.Minor
             override type AckType = AckBlock.Minor
             override type RoundTwoType = Void
             override type RoundTwoOwnAckType = Void
@@ -773,18 +772,18 @@ class ConsensusActor(
             override protected def withPostponedAck(ack: RoundOneOwnAck): MinorConsensusCell =
                 copy(postponedNextBlockOwnAck = Some(ack))
 
-            override def applyAugBlock(
-                augmentedBlock: Block.Unsigned.Minor
+            override def applyBlock(
+                block: Block.Unsigned.Minor
             ): IO[MinorConsensusCell] =
                 for {
-                    blockNumber <- IO.pure(augmentedBlock.blockNum)
+                    blockNumber <- IO.pure(block.blockNum)
                     _ <- IO.raiseWhen(this.blockNum != blockNumber)(
                       UnexpectedBlockNumber(this.blockNum, blockNumber)
                     )
-                    _ <- IO.raiseWhen(this.augBlock.isDefined)(
-                      UnexpectedAugmentedBlock(this.blockNum)
+                    _ <- IO.raiseWhen(this.block.isDefined)(
+                      UnexpectedBlock(this.blockNum)
                     )
-                    newRound = this.copy(augBlock = Some(augmentedBlock))
+                    newRound = this.copy(block = Some(block))
                 } yield newRound
 
             override def applyAck(ack: AckBlock.Minor): IO[MinorConsensusCell] =
@@ -807,7 +806,7 @@ class ConsensusActor(
                 } yield newRound
 
             override def isSaturated: Boolean =
-                augBlock.isDefined && acks.keys == config.verificationKeys.values
+                block.isDefined && acks.keys == config.verificationKeys.values
 
             override def complete
                 : IO[Either[(Void, Void), (BlockConfirmed.Minor, Option[RoundOneOwnAck])]] = {
@@ -824,8 +823,8 @@ class ConsensusActor(
                         .void
 
                 for {
-                    augBlock <- IO.pure(augBlock.get)
-                    blockBrief = augBlock.blockBrief
+                    block <- IO.pure(block.get)
+                    blockBrief = block.blockBrief
 
                     // 1. Verify header signatures
                     validate = validateHeaderSignature(blockBrief.header.onchainMsg)
@@ -833,7 +832,7 @@ class ConsensusActor(
                     _ <- IO.traverse_(vksAndSigs)((vk, sig) => validate(vk, sig))
 
                     // 2. Zip post-dated refunds with signatures, verify them, and attach to the transactions
-                    refunds = augBlock.effects.postDatedRefundTxs
+                    refunds = block.effects.postDatedRefundTxs
                     witnessSets = acks
                         .map((vk, ack) => ack.postDatedRefundTxs.map(vk -> _))
                         .toList
@@ -847,7 +846,7 @@ class ConsensusActor(
                         .foldLeft(false)(_ || _.finalizationRequested)
                 } yield Right(
                   BlockConfirmed.Minor(
-                    block = blockBrief,
+                    blockBrief = blockBrief,
                     effects = BlockEffects.MultiSigned.Minor(
                       headerSerialized = blockBrief.header.onchainMsg,
                       headerMultiSigned = vksAndSigs.map(_._2),
@@ -878,14 +877,14 @@ class ConsensusActor(
 
         final case class MajorRoundOneCell(
             override val blockNum: BlockNumber,
-            augmentedBlock: Option[Block.Unsigned.Major],
+            block: Option[Block.Unsigned.Major],
             acks1: Map[VerificationKeyBytes, AckBlock.Major1],
             acks2: Map[VerificationKeyBytes, AckBlock.Major2],
             postponedNextBlockOwnAck: Option[RoundOneOwnAck]
         ) extends MajorConsensusCell[MajorRoundOneCell] {
             import CollectingError.*
 
-            override type AugBlockType = Block.Unsigned.Major
+            override type BlockType = Block.Unsigned.Major
             override type AckType = AckBlock.Major1 | AckBlock.Major2
             override type RoundTwoType = MajorRoundTwoCell
             override type RoundTwoOwnAckType = AckBlock.Major2
@@ -894,18 +893,18 @@ class ConsensusActor(
             override protected def withPostponedAck(ack: RoundOneOwnAck): MajorRoundOneCell =
                 copy(postponedNextBlockOwnAck = Some(ack))
 
-            override def applyAugBlock(
-                augmentedBlock: Block.Unsigned.Major
+            override def applyBlock(
+                block: Block.Unsigned.Major
             ): IO[MajorRoundOneCell] =
                 for {
-                    blockNumber <- IO.pure(augmentedBlock.blockNum)
+                    blockNumber <- IO.pure(block.blockNum)
                     _ <- IO.raiseWhen(this.blockNum != blockNumber)(
                       UnexpectedBlockNumber(this.blockNum, blockNumber)
                     )
-                    _ <- IO.raiseWhen(this.augmentedBlock.isDefined)(
-                      UnexpectedAugmentedBlock(this.blockNum)
+                    _ <- IO.raiseWhen(this.block.isDefined)(
+                      UnexpectedBlock(this.blockNum)
                     )
-                    newRound = this.copy(augmentedBlock = Some(augmentedBlock))
+                    newRound = this.copy(block = Some(block))
                 } yield newRound
 
             override def applyAck(
@@ -949,19 +948,19 @@ class ConsensusActor(
                 } yield newRound
 
             override def isSaturated: Boolean =
-                this.augmentedBlock.isDefined &&
+                this.block.isDefined &&
                     this.acks1.keySet == config.verificationKeys.values.toSet
 
             override def complete
                 : IO[Either[(MajorRoundTwoCell, AckBlock.Major2), (Void, Option[RoundOneOwnAck])]] =
                 for {
-                    augBlock <- this.augmentedBlock.liftTo[IO](
+                    block <- this.block.liftTo[IO](
                       // This should never happen
-                      new IllegalStateException("Cannot complete without augmented block")
+                      new IllegalStateException("Cannot complete without block")
                     )
                     roundTwo = MajorRoundTwoCell(
                       blockNum = this.blockNum,
-                      augBlock = augBlock,
+                      block = block,
                       acks1 = this.acks1,
                       acks2 = this.acks2,
                       postponedNextBlockOwnAck = postponedNextBlockOwnAck
@@ -989,14 +988,14 @@ class ConsensusActor(
 
         final case class MajorRoundTwoCell(
             override val blockNum: BlockNumber,
-            augBlock: Block.Unsigned.Major,
+            block: Block.Unsigned.Major,
             acks1: Map[VerificationKeyBytes, AckBlock.Major1],
             acks2: Map[VerificationKeyBytes, AckBlock.Major2],
             postponedNextBlockOwnAck: Option[RoundOneOwnAck]
         ) extends MajorConsensusCell[MajorRoundTwoCell] {
             import CollectingError.*
 
-            override type AugBlockType = Void
+            override type BlockType = Void
             override type AckType = AckBlock.Major2
             override type RoundTwoType = Void
             override type RoundTwoOwnAckType = Void
@@ -1005,9 +1004,9 @@ class ConsensusActor(
             override protected def withPostponedAck(ack: RoundOneOwnAck): MajorRoundTwoCell =
                 copy(postponedNextBlockOwnAck = Some(ack))
 
-            override def applyAugBlock(augBlock: Void): IO[MajorRoundTwoCell] =
+            override def applyBlock(block: Void): IO[MajorRoundTwoCell] =
                 IO.raiseError(
-                  new IllegalStateException("MajorBlockRoundTwo does not accept augmented blocks")
+                  new IllegalStateException("MajorBlockRoundTwo does not accept blocks")
                 )
 
             override def applyAck(ack: AckBlock.Major2): IO[MajorRoundTwoCell] =
@@ -1038,7 +1037,7 @@ class ConsensusActor(
                       acks1.map((vk, ack) => vk -> ack.fallbackTx).toList
                     )
                     fallbackTxSigned <- validateAndAttachTxSignature(
-                      augBlock.effects.fallbackTx,
+                      block.effects.fallbackTx,
                       fallbackWitnessSet
                     )
 
@@ -1047,7 +1046,7 @@ class ConsensusActor(
                         .map((vk, ack) => ack.rolloutTxs.map(vk -> _))
                         .toList
                         .transpose
-                    rolloutsSigned <- augBlock.effects.rolloutTxs
+                    rolloutsSigned <- block.effects.rolloutTxs
                         .zip(rolloutWitnessSets)
                         .traverse(tupled(validateAndAttachTxSignature[RolloutTx]))
 
@@ -1056,7 +1055,7 @@ class ConsensusActor(
                         .map((vk, ack) => ack.postDatedRefundTxs.map(vk -> _))
                         .toList
                         .transpose
-                    postDatedRefundsSigned <- augBlock.effects.postDatedRefundTxs
+                    postDatedRefundsSigned <- block.effects.postDatedRefundTxs
                         .zip(postDatedRefundsWitnessSets)
                         .traverse(tupled(validateAndAttachTxSignature[RefundTx.PostDated]))
 
@@ -1065,7 +1064,7 @@ class ConsensusActor(
                       acks2.map((vk, ack) => vk -> ack.settlementTx).toList
                     )
                     settlementTxSigned <- validateAndAttachTxSignature(
-                      augBlock.effects.settlementTx,
+                      block.effects.settlementTx,
                       settlementWitnessSet
                     )
 
@@ -1075,7 +1074,7 @@ class ConsensusActor(
 
                 } yield Right(
                   BlockConfirmed.Major(
-                    block = augBlock.blockBrief,
+                    blockBrief = block.blockBrief,
                     effects = BlockEffects.MultiSigned.Major(
                       settlementTx = settlementTxSigned,
                       fallbackTx = fallbackTxSigned,
@@ -1094,30 +1093,30 @@ class ConsensusActor(
 
         final case class FinalRoundOneCell(
             override val blockNum: BlockNumber,
-            augmentedBlock: Option[Block.Unsigned.Final],
+            block: Option[Block.Unsigned.Final],
             acks1: Map[VerificationKeyBytes, AckBlock.Final1],
             acks2: Map[VerificationKeyBytes, AckBlock.Final2]
         ) extends FinalConsensusCell[FinalRoundOneCell] {
             import CollectingError.*
 
-            override type AugBlockType = Block.Unsigned.Final
+            override type BlockType = Block.Unsigned.Final
             override type AckType = AckBlock.Final1 | AckBlock.Final2
             override type RoundTwoType = FinalRoundTwoCell
             override type RoundTwoOwnAckType = AckBlock.Final2
             override type ResultType = Void
 
-            override def applyAugBlock(
-                augmentedBlock: Block.Unsigned.Final
+            override def applyBlock(
+                block: Block.Unsigned.Final
             ): IO[FinalRoundOneCell] =
                 for {
-                    blockNumber <- IO.pure(augmentedBlock.blockNum)
+                    blockNumber <- IO.pure(block.blockNum)
                     _ <- IO.raiseWhen(this.blockNum != blockNumber)(
                       UnexpectedBlockNumber(this.blockNum, blockNumber)
                     )
-                    _ <- IO.raiseWhen(this.augmentedBlock.isDefined)(
-                      UnexpectedAugmentedBlock(this.blockNum)
+                    _ <- IO.raiseWhen(this.block.isDefined)(
+                      UnexpectedBlock(this.blockNum)
                     )
-                    newRound = this.copy(augmentedBlock = Some(augmentedBlock))
+                    newRound = this.copy(block = Some(block))
                 } yield newRound
 
             override def applyAck(ack: AckBlock.Final1 | AckBlock.Final2): IO[FinalRoundOneCell] =
@@ -1159,18 +1158,18 @@ class ConsensusActor(
                 } yield newRound
 
             override def isSaturated: Boolean =
-                this.augmentedBlock.isDefined &&
+                this.block.isDefined &&
                     this.acks1.keySet == config.verificationKeys.values.toSet
 
             override def complete
                 : IO[Either[(FinalRoundTwoCell, AckBlock.Final2), (Void, Option[RoundOneOwnAck])]] =
                 for {
-                    augBlock <- this.augmentedBlock.liftTo[IO](
-                      new IllegalStateException("Cannot complete without augmented block")
+                    block <- this.block.liftTo[IO](
+                      new IllegalStateException("Cannot complete without block")
                     )
                     roundTwo = FinalRoundTwoCell(
                       blockNum = this.blockNum,
-                      augBlock = augBlock,
+                      block = block,
                       acks1 = this.acks1,
                       acks2 = this.acks2
                     )
@@ -1199,21 +1198,21 @@ class ConsensusActor(
 
         final case class FinalRoundTwoCell(
             override val blockNum: BlockNumber,
-            augBlock: Block.Unsigned.Final,
+            block: Block.Unsigned.Final,
             acks1: Map[VerificationKeyBytes, AckBlock.Final1],
             acks2: Map[VerificationKeyBytes, AckBlock.Final2]
         ) extends FinalConsensusCell[FinalRoundTwoCell] {
             import CollectingError.*
 
-            override type AugBlockType = Void
+            override type BlockType = Void
             override type AckType = AckBlock.Final2
             override type RoundTwoType = Void
             override type RoundTwoOwnAckType = Void
             override type ResultType = BlockConfirmed.Final
 
-            override def applyAugBlock(augBlock: Void): IO[FinalRoundTwoCell] =
+            override def applyBlock(block: Void): IO[FinalRoundTwoCell] =
                 IO.raiseError(
-                  new IllegalStateException("FinalBlockRoundTwo does not accept augmented blocks")
+                  new IllegalStateException("FinalBlockRoundTwo does not accept blocks")
                 )
 
             override def applyAck(ack: AckBlock.Final2): IO[FinalRoundTwoCell] =
@@ -1246,7 +1245,7 @@ class ConsensusActor(
                           .toList
                           .transpose
                     )
-                    rolloutsSigned <- augBlock.effects.rolloutTxs
+                    rolloutsSigned <- block.effects.rolloutTxs
                         .zip(rolloutWitnessSets)
                         .traverse(tupled(validateAndAttachTxSignature[RolloutTx]))
 
@@ -1255,12 +1254,12 @@ class ConsensusActor(
                       acks2.map((vk, ack) => vk -> ack.finalizationTx).toList
                     )
                     finalizationSigned <- validateAndAttachTxSignature(
-                      augBlock.effects.finalizationTx,
+                      block.effects.finalizationTx,
                       finalizationWitnessSet
                     )
 
                     // 3. Optional deinit
-                    mbDeinitSigned <- augBlock.effects.deinitTx match {
+                    mbDeinitSigned <- block.effects.deinitTx match {
                         case None => IO.pure(None)
                         case Some(deinit) =>
                             for {
@@ -1278,7 +1277,7 @@ class ConsensusActor(
                 } yield Right(
                   (
                     BlockConfirmed.Final(
-                      block = augBlock.blockBrief,
+                      blockBrief = block.blockBrief,
                       effects = BlockEffects.MultiSigned.Final(
                         rolloutTxs = rolloutsSigned,
                         deinitTx = mbDeinitSigned,
@@ -1293,7 +1292,7 @@ class ConsensusActor(
         enum CollectingError extends Throwable:
             case UnexpectedBlockNumber(roundBlockNumber: BlockNumber, blockNumber: BlockNumber)
             case UnexpectedAck(blockNum: BlockNumber, peerId: PeerNumber)
-            case UnexpectedAugmentedBlock(blockNum: BlockNumber)
+            case UnexpectedBlock(blockNum: BlockNumber)
             case UnexpectedPeer(peer: PeerNumber)
             case PostponedAckAlreadySet
             case UnexpectedPosponedAck
@@ -1303,8 +1302,8 @@ class ConsensusActor(
                     s"Unexpected block number $blockNumber in round for block number $roundBlockNumber"
                 case UnexpectedAck(blockNum, peerId) =>
                     s"Round for block $blockNum already has an ack from peer $peerId"
-                case UnexpectedAugmentedBlock(blockNum) =>
-                    s"Round for block $blockNum already has an augmented block"
+                case UnexpectedBlock(blockNum) =>
+                    s"Round for block $blockNum already has a block"
                 case UnexpectedPeer(peer) =>
                     s"Unexpected peer number: $peer"
                 case PostponedAckAlreadySet =>

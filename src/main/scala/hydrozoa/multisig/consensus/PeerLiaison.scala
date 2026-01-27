@@ -82,7 +82,7 @@ trait PeerLiaison(
                     next: GetMsgBatch <- state.verifyBatchAndGetNext(x)
                     _ <- conn.remotePeerLiaison ! next
                     _ <- x.ack.traverse_(conn.consensusActor ! _)
-                    _ <- x.block.traverse_(conn.blockWeaver ! _)
+                    _ <- x.blockBrief.traverse_(conn.blockWeaver ! _)
                     _ <- x.events.traverse_(conn.blockWeaver ! _)
                 } yield ()
 
@@ -207,15 +207,15 @@ trait PeerLiaison(
             } yield NewMsgBatch(
               batchNum = batchReq.batchNum,
               ack = mAck,
-              block = mBlock,
+              blockBrief = mBlock,
               events = events.toList
             )).attemptNarrow
 
         def dequeueConfirmed(x: BlockConfirmed): IO[Unit] = {
             import x.*
-            val blockNum: BlockNumber = block.blockNum
-            val ackNum: AckNumber = AckNumber.neededToConfirm(block.header)
-            val eventNum: LedgerEventId.Number = block.body.events.collect {
+            val blockNum: BlockNumber = blockBrief.blockNum
+            val ackNum: AckNumber = AckNumber.neededToConfirm(blockBrief.header)
+            val eventNum: LedgerEventId.Number = blockBrief.body.events.collect {
                 case x if x._1.peerNum == config.ownPeerId.peerNum => x._1.eventNum
             }.max
             for {
@@ -226,7 +226,7 @@ trait PeerLiaison(
         }
 
         def verifyBatchAndGetNext(receivedBatch: NewMsgBatch): IO[GetMsgBatch] = {
-            import receivedBatch.{ack, block, events}
+            import receivedBatch.{ack, blockBrief, events}
             for {
                 current <- this.currentlyRequesting.get
                 nextBatchNum = current.batchNum.increment
@@ -244,7 +244,7 @@ trait PeerLiaison(
 
                 // Received block num (if any) is the next leader block from the remote peer
                 // after the requested block num
-                correctBlockNum = block.forall(_.blockNum == nextBlockNum)
+                correctBlockNum = blockBrief.forall(_.blockNum == nextBlockNum)
 
                 // First received event ID is the increment of the requested event ID
                 // and all subsequent received event IDs are consecutive from it.
@@ -262,7 +262,7 @@ trait PeerLiaison(
                     GetMsgBatch(
                       batchNum = nextBatchNum,
                       ackNum = ack.fold(current.ackNum)(_.ackNum),
-                      blockNum = block.fold(current.blockNum)(_.blockNum),
+                      blockNum = blockBrief.fold(current.blockNum)(_.blockNum),
                       eventNum = events.lastOption.fold(current.eventNum)(_.eventNum)
                     )
                 else current
@@ -336,7 +336,7 @@ object PeerLiaison {
           * @param ack
           *   If provided, a block acknowledgment originating from the responder after the requested
           *   [[AckNum]].
-          * @param block
+          * @param blockBrief
           *   If provided, a block originating from the responder after the requested [[Number]].
           *   The initial block is never sent in a message batch because it's already pre-confirmed
           *   in the head config, which every peer already has locally.
@@ -347,12 +347,12 @@ object PeerLiaison {
         final case class NewMsgBatch(
             batchNum: Batch.Number,
             ack: Option[AckBlock],
-            block: Option[BlockBrief.Next],
+            blockBrief: Option[BlockBrief.Next],
             events: List[LedgerEvent]
         )
 
         final case class BlockConfirmed(
-            block: BlockBrief.Next
+            blockBrief: BlockBrief.Next
         )
     }
 
