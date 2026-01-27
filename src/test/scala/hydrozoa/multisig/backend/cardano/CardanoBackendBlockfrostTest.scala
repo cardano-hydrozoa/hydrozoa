@@ -158,6 +158,9 @@ class CardanoBackendBlockfrostTest extends AnyFunSuite {
         assert(ret.isLeft)
     }
 
+    // TODO: post our own golden tx - it's almost impossible to find such
+    //  a tx on the public testnet
+    // TODO: update the test
     ignore("Fetch txs with specific asset 1", RequiresBlockfrostApiKey) {
         val ret = runWithKey(key =>
             for {
@@ -177,6 +180,9 @@ class CardanoBackendBlockfrostTest extends AnyFunSuite {
         assert(ret.isRight && ret.exists(set => set.size == 13))
     }
 
+    // TODO: post our own golden tx - it's almost impossible to find such
+    //  a tx on the public testnet
+    // TODO: update the test
     ignore("Fetch txs - empty results", RequiresBlockfrostApiKey) {
         val ret = runWithKey(key =>
             for {

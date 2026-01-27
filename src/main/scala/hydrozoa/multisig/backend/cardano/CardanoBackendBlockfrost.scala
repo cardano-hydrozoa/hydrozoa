@@ -14,12 +14,11 @@ import com.bloxbean.cardano.client.quicktx.TxResult
 import hydrozoa.multisig.backend.cardano.CardanoBackend.Error.*
 import hydrozoa.{L1, OutputL1, UtxoIdL1, UtxoSet, UtxoSetL1}
 import io.bullet.borer.Cbor
+import scala.collection.mutable
+import scala.jdk.CollectionConverters.*
 import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger.{AssetName, PolicyId, Transaction, TransactionHash}
-
-import scala.collection.mutable
-import scala.jdk.CollectionConverters.*
 
 class CardanoBackendBlockfrost private (
     private val backendService: BackendService,
@@ -133,7 +132,7 @@ class CardanoBackendBlockfrost private (
                 if inlineDatumHex.isEmpty then None
                 else {
                     import io.bullet.borer.Cbor
-                import scalus.builtin.Data
+                    import scalus.builtin.Data
                     scala.util.Try {
                         val datumBytes = ByteString.fromHex(inlineDatumHex)
                         val data = Cbor.decode(datumBytes.bytes).to[Data].value
@@ -210,12 +209,13 @@ class CardanoBackendBlockfrost private (
         } yield txRets.flatten).value
 
     /** Tries to treat a transaction as one having a continue output with the asset. Returns the tx
-      * hash -> the redeemer of hte continuing input if a tx is good. Returns None if tx doesn't
+      * hash -> the redeemer of the continuing input if a tx is good. Returns None if tx doesn't
       * conform the pattern, i.e., an input is missing, an output is missing or the redeemer is
-      * missing.
+      * missing. NB: Decoding redeemer error is thrown though.
       *
       * @param txHash
-      * @param unit the asset unit string (policyId + assetName hex)
+      * @param unit
+      *   the asset unit string (policyId + assetName hex)
       * @return
       */
     private def continuingInputRedeemer(
@@ -225,9 +225,11 @@ class CardanoBackendBlockfrost private (
         (for {
             utxos <- EitherT(txUtxos(txHash))
             inputIx <- EitherT.fromOption[IO](
-              opt = utxos.getInputs.asScala.zipWithIndex.find { (input, _) =>
-                  input.getAmount.asScala.exists(_.getUnit == unit)
-              }.map(_._2),
+              opt = utxos.getInputs.asScala.zipWithIndex
+                  .find { (input, _) =>
+                      input.getAmount.asScala.exists(_.getUnit == unit)
+                  }
+                  .map(_._2),
               ifNone = NoTxInputWithAsset(txHash, unit)
             )
             _ <- EitherT.fromOption[IO](
@@ -250,10 +252,12 @@ class CardanoBackendBlockfrost private (
             )
 
         } yield Some(txHash -> redeemer)).value.map {
-            case Left(NoTxInputWithAsset(_, _)) => Right(None)
-            case Left(NoTxOutputWithAsset(_, _)) => Right(None)
+            // Some errors are ignored - there may be txs that doesn't conform
+            // the pattern.
+            case Left(NoTxInputWithAsset(_, _))       => Right(None)
+            case Left(NoTxOutputWithAsset(_, _))      => Right(None)
             case Left(SpendingRedeemerNotFound(_, _)) => Right(None)
-            case other => other
+            case other                                => other
         }
     }
 
