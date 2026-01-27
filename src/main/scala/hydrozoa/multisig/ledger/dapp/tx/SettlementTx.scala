@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toQuantizedInstant}
+import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.Settlement
@@ -8,8 +9,6 @@ import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, HasCtx, explai
 import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo, RolloutUtxo}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
-import hydrozoa.multisig.protocol.types.Block
-import hydrozoa.multisig.protocol.types.Block.Version.Major
 import monocle.{Focus, Lens}
 import scala.annotation.tailrec
 import scala.collection.immutable.Vector
@@ -27,7 +26,7 @@ import scalus.cardano.txbuilder.TransactionBuilderStep.*
 // TODO: why don't we have direct payouts here?
 sealed trait SettlementTx
     extends Tx[SettlementTx],
-      Block.Version.Major.Produced,
+      BlockVersion.Major.Produced,
       MultisigTreasuryUtxo.Spent,
       MultisigTreasuryUtxo.Produced,
       DepositUtxo.Many.Spent,
@@ -493,7 +492,7 @@ object SettlementTx {
                   */
                 @throws[AssertionError]
                 def getTreasuryProduced[T <: SettlementTx](
-                    majorVersion: Block.Version.Major,
+                    majorVersion: BlockVersion.Major,
                     treasurySpent: MultisigTreasuryUtxo,
                     ctx: State[T]
                 ): MultisigTreasuryUtxo = {
@@ -513,7 +512,7 @@ object SettlementTx {
     case class NoPayouts(
         override val validityEnd: QuantizedInstant,
         override val tx: Transaction,
-        override val majorVersionProduced: Major,
+        override val majorVersionProduced: BlockVersion.Major,
         override val treasurySpent: MultisigTreasuryUtxo,
         override val treasuryProduced: MultisigTreasuryUtxo,
         override val depositsSpent: Vector[DepositUtxo],
@@ -525,7 +524,7 @@ object SettlementTx {
     case class WithOnlyDirectPayouts(
         override val validityEnd: QuantizedInstant,
         override val tx: Transaction,
-        override val majorVersionProduced: Block.Version.Major,
+        override val majorVersionProduced: BlockVersion.Major,
         override val treasurySpent: MultisigTreasuryUtxo,
         override val treasuryProduced: MultisigTreasuryUtxo,
         override val depositsSpent: Vector[DepositUtxo],
@@ -538,7 +537,7 @@ object SettlementTx {
     case class WithRollouts(
         override val validityEnd: QuantizedInstant,
         override val tx: Transaction,
-        override val majorVersionProduced: Block.Version.Major,
+        override val majorVersionProduced: BlockVersion.Major,
         override val treasurySpent: MultisigTreasuryUtxo,
         override val treasuryProduced: MultisigTreasuryUtxo,
         override val depositsSpent: Vector[DepositUtxo],
@@ -567,7 +566,7 @@ object SettlementTx {
               HasCtx
 
         trait Args
-            extends Block.Version.Major.Produced,
+            extends BlockVersion.Major.Produced,
               MultisigTreasuryUtxo.ToSpend,
               DepositUtxo.Many.ToSpend,
               HasValidityEnd {
@@ -664,7 +663,7 @@ object SettlementTx {
         object Args {
             final case class NoPayouts(
                 override val kzgCommitment: KzgCommitment,
-                override val majorVersionProduced: Block.Version.Major,
+                override val majorVersionProduced: BlockVersion.Major,
                 override val treasuryToSpend: MultisigTreasuryUtxo,
                 // FIXME (Peter, 2025-12-10): If there's no deposits and no payouts,
                 // then this is a "roll forward" transaction, which is supposed to
@@ -676,7 +675,7 @@ object SettlementTx {
 
             final case class WithPayouts(
                 override val kzgCommitment: KzgCommitment,
-                override val majorVersionProduced: Block.Version.Major,
+                override val majorVersionProduced: BlockVersion.Major,
                 override val treasuryToSpend: MultisigTreasuryUtxo,
                 override val depositsToSpend: Vector[DepositUtxo],
                 override val validityEnd: QuantizedInstant,

@@ -7,11 +7,13 @@ import com.suprnation.actor.ActorSystem
 import com.suprnation.actor.test.TestKit
 import com.suprnation.typelevel.actors.syntax.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
+import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
+import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
+import hydrozoa.multisig.protocol.types.LedgerEvent
 import hydrozoa.multisig.protocol.types.LedgerEventId.ValidityFlag.Valid
-import hydrozoa.multisig.protocol.types.{Block, LedgerEvent, Peer}
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.genVersion
 import java.time.Instant
 import org.scalacheck.{Arbitrary, Gen, Properties, PropertyBuilder, Test}
@@ -33,11 +35,11 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
 
         val peers = p.pick(genTestPeers(), "test peers")
         val peer = p.pick(Gen.oneOf(peers.toList))
-        val peerId = Peer.Id(peer.ordinal, peers.size)
+        val peerId = PeerId(peer.ordinal, peers.size)
 
         // Either the initialization block or any arbitrary block
         val lastKnownBlock =
-            Block.Number(
+            BlockNumber(
               p.pick(
                 Gen.frequency(
                   5 -> Gen.const(0),
@@ -111,7 +113,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
             val peers = p.pick(genTestPeers(), "test peers")
             // The second peer (i=1) or the first one if there is only one
             val leader = peers.tail.headOption.getOrElse(peers.head)
-            val peerId = Peer.Id(leader.ordinal, peers.size)
+            val peerId = PeerId(leader.ordinal, peers.size)
             val lastKnownBlock = 0
 
             // Joint ledger mock
@@ -122,7 +124,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
 
             // Weaver's config
             val config = BlockWeaver.Config(
-              lastKnownBlock = Block.Number(lastKnownBlock),
+              lastKnownBlock = BlockNumber(lastKnownBlock),
               peerId = peerId,
               recoveredMempool = BlockWeaver.Mempool.empty,
               slotConfig = testTxBuilderCardanoInfo.slotConfig
@@ -158,7 +160,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
     //
     //        val peers = p.pick(genTestPeers(), "test peers")
     //        val peer = p.pick(Gen.oneOf(peers.toList))
-    //        val peerId = Peer.Id(peer.ordinal, peers.size)
+    //        val peerId = PeerId(peer.ordinal, peers.size)
     //
     //        // Joint ledger mock
     //        val system = p.runIO(ActorSystem[IO]("Weaver SUT").allocated)._1
@@ -169,7 +171,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
     //        // Weaver's config such that the peer is going to be the leader of the next non-first block
     //        val roundsCompleted = p.pick(Gen.choose(100, 1000))
     //        val config = BlockWeaver.Config(
-    //          lastKnownBlock = Block.Number(roundsCompleted * peers.size + peer.ordinal - 1),
+    //          lastKnownBlock = BlockNumber(roundsCompleted * peers.size + peer.ordinal - 1),
     //          peerId = peerId,
     //          recoveredMempool = BlockWeaver.Mempool.empty,
     //          slotConfig = testTxBuilderCardanoInfo.slotConfig
@@ -212,7 +214,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
         // blocks (since we don't want its leader StartBlock gets into our way).
         val peers = p.pick(genTestPeers(4), "test peers")
         val peer = p.pick(Gen.oneOf(peers.toList), "own peer")
-        val peerId = Peer.Id(peer.ordinal, peers.size)
+        val peerId = PeerId(peer.ordinal, peers.size)
 
         // Joint ledger mock
         val system = p.runIO(ActorSystem[IO]("Weaver SUT").allocated)._1
@@ -223,7 +225,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
         // Weaver's config such that lastKnownBlock was peer's turn so we have at least 3 blocks
         // that the SUT weaver is guaranteed to handle as a follower.
         val roundsCompleted = p.pick(Gen.choose(100, 1000), "rounds completed")
-        val lastKnownBlock = Block.Number(roundsCompleted * peers.size + peer.ordinal)
+        val lastKnownBlock = BlockNumber(roundsCompleted * peers.size + peer.ordinal)
         val config = BlockWeaver.Config(
           // This is
           lastKnownBlock = lastKnownBlock,
@@ -264,7 +266,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
             p.pick(Gen.const(events.filterNot(eventsDelayed.contains)), "events immediate")
 
         val version = p.pick(
-          genVersion.map((maj, min) => Block.Version.Full.apply(maj.toInt, min.toInt)),
+          genVersion.map((maj, min) => BlockVersion.Full.apply(maj.toInt, min.toInt)),
           "first block version"
         )
 
@@ -277,14 +279,15 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
 
                   // First block
                   now <- realTimeQuantizedInstant(testTxBuilderCardanoInfo.slotConfig)
-                  firstBlock: Block.Next = Block.Minor(
-                    Block.Header.Minor(
+                  firstBlock: BlockBrief.Minor = BlockBrief.Minor(
+                    BlockHeader.Minor(
                       blockNum = lastKnownBlock.increment,
                       blockVersion = version,
-                      timeCreation = now,
-                      commitment = KzgCommitment.empty
+                      startTime = now,
+                      endTime = ???,
+                      kzgCommitment = KzgCommitment.empty
                     ),
-                    Block.Body.Minor(
+                    BlockBody.Minor(
                       events = firstBlockEvents.map(e => (e.eventId, Valid)).toList,
                       depositsRefunded = List.empty
                     )
@@ -292,14 +295,17 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
 
                   // Second block
                   newTime <- realTimeQuantizedInstant(testTxBuilderCardanoInfo.slotConfig)
-                  secondBlock: Block.Next = firstBlock.nextBlock(
-                    Block.Body.Minor(
-                      events = secondBlockEvents.map(e => (e.eventId, Valid)).toList,
-                      depositsRefunded = List.empty
-                    ),
-                    newTime = newTime,
-                    newCommitment = KzgCommitment.empty
-                  )
+                  secondBlock: BlockBrief.Minor = BlockBody
+                      .Minor(
+                        events = secondBlockEvents.map(e => (e.eventId, Valid)).toList,
+                        depositsRefunded = List.empty
+                      )
+                      .asNextBlockBrief(
+                        firstBlock.header,
+                        newStartTime = newTime,
+                        newEndTime = ???,
+                        newKzgCommitment = KzgCommitment.empty
+                      )
 
                   _ <- (for {
                       _ <- IO.sleep(50.millis)
@@ -313,14 +319,14 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
                   // This `expectMsgs` spams to console with Expecting:..., is's "ok"
                   _ <- expectMsgs(jointLedgerMockActor, 10.seconds)(
                     List(
-                      StartBlock(firstBlock.header.blockNum, firstBlock.header.timeCreation)
+                      StartBlock(firstBlock.header.blockNum, firstBlock.header.startTime)
                     )
                         ++ firstBlockEvents
                         ++ List(
                           CompleteBlockRegular(Some(firstBlock), Set.empty, false)
                         )
                         ++ List(
-                          StartBlock(secondBlock.header.blockNum, secondBlock.header.timeCreation)
+                          StartBlock(secondBlock.header.blockNum, secondBlock.header.startTime)
                         )
                         ++ secondBlockEvents
                         ++ List(CompleteBlockRegular(Some(secondBlock), Set.empty, false))*

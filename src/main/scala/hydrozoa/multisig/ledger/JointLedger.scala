@@ -4,15 +4,18 @@ import cats.effect.{IO, Ref}
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
+import hydrozoa.UtxoIdL1
 import hydrozoa.config.EquityShares
 import hydrozoa.lib.actor.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, toEpochQuantizedInstant}
 import hydrozoa.multisig.MultisigRegimeManager
+import hydrozoa.multisig.consensus.peer.{PeerId, PeerWallet}
 import hydrozoa.multisig.consensus.{ConsensusActor, PeerLiaison}
 import hydrozoa.multisig.ledger.DappLedgerM.runDappLedgerM
 import hydrozoa.multisig.ledger.JointLedger.*
 import hydrozoa.multisig.ledger.JointLedger.Requests.*
 import hydrozoa.multisig.ledger.VirtualLedgerM.runVirtualLedgerM
+import hydrozoa.multisig.ledger.block.{Block, BlockBody, BlockBrief, BlockEffects, BlockHeader, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming
@@ -21,15 +24,10 @@ import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, Mult
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.{GenesisObligation, L2EventGenesis}
-import hydrozoa.multisig.protocol.types
-import hydrozoa.multisig.protocol.types.*
-import hydrozoa.multisig.protocol.types.AckBlock.Number.neededToConfirm
-import hydrozoa.multisig.protocol.types.AckBlock.{BlockAckSet, TxSignature}
-import hydrozoa.multisig.protocol.types.Block.*
 import hydrozoa.multisig.protocol.types.LedgerEvent.*
 import hydrozoa.multisig.protocol.types.LedgerEventId.ValidityFlag
 import hydrozoa.multisig.protocol.types.LedgerEventId.ValidityFlag.{Invalid, Valid}
-import hydrozoa.{UtxoIdL1, Wallet}
+import hydrozoa.multisig.protocol.types.{LedgerEvent, LedgerEventId}
 import monocle.Focus.focus
 import scala.collection.immutable.Queue
 import scala.math.Ordered.orderingToOrdered
@@ -55,12 +53,7 @@ final case class JointLedger(
     val state: Ref[IO, JointLedger.State] =
         Ref.unsafe[IO, JointLedger.State](
           Done(
-            producedBlock = Block.Initial(
-              Block.Header.Initial(
-                timeCreation = config.initialBlockTime,
-                commitment = config.initialBlockKzg
-              )
-            ),
+            producedBlock = config.initialBlock,
             lastFallbackValidityStart = config.initialFallbackValidityStart,
             dappLedgerState = DappLedgerM.State(config.initialTreasury, Queue.empty),
             virtualLedgerState = VirtualLedgerM.State.empty
@@ -249,66 +242,64 @@ final case class JointLedger(
 
         def augmentBlockMinor(
             depositsRefunded: List[LedgerEventId]
-        ): IO[AugmentedBlock.Minor] = for {
+        ): IO[Block.Unsigned.Minor] = for {
             p <- unsafeGetProducing
-            nextBlockBody: Block.Body.Minor = {
+            nextBlockBody: BlockBody.Minor = {
                 import p.nextBlockData.*
-                Block.Body.Minor(
+                BlockBody.Minor(
                   events = events,
                   depositsRefunded = depositsRefunded
                 )
             }
 
             kzgCommit = p.virtualLedgerState.kzgCommitment
-            nextBlock: Block.Minor = p.previousBlock
-                .nextBlock(
-                  newBody = nextBlockBody,
-                  newTime = p.startTime,
-                  newCommitment = kzgCommit
-                )
-                .asInstanceOf[Block.Minor]
+            nextBlockBrief: BlockBrief.Minor = nextBlockBody.asNextBlockBrief(
+              previousHeader = p.previousBlock.header,
+              newStartTime = p.startTime,
+              newEndTime = ???,
+              newKzgCommitment = kzgCommit
+            )
 
-        } yield AugmentedBlock.Minor(
-          nextBlock,
-          BlockEffects.Minor(nextBlock.id, nextBlock.header, List.empty)
+        } yield Block.Unsigned.Minor(
+          nextBlockBrief,
+          BlockEffects.Unsigned.Minor(nextBlockBrief.header.onchainMsg, ???)
         )
 
         def augmentedBlockMajor(
             settleLedgerRes: DappLedgerM.SettleLedger.Result,
             refundedDeposits: List[LedgerEventId],
             absorbedDeposits: List[LedgerEventId]
-        ): IO[AugmentedBlock.Major] =
+        ): IO[Block.Unsigned.Major] =
             for {
                 p <- unsafeGetProducing
-                nextBlockBody: Block.Body.Major = {
+                nextBlockBody: BlockBody.Major = {
                     import p.nextBlockData.*
 
-                    Block.Body.Major(
+                    BlockBody.Major(
                       events = events,
                       depositsAbsorbed = absorbedDeposits,
                       depositsRefunded = refundedDeposits
                     )
                 }
 
-                // FIXME: unsafe cast
-                nextBlock: Block.Major = p.previousBlock
-                    .nextBlock(
-                      newBody = nextBlockBody,
-                      newTime = p.startTime,
-                      newCommitment = IArray.unsafeFromArray(
-                        settleLedgerRes.settlementTxSeq.settlementTx.treasuryProduced.datum.commit.bytes
-                      )
+                kzgCommitment =
+                    settleLedgerRes.settlementTxSeq.settlementTx.treasuryProduced.kzgCommitment
+                nextBlockBrief: BlockBrief.Major = nextBlockBody
+                    .asNextBlockBrief(
+                      previousHeader = p.previousBlock.header,
+                      newStartTime = p.startTime,
+                      newEndTime = ???,
+                      newKzgCommitment = kzgCommitment
                     )
-                    .asInstanceOf[Block.Major]
+                    .asInstanceOf[BlockBrief.Major]
 
-            } yield AugmentedBlock.Major(
-              nextBlock,
-              BlockEffects.Major(
-                nextBlock.id,
-                settlement = settleLedgerRes.settlementTxSeq.settlementTx,
-                rollouts = settleLedgerRes.settlementTxSeq.mbRollouts,
-                fallback = settleLedgerRes.fallBack,
-                postDatedRefunds = List.empty
+            } yield Block.Unsigned.Major(
+              nextBlockBrief,
+              BlockEffects.Unsigned.Major(
+                settlementTx = settleLedgerRes.settlementTxSeq.settlementTx,
+                rolloutTxs = settleLedgerRes.settlementTxSeq.mbRollouts,
+                fallbackTx = settleLedgerRes.fallBack,
+                postDatedRefundTxs = List.empty
               )
             )
 
@@ -491,36 +482,34 @@ final case class JointLedger(
               onSuccess = IO.pure
             )
 
-            augmentedBlock: AugmentedBlock.Final = {
+            augmentedBlock: Block.Unsigned.Final = {
                 import p.nextBlockData.*
-                val nextBlockBody: Block.Body.Final = Block.Body.Final(
+                val nextBlockBody: BlockBody.Final = BlockBody.Final(
                   events = events,
                   // TODO: see comment in registerDeposit
                   // depositsRejected = depositsRejected ++ depositsRegistered,
                   depositsRefunded = List.empty // FIXME: currently not handling refunds
                 )
 
-                // FIXME: unsafe cast
-                val nextBlock: Block.Final = p.previousBlock
-                    .nextBlock(
-                      nextBlockBody,
-                      p.startTime,
-                      IArray.empty[Byte]
+                val nextBlock: BlockBrief.Final = nextBlockBody
+                    .asNextBlockBrief(
+                      previousHeader = p.previousBlock.header,
+                      newStartTime = p.startTime,
+                      newEndTime = ???
                     )
-                    .asInstanceOf[Block.Final]
+                    .asInstanceOf[BlockBrief.Final]
 
-                val blockEffects: BlockEffects.Final = {
+                val blockEffects: BlockEffects.Unsigned.Final = {
                     import FinalizationTxSeq.*
 
-                    BlockEffects.Final(
-                      nextBlock.id,
-                      finalizationTxSeq.finalizationTx,
-                      rollouts = finalizationTxSeq.mbRollouts,
-                      deinit = finalizationTxSeq.mbDeinit
+                    BlockEffects.Unsigned.Final(
+                      finalizationTx = finalizationTxSeq.finalizationTx,
+                      rolloutTxs = finalizationTxSeq.mbRollouts,
+                      deinitTx = finalizationTxSeq.mbDeinit
                     )
                 }
 
-                AugmentedBlock.Final(nextBlock, blockEffects)
+                Block.Unsigned.Final(nextBlock, blockEffects)
             }
 
             _ <- checkReferenceBlock(referenceBlock, augmentedBlock)
@@ -536,112 +525,26 @@ final case class JointLedger(
       *   - sending block's ack(s) to the consensus actor
       */
     private def handleAugmentedBlock(
-        augmentedBlock: AugmentedBlock.Next,
+        augmentedBlock: Block.Unsigned.Next,
         localFinalization: Boolean
     ): IO[Unit] =
         for {
-            // _ <- blockSigner ! augmentedBlock
             conn <- getConnections
-            _ <- (conn.peerLiaisons ! augmentedBlock.blockAsNext).parallel
+            acks = augmentedBlock.acks(wallet, localFinalization)
+            _ <- (conn.peerLiaisons ! augmentedBlock.blockBriefNext).parallel
             _ <- conn.consensusActor ! augmentedBlock
-            ackSet <- signBlockEffects(
-              augmentedBlock.blockAsNext.header,
-              augmentedBlock.effects,
-              localFinalization
-            )
-            _ <- IO.traverse_(ackSet.asList)(ack => conn.consensusActor ! ack)
+            _ <- IO.traverse_(acks)(ack => conn.consensusActor ! ack)
         } yield ()
 
-    private def signBlockEffects(
-        header: Block.Header,
-        effects: BlockEffects,
-        localFinalization: Boolean
-    ): IO[BlockAckSet] = effects match {
-        case minor: BlockEffects.Minor =>
-            val headerSignature = wallet.signMsg(minor.header.mkMessage)
-            val refundSignatures =
-                minor.postDatedRefunds
-                    .map(r => wallet.signTx(r.tx))
-                    .map(TxSignature.apply)
-
-            IO.pure(
-              AckBlock.Minor(
-                id = AckBlock.Id.apply(peerId.peerNum, neededToConfirm(header)),
-                blockNum = header.blockNum,
-                headerSignature = headerSignature,
-                postDatedRefunds = refundSignatures,
-                finalizationRequested = localFinalization
-              )
-            )
-        case major: BlockEffects.Major =>
-            val fallbackSignature = TxSignature.apply(wallet.signTx(major.fallback.tx))
-            val rolloutSignatures =
-                major.rollouts
-                    .map(r => wallet.signTx(r.tx))
-                    .map(TxSignature.apply)
-            val refundSignatures =
-                major.postDatedRefunds
-                    .map(r => wallet.signTx(r.tx))
-                    .map(TxSignature.apply)
-            val settlementSignature =
-                TxSignature.apply(wallet.signTx(major.settlement.tx))
-            val secondAckNumber = neededToConfirm(header)
-
-            IO.pure(
-              BlockAckSet.Major(
-                AckBlock.Major1(
-                  id = AckBlock.Id.apply(peerId.peerNum, secondAckNumber.decrement),
-                  blockNum = header.blockNum,
-                  fallback = fallbackSignature,
-                  rollouts = rolloutSignatures,
-                  postDatedRefunds = refundSignatures,
-                  finalizationRequested = localFinalization
-                ),
-                AckBlock.Major2(
-                  id = AckBlock.Id.apply(peerId.peerNum, secondAckNumber),
-                  blockNum = header.blockNum,
-                  settlement = settlementSignature
-                )
-              )
-            )
-        case f: BlockEffects.Final =>
-            val rolloutSignatures =
-                f.rollouts
-                    .map(r => wallet.signTx(r.tx))
-                    .map(TxSignature.apply)
-            val deinitSignature =
-                f.deinit.map(deinit => TxSignature.apply(wallet.signTx(deinit.tx)))
-
-            val finalizationSignature =
-                TxSignature.apply(wallet.signTx(f.finalization.tx))
-            val secondAckNumber = neededToConfirm(header)
-
-            IO.pure(
-              BlockAckSet.Final(
-                AckBlock.Final1(
-                  id = AckBlock.Id.apply(peerId.peerNum, secondAckNumber.decrement),
-                  blockNum = header.blockNum,
-                  rollouts = rolloutSignatures,
-                  deinit = deinitSignature
-                ),
-                AckBlock.Final2(
-                  id = AckBlock.Id.apply(peerId.peerNum, secondAckNumber),
-                  blockNum = header.blockNum,
-                  finalization = finalizationSignature
-                )
-              )
-            )
-    }
-
     private def checkReferenceBlock(
-        expectedBlock: Option[Block],
-        actualBlock: AugmentedBlock
+        expectedBlock: Option[BlockBrief],
+        actualBlock: Block
     ): IO[Unit] = for {
         p <- unsafeGetProducing
         fallbackValidityStart: QuantizedInstant =
             actualBlock match {
-                case major: types.AugmentedBlock.Major =>
-                    major.effects.fallback.validityStart
+                case major: Block.Unsigned.Major =>
+                    major.effects.fallbackTx.validityStart
                 case _ => p.competingFallbackValidityStart
             }
 
@@ -687,8 +590,9 @@ object JointLedger {
     type Handle = ActorRef[IO, Requests.Request]
 
     case class Config(
-        peerId: Peer.Id,
-        wallet: Wallet,
+        initialBlock: Block.MultiSigned.Initial,
+        peerId: PeerId,
+        wallet: PeerWallet,
         initialBlockTime: QuantizedInstant,
         cardanoInfo: CardanoInfo,
         initialBlockKzg: KzgCommitment,
@@ -717,7 +621,7 @@ object JointLedger {
             LedgerEvent | StartBlock | CompleteBlockRegular | CompleteBlockFinal | GetState.Sync
 
         case class StartBlock(
-            blockNum: Block.Number,
+            blockNum: BlockNumber,
             blockCreationTime: QuantizedInstant
         )
 
@@ -735,13 +639,13 @@ object JointLedger {
           *   `finalizationRequested` in the block acknowledgement
           */
         case class CompleteBlockRegular(
-            referenceBlock: Option[Block],
+            referenceBlock: Option[BlockBrief.Intermediate],
             pollResults: Set[UtxoIdL1],
             finalizationLocallyTriggered: Boolean
         )
 
         case class CompleteBlockFinal(
-            referenceBlock: Option[Block],
+            referenceBlock: Option[BlockBrief.Final],
         )
 
         case object GetState extends SyncRequest[IO, GetState.type, State] {

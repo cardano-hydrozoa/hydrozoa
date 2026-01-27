@@ -17,11 +17,11 @@ import hydrozoa.multisig.consensus.CardanoLiaison.{FinalBlockConfirmed, MajorBlo
 import hydrozoa.multisig.consensus.CardanoLiaisonTest.BlockEffectsSignedChain.*
 import hydrozoa.multisig.consensus.CardanoLiaisonTest.Rollback.SettlementTiming
 import hydrozoa.multisig.consensus.CardanoLiaisonTest.Rollback.SettlementTiming.*
+import hydrozoa.multisig.ledger.block.{BlockEffects, BlockNumber}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, FinalizationTx, RolloutTx, SettlementTx, Tx, TxTiming, genFinalizationTxSeqBuilder, genNextSettlementTxSeqBuilder}
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, InitializationTxSeq, InitializationTxSeqTest, SettlementTxSeq}
-import hydrozoa.multisig.protocol.types.{Block, BlockEffectsSigned}
 import hydrozoa.rulebased.ledger.dapp.tx.genEquityShares
 import hydrozoa.{L1, Output, UtxoId, UtxoSet, UtxoSetL1, attachVKeyWitnesses}
 import java.util.concurrent.TimeUnit
@@ -46,15 +46,15 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
     }
 
     /** This is the "skeleton" of the Hydrozoa transactions (see diagrams to get an idea what it
-      * looks like). After introducing [[BlockEffectsSigned]] we use it rather than tx sequences
-      * which are unwieldy and were designed to be used with the tx builders.
+      * looks like). After introducing [[BlockEffects.MultiSigned]] we use it rather than tx
+      * sequences which are unwieldy and were designed to be used with the tx builders.
       *
       * TODO: case class?
       */
     type BlockEffectsSignedChain = (
-        BlockEffectsSigned.Initial,
-        List[BlockEffectsSigned.Major],
-        BlockEffectsSigned.Final
+        BlockEffects.MultiSigned.Initial,
+        List[BlockEffects.MultiSigned.Major],
+        BlockEffects.MultiSigned.Final
     )
 
     object BlockEffectsSignedChain:
@@ -89,19 +89,19 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
             fallbackTx = initializationTxSeq.fallbackTx
 
             initTxWitnesses: List[VKeyWitness] =
-                peers.map(p => p.wallet.signTx(initializationTx.tx)).toList
+                peers.map(p => p.wallet.mkVKeyWitness(initializationTx.tx)).toList
             fallbackTxWitnesses: List[VKeyWitness] =
-                peers.map(p => p.wallet.signTx(fallbackTx.tx)).toList
+                peers.map(p => p.wallet.mkVKeyWitness(fallbackTx.tx)).toList
 
-            initialBlockEffectsSigned: BlockEffectsSigned.Initial = BlockEffectsSigned.Initial(
-              blockNum = Block.Number.zero,
-              initialSigned = initializationTx.txLens.modify(tx =>
-                  attachVKeyWitnesses(tx, initTxWitnesses)
-              )(initializationTx),
-              fallbackSigned = fallbackTx.txLens.modify(tx =>
-                  attachVKeyWitnesses(tx, fallbackTxWitnesses)
-              )(fallbackTx)
-            )
+            initialBlockEffectsSigned: BlockEffects.MultiSigned.Initial = BlockEffects.MultiSigned
+                .Initial(
+                  initializationTx = initializationTx.txLens.modify(tx =>
+                      attachVKeyWitnesses(tx, initTxWitnesses)
+                  )(initializationTx),
+                  fallbackTx = fallbackTx.txLens.modify(tx =>
+                      attachVKeyWitnesses(tx, fallbackTxWitnesses)
+                  )(fallbackTx)
+                )
 
             initializationTreasuryProduced = initializationTx.treasuryProduced
             initializationFallbackValidityStart = fallbackTx.validityStart
@@ -138,7 +138,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                     initializationTreasuryProduced,
                     initTxConfig.startTime,
                     initializationFallbackValidityStart,
-                    List.empty: List[BlockEffectsSigned.Major],
+                    List.empty: List[BlockEffects.MultiSigned.Major],
                     1
                   )
                 ) {
@@ -177,35 +177,36 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                                 settlementTx = result.settlementTxSeq.settlementTx
                                 settlementTxWitnesses: List[VKeyWitness] =
                                     peers
-                                        .map(p => p.wallet.signTx(settlementTx.tx))
+                                        .map(p => p.wallet.mkVKeyWitness(settlementTx.tx))
                                         .toList
 
                                 fallbackTx = result.fallbackTx
                                 fallbackTxWitnesses: List[VKeyWitness] =
                                     peers
-                                        .map(p => p.wallet.signTx(fallbackTx.tx))
+                                        .map(p => p.wallet.mkVKeyWitness(fallbackTx.tx))
                                         .toList
 
                                 rolloutTxs = result.settlementTxSeq.mbRollouts
                                 rolloutTxWitnesses: List[List[VKeyWitness]] =
                                     rolloutTxs
-                                        .map(r => peers.map(p => p.wallet.signTx(r.tx)).toList)
+                                        .map(r =>
+                                            peers.map(p => p.wallet.mkVKeyWitness(r.tx)).toList
+                                        )
 
-                                blockEffects: BlockEffectsSigned.Major =
-                                    BlockEffectsSigned.Major(
-                                      blockNum = Block.Number(settlementNum),
-                                      settlementSigned = settlementTx.txLens.modify(tx =>
+                                blockEffects: BlockEffects.MultiSigned.Major =
+                                    BlockEffects.MultiSigned.Major(
+                                      settlementTx = settlementTx.txLens.modify(tx =>
                                           attachVKeyWitnesses(tx, settlementTxWitnesses)
                                       )(settlementTx),
-                                      fallbackSigned = fallbackTx.txLens.modify(tx =>
+                                      fallbackTx = fallbackTx.txLens.modify(tx =>
                                           attachVKeyWitnesses(tx, fallbackTxWitnesses)
                                       )(fallbackTx),
-                                      rolloutsSigned = rolloutTxs
+                                      rolloutTxs = rolloutTxs
                                           .zip(rolloutTxWitnesses)
                                           .map((r, ws) =>
                                               r.txLens.modify(tx => attachVKeyWitnesses(tx, ws))(r)
                                           ),
-                                      postDatedRefundsSigned = List.empty
+                                      postDatedRefundTxs = List.empty
                                     )
 
                                 nextTreasuryToSpend =
@@ -225,7 +226,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
 
             // Finalization seq
             lastSettlementTreasury =
-                majorBlocksEffectsSigned.last.settlementSigned.treasuryProduced
+                majorBlocksEffectsSigned.last.settlementTx.treasuryProduced
 
             finalizationBlockCreatedOnL <- Gen.choose(
               (lastSettlementBlockTimestamp + 10.seconds).toSlot.slot,
@@ -265,35 +266,35 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
             finalizationTx = finalizationTxSeq.finalizationTx
             finalizationTxWitnesses: List[VKeyWitness] =
                 peers
-                    .map(p => p.wallet.signTx(finalizationTx.tx))
+                    .map(p => p.wallet.mkVKeyWitness(finalizationTx.tx))
                     .toList
 
             rolloutTxs = finalizationTxSeq.mbRollouts
             rolloutTxWitnesses: List[List[VKeyWitness]] =
-                rolloutTxs.map(r => peers.map(p => p.wallet.signTx(r.tx)).toList)
+                rolloutTxs.map(r => peers.map(p => p.wallet.mkVKeyWitness(r.tx)).toList)
 
             mbDeinitTx = finalizationTxSeq.mbDeinit
             deinitTxWitnesses: List[VKeyWitness] =
                 mbDeinitTx
                     .map(deinitTx =>
                         peers
-                            .map(p => p.wallet.signTx(deinitTx.tx))
+                            .map(p => p.wallet.mkVKeyWitness(deinitTx.tx))
                             .toList
                     )
                     .getOrElse(List.empty)
 
-            finalBlockEffectsSigned: BlockEffectsSigned.Final = BlockEffectsSigned.Final(
-              blockNum = Block.Number(finalBlockNum),
-              rolloutsSigned = rolloutTxs
-                  .zip(rolloutTxWitnesses)
-                  .map((r, ws) => r.txLens.modify(tx => attachVKeyWitnesses(tx, ws))(r)),
-              mbDeinitSigned = mbDeinitTx.map(d =>
-                  d.txLens.modify(tx => attachVKeyWitnesses(tx, deinitTxWitnesses))(d)
-              ),
-              finalizationSigned = finalizationTx.txLens.modify(tx =>
-                  attachVKeyWitnesses(tx, finalizationTxWitnesses)
-              )(finalizationTx),
-            )
+            finalBlockEffectsSigned: BlockEffects.MultiSigned.Final = BlockEffects.MultiSigned
+                .Final(
+                  rolloutTxs = rolloutTxs
+                      .zip(rolloutTxWitnesses)
+                      .map((r, ws) => r.txLens.modify(tx => attachVKeyWitnesses(tx, ws))(r)),
+                  deinitTx = mbDeinitTx.map(d =>
+                      d.txLens.modify(tx => attachVKeyWitnesses(tx, deinitTxWitnesses))(d)
+                  ),
+                  finalizationTx = finalizationTx.txLens.modify(tx =>
+                      attachVKeyWitnesses(tx, finalizationTxWitnesses)
+                  )(finalizationTx),
+                )
 
         } yield (
           initialBlockEffectsSigned,
@@ -306,21 +307,21 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
             /** Returns all happy path txs of the skeleton, i.e. all but post dated fallback txs. */
             def happyPathTxs: Set[Transaction] = {
 
-                def finalizationTxs(effects: BlockEffectsSigned.Final): List[Transaction] =
-                    List(effects.finalizationSigned.tx)
-                        ++ effects.rolloutsSigned.map(_.tx)
-                        ++ effects.mbDeinitSigned.map(_.tx).toList
+                def finalizationTxs(effects: BlockEffects.MultiSigned.Final): List[Transaction] =
+                    List(effects.finalizationTx.tx)
+                        ++ effects.rolloutTxs.map(_.tx)
+                        ++ effects.deinitTx.map(_.tx).toList
 
-                ((skeleton._1.initialSigned.tx
-                    +: skeleton._2.map(_.settlementSigned.tx))
+                ((skeleton._1.initializationTx.tx
+                    +: skeleton._2.map(_.settlementTx.tx))
                     ++ finalizationTxs(skeleton._3)).toSet
             }
 
             /** All backbone transactions from the skeleton. */
             def backboneTxs: List[Tx[?]] =
-                (skeleton._1.initialSigned +: skeleton._2.map(_.settlementSigned)) ++
-                    List(skeleton._3.finalizationSigned)
-                    ++ skeleton._3.mbDeinitSigned.toList
+                (skeleton._1.initializationTx +: skeleton._2.map(_.settlementTx)) ++
+                    List(skeleton._3.finalizationTx)
+                    ++ skeleton._3.deinitTx.toList
 
             /** Returns the competing fallback transaction if it exists for a backbone node
               * identified by tx hash.
@@ -335,8 +336,8 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                     .map(_.tx.id)
                     .zip(
                       // There is no (None) fallback txs for the initialization tx and the deinit tx
-                      List(None, Some(skeleton._1.fallbackSigned)) ++ skeleton._2.map(node =>
-                          Some(node.fallbackSigned)
+                      List(None, Some(skeleton._1.fallbackTx)) ++ skeleton._2.map(node =>
+                          Some(node.fallbackTx)
                       ) ++ List(None)
                     )
                     .find(_._1 == backbonePoint)
@@ -346,11 +347,11 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
             // The common structure for the initialization tx, settlement txs, and the finalization tx
             // with the linked rollouts (where applicable, otherwise None)
             private def backboneNodesWithRollouts: List[(TransactionHash, List[RolloutTx])] = {
-                (skeleton._1.initialSigned.tx.id -> List.empty)
+                (skeleton._1.initializationTx.tx.id -> List.empty)
                     +:
                         skeleton._2
-                            .map(node => node.settlementSigned.tx.id -> node.rolloutsSigned)
-                        :+ skeleton._3.finalizationSigned.tx.id -> skeleton._3.rolloutsSigned
+                            .map(node => node.settlementTx.tx.id -> node.rolloutTxs)
+                        :+ skeleton._3.finalizationTx.tx.id -> skeleton._3.rolloutTxs
             }
 
             /** @param backbonePoint
@@ -378,46 +379,46 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                     .map(_._2.map(_.tx))
 
             def earliestTtl: QuantizedInstant =
-                skeleton._1.initialSigned.validityEnd
+                skeleton._1.initializationTx.validityEnd
 
             def dumpSkeletonInfo: Unit =
 
                 println("--------- Hydrozoa L1 effects chain sample --------- ")
 
-                val initTx = skeleton._1.initialSigned
+                val initTx = skeleton._1.initializationTx
 
                 println(s"Initialization tx: ${initTx.tx.id}, TTL: ${initTx.validityEnd}")
 
-                val fallbackTx = skeleton._1.fallbackSigned
+                val fallbackTx = skeleton._1.fallbackTx
                 println(
                   s"\t=> Fallback 0 tx: ${fallbackTx.tx.id}, validity start: ${fallbackTx.validityStart}"
                 )
 
                 // Settlements
                 skeleton._2.foreach(effects => {
-                    val fallbackTx = effects.fallbackSigned
+                    val fallbackTx = effects.fallbackTx
 
                     println(
-                      s"Settlement, block ${effects.blockNum}: " +
-                          s"${effects.settlementSigned.tx.id}, TTL: ${effects.settlementSigned.validityEnd}, " +
-                          s"deposits: ${effects.settlementSigned.depositsSpent.length}, " +
-                          s"rollouts: ${effects.rolloutsSigned.size}"
+                      "Settlement: " + // FIXME: block ${effects.blockNum}
+                          s"${effects.settlementTx.tx.id}, TTL: ${effects.settlementTx.validityEnd}, " +
+                          s"deposits: ${effects.settlementTx.depositsSpent.length}, " +
+                          s"rollouts: ${effects.rolloutTxs.size}"
                     )
 
-                    effects.rolloutsSigned.foreach(r => println(s"\t\t - rollout: ${r.tx.id}"))
+                    effects.rolloutTxs.foreach(r => println(s"\t\t - rollout: ${r.tx.id}"))
                     println(
-                      s"\t=> Fallback block ${effects.blockNum}: " +
+                      "\t=> Fallback: " + // FIXME: block ${effects.blockNum}
                           s"${fallbackTx.tx.id}, validity start: ${fallbackTx.validityStart}"
                     )
                 })
 
                 // Finalization
                 println(
-                  s"Finalization: ${skeleton._3.finalizationSigned.tx.id}, TTL: ${skeleton._3.finalizationSigned.validityEnd}" +
-                      s", rollouts: ${skeleton._3.rolloutsSigned.size}"
+                  s"Finalization: ${skeleton._3.finalizationTx.tx.id}, TTL: ${skeleton._3.finalizationTx.validityEnd}" +
+                      s", rollouts: ${skeleton._3.rolloutTxs.size}"
                 )
-                skeleton._3.rolloutsSigned.foreach(r => println(s"\t\t - rollout: ${r.tx.id}"))
-                skeleton._3.mbDeinitSigned.foreach(d => println(s"Deinit: ${d.tx.id}"))
+                skeleton._3.rolloutTxs.foreach(r => println(s"\t\t - rollout: ${r.tx.id}"))
+                skeleton._3.deinitTx.foreach(d => println(s"Deinit: ${d.tx.id}"))
 
                 println("--------- END of Hydrozoa L1 effects chain sample --------- ")
 
@@ -682,8 +683,8 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
 
                             config = CardanoLiaison.Config(
                               cardanoBackend,
-                              skeleton._1.initialSigned,
-                              skeleton._1.fallbackSigned,
+                              skeleton._1.initializationTx,
+                              skeleton._1.fallbackTx,
                               100.millis,
                               slotConfig = testTxBuilderCardanoInfo.slotConfig
                             )
@@ -696,10 +697,10 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                             _ <- skeleton._2.traverse_(s =>
                                 cardanoLiaison.handleMajorBlockL1Effects(
                                   MajorBlockConfirmed(
-                                    blockNum = s.blockNum,
-                                    settlementSigned = s.settlementSigned,
-                                    rolloutsSigned = s.rolloutsSigned,
-                                    fallbackSigned = s.fallbackSigned
+                                    blockNum = ???, // FIXME
+                                    settlementTx = s.settlementTx,
+                                    rolloutTxs = s.rolloutTxs,
+                                    fallbackTx = s.fallbackTx
                                   )
                                 )
                             )
@@ -708,12 +709,12 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                               FinalBlockConfirmed(
                                 blockNum =
                                     // This is technically correct in that particular case, but it's not nice
-                                    Block.Number(
-                                      skeleton._3.finalizationSigned.majorVersionProduced
+                                    BlockNumber(
+                                      skeleton._3.finalizationTx.majorVersionProduced
                                     ),
-                                finalizationSigned = skeleton._3.finalizationSigned,
-                                rolloutsSigned = skeleton._3.rolloutsSigned,
-                                mbDeinitSigned = skeleton._3.mbDeinitSigned
+                                finalizationTx = skeleton._3.finalizationTx,
+                                rolloutTxs = skeleton._3.rolloutTxs,
+                                deinitTx = skeleton._3.deinitTx
                               )
                             )
 

@@ -7,6 +7,7 @@ import hydrozoa.config.EquityShares
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
 import hydrozoa.multisig.ledger
 import hydrozoa.multisig.ledger.DappLedgerM.Error.{AbsorptionPeriodExpired, ParseError, SettlementTxSeqBuilderError}
+import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.*
@@ -16,7 +17,7 @@ import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, Mult
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.LedgerEvent.RegisterDeposit
-import hydrozoa.multisig.protocol.types.{Block, LedgerEventId}
+import hydrozoa.multisig.protocol.types.LedgerEventId
 import monocle.syntax.all.*
 import scala.collection.immutable.Queue
 import scala.language.implicitConversions
@@ -151,7 +152,7 @@ object DappLedgerM {
             args = SettlementTxSeq.Builder.Args(
               kzgCommitment = nextKzg,
               majorVersionProduced =
-                  Block.Version.Major(state.treasury.datum.versionMajor.toInt + 1),
+                  BlockVersion.Major(state.treasury.datum.versionMajor.toInt + 1),
               treasuryToSpend = state.treasury,
               depositsToSpend = Vector.from(validDeposits.map(_._2).toList),
               payoutObligationsRemaining = payoutObligations,
@@ -219,7 +220,7 @@ object DappLedgerM {
             config <- ask
             args = FinalizationTxSeq.Builder.Args(
               majorVersionProduced =
-                  Block.Version.Major(s.treasury.datum.versionMajor.toInt).increment,
+                  BlockVersion.Major(s.treasury.datum.versionMajor.toInt).increment,
               treasuryToSpend = s.treasury,
               payoutObligationsRemaining = payoutObligationsRemaining,
               competingFallbackValidityStart = competingFallbackValidityStart,

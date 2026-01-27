@@ -8,11 +8,11 @@ import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.UtxoIdL1
 import hydrozoa.lib.cardano.scalus.QuantizedTime.toEpochQuantizedInstant
 import hydrozoa.multisig.MultisigRegimeManager
+import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
-import hydrozoa.multisig.protocol.types.Block.Number.first
-import hydrozoa.multisig.protocol.types.Block.blockEvents
-import hydrozoa.multisig.protocol.types.{Block, LedgerEvent, LedgerEventId, Peer}
+import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
+import hydrozoa.multisig.protocol.types.{LedgerEvent, LedgerEventId}
 import scalus.cardano.ledger.SlotConfig
 
 /** Block weaver actor.
@@ -50,8 +50,8 @@ object BlockWeaver:
       *   the slot configuration.
       */
     final case class Config(
-        lastKnownBlock: Block.Number,
-        peerId: Peer.Id,
+        lastKnownBlock: BlockNumber,
+        peerId: PeerId,
         // TODO: shall we use just Seq[LedgerEvent here] not to expose Mempool?
         recoveredMempool: Mempool,
         slotConfig: SlotConfig
@@ -72,13 +72,13 @@ object BlockWeaver:
     ) extends State
 
     final case class Leader(
-        blockNumber: Block.Number
+        blockNumber: BlockNumber
     ) extends State {
-        def isFirstBlock: Boolean = blockNumber == first
+        def isFirstBlock: Boolean = blockNumber == BlockNumber.zero.increment
     }
 
     final case class Awaiting(
-        block: Block.Next,
+        block: BlockBrief.Next,
         eventIdAwaited: LedgerEventId,
         mempool: Mempool
     ) extends State
@@ -95,7 +95,7 @@ object BlockWeaver:
       * @param blockNumber
       */
     final case class BlockConfirmed(
-        blockNumber: Block.Number,
+        blockNumber: BlockNumber,
         finalizationRequested: Boolean = false
     )
 
@@ -113,19 +113,19 @@ object BlockWeaver:
     object FinalizationLocallyTriggered
 
     type Handle = ActorRef[IO, Request]
-    type Request = LedgerEvent | Block.Next | BlockConfirmed | PollResults |
+    type Request = LedgerEvent | BlockBrief.Next | BlockConfirmed | PollResults |
         FinalizationLocallyTriggered.type
 
     // ===================================
     // Immutable mempool state
     // ===================================
 
-    /** Simple immutable mempool implementation. Duplicate ledger events IDs are NOT allowe and a
+    /** Simple immutable mempool implementation. Duplicate ledger events IDs are NOT allowed and a
       * runtime exception is thrown since this should never happen. Other components, particularly
       * the peer liaison is in charge or maintaining the integrity of the stream of messages.
       *
       * @param events
-      *   map to srtore events
+      *   map to store events
       * @param receivingOrder
       *   vector to store order of event ids
       */
@@ -204,7 +204,7 @@ trait BlockWeaver(
 
     private val connections = Ref.unsafe[IO, Option[BlockWeaver.Connections]](None)
 
-    /** This ref initialized with false value intially and gets true value upon receiving
+    /** This ref initialized with false value initially and gets true value upon receiving
       * [[FinalizationLocallyTriggered]]. Regardless the peers' role for the current block, that
       * causes the eponymous flag `finalizationLocallyTriggeredRef` in the next
       * [[CompleteBlockRegular]] be set to true. This tells the joint ledger to set up the
@@ -252,7 +252,7 @@ trait BlockWeaver(
     private def receiveTotal(req: Request): IO[Unit] =
         req match {
             case msg: LedgerEvent             => handleLedgerEvent(msg)
-            case b: Block.Next                => handleNewBlock(b)
+            case b: BlockBrief.Next           => handleNewBlock(b)
             case bc: BlockConfirmed           => handleBlockConfirmed(bc)
             case pr: PollResults              => handlePollResults(pr)
             case finalizationLocallyTriggered => finalizationLocallyTriggeredRef.set(true)
@@ -307,7 +307,7 @@ trait BlockWeaver(
                                         // _ <- IO.println("Done after awaiting for missing events")
                                         _ <- completeReferenceBlock(block)
                                         // Switch to Idle with the residual of mempool
-                                        _ <- switchToIdle(block.id.increment, residualMempool)
+                                        _ <- switchToIdle(block.blockNum.increment, residualMempool)
                                     } yield ()
                                 case EventMissing(newEventIdAwaited, newMempool) =>
                                     // Stay in Awaiting with new eventIdAwaited and new mempool
@@ -329,7 +329,7 @@ trait BlockWeaver(
         } yield ()
     }
 
-    private def handleNewBlock(block: Block.Next): IO[Unit] = {
+    private def handleNewBlock(block: BlockBrief.Next): IO[Unit] = {
         import FeedResult.*
         import WeaverError.*
 
@@ -343,8 +343,8 @@ trait BlockWeaver(
                         conn <- getConnections
                         // This is sort of ephemeral Follower state
                         _ <- conn.jointLedger ! StartBlock(
-                          block.header.blockNum,
-                          block.header.timeCreation
+                          block.blockNum,
+                          block.startTime
                         )
                         result <- tryFeedBlock(block, mempool)
                         _ <- result match {
@@ -353,7 +353,7 @@ trait BlockWeaver(
                                     // We are done with the block
                                     // _ <- IO.println("Done")
                                     _ <- completeReferenceBlock(block)
-                                    _ <- switchToIdle(block.id.increment, residualMempool)
+                                    _ <- switchToIdle(block.blockNum.increment, residualMempool)
                                 } yield ()
                             case EventMissing(eventIdAwaited, residualMempool) =>
                                 for {
@@ -369,7 +369,7 @@ trait BlockWeaver(
         } yield ()
     }
 
-    /** When completing a refernce block, we decide upon the type of completion message
+    /** When completing a reference block, we decide upon the type of completion message
       * CompleteBlockRegular/CompleteBlockFinal based on the type of the block only.
       *
       * `finalizationLocallyTriggered` is passed only if [[CompleteBlockRegular]] was chosen to
@@ -378,20 +378,20 @@ trait BlockWeaver(
       * @param block
       * @return
       */
-    private def completeReferenceBlock(block: Block.Next): IO[Unit] = for {
+    private def completeReferenceBlock(block: BlockBrief.Next): IO[Unit] = for {
         pollResults <- pollResultsRef.get
         finalizationLocallyTriggered <- finalizationLocallyTriggeredRef.get
         completeBlock <- block match {
-            case _: Block.Minor =>
+            case x: BlockBrief.Minor =>
                 IO.pure(
-                  CompleteBlockRegular(Some(block), pollResults.utxos, finalizationLocallyTriggered)
+                  CompleteBlockRegular(Some(x), pollResults.utxos, finalizationLocallyTriggered)
                 )
-            case _: Block.Major =>
+            case x: BlockBrief.Major =>
                 IO.pure(
-                  CompleteBlockRegular(Some(block), pollResults.utxos, finalizationLocallyTriggered)
+                  CompleteBlockRegular(Some(x), pollResults.utxos, finalizationLocallyTriggered)
                 )
-            case _: Block.Final =>
-                IO.pure(CompleteBlockFinal(Some(block)))
+            case x: BlockBrief.Final =>
+                IO.pure(CompleteBlockFinal(Some(x)))
         }
         conn <- getConnections
         _ <- conn.jointLedger ! completeBlock
@@ -457,21 +457,18 @@ trait BlockWeaver(
       *   [[FeedResult]]
       */
     private def tryFeedBlock(
-        block: Block.Next,
+        block: BlockBrief.Next,
         initialMempool: Mempool,
         startWith: Option[LedgerEventId] = None
     ): IO[FeedResult] = {
         import FeedResult.*
 
+        val eventsToFeed = startWith match {
+            case Some(eventId) => block.events.splitAt(block.events.indexOf(eventId))._2
+            case None          => block.events
+        }
+
         for {
-            // _ <- IO.println(s"tryFeedBlock: start with: $startWith")
-            blockEvents <- IO.pure(block.blockEvents)
-
-            eventsToFeed = startWith match {
-                case Some(eventId) => blockEvents.splitAt(blockEvents.indexOf(eventId))._2
-                case None          => blockEvents
-            }
-
             // _ <- IO.println(s"events to feed: ${eventsToFeed}")
             // _ <- IO.println(s"initial mempool: ${initialMempool}")
 
@@ -482,12 +479,12 @@ trait BlockWeaver(
                 case (Nil, mempool) => IO.pure(Right(None, mempool))
                 // TODO maybe add tryRemove later on
                 case (e :: es, mempool) =>
-                    mempool.findById(e) match {
+                    mempool.findById(e._1) match {
                         case Some(event) =>
                             for {
                                 conn <- getConnections
                                 _ <- conn.jointLedger ! event
-                            } yield Left(es, mempool.remove(e))
+                            } yield Left(es, mempool.remove(e._1))
                         case None =>
                             for {
                                 _ <- IO.unit // IO.println(s"new missing event: $e")
@@ -499,13 +496,13 @@ trait BlockWeaver(
                 case (None, residualMempool) =>
                     IO.pure(Done(residualMempool))
                 case (Some(eventId), residualMempool) =>
-                    IO.pure(EventMissing(eventId, residualMempool))
+                    IO.pure(EventMissing(eventId._1, residualMempool))
             }
         } yield result
     }
 
     private def continueFeedBlock(
-        block: Block.Next,
+        block: BlockBrief.Next,
         event: LedgerEvent,
         mempool: Mempool
     ): IO[FeedResult] =
@@ -526,7 +523,7 @@ trait BlockWeaver(
       * @return
       */
     private def switchToIdle(
-        nextBlockNum: Block.Number,
+        nextBlockNum: BlockNumber,
         mempool: Mempool = Mempool.empty
     ): IO[Unit] =
         if config.peerId.isLeader(nextBlockNum)

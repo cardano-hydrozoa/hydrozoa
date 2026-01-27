@@ -10,7 +10,7 @@ object AckId {
 
     def apply(peerNum: Int, ackNum: Int): AckId = (peerNum, ackNum)
 
-    def apply(wallet: PeerWallet, ackNum: Int): AckId = (wallet.getPeerId.peerNum, ackNum)
+    def apply(wallet: PeerWallet, ackNum: Int): AckId = (wallet.getPeerNum, ackNum)
 
     def unapply(self: AckId): (PeerNumber, AckNumber) = (PeerNumber(self._1), AckNumber(self._2))
 

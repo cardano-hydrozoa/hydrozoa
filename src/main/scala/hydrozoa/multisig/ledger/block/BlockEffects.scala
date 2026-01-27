@@ -65,7 +65,7 @@ object BlockEffects {
 
         final case class Minor(
             override val headerSerialized: BlockHeader.Minor.Onchain.Serialized,
-            override val headerMultiSig: List[BlockHeader.Minor.HeaderSignature],
+            override val headerMultiSigned: List[BlockHeader.Minor.HeaderSignature],
             override val postDatedRefundTxs: List[RefundTx.PostDated],
         ) extends BlockEffects.MultiSigned,
               BlockType.Minor,

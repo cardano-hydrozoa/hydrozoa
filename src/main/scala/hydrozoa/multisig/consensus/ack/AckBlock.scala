@@ -1,11 +1,15 @@
 package hydrozoa.multisig.consensus.ack
 
+import hydrozoa.multisig.consensus.peer.PeerNumber
 import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber, BlockType}
 import hydrozoa.multisig.ledger.dapp.tx.TxSignature
 
 sealed trait AckBlock {
     def ackId: AckId
     def blockNum: BlockNumber
+
+    final transparent inline def ackNum: AckNumber = ackId.ackNum
+    final transparent inline def peerNum: PeerNumber = ackId.peerNum
 }
 
 object AckBlock {

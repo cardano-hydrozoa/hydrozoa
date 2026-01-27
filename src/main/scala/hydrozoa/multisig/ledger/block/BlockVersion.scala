@@ -12,7 +12,7 @@ object BlockVersion {
 
         def apply(i: Int, j: Int): Full = (i, j)
 
-        val zero: Full = apply(0, 0)
+        val zero: Full = (0, 0)
 
         def unapply(self: Full): (Major, Minor) = (Major(self._1), Minor(self._2))
 
@@ -35,7 +35,7 @@ object BlockVersion {
 
         def apply(i: Int): Major = i
 
-        val zero: Major = apply(0)
+        val zero: Major = 0
 
         given Conversion[Major, Int] = identity
 
@@ -56,7 +56,7 @@ object BlockVersion {
 
         def apply(i: Int): Minor = i
 
-        val zero: Minor = apply(0)
+        val zero: Minor = 0
 
         given Conversion[Minor, Int] = identity
 

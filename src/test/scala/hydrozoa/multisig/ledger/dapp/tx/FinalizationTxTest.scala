@@ -3,12 +3,12 @@ package hydrozoa.multisig.ledger.dapp.tx
 import cats.data.*
 import hydrozoa.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, quantize}
+import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.txseq.FinalizationTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
-import hydrozoa.multisig.protocol.types.Block as HBlock
 import hydrozoa.rulebased.ledger.dapp.tx.genEquityShares
 import java.time.Instant
 import org.scalacheck.Arbitrary.arbitrary
@@ -123,7 +123,7 @@ def genStandaloneFinalizationTxSeqBuilder(
           FinalizationTxSeq.Config(testTxTiming, mw, testTxBuilderCardanoInfo, hms, shares)
       ),
       FinalizationTxSeq.Builder.Args(
-        majorVersionProduced = HBlock.Version.Major(majorVersion),
+        majorVersionProduced = BlockVersion.Major(majorVersion),
         treasuryToSpend = treasuryUtxo,
         payoutObligationsRemaining = payouts,
         competingFallbackValidityStart = Instant
@@ -175,7 +175,7 @@ def genFinalizationTxSeqBuilder(
     } yield (
       FinalizationTxSeq.Builder(config = config),
       FinalizationTxSeq.Builder.Args(
-        majorVersionProduced = HBlock.Version.Major(majorVersion),
+        majorVersionProduced = BlockVersion.Major(majorVersion),
         treasuryToSpend = treasuryToSpend,
         payoutObligationsRemaining = payouts.asScala.toVector,
         competingFallbackValidityStart = fallbackValidityStart,

@@ -2,6 +2,7 @@ package hydrozoa.multisig.protocol.types
 
 import cats.syntax.all.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.multisig.consensus.peer.PeerNumber
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming
 import scalus.cardano.ledger.Coin
 
@@ -20,7 +21,7 @@ object LedgerEventId {
 
     def apply(peerId: Int, eventNum: Int): Id = (peerId, eventNum)
 
-    def unapply(self: Id): (Peer.Number, Number) = (Peer.Number(self._1), Number(self._2))
+    def unapply(self: Id): (PeerNumber, Number) = (PeerNumber(self._1), Number(self._2))
 
     given Conversion[Id, (Int, Int)] = identity
 
@@ -31,7 +32,7 @@ object LedgerEventId {
 
     extension (self: Id)
         def increment: Id = LedgerEventId(self._1, self._2 + 1)
-        def peerNum: Peer.Number = Peer.Number(self._1)
+        def peerNum: PeerNumber = PeerNumber(self._1)
         def eventNum: Number = Number(self._2)
 
         def precedes(other: Id): Boolean =
@@ -58,6 +59,9 @@ object LedgerEventId {
 
 sealed trait LedgerEvent {
     def eventId: LedgerEventId
+
+    final transparent inline def eventNum: LedgerEventId.Number = eventId.eventNum
+    final transparent inline def peerNum: PeerNumber = eventId.peerNum
 }
 
 object LedgerEvent {

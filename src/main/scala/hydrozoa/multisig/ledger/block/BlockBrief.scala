@@ -36,6 +36,7 @@ object BlockBrief {
     }
 
     type Next = BlockBrief & BlockType.Next
+
     type Intermediate = BlockBrief & BlockType.Intermediate
 
     trait Section extends BlockType, BlockHeader.Section, BlockBody.Section {

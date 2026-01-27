@@ -9,8 +9,8 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuant
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.BlockWeaver.PollResults
+import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.dapp.tx.*
-import hydrozoa.multisig.protocol.types.Block
 import scala.collection.immutable.{Seq, TreeMap}
 import scala.concurrent.duration.FiniteDuration
 import scala.math.Ordered.orderingToOrdered
@@ -67,10 +67,10 @@ object CardanoLiaison:
       *   - 0 - settlement
       *   - 1,2,3,... - rollouts
       */
-    type EffectId = (Block.Number, Int)
+    type EffectId = (BlockNumber, Int)
 
     object EffectId:
-        val initializationEffectId: EffectId = Block.Number(0) -> 0
+        val initializationEffectId: EffectId = BlockNumber(0) -> 0
 
     /** The state we want to achieve on L1. */
     enum TargetState:
@@ -107,7 +107,7 @@ object CardanoLiaison:
         happyPathEffects: TreeMap[EffectId, HappyPathEffect],
 
         /** Fallback effects, indexed by the block number they were created. */
-        fallbackEffects: Map[Block.Number, FallbackTx]
+        fallbackEffects: Map[BlockNumber, FallbackTx]
     )
 
     object State:
@@ -118,7 +118,7 @@ object CardanoLiaison:
               effectInputs = Map.empty,
               happyPathEffects =
                   TreeMap(EffectId.initializationEffectId -> config.initializationTx),
-              fallbackEffects = Map(Block.Number(0) -> config.initializationFallbackTx)
+              fallbackEffects = Map(BlockNumber(0) -> config.initializationFallbackTx)
             )
         }
 
@@ -128,22 +128,22 @@ object CardanoLiaison:
 
     /** L2 block confirmations. This is a local signal coming from the consensus actor. */
     sealed trait BlockConfirmed {
-        def blockNum: Block.Number
-        def rolloutsSigned: List[RolloutTx]
+        def blockNum: BlockNumber
+        def rolloutTxs: List[RolloutTx]
     }
 
     final case class MajorBlockConfirmed(
-        override val blockNum: Block.Number,
-        settlementSigned: SettlementTx,
-        override val rolloutsSigned: List[RolloutTx],
-        fallbackSigned: FallbackTx
+        override val blockNum: BlockNumber,
+        settlementTx: SettlementTx,
+        override val rolloutTxs: List[RolloutTx],
+        fallbackTx: FallbackTx
     ) extends BlockConfirmed
 
     final case class FinalBlockConfirmed(
-        override val blockNum: Block.Number,
-        finalizationSigned: FinalizationTx,
-        override val rolloutsSigned: List[RolloutTx],
-        mbDeinitSigned: Option[DeinitTx]
+        override val blockNum: BlockNumber,
+        finalizationTx: FinalizationTx,
+        override val rolloutTxs: List[RolloutTx],
+        deinitTx: Option[DeinitTx]
     ) extends BlockConfirmed
 
     object Timeout
@@ -209,14 +209,14 @@ trait CardanoLiaison(
         _ <- IO.println("handleMajorBlockL1Effects")
         _ <- stateRef.update(s => {
             val (blockEffectInputs, blockEffects) =
-                mkHappyPathEffectInputsAndEffects(block.settlementSigned, block.rolloutsSigned)
+                mkHappyPathEffectInputsAndEffects(block.settlementTx, block.rolloutTxs)
             State(
               targetState = TargetState.Active(
-                UtxoIdL1(block.settlementSigned.treasuryProduced.utxoId)
+                UtxoIdL1(block.settlementTx.treasuryProduced.utxoId)
               ),
               effectInputs = s.effectInputs ++ blockEffectInputs,
               happyPathEffects = s.happyPathEffects ++ blockEffects,
-              fallbackEffects = s.fallbackEffects + (block.blockNum -> block.fallbackSigned)
+              fallbackEffects = s.fallbackEffects + (block.blockNum -> block.fallbackTx)
             )
         })
     } yield ()
@@ -229,12 +229,12 @@ trait CardanoLiaison(
         _ <- stateRef.update(s => {
             val (blockEffectInputs, blockEffects) =
                 mkHappyPathEffectInputsAndEffects(
-                  block.finalizationSigned,
-                  block.rolloutsSigned,
-                  block.mbDeinitSigned
+                  block.finalizationTx,
+                  block.rolloutTxs,
+                  block.deinitTx
                 )
             s.copy(
-              targetState = TargetState.Finalized(block.finalizationSigned.tx.id),
+              targetState = TargetState.Finalized(block.finalizationTx.tx.id),
               effectInputs = s.effectInputs ++ blockEffectInputs,
               happyPathEffects = s.happyPathEffects ++ blockEffects
             )
@@ -253,13 +253,13 @@ trait CardanoLiaison(
             List(treasurySpent.utxoId -> settlementTx)
             // TODO: add utxoId
                 ++ rollouts.map(r => r.rolloutSpent.utxo.input -> r)
-        val blockNumber = Block.Number(settlementTx.majorVersionProduced)
+        val blockNumber = BlockNumber(settlementTx.majorVersionProduced)
         indexWithEffectId(effects, blockNumber).unzip
     }
 
     private def indexWithEffectId(
         effects: List[(TransactionInput, HappyPathEffect)],
-        blockNumber: Block.Number
+        blockNumber: BlockNumber
     ): List[((UtxoIdL1, EffectId), (EffectId, HappyPathEffect))] =
         effects.zipWithIndex
             .map((utxoIdAndEffect, index) => {
@@ -278,7 +278,7 @@ trait CardanoLiaison(
         Seq[(EffectId, HappyPathEffect)]
     ) =
         val treasurySpent = finalizationTx.treasurySpent
-        val blockNumber = Block.Number(finalizationTx.majorVersionProduced)
+        val blockNumber = BlockNumber(finalizationTx.majorVersionProduced)
 
         val effects: List[(TransactionInput, HappyPathEffect)] =
             List(treasurySpent.utxoId -> finalizationTx)

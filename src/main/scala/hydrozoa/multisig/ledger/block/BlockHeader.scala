@@ -103,8 +103,8 @@ object BlockHeader {
         )
     }
     object Initial {
-        final transparent inline def blockNum: BlockNumber = BlockNumber(0)
-        final transparent inline def blockVersion: BlockVersion.Full = BlockVersion.Full(0, 0)
+        final transparent inline def blockNum: BlockNumber = BlockNumber.zero
+        final transparent inline def blockVersion: BlockVersion.Full = BlockVersion.Full.zero
     }
 
     object Minor {
@@ -177,7 +177,7 @@ object BlockHeader {
 
         object MultiSigned {
             trait Section extends BlockType.Minor {
-                def headerMultiSig: List[BlockHeader.Minor.HeaderSignature]
+                def headerMultiSigned: List[BlockHeader.Minor.HeaderSignature]
             }
         }
     }

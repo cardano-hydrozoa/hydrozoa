@@ -9,6 +9,8 @@ object PeerNumber {
 
     def apply(i: Int): PeerNumber = i
 
+    val zero: PeerNumber = 0
+
     /** The given block will be confirmed when AckBlocks with this AckBlock.Number are received from
       * all peers. It is equal to the block number plus the major version number because:
       *   - Minor blocks each need only one ack and don't increment the major version.
@@ -21,7 +23,7 @@ object PeerNumber {
 
     given Ordering[PeerNumber] with {
         override def compare(x: PeerNumber, y: PeerNumber): Int =
-            x.compare(y)
+            x.convert.compare(y.convert)
     }
 
     extension (self: PeerNumber)

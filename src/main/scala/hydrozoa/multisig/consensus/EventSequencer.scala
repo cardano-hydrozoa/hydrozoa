@@ -9,9 +9,11 @@ import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.EventSequencer.*
 import hydrozoa.multisig.consensus.EventSequencer.Request.*
 import hydrozoa.multisig.consensus.PeerLiaison.Handle
+import hydrozoa.multisig.consensus.peer.{PeerId, PeerNumber}
+import hydrozoa.multisig.ledger.block.BlockBrief
 import hydrozoa.multisig.ledger.dapp.tx.RefundTx
 import hydrozoa.multisig.protocol.*
-import hydrozoa.multisig.protocol.types.{Block, LedgerEvent, LedgerEventId, Peer}
+import hydrozoa.multisig.protocol.types.{LedgerEvent, LedgerEventId}
 
 trait EventSequencer(
     config: Config,
@@ -101,7 +103,7 @@ object EventSequencer {
     ): IO[EventSequencer] =
         IO(new EventSequencer(config, pendingConnections) {})
 
-    final case class Config(peerId: Peer.Id)
+    final case class Config(peerId: PeerId)
 
     final case class Connections(
         blockWeaver: BlockWeaver.Handle,
@@ -114,7 +116,7 @@ object EventSequencer {
 
     object Request {
         final case class BlockConfirmed(
-            block: Block.Next,
+            block: BlockBrief.Next,
             mbPostDatedRefundsSigned: List[RefundTx.PostDated]
         )
     }

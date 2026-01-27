@@ -8,7 +8,9 @@ import hydrozoa.multisig.ledger.dapp.tx.{DeinitTx, FallbackTx, FinalizationTx, I
 sealed trait Block extends Block.Section
 
 object Block {
-    sealed trait Unsigned extends Block
+    sealed trait Unsigned extends Block {
+        def acks(wallet: PeerWallet, finalizationRequested: Boolean): List[AckBlock]
+    }
 
     object Unsigned {
         final case class Initial(
@@ -25,6 +27,11 @@ object Block {
             override transparent inline def initializationTx: InitializationTx =
                 effects.initializationTx
             override transparent inline def fallbackTx: FallbackTx = effects.fallbackTx
+
+            override transparent inline def acks(
+                wallet: PeerWallet,
+                finalizationRequested: Boolean
+            ): List[AckBlock] = List()
         }
 
         final case class Minor(
@@ -51,6 +58,11 @@ object Block {
                   postDatedRefundTxs = postDatedRefundTxs.map(_.tx).map(wallet.mkTxSignature),
                   finalizationRequested = finalizationRequested
                 )
+
+            override transparent inline def acks(
+                wallet: PeerWallet,
+                finalizationRequested: Boolean
+            ): List[AckBlock.Minor] = List(ack(wallet, finalizationRequested))
         }
 
         final case class Major(
@@ -86,6 +98,12 @@ object Block {
                   blockNum = blockNum,
                   settlementTx = wallet.mkTxSignature(settlementTx.tx)
                 )
+
+            override transparent inline def acks(
+                wallet: PeerWallet,
+                finalizationRequested: Boolean
+            ): List[AckBlock & BlockType.Major] =
+                List(ack1(wallet, finalizationRequested), ack2(wallet))
         }
 
         final case class Final(
@@ -94,6 +112,8 @@ object Block {
         ) extends Block.Unsigned,
               BlockType.Final,
               BlockEffects.Final.Section {
+            import scala.annotation.unused
+
             override transparent inline def block: Block.Unsigned.Final = this
 
             override transparent inline def header: BlockHeader.Final = blockBrief.header
@@ -115,10 +135,19 @@ object Block {
               blockNum = blockNum,
               finalizationTx = wallet.mkTxSignature(finalizationTx.tx)
             )
+
+            override transparent inline def acks(
+                wallet: PeerWallet,
+                @unused finalizationRequested: Boolean
+            ): List[AckBlock & BlockType.Final] = List(ack1(wallet), ack2(wallet))
         }
 
         type Next = Block.Unsigned & BlockType.Next
         type Intermediate = Block.Unsigned & BlockType.Intermediate
+
+        extension (self: Next)
+            transparent inline def blockBriefNext: BlockBrief.Next =
+                self.blockBrief.asInstanceOf[BlockBrief.Next]
     }
 
     trait MultiSigned extends Block
@@ -153,8 +182,8 @@ object Block {
 
             override transparent inline def headerSerialized: BlockHeader.Minor.Onchain.Serialized =
                 effects.headerSerialized
-            override transparent inline def headerMultiSig: List[HeaderSignature] =
-                effects.headerMultiSig
+            override transparent inline def headerMultiSigned: List[HeaderSignature] =
+                effects.headerMultiSigned
             override transparent inline def postDatedRefundTxs: List[RefundTx.PostDated] =
                 effects.postDatedRefundTxs
         }
@@ -194,6 +223,7 @@ object Block {
         }
 
         type Next = Block.MultiSigned & BlockType.Next
+
         type Intermediate = Block.MultiSigned & BlockType.Intermediate
     }
 

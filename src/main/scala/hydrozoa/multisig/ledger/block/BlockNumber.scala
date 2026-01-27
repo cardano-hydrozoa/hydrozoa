@@ -1,25 +1,25 @@
 package hydrozoa.multisig.ledger.block
 
-type BlockNumber = BlockNumber.Number
+type BlockNumber = BlockNumber.BlockNumber
 
 object BlockNumber {
-    opaque type Number = Int
+    opaque type BlockNumber = Int
 
-    def apply(i: Int): Number = i
+    def apply(i: Int): BlockNumber = i
 
-    val zero: Number = apply(0)
+    val zero: BlockNumber = 0
 
     /** Number of the first (non-initial) block, i.e. 1. */
-    val first: Number = zero.increment
+    val first: BlockNumber = zero.increment
 
-    given Conversion[Number, Int] = identity
+    given Conversion[BlockNumber, Int] = identity
 
-    given Ordering[Number] with {
-        override def compare(x: Number, y: Number): Int =
+    given Ordering[BlockNumber] with {
+        override def compare(x: BlockNumber, y: BlockNumber): Int =
             x.compare(y)
     }
 
-    extension (self: Number)
-        def increment: Number = BlockNumber(self + 1)
-        def decrement: Number = BlockNumber(self - 1)
+    extension (self: BlockNumber)
+        def increment: BlockNumber = BlockNumber(self + 1)
+        def decrement: BlockNumber = BlockNumber(self - 1)
 }

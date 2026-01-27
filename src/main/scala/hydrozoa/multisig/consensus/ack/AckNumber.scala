@@ -9,6 +9,8 @@ object AckNumber {
 
     def apply(i: Int): AckNumber = i
 
+    val zero: AckNumber = 0
+
     /** The given block will be confirmed when AckBlocks with this AckBlock.Number are received from
       * all peers. It is equal to the block number plus the major version number because:
       *   - Minor blocks each need only one ack and don't increment the major version.
