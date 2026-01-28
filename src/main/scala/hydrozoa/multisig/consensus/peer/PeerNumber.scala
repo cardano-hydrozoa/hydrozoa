@@ -7,7 +7,10 @@ type PeerNumber = PeerNumber.PeerNumber
 object PeerNumber {
     opaque type PeerNumber = Int
 
-    def apply(i: Int): PeerNumber = i
+    def apply(i: Int): PeerNumber = {
+        require(i >= 0)
+        i
+    }
 
     val zero: PeerNumber = 0
 

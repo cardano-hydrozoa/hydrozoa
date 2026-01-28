@@ -7,7 +7,10 @@ type AckNumber = AckNumber.AckNumber
 object AckNumber {
     opaque type AckNumber = Int
 
-    def apply(i: Int): AckNumber = i
+    def apply(i: Int): AckNumber = {
+        require(i >= 0)
+        i
+    }
 
     val zero: AckNumber = 0
 

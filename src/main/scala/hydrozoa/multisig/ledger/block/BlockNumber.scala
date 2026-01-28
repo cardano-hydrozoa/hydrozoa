@@ -5,7 +5,10 @@ type BlockNumber = BlockNumber.BlockNumber
 object BlockNumber {
     opaque type BlockNumber = Int
 
-    def apply(i: Int): BlockNumber = i
+    def apply(i: Int): BlockNumber = {
+        require(i >= 0)
+        i
+    }
 
     val zero: BlockNumber = 0
 

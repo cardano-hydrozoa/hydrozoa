@@ -52,7 +52,7 @@ object Block {
 
             def ack(wallet: PeerWallet, finalizationRequested: Boolean): AckBlock.Minor =
                 AckBlock.Minor(
-                  ackId = AckId(wallet, AckNumber.neededToConfirm(header)),
+                  ackId = AckId(wallet.getPeerNum, AckNumber.neededToConfirm(header)),
                   blockNum = blockNum,
                   header = wallet.mkMinorHeaderSignature(headerSerialized),
                   postDatedRefundTxs = postDatedRefundTxs.map(_.tx).map(wallet.mkTxSignature),
@@ -84,7 +84,7 @@ object Block {
 
             def ack1(wallet: PeerWallet, finalizationRequested: Boolean): AckBlock.Major1 =
                 AckBlock.Major1(
-                  ackId = AckId(wallet, AckNumber.neededToConfirm(header).decrement),
+                  ackId = AckId(wallet.getPeerNum, AckNumber.neededToConfirm(header).decrement),
                   blockNum = blockNum,
                   fallbackTx = wallet.mkTxSignature(fallbackTx.tx),
                   rolloutTxs = rolloutTxs.map(_.tx).map(wallet.mkTxSignature),
@@ -94,7 +94,7 @@ object Block {
 
             def ack2(wallet: PeerWallet): AckBlock.Major2 =
                 AckBlock.Major2(
-                  ackId = AckId(wallet, AckNumber.neededToConfirm(header)),
+                  ackId = AckId(wallet.getPeerNum, AckNumber.neededToConfirm(header)),
                   blockNum = blockNum,
                   settlementTx = wallet.mkTxSignature(settlementTx.tx)
                 )
@@ -124,14 +124,14 @@ object Block {
             override transparent inline def deinitTx: Option[DeinitTx] = effects.deinitTx
 
             def ack1(wallet: PeerWallet): AckBlock.Final1 = AckBlock.Final1(
-              ackId = AckId(wallet, AckNumber.neededToConfirm(header).decrement),
+              ackId = AckId(wallet.getPeerNum, AckNumber.neededToConfirm(header).decrement),
               blockNum = blockNum,
               rolloutTxs = rolloutTxs.map(_.tx).map(wallet.mkTxSignature),
               deinitTx = deinitTx.map(_.tx).map(wallet.mkTxSignature)
             )
 
             def ack2(wallet: PeerWallet): AckBlock.Final2 = AckBlock.Final2(
-              ackId = AckId(wallet, AckNumber.neededToConfirm(header)),
+              ackId = AckId(wallet.getPeerNum, AckNumber.neededToConfirm(header)),
               blockNum = blockNum,
               finalizationTx = wallet.mkTxSignature(finalizationTx.tx)
             )

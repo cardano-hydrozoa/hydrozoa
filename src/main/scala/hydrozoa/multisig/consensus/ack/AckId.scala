@@ -1,16 +1,18 @@
 package hydrozoa.multisig.consensus.ack
 
 import cats.implicits.catsSyntaxOrder
-import hydrozoa.multisig.consensus.peer.{PeerNumber, PeerWallet}
+import hydrozoa.multisig.consensus.peer.PeerNumber
+import scala.annotation.targetName
 
 type AckId = AckId.AckId
 
 object AckId {
-    opaque type AckId = (Int, Int)
+    opaque type AckId = (PeerNumber, AckNumber)
 
-    def apply(peerNum: Int, ackNum: Int): AckId = (peerNum, ackNum)
+    def apply(peerNum: PeerNumber, ackNum: AckNumber): AckId = (peerNum, ackNum)
 
-    def apply(wallet: PeerWallet, ackNum: Int): AckId = (wallet.getPeerNum, ackNum)
+    @targetName("apply_int")
+    def apply(peerNum: Int, ackNum: Int): AckId = (PeerNumber(peerNum), AckNumber(ackNum))
 
     def unapply(self: AckId): (PeerNumber, AckNumber) = (PeerNumber(self._1), AckNumber(self._2))
 
@@ -18,7 +20,7 @@ object AckId {
 
     given Ordering[AckId] with {
         override def compare(x: AckId, y: AckId): Int =
-            x.compare(y)
+            x.convert.compare(y.convert)
     }
 
     extension (self: AckId)

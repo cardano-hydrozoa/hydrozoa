@@ -5,7 +5,10 @@ type LedgerEventNumber = LedgerEventNumber.LedgerEventNumber
 object LedgerEventNumber {
     opaque type LedgerEventNumber = Int
 
-    def apply(i: Int): LedgerEventNumber = i
+    def apply(i: Int): LedgerEventNumber = {
+        require(i >= 0)
+        i
+    }
 
     given Conversion[LedgerEventNumber, Int] = identity
 

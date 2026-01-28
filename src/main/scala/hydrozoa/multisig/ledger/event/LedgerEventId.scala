@@ -2,6 +2,7 @@ package hydrozoa.multisig.ledger.event
 
 import cats.implicits.catsSyntaxOrder
 import hydrozoa.multisig.consensus.peer.PeerNumber
+import scala.annotation.targetName
 
 type LedgerEventId = LedgerEventId.Id
 
@@ -14,9 +15,12 @@ object LedgerEventId {
         case Valid
         case Invalid
 
-    opaque type Id = (Int, Int)
+    opaque type Id = (PeerNumber, LedgerEventNumber)
 
-    def apply(peerId: Int, eventNum: Int): Id = (peerId, eventNum)
+    def apply(peerNum: PeerNumber, eventNum: LedgerEventNumber): Id = (peerNum, eventNum)
+
+    @targetName("apply_Int")
+    def apply(peerNum: Int, eventNum: Int): Id = (PeerNumber(peerNum), LedgerEventNumber(eventNum))
 
     def unapply(self: Id): (PeerNumber, LedgerEventNumber) =
         (PeerNumber(self._1), LedgerEventNumber(self._2))
