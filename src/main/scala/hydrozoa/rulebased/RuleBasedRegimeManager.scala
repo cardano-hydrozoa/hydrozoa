@@ -59,7 +59,7 @@ case class RuleBasedRegimeManager(
             )
             _ <- context.actorOf(
               LiquidationActor(
-                utxosToWithdraw = utxosToWithdrawL2,
+                allUtxosToWithdraw = utxosToWithdrawL2,
                 cardanoBackend = cardanoBackend,
                 config = liquidationActorConfig,
                 l2SetAtFallback = l2SetAtFallback,
