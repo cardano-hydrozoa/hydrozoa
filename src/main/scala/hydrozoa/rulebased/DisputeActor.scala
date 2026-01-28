@@ -14,7 +14,6 @@ import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.Tx
 import hydrozoa.multisig.protocol.types.AckBlock.HeaderSignature
 import hydrozoa.rulebased.DisputeActor.*
-import hydrozoa.rulebased.DisputeActor.Error.*
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.OnchainBlockHeader
 import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
@@ -32,7 +31,7 @@ import scalus.cardano.ledger.{CardanoInfo, DatumOption, PlutusScriptEvaluator}
 import scalus.cardano.txbuilder.SomeBuildError
 
 // QUESTION: The `OwnVoteUtxo` type is pretty sparse. Should I augment it directly, or did we want to keep
-// it small for some reason?
+// it small for some reason?<
 type VoteUtxoWithDatum = (hydrozoa.Utxo[L1], VoteDatum)
 
 /** Pulls in vote/treasury utxo from cardano backend, and decides whether to submit a vote tx, tally
@@ -63,8 +62,8 @@ final case class DisputeActor(
     signatures: List[HeaderSignature],
 ) extends Actor[IO, DisputeActor.Requests.Request] {
 
-    private val handleDisputeRes: IO[Either[DisputeActor.Error.Error, Unit]] = {
-        val et: EitherT[IO, DisputeActor.Error.Error, Unit] = for {
+    private val handleDisputeRes: IO[Either[DisputeActor.Error.RecoverableErrors, Unit]] = {
+        val et: EitherT[IO, DisputeActor.Error.RecoverableErrors, Unit] = for {
             // Wrapped in EitherT because a Left doesn't signify an unrecoverable failure
             unparsedDisputeUtxos <- EitherT(
               cardanoBackend.utxosAt(
@@ -98,7 +97,7 @@ final case class DisputeActor(
                     )
                     for {
                         voteTx <- VoteTx.build(recipe) match {
-                            case Left(e)   => EitherT.liftF(IO.raiseError(VoteTxBuildError(e)))
+                            case Left(e)   => EitherT.liftF(IO.raiseError(Error.BuildError.Vote(e)))
                             case Right(tx) => EitherT.pure[IO, cardano.CardanoBackend.Error](tx)
                         }
                         _ <- EitherT(cardanoBackend.submitTx(voteTx.tx))
@@ -126,7 +125,7 @@ final case class DisputeActor(
                     )
                     for {
                         tallyTx <- TallyTx.build(recipe) match {
-                            case Left(e)   => EitherT.liftF(IO.raiseError(TallyTxBuildError(e)))
+                            case Left(e) => EitherT.liftF(IO.raiseError(Error.BuildError.Tally(e)))
                             case Right(tx) => EitherT.pure[IO, cardano.CardanoBackend.Error](tx)
                         }
                         _ <- EitherT(cardanoBackend.submitTx(tallyTx.tx))
@@ -145,7 +144,8 @@ final case class DisputeActor(
                     )
                     for {
                         resolutionTx <- ResolutionTx.build(recipe) match {
-                            case Left(e) => EitherT.liftF(IO.raiseError(ResolutionTxBuildError(e)))
+                            case Left(e) =>
+                                EitherT.liftF(IO.raiseError(Error.BuildError.Resolution(e)))
                             case Right(tx) => EitherT.pure[IO, cardano.CardanoBackend.Error](tx)
                         }
                         _ <- EitherT(cardanoBackend.submitTx(resolutionTx.tx))
@@ -202,16 +202,19 @@ final case class DisputeActor(
     ): IO[VoteUtxoWithDatum] = {
         for {
             d1: DatumOption <- utxo._2.datumOption match {
-                case None    => IO.raiseError(DisputeActor.Error.MissingVoteUtxoDatum(utxo))
+                case None    => IO.raiseError(DisputeActor.Error.ParseError.Vote.MissingDatum(utxo))
                 case Some(x) => IO.pure(x)
             }
             d2: Inline <- d1 match {
                 case i: Inline => IO.pure(i)
-                case _         => IO.raiseError(DisputeActor.Error.VoteDatumNotInline(utxo))
+                case _ => IO.raiseError(DisputeActor.Error.ParseError.Vote.DatumNotInline(utxo))
             }
             d3: VoteDatum <- Try(fromData[VoteDatum](d2.data)) match {
                 case Success(d) => IO.pure(d)
-                case Failure(e) => IO.raiseError(VoteDatumDeserializationError(utxo, e))
+                case Failure(e) =>
+                    IO.raiseError(
+                      DisputeActor.Error.ParseError.Vote.DatumDeserializationError(utxo, e)
+                    )
             }
         } yield (utxo, d3)
     }
@@ -240,43 +243,45 @@ object DisputeActor {
     }
 
     object Error {
+        type RecoverableErrors = Recoverable | CardanoBackend.Error
+        sealed trait Recoverable
 
-        /** Hierarchy:
-          *   - ParseError
-          *     - VoteParseError
-          *     - TreasuryParseError
-          *   - BuildError
-          *     - VoteTxBuildError
-          *     - TallyTxBuildError
-          *     - ResolutionTxBuildError
-          *   - CardanoBackendError
-          */
-        type Error = DisputeActor.Error.ParseError | cardano.CardanoBackend.Error |
-            DisputeActor.Error.BuildError
+        type UnrecoverableErrors = Unrecoverable
+        sealed trait Unrecoverable extends Throwable
 
         sealed trait BuildError extends Throwable
-        case class VoteTxBuildError(wrapped: VoteTx.VoteTxError | SomeBuildError) extends BuildError
-        case class TallyTxBuildError(wrapped: TallyTx.TallyTxError | SomeBuildError)
-            extends BuildError
-        case class ResolutionTxBuildError(wrapped: ResolutionTxError | SomeBuildError)
-            extends BuildError
+        object BuildError {
+            case class Vote(wrapped: VoteTx.VoteTxError | SomeBuildError) extends Unrecoverable
 
-        sealed trait ParseError extends Throwable
-        sealed trait VoteParseError extends ParseError
-        sealed trait TreasuryParseError extends ParseError
+            case class Tally(wrapped: TallyTx.TallyTxError | SomeBuildError) extends Unrecoverable
 
-        case class MissingVoteUtxoDatum(utxo: hydrozoa.Utxo[L1]) extends VoteParseError
-        case class VoteDatumNotInline(utxo: hydrozoa.Utxo[L1]) extends VoteParseError
-        case class VoteDatumDeserializationError(utxo: hydrozoa.Utxo[L1], e: Throwable)
-            extends VoteParseError
+            case class Resolution(wrapped: ResolutionTxError | SomeBuildError) extends Unrecoverable
+        }
 
-        case class MultipleTreasuryTokensFound(utxos: UtxoSetL1) extends TreasuryParseError
-        case class WrappedTreasuryParseError(wrapped: TreasuryParseError) extends TreasuryParseError
+        sealed trait ParseError
+        object ParseError {
+            object Vote {
+                case class MissingDatum(utxo: hydrozoa.Utxo[L1]) extends Unrecoverable
 
-        /** This either means something is very wrong, or simply that the dispute resolution is over
-          * and the deinit transaction completed successfully
-          */
-        case object TreasuryMissing extends TreasuryParseError
+                case class DatumNotInline(utxo: hydrozoa.Utxo[L1]) extends Unrecoverable
+
+                case class DatumDeserializationError(utxo: hydrozoa.Utxo[L1], e: Throwable)
+                    extends Unrecoverable
+            }
+
+            object Treasury {
+                case class MultipleTreasuryTokensFound(utxos: UtxoSetL1) extends Unrecoverable
+
+                case class WrappedTreasuryParseError(wrapped: RuleBasedTreasuryUtxo.ParseError)
+                    extends Unrecoverable
+
+                /** This either means something is very wrong, or simply that the dispute resolution
+                  * is over and the deinit transaction completed successfully
+                  */
+                case object TreasuryMissing extends Recoverable
+            }
+        }
+
     }
 
     // Parsing. Its in EitherT over IO because we have some recoverable failures (Lefts) and some unrecoverable failures
@@ -286,14 +291,19 @@ object DisputeActor {
     //   of rollbacks.
     // TODO: Factor out. Its shared between this and the li
     // obtained from the parameters to this class
-    def parseRBTreasury(utxos: UtxoSetL1): EitherT[IO, ParseError, RuleBasedTreasuryUtxo] =
+    def parseRBTreasury(
+        utxos: UtxoSetL1
+    ): EitherT[IO, Error.RecoverableErrors, RuleBasedTreasuryUtxo] =
         for {
-            utxo <-
-                if utxos.size == 1
-                then EitherT.pure[IO, ParseError](hydrozoa.Utxo[L1](utxos.head))
-                else if utxos.size > 1
-                then EitherT.right(IO.raiseError(MultipleTreasuryTokensFound(utxos)))
-                else EitherT.fromEither[IO](Left(TreasuryMissing))
+            utxo <- utxos.size match {
+                // May happen due to rollback, ignore and try again
+                case 0 => EitherT.left(IO.pure(Error.ParseError.Treasury.TreasuryMissing))
+                case 1 => EitherT.right(IO.pure(hydrozoa.Utxo[L1](utxos.head)))
+                case _ =>
+                    EitherT.liftF(
+                      IO.raiseError(Error.ParseError.Treasury.MultipleTreasuryTokensFound(utxos))
+                    )
+            }
 
             res <- EitherT.right(IO.fromEither(RuleBasedTreasuryUtxo.parse(utxo)))
 

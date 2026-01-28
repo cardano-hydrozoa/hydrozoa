@@ -10,7 +10,6 @@ import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.virtual.commitment.Membership
-import hydrozoa.rulebased.LiquidationActor.Error.WithdrawTxBuildError
 import hydrozoa.rulebased.LiquidationActor.{Error, Requests}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryScript
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.WithdrawRedeemer
@@ -81,8 +80,8 @@ case class LiquidationActor(
       *   - build failures on the withdrawal tx are thrown as exceptions
       * @return
       */
-    private def handleLiquidation: IO[Either[Error.Error, Unit]] = {
-        val et: EitherT[IO, Error.Error, Unit] = {
+    private def handleLiquidation: IO[Either[Error.RecoverableErrors, Unit]] = {
+        val et: EitherT[IO, Error.RecoverableErrors, Unit] = {
             for {
                 //////////////////////////////
                 // Step 1: Figure out utxos we need to withdraw
@@ -99,8 +98,8 @@ case class LiquidationActor(
 
                 // All parsed redeemers. If parsing fails, something is seriously wrong and we return Left
                 redeemers: List[WithdrawRedeemer] <- treasuryTxRedeemers.length match {
-                    // Treasury not resolved, can't liquidate, short circuit
-                    case 0 => EitherT.fromEither[IO](Left(Error.TreasuryNotResolved))
+                    // Treasury not resolved, can't liquidate, return left and retry
+                    case 0 => EitherT.fromEither[IO](Left(Error.QueryError.NoTreasuryFound))
                     // Treasury resolved but no withdrawals processed yet, active utxo set will be as it was at fallback
                     case 1 => EitherT.fromEither[IO](Right(List.empty[WithdrawRedeemer]))
                     // Treasury resolved, some withdrawals processed. We need to parse redeemers to determine active utxo set.
@@ -111,13 +110,16 @@ case class LiquidationActor(
                         treasuryTxRedeemers.tail.traverse(tuple =>
                             val (_, redeemerData) = tuple
                             Try(fromData[WithdrawRedeemer](redeemerData)) match {
+                                // Can't deserialize the redeemer. Raise exception
                                 case Failure(t) =>
-                                    EitherT.left(
-                                      IO.pure(
-                                        Error.TreasuryWithdrawRedeemerDataDeserializationFailure(t)
+                                    EitherT(
+                                      IO.raiseError(
+                                        Error.ParseError
+                                            .TreasuryWithdrawRedeemerDataDeserializationFailure(t)
                                       )
                                     )
-                                case Success(r) => EitherT.right[Error.Error](IO.pure(r))
+                                case Success(r) =>
+                                    EitherT.right[Error.RecoverableErrors](IO.pure(r))
                             }
                         )
                 }
@@ -153,9 +155,7 @@ case class LiquidationActor(
                   )
                 )
 
-                treasuryUtxoAndDatum <- EitherT.fromEither(
-                  LiquidationActor.parseRBTreasury(unparsedTreasuryUtxos)
-                )
+                treasuryUtxoAndDatum <- LiquidationActor.parseRBTreasury(unparsedTreasuryUtxos)
 
                 walletAddress = ShelleyAddress(
                   network = config.cardanoInfo.network,
@@ -163,6 +163,7 @@ case class LiquidationActor(
                   delegation = ShelleyDelegationPart.Null
                 )
 
+                // Note that if there are no fee utxos, we just try again.
                 feeUtxos <- EitherT(
                   cardanoBackend.utxosAt(
                     address = walletAddress
@@ -193,8 +194,8 @@ case class LiquidationActor(
                 )
 
                 withdrawTx <- Withdrawal(wConfig).build(recipe) match {
-                    case Left(e)   => EitherT.left(IO.pure(WithdrawTxBuildError(e)))
-                    case Right(tx) => EitherT.pure[IO, LiquidationActor.Error.Error](tx)
+                    case Left(e) => EitherT(IO.raiseError(Error.BuildError.WithdrawTxBuildError(e)))
+                    case Right(tx) => EitherT.pure[IO, LiquidationActor.Error.RecoverableErrors](tx)
                 }
 
                 _ <- EitherT(cardanoBackend.submitTx(withdrawTx.tx))
@@ -226,40 +227,64 @@ object LiquidationActor {
     }
 
     object Error {
-        type Error = ParseError | CardanoBackend.Error | BuildError |
-            Membership.MembershipCheckError
+        // These errors get swallowed and we retry
+        type RecoverableErrors = Recoverable | CardanoBackend.Error
+        sealed trait Recoverable
 
-        sealed trait ParseError extends Throwable
-        case class MultipleTreasuryTokensFound(utxoSetL1: UtxoSetL1) extends ParseError
-        case object TreasuryMissing extends ParseError
-        case object TreasuryNotResolved extends ParseError
-        case class TreasuryWithdrawRedeemerDataDeserializationFailure(wrapped: Throwable)
-            extends ParseError
-        case class RulesBasedTreasuryParseError(wrapped: RuleBasedTreasuryUtxo.ParseError)
-            extends ParseError
+        type UnrecoverableErrors = Unrecoverable | Membership.MembershipCheckError
+        sealed trait Unrecoverable extends Throwable
 
-        sealed trait BuildError extends Throwable
-        case class WithdrawTxBuildError(
-            wrapped: Withdrawal.Builder.Error | SomeBuildError | Membership.MembershipCheckError
-        ) extends BuildError
+        object QueryError {
+            case object NoTreasuryFound extends Recoverable
+        }
+
+        object ParseError {
+            case class MultipleTreasuryTokensFound(utxoSetL1: UtxoSetL1) extends Unrecoverable
+
+            case object TreasuryMissing extends Recoverable
+
+            case object TreasuryNotResolved extends Unrecoverable
+
+            case class TreasuryWithdrawRedeemerDataDeserializationFailure(wrapped: Throwable)
+                extends Unrecoverable
+
+            case class RulesBasedTreasuryParseError(wrapped: RuleBasedTreasuryUtxo.ParseError)
+                extends Unrecoverable
+        }
+
+        object BuildError {
+            case class WithdrawTxBuildError(
+                wrapped: Withdrawal.Builder.Error | SomeBuildError | Membership.MembershipCheckError
+            ) extends Unrecoverable
+        }
 
     }
 
     // NOTE: some duplication with the same function in DisputeActor
     def parseRBTreasury(
         utxos: UtxoSetL1
-    ): Either[LiquidationActor.Error.Error, (RuleBasedTreasuryUtxo, Resolved)] =
+    ): EitherT[IO, Error.RecoverableErrors, (RuleBasedTreasuryUtxo, Resolved)] =
         for {
             utxo <- utxos.size match {
-                case 0 => Left(Error.TreasuryMissing)
-                case 1 => Right(hydrozoa.Utxo[L1](utxos.head))
-                case _ => Left(Error.MultipleTreasuryTokensFound(utxos))
+                // May happen due to rollback, ignore and try again
+                case 0 => EitherT.left(IO.pure(Error.ParseError.TreasuryMissing))
+                case 1 => EitherT.right(IO.pure(hydrozoa.Utxo[L1](utxos.head)))
+                case _ =>
+                    EitherT.liftF(
+                      IO.raiseError(Error.ParseError.MultipleTreasuryTokensFound(utxos))
+                    )
             }
 
             treasuryUtxo <- RuleBasedTreasuryUtxo
-                .parse(utxo)
-                .left
-                .map(LiquidationActor.Error.RulesBasedTreasuryParseError(_))
+                .parse(utxo) match {
+                case Left(e) =>
+                    EitherT.liftF(
+                      IO.raiseError(
+                        LiquidationActor.Error.ParseError.RulesBasedTreasuryParseError(e)
+                      )
+                    )
+                case Right(rbt) => EitherT.right(IO.pure(rbt))
+            }
             resolvedDatum <- treasuryUtxo match {
                 case RuleBasedTreasuryUtxo(
                       _utxoId,
@@ -267,9 +292,8 @@ object LiquidationActor {
                       datum: RuleBasedTreasuryDatum.Resolved,
                       _value
                     ) =>
-                    Right(datum)
-                // Could happen if there's a rollback
-                case _ => Left(Error.TreasuryNotResolved)
+                    EitherT.right(IO.pure(datum))
+                case _ => EitherT.liftF(IO.raiseError(Error.ParseError.TreasuryNotResolved))
             }
         } yield (treasuryUtxo, resolvedDatum)
 
