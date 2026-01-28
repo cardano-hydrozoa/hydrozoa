@@ -1,9 +1,10 @@
 package hydrozoa.multisig.ledger.block
 
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.multisig.ledger.event.LedgerEventId
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
-import hydrozoa.multisig.protocol.types.LedgerEventId
-import hydrozoa.multisig.protocol.types.LedgerEventId.ValidityFlag
+
+import LedgerEventId.ValidityFlag
 
 trait BlockBody extends BlockBody.Section {
     def asUnsigned: this.type & BlockStatus.Unsigned =

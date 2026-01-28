@@ -26,18 +26,18 @@ import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.SpentUtxos
 import hydrozoa.multisig.ledger.dapp.tx.{TxTiming, minInitTreasuryAda}
 import hydrozoa.multisig.ledger.dapp.txseq.{DepositRefundTxSeq, InitializationTxSeq}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo}
+import hydrozoa.multisig.ledger.event.LedgerEvent.RegisterDeposit
+import hydrozoa.multisig.ledger.event.LedgerEventId
+import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag.{Invalid, Valid}
 import hydrozoa.multisig.ledger.virtual.L2EventGenesis
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
-import hydrozoa.multisig.protocol.types.*
-import hydrozoa.multisig.protocol.types.LedgerEvent.RegisterDeposit
-import hydrozoa.multisig.protocol.types.LedgerEventId.ValidityFlag.{Invalid, Valid}
 import hydrozoa.rulebased.ledger.dapp.tx.genEquityShares
 import hydrozoa.{UtxoIdL1, maxNonPlutusTxFee}
 import io.bullet.borer.Cbor
 import java.util.concurrent.TimeUnit
+import org.scalacheck.*
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.PropertyM.monadForPropM
-import org.scalacheck.{Gen, Prop, PropertyM, *}
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.{DurationInt, FiniteDuration, HOURS}
 import scalus.builtin.ByteString
@@ -45,7 +45,7 @@ import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.ledger.{AddrKeyHash, Block as _, BlockHeader as _, Coin, Utxo, *}
 import scalus.prelude.Option as SOption
 import test.*
-import test.Generators.Hydrozoa.{genAdaOnlyPubKeyUtxo, *}
+import test.Generators.Hydrozoa.*
 import test.Generators.Other.genCoinDistributionWithMinAdaUtxo
 import test.TestM.*
 

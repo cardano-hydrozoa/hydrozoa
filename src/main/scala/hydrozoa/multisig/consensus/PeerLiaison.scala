@@ -10,7 +10,7 @@ import hydrozoa.multisig.consensus.PeerLiaison.Request.*
 import hydrozoa.multisig.consensus.ack.{AckBlock, AckId, AckNumber}
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber, BlockStatus, BlockType}
-import hydrozoa.multisig.protocol.types.{LedgerEvent, LedgerEventId}
+import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId, LedgerEventNumber}
 import scala.collection.immutable.Queue
 
 trait PeerLiaison(
@@ -98,7 +98,7 @@ trait PeerLiaison(
             Ref.unsafe[IO, GetMsgBatch](GetMsgBatch.initial)
         private val nAck = Ref.unsafe[IO, AckNumber](AckNumber(0))
         private val nBlock = Ref.unsafe[IO, BlockNumber](BlockNumber(0))
-        private val nEvent = Ref.unsafe[IO, LedgerEventId.Number](LedgerEventId.Number(0))
+        private val nEvent = Ref.unsafe[IO, LedgerEventNumber](LedgerEventNumber(0))
         private val qAck = Ref.unsafe[IO, Queue[AckBlock]](Queue())
         private val qBlock = Ref.unsafe[IO, Queue[BlockBrief.Next]](Queue())
         private val qEvent = Ref.unsafe[IO, Queue[LedgerEvent]](Queue())
@@ -214,7 +214,7 @@ trait PeerLiaison(
         def dequeueConfirmed(x: BlockConfirmed): IO[Unit] = {
             import x.*
             val ackNum: AckNumber = AckNumber.neededToConfirm(header)
-            val eventNum: LedgerEventId.Number = events.collect {
+            val eventNum: LedgerEventNumber = events.collect {
                 case x if x._1.peerNum == config.ownPeerId.peerNum => x._1.eventNum
             }.max
             for {
@@ -326,7 +326,7 @@ object PeerLiaison {
             batchNum: Batch.Number,
             ackNum: AckNumber,
             blockNum: BlockNumber,
-            eventNum: LedgerEventId.Number
+            eventNum: LedgerEventNumber
         )
 
         object GetMsgBatch {
@@ -334,7 +334,7 @@ object PeerLiaison {
               batchNum = Batch.Number(0),
               ackNum = AckNumber(0),
               blockNum = BlockNumber(0),
-              eventNum = LedgerEventId.Number(0)
+              eventNum = LedgerEventNumber(0)
             )
         }
 

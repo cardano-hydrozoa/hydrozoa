@@ -11,9 +11,9 @@ import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
+import hydrozoa.multisig.ledger.event.LedgerEvent
+import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag.Valid
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
-import hydrozoa.multisig.protocol.types.LedgerEvent
-import hydrozoa.multisig.protocol.types.LedgerEventId.ValidityFlag.Valid
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.genVersion
 import java.time.Instant
 import org.scalacheck.{Arbitrary, Gen, Properties, PropertyBuilder, Test}

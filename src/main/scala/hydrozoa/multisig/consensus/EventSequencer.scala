@@ -11,9 +11,8 @@ import hydrozoa.multisig.consensus.PeerLiaison.Handle
 import hydrozoa.multisig.consensus.peer.{PeerId, PeerNumber}
 import hydrozoa.multisig.ledger.block.{BlockBody, BlockEffects, BlockStatus}
 import hydrozoa.multisig.ledger.dapp.tx.RefundTx
-import hydrozoa.multisig.protocol.*
-import hydrozoa.multisig.protocol.types.LedgerEventId.ValidityFlag
-import hydrozoa.multisig.protocol.types.{LedgerEvent, LedgerEventId}
+import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag
+import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId, LedgerEventNumber}
 
 trait EventSequencer(
     config: Config,
@@ -73,13 +72,13 @@ trait EventSequencer(
         }
 
     private final class State {
-        private val nLedgerEvent = Ref.unsafe[IO, LedgerEventId.Number](LedgerEventId.Number(0))
+        private val nLedgerEvent = Ref.unsafe[IO, LedgerEventNumber](LedgerEventNumber(0))
 //        private val localRequests =
 //            Ref.unsafe[IO, Queue[(LedgerEventId.Number, Deferred[IO, Unit])]](
 //              Queue()
 //            )
 
-        def nextLedgerEventNum(): IO[LedgerEventId.Number] =
+        def nextLedgerEventNum(): IO[LedgerEventNumber] =
             for {
                 newNum <- nLedgerEvent.updateAndGet(x => x.increment)
                 // FIXME:
@@ -87,7 +86,7 @@ trait EventSequencer(
             } yield newNum
 
         def completeDeferredEventOutcomes(
-            eventOutcomes: List[(LedgerEventId.Number, Unit)]
+            eventOutcomes: List[(LedgerEventNumber, Unit)]
         ): IO[Unit] =
             ???
     }

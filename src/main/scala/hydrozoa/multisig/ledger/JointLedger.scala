@@ -21,13 +21,13 @@ import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo}
+import hydrozoa.multisig.ledger.event.LedgerEvent.*
+import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag
+import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag.{Invalid, Valid}
+import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.{GenesisObligation, L2EventGenesis}
-import hydrozoa.multisig.protocol.types.LedgerEvent.*
-import hydrozoa.multisig.protocol.types.LedgerEventId.ValidityFlag
-import hydrozoa.multisig.protocol.types.LedgerEventId.ValidityFlag.{Invalid, Valid}
-import hydrozoa.multisig.protocol.types.{LedgerEvent, LedgerEventId}
 import monocle.Focus.focus
 import scala.collection.immutable.Queue
 import scala.math.Ordered.orderingToOrdered

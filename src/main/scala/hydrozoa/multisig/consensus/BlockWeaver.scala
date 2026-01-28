@@ -12,7 +12,7 @@ import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockHeader, BlockNumber, BlockStatus}
-import hydrozoa.multisig.protocol.types.{LedgerEvent, LedgerEventId}
+import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId}
 import scalus.cardano.ledger.SlotConfig
 
 /** Block weaver actor.

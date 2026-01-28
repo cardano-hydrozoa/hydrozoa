@@ -46,9 +46,9 @@ object BlockBrief {
 
     trait Section extends BlockType, BlockHeader.Section, BlockBody.Section {
         import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+        import hydrozoa.multisig.ledger.event.LedgerEventId
         import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
-        import hydrozoa.multisig.protocol.types.LedgerEventId
-        import hydrozoa.multisig.protocol.types.LedgerEventId.ValidityFlag
+        import LedgerEventId.ValidityFlag
 
         def blockBrief: BlockBrief
 
