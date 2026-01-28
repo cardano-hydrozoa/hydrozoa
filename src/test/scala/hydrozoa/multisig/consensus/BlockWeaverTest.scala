@@ -11,6 +11,7 @@ import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
+import hydrozoa.multisig.ledger.dapp.tx.TxTiming
 import hydrozoa.multisig.ledger.event.LedgerEvent
 import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag.Valid
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
@@ -277,6 +278,8 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
                   // Pass all immediate events
                   _ <- IO.traverse_(immediateEvents)(weaverActor ! _)
 
+                  txTiming = TxTiming.default(testTxBuilderCardanoInfo.slotConfig)
+
                   // First block
                   now <- realTimeQuantizedInstant(testTxBuilderCardanoInfo.slotConfig)
                   firstBlock: BlockBrief.Minor = BlockBrief.Minor(
@@ -284,7 +287,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
                       blockNum = lastKnownBlock.increment,
                       blockVersion = version,
                       startTime = now,
-                      endTime = ???,
+                      endTime = txTiming.newBlockEndTime(now),
                       kzgCommitment = KzgCommitment.empty
                     ),
                     BlockBody.Minor(
@@ -295,17 +298,24 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
 
                   // Second block
                   newTime <- realTimeQuantizedInstant(testTxBuilderCardanoInfo.slotConfig)
-                  secondBlock: BlockBrief.Minor = BlockBody
-                      .Minor(
-                        events = secondBlockEvents.map(e => (e.eventId, Valid)).toList,
-                        depositsRefunded = List.empty
-                      )
-                      .mkNextBlockBrief(
-                        firstBlock.header,
+
+                  secondHeader: BlockHeader.Minor = firstBlock
+                      .nextHeaderIntermediate(
+                        txTiming,
                         newStartTime = newTime,
-                        newEndTime = ???,
+                        previousEndTime = firstBlock.endTime,
                         newKzgCommitment = KzgCommitment.empty
                       )
+                      .asInstanceOf[BlockHeader.Minor]
+
+                  secondBlock: BlockBrief.Minor = BlockBrief.Minor(
+                    secondHeader,
+                    BlockBody
+                        .Minor(
+                          events = secondBlockEvents.map(e => (e.eventId, Valid)).toList,
+                          depositsRefunded = List.empty
+                        )
+                  )
 
                   _ <- (for {
                       _ <- IO.sleep(50.millis)

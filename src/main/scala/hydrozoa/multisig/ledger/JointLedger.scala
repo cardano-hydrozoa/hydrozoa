@@ -240,69 +240,6 @@ final case class JointLedger(
     private def completeBlockRegular(args: CompleteBlockRegular): IO[Unit] = {
         import args.*
 
-        def mkBlockMinor(
-            depositsRefunded: List[LedgerEventId]
-        ): IO[Block.Unsigned.Minor] = for {
-            p <- unsafeGetProducing
-            nextBlockBody: BlockBody.Minor = {
-                import p.nextBlockData.*
-                BlockBody.Minor(
-                  events = events,
-                  depositsRefunded = depositsRefunded
-                )
-            }
-
-            kzgCommit = p.virtualLedgerState.kzgCommitment
-            nextBlockBrief: BlockBrief.Minor = nextBlockBody.mkNextBlockBrief(
-              previousHeader = p.previousBlock.header,
-              newStartTime = p.startTime,
-              newEndTime = ???,
-              newKzgCommitment = kzgCommit
-            )
-
-        } yield Block.Unsigned.Minor(
-          nextBlockBrief,
-          BlockEffects.Unsigned.Minor(nextBlockBrief.header.onchainMsg, ???)
-        )
-
-        def mkBlockMajor(
-            settleLedgerRes: DappLedgerM.SettleLedger.Result,
-            refundedDeposits: List[LedgerEventId],
-            absorbedDeposits: List[LedgerEventId]
-        ): IO[Block.Unsigned.Major] =
-            for {
-                p <- unsafeGetProducing
-                nextBlockBody: BlockBody.Major = {
-                    import p.nextBlockData.*
-
-                    BlockBody.Major(
-                      events = events,
-                      depositsAbsorbed = absorbedDeposits,
-                      depositsRefunded = refundedDeposits
-                    )
-                }
-
-                kzgCommitment =
-                    settleLedgerRes.settlementTxSeq.settlementTx.treasuryProduced.kzgCommitment
-                nextBlockBrief: BlockBrief.Major = nextBlockBody
-                    .mkNextBlockBrief(
-                      previousHeader = p.previousBlock.header,
-                      newStartTime = p.startTime,
-                      newEndTime = ???,
-                      newKzgCommitment = kzgCommitment
-                    )
-                    .asInstanceOf[BlockBrief.Major]
-
-            } yield Block.Unsigned.Major(
-              nextBlockBrief,
-              BlockEffects.Unsigned.Major(
-                settlementTx = settleLedgerRes.settlementTxSeq.settlementTx,
-                rolloutTxs = settleLedgerRes.settlementTxSeq.mbRollouts,
-                fallbackTx = settleLedgerRes.fallBack,
-                postDatedRefundTxs = List.empty
-              )
-            )
-
         def doSettlement(
             validDeposits: Queue[(LedgerEventId, DepositUtxo)],
             immatureDeposits: Queue[(LedgerEventId, DepositUtxo)],
@@ -411,43 +348,58 @@ final case class JointLedger(
             eligibleForAbsorption = depositsPartition._2
             neverEligibleForAbsorption = depositsPartition._3
 
-            // For a description of timing, see GitHub issue #296
-            forceUpgradeToMajor: Boolean =
-                // First block is always major
-                config.initialFallbackValidityStart == producing.competingFallbackValidityStart ||
-                    // Upgrade if we are too close to fallback
-                    (txTiming.minSettlementDuration >=
-                        // FIXME: This time handling is a bit wonky because of the java <> scala mix
-                        producing.competingFallbackValidityStart - txTiming.silenceDuration
-                        - producing.startTime)
+            depositsRefunded = neverEligibleForAbsorption.toList.map(_._1)
 
-            isMinorBlock: Boolean =
-                (eligibleForAbsorption.isEmpty && producing.nextBlockData.blockWithdrawnUtxos.isEmpty)
-                    && (!forceUpgradeToMajor)
+            kzgCommitment = producing.virtualLedgerState.kzgCommitment
 
-            block <-
-                if isMinorBlock
+            previousHeader = producing.previousBlock.header
+
+            events = producing.nextBlockData.events
+
+            headerIntermediate: BlockHeader.Intermediate =
+                if eligibleForAbsorption.isEmpty && producing.nextBlockData.blockWithdrawnUtxos.isEmpty
                 then
-                    mkBlockMinor(
-                      depositsRefunded = neverEligibleForAbsorption.toList.map(_._1)
+                    previousHeader.nextHeaderIntermediate(
+                      txTiming,
+                      producing.startTime,
+                      previousHeader.endTime,
+                      kzgCommitment
                     )
-                else {
+                else previousHeader.nextHeaderMajor(txTiming, producing.startTime, kzgCommitment)
+
+            block <- headerIntermediate match {
+                case header: BlockHeader.Minor =>
+                    val blockBody = BlockBody.Minor(events, depositsRefunded)
+                    val blockBrief = BlockBrief.Minor(header, blockBody)
+                    val blockEffects =
+                        BlockEffects.Unsigned.Minor(
+                          headerSerialized = header.onchainMsg,
+                          postDatedRefundTxs = List() // FIXME: Where are they?
+                        )
+                    IO.pure(Block.Unsigned.Minor(blockBrief, blockEffects))
+                case header: BlockHeader.Major =>
                     for {
                         settlementRes <- doSettlement(
                           validDeposits = eligibleForAbsorption,
                           immatureDeposits = notYetMature,
                         )
-                        absorbedDeposits = eligibleForAbsorption.filter(deposit =>
-                            settlementRes.settlementTxSeq.settlementTx.depositsSpent
-                                .contains(deposit._2)
+                        depositsAbsorbed = eligibleForAbsorption
+                            .filter(deposit =>
+                                settlementRes.settlementTxSeq.settlementTx.depositsSpent
+                                    .contains(deposit._2)
+                            )
+                            .map(_._1)
+                            .toList
+                        blockBody = BlockBody.Major(events, depositsAbsorbed, depositsRefunded)
+                        blockBrief = BlockBrief.Major(header, blockBody)
+                        blockEffects = BlockEffects.Unsigned.Major(
+                          settlementTx = settlementRes.settlementTxSeq.settlementTx,
+                          rolloutTxs = settlementRes.settlementTxSeq.mbRollouts,
+                          fallbackTx = settlementRes.fallBack,
+                          postDatedRefundTxs = List() // FIXME: Where are they?
                         )
-                        blockMajor <- mkBlockMajor(
-                          settleLedgerRes = settlementRes,
-                          refundedDeposits = neverEligibleForAbsorption.toList.map(_._1),
-                          absorbedDeposits = absorbedDeposits.toList.map(_._1)
-                        )
-                    } yield blockMajor
-                }
+                    } yield Block.Unsigned.Major(blockBrief, blockEffects)
+            }
 
             _ <- checkReferenceBlock(referenceBlockBrief, block)
             _ <- handleBlock(block, finalizationLocallyTriggered)
@@ -484,32 +436,24 @@ final case class JointLedger(
 
             block: Block.Unsigned.Final = {
                 import p.nextBlockData.*
-                val nextBlockBody: BlockBody.Final = BlockBody.Final(
+                val blockHeader = p.previousBlock.header.nextHeaderFinal(txTiming, p.startTime)
+
+                val blockBody = BlockBody.Final(
                   events = events,
                   // TODO: see comment in registerDeposit
                   // depositsRejected = depositsRejected ++ depositsRegistered,
                   depositsRefunded = List.empty // FIXME: currently not handling refunds
                 )
 
-                val nextBlock: BlockBrief.Final = nextBlockBody
-                    .mkNextBlockBrief(
-                      previousHeader = p.previousBlock.header,
-                      newStartTime = p.startTime,
-                      newEndTime = ???
-                    )
-                    .asInstanceOf[BlockBrief.Final]
+                val blockBrief = BlockBrief.Final(blockHeader, blockBody)
 
-                val blockEffects: BlockEffects.Unsigned.Final = {
-                    import FinalizationTxSeq.*
+                val blockEffects = BlockEffects.Unsigned.Final(
+                  finalizationTx = finalizationTxSeq.finalizationTx,
+                  rolloutTxs = finalizationTxSeq.mbRollouts,
+                  deinitTx = finalizationTxSeq.mbDeinit
+                )
 
-                    BlockEffects.Unsigned.Final(
-                      finalizationTx = finalizationTxSeq.finalizationTx,
-                      rolloutTxs = finalizationTxSeq.mbRollouts,
-                      deinitTx = finalizationTxSeq.mbDeinit
-                    )
-                }
-
-                Block.Unsigned.Final(nextBlock, blockEffects)
+                Block.Unsigned.Final(blockBrief, blockEffects)
             }
 
             _ <- checkReferenceBlock(referenceBlockBrief, block)

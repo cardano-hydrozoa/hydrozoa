@@ -1,7 +1,8 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
-import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, quantize}
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, quantize}
 import scala.concurrent.duration.DurationInt
+import scala.math.Ordered.orderingToOrdered
 import scalus.cardano.ledger.SlotConfig
 
 /** TODO: This should be derived from Hydrozoa parameters.
@@ -47,7 +48,23 @@ final case class TxTiming(
     silenceDuration: QuantizedFiniteDuration,
     depositMaturityDuration: QuantizedFiniteDuration,
     depositAbsorptionDuration: QuantizedFiniteDuration,
-)
+) {
+
+    /** A block can stay minor if this predicate is true for its start and end times. Otherwise, it
+      * must be upgraded to a major block so that the competing fallback start time is pushed
+      * forward for future blocks.
+      */
+    def isSufficientDurationToEndTime(
+        blockStartTime: QuantizedInstant,
+        blockEndTime: QuantizedInstant
+    ): Boolean =
+        blockEndTime - blockStartTime > minSettlementDuration
+
+    /** Every non-minor block uses this to set its end time relative to its start time.
+      */
+    def newBlockEndTime(blockStartTime: QuantizedInstant): QuantizedInstant =
+        blockStartTime + minSettlementDuration + inactivityMarginDuration
+}
 
 /** Timing is hard. The precision we have to use is going to be dependent on the slot config.
   *

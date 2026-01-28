@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.block
 
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.multisig.ledger.dapp.tx.TxTiming
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.{KzgCommitment, asByteString}
 
@@ -88,38 +89,43 @@ object BlockHeader {
 
     trait Section extends BlockType, HasBlockNum, HasBlockVersion, HasBlockTimes, HasKzgCommitment {
         def header: BlockHeader
-        final transparent inline def nextHeaderMinor(
+        final def nextHeaderIntermediate(
+            txTiming: TxTiming,
             newStartTime: QuantizedInstant,
-            newEndTime: QuantizedInstant,
+            previousEndTime: QuantizedInstant,
             newKzgCommitment: KzgCommitment
-        ): BlockHeader.Minor = BlockHeader.Minor(
-          blockNum = blockNum.increment,
-          blockVersion = blockVersion.incrementMinor,
-          startTime = newStartTime,
-          endTime = newEndTime,
-          kzgCommitment = newKzgCommitment
-        )
+        ): BlockHeader.Intermediate =
+            if txTiming.isSufficientDurationToEndTime(newStartTime, previousEndTime)
+            then
+                BlockHeader.Minor(
+                  blockNum = blockNum.increment,
+                  blockVersion = blockVersion.incrementMinor,
+                  startTime = newStartTime,
+                  endTime = previousEndTime,
+                  kzgCommitment = newKzgCommitment
+                )
+            else nextHeaderMajor(txTiming, newStartTime, newKzgCommitment)
 
         final transparent inline def nextHeaderMajor(
+            txTiming: TxTiming,
             newStartTime: QuantizedInstant,
-            newEndTime: QuantizedInstant,
             newKzgCommitment: KzgCommitment
         ): BlockHeader.Major = BlockHeader.Major(
           blockNum = blockNum.increment,
           blockVersion = blockVersion.incrementMajor,
           startTime = newStartTime,
-          endTime = newEndTime,
+          endTime = txTiming.newBlockEndTime(newStartTime),
           kzgCommitment = newKzgCommitment
         )
 
-        final transparent inline def nextHeaderFinal(
+        final def nextHeaderFinal(
+            txTiming: TxTiming,
             newStartTime: QuantizedInstant,
-            newEndTime: QuantizedInstant,
         ): BlockHeader.Final = BlockHeader.Final(
           blockNum = blockNum.increment,
           blockVersion = blockVersion.incrementMajor,
           startTime = newStartTime,
-          endTime = newEndTime,
+          endTime = txTiming.newBlockEndTime(newStartTime),
         )
     }
     object Initial {

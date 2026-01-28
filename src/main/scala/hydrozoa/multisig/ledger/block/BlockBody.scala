@@ -1,8 +1,6 @@
 package hydrozoa.multisig.ledger.block
 
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.event.LedgerEventId
-import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 
 import LedgerEventId.ValidityFlag
 
@@ -28,16 +26,6 @@ object BlockBody {
           BlockType.Minor {
         override transparent inline def body: BlockBody.Minor = this
         override transparent inline def depositsAbsorbed: List[LedgerEventId] = List()
-
-        transparent inline def mkNextBlockBrief(
-            previousHeader: BlockHeader,
-            newStartTime: QuantizedInstant,
-            newEndTime: QuantizedInstant,
-            newKzgCommitment: KzgCommitment
-        ): BlockBrief.Minor = BlockBrief.Minor(
-          header = previousHeader.nextHeaderMinor(newStartTime, newEndTime, newKzgCommitment),
-          body = this
-        )
     }
 
     final case class Major(
@@ -47,16 +35,6 @@ object BlockBody {
     ) extends BlockBody,
           BlockType.Major {
         override transparent inline def body: BlockBody.Major = this
-
-        transparent inline def mkNextBlockBrief(
-            previousHeader: BlockHeader,
-            newStartTime: QuantizedInstant,
-            newEndTime: QuantizedInstant,
-            newKzgCommitment: KzgCommitment
-        ): BlockBrief.Major = BlockBrief.Major(
-          header = previousHeader.nextHeaderMajor(newStartTime, newEndTime, newKzgCommitment),
-          body = this
-        )
     }
 
     final case class Final(
@@ -66,15 +44,6 @@ object BlockBody {
           BlockType.Final {
         override transparent inline def body: BlockBody.Final = this
         override transparent inline def depositsAbsorbed: List[LedgerEventId] = List()
-
-        transparent inline def mkNextBlockBrief(
-            previousHeader: BlockHeader,
-            newStartTime: QuantizedInstant,
-            newEndTime: QuantizedInstant
-        ): BlockBrief.Final = BlockBrief.Final(
-          header = previousHeader.nextHeaderFinal(newStartTime, newEndTime),
-          body = this
-        )
     }
 
     type Next = BlockBody & BlockType.Next
