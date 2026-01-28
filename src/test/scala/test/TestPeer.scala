@@ -6,6 +6,8 @@ import com.bloxbean.cardano.client.common.model.Network as BBNetwork
 import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath
 import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath.createExternalAddressDerivationPathForAccount
 import hydrozoa.*
+import hydrozoa.lib.cardano.wallet.WalletModule
+import hydrozoa.multisig.consensus.peer.{PeerNumber, PeerWallet}
 import org.scalacheck.Gen
 import scala.collection.mutable
 import scalus.builtin.Builtins.blake2b_224
@@ -27,18 +29,36 @@ enum TestPeer derives CanEqual:
     case Hector
     case Isabel
     case Julia
-
-    // def compareTo(another: TestPeer): Int = this.ordinal.compareTo(another.ordinal)
+    case Katie
+    case Logan
+    case Michael
+    case Nora
+    case Ophelia
+    case Proteus
+    case Quincy
+    case Rose
+    case Sarah
+    case Thomas
+    // Stopping here due to Yaci's limit of 20 genesis utxos.
+    // case Uriel
+    // case Victor
+    // case Wendy
+    // case Xochitl
+    // case Yannis
+    // case Zoe
 
     def account: Account = TestPeer.mkAccount(this)
 
-    def wallet: Wallet = TestPeer.mkWallet(this)
+    def wallet: PeerWallet = TestPeer.mkWallet(this)
 
-    def walletId: WalletId = TestPeer.mkWalletId(this)
+    def peerNum: PeerNumber = TestPeer.peerNum(this)
 
     def address(network: Network = testNetwork): ShelleyAddress = TestPeer.address(this, network)
 
 object TestPeer:
+    val nNamedPeers: Int = TestPeer.values.length
+    val peerNumRange: Range = Range.Exclusive(0, nNamedPeers, 1)
+
     private val mnemonic: String =
         "test test test test " +
             "test test test test " +
@@ -56,11 +76,11 @@ object TestPeer:
             )
         )
 
-    private val walletCache: mutable.Map[TestPeer, Wallet] = mutable.Map.empty
+    private val walletCache: mutable.Map[TestPeer, PeerWallet] = mutable.Map.empty
         .withDefault(peer =>
-            Wallet(
-              peer.toString,
-              WalletModuleBloxbean,
+            PeerWallet(
+              PeerNumber(peer.ordinal),
+              WalletModule.BloxBean,
               mkAccount(peer).hdKeyPair().getPublicKey,
               mkAccount(peer).hdKeyPair().getPrivateKey
             )
@@ -76,9 +96,9 @@ object TestPeer:
 
     def mkAccount(peer: TestPeer): Account = accountCache.useOrCreate(peer)
 
-    def mkWallet(peer: TestPeer): Wallet = walletCache.useOrCreate(peer)
+    def mkWallet(peer: TestPeer): PeerWallet = walletCache.useOrCreate(peer)
 
-    def mkWalletId(peer: TestPeer): WalletId = WalletId(peer.toString)
+    def peerNum(peer: TestPeer): PeerNumber = PeerNumber(peer.ordinal)
 
     def address(network: Network)(peer: TestPeer): ShelleyAddress = address(peer, network)
 
@@ -99,41 +119,30 @@ object TestPeer:
 
     extension (peer: TestPeer)
         def signTx(txUnsigned: STransaction): STransaction =
-            val keyWitness = peer.wallet.signTx(txUnsigned)
+            val keyWitness = peer.wallet.mkVKeyWitness(txUnsigned)
             attachVKeyWitnesses(txUnsigned, List(keyWitness))
+
+    extension (wallet: PeerWallet)
+        def testPeerName: String = {
+            val i = wallet.getPeerNum.convert
+            if peerNumRange.contains(i) then TestPeer.fromOrdinal(i).toString else "Unknown"
+        }
 
 // ===================================
 // Generators
 // ===================================
 
-val genTestPeer: Gen[TestPeer] =
-    Gen.oneOf(
-      TestPeer.Alice,
-      TestPeer.Bob,
-      TestPeer.Carol,
-      TestPeer.Daniella,
-      TestPeer.Erin,
-      TestPeer.Frank,
-      TestPeer.Gustavo,
-      TestPeer.Hector,
-      TestPeer.Isabel,
-      TestPeer.Julia
-    )
-
-/** Choose between 2 and 10 peers */
-def genTestPeers(minPeers: Int = 2): Gen[NonEmptyList[TestPeer]] =
+val genTestPeer: Gen[TestPeer] = {
     for {
-        numPeers <- Gen.choose(minPeers, 10)
-        peersList = List(
-          TestPeer.Alice,
-          TestPeer.Bob,
-          TestPeer.Carol,
-          TestPeer.Daniella,
-          TestPeer.Erin,
-          TestPeer.Frank,
-          TestPeer.Gustavo,
-          TestPeer.Hector,
-          TestPeer.Isabel,
-          TestPeer.Julia
-        )
-    } yield NonEmptyList.fromList(peersList.take(numPeers)).get
+        i <- Gen.choose(TestPeer.peerNumRange.start, TestPeer.peerNumRange.last)
+    } yield TestPeer.fromOrdinal(i)
+}
+
+def genTestPeers(minPeers: Int = 2, maxPeers: Int = 5): Gen[NonEmptyList[TestPeer]] = {
+    require(0 < minPeers && minPeers < TestPeer.nNamedPeers)
+    require(minPeers <= maxPeers && maxPeers < TestPeer.nNamedPeers)
+    for {
+        numPeers <- Gen.choose(minPeers, maxPeers)
+        peers = TestPeer.peerNumRange.take(numPeers).map(TestPeer.fromOrdinal)
+    } yield NonEmptyList.fromListUnsafe(peers.toList)
+}

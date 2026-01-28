@@ -1,0 +1,58 @@
+package hydrozoa.multisig.ledger.block
+
+import hydrozoa.multisig.ledger.event.LedgerEventId
+
+import LedgerEventId.ValidityFlag
+
+trait BlockBody extends BlockBody.Section {
+    def asUnsigned: this.type & BlockStatus.Unsigned =
+        this.asInstanceOf[this.type & BlockStatus.Unsigned]
+    def asMultiSigned: this.type & BlockStatus.MultiSigned =
+        this.asInstanceOf[this.type & BlockStatus.MultiSigned]
+}
+
+object BlockBody {
+    case object Initial extends BlockBody, BlockType.Initial {
+        override transparent inline def body: BlockBody.Initial.type = this
+        override transparent inline def events: List[(LedgerEventId, ValidityFlag)] = List()
+        override transparent inline def depositsAbsorbed: List[LedgerEventId] = List()
+        override transparent inline def depositsRefunded: List[LedgerEventId] = List()
+    }
+
+    final case class Minor(
+        override val events: List[(LedgerEventId, ValidityFlag)],
+        override val depositsRefunded: List[LedgerEventId]
+    ) extends BlockBody,
+          BlockType.Minor {
+        override transparent inline def body: BlockBody.Minor = this
+        override transparent inline def depositsAbsorbed: List[LedgerEventId] = List()
+    }
+
+    final case class Major(
+        override val events: List[(LedgerEventId, ValidityFlag)],
+        override val depositsAbsorbed: List[LedgerEventId],
+        override val depositsRefunded: List[LedgerEventId]
+    ) extends BlockBody,
+          BlockType.Major {
+        override transparent inline def body: BlockBody.Major = this
+    }
+
+    final case class Final(
+        override val events: List[(LedgerEventId, ValidityFlag)],
+        override val depositsRefunded: List[LedgerEventId]
+    ) extends BlockBody,
+          BlockType.Final {
+        override transparent inline def body: BlockBody.Final = this
+        override transparent inline def depositsAbsorbed: List[LedgerEventId] = List()
+    }
+
+    type Next = BlockBody & BlockType.Next
+    type Intermediate = BlockBody & BlockType.Intermediate
+
+    trait Section {
+        def body: BlockBody
+        def events: List[(LedgerEventId, ValidityFlag)]
+        def depositsAbsorbed: List[LedgerEventId]
+        def depositsRefunded: List[LedgerEventId]
+    }
+}

@@ -2,6 +2,7 @@ package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.data.NonEmptyVector
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
+import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx
@@ -9,7 +10,6 @@ import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
-import hydrozoa.multisig.protocol.types.Block
 import scalus.cardano.ledger.{CardanoInfo, Coin}
 import scalus.cardano.txbuilder.SomeBuildError
 
@@ -162,7 +162,7 @@ object SettlementTxSeq {
         ) extends DepositUtxo.Many.Spent.Partition
 
         final case class Args(
-            majorVersionProduced: Block.Version.Major,
+            majorVersionProduced: BlockVersion.Major,
             treasuryToSpend: MultisigTreasuryUtxo,
             depositsToSpend: Vector[DepositUtxo],
             payoutObligationsRemaining: Vector[Payout.Obligation],

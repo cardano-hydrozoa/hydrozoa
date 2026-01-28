@@ -3,6 +3,7 @@ package hydrozoa.multisig.ledger.dapp.txseq
 import cats.data.NonEmptyVector
 import hydrozoa.config.EquityShares
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.dapp
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx
@@ -14,8 +15,6 @@ import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, Mult
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
-import hydrozoa.multisig.protocol.types.Block
-import hydrozoa.multisig.protocol.types.Block.Version.Major
 import scalus.cardano.ledger.CardanoInfo
 import scalus.cardano.txbuilder.SomeBuildError
 
@@ -245,7 +244,7 @@ object FinalizationTxSeq {
             case RolloutSeqError(e: (SomeBuildError, String))
 
         final case class Args(
-            majorVersionProduced: Block.Version.Major,
+            majorVersionProduced: BlockVersion.Major,
             treasuryToSpend: MultisigTreasuryUtxo,
             payoutObligationsRemaining: Vector[Payout.Obligation],
             competingFallbackValidityStart: QuantizedInstant,

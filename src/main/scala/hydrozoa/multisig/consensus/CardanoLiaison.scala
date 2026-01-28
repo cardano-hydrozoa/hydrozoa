@@ -9,12 +9,12 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuant
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.BlockWeaver.PollResults
+import hydrozoa.multisig.ledger.block.{BlockEffects, BlockHeader, BlockNumber}
 import hydrozoa.multisig.ledger.dapp.tx.*
-import hydrozoa.multisig.protocol.types.Block
 import scala.collection.immutable.{Seq, TreeMap}
 import scala.concurrent.duration.FiniteDuration
 import scala.math.Ordered.orderingToOrdered
-import scalus.cardano.ledger.{SlotConfig, Transaction, TransactionHash, TransactionInput}
+import scalus.cardano.ledger.{Block as _, BlockHeader as _, SlotConfig, Transaction, TransactionHash, TransactionInput}
 
 /** Hydrozoa's liaison to Cardano L1 (actor):
   *   - Keeps track of the target L1 state the liaison tries to achieve by observing all L1 block
@@ -67,10 +67,10 @@ object CardanoLiaison:
       *   - 0 - settlement
       *   - 1,2,3,... - rollouts
       */
-    type EffectId = (Block.Number, Int)
+    type EffectId = (BlockNumber, Int)
 
     object EffectId:
-        val initializationEffectId: EffectId = Block.Number(0) -> 0
+        val initializationEffectId: EffectId = BlockNumber(0) -> 0
 
     /** The state we want to achieve on L1. */
     enum TargetState:
@@ -107,7 +107,7 @@ object CardanoLiaison:
         happyPathEffects: TreeMap[EffectId, HappyPathEffect],
 
         /** Fallback effects, indexed by the block number they were created. */
-        fallbackEffects: Map[Block.Number, FallbackTx]
+        fallbackEffects: Map[BlockNumber, FallbackTx]
     )
 
     object State:
@@ -118,37 +118,55 @@ object CardanoLiaison:
               effectInputs = Map.empty,
               happyPathEffects =
                   TreeMap(EffectId.initializationEffectId -> config.initializationTx),
-              fallbackEffects = Map(Block.Number(0) -> config.initializationFallbackTx)
+              fallbackEffects = Map(BlockNumber(0) -> config.initializationFallbackTx)
             )
         }
 
     // ===================================
     // Request + ActorRef + apply
     // ===================================
-
-    /** L2 block confirmations. This is a local signal coming from the consensus actor. */
-    sealed trait BlockConfirmed {
-        def blockNum: Block.Number
-        def rolloutsSigned: List[RolloutTx]
-    }
-
-    final case class MajorBlockConfirmed(
-        override val blockNum: Block.Number,
-        settlementSigned: SettlementTx,
-        override val rolloutsSigned: List[RolloutTx],
-        fallbackSigned: FallbackTx
-    ) extends BlockConfirmed
-
-    final case class FinalBlockConfirmed(
-        override val blockNum: Block.Number,
-        finalizationSigned: FinalizationTx,
-        override val rolloutsSigned: List[RolloutTx],
-        mbDeinitSigned: Option[DeinitTx]
-    ) extends BlockConfirmed
-
     object Timeout
 
-    type Request = MajorBlockConfirmed | FinalBlockConfirmed | Timeout.type
+    object BlockConfirmed {
+        type Major = BlockHeader.Fields.HasBlockNum & BlockEffects.MultiSigned.Major.Section
+        type Final = BlockHeader.Fields.HasBlockNum & BlockEffects.MultiSigned.Final.Section
+
+        /** For testing purposes, where we may not want to construct a whole Block.MultiSigned. */
+        sealed trait Minimal extends BlockHeader.Fields.HasBlockNum
+
+        object Minimal {
+
+            /** For testing purposes, where we may not want to construct a whole Block.MultiSigned.
+              */
+            final case class Major(
+                override val blockNum: BlockNumber,
+                override val settlementTx: SettlementTx,
+                override val fallbackTx: FallbackTx,
+                override val rolloutTxs: List[RolloutTx],
+                override val postDatedRefundTxs: List[RefundTx.PostDated],
+            ) extends Minimal,
+                  BlockEffects.MultiSigned.Major.Section {
+                override def effects: BlockEffects.MultiSigned.Major = BlockEffects.MultiSigned
+                    .Major(settlementTx, rolloutTxs, fallbackTx, postDatedRefundTxs)
+            }
+
+            /** For testing purposes, where we may not want to construct a whole Block.MultiSigned.
+              */
+            final case class Final(
+                override val blockNum: BlockNumber,
+                override val finalizationTx: FinalizationTx,
+                override val rolloutTxs: List[RolloutTx],
+                override val deinitTx: Option[DeinitTx],
+            ) extends Minimal,
+                  BlockEffects.MultiSigned.Final.Section {
+                override def effects: BlockEffects.MultiSigned.Final =
+                    BlockEffects.MultiSigned.Final(finalizationTx, rolloutTxs, deinitTx)
+            }
+        }
+
+    }
+
+    type Request = BlockConfirmed.Major | BlockConfirmed.Final | Timeout.type
     type Handle = ActorRef[IO, Request]
 
 end CardanoLiaison
@@ -191,10 +209,10 @@ trait CardanoLiaison(
         } yield ()
 
     override def receive: Receive[IO, Request] = {
-        case effects: MajorBlockConfirmed =>
-            handleMajorBlockL1Effects(effects) >> runEffects
-        case effects: FinalBlockConfirmed =>
-            handleFinalBlockL1Effects(effects) >> runEffects
+        case block: BlockConfirmed.Major =>
+            handleMajorBlockL1Effects(block) >> runEffects
+        case block: BlockConfirmed.Final =>
+            handleFinalBlockL1Effects(block) >> runEffects
         case CardanoLiaison.Timeout => IO.println("Timeout") >> runEffects
     }
 
@@ -202,44 +220,46 @@ trait CardanoLiaison(
     // Inbox handlers
     // ===================================
 
-    /** Handle [[MajorBlockConfirmed]] request:
+    /** Handle [[Block.MultiSigned.Major]] request:
       *   - saves the effects in the internal actor's state
       */
-    protected[consensus] def handleMajorBlockL1Effects(block: MajorBlockConfirmed): IO[Unit] = for {
-        _ <- IO.println("handleMajorBlockL1Effects")
-        _ <- stateRef.update(s => {
-            val (blockEffectInputs, blockEffects) =
-                mkHappyPathEffectInputsAndEffects(block.settlementSigned, block.rolloutsSigned)
-            State(
-              targetState = TargetState.Active(
-                UtxoIdL1(block.settlementSigned.treasuryProduced.utxoId)
-              ),
-              effectInputs = s.effectInputs ++ blockEffectInputs,
-              happyPathEffects = s.happyPathEffects ++ blockEffects,
-              fallbackEffects = s.fallbackEffects + (block.blockNum -> block.fallbackSigned)
-            )
-        })
-    } yield ()
-
-    /** Handle [[FinalBlockConfirmed]] request:
-      *   - saves the effects in the internal actor's state
-      */
-    protected[consensus] def handleFinalBlockL1Effects(block: FinalBlockConfirmed): IO[Unit] = for {
-        _ <- IO.println("handleFinalBlockL1Effects")
-        _ <- stateRef.update(s => {
-            val (blockEffectInputs, blockEffects) =
-                mkHappyPathEffectInputsAndEffects(
-                  block.finalizationSigned,
-                  block.rolloutsSigned,
-                  block.mbDeinitSigned
+    protected[consensus] def handleMajorBlockL1Effects(block: BlockConfirmed.Major): IO[Unit] =
+        for {
+            _ <- IO.println("handleMajorBlockL1Effects")
+            _ <- stateRef.update(s => {
+                val (blockEffectInputs, blockEffects) =
+                    mkHappyPathEffectInputsAndEffects(block.settlementTx, block.rolloutTxs)
+                State(
+                  targetState = TargetState.Active(
+                    UtxoIdL1(block.settlementTx.treasuryProduced.utxoId)
+                  ),
+                  effectInputs = s.effectInputs ++ blockEffectInputs,
+                  happyPathEffects = s.happyPathEffects ++ blockEffects,
+                  fallbackEffects = s.fallbackEffects + (block.blockNum -> block.fallbackTx)
                 )
-            s.copy(
-              targetState = TargetState.Finalized(block.finalizationSigned.tx.id),
-              effectInputs = s.effectInputs ++ blockEffectInputs,
-              happyPathEffects = s.happyPathEffects ++ blockEffects
-            )
-        })
-    } yield ()
+            })
+        } yield ()
+
+    /** Handle [[Block.MultiSigned.Final]] request:
+      *   - saves the effects in the internal actor's state
+      */
+    protected[consensus] def handleFinalBlockL1Effects(block: BlockConfirmed.Final): IO[Unit] =
+        for {
+            _ <- IO.println("handleFinalBlockL1Effects")
+            _ <- stateRef.update(s => {
+                val (blockEffectInputs, blockEffects) =
+                    mkHappyPathEffectInputsAndEffects(
+                      block.finalizationTx,
+                      block.rolloutTxs,
+                      block.deinitTx
+                    )
+                s.copy(
+                  targetState = TargetState.Finalized(block.finalizationTx.tx.id),
+                  effectInputs = s.effectInputs ++ blockEffectInputs,
+                  happyPathEffects = s.happyPathEffects ++ blockEffects
+                )
+            })
+        } yield ()
 
     private def mkHappyPathEffectInputsAndEffects(
         settlementTx: SettlementTx,
@@ -253,13 +273,13 @@ trait CardanoLiaison(
             List(treasurySpent.utxoId -> settlementTx)
             // TODO: add utxoId
                 ++ rollouts.map(r => r.rolloutSpent.utxo.input -> r)
-        val blockNumber = Block.Number(settlementTx.majorVersionProduced)
+        val blockNumber = BlockNumber(settlementTx.majorVersionProduced)
         indexWithEffectId(effects, blockNumber).unzip
     }
 
     private def indexWithEffectId(
         effects: List[(TransactionInput, HappyPathEffect)],
-        blockNumber: Block.Number
+        blockNumber: BlockNumber
     ): List[((UtxoIdL1, EffectId), (EffectId, HappyPathEffect))] =
         effects.zipWithIndex
             .map((utxoIdAndEffect, index) => {
@@ -278,7 +298,7 @@ trait CardanoLiaison(
         Seq[(EffectId, HappyPathEffect)]
     ) =
         val treasurySpent = finalizationTx.treasurySpent
-        val blockNumber = Block.Number(finalizationTx.majorVersionProduced)
+        val blockNumber = BlockNumber(finalizationTx.majorVersionProduced)
 
         val effects: List[(TransactionInput, HappyPathEffect)] =
             List(treasurySpent.utxoId -> finalizationTx)

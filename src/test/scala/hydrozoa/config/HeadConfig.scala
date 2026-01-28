@@ -7,11 +7,11 @@ import cats.syntax.all.{catsSyntaxEither, toFlatMapOps}
 import hydrozoa.config.HeadConfig.OwnPeer
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, quantize}
+import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.SpentUtxos
 import hydrozoa.multisig.ledger.dapp.tx.{TxTiming, minInitTreasuryAda}
 import hydrozoa.multisig.ledger.dapp.txseq.InitializationTxSeq
-import hydrozoa.multisig.protocol.types.Peer
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.genShelleyAddress
 import hydrozoa.rulebased.ledger.dapp.tx.genEquityShares
 import hydrozoa.{Address, L1, maxNonPlutusTxFee}
@@ -93,7 +93,7 @@ val genRawConfig: PropertyM[IO, RawConfig] =
         ownPeerIndex <- PropertyM.pick[IO, Int](Gen.choose(0, peers.size - 1).label("Own Peer Id"))
 
         ownPeer = (
-          OwnPeer(Peer.Id(ownPeerIndex, peers.size), peers.toList(ownPeerIndex).wallet),
+          OwnPeer(PeerId(ownPeerIndex, peers.size), peers.toList(ownPeerIndex).wallet),
           Address[L1](payoutAddresses(ownPeerIndex)),
           equityShares.peerShares(UByte(ownPeerIndex)).equityShare
         )

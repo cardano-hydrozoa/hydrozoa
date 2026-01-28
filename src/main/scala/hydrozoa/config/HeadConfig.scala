@@ -4,14 +4,15 @@ import cats.data.NonEmptyList
 import hydrozoa.config.HeadConfig.Error.*
 import hydrozoa.config.HeadConfig.{HeadInstanceL1, HeadParameters, InitialBlock, OwnPeer, PrivateNodeSettings}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
+import hydrozoa.multisig.consensus.peer.{PeerId, PeerWallet}
+import hydrozoa.multisig.ledger.block.BlockEffects
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, InitializationTx, TxTiming}
 import hydrozoa.multisig.ledger.dapp.txseq.InitializationTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
-import hydrozoa.multisig.protocol.types.{BlockEffectsSigned, Peer}
-import hydrozoa.{AddressL1, VerificationKeyBytes, Wallet}
+import hydrozoa.{AddressL1, VerificationKeyBytes}
 import scala.collection.immutable.TreeMap
 import scala.concurrent.duration.FiniteDuration
 import scala.util.Try
@@ -26,7 +27,7 @@ import spire.math.{Rational, UByte}
 // QUESTION: Do we want a separate type to bridge "this is valid yaml" and "this is valid data for the HeadConfig
 // smart constructor"? Or do we just want to define yaml parsing for each of these types? I'm in favor of the latter
 case class RawConfig(
-    // OwnPeer (need private key), equity/contigency payout address, equity share
+    // OwnPeer (need private key), equity/contingency payout address, equity share
     // QUESTION: does it make sense to change the rational to PeerEquityShare?
     ownPeer: (OwnPeer, AddressL1, Rational),
     otherPeers: List[PeerSection],
@@ -43,7 +44,7 @@ case class RawConfig(
     // blockfrost to query the chain. Thus, we pass in the UTxOs directly.
     resolvedUtxosForInitialization: ResolvedUtxos,
     // FIXME: I guess we need both the public and private key?
-    withdrawalFeeWallet: Wallet,
+    withdrawalFeeWallet: PeerWallet,
     pollingPeriod: FiniteDuration
 
     // Augmented Initial block
@@ -82,7 +83,7 @@ object HeadConfig {
             // Check key uniqueness
             keysUnique <- {
 
-                val sortedVKs = peers.toList.map(_.verificationKeyBytes).sortBy(_.bytes)
+                val sortedVKs = peers.map(_.verificationKeyBytes).sortBy(_.bytes)
                 val duplicates =
                     sortedVKs.groupMapReduce(identity)(_ => 1)(_ + _).filter((_, cnt) => cnt > 1)
                 Either.cond(
@@ -100,7 +101,7 @@ object HeadConfig {
             // Attach indices to verification keys
             verificationKeys = keysUnique.zipWithIndex.map((k, i) => (UByte.apply(i), k)).toMap
             // Convert list of peer config section into map indexed by the verification key
-            peerSectionMap = peers.map(s => s.verificationKeyBytes -> s).toList.toMap
+            peerSectionMap = peers.map(s => s.verificationKeyBytes -> s).toMap
             // Contingency
             collectiveContingency = CollectiveContingency.apply(UByte(keysUnique.size))
             individualContingency = IndividualContingency.apply
@@ -139,9 +140,11 @@ object HeadConfig {
               this.getClass.getResourceAsStream("/blockfrost-params-epoch-544.json")
             )
 
-            slotConfig: SlotConfig = rawConfig.network match {
-                case Mainnet => SlotConfig.Mainnet
-                case Testnet => SlotConfig.Preview
+            slotConfig: SlotConfig <- rawConfig.network match {
+                case Mainnet => Right(SlotConfig.mainnet)
+                case Testnet => Right(SlotConfig.preview)
+                case scalus.cardano.address.Network.Other(_) =>
+                    Left(UnknownNetwork(rawConfig.network))
             }
 
             cardanoInfo: CardanoInfo = CardanoInfo(
@@ -166,9 +169,9 @@ object HeadConfig {
 
             initialBlock = InitialBlock(
               startTime = rawConfig.startTime,
-              effects = BlockEffectsSigned.Initial(
-                initialSigned = initializationTxSeq.initializationTx,
-                fallbackSigned = initializationTxSeq.fallbackTx
+              effects = BlockEffects.MultiSigned.Initial(
+                initializationTx = initializationTxSeq.initializationTx,
+                fallbackTx = initializationTxSeq.fallbackTx
               )
             )
 
@@ -176,7 +179,7 @@ object HeadConfig {
               headPeers = HeadPeers(
                 TreeMap.from(
                   verificationKeys.map((id, pubKey) =>
-                      (Peer.Id(id.toInt, verificationKeys.size), pubKey)
+                      (PeerId(id.toInt, verificationKeys.size), pubKey)
                   )
                 )
               ),
@@ -219,6 +222,7 @@ object HeadConfig {
         case TooSmallVoteDeposit(peer: UByte, minimal: Coin, actual: Coin)
         case CborDeserializationFailed(msg: String, bytes: Array[Byte], error: Throwable)
         case InitializationTxSeqParseError(wrapped: InitializationTxSeq.ParseError)
+        case UnknownNetwork(network: Network)
 
         def explain: String = this match
             case NonUniqueVerificationKey(duplicates) =>
@@ -226,9 +230,15 @@ object HeadConfig {
             case TooManyPeers(count)       => s"Too many peers: $count, maximum allowed is 255"
             case SharesMustSumToOne(total) => s"Shares do not sum up to one, got total: $total"
             case TooSmallCollateralDeposit(peer, minimal, actual) =>
-                s"The peer ${peer} has too small collateral deposit: ${actual}, minimal is: {minimal}"
+                s"The peer $peer has too small collateral deposit: $actual, minimal is: {minimal}"
             case TooSmallVoteDeposit(peer, minimal, actual) =>
-                s"The peer ${peer} has too small vote deposit: ${actual}, minimal is: {minimal}"
+                s"The peer $peer has too small vote deposit: $actual, minimal is: {minimal}"
+            case x: hydrozoa.config.HeadConfig.Error.CborDeserializationFailed =>
+                s"CBOR deserialization failed: ${x.msg}"
+            case hydrozoa.config.HeadConfig.Error.InitializationTxSeqParseError(wrapped) =>
+                s"Initialization transaction sequence failed to parse. Error: $wrapped"
+            case hydrozoa.config.HeadConfig.Error.UnknownNetwork(network) =>
+                s"Expected either mainnet or testnet network ID, but received: ${network.networkId}"
     }
 
     final case class HeadParameters private[config] (
@@ -247,15 +257,15 @@ object HeadConfig {
     // TODO: can we remove private here?
     // final case class OwnPeer private[config] (
     final case class OwnPeer(
-        peerId: Peer.Id,
-        wallet: Wallet
+        peerId: PeerId,
+        wallet: PeerWallet
     )
 
     final case class InitialBlock private[config] (
         startTime: QuantizedInstant,
-        effects: BlockEffectsSigned.Initial
+        effects: BlockEffects.MultiSigned.Initial
     ) {
-        def initialFallbackTx: FallbackTx = effects.fallbackSigned
+        def initialFallbackTx: FallbackTx = effects.fallbackTx
 
         def initialKzgCommitment: KzgCommitment = IArray.from(initialTreasury.datum.commit.bytes)
 
@@ -265,7 +275,7 @@ object HeadConfig {
 
         def multisigRegimeUtxo: MultisigRegimeUtxo = initializationTx.multisigRegimeUtxo
 
-        def initializationTx: InitializationTx = effects.initialSigned
+        def initializationTx: InitializationTx = effects.initializationTx
     }
 
     /** A Hydrozoa head is uniquely identified on the L1 blockchain by the L1's network, the head's
@@ -282,7 +292,7 @@ object HeadConfig {
     )
 
     final case class HeadPeers private[config] (
-        peerKeys: TreeMap[Peer.Id, VerificationKeyBytes]
+        peerKeys: TreeMap[PeerId, VerificationKeyBytes]
     ) {
         def headMultisigScript: HeadMultisigScript =
             HeadMultisigScript(NonEmptyList.fromListUnsafe(peerKeys.values.toList))
@@ -320,7 +330,7 @@ object HeadConfig {
       *   when idle, the liquidation actor waits this long before polling the Cardano backend again.
       */
     final case class LiquidationActorOperationalSettings private[config] (
-        withdrawalFeeWallet: Wallet,
+        withdrawalFeeWallet: PeerWallet,
         pollingPeriod: FiniteDuration
     )
 

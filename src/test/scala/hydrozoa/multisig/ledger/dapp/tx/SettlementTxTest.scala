@@ -2,12 +2,12 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, quantize}
+import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
-import hydrozoa.multisig.protocol.types.Block as HBlock
 import java.time.Instant
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
@@ -185,7 +185,7 @@ def genSettlementTxSeqBuilder(
       SettlementTxSeq.Builder(config),
       SettlementTxSeq.Builder.Args(
         kzgCommitment = kzg,
-        majorVersionProduced = HBlock.Version.Major(majorVersion),
+        majorVersionProduced = BlockVersion.Major(majorVersion),
         depositsToSpend = deposits,
         payoutObligationsRemaining = payouts,
         treasuryToSpend = utxo,
@@ -258,7 +258,7 @@ def genNextSettlementTxSeqBuilder(
       SettlementTxSeq.Builder(config),
       SettlementTxSeq.Builder.Args(
         kzgCommitment = kzg,
-        majorVersionProduced = HBlock.Version.Major(majorVersion),
+        majorVersionProduced = BlockVersion.Major(majorVersion),
         depositsToSpend = deposits,
         payoutObligationsRemaining = infimum,
         treasuryToSpend = treasuryToSpend,

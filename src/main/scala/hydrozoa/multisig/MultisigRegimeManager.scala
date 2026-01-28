@@ -10,9 +10,10 @@ import com.suprnation.actor.{OneForOneStrategy, SupervisionStrategy}
 import hydrozoa.multisig.MultisigRegimeManager.*
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
+import hydrozoa.multisig.consensus.ack.AckBlock
+import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, InitializationTx}
-import hydrozoa.multisig.protocol.types.Peer
 import scala.concurrent.duration.DurationInt
 import scala.language.postfixOps
 import scalus.cardano.ledger.SlotConfig
@@ -157,8 +158,8 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
   */
 object MultisigRegimeManager {
     final case class Config(
-        peerId: Peer.Id,
-        peers: List[Peer.Id],
+        peerId: PeerId,
+        peers: List[PeerId],
         cardanoBackend: CardanoBackend[IO],
         initializationTx: InitializationTx,
         fallbackTx: FallbackTx,
@@ -172,7 +173,7 @@ object MultisigRegimeManager {
         eventSequencer: EventSequencer.Handle,
         jointLedger: JointLedger.Handle,
         peerLiaisons: List[PeerLiaison.Handle],
-        remotePeerLiaisons: Map[Peer.Id, PeerLiaison.Handle],
+        remotePeerLiaisons: Map[PeerId, PeerLiaison.Handle],
     )
 
     type PendingConnections = Deferred[IO, Connections]
