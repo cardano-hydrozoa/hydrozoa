@@ -34,17 +34,18 @@ enum TestPeer derives CanEqual:
     case Michael
     case Nora
     case Ophelia
-    case Peter
+    case Proteus
     case Quincy
     case Rose
     case Sarah
     case Thomas
-    case Uriel
-    case Victor
-    case Wendy
-    case Xochitl
-    case Yannis
-    case Zoe
+    // Stopping here due to Yaci's limit of 20 genesis utxos.
+    // case Uriel
+    // case Victor
+    // case Wendy
+    // case Xochitl
+    // case Yannis
+    // case Zoe
 
     def account: Account = TestPeer.mkAccount(this)
 

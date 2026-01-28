@@ -19,7 +19,7 @@ import hydrozoa.multisig.ledger.JointLedger.{Done, Producing}
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.*
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Requests.{completeBlockRegular, getState, startBlockNow}
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Scenarios.{deposit, unsafeGetDone, unsafeGetProducing}
-import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockNumber, BlockVersion}
+import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.SpentUtxos
@@ -156,7 +156,7 @@ object JointLedgerTestHelpers {
             headMultisigScript = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
 
             system <- PropertyM.run(ActorSystem[IO]("DappLedger").allocated.map(_._1))
-            initTx <- PropertyM.run(
+            initializationTxSeq <- PropertyM.run(
               InitializationTxSeq.Builder.build(initTxArgs, initTxConfig).liftTo[IO]
             )
 
@@ -164,9 +164,9 @@ object JointLedgerTestHelpers {
               genEquityShares(peers).label("Equity shares")
             )
 
-            multisigRegimeUtxo = initTx.initializationTx.multisigRegimeUtxo
+            multisigRegimeUtxo = initializationTxSeq.initializationTx.multisigRegimeUtxo
 
-            tokenNames = initTx.initializationTx.tokenNames
+            tokenNames = initializationTxSeq.initializationTx.tokenNames
 
             consensusActorStub <- PropertyM.run(
               system.actorOf(new Actor[IO, ConsensusActor.Request] {
@@ -174,11 +174,22 @@ object JointLedgerTestHelpers {
               })
             )
 
+            initialBlock = Block.MultiSigned.Initial(
+              blockBrief = BlockBrief.Initial(header =
+                  BlockHeader
+                      .Initial(startTime = startTime, kzgCommitment = KzgCommitment.empty)
+              ),
+              effects = BlockEffects.MultiSigned.Initial(
+                initializationTx = initializationTxSeq.initializationTx,
+                fallbackTx = initializationTxSeq.fallbackTx
+              )
+            )
+
             jointLedger <- PropertyM.run(
               system.actorOf(
                 JointLedger(
                   JointLedger.Config(
-                    initialBlock = ???,
+                    initialBlock = initialBlock,
                     peerId = PeerId(peers.head.ordinal, peers.size),
                     wallet = peers.head.wallet,
                     tallyFeeAllowance = Coin.ada(2),
@@ -191,7 +202,7 @@ object JointLedgerTestHelpers {
                     multisigRegimeUtxo = multisigRegimeUtxo,
                     votingDuration =
                         FiniteDuration(24, HOURS).quantize(testTxBuilderCardanoInfo.slotConfig),
-                    initialTreasury = initTx.initializationTx.treasuryProduced,
+                    initialTreasury = initializationTxSeq.initializationTx.treasuryProduced,
                     txTiming = txTiming,
                     initialFallbackValidityStart =
                         startTime + txTiming.minSettlementDuration + txTiming.inactivityMarginDuration + txTiming.silenceDuration
@@ -207,7 +218,7 @@ object JointLedgerTestHelpers {
         } yield TestR(
           peers,
           system,
-          initTx,
+          initializationTxSeq,
           jointLedger,
           txTiming,
           tokenNames,
@@ -492,21 +503,21 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                   for {
                       jointLedgerState <- getState
                       _ <- assertWith(
-                        msg = "First finished block should always be Major",
+                        msg = "Block with no deposits/withdrawal should be Minor",
                         condition = jointLedgerState match {
-                            case JointLedger.Done(block: Block.Unsigned.Major, _, _, _) => true
+                            case JointLedger.Done(block: Block.Unsigned.Minor, _, _, _) => true
                             case _                                                      => false
                         }
                       )
-                      majorBlock: Block.Unsigned.Major =
+                      minorBlock: Block.Unsigned.Minor =
                           jointLedgerState
                               .asInstanceOf[JointLedger.Done]
                               .producedBlock
-                              .asInstanceOf[Block.Unsigned.Major]
+                              .asInstanceOf[Block.Unsigned.Minor]
                       _ <- assertWith(
-                        msg = "Block deposits should be correct",
-                        condition = majorBlock.body.depositsRefunded.isEmpty
-                            && majorBlock.body.depositsAbsorbed.isEmpty
+                        msg = "Block's deposit absorbed and deposits refunded should both be empty",
+                        condition = minorBlock.body.depositsRefunded.isEmpty
+                            && minorBlock.body.depositsAbsorbed.isEmpty
                       )
                   } yield ()
 
@@ -656,7 +667,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
     )
 
     val _ = property(
-      "Deposit absorption start timing test: absorption starts at block start time"
+      "Deposit absorption start timing test: absorption starts at block start time, deposit gets absorbed"
     ) = run(
       initializer = defaultInitializer,
       testM = for {
@@ -760,15 +771,16 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               jlState <- unsafeGetDone
 
               _ <- assertWith(
-                msg = "Produced block should be Major",
-                condition = jlState.producedBlock.isInstanceOf[Block.Unsigned.Major]
+                msg = "Produced block should be Minor",
+                condition = jlState.producedBlock.isInstanceOf[Block.Unsigned.Minor]
               )
 
-              majorBlock = jlState.producedBlock.asInstanceOf[Block.Unsigned.Major]
+              minorBlock = jlState.producedBlock.asInstanceOf[Block.Unsigned.Minor]
 
+              // This is trivial statement which may be removed
               _ <- assertWith(
                 msg = "Block should not contain absorbed deposit",
-                condition = majorBlock.body.depositsAbsorbed == List.empty
+                condition = minorBlock.body.depositsAbsorbed == List.empty
               )
           } yield ()
       } yield true
