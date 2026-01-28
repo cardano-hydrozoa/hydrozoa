@@ -50,7 +50,7 @@ enum TestPeer derives CanEqual:
 
     def wallet: PeerWallet = TestPeer.mkWallet(this)
 
-    def walletId: PeerNumber = TestPeer.mkWalletId(this)
+    def peerNum: PeerNumber = TestPeer.peerNum(this)
 
     def address(network: Network = testNetwork): ShelleyAddress = TestPeer.address(this, network)
 
@@ -97,7 +97,7 @@ object TestPeer:
 
     def mkWallet(peer: TestPeer): PeerWallet = walletCache.useOrCreate(peer)
 
-    def mkWalletId(peer: TestPeer): PeerNumber = PeerNumber(peer.ordinal)
+    def peerNum(peer: TestPeer): PeerNumber = PeerNumber(peer.ordinal)
 
     def address(network: Network)(peer: TestPeer): ShelleyAddress = address(peer, network)
 

@@ -78,7 +78,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
               mbUtxosAvailable = Some(yaciTestSauceGenesis(testNetwork))
             )
 
-            _ = println(s"peers: ${peers.map(_.walletId)}")
+            _ = println(s"peers: ${peers.map(_.peerNum)}")
 
             // Initial block effects
             initializationTxSeq = InitializationTxSeq.Builder
