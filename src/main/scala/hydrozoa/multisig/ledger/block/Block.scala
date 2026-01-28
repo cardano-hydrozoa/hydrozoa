@@ -1,16 +1,12 @@
 package hydrozoa.multisig.ledger.block
 
-import hydrozoa.multisig.consensus.ack.{AckBlock, AckId, AckNumber}
-import hydrozoa.multisig.consensus.peer.PeerWallet
 import hydrozoa.multisig.ledger.block.BlockHeader.Minor.HeaderSignature
 import hydrozoa.multisig.ledger.dapp.tx.{DeinitTx, FallbackTx, FinalizationTx, InitializationTx, RefundTx, RolloutTx, SettlementTx}
 
 sealed trait Block extends Block.Section
 
 object Block {
-    sealed trait Unsigned extends Block, BlockStatus.Unsigned {
-        def acks(wallet: PeerWallet, finalizationRequested: Boolean): List[AckBlock]
-    }
+    sealed trait Unsigned extends Block, BlockStatus.Unsigned
 
     object Unsigned {
         final case class Initial(
@@ -27,11 +23,6 @@ object Block {
             override transparent inline def initializationTx: InitializationTx =
                 effects.initializationTx
             override transparent inline def fallbackTx: FallbackTx = effects.fallbackTx
-
-            override transparent inline def acks(
-                wallet: PeerWallet,
-                finalizationRequested: Boolean
-            ): List[AckBlock] = List()
         }
 
         final case class Minor(
@@ -49,20 +40,6 @@ object Block {
                 effects.headerSerialized
             override transparent inline def postDatedRefundTxs: List[RefundTx.PostDated] =
                 effects.postDatedRefundTxs
-
-            def ack(wallet: PeerWallet, finalizationRequested: Boolean): AckBlock.Minor =
-                AckBlock.Minor(
-                  ackId = AckId(wallet.getPeerNum, AckNumber.neededToConfirm(header)),
-                  blockNum = blockNum,
-                  header = wallet.mkMinorHeaderSignature(headerSerialized),
-                  postDatedRefundTxs = postDatedRefundTxs.map(_.tx).map(wallet.mkTxSignature),
-                  finalizationRequested = finalizationRequested
-                )
-
-            override transparent inline def acks(
-                wallet: PeerWallet,
-                finalizationRequested: Boolean
-            ): List[AckBlock.Minor] = List(ack(wallet, finalizationRequested))
         }
 
         final case class Major(
@@ -81,29 +58,6 @@ object Block {
             override transparent inline def fallbackTx: FallbackTx = effects.fallbackTx
             override transparent inline def postDatedRefundTxs: List[RefundTx.PostDated] =
                 effects.postDatedRefundTxs
-
-            def ack1(wallet: PeerWallet, finalizationRequested: Boolean): AckBlock.Major1 =
-                AckBlock.Major1(
-                  ackId = AckId(wallet.getPeerNum, AckNumber.neededToConfirm(header).decrement),
-                  blockNum = blockNum,
-                  fallbackTx = wallet.mkTxSignature(fallbackTx.tx),
-                  rolloutTxs = rolloutTxs.map(_.tx).map(wallet.mkTxSignature),
-                  postDatedRefundTxs = postDatedRefundTxs.map(_.tx).map(wallet.mkTxSignature),
-                  finalizationRequested = finalizationRequested
-                )
-
-            def ack2(wallet: PeerWallet): AckBlock.Major2 =
-                AckBlock.Major2(
-                  ackId = AckId(wallet.getPeerNum, AckNumber.neededToConfirm(header)),
-                  blockNum = blockNum,
-                  settlementTx = wallet.mkTxSignature(settlementTx.tx)
-                )
-
-            override transparent inline def acks(
-                wallet: PeerWallet,
-                finalizationRequested: Boolean
-            ): List[AckBlock & BlockType.Major] =
-                List(ack1(wallet, finalizationRequested), ack2(wallet))
         }
 
         final case class Final(
@@ -112,7 +66,6 @@ object Block {
         ) extends Block.Unsigned,
               BlockType.Final,
               BlockEffects.Final.Section {
-            import scala.annotation.unused
 
             override transparent inline def block: Block.Unsigned.Final = this
 
@@ -122,24 +75,6 @@ object Block {
             override transparent inline def finalizationTx: FinalizationTx = effects.finalizationTx
             override transparent inline def rolloutTxs: List[RolloutTx] = effects.rolloutTxs
             override transparent inline def deinitTx: Option[DeinitTx] = effects.deinitTx
-
-            def ack1(wallet: PeerWallet): AckBlock.Final1 = AckBlock.Final1(
-              ackId = AckId(wallet.getPeerNum, AckNumber.neededToConfirm(header).decrement),
-              blockNum = blockNum,
-              rolloutTxs = rolloutTxs.map(_.tx).map(wallet.mkTxSignature),
-              deinitTx = deinitTx.map(_.tx).map(wallet.mkTxSignature)
-            )
-
-            def ack2(wallet: PeerWallet): AckBlock.Final2 = AckBlock.Final2(
-              ackId = AckId(wallet.getPeerNum, AckNumber.neededToConfirm(header)),
-              blockNum = blockNum,
-              finalizationTx = wallet.mkTxSignature(finalizationTx.tx)
-            )
-
-            override transparent inline def acks(
-                wallet: PeerWallet,
-                @unused finalizationRequested: Boolean
-            ): List[AckBlock & BlockType.Final] = List(ack1(wallet), ack2(wallet))
         }
 
         type Next = Block.Unsigned & BlockType.Next

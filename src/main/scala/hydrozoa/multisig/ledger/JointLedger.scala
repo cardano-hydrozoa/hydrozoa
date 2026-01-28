@@ -475,7 +475,7 @@ final case class JointLedger(
     ): IO[Unit] =
         for {
             conn <- getConnections
-            acks = block.acks(wallet, localFinalization)
+            acks = wallet.mkAcks(block, localFinalization)
             _ <- (conn.peerLiaisons ! block.blockBriefNext).parallel
             _ <- conn.consensusActor ! block
             _ <- IO.traverse_(acks)(ack => conn.consensusActor ! ack)
