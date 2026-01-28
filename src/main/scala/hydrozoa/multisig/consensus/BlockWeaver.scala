@@ -479,10 +479,11 @@ trait BlockWeaver(
     ): IO[FeedResult] = {
         import FeedResult.*
 
-        val eventsToFeed = (startWith match {
-            case Some(eventId) => blockBrief.events.splitAt(blockBrief.events.indexOf(eventId))._2
-            case None          => blockBrief.events
-        }).map(_._1)
+        val eventsToFeed = startWith match {
+            case Some(eventId) =>
+                blockBrief.events.map(_._1).splitAt(blockBrief.events.map(_._1).indexOf(eventId))._2
+            case None => blockBrief.events.map(_._1)
+        }
 
         for {
             // _ <- IO.println(s"events to feed: ${eventsToFeed}")
@@ -492,7 +493,7 @@ trait BlockWeaver(
             mbFirstEventIdMissingAndResidualMempool <- Monad[IO].tailRecM(
               (eventsToFeed, initialMempool)
             ) {
-                case (Nil, mempool) => IO.pure(Right(None, mempool))
+                case (Nil, mempool) => IO.pure(Right((None, mempool)))
                 // TODO maybe add tryRemove later on
                 case (e :: es, mempool) =>
                     mempool.findById(e) match {
@@ -503,7 +504,8 @@ trait BlockWeaver(
                             } yield Left(es, mempool.remove(e))
                         case None =>
                             for {
-                                _ <- IO.unit // IO.println(s"new missing event: $e")
+                                _ <- IO.unit
+                                // _ <- IO.println(s"new missing event: $e")
                             } yield Right(Some(e), mempool)
                     }
             }

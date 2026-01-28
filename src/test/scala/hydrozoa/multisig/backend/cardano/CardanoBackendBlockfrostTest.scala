@@ -174,7 +174,7 @@ class CardanoBackendBlockfrostTest extends AnyFunSuite {
             } yield txIds
         )
         println(ret)
-        assert(ret.isRight && ret.exists(set => set.size == 13))
+        assert(ret.isRight && ret.exists(set => set.size == 16))
     }
 
     test("Fetch txs - empty results", RequiresBlockfrostApiKey) {

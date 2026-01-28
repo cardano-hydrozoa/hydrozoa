@@ -34,7 +34,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
       "Weaver leads when turn comes, feeding events from recovered/residual mempool"
     ) = PropertyBuilder.property { p =>
 
-        val peers = p.pick(genTestPeers(), "test peers")
+        val peers = p.pick(genTestPeers(minPeers = 3, maxPeers = 5), "test peers")
         val peer = p.pick(Gen.oneOf(peers.toList))
         val peerId = PeerId(peer.ordinal, peers.size)
 
@@ -156,55 +156,55 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
             true
         }
 
-    // val _ = property("Being leader for non-first block weaver passes-through all ledger events") =
-    //    PropertyBuilder.property { p =>
-    //
-    //        val peers = p.pick(genTestPeers(), "test peers")
-    //        val peer = p.pick(Gen.oneOf(peers.toList))
-    //        val peerId = PeerId(peer.ordinal, peers.size)
-    //
-    //        // Joint ledger mock
-    //        val system = p.runIO(ActorSystem[IO]("Weaver SUT").allocated)._1
-    //        val jointLedgerMock = JointLedgerMock()
-    //        val jointLedgerMockActor =
-    //            p.runIO(system.actorOf(jointLedgerMock.trackWithCache("joint-ledger-mock")))
-    //
-    //        // Weaver's config such that the peer is going to be the leader of the next non-first block
-    //        val roundsCompleted = p.pick(Gen.choose(100, 1000))
-    //        val config = BlockWeaver.Config(
-    //          lastKnownBlock = BlockNumber(roundsCompleted * peers.size + peer.ordinal - 1),
-    //          peerId = peerId,
-    //          recoveredMempool = BlockWeaver.Mempool.empty,
-    //          slotConfig = testTxBuilderCardanoInfo.slotConfig
-    //        )
-    //
-    //        val connections = BlockWeaver.Connections(jointLedgerMockActor)
-    //
-    //        // Weaver
-    //        val weaverActor = p.runIO(system.actorOf(BlockWeaver(config, connections)))
-    //
-    //        // Any random events
-    //        val events: Seq[LedgerEvent] =
-    //            p.pick(Gen.nonEmptyListOf(Arbitrary.arbitrary[LedgerEvent]))
-    //
-    //        // Should be passed through with no delay
-    //        p.assert(
-    //          events
-    //              .map { e =>
-    //                  p.runIO(
-    //                    handleBoolean(for {
-    //                        _ <- weaverActor ! e
-    //                        _ <- system.waitForIdle()
-    //                    } yield ())
-    //                  ) &&
-    //                  (jointLedgerMock.events.last == e)
-    //              }
-    //              .forall(identity),
-    //          "events are passed through with no delay"
-    //        )
-    //
-    //        true
-    //    }
+    val _ = property("Being leader for non-first block weaver passes-through all ledger events") =
+        PropertyBuilder.property { p =>
+
+            val peers = p.pick(genTestPeers(), "test peers")
+            val peer = p.pick(Gen.oneOf(peers.toList))
+            val peerId = PeerId(peer.ordinal, peers.size)
+
+            // Joint ledger mock
+            val system = p.runIO(ActorSystem[IO]("Weaver SUT").allocated)._1
+            val jointLedgerMock = JointLedgerMock()
+            val jointLedgerMockActor =
+                p.runIO(system.actorOf(jointLedgerMock.trackWithCache("joint-ledger-mock")))
+
+            // Weaver's config such that the peer is going to be the leader of the next non-first block
+            val roundsCompleted = p.pick(Gen.choose(100, 1000))
+            val config = BlockWeaver.Config(
+              lastKnownBlock = BlockNumber(roundsCompleted * peers.size + peer.ordinal - 1),
+              peerId = peerId,
+              recoveredMempool = BlockWeaver.Mempool.empty,
+              slotConfig = testTxBuilderCardanoInfo.slotConfig
+            )
+
+            val connections = BlockWeaver.Connections(jointLedgerMockActor)
+
+            // Weaver
+            val weaverActor = p.runIO(system.actorOf(BlockWeaver(config, connections)))
+
+            // Any random events
+            val events: Seq[LedgerEvent] =
+                p.pick(Gen.nonEmptyListOf(Arbitrary.arbitrary[LedgerEvent]))
+
+            // Should be passed through with no delay
+            p.assert(
+              events
+                  .map { e =>
+                      p.runIO(
+                        handleBoolean(for {
+                            _ <- weaverActor ! e
+                            _ <- system.waitForIdle()
+                        } yield ())
+                      ) &&
+                      (jointLedgerMock.events.last == e)
+                  }
+                  .forall(identity),
+              "events are passed through with no delay"
+            )
+
+            true
+        }
 
     val _ = property(
       "Follower/awaiting modes are working as expected"
@@ -213,7 +213,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
         // Since we are going to check two blocks in a row not to peek into the weaver's state,
         // we need at least four peers so the SUT weaver won't become a leader at least for three
         // blocks (since we don't want its leader StartBlock gets into our way).
-        val peers = p.pick(genTestPeers(4), "test peers")
+        val peers = p.pick(genTestPeers(4, 10), "test peers")
         val peer = p.pick(Gen.oneOf(peers.toList), "own peer")
         val peerId = PeerId(peer.ordinal, peers.size)
 
@@ -234,6 +234,10 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
           recoveredMempool = BlockWeaver.Mempool.empty,
           slotConfig = testTxBuilderCardanoInfo.slotConfig
         )
+
+        // println(peerId)
+        // println(lastKnownBlock)
+        // println(peerId.isLeader(lastKnownBlock))
 
         val connections = BlockWeaver.Connections(jointLedgerMockActor)
 
@@ -309,6 +313,9 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
                         )
                   )
 
+                  // _ <- IO.println(s"first block: $firstBlock")
+                  // _ <- IO.println(s"second block: $secondBlock")
+
                   _ <- (for {
                       _ <- IO.sleep(50.millis)
                       _ <- weaverActor ! firstBlock
@@ -318,7 +325,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
                       _ <- weaverActor ! secondBlock
                   } yield ()).start.void
 
-                  // This `expectMsgs` spams to console with Expecting:..., is's "ok"
+                  // This `expectMsgs` spams to console with Expecting:..., which is "ok" for now
                   _ <- expectMsgs(jointLedgerMockActor, 10.seconds)(
                     List(
                       StartBlock(firstBlock.header.blockNum, firstBlock.header.startTime)

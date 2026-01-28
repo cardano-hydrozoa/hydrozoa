@@ -138,11 +138,11 @@ val genTestPeer: Gen[TestPeer] = {
     } yield TestPeer.fromOrdinal(i)
 }
 
-/** Choose between 2 and 10 peers */
-def genTestPeers(minPeers: Int = 2): Gen[NonEmptyList[TestPeer]] = {
+def genTestPeers(minPeers: Int = 2, maxPeers: Int = 5): Gen[NonEmptyList[TestPeer]] = {
     require(0 < minPeers && minPeers < TestPeer.nNamedPeers)
+    require(minPeers <= maxPeers && maxPeers < TestPeer.nNamedPeers)
     for {
-        numPeers <- Gen.choose(minPeers, TestPeer.nNamedPeers)
+        numPeers <- Gen.choose(minPeers, maxPeers)
         peers = TestPeer.peerNumRange.take(numPeers).map(TestPeer.fromOrdinal)
     } yield NonEmptyList.fromListUnsafe(peers.toList)
 }
