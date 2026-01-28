@@ -282,12 +282,13 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
 
                   // First block
                   now <- realTimeQuantizedInstant(testTxBuilderCardanoInfo.slotConfig)
+                  competingFallbackStartTime = txTiming.newFallbackStartTime(now)
+
                   firstBlock: BlockBrief.Minor = BlockBrief.Minor(
                     BlockHeader.Minor(
                       blockNum = lastKnownBlock.increment,
                       blockVersion = version,
                       startTime = now,
-                      endTime = txTiming.newBlockEndTime(now),
                       kzgCommitment = KzgCommitment.empty
                     ),
                     BlockBody.Minor(
@@ -299,17 +300,8 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
                   // Second block
                   newTime <- realTimeQuantizedInstant(testTxBuilderCardanoInfo.slotConfig)
 
-                  secondHeader: BlockHeader.Minor = firstBlock
-                      .nextHeaderIntermediate(
-                        txTiming,
-                        newStartTime = newTime,
-                        previousEndTime = firstBlock.endTime,
-                        newKzgCommitment = KzgCommitment.empty
-                      )
-                      .asInstanceOf[BlockHeader.Minor]
-
                   secondBlock: BlockBrief.Minor = BlockBrief.Minor(
-                    secondHeader,
+                    firstBlock.nextHeaderMinor(newTime, KzgCommitment.empty),
                     BlockBody
                         .Minor(
                           events = secondBlockEvents.map(e => (e.eventId, Valid)).toList,

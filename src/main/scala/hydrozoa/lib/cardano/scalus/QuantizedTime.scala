@@ -161,7 +161,16 @@ object QuantizedTime {
     case class QuantizedFiniteDuration private (
         finiteDuration: FiniteDuration,
         slotConfig: SlotConfig
-    )
+    ) {
+        def +(other: QuantizedFiniteDuration): QuantizedFiniteDuration = {
+            require(
+              this.slotConfig == other.slotConfig,
+              s"Tried to do ${this} + ${other}, but they have different" +
+                  " slot configurations"
+            )
+            this.copy(finiteDuration = finiteDuration + other.finiteDuration)
+        }
+    }
 
     object QuantizedInstant {
         def apply(slotConfig: SlotConfig, instant: java.time.Instant): QuantizedInstant =

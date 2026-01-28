@@ -55,7 +55,6 @@ object BlockBrief {
         override transparent inline def blockNum: BlockNumber = header.blockNum
         override transparent inline def blockVersion: BlockVersion.Full = header.blockVersion
         override transparent inline def startTime: QuantizedInstant = header.startTime
-        override transparent inline def endTime: QuantizedInstant = header.endTime
         override transparent inline def kzgCommitment: KzgCommitment = header.kzgCommitment
 
         override transparent inline def events: List[(LedgerEventId, ValidityFlag)] = body.events

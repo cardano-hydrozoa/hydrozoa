@@ -15,7 +15,7 @@ import hydrozoa.multisig.ledger.DappLedgerM.runDappLedgerM
 import hydrozoa.multisig.ledger.JointLedger.*
 import hydrozoa.multisig.ledger.JointLedger.Requests.*
 import hydrozoa.multisig.ledger.VirtualLedgerM.runVirtualLedgerM
-import hydrozoa.multisig.ledger.block.{Block, BlockBody, BlockBrief, BlockEffects, BlockHeader, BlockNumber, BlockVersion}
+import hydrozoa.multisig.ledger.block.{Block, BlockBody, BlockBrief, BlockEffects, BlockHeader, BlockNumber}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming
@@ -362,10 +362,10 @@ final case class JointLedger(
                     previousHeader.nextHeaderIntermediate(
                       txTiming,
                       producing.startTime,
-                      previousHeader.endTime,
+                      producing.competingFallbackValidityStart,
                       kzgCommitment
                     )
-                else previousHeader.nextHeaderMajor(txTiming, producing.startTime, kzgCommitment)
+                else previousHeader.nextHeaderMajor(producing.startTime, kzgCommitment)
 
             block <- headerIntermediate match {
                 case header: BlockHeader.Minor =>
@@ -436,7 +436,7 @@ final case class JointLedger(
 
             block: Block.Unsigned.Final = {
                 import p.nextBlockData.*
-                val blockHeader = p.previousBlock.header.nextHeaderFinal(txTiming, p.startTime)
+                val blockHeader = p.previousBlock.header.nextHeaderFinal(p.startTime)
 
                 val blockBody = BlockBody.Final(
                   events = events,

@@ -50,20 +50,21 @@ final case class TxTiming(
     depositAbsorptionDuration: QuantizedFiniteDuration,
 ) {
 
-    /** A block can stay minor if this predicate is true for its start and end times. Otherwise, it
-      * must be upgraded to a major block so that the competing fallback start time is pushed
-      * forward for future blocks.
+    /** A block can stay minor if this predicate is true for its start time, relative to the
+      * previous major block's fallback tx start time. Otherwise, it must be upgraded to a major
+      * block so that the competing fallback start time is pushed forward for future blocks.
       */
-    def isSufficientDurationToEndTime(
+    def blockCanStayMinor(
         blockStartTime: QuantizedInstant,
-        blockEndTime: QuantizedInstant
+        competingFallbackEndTime: QuantizedInstant
     ): Boolean =
-        blockEndTime - blockStartTime > minSettlementDuration
+        competingFallbackEndTime - blockStartTime > minSettlementDuration + silenceDuration
 
-    /** Every non-minor block uses this to set its end time relative to its start time.
+    /** A major/initial block's fallback tx's start time should be set to this time relative to the
+      * block's start time.
       */
-    def newBlockEndTime(blockStartTime: QuantizedInstant): QuantizedInstant =
-        blockStartTime + minSettlementDuration + inactivityMarginDuration
+    def newFallbackStartTime(blockStartTime: QuantizedInstant): QuantizedInstant =
+        blockStartTime + minSettlementDuration + inactivityMarginDuration + silenceDuration
 }
 
 /** Timing is hard. The precision we have to use is going to be dependent on the slot config.
