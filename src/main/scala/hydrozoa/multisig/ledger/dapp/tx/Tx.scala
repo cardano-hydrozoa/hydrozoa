@@ -26,6 +26,7 @@ trait Tx[Self <: Tx[Self]] extends HasResolvedUtxos { self: Self =>
             this.tx == that.tx
         case _ => false
     }
+
 }
 
 trait HasValidityStart:

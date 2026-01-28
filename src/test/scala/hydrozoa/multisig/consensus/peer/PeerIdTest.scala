@@ -1,10 +1,10 @@
-package hydrozoa.multisig.protocol
+package hydrozoa.multisig.consensus.peer
 
-import hydrozoa.multisig.protocol.types.{Block, Peer}
+import hydrozoa.multisig.ledger.block.BlockNumber
 import org.scalacheck.*
 import org.scalacheck.Test.Parameters
 
-object PeerProperty extends Properties("Peer/RoundRobin") {
+object PeerIdTest extends Properties("Peer/RoundRobin") {
     import Prop.forAll
 
     override def overrideParameters(p: Parameters): Parameters = {
@@ -17,21 +17,21 @@ object PeerProperty extends Properties("Peer/RoundRobin") {
         forAll(genSmallInt, genSmallInt, genSmallInt) { (x, y, z) =>
             val peerNum = x.abs
             val nPeers = x.abs + y.abs + 1
-            val peerId = Peer.Id(Peer.Number(peerNum), nPeers)
+            val peerId = PeerId(peerNum, nPeers)
 
             val roundNum = z.abs
-            val blockNum = Block.Number(roundNum * nPeers + peerNum)
+            val blockNum = BlockNumber(roundNum * nPeers + peerNum)
 
             val peerIsLeader = peerId.isLeader(blockNum)
 
             val otherPeersNotLeaders = Range(0, nPeers - 1)
                 .filter(_ != peerNum)
-                .forall((i: Int) => !Peer.Id(i, nPeers).isLeader(blockNum))
+                .forall((i: Int) => !PeerId(i, nPeers).isLeader(blockNum))
 
             val nextLeaderBlock = peerId.nextLeaderBlock(blockNum)
             val peerIsLeaderNextTime = peerId.isLeader(nextLeaderBlock)
 
-            val expectedNextLeaderBlock = Block.Number(nPeers + blockNum)
+            val expectedNextLeaderBlock = BlockNumber(nPeers + blockNum)
             val nextLeaderBlockIsAsExpected = nextLeaderBlock == expectedNextLeaderBlock
 
             peerIsLeader && peerIsLeaderNextTime && otherPeersNotLeaders && nextLeaderBlockIsAsExpected

@@ -46,7 +46,7 @@ object QuantizedTime {
 
     given Ordering[QuantizedInstant] with {
         override def compare(self: QuantizedInstant, other: QuantizedInstant): Int = {
-            // Whether or not this "require" is needed is up to semantic interpretation.
+            // Whether this "require" is needed is up to semantic interpretation.
             // I'm choosing to include it because in our particular case such a comparison would almost certainly be a
             // programming error, and it is not a priori given what should happen if the instants being compared as "close"
             // within their respective quantization window.
@@ -144,15 +144,32 @@ object QuantizedTime {
 
     }
 
+    given Ordering[QuantizedFiniteDuration] with {
+        override def compare(self: QuantizedFiniteDuration, other: QuantizedFiniteDuration): Int = {
+            // Whether this "require" is needed is up to semantic interpretation.
+            // I'm choosing to include it because in our particular case such a comparison would almost certainly be a
+            // programming error, and it is not a priori given what should happen if the instants being compared as "close"
+            // within their respective quantization window.
+            require(
+              self.slotConfig == other.slotConfig,
+              s"Tried to compare $self and $other, but they have " + "different slotConfigs"
+            )
+            self.finiteDuration.compare(other.finiteDuration)
+        }
+    }
+
     case class QuantizedFiniteDuration private (
         finiteDuration: FiniteDuration,
         slotConfig: SlotConfig
     ) {
-        def <=(other: QuantizedFiniteDuration): Boolean =
-            this.finiteDuration <= other.finiteDuration
-
-        def >=(other: QuantizedFiniteDuration): Boolean =
-            this.finiteDuration >= other.finiteDuration
+        def +(other: QuantizedFiniteDuration): QuantizedFiniteDuration = {
+            require(
+              this.slotConfig == other.slotConfig,
+              s"Tried to do ${this} + ${other}, but they have different" +
+                  " slot configurations"
+            )
+            this.copy(finiteDuration = finiteDuration + other.finiteDuration)
+        }
     }
 
     object QuantizedInstant {

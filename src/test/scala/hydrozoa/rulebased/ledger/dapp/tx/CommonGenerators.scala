@@ -2,27 +2,23 @@ package hydrozoa.rulebased.ledger.dapp.tx
 
 import cats.data.NonEmptyList
 import hydrozoa.*
+import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.virtual.commitment.TrustedSetup
-import hydrozoa.multisig.protocol.types.AckBlock.HeaderSignature
-import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{BlockTypeL2, OnchainBlockHeader, given}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryScript
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.UnresolvedDatum
 import hydrozoa.rulebased.ledger.dapp.utxo.RuleBasedTreasuryUtxo
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
-import scalus.builtin.Builtins.serialiseData
-import scalus.builtin.Data.toData
 import scalus.builtin.{BLS12_381_G2_Element, ByteString}
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{Utxo as _, *}
+import scalus.cardano.ledger.{BlockHeader as _, Utxo as _, *}
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
 import scalus.ledger.api.v3.TokenName
 import scalus.prelude.List as SList
-import scalus.|>
 import test.*
 import test.Generators.Hydrozoa.genPubkeyAddress
 
@@ -150,28 +146,27 @@ object CommonGenerators {
           )
         )
 
-    def genOnchainBlockHeader(versionMajor: BigInt): Gen[OnchainBlockHeader] =
+    def genOnchainBlockHeader(versionMajor: BigInt): Gen[BlockHeader.Minor.Onchain] =
         for {
             blockNum <- Gen.choose(10L, 20L).map(BigInt(_))
             timeCreation <- Gen.choose(1591566491L, 1760000000L).map(BigInt(_))
             versionMinor <- Gen.choose(0L, 100L).map(BigInt(_))
             commitment <- genByteStringOfN(48) // KZG commitment (G1 compressed point)
-        } yield OnchainBlockHeader(
+        } yield BlockHeader.Minor.Onchain(
           blockNum = blockNum,
-          blockType = BlockTypeL2.Minor,
-          timeCreation = timeCreation,
+          startTime = timeCreation,
           versionMajor = versionMajor,
           versionMinor = versionMinor,
           commitment = commitment
         )
 
     def signBlockHeader(
-        blockHeader: OnchainBlockHeader,
+        blockHeader: BlockHeader.Minor.Onchain,
         peers: NonEmptyList[TestPeer]
-    ): List[HeaderSignature] = {
+    ): List[BlockHeader.Minor.HeaderSignature] = {
         // TODO: use Header.Minor.mkMessage
-        val bs = blockHeader.toData |> serialiseData |> (_.bytes) |> IArray.from
-        peers.toList.map(peer => peer.wallet.signMsg(bs))
+        val bs = BlockHeader.Minor.Onchain.Serialized(blockHeader)
+        peers.toList.map(peer => peer.wallet.mkMinorHeaderSignature(bs))
     }
 
     /** Generator for Shelley address */
