@@ -78,13 +78,14 @@ lazy val core: Project = (project in file("."))
 
 // Integration tests
 lazy val integration: Project = (project in file("integration"))
-    .dependsOn(core)
+    .dependsOn(core % "compile->compile;test->test")
     .settings(
       // Compile / mainClass := Some("hydrozoa.demo.Workload"),
       publish / skip := true,
       // test dependencies
       libraryDependencies ++= Seq(
-        "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test
+        "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
+        "org.typelevel" %% "cats-effect" % "3.6.3" % Test
       )
     )
 

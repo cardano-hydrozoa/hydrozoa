@@ -175,10 +175,9 @@ object CommonGenerators {
     }
 
     /** Generator for Shelley address */
-    def genShelleyAddress: Gen[ShelleyAddress] =
+    def genShelleyAddress(network: Network = testNetwork): Gen[ShelleyAddress] =
         for {
             keyHash <- arbitrary[AddrKeyHash]
-            network = testNetwork
         } yield ShelleyAddress(
           network = network,
           payment = ShelleyPaymentPart.Key(keyHash),
@@ -195,7 +194,7 @@ object CommonGenerators {
     /** Generator for a single L2 output */
     def genOutputL2: Gen[OutputL2] =
         for {
-            address <- genShelleyAddress
+            address <- genShelleyAddress()
             coin <- Gen.choose(1_000_000L, 10_000_000L)
             value = Value(Coin(coin))
         } yield Output[L2](

@@ -24,7 +24,7 @@ import scalus.cardano.ledger.{AddrKeyHash, Coin, Utxo, Value}
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import spire.math.UByte
 import test.Generators.Hydrozoa.genAdaOnlyPubKeyUtxo
-import test.{TestPeer, genTestPeers, minPubkeyAda, sumUtxoValues, testNetwork, testTxBuilderCardanoInfo, testTxTiming}
+import test.{TestPeer, genTestPeers, minPubkeyAda, sumUtxoValues, testNetwork, testTxBuilderCardanoInfo}
 
 object HeadConfigTest extends Properties("HeadConfig Test") {
     val _ = property("sanity test for genRawConfig") = PropertyM.monadicIO(
@@ -86,7 +86,7 @@ val genRawConfig: PropertyM[IO, RawConfig] =
         payoutAddresses <- PropertyM.pick[IO, List[ShelleyAddress]](
           Gen.listOfN(
             peers.size,
-            genShelleyAddress.label("Payout addresses for contingency/equity")
+            genShelleyAddress().label("Payout addresses for contingency/equity")
           )
         )
 
@@ -158,10 +158,6 @@ val genRawConfig: PropertyM[IO, RawConfig] =
 
         txTiming = TxTiming.default(testTxBuilderCardanoInfo.slotConfig)
 
-        startTime <- PropertyM.run(
-          realTimeQuantizedInstant(testTxBuilderCardanoInfo.slotConfig)
-        )
-
         initTxConfig = InitializationTxSeq.Config(
           tallyFeeAllowance = Coin.ada(2),
           votingDuration = FiniteDuration(24, HOURS).quantize(testTxBuilderCardanoInfo.slotConfig),
@@ -199,7 +195,7 @@ val genRawConfig: PropertyM[IO, RawConfig] =
             finiteDuration = 24.hours,
             slotConfig = testTxBuilderCardanoInfo.slotConfig
           ),
-          txTiming = testTxTiming,
+          txTiming = txTiming,
           startTime = startTime,
           resolvedUtxosForInitialization =
               ResolvedUtxos(Map.from(spentUtxos.toList.map(_.toTuple))),

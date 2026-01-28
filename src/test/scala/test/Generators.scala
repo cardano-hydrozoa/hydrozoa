@@ -347,7 +347,7 @@ object Generators {
             peer: TestPeer
         ): Gen[L2EventTransaction] =
             for {
-                addr <- genShelleyAddress
+                addr <- genShelleyAddress()
 
                 inputValue: Value = inputUtxos.values.foldLeft(Value.zero)((acc, output) => {
                     acc + output.value

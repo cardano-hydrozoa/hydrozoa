@@ -19,7 +19,7 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 import scala.annotation.nowarn
 import scalus.builtin.ByteString
 import scalus.builtin.ByteString.hex
-import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
+import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.{Utxo as _, *}
 import scalus.cardano.txbuilder.SomeBuildError
 import spire.compat.integral
@@ -77,9 +77,13 @@ def genEmptyResolvedTreasuryUtxo(
 
 // TODO: move away from rule-based, it's used in both regimes
 /** Generate EquityShares for testing */
-def genEquityShares(peers: NonEmptyList[TestPeer]): Gen[EquityShares] =
+def genEquityShares(
+    peers: NonEmptyList[TestPeer],
+    network: Network = testNetwork
+): Gen[EquityShares] =
     for {
-        addresses <- Gen.listOfN(peers.length, genPubkeyAddress(testNetwork))
+        // TODO: shall we use main peers' addresses here?
+        addresses <- Gen.listOfN(peers.length, genPubkeyAddress(network))
         shares <- genShares(peers.length)
     } yield {
         val peerShares = addresses
@@ -97,7 +101,7 @@ def genEquityShares(peers: NonEmptyList[TestPeer]): Gen[EquityShares] =
               collectiveContingency = CollectiveContingency.apply(UByte(peers.size)),
               individualContingency = IndividualContingency.apply
             )
-            .getOrElse(throw RuntimeException("error generating shares"))
+            .fold(err => throw RuntimeException(s"error generating shares: ${err.explain}"), x => x)
     }
 
 def genRational: Gen[Rational] =
@@ -113,10 +117,12 @@ def genShares(n: Int): Gen[List[Rational]] =
           List.fill(n)(share)
       },
       5 -> {
-          for {
-              r <- Gen.choose(1, n - 1)
-              randomShares <- Gen.listOfN(r, genRational).suchThat(_.sum <= 1)
-          } yield randomShares ++ List.fill(n - (r + 1))(r"0") :+ (r"1" - randomShares.sum)
+          if n == 1 then Gen.const(List(r"1"))
+          else
+              for {
+                  r <- Gen.choose(1, n - 1)
+                  randomShares <- Gen.listOfN(r, genRational).suchThat(_.sum <= 1)
+              } yield randomShares ++ List.fill(n - (r + 1))(r"0") :+ (r"1" - randomShares.sum)
       }
     )
 

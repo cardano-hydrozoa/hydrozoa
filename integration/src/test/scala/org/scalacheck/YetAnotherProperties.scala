@@ -5,6 +5,7 @@ import org.scalacheck.rng.Seed
 import org.scalacheck.util.ConsoleReporter
 import scala.util.{Failure, Success}
 
+// TODO: likely we don't need it
 abstract class YetAnotherProperties(override val name: String) extends Properties(name):
 
     override def main(args: Array[String]): Unit =

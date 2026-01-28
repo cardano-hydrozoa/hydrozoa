@@ -321,7 +321,6 @@ object InitializationTxSeq {
         case class InitializationTxError(e: SomeBuildError) extends Error
         case class FallbackTxError(e: SomeBuildError) extends Error
 
-        // TODO: this is getting cumbersome, review
         final case class Args(
             spentUtxos: InitializationTx.SpentUtxos,
             initialTreasury: Value,

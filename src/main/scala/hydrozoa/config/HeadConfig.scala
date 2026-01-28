@@ -244,7 +244,9 @@ object HeadConfig {
         liquidationActorOperationalSettings: LiquidationActorOperationalSettings
     )
 
-    final case class OwnPeer private[config] (
+    // TODO: can we remove private here?
+    // final case class OwnPeer private[config] (
+    final case class OwnPeer(
         peerId: Peer.Id,
         wallet: Wallet
     )
