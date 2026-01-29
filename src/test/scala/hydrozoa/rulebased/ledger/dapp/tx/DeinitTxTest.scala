@@ -167,6 +167,7 @@ class DeinitTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
     implicit override val generatorDrivenConfig: PropertyCheckConfiguration =
         PropertyCheckConfiguration(minSuccessful = 100)
 
+    // TODO: this sometimes fails - something is not working stably in our generators
     test("Recipe generator works") {
         val exampleRecipe = genSimpleDeinitTxRecipe.sample.get
         println(exampleRecipe)

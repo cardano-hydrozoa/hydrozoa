@@ -4,6 +4,7 @@ import hydrozoa.*
 import hydrozoa.lib.cardano.scalus.ledger.api.ByteStringExtension.take
 import hydrozoa.lib.cardano.scalus.ledger.api.TxOutExtension.inlineDatumOfType
 import hydrozoa.lib.cardano.scalus.ledger.api.ValueExtension.*
+import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.TallyRedeemer.{Continuing, Removed}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum
@@ -38,32 +39,34 @@ object DisputeResolutionValidator extends Validator {
     given ToData[DisputeRedeemer] = ToData.derived
 
     case class VoteRedeemer(
-        blockHeader: OnchainBlockHeader,
+        blockHeader: BlockHeader.Minor.Onchain,
         multisig: List[Signature]
     )
 
     given FromData[VoteRedeemer] = FromData.derived
     given ToData[VoteRedeemer] = ToData.derived
 
-    /** After an attempt to make types form hydrozoa.multisig.protocol.types onchain-compatible we
-      * decided to go for having a separate type to use onchain. Mostly because opaque types don't
-      * seem to work well with deriving machinery.
-      *
-      * NB: The minor block header signing function should use this type.
-      */
-    case class OnchainBlockHeader(
-        blockNum: BigInt,
-        blockType: BlockTypeL2, // this field is not used directly, but it's needed to verify the signatures
-        // TODO: make it milliseconds
-        timeCreation: PosixTime, // the same
-        versionMajor: BigInt,
-        versionMinor: BigInt,
-        commitment: VoteState.KzgCommitment
-    ) derives FromData,
-          ToData
+    // TODO: Remove. Duplicate to multisig.ledger.block.Block.Minor.Onchain
 
-    given FromData[OnchainBlockHeader] = FromData.derived
-    given ToData[OnchainBlockHeader] = ToData.derived
+    //    /** After an attempt to make types form hydrozoa.multisig.protocol.types onchain-compatible we
+    //      * decided to go for having a separate type to use onchain. Mostly because opaque types don't
+    //      * seem to work well with deriving machinery.
+    //      *
+    //      * NB: The minor block header signing function should use this type.
+    //      */
+    //    case class BlockHeader.Minor.Onchain(
+    //        blockNum: BigInt,
+    //        blockType: BlockTypeL2, // this field is not used directly, but it's needed to verify the signatures
+    //        // make it milliseconds?
+    //        timeCreation: PosixTime, // the same
+    //        versionMajor: BigInt,
+    //        versionMinor: BigInt,
+    //        commitment: VoteState.KzgCommitment
+    //    ) derives FromData,
+    //          ToData
+    //
+    //    given FromData[BlockHeader.Minor.Onchain] = FromData.derived
+    //    given ToData[BlockHeader.Minor.Onchain] = ToData.derived
 
     // EdDSA / ed25519 signature
     private type Signature = ByteString

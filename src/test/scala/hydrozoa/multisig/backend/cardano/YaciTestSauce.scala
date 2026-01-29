@@ -7,8 +7,6 @@ import scalus.cardano.ledger.{Blake2b_256, Hash, HashPurpose, TransactionInput, 
 import test.TestPeer
 import test.TestPeer.*
 
-// TODO: move to TestPeer?
-/** Two utxos per test peer */
 def yaciTestSauceGenesis(network: Network): Map[TestPeer, UtxoSetL1] =
     val mkAddress = TestPeer.address(network)
 
@@ -55,43 +53,43 @@ def yaciTestSauceGenesis(network: Network): Map[TestPeer, UtxoSetL1] =
       ),
       (
         "08419f77fa20aec0a8b66047d0040be1c5446b2ddbe88e656dc62390260a997c",
-        Alice
+        Katie
       ),
       (
         "592b36fd2dff5c8ff8c7125b9dd7ac027de661d55b2fc9ea4ef5b22b53cffda7",
-        Bob
+        Logan
       ),
       (
         "ce5179fbf81eb92907e8e5ca7d2180b561871c87c4136a2deaf9dd75f34b51be",
-        Carol
+        Michael
       ),
       (
         "d9d325322d157b007eb936bbd54968844e6e0f845994ad1843874d82a1521832",
-        Daniella
+        Nora
       ),
       (
         "c408f9103ba7e0f207e211b53f5cca42f79f3e9c9d24024731d648be909497a8",
-        Erin
+        Ophelia
       ),
       (
         "6712b9e13e7e433397ea2888899b8a5ba57b12c427dc72f1c1c684ac05f32b1a",
-        Frank
+        Proteus
       ),
       (
         "1c2498914a63269e7d4ab7f6b7d493d0d41a87b0cacaab7412c591219dcc21c4",
-        Gustavo
+        Quincy
       ),
       (
         "8b96680725c4fcf461214054d0b364a86e43d7d6be0475d610e980971b101ad0",
-        Hector
+        Rose
       ),
       (
         "c7565416e7553cdf8fdac8bf054b4b3de19d06b72efd00c47823335d7156ed1f",
-        Isabel
+        Sarah
       ),
       (
         "a6ce90a9a5ef8ef73858effdae375ba50f302d3c6c8b587a15eaa8fa98ddf741",
-        Julia
+        Thomas
       )
     ).map((txHash, peer) =>
         peer ->

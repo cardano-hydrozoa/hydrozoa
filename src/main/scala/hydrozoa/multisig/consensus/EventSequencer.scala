@@ -7,11 +7,12 @@ import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.EventSequencer.*
-import hydrozoa.multisig.consensus.EventSequencer.Request.*
 import hydrozoa.multisig.consensus.PeerLiaison.Handle
+import hydrozoa.multisig.consensus.peer.PeerId
+import hydrozoa.multisig.ledger.block.{BlockBody, BlockEffects, BlockStatus}
 import hydrozoa.multisig.ledger.dapp.tx.RefundTx
-import hydrozoa.multisig.protocol.*
-import hydrozoa.multisig.protocol.types.{Block, LedgerEvent, LedgerEventId, Peer}
+import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag
+import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId, LedgerEventNumber}
 
 trait EventSequencer(
     config: Config,
@@ -71,13 +72,13 @@ trait EventSequencer(
         }
 
     private final class State {
-        private val nLedgerEvent = Ref.unsafe[IO, LedgerEventId.Number](LedgerEventId.Number(0))
+        private val nLedgerEvent = Ref.unsafe[IO, LedgerEventNumber](LedgerEventNumber(0))
 //        private val localRequests =
 //            Ref.unsafe[IO, Queue[(LedgerEventId.Number, Deferred[IO, Unit])]](
 //              Queue()
 //            )
 
-        def nextLedgerEventNum(): IO[LedgerEventId.Number] =
+        def nextLedgerEventNum(): IO[LedgerEventNumber] =
             for {
                 newNum <- nLedgerEvent.updateAndGet(x => x.increment)
                 // FIXME:
@@ -85,7 +86,7 @@ trait EventSequencer(
             } yield newNum
 
         def completeDeferredEventOutcomes(
-            eventOutcomes: List[(LedgerEventId.Number, Unit)]
+            eventOutcomes: List[(LedgerEventNumber, Unit)]
         ): IO[Unit] =
             ???
     }
@@ -101,7 +102,7 @@ object EventSequencer {
     ): IO[EventSequencer] =
         IO(new EventSequencer(config, pendingConnections) {})
 
-    final case class Config(peerId: Peer.Id)
+    final case class Config(peerId: PeerId)
 
     final case class Connections(
         blockWeaver: BlockWeaver.Handle,
@@ -110,12 +111,24 @@ object EventSequencer {
 
     type Handle = ActorRef[IO, Request]
 
-    type Request = LedgerEvent | BlockConfirmed
+    type BlockConfirmed = BlockBody.Section & BlockEffects.Fields.HasPostDatedRefundTxs &
+        BlockStatus.MultiSigned
 
-    object Request {
-        final case class BlockConfirmed(
-            block: Block.Next,
-            mbPostDatedRefundsSigned: List[RefundTx.PostDated]
-        )
+    object BlockConfirmed {
+
+        /** For unit/property testing. */
+        final case class Minimal(
+            override val body: BlockBody.Next,
+            // FIXME: How do we ensure these are signed?
+            override val postDatedRefundTxs: List[RefundTx.PostDated],
+        ) extends BlockBody.Section,
+              BlockEffects.Fields.HasPostDatedRefundTxs,
+              BlockStatus.MultiSigned {
+            override def events: List[(LedgerEventId, ValidityFlag)] = body.events
+            override def depositsAbsorbed: List[LedgerEventId] = body.depositsAbsorbed
+            override def depositsRefunded: List[LedgerEventId] = body.depositsAbsorbed
+        }
     }
+
+    type Request = LedgerEvent | BlockConfirmed
 }
