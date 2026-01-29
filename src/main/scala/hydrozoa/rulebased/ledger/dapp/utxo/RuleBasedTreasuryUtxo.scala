@@ -1,17 +1,18 @@
 package hydrozoa.rulebased.ledger.dapp.utxo
 
+import hydrozoa.L1
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum
+import scala.util.{Failure, Success, Try}
 import scalus.*
 import scalus.builtin.Data
-import scalus.builtin.Data.toData
+import scalus.builtin.Data.{fromData, toData}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{AssetName, TransactionInput, TransactionOutput, Utxo, Value}
+import scalus.cardano.ledger.{TransactionInput, TransactionOutput, Utxo, Value}
 
 // TODO: Make opaque
 final case class RuleBasedTreasuryUtxo(
-    treasuryTokenName: AssetName,
     utxoId: TransactionInput,
     address: ShelleyAddress,
     datum: RuleBasedTreasuryDatum,
@@ -36,6 +37,42 @@ final case class RuleBasedTreasuryUtxo(
 }
 
 object RuleBasedTreasuryUtxo {
+    trait ParseError extends Throwable
+
+    case class TreasuryDatumMissing(utxo: hydrozoa.Utxo[L1]) extends ParseError
+
+    case class TreasuryDatumNotInline(utxo: hydrozoa.Utxo[L1]) extends ParseError
+
+    case class TreasuryDatumDeserializationError(utxo: hydrozoa.Utxo[L1], e: Throwable)
+        extends ParseError
+
+    case class TreasuryAddressNotShelley(utxo: hydrozoa.Utxo[L1]) extends ParseError
+
+    def parse(utxo: hydrozoa.Utxo[L1]): Either[ParseError, RuleBasedTreasuryUtxo] =
+        for {
+            d1 <- utxo.output.datumOption.toRight(TreasuryDatumMissing(utxo))
+
+            d2 <- d1 match {
+                case i: Inline => Right(i)
+                case _         => Left(TreasuryDatumNotInline(utxo))
+            }
+
+            datum <- Try(fromData[RuleBasedTreasuryDatum](d2.data)) match {
+                case Success(d) => Right(d)
+                case Failure(e) => Left(TreasuryDatumDeserializationError(utxo, e))
+            }
+
+            address <- utxo.output.address match {
+                case sa: ShelleyAddress => Right(sa)
+                case _                  => Left(TreasuryAddressNotShelley(utxo))
+            }
+
+        } yield RuleBasedTreasuryUtxo(
+          utxoId = utxo.input,
+          address = address,
+          datum = datum,
+          value = utxo.output.value
+        )
 
 //def mkTreasuryDatumUnresolved(
 //    headMp: PolicyId,

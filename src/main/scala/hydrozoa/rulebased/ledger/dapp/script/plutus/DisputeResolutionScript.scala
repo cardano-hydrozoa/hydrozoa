@@ -20,7 +20,6 @@ import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, Data, FromData, ToData}
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.{Language, Script}
-import scalus.ledger.api.v1.IntervalBoundType.Finite
 import scalus.ledger.api.v1.Value.+
 import scalus.ledger.api.v3.*
 import scalus.prelude.Option.{None, Some}
@@ -101,8 +100,6 @@ object DisputeResolutionValidator extends Validator {
     private inline val VoteTreasuryDatum = "Treasury datum is missing"
     private inline val VoteTreasuryDatumHeadMp = "Treasury datum headMp mismatch"
     private inline val VoteTreasuryDatumDisputeId = "Treasury datum disputeId mismatch"
-    private inline val VoteTimeValidityCheck =
-        "The transaction validity upper bound must not exceed the deadlineVoting"
     private inline val VoteMultisigCheck =
         "Redeemer should contain all valid signatures for the block voted"
     private inline val VoteMajorVersionCheck =
@@ -226,14 +223,6 @@ object DisputeResolutionValidator extends Validator {
                     }
                 require(treasuryDatum.headMp === headMp, VoteTreasuryDatumHeadMp)
                 require(treasuryDatum.disputeId === disputeId, VoteTreasuryDatumDisputeId)
-
-                // The transaction’s time -validity upper bound must not exceed the deadlineVoting
-                // field of treasury.
-                tx.validRange.to.boundType match {
-                    case Finite(toTime) =>
-                        require(toTime <= treasuryDatum.deadlineVoting, VoteTimeValidityCheck)
-                    case _ => fail(VoteTimeValidityCheck)
-                }
 
                 // The multisig field of voteRedeemer must have signatures of the blockHeader
                 // field of voteRedeemer for all the public keys in the peers field of treasury.
@@ -425,14 +414,6 @@ object DisputeResolutionValidator extends Validator {
 
                     require(treasuryDatum.headMp === contCs, TreasuryDatumMatchesHeadMp)
                     require(treasuryDatum.disputeId === contTn, TreasuryDatumMatchesDisputeId)
-
-                    // The transaction’s time -validity upper bound must not exceed the deadlineVoting
-                    // field of treasury.
-                    tx.validRange.to.boundType match {
-                        case Finite(toTime) =>
-                            require(toTime <= treasuryDatum.deadlineVoting, TimeValidityCheck)
-                        case _ => fail(TimeValidityCheck)
-                    }
                 }
 
                 // Verify the vote output

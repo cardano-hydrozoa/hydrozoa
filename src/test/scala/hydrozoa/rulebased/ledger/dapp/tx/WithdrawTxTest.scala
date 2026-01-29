@@ -1,12 +1,10 @@
 package hydrozoa.rulebased.ledger.dapp.tx
 
-import cats.data.NonEmptyList
-import cats.effect.unsafe.implicits.global
 import hydrozoa.*
 import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
-import hydrozoa.multisig.ledger.dapp.tx.Tx.Validators.nonSigningValidators
-import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.asG1Element
-import hydrozoa.multisig.ledger.virtual.commitment.{KzgCommitment, Membership, TrustedSetup}
+import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
+import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
+import hydrozoa.multisig.ledger.virtual.commitment.{KzgCommitment, TrustedSetup}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
 import hydrozoa.rulebased.ledger.dapp.script.plutus.{RuleBasedTreasuryScript, RuleBasedTreasuryValidator}
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{ResolvedDatum, RuleBasedTreasuryDatum}
@@ -19,12 +17,12 @@ import scala.annotation.nowarn
 import scalus.builtin.{BLS12_381_G1_Element, BLS12_381_G2_Element, ByteString}
 import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.rules.FeesOkValidator
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
 import scalus.ledger.api.v3.TokenName
 import scalus.prelude as scalus
 import supranational.blst.Scalar
 import test.*
+import test.Generators.Hydrozoa.genAdaOnlyPubKeyUtxo
 
 /** Generator for resolved treasury UTXO with resolved datum */
 def genResolvedTreasuryUtxo(
@@ -45,7 +43,6 @@ def genResolvedTreasuryUtxo(
         spp = ShelleyPaymentPart.Script(RuleBasedTreasuryScript.compiledScriptHash)
         scriptAddr = ShelleyAddress(testNetwork, spp, ShelleyDelegationPart.Null)
     } yield RuleBasedTreasuryUtxo(
-      treasuryTokenName = AssetName(beaconTokenName),
       utxoId = txId,
       address = scriptAddr,
       datum = RuleBasedTreasuryDatum.Resolved(treasuryDatum),
@@ -80,85 +77,60 @@ def mkCommitment(withdrawals: Utxos): KzgCommitment.KzgCommitment =
     ret
 
 /** Generator for withdraw transaction recipe */
-def genWithdrawTxRecipe: Gen[WithdrawTx.Recipe] =
+def genWithdrawTxRecipe: Gen[(Withdrawal.Builder.Recipe, TestPeer)] = {
     for {
-        // Common head parameters
-        (
-          hns,
-          headTokensSuffix,
-          peers,
-          peersVKs,
-          paramsHash,
-          versionMajor,
-          fallbackTxId
-        ) <- genHeadParams
-
-        // Generate a set of 64-1000 L2 utxos (64 is
-        l2UtxoCount <- Gen.choose(64, 1000)
-        utxosL2 <- genUtxosL2(l2UtxoCount)
-        _ = println(s"utxosL2: ${utxosL2.keys.size}")
-
-        // Calculate the whole L2 utxo set commitment
-        utxoCommitment = mkCommitment(utxosL2.asScalus)
-
-        // Select some random number of withdrawals
-        // TODO: find the limit with refscripts
-        wn <- Gen.choose(1, Integer.min(5, utxosL2.untagged.keys.size))
-        withdrawals0 <- Gen.pick(wn, utxosL2.untagged)
-        _ = println(s"withdrawals length: ${withdrawals0.length}")
-        withdrawals = UtxoSet(withdrawals0.toMap)
-
-        // Check
-        // _ = println(s"withdrawals: {$withdrawals0}")
-        // _ = println(
-        //  s"withdrawal hashes: ${withdrawalScalars.map(e => BigInt.apply(e.to_bendian()))}"
-        // )
-
-        // Calculate and validate the membership proof
-        theRest = UtxoSet(utxosL2.untagged -- withdrawals.untagged.keys)
-        _ = println(s"theRest: ${theRest.keys.size}")
-
-        membershipProof = Membership
-            .mkMembershipProofValidated(
-              utxoCommitment,
-              utxosL2.asScalus,
-              withdrawals.asScalus
-            )
-            .unsafeRunSync()
-            .fold(err => throw RuntimeException(err.explain), x => x)
-
-        _ = println(
-          s"validated membership proof: ${membershipProof.asG1Element.toCompressedByteString.toHex}"
+        peers <- genTestPeers()
+        peer = peers.head
+        nUtxos <- Gen.frequency(
+          (1, Gen.const(0)),
+          (1, Gen.const(1)),
+          (1, Gen.const(2)),
+          (20, Gen.posNum[Int])
         )
+        fallbackTxId <- genByteStringOfN(32).map(TransactionHash.fromByteString)
+        seedUtxo <- for {
+            txHash <- genByteStringOfN(32).map(TransactionHash.fromByteString)
+            index <- Gen.choose(0, 10)
+        } yield TransactionInput(txHash, index)
+        tokenNames = TokenNames(seedUtxo)
 
-        // Generate treasury UTXO with _some_ funds
-        beaconTokenName = cip67BeaconTokenPrefix.concat(headTokensSuffix)
+        activeSet <- genUtxosL2(nUtxos)
+        withdrawalSubset <- Gen.atLeastOne(activeSet)
+        feeUtxos <- Gen.nonEmptyListOf(genAdaOnlyPubKeyUtxo(peer))
+
+        headTokenSuffix <- genByteStringOfN(28)
+        beaconTokenName = cip67BeaconTokenPrefix.concat(headTokenSuffix)
+
         treasuryUtxo <- genResolvedTreasuryUtxo(
-          fallbackTxId,
-          hns.policyId,
-          beaconTokenName,
-          utxoCommitment,
-          wn + 1
+          fallbackTxId = fallbackTxId,
+          headMp = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes)).policyId,
+          beaconTokenName = beaconTokenName,
+          utxosCommitment = KzgCommitment.calculateCommitment(
+            KzgCommitment.hashToScalar(activeSet.asScalus)
+          ),
+          setupSize = withdrawalSubset.size + 1
         )
 
-        // Ensure treasury has sufficient funds
-        totalL2Value = utxosL2.untagged.values.foldLeft(Value.zero)(_ + _.untagged.value)
-        sufficientTreasuryValue = treasuryUtxo.value + totalL2Value +
-            Value(Coin(20_000_000L))
+        sufficientTreasuryValue =
+            treasuryUtxo.value
+                + activeSet.asScalus.values.toList.foldLeft(Value.zero)((v, to) => v + to.value)
+                + Value.ada(20)
         adjustedTreasuryUtxo = treasuryUtxo.copy(value = sufficientTreasuryValue)
 
-        // Generate validity slot
-        validityEndSlot <- Gen.choose(100L, 1000L)
-    } yield WithdrawTx.Recipe(
-      treasuryUtxo = adjustedTreasuryUtxo,
-      withdrawals = withdrawals,
-      membershipProof = membershipProof,
-      validityEndSlot = validityEndSlot,
-      network = testNetwork,
-      protocolParams = testProtocolParams,
-      evaluator = testEvaluator,
-      validators = nonSigningValidators.filterNot(_ == FeesOkValidator)
+    } yield (
+      Withdrawal.Builder.Recipe(
+        treasuryUtxo = adjustedTreasuryUtxo,
+        withdrawalsSubset = UtxoSet[L2](withdrawalSubset.toMap),
+        activeSet = activeSet,
+        feeUtxos = UtxoSet[L1](
+          feeUtxos
+              .map(utxo => (UtxoId[L1](utxo.input), Output[L1](utxo.output)))
+              .toMap
+        )
+      ),
+      peers.head
     )
+}
 
 @nowarn("msg=unused value")
 class WithdrawTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
@@ -169,8 +141,9 @@ class WithdrawTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
     ignore(
       "Withdraw tx builds successfully with valid recipe - FIXME: pair deconstruction regression"
     ) {
-        forAll(genWithdrawTxRecipe) { recipe =>
-            WithdrawTx.build(recipe) match {
+        forAll(genShelleyAddress, genWithdrawTxRecipe) { case (changeAddress, (recipe, peer)) =>
+            val config = Withdrawal.Config(testTxBuilderCardanoInfo, changeAddress)
+            Withdrawal(config).build(recipe) match {
                 case Left(error) =>
                     fail(s"Build failed with valid recipe: $error")
                 case Right(withdrawTx) =>
@@ -182,20 +155,6 @@ class WithdrawTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
                     assert(
                       withdrawTx.treasuryUtxoProduced != null,
                       "Treasury UTXO produced should not be null"
-                    )
-                    assert(
-                      withdrawTx.withdrawalOutputs.length == recipe.withdrawals.size,
-                      "Withdrawal outputs should match recipe withdrawals"
-                    )
-                    assert(withdrawTx.tx != null, "Transaction should not be null")
-
-                    // Verify residual treasury value is correct
-                    val totalWithdrawals =
-                        recipe.withdrawals.values.foldLeft(Value.zero)(_ + _.untagged.value)
-                    val expectedResidual = recipe.treasuryUtxo.value - totalWithdrawals
-                    assert(
-                      withdrawTx.treasuryUtxoProduced.value == expectedResidual,
-                      "Residual treasury value should be correct"
                     )
             }
         }

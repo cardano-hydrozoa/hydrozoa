@@ -37,7 +37,6 @@ object VoteTx {
         collateralUtxo: Utxo[L1],
         blockHeader: BlockHeader.Minor.Onchain,
         signatures: List[BlockHeader.Minor.HeaderSignature],
-        validityEndSlot: Long,
         network: Network,
         protocolParams: ProtocolParams,
         evaluator: PlutusScriptEvaluator,
@@ -59,7 +58,7 @@ object VoteTx {
                 Try(fromData[VoteDatum](datumData)) match {
                     case Success(voteDatum) =>
                         voteDatum.voteStatus match {
-                            case AwaitingVote(_) => {
+                            case AwaitingVote(_) =>
                                 val updatedVoteDatum = voteDatum.copy(
                                   voteStatus = VoteStatus.Voted(
                                     recipe.blockHeader.commitment,
@@ -67,7 +66,6 @@ object VoteTx {
                                   )
                                 )
                                 buildVoteTx(recipe, updatedVoteDatum)
-                            }
                             case _ => Left(VoteAlreadyCast)
                         }
 
@@ -138,8 +136,7 @@ object VoteTx {
                       )
                     ),
                     ReferenceOutput(SUtxo(recipe.treasuryUtxo.asTuple)),
-                    AddCollateral(recipe.collateralUtxo.toScalus),
-                    ValidityEndSlot(recipe.validityEndSlot)
+                    AddCollateral(recipe.collateralUtxo.toScalus)
                   )
                 )
 

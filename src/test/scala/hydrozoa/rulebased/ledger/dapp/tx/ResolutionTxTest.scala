@@ -66,7 +66,6 @@ def genResolutionTallyVoteUtxo(
 
     Gen.const(
       TallyVoteUtxo(
-        voter = voter,
         Utxo[L1](UtxoId[L1](txId), Output[L1](voteOutput))
       )
     )
@@ -129,7 +128,6 @@ def genResolutionTxRecipe(
       talliedVoteUtxo = talliedVoteUtxo,
       treasuryUtxo = treasuryUtxo,
       collateralUtxo = Utxo[L1](UtxoId(collateralUtxo._1), Output(collateralUtxo._2)),
-      validityEndSlot = 200,
       network = testNetwork,
       protocolParams = testProtocolParams,
       evaluator = testEvaluator,

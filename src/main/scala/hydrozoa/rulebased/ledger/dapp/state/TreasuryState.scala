@@ -23,7 +23,6 @@ object TreasuryState:
         disputeId: TokenName,
         peers: List[VerificationKey],
         peersN: BigInt,
-        deadlineVoting: PosixTime,
         versionMajor: BigInt,
         params: L2ConsensusParamsH32,
         setup: List[ByteString]

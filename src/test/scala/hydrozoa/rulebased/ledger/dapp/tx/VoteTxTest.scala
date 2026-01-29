@@ -133,12 +133,10 @@ def genVoteTxRecipe(
       collateralUtxo = Utxo[L1](UtxoId(collateralUtxo._1), Output(collateralUtxo._2)),
       blockHeader = blockHeader,
       signatures = signatures,
-      // TODO: now sure how to do that properly
-      validityEndSlot = 200,
       network = testNetwork,
       protocolParams = testProtocolParams,
       evaluator = testEvaluator,
-      validators = nonSigningValidators
+      validators = nonSigningValidators,
     )
 
 @nowarn("msg=unused value")

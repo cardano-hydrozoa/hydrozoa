@@ -39,6 +39,7 @@ final case class FallbackTx(
     // The rest should have domain-specific types as well. See:
     // https://github.com/cardano-hydrozoa/hydrozoa/issues/262
     treasuryProduced: RuleBasedTreasuryUtxo,
+    // This can _probably_ be taken out of the fallback tx, because it is in the head config.
     consumedHMRWUtxo: MultisigRegimeUtxo,
     producedDefaultVoteUtxo: Utxo,
     producedPeerVoteUtxos: NonEmptyList[Utxo],
@@ -105,7 +106,6 @@ object FallbackTx {
           disputeId = voteTokenName.bytes,
           peers = SList.from(hns.requiredSigners.map(_.hash)),
           peersN = hns.numSigners,
-          deadlineVoting = config.votingDuration.finiteDuration.toMillis,
           versionMajor = multisigDatum.versionMajor.toInt,
           params = multisigDatum.paramsHash,
           // TODO: pull in N first elements of G2 CRS
@@ -236,7 +236,6 @@ object FallbackTx {
                   Slot(setStartSlot.slot).toQuantizedInstant(config.cardanoInfo.slotConfig),
               treasurySpent = treasuryUtxoSpent,
               treasuryProduced = RuleBasedTreasuryUtxo(
-                treasuryTokenName = config.tokenNames.headTokenName,
                 utxoId = TransactionInput(txId, 0),
                 address = disputeTreasuryAddress,
                 datum = RuleBasedTreasuryDatum.Unresolved(newTreasuryDatum),

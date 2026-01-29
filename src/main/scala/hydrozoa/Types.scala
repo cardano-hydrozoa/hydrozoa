@@ -159,6 +159,12 @@ object Utxo:
     opaque type Utxo[L <: AnyLayer] = (UtxoId[L], Output[L])
     def apply[L <: AnyLayer](io: (UtxoId[L], Output[L])): Utxo[L] = io
     def apply[L <: AnyLayer](input: UtxoId[L], output: Output[L]): Utxo[L] = (input, output)
+    def apply[L <: AnyLayer](utxo: scalus.cardano.ledger.Utxo): Utxo[L] = {
+        val input = UtxoId[L](utxo.input)
+        val output = Output[L](utxo.output)
+        Utxo[L](input, output)
+    }
+
     def apply[L <: AnyLayer](
         txId: TransactionHash,
         txIx: Int,

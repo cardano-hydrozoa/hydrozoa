@@ -87,7 +87,7 @@ object RuleBasedTreasuryValidator extends Validator {
     private inline val WithdrawMembershipValidationFailed =
         "Withdrawals membership check failed"
     private inline val WithdrawBeaconTokenShouldBePreserved =
-        "Beacon token should be preserves in treasury output"
+        "Beacon token should be preserved in treasury output"
     private inline val WithdrawValueShouldBePreserved =
         "Value invariant should hold: treasuryInput = treasuryOutput + Σ withdrawalOutput"
     private inline val WithdrawOutputAccumulatorUpdated =
@@ -250,8 +250,12 @@ object RuleBasedTreasuryValidator extends Validator {
                         case _ => fail(WithdrawBeaconTokenFailure)
 
                 // The beacon token should be preserved
-                // By contract, we require the treasure utxo is always be the head, and the tail be withdrawals
-                val List.Cons(treasuryOutput, withdrawalOutputs) = tx.outputs: @unchecked
+                // By contract, we require:
+                //   - The change utxo is position one
+                //   - the treasury utxo in position
+                //   - the tail be withdrawals
+                val List.Cons(changeOutput, List.Cons(treasuryOutput, withdrawalOutputs)) =
+                    tx.outputs: @unchecked
 
                 require(
                   treasuryOutput.value.toSortedMap

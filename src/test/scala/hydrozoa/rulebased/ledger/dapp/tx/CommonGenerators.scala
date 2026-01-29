@@ -82,7 +82,6 @@ object CommonGenerators {
           disputeId = disputeId,
           peers = SList.from(peersVKs.map(_.bytes).toList),
           peersN = BigInt(peersVKs.length),
-          deadlineVoting = deadlineVoting,
           versionMajor = versionMajor,
           params = params,
           setup = setup
@@ -107,7 +106,6 @@ object CommonGenerators {
             beaconTokenAssetName = AssetName(beaconTokenName)
             beaconToken = singleton(headMp, beaconTokenAssetName)
         } yield RuleBasedTreasuryUtxo(
-          treasuryTokenName = beaconTokenAssetName,
           utxoId = txId,
           address = scriptAddr,
           datum = Unresolved(unresolvedDatum),

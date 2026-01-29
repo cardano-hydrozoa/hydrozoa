@@ -60,6 +60,7 @@ def sumUtxoValues(utxos: Seq[Utxo]): Value =
     utxos.map(_._2.value).foldLeft(Value.zero)((acc: Value, v: Value) => acc + v)
 
 extension [E, A](e: Either[E, A])
+    // TODO: Remove this. We don't need this partiality in our lives.
     def get: A = e match {
         case Right(a) => a
     }
