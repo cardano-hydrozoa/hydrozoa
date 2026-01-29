@@ -40,6 +40,18 @@ object HeadConfigTest extends Properties("HeadConfig Test") {
     )
 }
 
+case class TestRawConfig(
+    rawConfig: RawConfig,
+    // Includes withdrawal wallet and "own peer"
+    allPeers: NonEmptyList[TestPeer]
+)
+
+case class TestHeadConfig(
+    rawConfig: RawConfig,
+    headConfig: HeadConfig,
+    allPeers: NonEmptyList[TestPeer]
+)
+
 /** Generate a RawConfig.
   *
   * This is intended to be THE general-purpose generator for tests that test the behavior of
@@ -55,7 +67,7 @@ object HeadConfigTest extends Properties("HeadConfig Test") {
   * Note that this is generating, building, and parsing an InitializationTxSeq. Thus, you should
   * most likely re-use this value in the majority of your tests.
   */
-val genRawConfig: PropertyM[IO, RawConfig] =
+val genRawConfig: PropertyM[IO, TestRawConfig] =
     for {
         // NOTE: I'm going to do everything inline here for now. It will be better to break it up in the future, and this
         // may replace some of the other generators with ones that have better labeling (since they use PropertyM).
@@ -206,12 +218,14 @@ val genRawConfig: PropertyM[IO, RawConfig] =
           withdrawalFeeWallet = withdrawalPlusPeers.head.wallet,
           pollingPeriod = 5.seconds
         )
-    } yield rawConfig
+    } yield TestRawConfig(rawConfig, withdrawalPlusPeers)
 
 /** Can be used as the initializer (or a component thereof) for a TestM[HeadConfig, A]
   */
-val genHeadConfig: PropertyM[IO, HeadConfig] =
+val genHeadConfig: PropertyM[IO, TestHeadConfig] =
     for {
-        rawConfig <- genRawConfig
-        headConfig <- PropertyM.run[IO, HeadConfig](HeadConfig.parse(rawConfig).liftTo[IO])
-    } yield headConfig
+        rawConfigAndPeers <- genRawConfig
+        headConfig <- PropertyM.run[IO, HeadConfig](
+          HeadConfig.parse(rawConfigAndPeers._1).liftTo[IO]
+        )
+    } yield TestHeadConfig(rawConfigAndPeers._1, headConfig, rawConfigAndPeers._2)

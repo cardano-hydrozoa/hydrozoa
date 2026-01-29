@@ -6,11 +6,11 @@ import cats.syntax.all.*
 import com.suprnation.actor.Actor.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.backend.cardano.CardanoBackend
+import hydrozoa.multisig.consensus.peer.PeerWallet
+import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
-import hydrozoa.multisig.protocol.types.AckBlock.HeaderSignature
-import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.OnchainBlockHeader
-import hydrozoa.{L1, UtxoSetL2, VerificationKeyBytes, Wallet, rulebased}
+import hydrozoa.{L1, UtxoSetL2, VerificationKeyBytes, rulebased}
 import scala.concurrent.duration.FiniteDuration
 import scalus.cardano.ledger.{CardanoInfo, TransactionHash}
 
@@ -20,8 +20,8 @@ import scalus.cardano.ledger.{CardanoInfo, TransactionHash}
 case class RuleBasedRegimeManager(
     config: RuleBasedRegimeManager.Config,
     collateralUtxo: hydrozoa.Utxo[L1],
-    blockHeader: OnchainBlockHeader,
-    signatures: List[HeaderSignature],
+    blockHeader: BlockHeader.Minor.Onchain,
+    signatures: List[BlockHeader.Minor.HeaderSignature],
     cardanoBackend: CardanoBackend[IO],
     votingDeadline: QuantizedInstant,
     utxosToWithdrawL2: UtxoSetL2,
@@ -75,7 +75,7 @@ object RuleBasedRegimeManager {
         ownPeerPkh: VerificationKeyBytes,
         tokenNames: TokenNames,
         cardanoInfo: CardanoInfo,
-        withdrawalFeeWallet: Wallet,
+        withdrawalFeeWallet: PeerWallet,
         receiveTimeout: FiniteDuration,
         headMultisigScript: HeadMultisigScript,
     )

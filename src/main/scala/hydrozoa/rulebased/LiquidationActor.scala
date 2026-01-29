@@ -7,6 +7,7 @@ import cats.syntax.all.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.multisig.backend.cardano.CardanoBackend
+import hydrozoa.multisig.consensus.peer.PeerWallet
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.virtual.commitment.Membership
@@ -17,7 +18,7 @@ import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.Resolved
 import hydrozoa.rulebased.ledger.dapp.tx.Withdrawal
 import hydrozoa.rulebased.ledger.dapp.utxo.RuleBasedTreasuryUtxo
-import hydrozoa.{L1, L2, Output, UtxoId, UtxoIdL2, UtxoSet, UtxoSetL1, UtxoSetL2, Wallet, rulebased}
+import hydrozoa.{L1, L2, Output, UtxoId, UtxoIdL2, UtxoSet, UtxoSetL1, UtxoSetL2, rulebased}
 import scala.concurrent.duration.FiniteDuration
 import scala.util.{Failure, Success, Try}
 import scalus.builtin.Data
@@ -208,7 +209,7 @@ case class LiquidationActor(
 
 object LiquidationActor {
     case class Config(
-        withdrawalFeeWallet: Wallet,
+        withdrawalFeeWallet: PeerWallet,
         receiveTimeout: FiniteDuration,
         headMultisigScript: HeadMultisigScript,
         tokenNames: TokenNames,

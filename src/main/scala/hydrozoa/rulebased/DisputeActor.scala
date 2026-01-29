@@ -9,13 +9,14 @@ import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.*
 import hydrozoa.multisig.backend.cardano
 import hydrozoa.multisig.backend.cardano.CardanoBackend
+import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.Tx
-import hydrozoa.multisig.protocol.types.AckBlock.HeaderSignature
 import hydrozoa.rulebased.DisputeActor.*
-import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.OnchainBlockHeader
+import hydrozoa.rulebased.DisputeActor.Error.ParseError.Treasury.TreasuryResolved
 import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
+import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.dapp.tx.ResolutionTx.ResolutionTxError
 import hydrozoa.rulebased.ledger.dapp.tx.TallyTx.TallyTxError
@@ -57,12 +58,13 @@ type VoteUtxoWithDatum = (hydrozoa.Utxo[L1], VoteDatum)
 final case class DisputeActor(
     config: DisputeActor.Config,
     collateralUtxo: hydrozoa.Utxo[L1],
-    blockHeader: OnchainBlockHeader,
+    blockHeader: BlockHeader.Minor.Onchain,
     cardanoBackend: CardanoBackend[IO],
-    signatures: List[HeaderSignature],
+    signatures: List[BlockHeader.Minor.HeaderSignature],
 ) extends Actor[IO, DisputeActor.Requests.Request] {
 
-    private val handleDisputeRes: IO[Either[DisputeActor.Error.RecoverableErrors, Unit]] = {
+    // TODO: no transactions are currently getting signed
+    val handleDisputeRes: IO[Either[DisputeActor.Error.RecoverableErrors, Unit]] = {
         val et: EitherT[IO, DisputeActor.Error.RecoverableErrors, Unit] = for {
             // Wrapped in EitherT because a Left doesn't signify an unrecoverable failure
             unparsedDisputeUtxos <- EitherT(
@@ -150,6 +152,12 @@ final case class DisputeActor(
                         }
                         _ <- EitherT(cardanoBackend.submitTx(resolutionTx.tx))
                     } yield ()
+
+                // This should not be able to happen. If the treasury is unresolved,
+                // then there must be at least one vote according to the spec.
+                // If the treasury is resolved, we should short circuit with a left when the treasury
+                // utxo is parsed.
+                case (None, _) => EitherT.liftF(IO.raiseError(Error.TreasuryUnresolvedButNoVotes))
             }
 
         } yield ()
@@ -248,6 +256,7 @@ object DisputeActor {
 
         type UnrecoverableErrors = Unrecoverable
         sealed trait Unrecoverable extends Throwable
+        case object TreasuryUnresolvedButNoVotes extends Unrecoverable
 
         sealed trait BuildError extends Throwable
         object BuildError {
@@ -279,6 +288,8 @@ object DisputeActor {
                   * is over and the deinit transaction completed successfully
                   */
                 case object TreasuryMissing extends Recoverable
+                case object TreasuryResolved extends Recoverable
+
             }
         }
 
@@ -305,7 +316,10 @@ object DisputeActor {
                     )
             }
 
-            res <- EitherT.right(IO.fromEither(RuleBasedTreasuryUtxo.parse(utxo)))
-
-        } yield res
+            rbTreasury <- EitherT.right(IO.fromEither(RuleBasedTreasuryUtxo.parse(utxo)))
+            unresolvedRbt <- rbTreasury.datum match {
+                case RuleBasedTreasuryDatum.Unresolved(_) => EitherT.right(IO.pure(rbTreasury))
+                case RuleBasedTreasuryDatum.Resolved(_)   => EitherT.left(IO.pure(TreasuryResolved))
+            }
+        } yield unresolvedRbt
 }
