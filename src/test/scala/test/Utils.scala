@@ -17,17 +17,19 @@ val costModels = blockfrost544Params.costModels
 
 // Individual parameters for Recipe constructors (replacing BuilderContext)
 /** WARNING: Use this. Don't use Network.Testnet. Scalus uses Mainnet in its test utils.
+  *
+  * WARNING: Don't use this if you can use head config.
   */
 val testNetwork: Network = Mainnet
 val testProtocolParams: ProtocolParams = blockfrost544Params
 
-def slotConfig(network: Network): SlotConfig = network match {
+private def slotConfig(network: Network): SlotConfig = network match {
     case Network.Testnet  => SlotConfig.preprod
     case Network.Mainnet  => SlotConfig.mainnet
     case Network.Other(v) => throw RuntimeException("This network is not supported in tests")
 }
 
-val evaluator = PlutusScriptEvaluator(
+private val evaluator = PlutusScriptEvaluator(
   slotConfig = slotConfig(testNetwork),
   initialBudget = ExBudget.enormous,
   protocolMajorVersion = MajorProtocolVersion.plominPV,
@@ -36,6 +38,7 @@ val evaluator = PlutusScriptEvaluator(
 
 val testEvaluator: PlutusScriptEvaluator = evaluator
 
+// TODO: this should be removed at some point in favor of HeadConfig
 val testTxBuilderCardanoInfo: CardanoInfo = CardanoInfo(
   protocolParams = testProtocolParams,
   slotConfig = slotConfig(testNetwork),

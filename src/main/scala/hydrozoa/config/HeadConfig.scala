@@ -17,13 +17,35 @@ import scala.collection.immutable.TreeMap
 import scala.concurrent.duration.FiniteDuration
 import scala.util.Try
 import scalus.cardano.address.Network
-import scalus.cardano.address.Network.{Mainnet, Testnet}
 import scalus.cardano.ledger.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import spire.math.{Rational, UByte}
 
-/** Raw config -- What gets parsed from file. Probably YAML */
-// TODO: Move everything from "Assumptions.scala"
+/** Raw config -- What gets parsed from file. Probably YAML
+  *
+  * TODO: Move everything from "Assumptions.scala"
+  *
+  * TODO: add initial list of L2 utxos in CBOR (that should be converter into kzg commitment or into
+  * block)
+  *
+  * TODO: Augmented Initial block - not here! Should appear in the parsed data
+  *
+  * @param initializationTxBytes
+  *   Fully signed init tx.
+  * @param initialFallbackTxBytes
+  *   Fully signed fallback zero tx.
+  * @param network
+  *   Either a standard network or a custom network with custom params and slot config. Since Scalus
+  *   doesn't support protocol magic, we treat Network.Testnet as Preprod. To run on Preview use
+  *   Right([[previewNetwork]]).
+  * @param resolvedUtxosForInitialization
+  *   In order to validate the initialization tx seq, we need a resolved utxo set. Since the actual
+  *   utxos to-be-spent might be part of a larger tx chain, we can't just use a resolver like
+  *   blockfrost to query the chain. Thus, we pass in the UTxOs directly.
+  *
+  * @param resolvedUtxosForInitialization
+  */
+//
 // QUESTION: Do we want a separate type to bridge "this is valid yaml" and "this is valid data for the HeadConfig
 // smart constructor"? Or do we just want to define yaml parsing for each of these types? I'm in favor of the latter
 case class RawConfig(
@@ -34,25 +56,95 @@ case class RawConfig(
     receiveTimeout: FiniteDuration,
     initializationTxBytes: Array[Byte],
     initialFallbackTxBytes: Array[Byte],
-    network: Network,
+    network: Either[StandardCardanoNetwork, NetworkInfo],
     tallyFeeAllowance: Coin,
+    // TODO: in raw config it should be just time, quantization should be done upon parsing
     votingDuration: QuantizedFiniteDuration,
+    // TODO: in raw config it should be just time, quantization should be done upon parsing
     txTiming: TxTiming,
+    // TODO: in raw config it should be just time, quantization should be done upon parsing
+    // TODO: rename to zeroBlockCreationTime
     startTime: QuantizedInstant,
-    // In order to validate the initialization tx seq, we need a resolved utxo set. Since the
-    // actual utxos to-be-spent might be part of a larger tx chain, we can't just use a resolver like
-    // blockfrost to query the chain. Thus, we pass in the UTxOs directly.
     resolvedUtxosForInitialization: ResolvedUtxos,
     // FIXME: I guess we need both the public and private key?
     withdrawalFeeWallet: PeerWallet,
     pollingPeriod: FiniteDuration
-
-    // Augmented Initial block
-    // Creation time
-    // initial list of L2 utxos in CBOR
-    // fully signed init tx
-    // fully signed fallback zero tx
 )
+
+/** Standard network for which default [[NetworkInfo]] are defined. */
+enum StandardCardanoNetwork:
+    case Mainnet
+    case Preprod
+    case Preview
+
+    def scalusNetwork: Network = this match {
+        case StandardCardanoNetwork.Mainnet => Network.Mainnet
+        case StandardCardanoNetwork.Preprod => Network.Testnet
+        case StandardCardanoNetwork.Preview => Network.Testnet
+    }
+
+/** Like CardanoInfo, but gives us more flexibility how to pass the custom params, instead of
+  * carrying the params may contain a link to Blockfrost-compatible file.
+  *
+  * @param networkId
+  * @param slotConfig
+  * @param protocolParams
+  */
+case class NetworkInfo(
+    networkId: Byte,
+    slotConfig: SlotConfig,
+    // This should be specified as link to Blockfrost params JSON?
+    protocolParams: ProtocolParams
+)
+
+object NetworkInfo:
+
+    def apply(network: StandardCardanoNetwork): NetworkInfo = network match {
+        case StandardCardanoNetwork.Mainnet => NetworkInfo.mainnet
+        case StandardCardanoNetwork.Preprod => NetworkInfo.preprod
+        case StandardCardanoNetwork.Preview => NetworkInfo.preview
+    }
+
+    val mainnet = NetworkInfo(
+      protocolParams = ProtocolParams.fromBlockfrostJson(
+        this.getClass
+            .getResourceAsStream("/blockfrost-params-epoch-544.json")
+      ),
+      networkId = 0x01,
+      slotConfig = SlotConfig.mainnet,
+    )
+
+    val preprod = NetworkInfo(
+      protocolParams = ProtocolParams.fromBlockfrostJson(
+        this.getClass
+            .getResourceAsStream("/blockfrost-params-preprod-258.json")
+      ),
+      networkId = 0x00,
+      slotConfig = SlotConfig.preprod,
+    )
+
+    val preview = NetworkInfo(
+      protocolParams = ProtocolParams.fromBlockfrostJson(
+        this.getClass
+            .getResourceAsStream("/blockfrost-params-preview-1145.json")
+      ),
+      networkId = 0x00,
+      slotConfig = SlotConfig.preview,
+    )
+
+    extension (self: NetworkInfo)
+        def toCardanoInfo: CardanoInfo =
+            CardanoInfo(
+              protocolParams = self.protocolParams,
+              network = Network.fromNetworkId(self.networkId),
+              slotConfig = self.slotConfig
+            )
+
+    extension (self: Either[StandardCardanoNetwork, NetworkInfo])
+        def toCardanoInfo: CardanoInfo = self match {
+            case Left(standardNetwork) => NetworkInfo(standardNetwork).toCardanoInfo
+            case Right(networkInfo)    => networkInfo.toCardanoInfo
+        }
 
 /** An element of a raw head config that describes a peer */
 case class PeerSection(
@@ -135,23 +227,7 @@ object HeadConfig {
               )
             )
 
-            // FIXME: Currently hardcoded
-            protocolParams: ProtocolParams = ProtocolParams.fromBlockfrostJson(
-              this.getClass.getResourceAsStream("/blockfrost-params-epoch-544.json")
-            )
-
-            slotConfig: SlotConfig <- rawConfig.network match {
-                case Mainnet => Right(SlotConfig.mainnet)
-                case Testnet => Right(SlotConfig.preview)
-                case scalus.cardano.address.Network.Other(_) =>
-                    Left(UnknownNetwork(rawConfig.network))
-            }
-
-            cardanoInfo: CardanoInfo = CardanoInfo(
-              protocolParams = protocolParams,
-              network = rawConfig.network,
-              slotConfig = slotConfig
-            )
+            cardanoInfo = rawConfig.network.toCardanoInfo
 
             initializationTxSeq <- InitializationTxSeq
                 .parse(

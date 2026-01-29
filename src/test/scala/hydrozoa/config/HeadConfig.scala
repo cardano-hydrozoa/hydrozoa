@@ -20,11 +20,11 @@ import scala.concurrent.duration.{DurationInt, FiniteDuration, HOURS}
 import scalus.builtin.ByteString
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.address.ShelleyPaymentPart.Key
-import scalus.cardano.ledger.{AddrKeyHash, Coin, Utxo, Value}
+import scalus.cardano.ledger.{AddrKeyHash, Coin, SlotConfig, Utxo, Value}
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import spire.math.UByte
 import test.Generators.Hydrozoa.genAdaOnlyPubKeyUtxo
-import test.{TestPeer, genTestPeers, minPubkeyAda, sumUtxoValues, testNetwork, testTxBuilderCardanoInfo}
+import test.{TestPeer, genTestPeers, minPubkeyAda, sumUtxoValues, testTxBuilderCardanoInfo}
 
 object HeadConfigTest extends Properties("HeadConfig Test") {
     val _ = property("sanity test for genRawConfig") = PropertyM.monadicIO(
@@ -50,12 +50,16 @@ object HeadConfigTest extends Properties("HeadConfig Test") {
   * ensure internal coherence of the invariants on HeadConfig.
   *
   * It also simulates an environment closer to production, where everything will be parsed from a
-  * RawConfig anyways.
+  * RawConfig anyway.
   *
   * Note that this is generating, building, and parsing an InitializationTxSeq. Thus, you should
   * most likely re-use this value in the majority of your tests.
   */
 val genRawConfig: PropertyM[IO, RawConfig] =
+
+    // TODO: Should be gone after refactoring
+    val mainnetSlotConfig: SlotConfig = testTxBuilderCardanoInfo.slotConfig
+
     for {
         // NOTE: I'm going to do everything inline here for now. It will be better to break it up in the future, and this
         // may replace some of the other generators with ones that have better labeling (since they use PropertyM).
@@ -65,7 +69,7 @@ val genRawConfig: PropertyM[IO, RawConfig] =
         ////////////////////////////////////////////////////
 
         // This doesn't necessarily need to be impure
-        startTime <- PropertyM.run(realTimeQuantizedInstant(testTxBuilderCardanoInfo.slotConfig))
+        startTime <- PropertyM.run(realTimeQuantizedInstant(mainnetSlotConfig))
 
         // We need a wallet for handling withdrawals. We do this by just generating 3 peers and using
         // the tail as the "actual" peers.
@@ -156,11 +160,11 @@ val genRawConfig: PropertyM[IO, RawConfig] =
 
         initialTreasury = Value(initialTreasuryCoin)
 
-        txTiming = TxTiming.default(testTxBuilderCardanoInfo.slotConfig)
+        txTiming = TxTiming.default(mainnetSlotConfig)
 
         initTxConfig = InitializationTxSeq.Config(
           tallyFeeAllowance = Coin.ada(2),
-          votingDuration = FiniteDuration(24, HOURS).quantize(testTxBuilderCardanoInfo.slotConfig),
+          votingDuration = FiniteDuration(24, HOURS).quantize(mainnetSlotConfig),
           cardanoInfo = testTxBuilderCardanoInfo,
           peerKeys = peers.map(_.wallet.exportVerificationKeyBytes),
           startTime = startTime,
@@ -189,11 +193,11 @@ val genRawConfig: PropertyM[IO, RawConfig] =
           receiveTimeout = 10.seconds,
           initializationTxBytes = initTxSeq.initializationTx.tx.toCbor,
           initialFallbackTxBytes = initTxSeq.fallbackTx.tx.toCbor,
-          network = testNetwork,
+          network = Left(StandardCardanoNetwork.Mainnet),
           tallyFeeAllowance = Coin.ada(2),
           votingDuration = QuantizedFiniteDuration(
             finiteDuration = 24.hours,
-            slotConfig = testTxBuilderCardanoInfo.slotConfig
+            slotConfig = mainnetSlotConfig
           ),
           txTiming = txTiming,
           startTime = startTime,
