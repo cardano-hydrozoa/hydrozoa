@@ -26,8 +26,11 @@ import hydrozoa.multisig.ledger.dapp.txseq.InitializationTxSeq.Builder
 import hydrozoa.multisig.ledger.event.LedgerEvent
 import hydrozoa.rulebased.ledger.dapp.tx.genEquityShares
 import hydrozoa.{Address, L1, UtxoSetL1, attachVKeyWitnesses, maxNonPlutusTxFee}
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import org.scalacheck.commands.ModelBasedSuite
 import org.scalacheck.{Arbitrary, Gen, Prop, YetAnotherProperties}
+import scala.concurrent.duration.{DurationInt, FiniteDuration, HOURS}
 import scalus.cardano.ledger.{Coin, TransactionInput, TransactionOutput, Utxo, Value}
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import spire.math.UByte
@@ -35,22 +38,24 @@ import test.Generators.Hydrozoa.ArbitraryInstances.given_Arbitrary_LedgerEvent
 import test.TestPeer.Alice
 import test.{TestPeer, minPubkeyAda, sumUtxoValues}
 
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicInteger
-import scala.concurrent.duration.{DurationInt, FiniteDuration, HOURS}
-
 /** Integration Stage 1 (the simplest).
   *   - Only three real actors are involved: [[JointLedger]], [[ConsensusActor]], and
   *     [[CardanoLiaison]]
   */
 object Stage1Properties extends YetAnotherProperties("Joint ledger and Cardano liaison (stage 1"):
 
+    override def overrideParameters(
+        p: org.scalacheck.Test.Parameters
+    ): org.scalacheck.Test.Parameters = {
+        p.withWorkers(1)
+    }
+
     private val preprod = StandardCardanoNetwork.Preprod
 
     val _ = property("Work well on L1 mock (fast, reproducible)") = Stage1(
       network = Left(preprod),
       genesisUtxos = yaciTestSauceGenesis(preprod.scalusNetwork)
-    ).property0()
+    ).property()
 
     // val _ = property("Work well on Yaci DevKit (slow, reproducible)") = ???
     // val _ = property("Work well on Preview (slow, non-reproducible)") = ???
@@ -67,10 +72,10 @@ case class Stage1(
     // SUT handling
     // ===================================
 
-    override def newSut(state: Stage1State): Sut = {
+    override def newSut(state: Stage1State): IO[Sut] = {
         import state.headConfig.*
 
-        (for {
+        for {
 
             // Actor system
             system <- ActorSystem[IO]("Stage1").allocated.map(_._1)
@@ -159,19 +164,19 @@ case class Stage1(
               )
             )
 
-        } yield Stage1Sut(system, jointLedger)).unsafeRunSync()
+        } yield Stage1Sut(system, jointLedger)
     }
 
-    override def destroySut(sut: Sut): Unit = {
-        sut.system.terminate().unsafeRunSync()
+    override def shutdownSut(sut: Sut): IO[Prop] = for {
+        _ <- sut.system.terminate()
         // TODO shutdown Yaci? Clean up the public testnet?
-    }
+    } yield Prop.passed
 
-    // TODO: do we want to run multiple SUTs?
+    // TODO: do we want to run multiple SUTs when using L1 mock?
     override def canCreateNewSut(
         _newState: State,
         initSuts: Iterable[State],
-        runningSuts: Iterable[Sut]
+        runningSuts: Iterable[IO[Sut]]
     ): Boolean = initSuts.isEmpty && runningSuts.isEmpty // only one SUT is allowed
 
     // ===================================
@@ -184,6 +189,7 @@ case class Stage1(
         val cardanoInfo = network.toCardanoInfo
 
         for {
+            // Can this be pure?
             zeroBlockCreationTime <- Gen
                 .const(realTimeQuantizedInstant(cardanoInfo.slotConfig).unsafeRunSync())
                 .label("Zero block creation time")
@@ -313,7 +319,7 @@ case class Stage1(
         override val id: Int,
         blockNumber: BlockNumber,
         blockCreationTime: QuantizedInstant
-    ) extends StateLikeCommand {
+    ) extends Command {
 
         override type Result = Unit
 
@@ -330,31 +336,36 @@ case class Stage1(
             )
         }
 
-        override def run(sut: Sut): Result = {
+        override def run(sut: Sut): IO[Result] = {
             val msg = StartBlock(
               blockNum = blockNumber,
               blockCreationTime = blockCreationTime
             )
-            (sut.jointLedger ! msg).unsafeRunSync()
+            sut.jointLedger ! msg
         }
+
+        override def preCondition(state: State): Boolean = true
     }
 
     final case class LedgerEventCommand(
         override val id: Int,
         event: LedgerEvent
-    ) extends StateLikeCommand {
+    ) extends Command {
 
         override type Result = Unit
 
         override def runState(state: Stage1State): (Result, Stage1State) = () -> state
 
-        override def run(sut: Sut): Result = (sut.jointLedger ! event).unsafeRunSync()
+        override def run(sut: Sut): IO[Result] = sut.jointLedger ! event
+
+        override def preCondition(state: State): Boolean = true
+
     }
 
     final case class CompleteBlockCommand(
         override val id: Int,
         isFinal: Boolean
-    ) extends StateLikeCommand {
+    ) extends Command {
 
         override type Result = Unit
 
@@ -366,20 +377,23 @@ case class Stage1(
             }
         }
 
-        override def run(sut: Sut): Result = {
+        override def run(sut: Sut): IO[Result] = {
             val msg =
                 if isFinal
                 then CompleteBlockFinal(None)
                 else CompleteBlockRegular(None, Set.empty, false)
-            (sut.jointLedger ! msg).unsafeRunSync()
+            sut.jointLedger ! msg
         }
+
+        override def preCondition(state: State): Boolean = true
     }
 
     // This is used to numerate commands that we generate
+    // TODO: remove - doesn't make sense for parallel commands
     val cmdCnt: AtomicInteger = AtomicInteger(0)
     def nextCmdCnt: Int = cmdCnt.getAndIncrement()
 
-    override def genCommand(state: State): Gen[Command0] = {
+    override def genCommand(state: State): Gen[Command] = {
         import hydrozoa.integration.stage1.CurrentBlock.*
 
         for {
@@ -390,7 +404,7 @@ case class Stage1(
                       10 -> genLedgerEvent(state.activeUtxos)
                     )
                 case Done(blockNumber) => genStartBlock(blockNumber, state.currentTime)
-                case Finished          => Gen.const(NoOp0(nextCmdCnt))
+                case Finished          => Gen.const(NoOp(nextCmdCnt))
             }
         } yield cmd
     }
