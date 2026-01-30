@@ -1,21 +1,27 @@
 package org.scalacheck.commands
 
-import org.scalacheck.Gen.resize
 import org.scalacheck.{Gen, Prop}
+
 import scala.util.{Failure, Success, Try}
 
-/** Yet another better/different [[Commands]]:
+/** TODO: WIP
+  *
+  * Yet another better/different [[Commands]]:
   *   - Haskell State-like commands
   *   - Readable and pretty output
+  *   - Support for [[IO]] actions and [[TestControl]] -
+  * Limitations:
   *   - Supports only sequential commands
   */
-trait YetAnotherCommands extends Commands {
+trait ModelBasedSuite extends Commands {
 
     // ===================================
     // StateLikeCommand
     // ===================================
 
-    trait Command0(val id: Int) extends Command:
+    trait Command0 extends Command:
+
+        def id: Int
 
         private[commands] def runPC0(sut: Sut): (Try[String], State => Prop) = {
             import Prop.propBoolean
@@ -23,16 +29,16 @@ trait YetAnotherCommands extends Commands {
             (r.map(_.toString), s => preCondition(s) ==> postCondition(s, r))
         }
 
-    final case class NoOp0(override val id: Int) extends Command0(id) {
-        type Result = Null
+    final case class NoOp0(override val id: Int) extends Command0 {
+        type Result = Unit
 
-        override def run(sut: Sut) = null
+        override def run(sut: Sut) = ()
 
         override def nextState(state: State) = state
 
         override def preCondition(state: State) = true
 
-        override def postCondition(state: State, result: Try[Null]) = true
+        override def postCondition(state: State, result: Try[Unit]) = true
     }
 
     /** State-like Command that uses Haskell-style `runState` instead of `nextState`.
@@ -42,6 +48,13 @@ trait YetAnotherCommands extends Commands {
         final override def nextState(state: State): State = runState(state)._2
 
         def runState(state: State): (Result, State)
+
+        /** NB: I guess the description in the [[Command]] is misleading. The reason this exists is
+          * that one could generate wrong commands that should error. So you have "right" commands
+          * and "bad" commands. This method allows the test suite tell them apart to see what expect
+          * from the SUT.
+          */
+        override def preCondition(state: State): Boolean = true
 
         final override def postCondition(stateBefore: State, result: Try[Result]): Prop =
             val (expectedResult, stateAfter) = runState(stateBefore)
@@ -61,14 +74,14 @@ trait YetAnotherCommands extends Commands {
             stateBefore: State,
             stateAfter: State,
             result: Result
-        ): Prop
+        ): Prop = Prop.passed
 
         def postConditionFailure(
             expectedResult: Result,
             stateBefore: State,
             stateAfter: State,
             err: Throwable
-        ): Prop
+        ): Prop = Prop.falsified
 
     final def property0(): Prop = {
         val suts = collection.mutable.Map.empty[AnyRef, (State, Option[Sut])]
@@ -163,7 +176,8 @@ trait YetAnotherCommands extends Commands {
 
         val g = for {
             s0 <- genInitialState
-            (s1, seqCmds) <- resize(100, sized(sizedCmds(s0)))
+            (s1, seqCmds) <- sized(sizedCmds(s0))
+            // (s1, seqCmds) <- resize(100, sized(sizedCmds(s0)))
         } yield Actions(s0, seqCmds)
 
         g.suchThat(actionsPrecond)

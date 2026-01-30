@@ -269,7 +269,8 @@ object HeadConfig {
                 collectiveContingency,
                 individualContingency,
                 rawConfig.tallyFeeAllowance
-              )
+              ),
+              equityShares = contingencyDepositsAndEquityShares
             )
 
             privateNodeSettings = PrivateNodeSettings(
@@ -321,7 +322,8 @@ object HeadConfig {
         headPeers: HeadPeers,
         multisigRegimeSettings: MultisigRegimeSettings,
         ruleBasedRegimeSettings: RuleBasedRegimeSettings,
-        fallbackSettings: FallbackSettings
+        fallbackSettings: FallbackSettings,
+        equityShares: EquityShares
     )
 
     final case class PrivateNodeSettings private[config] (
@@ -434,7 +436,7 @@ final case class HeadConfig private[config] (
     headParameters: HeadParameters,
     privateNodeSettings: PrivateNodeSettings
 ) {
-    def headInstance: HeadInstanceL1 = HeadInstanceL1(
+    def headInstanceL1: HeadInstanceL1 = HeadInstanceL1(
       network = cardanoInfo.network,
       headMultisigScript = headParameters.headPeers.headMultisigScript,
       tokenNames = initialBlock.tokenNames,

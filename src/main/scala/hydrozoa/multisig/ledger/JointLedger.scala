@@ -534,12 +534,15 @@ object JointLedger {
 
     type Handle = ActorRef[IO, Requests.Request]
 
+    // TODO: review
     case class Config(
         initialBlock: Block.MultiSigned.Initial,
         peerId: PeerId,
         wallet: PeerWallet,
+        // TODO: can be obtained from initialBlock?
         initialBlockTime: QuantizedInstant,
         cardanoInfo: CardanoInfo,
+        // TODO: can be obtained from initialBlock?
         initialBlockKzg: KzgCommitment,
         txTiming: TxTiming,
         headMultisigScript: HeadMultisigScript,
@@ -549,6 +552,7 @@ object JointLedger {
         votingDuration: QuantizedFiniteDuration,
         initialTreasury: MultisigTreasuryUtxo,
         tokenNames: TokenNames,
+        // TODO: can be obtained from effects in the initialBlock?
         initialFallbackValidityStart: QuantizedInstant
     )
 

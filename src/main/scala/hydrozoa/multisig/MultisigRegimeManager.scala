@@ -63,7 +63,7 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
             consensusActor <- context.actorOf(
               ConsensusActor(
                 ConsensusActor.Config(
-                  peerId = ???,
+                  peerNumber = ???,
                   verificationKeys = ???,
                   recoveredRequests = ???
                 ),

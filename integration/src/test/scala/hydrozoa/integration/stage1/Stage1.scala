@@ -1,42 +1,55 @@
 package hydrozoa.integration.stage1
 
 import cats.data.NonEmptyList
+import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.applicative.*
+import com.suprnation.actor.Actor.{Actor, Receive}
+import com.suprnation.actor.ActorSystem
 import hydrozoa.config.HeadConfig.OwnPeer
 import hydrozoa.config.{HeadConfig, NetworkInfo, RawConfig, StandardCardanoNetwork}
+import hydrozoa.integration.stage1.CurrentBlock.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
-import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, quantize}
-import hydrozoa.multisig.backend.cardano.yaciTestSauceGenesis
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, quantize}
+import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState, yaciTestSauceGenesis}
+import hydrozoa.multisig.consensus.CardanoLiaisonTest.BlockWeaverMock
 import hydrozoa.multisig.consensus.peer.PeerId
+import hydrozoa.multisig.consensus.{CardanoLiaison, ConsensusActor, EventSequencer}
+import hydrozoa.multisig.ledger.JointLedger
+import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
+import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockHeader, BlockNumber}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.SpentUtxos
 import hydrozoa.multisig.ledger.dapp.tx.{TxTiming, minInitTreasuryAda}
 import hydrozoa.multisig.ledger.dapp.txseq.InitializationTxSeq
 import hydrozoa.multisig.ledger.dapp.txseq.InitializationTxSeq.Builder
+import hydrozoa.multisig.ledger.event.LedgerEvent
 import hydrozoa.rulebased.ledger.dapp.tx.genEquityShares
 import hydrozoa.{Address, L1, UtxoSetL1, attachVKeyWitnesses, maxNonPlutusTxFee}
-import org.scalacheck.commands.YetAnotherCommands
-import org.scalacheck.{Gen, YetAnotherProperties}
-import scala.concurrent.duration.{DurationInt, FiniteDuration, HOURS}
-import scalus.cardano.ledger.{Coin, Utxo, Value}
+import org.scalacheck.commands.ModelBasedSuite
+import org.scalacheck.{Arbitrary, Gen, Prop, YetAnotherProperties}
+import scalus.cardano.ledger.{Coin, TransactionInput, TransactionOutput, Utxo, Value}
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import spire.math.UByte
+import test.Generators.Hydrozoa.ArbitraryInstances.given_Arbitrary_LedgerEvent
 import test.TestPeer.Alice
 import test.{TestPeer, minPubkeyAda, sumUtxoValues}
 
-/** Stage 1 (the simplest).
-  *   - Only two real actors are involved: [[JointLedger]] and [[CardanoLiaison]]
-  */
-object Stage1Properties
-//extends YetAnotherProperties("Joint ledger and Cardano liaison (stage 1"):
-    extends YetAnotherProperties("Joint ledger and Cardano liaison (stage 1"):
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+import scala.concurrent.duration.{DurationInt, FiniteDuration, HOURS}
 
-    private val preprod: StandardCardanoNetwork = StandardCardanoNetwork.Preprod
+/** Integration Stage 1 (the simplest).
+  *   - Only three real actors are involved: [[JointLedger]], [[ConsensusActor]], and
+  *     [[CardanoLiaison]]
+  */
+object Stage1Properties extends YetAnotherProperties("Joint ledger and Cardano liaison (stage 1"):
+
+    private val preprod = StandardCardanoNetwork.Preprod
 
     val _ = property("Work well on L1 mock (fast, reproducible)") = Stage1(
       network = Left(preprod),
-      genesisUtxo = yaciTestSauceGenesis(preprod.scalusNetwork)
+      genesisUtxos = yaciTestSauceGenesis(preprod.scalusNetwork)
     ).property0()
 
     // val _ = property("Work well on Yaci DevKit (slow, reproducible)") = ???
@@ -44,19 +57,115 @@ object Stage1Properties
 
 case class Stage1(
     network: Either[StandardCardanoNetwork, NetworkInfo],
-    genesisUtxo: Map[TestPeer, UtxoSetL1]
-) extends YetAnotherCommands {
+    genesisUtxos: Map[TestPeer, UtxoSetL1]
+) extends ModelBasedSuite {
 
-    override type State = HarnessState
+    override type State = Stage1State
     override type Sut = Stage1Sut
 
     // ===================================
     // SUT handling
     // ===================================
 
-    override def newSut(state: HarnessState): Sut = ???
+    override def newSut(state: Stage1State): Sut = {
+        import state.headConfig.*
 
-    override def destroySut(sut: Sut): Unit = ???
+        (for {
+
+            // Actor system
+            system <- ActorSystem[IO]("Stage1").allocated.map(_._1)
+
+            // Cardano L1 backend mock
+            utxos = genesisUtxos.values.flatten.map((k, v) => k.untagged -> v.untagged).toMap
+            mockState = MockState.apply(utxos)
+            cardanoBackend <- CardanoBackendMock.mockIO(mockState)
+
+            // Weaver stub
+            blockWeaver <- system.actorOf(new BlockWeaverMock)
+
+            // Cardano liaison
+            liaisonConfig = CardanoLiaison.Config(
+              cardanoBackend = cardanoBackend,
+              initializationTx = initialBlock.effects.initializationTx,
+              initializationFallbackTx = initialBlock.effects.fallbackTx,
+              receiveTimeout = 100.millis,
+              slotConfig = cardanoInfo.slotConfig
+            )
+
+            liaisonConnections = CardanoLiaison.Connections(blockWeaver)
+
+            cardanoLiaison <- system.actorOf(
+              CardanoLiaison.apply(liaisonConfig, liaisonConnections)
+            )
+
+            // Event sequencer stub
+            eventSequencerStub <- system.actorOf(new Actor[IO, EventSequencer.Request] {
+                override def receive: Receive[IO, EventSequencer.Request] = _ => IO.pure(())
+            })
+
+            // Consensus actor
+            consensusConfig = ConsensusActor.Config(
+              peerNumber = privateNodeSettings.ownPeer.peerId.peerNum,
+              verificationKeys =
+                  headParameters.headPeers.peerKeys.map((peerId, key) => peerId.peerNum -> key)
+            )
+
+            consensusConnections = ConsensusActor.Connections(
+              blockWeaver = blockWeaver,
+              cardanoLiaison = cardanoLiaison,
+              eventSequencer = eventSequencerStub,
+              peerLiaisons = List.empty
+            )
+
+            consensusActor <- system.actorOf(ConsensusActor(consensusConfig, consensusConnections))
+
+            // Joint ledger
+            initialBlock1 = Block.MultiSigned.Initial(
+              blockBrief = BlockBrief.Initial(
+                header = BlockHeader.Initial(
+                  startTime = initialBlock.startTime,
+                  kzgCommitment = initialBlock.initialKzgCommitment
+                )
+              ),
+              effects = initialBlock.effects
+            )
+            jointLedgerConfig = JointLedger.Config(
+              initialBlock = initialBlock1,
+              peerId = privateNodeSettings.ownPeer.peerId,
+              wallet = privateNodeSettings.ownPeer.wallet,
+              tallyFeeAllowance = headParameters.fallbackSettings.tallyFeeAllowance,
+              tokenNames = initialBlock.tokenNames,
+              headMultisigScript = headParameters.headPeers.headMultisigScript,
+              cardanoInfo = cardanoInfo,
+              initialBlockTime = initialBlock.startTime,
+              initialBlockKzg = initialBlock.initialKzgCommitment,
+              equityShares = headParameters.equityShares,
+              multisigRegimeUtxo = initialBlock.multisigRegimeUtxo,
+              votingDuration = headParameters.ruleBasedRegimeSettings.votingDuration,
+              initialTreasury = initialBlock.initialTreasury,
+              txTiming = headParameters.multisigRegimeSettings.txTiming,
+              initialFallbackValidityStart = initialBlock.effects.fallbackTx.validityStart
+            )
+
+            jointLedgerConnections = JointLedger.Connections(
+              consensusActor = consensusActor,
+              peerLiaisons = List()
+            )
+
+            jointLedger <- system.actorOf(
+              JointLedger(
+                jointLedgerConfig,
+                jointLedgerConnections
+              )
+            )
+
+        } yield Stage1Sut(system, jointLedger)).unsafeRunSync()
+    }
+
+    override def destroySut(sut: Sut): Unit = {
+        sut.system.terminate().unsafeRunSync()
+        // TODO shutdown Yaci? Clean up the public testnet?
+    }
 
     // TODO: do we want to run multiple SUTs?
     override def canCreateNewSut(
@@ -69,13 +178,13 @@ case class Stage1(
     // Initial state handling
     // ===================================
 
-    override def initialPreCondition(state: HarnessState): Boolean = true
+    override def initialPreCondition(state: Stage1State): Boolean = true
 
     override def genInitialState: Gen[State] = {
         val cardanoInfo = network.toCardanoInfo
 
         for {
-            startTime <- Gen
+            zeroBlockCreationTime <- Gen
                 .const(realTimeQuantizedInstant(cardanoInfo.slotConfig).unsafeRunSync())
                 .label("Zero block creation time")
 
@@ -91,7 +200,7 @@ case class Stage1(
 
             seedUtxo <- Gen
                 .oneOf(
-                  genesisUtxo(ownTestPeer)
+                  genesisUtxos(ownTestPeer)
                       .map(u => Utxo(u._1.untagged, u._2.untagged))
                 )
                 .label("seed utxo")
@@ -121,7 +230,7 @@ case class Stage1(
               votingDuration = FiniteDuration(24, HOURS).quantize(cardanoInfo.slotConfig),
               cardanoInfo = cardanoInfo,
               peerKeys = peers.map(_.wallet.exportVerificationKeyBytes),
-              startTime = startTime,
+              startTime = zeroBlockCreationTime,
               txTiming = txTiming
             )
 
@@ -171,7 +280,7 @@ case class Stage1(
                 slotConfig = cardanoInfo.slotConfig
               ),
               txTiming = txTiming,
-              startTime = startTime,
+              startTime = zeroBlockCreationTime,
               resolvedUtxosForInitialization =
                   ResolvedUtxos(Map.from(spentUtxos.toList.map(_.toTuple))),
               // Can it be the peer's automated wallet though, at least for now?
@@ -188,13 +297,131 @@ case class Stage1(
                 case Right(value) => value
             }
 
-        } yield HarnessState(headConfig = configParsed)
+        } yield Stage1State(
+          headConfig = configParsed,
+          currentBlock = Done(BlockNumber.zero), // initial (zero) block is finished
+          currentTime = zeroBlockCreationTime,
+          activeUtxos = Map.empty
+        )
     }
 
     // ===================================
     // Command generation
     // ===================================
 
-    override def genCommand(state: State): Gen[Command0] = ???
+    final case class StartBlockCommand(
+        override val id: Int,
+        blockNumber: BlockNumber,
+        blockCreationTime: QuantizedInstant
+    ) extends StateLikeCommand {
 
+        override type Result = Unit
+
+        override def runState(state: Stage1State): (Result, Stage1State) = {
+            val newBlock = state.currentBlock match {
+                case CurrentBlock.Done(prevBlockNumber)
+                    if prevBlockNumber.increment == blockNumber =>
+                    CurrentBlock.InProgress(blockNumber)
+                case _ => throw Error.UnexpectedState
+            }
+            () -> state.copy(
+              currentBlock = newBlock,
+              currentTime = blockCreationTime
+            )
+        }
+
+        override def run(sut: Sut): Result = {
+            val msg = StartBlock(
+              blockNum = blockNumber,
+              blockCreationTime = blockCreationTime
+            )
+            (sut.jointLedger ! msg).unsafeRunSync()
+        }
+    }
+
+    final case class LedgerEventCommand(
+        override val id: Int,
+        event: LedgerEvent
+    ) extends StateLikeCommand {
+
+        override type Result = Unit
+
+        override def runState(state: Stage1State): (Result, Stage1State) = () -> state
+
+        override def run(sut: Sut): Result = (sut.jointLedger ! event).unsafeRunSync()
+    }
+
+    final case class CompleteBlockCommand(
+        override val id: Int,
+        isFinal: Boolean
+    ) extends StateLikeCommand {
+
+        override type Result = Unit
+
+        override def runState(state: Stage1State): (Result, Stage1State) = {
+            state.currentBlock match {
+                case InProgress(blockNumber) =>
+                    () -> state.copy(currentBlock = if isFinal then Finished else Done(blockNumber))
+                case _ => throw Error.UnexpectedState
+            }
+        }
+
+        override def run(sut: Sut): Result = {
+            val msg =
+                if isFinal
+                then CompleteBlockFinal(None)
+                else CompleteBlockRegular(None, Set.empty, false)
+            (sut.jointLedger ! msg).unsafeRunSync()
+        }
+    }
+
+    // This is used to numerate commands that we generate
+    val cmdCnt: AtomicInteger = AtomicInteger(0)
+    def nextCmdCnt: Int = cmdCnt.getAndIncrement()
+
+    override def genCommand(state: State): Gen[Command0] = {
+        import hydrozoa.integration.stage1.CurrentBlock.*
+
+        for {
+            cmd <- state.currentBlock match {
+                case InProgress(blockNumber) =>
+                    Gen.frequency(
+                      1 -> genCompleteBlock,
+                      10 -> genLedgerEvent(state.activeUtxos)
+                    )
+                case Done(blockNumber) => genStartBlock(blockNumber, state.currentTime)
+                case Finished          => Gen.const(NoOp0(nextCmdCnt))
+            }
+        } yield cmd
+    }
+
+    private def genStartBlock(
+        prevBlockNumber: BlockNumber,
+        currentTime: QuantizedInstant
+    ): Gen[StartBlockCommand] = for {
+        // During command generation we cannot use IO.realTime
+        // Instead we can generate delays that could be fast forwarded in the suitable SUT
+        delay <- Gen.choose(10, 86400).flatMap(secs => FiniteDuration.apply(secs, TimeUnit.SECONDS))
+    } yield StartBlockCommand(
+      nextCmdCnt,
+      prevBlockNumber.increment,
+      currentTime + delay
+    )
+
+    private def genCompleteBlock: Gen[CompleteBlockCommand] = for {
+        isFinal <- Gen.frequency(
+          1 -> true,
+          20 -> false
+        )
+    } yield CompleteBlockCommand(nextCmdCnt, isFinal)
+
+    private def genLedgerEvent(
+        _activeUtxos: Map[TransactionInput, TransactionOutput]
+    ): Gen[LedgerEventCommand] = for {
+        // TODO: implement properly
+        event <- Arbitrary.arbitrary[LedgerEvent]
+    } yield LedgerEventCommand(id = nextCmdCnt, event = event)
+
+    enum Error extends Throwable:
+        case UnexpectedState
 }

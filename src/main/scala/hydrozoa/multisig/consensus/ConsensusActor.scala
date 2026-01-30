@@ -243,7 +243,7 @@ object ConsensusActor:
 
     final case class Config(
         /** Own peer number */
-        peerId: PeerNumber,
+        peerNumber: PeerNumber,
 
         /** The mapping from head's peers to their verification keys. */
         verificationKeys: Map[PeerNumber, VerificationKeyBytes],
@@ -285,7 +285,7 @@ object ConsensusActor:
 
     def apply(
         config: Config,
-        pendingConnections: MultisigRegimeManager.PendingConnections
+        pendingConnections: MultisigRegimeManager.PendingConnections | ConsensusActor.Connections
     ): IO[ConsensusActor] =
         for {
             stateRef <- Ref[IO].of(State.mkInitialState)
@@ -379,10 +379,12 @@ class ConsensusActor(
         _ <- ack match {
             case minor: AckBlock.Minor =>
                 state.withCellFor(minor)(_.applyAck(minor)) >>
-                    IO.whenA(ack.peerNum == config.peerId)(state.scheduleOwnImmediateAck(minor))
+                    IO.whenA(ack.peerNum == config.peerNumber)(state.scheduleOwnImmediateAck(minor))
             case major1: AckBlock.Major1 =>
                 state.withCellFor(major1)(_.applyAck(major1)) >>
-                    IO.whenA(ack.peerNum == config.peerId)(state.scheduleOwnImmediateAck(major1))
+                    IO.whenA(ack.peerNum == config.peerNumber)(
+                      state.scheduleOwnImmediateAck(major1)
+                    )
             case major2: AckBlock.Major2 =>
                 state.withCellFor(major2) {
                     case round1: MajorRoundOneCell => round1.applyAck(major2)
@@ -390,7 +392,9 @@ class ConsensusActor(
                 }
             case final1: AckBlock.Final1 =>
                 state.withCellFor(final1)(_.applyAck(final1)) >>
-                    IO.whenA(ack.peerNum == config.peerId)(state.scheduleOwnImmediateAck(final1))
+                    IO.whenA(ack.peerNum == config.peerNumber)(
+                      state.scheduleOwnImmediateAck(final1)
+                    )
             case final2: AckBlock.Final2 =>
                 state.withCellFor(final2) {
                     case round1: FinalRoundOneCell => round1.applyAck(final2)
@@ -486,7 +490,7 @@ class ConsensusActor(
           */
         def scheduleOwnImmediateAck(ack: RoundOneOwnAck): IO[Unit] = for {
             // Check again it's our own ack
-            _ <- IO.raiseWhen(ack.peerNum != config.peerId)(Error.AlienAckAnnouncement)
+            _ <- IO.raiseWhen(ack.peerNum != config.peerNumber)(Error.AlienAckAnnouncement)
             // The number of the block an ack may depend - the previous block
             prevBlockNum = ack.blockNum.decrement
             _ <- state.cells.get(prevBlockNum) match {
@@ -886,7 +890,7 @@ class ConsensusActor(
                       postponedNextBlockOwnAck = postponedNextBlockOwnAck
                     )
                     ownAck <- config.verificationKeys
-                        .get(config.peerId)
+                        .get(config.peerNumber)
                         .flatMap(vkey => this.acks2.get(vkey))
                         .liftTo[IO](
                           new IllegalStateException(s"Own Major2 ack not found for block $blockNum")
@@ -1095,7 +1099,7 @@ class ConsensusActor(
                     )
                     // Own ack should always be present
                     ownAck <- config.verificationKeys
-                        .get(config.peerId)
+                        .get(config.peerNumber)
                         .flatMap(vkey => this.acks2.get(vkey))
                         .liftTo[IO](
                           new IllegalStateException(s"Own Final2 ack not found for block $blockNum")
