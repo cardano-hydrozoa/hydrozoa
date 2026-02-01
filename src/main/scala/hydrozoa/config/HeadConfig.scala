@@ -202,6 +202,9 @@ object HeadConfig {
                 val section = peerSectionMap(i)
                 id -> (section.payoutAddress, section.equityShare)
             )
+
+            // TODO: validate that addresses belong to the proper network
+            // TODO: wider: all addresses shoudl belong to the same network
             contingencyDepositsAndEquityShares <- EquityShares.apply(
               peersShares,
               collectiveContingency,

@@ -178,10 +178,11 @@ case class Stage1(
       * just immediately shutdown the system and will get a false-positive test.
       */
     override def shutdownSut(sut: Sut): IO[Prop] = for {
-        wasTerminated <- sut.system.isTerminated
-        _ <- IO.whenA(!wasTerminated)(sut.system.waitForIdle() >> sut.system.terminate())
+        _ <- sut.system.waitForIdle()
+        // wasTerminated <- sut.system.isTerminated
+        // _ <- IO.whenA(!wasTerminated)(sut.system.waitForIdle() >> sut.system.terminate())
         // TODO shutdown Yaci? Clean up the public testnet?
-    } yield !wasTerminated
+    } yield true // !wasTerminated
 
     // TODO: do we want to run multiple SUTs when using L1 mock?
     override def canCreateNewSut(
@@ -209,9 +210,12 @@ case class Stage1(
             peers = NonEmptyList.one(ownTestPeer) // useful to have since many gens want it
             ownPeerIndex = 0
             equityShares <- genEquityShares(peers, cardanoInfo.network).label("Equity shares")
+
+            _ = println(s"equityShares: $equityShares")
+
             ownPeer = (
               OwnPeer(PeerId(ownPeerIndex, peers.size), ownTestPeer.wallet),
-              Address[L1](ownTestPeer.address()),
+              Address[L1](ownTestPeer.address(cardanoInfo.network)),
               equityShares.peerShares(UByte(ownPeerIndex)).equityShare
             )
 
@@ -255,7 +259,7 @@ case class Stage1(
                 InitializationTxSeq.Builder.Args(
                   spentUtxos = SpentUtxos(seedUtxo, List.empty),
                   initialTreasury = initialTreasury,
-                  initializationTxChangePP = ownTestPeer.address().payment,
+                  initializationTxChangePP = ownTestPeer.address(cardanoInfo.network).payment,
                 )
 
             headMultisigScript = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))

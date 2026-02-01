@@ -352,6 +352,7 @@ class ConsensusActor(
       * responsible for sending acks only.
       */
     def handleBlock(block: Block.Unsigned.Next): IO[Unit] = for {
+        _ <- IO.println(s"---- CA ----: handleBlock: $block")
         state <- stateRef.get
         // This is a bit annoying but Scala cannot infer types unless we PM explicitly
         _ <- block match {
@@ -374,6 +375,7 @@ class ConsensusActor(
       *   an arbitrary ack, whether own one or someone else's one
       */
     def handleAck(ack: AckBlock): IO[Unit] = for {
+        _ <- IO.println(s"---- CA ----: handleAck: $ack")
         state <- stateRef.get
         // This is a bit annoying but Scala cannot infer types unless we PM explicitly
         _ <- ack match {
@@ -873,14 +875,22 @@ class ConsensusActor(
 
             override def isSaturated: Boolean =
                 this.block.isDefined &&
-                    this.acks1.keySet == config.verificationKeys.values.toSet
+                    this.acks1.keySet == config.verificationKeys.values.toSet && hasOwnAck2
+
+            private def hasOwnAck2: Boolean =
+                (config.verificationKeys.get(config.peerNumber) >>= (key =>
+                    Some(this.acks2.contains(key))
+                ))
+                    .getOrElse(false)
 
             override def complete
                 : IO[Either[(MajorRoundTwoCell, AckBlock.Major2), (Void, Option[RoundOneOwnAck])]] =
                 for {
                     block <- this.block.liftTo[IO](
-                      // This should never happen
-                      new IllegalStateException("Cannot complete without block")
+                      // This should never happen due to checks in [[isSaturated]]
+                      new IllegalStateException(
+                        s"Cannot complete major round one without block $blockNum"
+                      )
                     )
                     roundTwo = MajorRoundTwoCell(
                       blockNum = this.blockNum,
@@ -893,7 +903,10 @@ class ConsensusActor(
                         .get(config.peerNumber)
                         .flatMap(vkey => this.acks2.get(vkey))
                         .liftTo[IO](
-                          new IllegalStateException(s"Own Major2 ack not found for block $blockNum")
+                          // This should never happen due to checks in [[isSaturated]]
+                          new IllegalStateException(
+                            s"Cannot complete major round one without own Major2 ack for block $blockNum"
+                          )
                         )
                 } yield Left((roundTwo, ownAck))
         }
@@ -1083,13 +1096,23 @@ class ConsensusActor(
 
             override def isSaturated: Boolean =
                 this.block.isDefined &&
-                    this.acks1.keySet == config.verificationKeys.values.toSet
+                    this.acks1.keySet == config.verificationKeys.values.toSet &&
+                    hasOwnAck2
+
+            private def hasOwnAck2: Boolean =
+                (config.verificationKeys.get(config.peerNumber) >>= (key =>
+                    Some(this.acks2.contains(key))
+                ))
+                    .getOrElse(false)
 
             override def complete
                 : IO[Either[(FinalRoundTwoCell, AckBlock.Final2), (Void, Option[RoundOneOwnAck])]] =
                 for {
                     block <- this.block.liftTo[IO](
-                      new IllegalStateException("Cannot complete without block")
+                      // This should never happen due to checks in [[isSaturated]]
+                      new IllegalStateException(
+                        s"Cannot complete final round one without block $blockNum"
+                      )
                     )
                     roundTwo = FinalRoundTwoCell(
                       blockNum = this.blockNum,
@@ -1102,7 +1125,10 @@ class ConsensusActor(
                         .get(config.peerNumber)
                         .flatMap(vkey => this.acks2.get(vkey))
                         .liftTo[IO](
-                          new IllegalStateException(s"Own Final2 ack not found for block $blockNum")
+                          // This should never happen due to checks in [[isSaturated]]
+                          new IllegalStateException(
+                            s"Cannot complete final round one without own Final2 ack for block $blockNum"
+                          )
                         )
                 } yield Left((roundTwo, ownAck))
         }

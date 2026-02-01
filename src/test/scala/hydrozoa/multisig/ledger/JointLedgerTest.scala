@@ -393,7 +393,7 @@ object JointLedgerTestHelpers {
                 depositRefundSeqBuilder = DepositRefundTxSeq.Builder(
                   config = depositRefundSeqConfig,
                   refundInstructions = DepositUtxo.Refund.Instructions(
-                    LedgerToPlutusTranslation.getAddress(peer.address()),
+                    LedgerToPlutusTranslation.getAddress(peer.address(testNetwork)),
                     SOption.None,
                     validityEnd
                         + env.txTiming.depositMaturityDuration
@@ -403,7 +403,7 @@ object JointLedgerTestHelpers {
                   donationToTreasury = Coin.zero,
                   refundValue = virtualOutputsValue,
                   virtualOutputs = virtualOutputs,
-                  changeAddress = peer.address(),
+                  changeAddress = peer.address(testNetwork),
                   utxosFunding = utxosFunding,
                 )
 

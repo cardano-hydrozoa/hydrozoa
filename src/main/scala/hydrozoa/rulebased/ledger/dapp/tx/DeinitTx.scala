@@ -119,7 +119,7 @@ object DeinitTx {
 
         val initial = EquityProduced(Coin(distribution.dust.underlying))
 
-        distribution.payouts.foldLeft(initial)((acc, share) => {
+        distribution.disbursements.foldLeft(initial)((acc, share) => {
             val shareAsCoin = Coin(share._2.underlying)
             val output =
                 Babbage(
