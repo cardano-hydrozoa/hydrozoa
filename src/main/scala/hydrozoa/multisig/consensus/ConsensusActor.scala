@@ -1121,7 +1121,7 @@ class ConsensusActor(
                       acks2 = this.acks2
                     )
                     // Own ack should always be present
-                    ownAck <- config.verificationKeys
+                    ownAck2 <- config.verificationKeys
                         .get(config.peerNumber)
                         .flatMap(vkey => this.acks2.get(vkey))
                         .liftTo[IO](
@@ -1130,7 +1130,7 @@ class ConsensusActor(
                             s"Cannot complete final round one without own Final2 ack for block $blockNum"
                           )
                         )
-                } yield Left((roundTwo, ownAck))
+                } yield Left((roundTwo, ownAck2))
         }
 
         object FinalRoundOneCell:

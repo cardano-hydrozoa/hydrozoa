@@ -361,7 +361,7 @@ final case class JointLedger(
                 then
                     previousHeader.nextHeaderIntermediate(
                       txTiming,
-                      producing.startTime,
+                      producing.startTime, // TODO: shall we use something like production.completeTime instead?
                       producing.competingFallbackValidityStart,
                       kzgCommitment
                     )

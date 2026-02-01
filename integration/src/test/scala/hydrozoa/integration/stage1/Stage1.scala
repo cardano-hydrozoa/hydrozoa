@@ -178,9 +178,12 @@ case class Stage1(
       * just immediately shutdown the system and will get a false-positive test.
       */
     override def shutdownSut(sut: Sut): IO[Prop] = for {
+        // Luckily enough, waitForIdle does exactly what we need in addition to
+        // checking the mailboxes it also verifies that the system was not terminated.
         _ <- sut.system.waitForIdle()
-        // wasTerminated <- sut.system.isTerminated
-        // _ <- IO.whenA(!wasTerminated)(sut.system.waitForIdle() >> sut.system.terminate())
+
+        // Next part of the property is to check that all txs are known to the Cardano backend.
+
         // TODO shutdown Yaci? Clean up the public testnet?
     } yield true // !wasTerminated
 
