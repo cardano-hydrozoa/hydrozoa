@@ -2,15 +2,16 @@ package org.scalacheck.commands
 
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
+import cats.syntax.all.catsSyntaxFlatMapOps
 import org.scalacheck.{Gen, Prop, Shrink}
-import scala.util.{Success, Try}
 
-/** TODO: WIP
-  *
-  * Yet another better/different [[Commands]]:
-  *   - Haskell State-like commands with runState
-  *   - Readable and pretty output (TODO)
+/** Yet another better/different [[Commands]]:
   *   - Support for [[IO]] genActions and [[TestControl]]
+  *   - Haskell State-like commands with runState
+  *   - Readable and pretty output
+  *
+  * Limitations:
+  *   - Parallel commands are not supported yet.
   */
 trait ModelBasedSuite {
 
@@ -34,7 +35,7 @@ trait ModelBasedSuite {
       */
     type Sut
 
-    /** Decides if [[newSut]] should be allowed to be called with the specified state instance. This
+    /** Decides if [[newSut]] should be allowed to be called with the specified state value. This
       * can be used to limit the number of co-existing [[Sut]] instances. The list of existing
       * states represents the initial states (not the current states) for all [[Sut]] instances that
       * are active for the moment. If this method is implemented incorrectly, for example if it
@@ -44,31 +45,29 @@ trait ModelBasedSuite {
       * [[Sut]]), implement this method the following way:
       *
       * {{{
-      *  def canCreateNewSut(newState: State, initSuts: Traversable[State]
-      *    runningSuts: Traversable[Sut]
-      *  ) = {
-      *    initSuts.isEmpty && runningSuts.isEmpty
-      *  }
+      *  def canCreateNewSut(candidateState: State, inactiveSuts: Iterable[State]
+      *    runningSuts: Iterable[State]
+      *  ) = inactiveSuts.isEmpty && runningSuts.isEmpty
       * }}}
       *
-      * @param newState
-      *   TODO: why do we need it?
-      * @param initSuts
-      *   TODO:
+      * @param candidateState
+      *   the initial state of the SUT that the suite wants to create
+      * @param inactiveSuts
+      *   the initial states for SUTs that are planned to be run
       * @param runningSuts
-      *   TODO:
+      *   the initial states for SUTs that are currently active
       */
     def canCreateNewSut(
-        newState: State,
-        initSuts: Iterable[State],
-        runningSuts: Iterable[IO[Sut]]
+        candidateState: State,
+        inactiveSuts: Iterable[State],
+        runningSuts: Iterable[State]
     ): Boolean
 
     /** Create a new [[Sut]] instance with an internal state that corresponds to the provided
       * abstract state instance.
       *
       * The provided state is guaranteed to fulfill [[initialPreCondition]], and [[newSut]] will
-      * never be called if [[canCreateNewSut]] is not true for the given state.
+      * never be called if [[canCreateNewSut]] is not true for the [[state]].
       */
     def newSut(state: State): IO[Sut]
 
@@ -130,11 +129,6 @@ trait ModelBasedSuite {
 
         /** Precondition that decides if this command is allowed to run when the system under test
           * is in the provided state.
-          *
-          * TODO: this is not the case NB: I guess the description in the [[Command]] is misleading.
-          * The reason this exists is that one could generate wrong commands that should error. So
-          * you have "right" commands and "bad" commands. This method allows the test suite tell
-          * them apart to see what expect * from the SUT.
           */
         def preCondition(state: State): Boolean
 
@@ -170,9 +164,9 @@ trait ModelBasedSuite {
         ): Prop = Prop.falsified
 
         /** Wraps the run and postCondition methods in order not to leak the dependent Result type.
-          * TODO:
           * @param sut
           * @return
+          *   the predicate on State in IO
           */
         private[commands] def runPC(sut: Sut): IO[State => Prop] = {
             import Prop.propBoolean
@@ -187,8 +181,8 @@ trait ModelBasedSuite {
 
         final override def postCondition(state: State, result: Either[Throwable, Result]): Prop =
             result match {
-                case Left(e)       => Prop.exception(e)
-                case Right(result) => postCondition(state, result)
+                case Left(e)  => Prop.exception(e)
+                case Right(r) => postCondition(state, r)
             }
     }
 
@@ -204,12 +198,9 @@ trait ModelBasedSuite {
 
     final case class NoOp(override val id: Int) extends Command {
         type Result = Unit
-
         override def run(sut: Sut): IO[Result] = IO.pure(())
-
         override def runState(state: State): (Unit, State) = ((), state)
         override def preCondition(state: State) = true
-
         override def postCondition(stateBefore: State, result: Either[Throwable, Result]) = true
     }
 
@@ -251,41 +242,24 @@ trait ModelBasedSuite {
 
             try {
                 val sutId = suts.synchronized {
-                    val initSuts = suts.values.collect { case (state, None) => state }
-                    val runningSuts = suts.values.collect { case (_, Some(sut)) => sut }
-                    if canCreateNewSut(as.initialState, initSuts, runningSuts) then {
+                    val inactiveSuts = suts.values.collect { case (state, None) => state }
+                    val runningSuts = suts.values.collect { case (state, Some(_)) => state }
+                    if canCreateNewSut(as.initialState, inactiveSuts, runningSuts) then {
                         val sutId = new AnyRef
                         suts += (sutId -> (as.initialState -> None))
                         Some(sutId)
                     } else None
                 }
+
                 sutId match {
                     case Some(id) =>
-                        val ioSut = newSut(as.initialState)
 
-                        def removeSut(): Unit = {
-                            val _ = suts.synchronized {
-                                suts -= id
-                                IO.delay(for {
-                                    sut <- ioSut
-                                    _ <- shutdownSut(sut)
-                                } yield ())
-                                    .unsafeRunSync() // TODO: unsafeRunSync
-                            }
-                        }
-
-                        val doRun = suts.synchronized {
-                            if suts.contains(id) then {
-                                suts += (id -> (as.initialState -> Some(ioSut)))
-                                true
-                            } else false
-                        }
-
-                        if doRun then {
-                            runActions(ioSut, as, removeSut())
+                        if suts.contains(id) then {
+                            val ioSut = newSut(as.initialState)
+                            val _ = suts.put(id, as.initialState -> Some(ioSut))
+                            runActions(ioSut, as)
                         } else {
                             println("WARNING: you should never not see that")
-                            removeSut()
                             Prop.undecided
                         }
 
@@ -313,7 +287,7 @@ trait ModelBasedSuite {
     /** @param initialState
       *   the initial state
       * @param seqCmds
-      *   sequention commands, come first
+      *   sequentional commands, come first
       * @param parCmds
       *   optional parallel commands, come after sequential commands
       */
@@ -370,14 +344,75 @@ trait ModelBasedSuite {
         /** The size of parallel commands is determined by the number of parallel threads
           * [[threadCount]] and the limit of all possible state combinations [[maxParComb]].
           *
-          * Each thread i can be in one of i different positions relative to other threads when we
-          * have m parallel rounds:
-          *   - In each of m rounds, thread i has i possible relative orderings
-          *   - So thread i contributes i^m possibilities
-          *   - Total: ∏(i=1 to n) i^m = 1^m × 2^m × 3^m × ... × n^m
+          *  This is a conservative overestimate of the actual state space, used to limit commands
+          *  generation.
           *
-          * This is a conservative overestimate of the actual state space, used to limit test
-          * generation.
+          * The Key Insight
+          *
+          * When you have n threads running in parallel, and you're tracking their
+          * relative execution order, here's what happens:
+          *
+          * Thread 1 (i=1)
+          *
+          *   - It's the first thread, so there's only 1 way it can be ordered (it's
+          *     alone)
+          *   - Across m rounds: 1 × 1 × ... × 1 = 1^m = 1 possibility
+          *
+          * Thread 2 (i=2)
+          *
+          *   - Thread 2 can be either:
+          *     - Before thread 1, or
+          *     - After thread 1
+          *   - That's 2 positions for thread 2
+          *   - In each of m rounds, thread 2 can be in either position
+          *   - Total: 2 × 2 × ... × 2 = 2^m possibilities
+          *
+          * Thread 3 (i=3)
+          *
+          *   - Thread 3 can be:
+          *     - Position 1: Before both thread 1 and thread 2
+          *     - Position 2: Between thread 1 and thread 2
+          *     - Position 3: After both thread 1 and thread 2
+          *   - That's 3 positions for thread 3
+          *   - In each of m rounds, thread 3 independently chooses one of these 3
+          *     positions
+          *   - Total: 3 × 3 × ... × 3 = 3^m possibilities
+          *
+          * Thread i (general case)
+          *
+          *   - When thread i joins, there are already (i-1) threads
+          *   - Thread i can be inserted in i different positions:
+          *     - Before all existing threads
+          *     - Between any two existing threads (i-2 positions)
+          *     - After all existing threads
+          *     - Total: 1 + (i-2) + 1 = i positions
+          *   - Across m rounds, thread i makes this choice m times
+          *   - Total: i^m possibilities
+          *
+          * Each thread's choices are independent of other threads' choices (in
+          * terms of counting possibilities). So we use the multiplication principle:
+          *
+          * Total combinations =
+          *             (choices for thread 1) × (choices for thread 2) × ...
+          *               × (choices for thread n)
+          *     = 1^m × 2^m × 3^m × ... × n^m
+          *     = ∏(i=1 to n) i^m
+          *     = (n!)^m
+          *
+          * Concrete Example: n=3, m=2
+          *
+          * Let's verify with 3 threads, 2 rounds:
+          *
+          * Round 1 choices:
+          *   - Thread 1: 1 position
+          *   - Thread 2: 2 positions (before/after thread 1)
+          *   - Thread 3: 3 positions (before all, between 1&2, after all)
+          *
+          * Round 2 choices:
+          *   - Same: 1 × 2 × 3 possibilities
+          *
+          * Total across both rounds:
+          * (1 × 2 × 3) × (1 × 2 × 3) = 6 × 6 = 36
           *
           * {{{
           *       m=1    m=2      m=3        m=4           m=5
@@ -428,42 +463,19 @@ trait ModelBasedSuite {
     // Actions runner
     // ===================================
 
-    private def runActions(ioSut: IO[Sut], as: Actions, finalize: => Unit): Prop = {
-
-        /** Short-circuit property AND operator. (Should maybe be in Prop module) */
-        def propAnd(p1: => Prop, p2: => Prop) = p1.flatMap { r =>
-            if r.success then Prop.secure(p2) else Prop(_ => r)
-        }
+    private def runActions(ioSut: IO[Sut], as: Actions): Prop = {
 
         val maxLength = as.parCmds.map(_.length).foldLeft(as.seqCmds.length)(_.max(_))
+        val (_sut, p, s, lastCmd) = runSeqCmds(ioSut, as.initialState, as.seqCmds)
+        println(s"lastCmd=$lastCmd")
+        val l =
+            s"Initial state:\n  ${as.initialState}\n" +
+                s"Sequential Commands:\n${prettyCmdsRes(as.seqCmds, maxLength)}\n" +
+                // TODO: fix me
+                // s"Sequential Commands:\n${prettyCmdsRes(as.seqCmds, maxLength)}\n" +
+                s"Last executed command: $lastCmd"
 
-        try {
-            // TODO run the shutdown property here
-            val (_sut, p1, s, lastCmd) = runSeqCmds(ioSut, as.initialState, as.seqCmds)
-            val l1 =
-                s"Initial state:\n  ${as.initialState}\n" +
-                    // s"Sequential Commands:\n${prettyCmdsRes(as.seqCmds zip rs1, maxLength)}\n" +
-                    // TODO: fix me
-                    // s"Sequential Commands:\n${prettyCmdsRes(as.seqCmds, maxLength)}\n" +
-                    s"Last executed command: $lastCmd"
-
-            if as.parCmds.isEmpty
-            then p1 :| l1
-            else {
-                ???
-                // propAnd(
-                //  p1.flatMap { r =>
-                //      if !r.success then finalize; Prop(_ => r)
-                //  } :| l1, {
-                //      try {
-                //          val (p2, rs2) = runParCmds(ioSut, s, as.parCmds)
-                //          val l2 = rs2.map(prettyCmdsRes(_, maxLength)).mkString("\n\n")
-                //          p2 :| l1 :| s"Parallel Commands (starting in state = ${s})\n$l2"
-                //      } finally finalize
-                //  }
-                // )
-            }
-        } finally if as.parCmds.isEmpty then finalize
+        p :| l
     }
 
     // TODO: Added the last succeeded command (last `Int`) - do we need it though?
@@ -471,134 +483,29 @@ trait ModelBasedSuite {
         ioSut: IO[Sut],
         s0: State,
         cs: Commands
-    ): (Sut, Prop, State, Int) =
-        cs.foldLeft(ioSut.map(sut => (sut, Prop.proved, s0, 0))) { case (acc, c) =>
-            acc.flatMap { case (sut, p, s, lastCmd) =>
-                c.runPC(sut).map { pred =>
-                    (sut, p && pred(s), c.runState(s)._2, lastCmd + 1)
+    ): (Sut, Prop, State, Int) = {
+        val io = for {
+            initial <- ioSut.map(sut => (sut, Prop.proved, s0, 0))
+            result <- cs.foldLeft(IO.pure(initial)) { case (acc, c) =>
+                acc >>= { case (sut, p, s, lastCmd) =>
+                    c.runPC(sut).map { pred =>
+                        (sut, p && pred(s), c.runState(s)._2, lastCmd + 1)
+                    }
                 }
             }
-        }.unsafeRunSync() // FIXME:
+            (sut, prop, s, lastCmd) = result
+            shutdownProp <- shutdownSut(sut)
+        } yield (sut, prop && shutdownProp, s, lastCmd)
+        io.unsafeRunSync()
+    }
 
-    // private def runParCmds(
-    //    sut: Sut,
-    //    s: State,
-    //    pcmds: List[Commands]
-    // ): (Prop, List[List[(Command, Try[String])]]) = {
-    //    import concurrent.*
-    //    val tp = java.util.concurrent.Executors.newFixedThreadPool(pcmds.size)
-    //    implicit val ec: ExecutionContextExecutor = ExecutionContext.fromExecutor(tp)
-    //    val memo = collection.mutable.Map.empty[(State, List[Commands]), List[State]]
-    //
-    //    // [1,2,3] -- [f(1,[2,3]), f(2,[1,3]), f(3,[1,2])]
-    //    def scan[T, U](xs: List[T])(f: (T, List[T]) => U): List[U] = xs match {
-    //        case Nil     => Nil
-    //        case y :: ys => f(y, ys) :: scan(ys) { case (x, xs) => f(x, y :: xs) }
-    //    }
-    //
-    //    def endStates(scss: (State, List[Commands])): List[State] = {
-    //        val (s, css) = (scss._1, scss._2.filter(_.nonEmpty))
-    //        (memo.get((s, css)), css) match {
-    //            case (Some(states), _) => states
-    //            case (_, Nil)          => List(s)
-    //            case (_, cs :: Nil) =>
-    //                List(cs.init.foldLeft(s) { case (s0, c) => c.runState(s0)._2 })
-    //            case _ =>
-    //                val inits = scan(css) { case (cs, x) =>
-    //                    (cs.head.runState(s)._2, cs.tail :: x)
-    //                }
-    //                val states = inits.distinct.flatMap(endStates).distinct
-    //                memo += (s, css) -> states
-    //                states
-    //        }
-    //    }
-    //
-    //    def run(
-    //        endStates: List[State],
-    //        cs: Commands
-    //    ): Future[(Prop, List[(Command, Try[String])])] = Future {
-    //        if cs.isEmpty then (Prop.proved, Nil)
-    //        else
-    //            blocking {
-    //                val rs = cs.init.map(_.runPC(sut)._1)
-    //                val (r, pf) = cs.last.runPC(sut)
-    //                (Prop.atLeastOne(endStates.map(pf)*), cs.zip(rs :+ r))
-    //            }
-    //    }
-    //
-    //    try {
-    //        val res = Future.traverse(pcmds)(run(endStates(s -> pcmds), _)) map { l =>
-    //            val (ps, rs) = l.unzip
-    //            (Prop.atLeastOne(ps*), rs)
-    //        }
-    //        Await.result(res, concurrent.duration.Duration.Inf)
-    //    } finally {
-    //        tp.shutdown()
-    //    }
-    // }
-
-    private def prettyCmdsRes(rs: List[(Command, Try[String])], maxLength: Int) = {
+    private def prettyCmdsRes(rs: List[Command], maxLength: Int) = {
         val maxNumberWidth = "%d".format(maxLength).length
         val lineLayout = "  %%%dd. %%s".format(maxNumberWidth)
         val cs = rs.zipWithIndex.map { case (r, i) =>
-            lineLayout.format(
-              i + 1,
-              r match {
-                  case (c, Success("()")) => c.toString
-                  case (c, Success(r))    => s"$c => $r"
-                  case (c, r)             => s"$c => $r"
-              }
-            )
+            lineLayout.format(i + 1, r)
         }
         if cs.isEmpty then "  <no commands>"
         else cs.mkString("\n")
-    }
-
-    // ===================================
-    // Shrinking (not used for now)
-    // ===================================
-
-    /** Override this to provide a custom Shrinker for your internal [[State]]. By default no
-      * shrinking is done for [[State]].
-      */
-    def shrinkState: Shrink[State] = implicitly
-
-    private implicit val shrinkActions: Shrink[Actions] = Shrink[Actions] { as =>
-        val shrinkedCmds: Stream[Actions] =
-            Shrink.shrink(as.seqCmds).map(cs => as.copy(seqCmds = cs)) append
-                Shrink.shrink(as.parCmds).map(cs => as.copy(parCmds = cs))
-
-        Shrink.shrinkWithOrig[State](as.initialState)(shrinkState) flatMap { state =>
-            shrinkedCmds.map(_.copy(initialState = state))
-        } map { as => ensurePreconditions(as) }
-    }
-
-    private def ensurePreconditions(a: Actions): Actions = {
-        def filterCommandSequence(s: State, commands: Commands): Commands =
-            commands match {
-                case cmd :: cmds =>
-                    if cmd.preCondition(s) then
-                        cmd :: filterCommandSequence(cmd.runState(s)._2, cmds)
-                    else filterCommandSequence(s, cmds)
-                case Nil => Nil
-            }
-
-        val filteredSequentialCommands = filterCommandSequence(a.initialState, a.seqCmds)
-        val stateAfterSequentialCommands = filteredSequentialCommands
-            .foldLeft(a.initialState) { case (st, cmd) => cmd.runState(st)._2 }
-
-        val filteredParallelCommands = a.parCmds
-            .map(commands => {
-                filterCommandSequence(stateAfterSequentialCommands, commands)
-            })
-            .filter(_.nonEmpty)
-
-        filteredParallelCommands match {
-            case List(singleThreadedContinuation) =>
-                val seqCmds = filteredSequentialCommands ++ singleThreadedContinuation
-                Actions(a.initialState, seqCmds, Nil)
-            case _ =>
-                Actions(a.initialState, filteredSequentialCommands, filteredParallelCommands)
-        }
     }
 }

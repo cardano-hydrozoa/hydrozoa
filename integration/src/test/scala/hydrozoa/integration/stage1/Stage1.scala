@@ -6,6 +6,7 @@ import cats.effect.unsafe.implicits.global
 import cats.syntax.applicative.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorSystem
+import com.suprnation.typelevel.actors.syntax.*
 import hydrozoa.config.HeadConfig.OwnPeer
 import hydrozoa.config.{HeadConfig, NetworkInfo, RawConfig, StandardCardanoNetwork}
 import hydrozoa.integration.stage1.CurrentBlock.*
@@ -47,7 +48,7 @@ object Stage1Properties extends YetAnotherProperties("Joint ledger and Cardano l
     override def overrideParameters(
         p: org.scalacheck.Test.Parameters
     ): org.scalacheck.Test.Parameters = {
-        p.withWorkers(1)
+        p.withWorkers(1).withMinSuccessfulTests(100)
     }
 
     private val preprod = StandardCardanoNetwork.Preprod
@@ -79,6 +80,10 @@ case class Stage1(
 
             // Actor system
             system <- ActorSystem[IO]("Stage1").allocated.map(_._1)
+
+            // Note: Actor exceptions are logged by the supervision strategy but don't
+            // automatically fail tests. To treat them as test failures check that the
+            // system was not terminated in the [[shutdownSut]] action.
 
             // Cardano L1 backend mock
             utxos = genesisUtxos.values.flatten.map((k, v) => k.untagged -> v.untagged).toMap
@@ -167,17 +172,23 @@ case class Stage1(
         } yield Stage1Sut(system, jointLedger)
     }
 
+    /** Important: this action should ensure that the actor system was not terminated.
+      *
+      * Even more important: before terminating, make sure waitForIdle is called - otherwise you
+      * just immediately shutdown the system and will get a false-positive test.
+      */
     override def shutdownSut(sut: Sut): IO[Prop] = for {
-        _ <- sut.system.terminate()
+        wasTerminated <- sut.system.isTerminated
+        _ <- IO.whenA(!wasTerminated)(sut.system.waitForIdle() >> sut.system.terminate())
         // TODO shutdown Yaci? Clean up the public testnet?
-    } yield Prop.passed
+    } yield !wasTerminated
 
     // TODO: do we want to run multiple SUTs when using L1 mock?
     override def canCreateNewSut(
-        _newState: State,
-        initSuts: Iterable[State],
-        runningSuts: Iterable[IO[Sut]]
-    ): Boolean = initSuts.isEmpty && runningSuts.isEmpty // only one SUT is allowed
+        candidateState: State,
+        inactiveSuts: Iterable[State],
+        runningSuts: Iterable[State]
+    ): Boolean = inactiveSuts.isEmpty && runningSuts.isEmpty
 
     // ===================================
     // Initial state handling
@@ -336,13 +347,11 @@ case class Stage1(
             )
         }
 
-        override def run(sut: Sut): IO[Result] = {
-            val msg = StartBlock(
+        override def run(sut: Sut): IO[Result] =
+            sut.jointLedger ! StartBlock(
               blockNum = blockNumber,
               blockCreationTime = blockCreationTime
             )
-            sut.jointLedger ! msg
-        }
 
         override def preCondition(state: State): Boolean = true
     }
