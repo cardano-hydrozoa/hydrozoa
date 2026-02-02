@@ -1,31 +1,39 @@
 package hydrozoa.config.head.peers
 
 import hydrozoa.VerificationKeyBytes
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.peer.{PeerId, PeerNumber}
+import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
+import scalus.cardano.address.ShelleyAddress
 
-final case class HeadPeers private (
-    _peers: IArray[VerificationKeyBytes]
+final case class HeadPeers(
+    peerVKeys: IArray[VerificationKeyBytes]
 ) extends HeadPeers.Section {
+    require(peerVKeys.size > 0)
+
     def apply(p: PeerId): VerificationKeyBytes = {
         require(p.nPeers == nPeers)
-        _peers(p.peerNum)
+        peerVKeys(p.peerNum)
     }
 
-    override def getPeerKey(p: PeerId): VerificationKeyBytes = apply(p)
+    override def peerVKey(p: PeerId): VerificationKeyBytes = apply(p)
 
-    override def nPeers: PositiveInt = PositiveInt.unsafeApply(_peers.size)
+    override val nPeers: PositiveInt = PositiveInt.unsafeApply(peerVKeys.size)
+
+    override lazy val headMultisigScript: HeadMultisigScript = HeadMultisigScript(this)
 }
 
 object HeadPeers {
-    def apply(peers: IArray[VerificationKeyBytes]): HeadPeers = {
-        require(peers.size > 0)
-        HeadPeers(peers)
-    }
-
     trait Section {
-        def getPeerKey(p: PeerId): VerificationKeyBytes
+        def peerVKey(p: PeerId): VerificationKeyBytes
 
         def nPeers: PositiveInt
+
+        def headMultisigScript: HeadMultisigScript
     }
+
+    extension (config: HeadPeers.Section & CardanoNetwork.Section)
+        def headMultisigAddress: ShelleyAddress =
+            config.headMultisigScript.mkAddress(config.network)
 }

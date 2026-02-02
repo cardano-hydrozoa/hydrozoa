@@ -3,6 +3,7 @@ package hydrozoa.multisig.ledger.dapp.script.multisig
 import cats.*
 import cats.data.*
 import hydrozoa.VerificationKeyBytes
+import hydrozoa.config.head.peers.HeadPeers
 import scala.collection.SortedSet
 import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.ShelleyDelegationPart.Null
@@ -54,6 +55,21 @@ case class HeadMultisigScript(private val script0: Script.Native) {
 }
 
 object HeadMultisigScript:
+    def apply(headPeers: HeadPeers): HeadMultisigScript =
+        HeadMultisigScript(
+          Script.Native(
+            AllOf(
+              headPeers.peerVKeys
+                  .map(key => key.verKeyHash)
+                  .toList
+                  .toIndexedSeq
+                  .sorted(using Ordering[AddrKeyHash])
+                  .map(Signature(_))
+            )
+          )
+        )
+
+    // TODO: remove. Soon, we won't be using this.
     def apply(vKeys: NonEmptyList[VerificationKeyBytes]): HeadMultisigScript =
         HeadMultisigScript(
           Script.Native(
