@@ -14,12 +14,13 @@ import sourcecode.*
 trait Tx[Self <: Tx[Self]] extends HasResolvedUtxos { self: Self =>
     def tx: Transaction
 
+    // TODO: Replace this with a more straightforward method to replace unsigned tx with signed tx
     /** Lens for accessing the transaction field. Implementations should use:
       * `override val txLens: Lens[ConcreteType, Transaction] = Focus[ConcreteType](_.tx)`
       * Unfortunately this can't be generalized since Focus requires a concrete type.
       */
     def txLens: Lens[Self, Transaction]
-
+    
     /** This excludes the lens from equality. */
     override def equals(obj: Any): Boolean = obj match {
         case that: Tx[?] =>
