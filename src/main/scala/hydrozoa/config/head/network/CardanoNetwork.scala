@@ -6,13 +6,13 @@ import scalus.cardano.ledger.{CardanoInfo, Coin, ProtocolParams, SlotConfig}
 
 export hydrozoa.config.head.multisig.fallback.FallbackContingency.mkFallbackContingencyWithDefaults
 
-enum CardanoNetworkConfig(_cardanoInfo: CardanoInfo) extends CardanoNetworkConfig.Section {
-    case Mainnet extends CardanoNetworkConfig(CardanoInfo.mainnet)
-    case Preprod extends CardanoNetworkConfig(CardanoInfo.preprod)
-    case Preview extends CardanoNetworkConfig(CardanoInfo.preview)
-    case Custom(override val cardanoInfo: CardanoInfo) extends CardanoNetworkConfig(cardanoInfo)
+enum CardanoNetwork(_cardanoInfo: CardanoInfo) extends CardanoNetwork.Section {
+    case Mainnet extends CardanoNetwork(CardanoInfo.mainnet)
+    case Preprod extends CardanoNetwork(CardanoInfo.preprod)
+    case Preview extends CardanoNetwork(CardanoInfo.preview)
+    case Custom(override val cardanoInfo: CardanoInfo) extends CardanoNetwork(cardanoInfo)
 
-    override transparent inline def networkConfig: CardanoNetworkConfig = this
+    override transparent inline def cardanoNetwork: CardanoNetwork = this
 
     override def cardanoInfo: CardanoInfo = _cardanoInfo
     override def network: Network = _cardanoInfo.network
@@ -20,9 +20,9 @@ enum CardanoNetworkConfig(_cardanoInfo: CardanoInfo) extends CardanoNetworkConfi
     override def params: ProtocolParams = _cardanoInfo.protocolParams
 }
 
-object CardanoNetworkConfig {
+object CardanoNetwork {
     trait Section {
-        def networkConfig: CardanoNetworkConfig
+        def cardanoNetwork: CardanoNetwork
 
         def cardanoInfo: CardanoInfo
         def network: Network

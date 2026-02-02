@@ -1,6 +1,6 @@
 package hydrozoa.config.head.multisig.fallback
 
-import hydrozoa.config.head.network.CardanoNetworkConfig
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.number.PositiveInt
 import scalus.cardano.ledger.{Coin, Value}
@@ -48,7 +48,7 @@ object FallbackContingency {
 
         def multisigRegimeUtxoValue: Value = Value(config.totalFallbackContingency)
 
-    extension (config: CardanoNetworkConfig.Section) {
+    extension (config: CardanoNetwork.Section) {
         def mkFallbackContingencyWithDefaults(
             tallyTxFee: Coin,
             voteTxFee: Coin
