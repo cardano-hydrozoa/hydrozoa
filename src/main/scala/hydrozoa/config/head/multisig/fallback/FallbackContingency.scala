@@ -1,8 +1,9 @@
 package hydrozoa.config.head.multisig.fallback
 
+import hydrozoa.config.head.network.CardanoNetworkConfig
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.number.PositiveInt
-import scalus.cardano.ledger.{Coin, ProtocolParams, Value}
+import scalus.cardano.ledger.{Coin, Value}
 
 final case class FallbackContingency(
     override val collectiveContingency: FallbackContingency.Collective,
@@ -12,14 +13,25 @@ final case class FallbackContingency(
 }
 
 object FallbackContingency {
-    def withDefaults(params: ProtocolParams)(
+    final case class Collective(
+        defaultVoteDeposit: Coin,
+        fallbackTxFee: Coin,
+    ) {
+        lazy val totalCollectiveContingency: Coin = defaultVoteDeposit + fallbackTxFee
+    }
+
+    final case class Individual(
+        collateralDeposit: Coin,
         tallyTxFee: Coin,
-        voteTxFee: Coin
-    ): FallbackContingency =
-        FallbackContingency(
-          Collective.withDefaults(params),
-          Individual.withDefaults(params)(tallyTxFee = tallyTxFee, voteTxFee = voteTxFee)
-        )
+        voteDeposit: Coin,
+        voteTxFee: Coin,
+    ) {
+        lazy val collateralUtxo: Coin = collateralDeposit + tallyTxFee
+
+        lazy val voteUtxo: Coin = voteDeposit + voteTxFee
+
+        lazy val totalIndividualContingency: Coin = collateralUtxo + voteUtxo
+    }
 
     trait Section {
         def fallbackContingency: FallbackContingency
@@ -36,85 +48,51 @@ object FallbackContingency {
 
         def multisigRegimeUtxoValue: Value = Value(config.totalFallbackContingency)
 
-    final case class Collective(
-        defaultVoteDeposit: Coin,
-        fallbackTxFee: Coin,
-    ) {
-        lazy val totalCollectiveContingency: Coin = defaultVoteDeposit + fallbackTxFee
-    }
-
-    object Collective {
-        def withDefaults(params: ProtocolParams): Collective =
-            val default = Default(params)
-            Collective(
-              defaultVoteDeposit = default.voteUtxoMinLovelace,
-              fallbackTxFee = default.fallbackTxFee
-            )
-    }
-
-    final case class Individual(
-        collateralDeposit: Coin,
-        tallyTxFee: Coin,
-        voteDeposit: Coin,
-        voteTxFee: Coin,
-    ) {
-        lazy val collateralUtxo: Coin = collateralDeposit + tallyTxFee
-
-        lazy val voteUtxo: Coin = voteDeposit + voteTxFee
-
-        lazy val totalIndividualContingency: Coin = collateralUtxo + voteUtxo
-    }
-
-    object Individual {
-        def withDefaults(params: ProtocolParams)(tallyTxFee: Coin, voteTxFee: Coin): Individual =
-            val default = Default(params)
-
-            Individual(
-              collateralDeposit = default.collateralDeposit(tallyTxFee = tallyTxFee),
-              tallyTxFee = tallyTxFee,
-              voteDeposit = default.voteDeposit(voteTxFee = voteTxFee),
-              voteTxFee = voteTxFee
-            )
-    }
-
-    final case class Default(params: ProtocolParams) {
-        import Default.*
-        import Assumptions.*
-
-        def fallbackTxFee: Coin = maxNonPlutusTxFee(params)
-
-        def collateralDeposit(tallyTxFee: Coin): Coin = Coin(
-          collateralUtxoMinLovelace.value.max(tallyTxFee.value * params.collateralPercentage)
+    extension (config: CardanoNetworkConfig.Section) {
+        def mkFallbackContingencyWithDefaults(
+            tallyTxFee: Coin,
+            voteTxFee: Coin
+        ): FallbackContingency = FallbackContingency(
+          mkCollectiveContingencyWithDefaults,
+          mkIndividualContingencyWithDefaults(tallyTxFee = tallyTxFee, voteTxFee = voteTxFee)
         )
 
-        def voteDeposit(voteTxFee: Coin): Coin =
-            voteUtxoMinLovelace + Coin(voteTxFee.value * params.collateralPercentage)
+        def mkCollectiveContingencyWithDefaults: Collective = Collective(
+          defaultVoteDeposit = voteUtxoMinLovelace,
+          fallbackTxFee = fallbackTxFee
+        )
 
-        def collateralUtxoMinLovelace: Coin =
-            babbageUtxoMinLovelace(params, adaOnlyBaseAddressUtxoBytes)
+        def mkIndividualContingencyWithDefaults(
+            tallyTxFee: Coin,
+            voteTxFee: Coin
+        ): Individual = Individual(
+          collateralDeposit = collateralDeposit(tallyTxFee = tallyTxFee),
+          tallyTxFee = tallyTxFee,
+          voteDeposit = voteDeposit(voteTxFee = voteTxFee),
+          voteTxFee = voteTxFee
+        )
 
-        def voteUtxoMinLovelace: Coin =
-            babbageUtxoMinLovelace(params, maxVoteUtxoBytes)
+        private def fallbackTxFee: Coin = config.maxNonPlutusTxFee
+
+        private def collateralDeposit(tallyTxFee: Coin): Coin = Coin(
+          collateralUtxoMinLovelace.value.max(tallyTxFee.value * config.params.collateralPercentage)
+        )
+
+        private def voteDeposit(voteTxFee: Coin): Coin =
+            voteUtxoMinLovelace + Coin(voteTxFee.value * config.params.collateralPercentage)
+
+        private def collateralUtxoMinLovelace: Coin =
+            config.babbageUtxoMinLovelace(Assumptions.adaOnlyBaseAddressUtxoBytes)
+
+        private def voteUtxoMinLovelace: Coin =
+            config.babbageUtxoMinLovelace(Assumptions.maxVoteUtxoBytes)
     }
 
-    object Default {
-        object Assumptions {
-            // Serialized size of ADA-only utxo at the base address (with staking and payment credentials)
-            val adaOnlyBaseAddressUtxoBytes: PositiveInt = PositiveInt.unsafeApply(67)
+    object Assumptions {
+        // Serialized size of ADA-only utxo at the base address (with staking and payment credentials)
+        val adaOnlyBaseAddressUtxoBytes: PositiveInt = PositiveInt.unsafeApply(67)
 
-            // Max serialized size of a vote utxo (with/without vote)
-            val maxVoteUtxoBytes: PositiveInt = PositiveInt.unsafeApply(150)
-        }
-
-        def babbageUtxoMinLovelace(
-            params: ProtocolParams,
-            serializedSize: PositiveInt
-        ): Coin = Coin(
-          (160 + serializedSize.convert) * params.utxoCostPerByte
-        )
-
-        def maxNonPlutusTxFee(params: ProtocolParams): Coin = Coin(
-          params.txFeeFixed + params.maxTxSize * params.txFeePerByte
-        )
+        // Max serialized size of a vote utxo (with/without vote)
+        val maxVoteUtxoBytes: PositiveInt = PositiveInt.unsafeApply(150)
     }
 }
