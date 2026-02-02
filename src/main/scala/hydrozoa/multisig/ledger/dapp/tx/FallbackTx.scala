@@ -105,7 +105,8 @@ object FallbackTx {
           disputeId = voteTokenName.bytes,
           peers = SList.from(hns.requiredSigners.map(_.hash)),
           peersN = hns.numSigners,
-          deadlineVoting = config.votingDuration.finiteDuration.toMillis,
+          deadlineVoting = cardanoInfo.slotConfig.slotToTime(validityStart.slot) +
+              config.votingDuration.finiteDuration.toMillis,
           versionMajor = multisigDatum.versionMajor.toInt,
           params = multisigDatum.paramsHash,
           // TODO: pull in N first elements of G2 CRS
