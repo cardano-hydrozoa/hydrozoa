@@ -4,7 +4,7 @@ import hydrozoa.lib.cardano.value.coin.Coin
 import spire.compat.ordering
 import spire.math.{Rational, SafeLong, UByte}
 
-object Assumptions:
+object AssumptionsOld:
 
     // ===================================
     // Params / constants
@@ -60,4 +60,4 @@ object Assumptions:
             *~ SafeLong(numberOfPeers.toInt)
             +~ worstCaseFixedFeeFallbackTx).unsafeToCoin
 
-end Assumptions
+end AssumptionsOld

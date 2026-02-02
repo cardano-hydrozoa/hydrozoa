@@ -1,6 +1,6 @@
 package hydrozoa.config
 
-import hydrozoa.config.Assumptions.*
+import hydrozoa.config.AssumptionsOld.*
 import hydrozoa.lib.cardano.value.coin.Coin
 import spire.compat.ordering
 import spire.math.UByte
