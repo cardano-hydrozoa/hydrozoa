@@ -68,7 +68,7 @@ object Generators {
         val genHeadTokenName: Gen[AssetName] =
             for {
                 ti <- arbitrary[TransactionInput]
-            } yield CIP67.TokenNames(ti).headTokenName
+            } yield CIP67.HeadTokenNames(ti).headTokenName
 
         val genTreasuryDatum: Gen[MultisigTreasuryUtxo.Datum] = {
             for {
@@ -129,7 +129,7 @@ object Generators {
             hmrwTn <- hmrwTokenName match {
                 case None =>
                     arbitrary[TransactionInput].flatMap(ti =>
-                        CIP67.TokenNames(ti).multisigRegimeTokenName
+                        CIP67.HeadTokenNames(ti).multisigRegimeTokenName
                     )
                 case Some(n) => Gen.const(n)
             }

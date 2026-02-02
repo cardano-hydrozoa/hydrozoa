@@ -28,7 +28,7 @@ import test.TestPeer.mkWallet
 val genMultisigRegimeTokenName: Gen[AssetName] =
     for {
         ti <- arbitrary[TransactionInput]
-    } yield CIP67.TokenNames(ti).multisigRegimeTokenName
+    } yield CIP67.HeadTokenNames(ti).multisigRegimeTokenName
 
 def genMultisigRegimeUtxo(
     network: Network = testNetwork,

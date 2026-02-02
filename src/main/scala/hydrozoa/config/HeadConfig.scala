@@ -8,7 +8,7 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, Quant
 import hydrozoa.multisig.consensus.peer.{PeerId, PeerWallet}
 import hydrozoa.multisig.ledger.block.BlockEffects
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
+import hydrozoa.multisig.ledger.dapp.token.CIP67.HeadTokenNames
 import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, InitializationTx}
 import hydrozoa.multisig.ledger.dapp.txseq.InitializationTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
@@ -270,7 +270,7 @@ object HeadConfig {
 
         def initialTreasury: MultisigTreasuryUtxo = initializationTx.treasuryProduced
 
-        def tokenNames: TokenNames = initializationTx.tokenNames
+        def tokenNames: HeadTokenNames = initializationTx.tokenNames
 
         def multisigRegimeUtxo: MultisigRegimeUtxo = initializationTx.multisigRegimeUtxo
 
@@ -286,7 +286,7 @@ object HeadConfig {
     final case class HeadInstanceL1 private[config] (
         network: Network,
         headMultisigScript: HeadMultisigScript,
-        tokenNames: TokenNames,
+        tokenNames: HeadTokenNames,
         multisigRegimeUtxo: MultisigRegimeUtxo
     )
 

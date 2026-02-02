@@ -3,7 +3,7 @@ package hydrozoa.config.head.initialization
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.multisig.consensus.peer.PeerNumber
-import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
+import hydrozoa.multisig.ledger.dapp.token.CIP67.HeadTokenNames
 import scalus.cardano.ledger.{Coin, TransactionOutput, Utxo, Utxos, Value}
 
 /** Configuration settings for the head's initialization.
@@ -47,7 +47,7 @@ final case class InitializationConfig(
       */
     override lazy val unbalancedTreasuryValue: Value = Value(totalEquityContributed) + totalL2Value
 
-    override lazy val tokenNames: TokenNames = TokenNames(l1SeedUtxo.input)
+    override lazy val headTokenNames: HeadTokenNames = HeadTokenNames(l1SeedUtxo.input)
 }
 
 object InitializationConfig {
@@ -64,7 +64,7 @@ object InitializationConfig {
         def totalFundingValue: Value
         def totalL2Value: Value
         def unbalancedTreasuryValue: Value
-        def tokenNames: TokenNames
+        def headTokenNames: HeadTokenNames
     }
 
     extension (

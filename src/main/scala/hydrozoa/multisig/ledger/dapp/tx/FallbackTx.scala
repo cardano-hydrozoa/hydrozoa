@@ -5,7 +5,7 @@ import hydrozoa.config.head.multisig.timing.TxTiming.*
 import hydrozoa.ensureMinAda
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, toQuantizedInstant}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
+import hydrozoa.multisig.ledger.dapp.token.CIP67.HeadTokenNames
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.Fallback
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
@@ -79,7 +79,7 @@ object FallbackTx {
     case class Config(
         headMultisigScript: HeadMultisigScript,
         multisigRegimeUtxo: MultisigRegimeUtxo,
-        tokenNames: TokenNames,
+        tokenNames: HeadTokenNames,
         cardanoInfo: CardanoInfo,
         tallyFeeAllowance: Coin,
         votingDuration: QuantizedFiniteDuration

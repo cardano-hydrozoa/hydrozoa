@@ -5,7 +5,7 @@ import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
+import hydrozoa.multisig.ledger.dapp.token.CIP67.HeadTokenNames
 import hydrozoa.multisig.ledger.dapp.tx
 import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo}
@@ -32,7 +32,7 @@ object SettlementTxSeq {
     case class Config(
         headMultisigScript: HeadMultisigScript,
         multisigRegimeUtxo: MultisigRegimeUtxo,
-        tokenNames: TokenNames,
+        tokenNames: HeadTokenNames,
         votingDuration: QuantizedFiniteDuration,
         txTiming: TxTiming,
         tallyFeeAllowance: Coin,

@@ -174,7 +174,7 @@ object InitializationTxSeq {
     object Builder {
 
         def build(args: Args, config: Config): Either[Error, InitializationTxSeq] = {
-            val tokenNames = CIP67.TokenNames(args.spentUtxos.seedUtxo.input)
+            val tokenNames = CIP67.HeadTokenNames(args.spentUtxos.seedUtxo.input)
             val disputeResolutionAddress = ShelleyAddress(
               network = config.cardanoInfo.network,
               payment = ShelleyPaymentPart.Script(DisputeResolutionScript.compiledScriptHash),

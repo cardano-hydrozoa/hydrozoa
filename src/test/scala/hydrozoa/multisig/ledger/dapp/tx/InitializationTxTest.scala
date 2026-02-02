@@ -4,7 +4,7 @@ import cats.data.NonEmptyList
 import hydrozoa.maxNonPlutusTxFee
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
-import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
+import hydrozoa.multisig.ledger.dapp.token.CIP67.HeadTokenNames
 import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.SpentUtxos
 import hydrozoa.multisig.ledger.dapp.utxo.MultisigTreasuryUtxo
 import org.scalacheck.{Arbitrary, Gen}
@@ -34,7 +34,7 @@ val minInitTreasuryAda: Coin = {
             (
               genPolicyId.sample.get,
               SortedMap(
-                (CIP67.TokenNames(genAdaOnlyPubKeyUtxo(Alice).sample.get._1).headTokenName, 1L)
+                (CIP67.HeadTokenNames(genAdaOnlyPubKeyUtxo(Alice).sample.get._1).headTokenName, 1L)
               )
             )
           )
@@ -71,7 +71,7 @@ val genInitTxRecipe: Gen[InitializationTx.Recipe] =
 
         spentUtxos = NonEmptyList(seedUtxo, otherSpentUtxos)
 
-        tokenNames = TokenNames(seedUtxo.input)
+        tokenNames = HeadTokenNames(seedUtxo.input)
 
         // Initial deposit must be at least enough for the minAda of the treasury, and no more than the
         // sum of the seed utxos, while leaving enough left for the estimated fee and the minAda of the change

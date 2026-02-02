@@ -18,7 +18,7 @@ import hydrozoa.multisig.ledger.JointLedger.Requests.*
 import hydrozoa.multisig.ledger.VirtualLedgerM.runVirtualLedgerM
 import hydrozoa.multisig.ledger.block.{Block, BlockBody, BlockBrief, BlockEffects, BlockHeader, BlockNumber}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
+import hydrozoa.multisig.ledger.dapp.token.CIP67.HeadTokenNames
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.event.LedgerEvent.*
@@ -534,12 +534,15 @@ object JointLedger {
 
     type Handle = ActorRef[IO, Requests.Request]
 
+    // TODO: review
     case class Config(
         initialBlock: Block.MultiSigned.Initial,
         peerId: PeerId,
         wallet: PeerWallet,
+        // TODO: can be obtained from initialBlock?
         initialBlockTime: QuantizedInstant,
         cardanoInfo: CardanoInfo,
+        // TODO: can be obtained from initialBlock?
         initialBlockKzg: KzgCommitment,
         txTiming: TxTiming,
         headMultisigScript: HeadMultisigScript,
@@ -548,7 +551,8 @@ object JointLedger {
         multisigRegimeUtxo: MultisigRegimeUtxo,
         votingDuration: QuantizedFiniteDuration,
         initialTreasury: MultisigTreasuryUtxo,
-        tokenNames: TokenNames,
+        tokenNames: HeadTokenNames,
+        // TODO: can be obtained from effects in the initialBlock?
         initialFallbackValidityStart: QuantizedInstant
     )
 

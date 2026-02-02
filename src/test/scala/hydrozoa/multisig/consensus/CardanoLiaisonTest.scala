@@ -19,7 +19,7 @@ import hydrozoa.multisig.consensus.CardanoLiaisonTest.Rollback.SettlementTiming
 import hydrozoa.multisig.consensus.CardanoLiaisonTest.Rollback.SettlementTiming.*
 import hydrozoa.multisig.ledger.block.{BlockEffects, BlockNumber}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
+import hydrozoa.multisig.ledger.dapp.token.CIP67.HeadTokenNames
 import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, FinalizationTx, RolloutTx, SettlementTx, Tx, genFinalizationTxSeqBuilder, genNextSettlementTxSeqBuilder}
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, InitializationTxSeq, InitializationTxSeqTest, SettlementTxSeq}
 import hydrozoa.rulebased.ledger.dapp.tx.genEquityShares
@@ -108,7 +108,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
 
             // multisig regime utxo
             hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
-            tokenNames = TokenNames(initialArgs.spentUtxos.seedUtxo.input)
+            tokenNames = HeadTokenNames(initialArgs.spentUtxos.seedUtxo.input)
             multisigWitnessUtxo <- genFakeMultisigWitnessUtxo(
               hns,
               testTxBuilderCardanoInfo.network,

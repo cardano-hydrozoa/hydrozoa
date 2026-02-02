@@ -10,7 +10,7 @@ import hydrozoa.multisig.ledger
 import hydrozoa.multisig.ledger.DappLedgerM.Error.{AbsorptionPeriodExpired, ParseError, SettlementTxSeqBuilderError}
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
+import hydrozoa.multisig.ledger.dapp.token.CIP67.HeadTokenNames
 import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.txseq
 import hydrozoa.multisig.ledger.dapp.txseq.{DepositRefundTxSeq, FinalizationTxSeq, SettlementTxSeq}
@@ -64,7 +64,7 @@ object DappLedgerM {
         multisigRegimeUtxo: MultisigRegimeUtxo,
         headMultisigScript: HeadMultisigScript,
         cardanoInfo: CardanoInfo,
-        tokenNames: TokenNames,
+        tokenNames: HeadTokenNames,
         votingDuration: QuantizedFiniteDuration,
         tallyFeeAllowance: Coin,
     )

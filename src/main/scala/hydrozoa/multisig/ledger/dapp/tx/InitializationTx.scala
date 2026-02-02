@@ -6,7 +6,7 @@ import hydrozoa.config.head.multisig.timing.TxTiming.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
-import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
+import hydrozoa.multisig.ledger.dapp.token.CIP67.HeadTokenNames
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.Initialization
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
@@ -30,7 +30,7 @@ final case class InitializationTx(
     override val validityEnd: QuantizedInstant,
     treasuryProduced: MultisigTreasuryUtxo,
     multisigRegimeUtxo: MultisigRegimeUtxo,
-    tokenNames: TokenNames,
+    tokenNames: HeadTokenNames,
     override val resolvedUtxos: ResolvedUtxos,
     override val tx: Transaction,
     override val txLens: Lens[InitializationTx, Transaction] = Focus[InitializationTx](_.tx)
@@ -44,7 +44,7 @@ object InitializationTx {
         cardanoInfo: CardanoInfo,
         txTiming: TxTiming,
         startTime: QuantizedInstant,
-        tokenNames: TokenNames
+        tokenNames: HeadTokenNames
     ) {
         def evaluator: PlutusScriptEvaluator =
             PlutusScriptEvaluator(cardanoInfo, EvaluateAndComputeCost)
@@ -61,7 +61,8 @@ object InitializationTx {
             config.headMultisigScript.mkAddress(config.cardanoInfo.network)
         val changeAddress = ShelleyAddress(config.cardanoInfo.network, changePP, Null)
 
-        val mrTokenName = CIP67.TokenNames(recipe.spentUtxos.seedUtxo.input).multisigRegimeTokenName
+        val mrTokenName =
+            CIP67.HeadTokenNames(recipe.spentUtxos.seedUtxo.input).multisigRegimeTokenName
         val mrToken: MultiAsset = MultiAsset(
           SortedMap(
             config.headMultisigScript.policyId -> SortedMap(mrTokenName -> 1L)
@@ -231,7 +232,7 @@ object InitializationTx {
             // Data Extraction
             // ===================================
 
-            derivedTokenNames = CIP67.TokenNames(imd.seedInput)
+            derivedTokenNames = CIP67.HeadTokenNames(imd.seedInput)
 
             expectedHNS = HeadMultisigScript(peerKeys)
 

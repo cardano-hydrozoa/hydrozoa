@@ -5,7 +5,7 @@ import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, quantize}
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
+import hydrozoa.multisig.ledger.dapp.token.CIP67.HeadTokenNames
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
@@ -26,7 +26,7 @@ import scalus.ledger.api.v1.Value.valueOrd
 import scalus.prelude.Ord.<=
 import scalus.prelude.{Option as SOption, Ord}
 import test.*
-import test.Generators.Hydrozoa.{genFakeMultisigWitnessUtxo, *}
+import test.Generators.Hydrozoa.*
 import test.Generators.Other
 import test.TestPeer.{Alice, mkWallet}
 
@@ -141,7 +141,7 @@ def genSettlementTxSeqBuilder(
         peers <- genTestPeers()
         hms = HeadMultisigScript(peers.map(mkWallet(_).exportVerificationKeyBytes))
         seedUtxo <- arbitrary[TransactionInput]
-        tokenNames = TokenNames(seedUtxo)
+        tokenNames = HeadTokenNames(seedUtxo)
         mw <- genFakeMultisigWitnessUtxo(
           hms,
           network,

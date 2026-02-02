@@ -178,9 +178,9 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
             val multisigTreasuryUtxo = iTx.treasuryProduced
             val multisigRegimeUtxo = iTx.multisigRegimeUtxo
             val expectedHeadTokenName =
-                CIP67.TokenNames(spentUtxos.seedUtxo.input).headTokenName
+                CIP67.HeadTokenNames(spentUtxos.seedUtxo.input).headTokenName
             val expectedMulitsigRegimeTokenName =
-                CIP67.TokenNames(spentUtxos.seedUtxo.input).multisigRegimeTokenName
+                CIP67.HeadTokenNames(spentUtxos.seedUtxo.input).multisigRegimeTokenName
             val expectedHeadNativeScript =
                 HeadMultisigScript(testPeers.map(_.wallet.exportVerificationKeyBytes))
             val iTxOutputs: Seq[TransactionOutput] = iTx.tx.body.value.outputs.map(_.value)
@@ -369,7 +369,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                     value = multisigRegimeUtxo.output.value,
                     script = expectedHeadNativeScript
                   ),
-                  tokenNames = CIP67.TokenNames(spentUtxos.seedUtxo.input),
+                  tokenNames = CIP67.HeadTokenNames(spentUtxos.seedUtxo.input),
 
                   // NOTE: resolved utxos are also self-referential
                   resolvedUtxos = iTx.resolvedUtxos,

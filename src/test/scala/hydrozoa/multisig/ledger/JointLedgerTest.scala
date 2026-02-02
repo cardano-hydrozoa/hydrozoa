@@ -22,7 +22,7 @@ import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Requests.{completeBlockRe
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Scenarios.{deposit, unsafeGetDone, unsafeGetProducing}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
+import hydrozoa.multisig.ledger.dapp.token.CIP67.HeadTokenNames
 import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.SpentUtxos
 import hydrozoa.multisig.ledger.dapp.tx.minInitTreasuryAda
 import hydrozoa.multisig.ledger.dapp.txseq.{DepositRefundTxSeq, InitializationTxSeq}
@@ -82,7 +82,7 @@ object JointLedgerTestHelpers {
         initTx: InitializationTxSeq, // Move to HeadConfig
         jointLedger: ActorRef[IO, JointLedger.Requests.Request],
         txTiming: TxTiming, // Move to HeadConfig
-        tokenNames: TokenNames,
+        tokenNames: HeadTokenNames,
         multisigRegimeUtxo: MultisigRegimeUtxo
     )
 

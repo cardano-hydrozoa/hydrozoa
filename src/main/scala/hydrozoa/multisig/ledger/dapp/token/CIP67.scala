@@ -14,7 +14,7 @@ object CIP67 {
             4679L // "HMRW" (hydrozoa multisig regime witness) on the phone pad
     }
 
-    case class TokenNames(seedUtxo: TransactionInput) {
+    case class HeadTokenNames(seedUtxo: TransactionInput) {
         private val tokenSuffix: Array[Byte] = {
             // Serialized + hashed utxo ID of seed utxo
             val utxoBytes = ByteString.fromArray(
