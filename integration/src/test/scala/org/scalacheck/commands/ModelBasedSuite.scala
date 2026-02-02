@@ -161,7 +161,7 @@ trait ModelBasedSuite {
             stateBefore: State,
             stateAfter: State,
             err: Throwable
-        ): Prop = Prop.falsified
+        ): Prop = Prop.exception(err)
 
         /** Wraps the run and postCondition methods in order not to leak the dependent Result type.
           * @param sut
@@ -478,6 +478,11 @@ trait ModelBasedSuite {
         p :| l
     }
 
+    /** Short-circuit property AND operator. (Should maybe be in Prop module) */
+    private def propAnd(p1: => Prop, p2: => Prop) = p1.flatMap { r =>
+        if r.success then Prop.secure(p2) else Prop(_ => r)
+    }
+
     // TODO: Added the last succeeded command (last `Int`) - do we need it though?
     private def runSeqCmds(
         ioSut: IO[Sut],
@@ -489,13 +494,13 @@ trait ModelBasedSuite {
             result <- cs.foldLeft(IO.pure(initial)) { case (acc, c) =>
                 acc >>= { case (sut, p, s, lastCmd) =>
                     c.runPC(sut).map { pred =>
-                        (sut, p && pred(s), c.runState(s)._2, lastCmd + 1)
+                        (sut, propAnd(p, pred(s)), c.runState(s)._2, lastCmd + 1)
                     }
                 }
             }
             (sut, prop, s, lastCmd) = result
             shutdownProp <- shutdownSut(sut)
-        } yield (sut, prop && shutdownProp, s, lastCmd)
+        } yield (sut, propAnd(prop, shutdownProp), s, lastCmd)
         io.unsafeRunSync()
     }
 

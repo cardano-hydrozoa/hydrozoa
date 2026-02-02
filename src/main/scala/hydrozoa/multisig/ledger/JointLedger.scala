@@ -563,6 +563,7 @@ object JointLedger {
 
     final case class CompleteBlockError() extends Throwable
 
+    // TODO: Can we unify this with other actors?
     object Requests {
         type Request =
             // RegisterDeposit is exactly the DappLedger type, we're simply forwarding it through.

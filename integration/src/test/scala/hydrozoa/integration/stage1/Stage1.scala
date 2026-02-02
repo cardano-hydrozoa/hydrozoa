@@ -9,6 +9,7 @@ import com.suprnation.actor.ActorSystem
 import com.suprnation.typelevel.actors.syntax.*
 import hydrozoa.config.HeadConfig.OwnPeer
 import hydrozoa.config.{HeadConfig, NetworkInfo, RawConfig, StandardCardanoNetwork}
+import hydrozoa.integration.stage1.AgentActor.CompleteBlock
 import hydrozoa.integration.stage1.CurrentBlock.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, quantize}
@@ -129,6 +130,10 @@ case class Stage1(
 
             consensusActor <- system.actorOf(ConsensusActor(consensusConfig, consensusConnections))
 
+            // Agent actor
+            jointLedgerD <- IO.deferred[JointLedger.Handle]
+            agent <- system.actorOf(AgentActor(jointLedgerD, consensusActor))
+
             // Joint ledger
             initialBlock1 = Block.MultiSigned.Initial(
               blockBrief = BlockBrief.Initial(
@@ -158,7 +163,7 @@ case class Stage1(
             )
 
             jointLedgerConnections = JointLedger.Connections(
-              consensusActor = consensusActor,
+              consensusActor = agent,
               peerLiaisons = List()
             )
 
@@ -169,7 +174,9 @@ case class Stage1(
               )
             )
 
-        } yield Stage1Sut(system, jointLedger)
+            _ <- jointLedgerD.complete(jointLedger)
+
+        } yield Stage1Sut(system, agent)
     }
 
     /** Important: this action should ensure that the actor system was not terminated.
@@ -214,7 +221,7 @@ case class Stage1(
             ownPeerIndex = 0
             equityShares <- genEquityShares(peers, cardanoInfo.network).label("Equity shares")
 
-            _ = println(s"equityShares: $equityShares")
+            // _ = println(s"equityShares: $equityShares")
 
             ownPeer = (
               OwnPeer(PeerId(ownPeerIndex, peers.size), ownTestPeer.wallet),
@@ -355,7 +362,7 @@ case class Stage1(
         }
 
         override def run(sut: Sut): IO[Result] =
-            sut.jointLedger ! StartBlock(
+            sut.agent ! StartBlock(
               blockNum = blockNumber,
               blockCreationTime = blockCreationTime
             )
@@ -372,7 +379,7 @@ case class Stage1(
 
         override def runState(state: Stage1State): (Result, Stage1State) = () -> state
 
-        override def run(sut: Sut): IO[Result] = sut.jointLedger ! event
+        override def run(sut: Sut): IO[Result] = sut.agent ! event
 
         override def preCondition(state: State): Boolean = true
 
@@ -380,6 +387,7 @@ case class Stage1(
 
     final case class CompleteBlockCommand(
         override val id: Int,
+        blockNumber: BlockNumber,
         isFinal: Boolean
     ) extends Command {
 
@@ -393,13 +401,17 @@ case class Stage1(
             }
         }
 
-        override def run(sut: Sut): IO[Result] = {
-            val msg =
-                if isFinal
-                then CompleteBlockFinal(None)
-                else CompleteBlockRegular(None, Set.empty, false)
-            sut.jointLedger ! msg
-        }
+        override def run(sut: Sut): IO[Result] = for {
+            block <- IO.pure(
+              if isFinal
+              then CompleteBlockFinal(None)
+              else CompleteBlockRegular(None, Set.empty, false)
+            )
+            _ <- sut.system.terminate()
+            d <- (sut.agent ?: CompleteBlock(block, blockNumber)).timeout(5.seconds)
+            _ <- IO.println(s"--------->>> ${d}")
+            // TODO: save effects to the suite, return Result which is common for the SUT and the model
+        } yield ()
 
         override def preCondition(state: State): Boolean = true
     }
@@ -416,7 +428,7 @@ case class Stage1(
             cmd <- state.currentBlock match {
                 case InProgress(blockNumber) =>
                     Gen.frequency(
-                      1 -> genCompleteBlock,
+                      1 -> genCompleteBlock(blockNumber),
                       10 -> genLedgerEvent(state.activeUtxos)
                     )
                 case Done(blockNumber) => genStartBlock(blockNumber, state.currentTime)
@@ -438,12 +450,12 @@ case class Stage1(
       currentTime + delay
     )
 
-    private def genCompleteBlock: Gen[CompleteBlockCommand] = for {
+    private def genCompleteBlock(blockNumber: BlockNumber): Gen[CompleteBlockCommand] = for {
         isFinal <- Gen.frequency(
           1 -> true,
           20 -> false
         )
-    } yield CompleteBlockCommand(nextCmdCnt, isFinal)
+    } yield CompleteBlockCommand(nextCmdCnt, blockNumber, isFinal)
 
     private def genLedgerEvent(
         _activeUtxos: Map[TransactionInput, TransactionOutput]
