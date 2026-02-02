@@ -8,50 +8,46 @@ import scalus.cardano.ledger.{Coin, Hash32, TransactionOutput, Utxo, Utxos, Valu
 
 /** Configuration settings for the head's initialization.
   *
-  * @param l2Utxos
+  * @param initialL2Utxos
   *   the utxos with which the head's L2 ledger should be populated upon initialization.
-  * @param equityContributions
+  * @param initialEquityContributions
   *   the ADA amounts (if any) that each peer contributed to the head's equity. The total ADA
   *   contributed must be sufficient for the initialization tx fee, and will also be used for all
   *   subsequent settlement, rollout, and finalization tx fees.
-  * @param seedUtxo
+  * @param initialSeedUtxo
   *   among the utxos funding the head's initialization, this utxo's ID determines the head's token
   *   names.
-  * @param additionalFundingUtxos
+  * @param initialAdditionalFundingUtxos
   *   the other funding utxos for initialization, additional to the seed utxo.
-  * @param changeOutputs
+  * @param initialChangeOutputs
   *   change outputs that must contain all ADA and non-ADA assets from the funding utxos that are in
-  *   excess of the unbalanced treasury value ([[totalEquityContributed]] + [[totalL2Value]]).
+  *   excess of the unbalanced treasury value ([[initialEquityContributed]] + [[initialL2Value]]).
   */
 final case class InitializationParameters(
-    override val l2Utxos: Utxos,
-    override val equityContributions: Map[PeerNumber, Coin],
-    override val seedUtxo: Utxo,
-    override val additionalFundingUtxos: Utxos,
-    override val changeOutputs: List[TransactionOutput],
+    override val initialL2Utxos: Utxos,
+    override val initialEquityContributions: Map[PeerNumber, Coin],
+    override val initialSeedUtxo: Utxo,
+    override val initialAdditionalFundingUtxos: Utxos,
+    override val initialChangeOutputs: List[TransactionOutput],
 ) extends InitializationParameters.Section {
     override transparent inline def initializationParams: InitializationParameters = this
 
-    override lazy val totalL2Value: Value = l2Utxos.values.map(_.value).fold(Value(Coin(0)))(_ + _)
+    override lazy val initialL2Value: Value =
+        initialL2Utxos.values.map(_.value).fold(Value(Coin(0)))(_ + _)
 
-    override lazy val totalEquityContributed: Coin =
-        equityContributions.values.fold(Coin(0))(_ + _)
+    override lazy val initialEquityContributed: Coin =
+        initialEquityContributions.values.fold(Coin(0))(_ + _)
 
-    override lazy val totalFundingValue: Value =
-        seedUtxo.output.value +
-            additionalFundingUtxos.values.map(_.value).fold(Value(Coin(0)))(_ + _) -
-            changeOutputs.map(_.value).fold(Value(Coin(0)))(_ + _)
+    override lazy val initialFundingValue: Value =
+        initialSeedUtxo.output.value +
+            initialAdditionalFundingUtxos.values.map(_.value).fold(Value(Coin(0)))(_ + _) -
+            initialChangeOutputs.map(_.value).fold(Value(Coin(0)))(_ + _)
 
-    /** This is the initial treasury value before deducting the initialization tx fee and adding the
-      * minted head token.
-      */
-    override lazy val unbalancedTreasuryValue: Value = Value(totalEquityContributed) + totalL2Value
-
-    override lazy val headTokenNames: HeadTokenNames = HeadTokenNames(seedUtxo.input)
+    override lazy val headTokenNames: HeadTokenNames = HeadTokenNames(initialSeedUtxo.input)
 
     // TODO: We need this hash to put into the initialization tx's metadata,
     //  so that the equity contributions are pinned by something signed by all peers.
-    override lazy val equityContributionsHash: Hash32 =
+    override lazy val initialEquityContributionsHash: Hash32 =
         val cbor = ???
         ???
 }
@@ -60,26 +56,26 @@ object InitializationParameters {
     trait Section {
         def initializationParams: InitializationParameters
 
-        def l2Utxos: Utxos
-        def equityContributions: Map[PeerNumber, Coin]
-        def seedUtxo: Utxo
-        def additionalFundingUtxos: Utxos
-        def changeOutputs: List[TransactionOutput]
+        def initialL2Utxos: Utxos
+        def initialEquityContributions: Map[PeerNumber, Coin]
+        def initialSeedUtxo: Utxo
+        def initialAdditionalFundingUtxos: Utxos
+        def initialChangeOutputs: List[TransactionOutput]
 
-        def totalEquityContributed: Coin
-        def totalFundingValue: Value
-        def totalL2Value: Value
-        def unbalancedTreasuryValue: Value
+        def initialEquityContributed: Coin
+        def initialFundingValue: Value
+        def initialL2Value: Value
         def headTokenNames: HeadTokenNames
 
-        def equityContributionsHash: Hash32
+        def initialEquityContributionsHash: Hash32
     }
 
     extension (
         config: InitializationParameters.Section & FallbackContingency.Section & HeadPeers.Section
     )
-        def isBalancedInitializationFunding: Boolean =
-            config.totalFundingValue ==
-                config.unbalancedTreasuryValue + config.multisigRegimeUtxoValue
+        def isBalancedInitializationFunding: Boolean = {
+            config.initialFundingValue ==
+                config.initialL2Value + Value(config.initialEquityContributed) + config.multisigRegimeUtxoValue
+        }
 
 }
