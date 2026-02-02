@@ -1,9 +1,10 @@
 package hydrozoa.multisig.consensus.peer
 
+import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.ledger.block.BlockNumber
 import scala.annotation.targetName
 
-final case class PeerId(peerNum: PeerNumber, nPeers: Int) {
+final case class PeerId(peerNum: PeerNumber, nPeers: PositiveInt) {
     require(peerNum.convert < nPeers, "Peer ID must be less than the number of peers.")
 
     /** Is the peer the consensus leader of the given block number? */
@@ -24,7 +25,8 @@ final case class PeerId(peerNum: PeerNumber, nPeers: Int) {
 
 object PeerId {
     @targetName("applyIntPeerMane")
-    def apply(peerNumber: Int, nPeers: Int): PeerId = new PeerId(PeerNumber(peerNumber), nPeers)
+    def apply(peerNumber: Int, nPeers: Int): PeerId =
+        new PeerId(PeerNumber(peerNumber), PositiveInt.unsafeApply(nPeers))
 
     given Ordering[PeerId] with {
         override def compare(self: PeerId, other: PeerId): Int = {
