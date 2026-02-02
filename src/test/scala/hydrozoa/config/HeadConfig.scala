@@ -5,12 +5,13 @@ import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all.{catsSyntaxEither, toFlatMapOps}
 import hydrozoa.config.HeadConfig.OwnPeer
+import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, quantize}
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.SpentUtxos
-import hydrozoa.multisig.ledger.dapp.tx.{TxTiming, minInitTreasuryAda}
+import hydrozoa.multisig.ledger.dapp.tx.minInitTreasuryAda
 import hydrozoa.multisig.ledger.dapp.txseq.InitializationTxSeq
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.genShelleyAddress
 import hydrozoa.rulebased.ledger.dapp.tx.genEquityShares

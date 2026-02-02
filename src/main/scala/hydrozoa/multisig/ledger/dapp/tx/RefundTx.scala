@@ -1,10 +1,10 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
+import hydrozoa.config.head.multisig.timing.TxTiming.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant, toQuantizedInstant}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explainConst}
-import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo}
 import hydrozoa.{Utxo as _, prebalancedLovelaceDiffHandler, *}
 import monocle.{Focus, Lens}

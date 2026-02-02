@@ -3,12 +3,13 @@ package hydrozoa.config
 import cats.data.NonEmptyList
 import hydrozoa.config.HeadConfig.Error.*
 import hydrozoa.config.HeadConfig.{HeadInstanceL1, HeadParameters, InitialBlock, OwnPeer, PrivateNodeSettings}
+import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
 import hydrozoa.multisig.consensus.peer.{PeerId, PeerWallet}
 import hydrozoa.multisig.ledger.block.BlockEffects
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
-import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, InitializationTx, TxTiming}
+import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, InitializationTx}
 import hydrozoa.multisig.ledger.dapp.txseq.InitializationTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment

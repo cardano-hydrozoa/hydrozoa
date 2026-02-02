@@ -1,13 +1,14 @@
 package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.data.NonEmptyList
+import hydrozoa.config.head.multisig.timing.TxTiming
+import hydrozoa.config.head.multisig.timing.TxTiming.default
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.SpentUtxos
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.{Fallback, Initialization}
-import hydrozoa.multisig.ledger.dapp.tx.TxTiming.default
-import hydrozoa.multisig.ledger.dapp.tx.{InitializationTx, Metadata as MD, TxTiming, minInitTreasuryAda}
+import hydrozoa.multisig.ledger.dapp.tx.{InitializationTx, Metadata as MD, minInitTreasuryAda}
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.dapp.state.VoteDatum

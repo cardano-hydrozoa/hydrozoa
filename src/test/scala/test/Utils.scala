@@ -1,6 +1,7 @@
 package test
+
+import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.multisig.ledger.VirtualLedgerM
-import hydrozoa.multisig.ledger.dapp.tx.TxTiming
 import scala.language.postfixOps
 import scalus.cardano.address.Network
 import scalus.cardano.address.Network.Mainnet

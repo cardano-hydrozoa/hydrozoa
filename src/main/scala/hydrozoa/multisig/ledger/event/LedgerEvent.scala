@@ -1,9 +1,9 @@
 package hydrozoa.multisig.ledger.event
 
 import cats.syntax.all.*
+import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.consensus.peer.PeerNumber
-import hydrozoa.multisig.ledger.dapp.tx.TxTiming
 import scalus.cardano.ledger.Coin
 
 sealed trait LedgerEvent {

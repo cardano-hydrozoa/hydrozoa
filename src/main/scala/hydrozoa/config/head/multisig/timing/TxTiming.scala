@@ -1,10 +1,11 @@
-package hydrozoa.multisig.ledger.dapp.tx
+package hydrozoa.config.head.multisig.timing
 
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, quantize}
 import scala.concurrent.duration.DurationInt
 import scala.math.Ordered.orderingToOrdered
 import scalus.cardano.ledger.SlotConfig
 
+// TODO: Update/fix comment
 /** TODO: This should be derived from Hydrozoa parameters.
   *
   * TODO: move around?
@@ -29,26 +30,30 @@ import scalus.cardano.ledger.SlotConfig
   * networks.
   *
   * @param minSettlementDuration
-  *   Minimal length of a settlement (finalization) tx's validity range.
+  *   Minimal duration of a settlement (finalization) tx's validity range.
   * @param inactivityMarginDuration
-  *   The minimal frequency of major blocks (in case no activity happens).
+  *   After every major block, a consecutive sequence of minor blocks can be made before this
+  *   duration elapses. After it elapses, the next block must be major.
   * @param silenceDuration
   *   A fixed-time gap between concurrent txs (i.e. fallback N and settlement/finalization N+1) to
   *   prevent contention, typically a small value like 5 min.
-  * @param initializationFallbackDeviation
-  *   Since it doesn't make sense to ask users to specify exact the same TTL/validity start slot for
-  *   txs in the initialization sequence that we may calculate based on the time the initialization
-  *   request was received, we need to allow some deviation which is defined by that parameter. The
-  *   rule is that the specified value in the txs should stay in the [calculatedTime -
-  *   initializationFallbackDeviation; calculatedTime + initializationFallbackDeviation].
+  * @param depositMaturityDuration
+  *   The head waits for this duration after a deposit tx's validity end time to check whether a
+  *   deposit utxo exists on L1. The deposit utxo should be mostly settled on L1 at this time (i.e.
+  *   unlikely to be rolled back).
+  * @param depositAbsorptionDuration
+  *   After a deposit utxo is mature, the head has until this duration elapses to attempt to absorb
+  *   it. In other words, the deposit utxo can be absorbed by a settlement tx only if the settlement
+  *   tx's validity end time is earlier than the maturity time plus absorption duration.
   */
 final case class TxTiming(
-    minSettlementDuration: QuantizedFiniteDuration,
-    inactivityMarginDuration: QuantizedFiniteDuration,
-    silenceDuration: QuantizedFiniteDuration,
-    depositMaturityDuration: QuantizedFiniteDuration,
-    depositAbsorptionDuration: QuantizedFiniteDuration,
-) {
+    override val minSettlementDuration: QuantizedFiniteDuration,
+    override val inactivityMarginDuration: QuantizedFiniteDuration,
+    override val silenceDuration: QuantizedFiniteDuration,
+    override val depositMaturityDuration: QuantizedFiniteDuration,
+    override val depositAbsorptionDuration: QuantizedFiniteDuration,
+) extends TxTiming.Section {
+    override transparent inline def txTiming: TxTiming = this
 
     /** A block can stay minor if this predicate is true for its start time, relative to the
       * previous major block's fallback tx start time. Otherwise, it must be upgraded to a major
@@ -67,6 +72,7 @@ final case class TxTiming(
         blockStartTime + minSettlementDuration + inactivityMarginDuration + silenceDuration
 }
 
+// TODO: Update/fix comment
 /** Timing is hard. The precision we have to use is going to be dependent on the slot config.
   *
   * For example, when we're parsing a PostDated refund tx, we need to extract a start time. That
@@ -86,11 +92,22 @@ final case class TxTiming(
   *
   * For now, we just have to be careful to ensure that we're using millisecond precision everywhere
   */
-object TxTiming:
-    def default(slotConfig: SlotConfig) = TxTiming(
+object TxTiming {
+    def default(slotConfig: SlotConfig): TxTiming = TxTiming(
       minSettlementDuration = 12.hours.quantize(slotConfig),
       inactivityMarginDuration = 24.hours.quantize(slotConfig),
       silenceDuration = 5.minutes.quantize(slotConfig),
       depositMaturityDuration = 1.hours.quantize(slotConfig),
       depositAbsorptionDuration = 48.hours.quantize(slotConfig),
     )
+
+    trait Section {
+        def txTiming: TxTiming
+
+        def minSettlementDuration: QuantizedFiniteDuration
+        def inactivityMarginDuration: QuantizedFiniteDuration
+        def silenceDuration: QuantizedFiniteDuration
+        def depositMaturityDuration: QuantizedFiniteDuration
+        def depositAbsorptionDuration: QuantizedFiniteDuration
+    }
+}
