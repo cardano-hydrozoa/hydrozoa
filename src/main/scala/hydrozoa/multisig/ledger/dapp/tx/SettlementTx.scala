@@ -206,9 +206,7 @@ object SettlementTx {
                         Inline(
                           MultisigTreasuryUtxo
                               .Datum(
-                                commit = ByteString.fromArray(
-                                  IArray.genericWrapArray(args.kzgCommitment).toArray
-                                ),
+                                commit = args.kzgCommitment,
                                 versionMajor = args.majorVersionProduced,
                                 paramsHash = ByteString.empty
                               )

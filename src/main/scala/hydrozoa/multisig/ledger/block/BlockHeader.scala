@@ -3,7 +3,7 @@ package hydrozoa.multisig.ledger.block
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
-import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.{KzgCommitment, asByteString}
+import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 
 sealed trait BlockHeader extends BlockHeader.Section {
     def asUnsigned: this.type & BlockStatus.Unsigned =
@@ -153,7 +153,7 @@ object BlockHeader {
                   startTime = startTime.instant.toEpochMilli,
                   versionMajor = BigInt(blockVersion.major.convert),
                   versionMinor = BigInt(blockVersion.minor.convert),
-                  commitment = kzgCommitment.asByteString
+                  commitment = kzgCommitment
                 )
 
             type Serialized = Serialized.Serialized

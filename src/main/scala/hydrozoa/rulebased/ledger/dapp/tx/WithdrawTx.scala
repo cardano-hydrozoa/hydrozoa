@@ -2,11 +2,11 @@ package hydrozoa.rulebased.ledger.dapp.tx
 
 import cats.implicits.*
 import hydrozoa.*
+import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryScript
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.{TreasuryRedeemer, WithdrawRedeemer}
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{ResolvedDatum, RuleBasedTreasuryDatum}
 import hydrozoa.rulebased.ledger.dapp.utxo.RuleBasedTreasuryUtxo
-import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.address.Network
 import scalus.cardano.ledger.*
@@ -33,7 +33,7 @@ object WithdrawTx {
         treasuryUtxo: RuleBasedTreasuryUtxo,
         // NB: The order doesn't matter in the recipe, since either all withdrawals should make it to the tx.
         withdrawals: UtxoSetL2,
-        membershipProof: IArray[Byte],
+        membershipProof: KzgCommitment,
         validityEndSlot: Long,
         network: Network,
         protocolParams: ProtocolParams,
@@ -91,8 +91,6 @@ object WithdrawTx {
     ): Either[SomeBuildError, WithdrawTx] = {
         import recipe.*
 
-        val proofBS = ByteString.fromArray(IArray.genericWrapArray(membershipProof).toArray)
-
         // From this point we should choose and stick to a particular order of withdrawals, so
         // to order of outputs in the tx (starting from index 1) and the order of utxo ids in
         // the redeemer should be the same.
@@ -104,11 +102,11 @@ object WithdrawTx {
               withdrawalsList
                   .map((utxoId, _) => TxOutRef(TxId(utxoId.transactionId), utxoId.index))
             ),
-            proofBS
+            membershipProof
           )
         )
         val newTreasuryDatum =
-            RuleBasedTreasuryDatum.Resolved(treasuryDatum.copy(utxosActive = proofBS))
+            RuleBasedTreasuryDatum.Resolved(treasuryDatum.copy(utxosActive = membershipProof))
 
         // withdrawal outputs
         val withdrawalOutputs = withdrawalsList.map(_._2)

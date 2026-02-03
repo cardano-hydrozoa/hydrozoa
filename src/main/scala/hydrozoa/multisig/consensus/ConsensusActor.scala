@@ -352,7 +352,7 @@ class ConsensusActor(
       * responsible for sending acks only.
       */
     def handleBlock(block: Block.Unsigned.Next): IO[Unit] = for {
-        _ <- IO.println(s"---- CA ----: handleBlock: $block")
+        // _ <- IO.println(s"---- CA ----: handleBlock: $block")
         state <- stateRef.get
         // This is a bit annoying but Scala cannot infer types unless we PM explicitly
         _ <- block match {
@@ -375,7 +375,7 @@ class ConsensusActor(
       *   an arbitrary ack, whether own one or someone else's one
       */
     def handleAck(ack: AckBlock): IO[Unit] = for {
-        _ <- IO.println(s"---- CA ----: handleAck: $ack")
+        // _ <- IO.println(s"---- CA ----: handleAck: $ack")
         state <- stateRef.get
         // This is a bit annoying but Scala cannot infer types unless we PM explicitly
         _ <- ack match {

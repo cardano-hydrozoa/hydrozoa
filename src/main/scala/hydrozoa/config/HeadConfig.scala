@@ -16,6 +16,7 @@ import hydrozoa.{AddressL1, VerificationKeyBytes}
 import scala.collection.immutable.TreeMap
 import scala.concurrent.duration.FiniteDuration
 import scala.util.Try
+import scalus.builtin.ByteString
 import scalus.cardano.address.Network
 import scalus.cardano.ledger.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
@@ -348,7 +349,8 @@ object HeadConfig {
     ) {
         def initialFallbackTx: FallbackTx = effects.fallbackTx
 
-        def initialKzgCommitment: KzgCommitment = IArray.from(initialTreasury.datum.commit.bytes)
+        def initialKzgCommitment: KzgCommitment =
+            ByteString.fromArray(initialTreasury.datum.commit.bytes)
 
         def initialTreasury: MultisigTreasuryUtxo = initializationTx.treasuryProduced
 

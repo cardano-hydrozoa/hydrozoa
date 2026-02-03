@@ -66,7 +66,7 @@ def genTreasuryResolvedDatum(
             .map(p2 => BLS12_381_G2_Element(p2).toCompressedByteString)
     } yield ResolvedDatum(
       headMp = headMp,
-      utxosActive = ByteString.fromArray(IArray.genericWrapArray(utxosCommitment).toArray),
+      utxosActive = utxosCommitment,
       version = version,
       params = params,
       setup = setup
@@ -226,8 +226,7 @@ class WithdrawTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
 
             // Accumulator
             commitmentPoint = KzgCommitment.calculateCommitment(identityBlst)
-            commitmentBS = ByteString.fromArray(IArray.genericWrapArray(commitmentPoint).toArray)
-            commitmentG1 = BLS12_381_G1_Element(commitmentBS)
+            commitmentG1 = commitmentPoint.asG1Element
 
             // Subset
             subset <- Gen.pick(Integer.min(1, 64), identity)
@@ -239,8 +238,7 @@ class WithdrawTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
             )
 
             proofPoint = KzgCommitment.calculateCommitment(theRestBlst)
-            proofBS = ByteString.fromArray(IArray.genericWrapArray(proofPoint).toArray)
-            proofG1 = BLS12_381_G1_Element(proofBS)
+            proofG1 = proofPoint.asG1Element
 
         } yield (scalus.List.from(subset), commitmentG1, proofG1)
 

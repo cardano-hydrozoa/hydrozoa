@@ -1,6 +1,5 @@
 package hydrozoa.rulebased.ledger.dapp.script.plutus
 
-import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
 import hydrozoa.multisig.ledger.virtual.commitment.{KzgCommitment, TrustedSetup}
 import org.scalatest.funsuite.AnyFunSuite
@@ -64,12 +63,11 @@ class RuleBasedTreasuryScriptTest extends AnyFunSuite {
         val commitmentPoint2 = KzgCommitment.calculateCommitment(subsetBlst)
 
         assert(
-          HexUtil.encodeHexString(IArray.genericWrapArray(commitmentPoint1).toArray) ==
-              HexUtil.encodeHexString(IArray.genericWrapArray(commitmentPoint2).toArray)
+          commitmentPoint1 == commitmentPoint2
         )
 
         assert(
-          HexUtil.encodeHexString(IArray.genericWrapArray(commitmentPoint1).toArray) ==
+          commitmentPoint1.toHex ==
               "97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb"
         )
     }
@@ -88,7 +86,7 @@ class RuleBasedTreasuryScriptTest extends AnyFunSuite {
         val commitmentPoint = KzgCommitment.calculateCommitment(subsetBlst)
 
         assert(
-          HexUtil.encodeHexString(IArray.genericWrapArray(commitmentPoint).toArray) ==
+          commitmentPoint.toHex ==
               "8ec51973adde24a8b6a05f62843f1c2949d01bdc642091f85a9d1803abc074616b545fd6fa25fbc467af2ef112cda832"
         )
     }

@@ -19,17 +19,21 @@ import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.consensus.{CardanoLiaison, ConsensusActor, EventSequencer}
 import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
-import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockHeader, BlockNumber}
+import hydrozoa.multisig.ledger.block.BlockBrief.{Final, Major, Minor}
+import hydrozoa.multisig.ledger.block.{Block, BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.SpentUtxos
 import hydrozoa.multisig.ledger.dapp.tx.{TxTiming, minInitTreasuryAda}
 import hydrozoa.multisig.ledger.dapp.txseq.InitializationTxSeq
 import hydrozoa.multisig.ledger.dapp.txseq.InitializationTxSeq.Builder
 import hydrozoa.multisig.ledger.event.LedgerEvent
+import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag
+import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.rulebased.ledger.dapp.tx.genEquityShares
 import hydrozoa.{Address, L1, UtxoSetL1, attachVKeyWitnesses, maxNonPlutusTxFee}
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import org.scalacheck.Prop.propBoolean
 import org.scalacheck.commands.ModelBasedSuite
 import org.scalacheck.{Arbitrary, Gen, Prop, YetAnotherProperties}
 import scala.concurrent.duration.{DurationInt, FiniteDuration, HOURS}
@@ -179,14 +183,16 @@ case class Stage1(
         } yield Stage1Sut(system, agent)
     }
 
-    /** Important: this action should ensure that the actor system was not terminated.
-      *
-      * Even more important: before terminating, make sure waitForIdle is called - otherwise you
-      * just immediately shutdown the system and will get a false-positive test.
-      */
     override def shutdownSut(sut: Sut): IO[Prop] = for {
-        // Luckily enough, waitForIdle does exactly what we need in addition to
-        // checking the mailboxes it also verifies that the system was not terminated.
+
+        /** Important: this action should ensure that the actor system was not terminated.
+          *
+          * Even more important: before terminating, make sure [[waitForIdle]] is called - otherwise
+          * you just immediately shutdown the system and will get a false-positive test.
+          *
+          * Luckily enough, [[waitForIdle]] does exactly what we need in addition to checking the
+          * mailboxes it also verifies that the system was not terminated.
+          */
         _ <- sut.system.waitForIdle()
 
         // Next part of the property is to check that all txs are known to the Cardano backend.
@@ -328,10 +334,16 @@ case class Stage1(
                 case Right(value) => value
             }
 
+            // _ = println(txTiming.newFallbackStartTime(zeroBlockCreationTime))
+            // _ = println(initTxSeq.fallbackTx.validityStart)
+
         } yield Stage1State(
           headConfig = configParsed,
-          currentBlock = Done(BlockNumber.zero), // initial (zero) block is finished
+          currentBlock =
+              Done(BlockNumber.zero, BlockVersion.Full.zero), // initial (zero) block is finished
+          currentBlockEvents = List.empty,
           currentTime = zeroBlockCreationTime,
+          competingFallbackStartTime = txTiming.newFallbackStartTime(zeroBlockCreationTime),
           activeUtxos = Map.empty
         )
     }
@@ -343,28 +355,28 @@ case class Stage1(
     final case class StartBlockCommand(
         override val id: Int,
         blockNumber: BlockNumber,
-        blockCreationTime: QuantizedInstant
+        creationTime: QuantizedInstant
     ) extends Command {
 
         override type Result = Unit
 
         override def runState(state: Stage1State): (Result, Stage1State) = {
             val newBlock = state.currentBlock match {
-                case CurrentBlock.Done(prevBlockNumber)
+                case CurrentBlock.Done(prevBlockNumber, version)
                     if prevBlockNumber.increment == blockNumber =>
-                    CurrentBlock.InProgress(blockNumber)
+                    CurrentBlock.InProgress(blockNumber, creationTime, version)
                 case _ => throw Error.UnexpectedState
             }
             () -> state.copy(
               currentBlock = newBlock,
-              currentTime = blockCreationTime
+              currentTime = creationTime
             )
         }
 
         override def run(sut: Sut): IO[Result] =
             sut.agent ! StartBlock(
               blockNum = blockNumber,
-              blockCreationTime = blockCreationTime
+              blockCreationTime = creationTime
             )
 
         override def preCondition(state: State): Boolean = true
@@ -377,12 +389,13 @@ case class Stage1(
 
         override type Result = Unit
 
-        override def runState(state: Stage1State): (Result, Stage1State) = () -> state
+        override def runState(state: Stage1State): (Result, Stage1State) = {
+            () -> state.copy(currentBlockEvents = state.currentBlockEvents :+ event)
+        }
 
         override def run(sut: Sut): IO[Result] = sut.agent ! event
 
         override def preCondition(state: State): Boolean = true
-
     }
 
     final case class CompleteBlockCommand(
@@ -391,14 +404,83 @@ case class Stage1(
         isFinal: Boolean
     ) extends Command {
 
-        override type Result = Unit
+        override type Result = BlockBrief
 
         override def runState(state: Stage1State): (Result, Stage1State) = {
             state.currentBlock match {
-                case InProgress(blockNumber) =>
-                    () -> state.copy(currentBlock = if isFinal then Finished else Done(blockNumber))
+                case InProgress(_, creationTime, prevVersion) =>
+                    val result = mkBlockBrief(
+                      state.currentBlockEvents,
+                      state.competingFallbackStartTime,
+                      state.headConfig.headParameters.multisigRegimeSettings.txTiming,
+                      creationTime,
+                      prevVersion,
+                      isFinal
+                    )
+                    val newState = state.copy(
+                      currentBlock =
+                          if isFinal then HeadFinalized else Done(blockNumber, result.blockVersion),
+                      currentBlockEvents = List.empty,
+                      competingFallbackStartTime =
+                          if result.isInstanceOf[Major] then
+                              state.headConfig.headParameters.multisigRegimeSettings.txTiming
+                                  .newFallbackStartTime(creationTime)
+                          else state.competingFallbackStartTime
+                    )
+                    result -> newState
                 case _ => throw Error.UnexpectedState
             }
+        }
+
+        private def mkBlockBrief(
+            currentBlockEvents: List[LedgerEvent],
+            competingFallbackStartTime: QuantizedInstant,
+            txTiming: TxTiming,
+            creationTime: QuantizedInstant,
+            prevVersion: BlockVersion.Full,
+            isFinal: Boolean
+        ): BlockBrief = {
+
+            if isFinal then
+                Final(
+                  header = BlockHeader.Final(
+                    blockNum = blockNumber,
+                    blockVersion = prevVersion.incrementMajor,
+                    startTime = creationTime,
+                  ),
+                  body = BlockBody.Final(
+                    events = currentBlockEvents.map(_.eventId -> ValidityFlag.Invalid),
+                    depositsRefunded = List.empty
+                  )
+                )
+            else if txTiming.blockCanStayMinor(creationTime, competingFallbackStartTime)
+            then
+                Minor(
+                  header = BlockHeader.Minor(
+                    blockNum = blockNumber,
+                    blockVersion = prevVersion.incrementMinor,
+                    startTime = creationTime,
+                    kzgCommitment = KzgCommitment.empty
+                  ),
+                  body = BlockBody.Minor(
+                    events = currentBlockEvents.map(_.eventId -> ValidityFlag.Invalid),
+                    depositsRefunded = List.empty
+                  )
+                )
+            else
+                Major(
+                  header = BlockHeader.Major(
+                    blockNum = blockNumber,
+                    blockVersion = prevVersion.incrementMajor,
+                    startTime = creationTime,
+                    kzgCommitment = KzgCommitment.empty
+                  ),
+                  body = BlockBody.Major(
+                    events = currentBlockEvents.map(_.eventId -> ValidityFlag.Invalid),
+                    depositsAbsorbed = List.empty,
+                    depositsRefunded = List.empty
+                  )
+                )
         }
 
         override def run(sut: Sut): IO[Result] = for {
@@ -407,13 +489,26 @@ case class Stage1(
               then CompleteBlockFinal(None)
               else CompleteBlockRegular(None, Set.empty, false)
             )
-            _ <- sut.system.terminate()
+            // All sync commands should be timed out since the system may terminate
             d <- (sut.agent ?: CompleteBlock(block, blockNumber)).timeout(5.seconds)
-            _ <- IO.println(s"--------->>> ${d}")
             // TODO: save effects to the suite, return Result which is common for the SUT and the model
-        } yield ()
+            // _ <- IO.println(s"--------->>> ${d}")
+        } yield d.blockBrief
 
-        override def preCondition(state: State): Boolean = true
+        override def preCondition(state: State): Boolean = state.currentBlock match {
+            case CurrentBlock.InProgress(currentBlockNumber, _, _) =>
+                blockNumber == currentBlockNumber
+            case _ => false
+        }
+
+        override def onSuccessCheck(
+            expectedResult: BlockBrief,
+            _stateBefore: Stage1State,
+            _stateAfter: Stage1State,
+            result: BlockBrief
+        ): Prop =
+            (expectedResult == result) :|
+                s"block briefs should be identical: \n\texpected: $expectedResult\n\tgot: $result"
     }
 
     // This is used to numerate commands that we generate
@@ -426,13 +521,13 @@ case class Stage1(
 
         for {
             cmd <- state.currentBlock match {
-                case InProgress(blockNumber) =>
+                case InProgress(blockNumber, _, _) =>
                     Gen.frequency(
                       1 -> genCompleteBlock(blockNumber),
                       10 -> genLedgerEvent(state.activeUtxos)
                     )
-                case Done(blockNumber) => genStartBlock(blockNumber, state.currentTime)
-                case Finished          => Gen.const(NoOp(nextCmdCnt))
+                case Done(blockNumber, _) => genStartBlock(blockNumber, state.currentTime)
+                case HeadFinalized        => Gen.const(NoOp(nextCmdCnt))
             }
         } yield cmd
     }

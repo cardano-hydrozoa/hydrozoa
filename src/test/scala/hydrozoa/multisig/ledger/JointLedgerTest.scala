@@ -578,21 +578,18 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                     condition = jlState.virtualLedgerState.activeUtxos == expectedUtxos
                   )
 
-                  kzgCommit = IArray
-                      .genericWrapArray(jlState.virtualLedgerState.kzgCommitment)
-                      .toArray
+                  kzgCommit = jlState.virtualLedgerState.kzgCommitment
 
-                  expectedKzg = IArray
-                      .genericWrapArray(
-                        KzgCommitment.calculateCommitment(KzgCommitment.hashToScalar(expectedUtxos))
-                      )
-                      .toArray
+                  expectedKzg = KzgCommitment.calculateCommitment(
+                    KzgCommitment.hashToScalar(expectedUtxos)
+                  )
 
                   _ <- assertWith(
                     msg =
-                        s"KZG Commitment is correct.\n\tObtained: ${kzgCommit.mkString("Array(", ", ", ")")}\n\tExpected: ${expectedKzg.mkString("Array(", ", ", ")")}",
-                    condition = kzgCommit.sameElements(expectedKzg)
+                        s"KZG Commitment is correct.\n\tObtained: ${kzgCommit}\n\tExpected: ${expectedKzg}",
+                    condition = kzgCommit == expectedKzg
                   )
+
               } yield ()
 
               // Step 5: Finalize

@@ -358,14 +358,16 @@ final case class JointLedger(
 
             headerIntermediate: BlockHeader.Intermediate =
                 if eligibleForAbsorption.isEmpty && producing.nextBlockData.blockWithdrawnUtxos.isEmpty
-                then
+                then {
+                    // println(s"JL: producing.startTime=${producing.startTime}")
+                    // println(s"JL: producing.competingFallbackValidityStart=${producing.competingFallbackValidityStart}")
                     previousHeader.nextHeaderIntermediate(
                       txTiming,
                       producing.startTime, // TODO: shall we use something like production.completeTime instead?
                       producing.competingFallbackValidityStart,
                       kzgCommitment
                     )
-                else previousHeader.nextHeaderMajor(producing.startTime, kzgCommitment)
+                } else previousHeader.nextHeaderMajor(producing.startTime, kzgCommitment)
 
             block <- headerIntermediate match {
                 case header: BlockHeader.Minor =>

@@ -2,7 +2,7 @@ package hydrozoa.multisig.ledger.dapp.utxo
 
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
-import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.{KzgCommitment, asByteString}
+import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import scala.util.Try
 import scalus.*
 import scalus.builtin.Data.{FromData, ToData, fromData, toData}
@@ -29,7 +29,7 @@ final case class MultisigTreasuryUtxo(
           )
         )
 
-    def kzgCommitment: KzgCommitment = IArray.unsafeFromArray(datum.commit.bytes)
+    def kzgCommitment: KzgCommitment = ByteString.fromArray(datum.commit.bytes)
 }
 
 object MultisigTreasuryUtxo {
@@ -73,7 +73,7 @@ object MultisigTreasuryUtxo {
     // TODO: implement root hash
     def mkInitMultisigTreasuryDatum: Datum =
         Datum(
-          KzgCommitment.empty.asByteString,
+          KzgCommitment.empty,
           BigInt(BlockVersion.Major(0).toLong),
           ByteString.empty
         )
