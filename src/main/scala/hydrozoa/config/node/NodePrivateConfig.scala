@@ -2,7 +2,6 @@ package hydrozoa.config.node
 
 import hydrozoa.config.node.operation.liquidation.NodeOperationLiquidationConfig
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
-import hydrozoa.config.node.wallet.OwnHeadPeer
 import hydrozoa.multisig.consensus.peer.HeadPeerWallet
 import scala.concurrent.duration.FiniteDuration
 

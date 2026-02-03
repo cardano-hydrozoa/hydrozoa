@@ -7,7 +7,6 @@ import hydrozoa.config.head.parameters.HeadParameters
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.operation.liquidation.NodeOperationLiquidationConfig
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
-import hydrozoa.config.node.wallet.OwnHeadPeer
 import hydrozoa.multisig.ledger.block.Block
 
 final case class NodeConfig(

@@ -5,10 +5,11 @@ import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
+import hydrozoa.config.head.peers.HeadPeers
+import hydrozoa.config.node.OwnHeadPeer
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.EventSequencer.*
 import hydrozoa.multisig.consensus.PeerLiaison.Handle
-import hydrozoa.multisig.consensus.peer.HeadPeerId
 import hydrozoa.multisig.ledger.block.{BlockBody, BlockEffects, BlockStatus}
 import hydrozoa.multisig.ledger.dapp.tx.RefundTx
 import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag
@@ -58,7 +59,7 @@ trait EventSequencer(
             case x: LedgerEvent =>
                 for {
                     newNum <- state.nextLedgerEventNum()
-                    newId = LedgerEventId(config.peerId.peerNum, newNum)
+                    newId = LedgerEventId(config.ownHeadPeerId.peerNum, newNum)
                     newEvent: LedgerEvent = x match {
                         case y: LedgerEvent.TxL2Event       => y.copy(eventId = newId)
                         case y: LedgerEvent.RegisterDeposit => y.copy(eventId = newId)
@@ -102,7 +103,7 @@ object EventSequencer {
     ): IO[EventSequencer] =
         IO(new EventSequencer(config, pendingConnections) {})
 
-    final case class Config(peerId: HeadPeerId)
+    type Config = OwnHeadPeer.Section & HeadPeers.Section
 
     final case class Connections(
         blockWeaver: BlockWeaver.Handle,

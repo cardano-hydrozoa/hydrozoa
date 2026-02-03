@@ -1,4 +1,4 @@
-package hydrozoa.config.node.wallet
+package hydrozoa.config.node
 
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber, HeadPeerWallet}

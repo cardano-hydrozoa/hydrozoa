@@ -70,12 +70,7 @@ trait MultisigRegimeManager(config: NodeConfig, cardanoBackend: CardanoBackend[I
               )
             )
 
-            eventSequencer <- context.actorOf(
-              EventSequencer(
-                EventSequencer.Config(peerId = config.ownHeadPeerId),
-                pendingConnections
-              )
-            )
+            eventSequencer <- context.actorOf(EventSequencer(config, pendingConnections))
 
             // FIXME
             jointLedger <- context.actorOf(???)
