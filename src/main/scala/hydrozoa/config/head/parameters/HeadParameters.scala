@@ -11,7 +11,7 @@ final case class HeadParameters(
     override val fallbackContingency: FallbackContingency,
     override val disputeResolutionConfig: DisputeResolutionConfig,
 ) extends HeadParameters.Section {
-    override transparent inline def headParameters: HeadParameters = this
+    override transparent inline def headParams: HeadParameters = this
 
     override transparent inline def minSettlementDuration: QuantizedFiniteDuration =
         txTiming.minSettlementDuration
@@ -34,7 +34,7 @@ final case class HeadParameters(
 
     // TODO: We need this hash to put into the initialization tx's metadata,
     //  so that the head parameters are pinned by something signed by all peers.
-    override lazy val headParametersHash: Hash32 = {
+    override lazy val headParamsHash: Hash32 = {
         val cbor = ???
         ???
     }
@@ -45,8 +45,8 @@ object HeadParameters {
         extends TxTiming.Section,
           FallbackContingency.Section,
           DisputeResolutionConfig.Section {
-        def headParameters: HeadParameters
+        def headParams: HeadParameters
 
-        def headParametersHash: Hash32
+        def headParamsHash: Hash32
     }
 }

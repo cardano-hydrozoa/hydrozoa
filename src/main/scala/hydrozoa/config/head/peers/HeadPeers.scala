@@ -12,6 +12,8 @@ final case class HeadPeers(
 ) extends HeadPeers.Section {
     require(peerVKeys.size > 0)
 
+    override transparent inline def headPeers: HeadPeers = this
+
     def apply(p: PeerId): VerificationKeyBytes = {
         require(p.nPeers == nPeers)
         peerVKeys(p.peerNum)
@@ -26,6 +28,8 @@ final case class HeadPeers(
 
 object HeadPeers {
     trait Section {
+        def headPeers: HeadPeers
+
         def peerVKey(p: PeerId): VerificationKeyBytes
 
         def nPeers: PositiveInt

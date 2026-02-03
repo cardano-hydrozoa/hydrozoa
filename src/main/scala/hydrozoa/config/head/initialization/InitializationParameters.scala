@@ -75,7 +75,9 @@ object InitializationParameters {
     )
         def isBalancedInitializationFunding: Boolean = {
             config.initialFundingValue ==
-                config.initialL2Value + Value(config.initialEquityContributed) + config.multisigRegimeUtxoValue
+                config.initialL2Value + Value(
+                  config.initialEquityContributed
+                ) + config.multisigRegimeUtxoValue
         }
 
 }

@@ -20,7 +20,7 @@ trait Tx[Self <: Tx[Self]] extends HasResolvedUtxos { self: Self =>
       * Unfortunately this can't be generalized since Focus requires a concrete type.
       */
     def txLens: Lens[Self, Transaction]
-    
+
     /** This excludes the lens from equality. */
     override def equals(obj: Any): Boolean = obj match {
         case that: Tx[?] =>

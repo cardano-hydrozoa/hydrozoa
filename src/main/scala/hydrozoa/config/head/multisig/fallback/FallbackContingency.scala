@@ -75,11 +75,13 @@ object FallbackContingency {
         private def fallbackTxFee: Coin = config.maxNonPlutusTxFee
 
         private def collateralDeposit(tallyTxFee: Coin): Coin = Coin(
-          collateralUtxoMinLovelace.value.max(tallyTxFee.value * config.params.collateralPercentage)
+          collateralUtxoMinLovelace.value.max(
+            tallyTxFee.value * config.cardanoParams.collateralPercentage
+          )
         )
 
         private def voteDeposit(voteTxFee: Coin): Coin =
-            voteUtxoMinLovelace + Coin(voteTxFee.value * config.params.collateralPercentage)
+            voteUtxoMinLovelace + Coin(voteTxFee.value * config.cardanoParams.collateralPercentage)
 
         private def collateralUtxoMinLovelace: Coin =
             config.babbageUtxoMinLovelace(Assumptions.adaOnlyBaseAddressUtxoBytes)
