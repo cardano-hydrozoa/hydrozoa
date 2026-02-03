@@ -5,16 +5,19 @@ import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.UtxoIdL1
+import hydrozoa.config.head.initialization.InitialBlock
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant}
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.BlockWeaver.PollResults
 import hydrozoa.multisig.ledger.block.{BlockEffects, BlockHeader, BlockNumber}
 import hydrozoa.multisig.ledger.dapp.tx.*
+
 import scala.collection.immutable.{Seq, TreeMap}
-import scala.concurrent.duration.FiniteDuration
 import scala.math.Ordered.orderingToOrdered
-import scalus.cardano.ledger.{Block as _, BlockHeader as _, SlotConfig, Transaction, TransactionHash, TransactionInput}
+import scalus.cardano.ledger.{Transaction, TransactionHash, TransactionInput, Block as _, BlockHeader as _}
 
 /** Hydrozoa's liaison to Cardano L1 (actor):
   *   - Keeps track of the target L1 state the liaison tries to achieve by observing all L1 block
@@ -43,17 +46,13 @@ import scalus.cardano.ledger.{Block as _, BlockHeader as _, SlotConfig, Transact
 object CardanoLiaison:
     def apply(
         config: Config,
+        cardanoBackend: CardanoBackend[IO],
         pendingConnections: MultisigRegimeManager.PendingConnections | CardanoLiaison.Connections
     ): IO[CardanoLiaison] =
-        IO(new CardanoLiaison(config, pendingConnections) {})
+        IO(new CardanoLiaison(config, cardanoBackend, pendingConnections) {})
 
-    final case class Config(
-        cardanoBackend: CardanoBackend[IO],
-        initializationTx: InitializationTx,
-        initializationFallbackTx: FallbackTx,
-        receiveTimeout: FiniteDuration,
-        slotConfig: SlotConfig
-    )
+    type Config = CardanoNetwork.Section & InitialBlock.Section &
+        NodeOperationMultisigConfig.Section
 
     final case class Connections(
         blockWeaver: BlockWeaver.Handle
@@ -118,7 +117,7 @@ object CardanoLiaison:
               effectInputs = Map.empty,
               happyPathEffects =
                   TreeMap(EffectId.initializationEffectId -> config.initializationTx),
-              fallbackEffects = Map(BlockNumber(0) -> config.initializationFallbackTx)
+              fallbackEffects = Map(BlockNumber(0) -> config.initialFallbackTx)
             )
         }
 
@@ -173,6 +172,7 @@ end CardanoLiaison
 
 trait CardanoLiaison(
     config: CardanoLiaison.Config,
+    cardanoBackend: CardanoBackend[IO],
     pendingConnections: MultisigRegimeManager.PendingConnections | CardanoLiaison.Connections,
 ) extends Actor[IO, CardanoLiaison.Request]:
     import CardanoLiaison.*
@@ -205,7 +205,10 @@ trait CardanoLiaison(
     override def preStart: IO[Unit] =
         for {
             _ <- initializeConnections
-            _ <- context.setReceiveTimeout(config.receiveTimeout, CardanoLiaison.Timeout)
+            _ <- context.setReceiveTimeout(
+              config.cardanoLiaisonPollingPeriod,
+              CardanoLiaison.Timeout
+            )
         } yield ()
 
     override def receive: Receive[IO, Request] = {
@@ -325,7 +328,7 @@ trait CardanoLiaison(
         _ <- IO.println("runEffects")
 
         // 1. Get the L1 state, i.e. the list of utxo ids at the multisig address  + the current time
-        resp <- config.cardanoBackend.utxosAt(config.initializationTx.treasuryProduced.address)
+        resp <- cardanoBackend.utxosAt(config.initializationTx.treasuryProduced.address)
 
         _ <- resp match {
 
@@ -333,7 +336,7 @@ trait CardanoLiaison(
                 // This may happen if L1 API is temporarily unavailable or misconfigured
                 // TODO: we need to address time when we work on autonomous mode
                 //   but for now we can just ignore it and skip till the next event/timeout
-                IO.println(s"error when getting Cardano L1 state: ${err}")
+                IO.println(s"error when getting Cardano L1 state: $err")
 
             case Right(l1State) =>
                 for {
@@ -389,14 +392,14 @@ trait CardanoLiaison(
                                     )
                                 case TargetState.Finalized(finalizationTxHash) =>
                                     for {
-                                        txResp <- config.cardanoBackend.isTxKnown(
+                                        txResp <- cardanoBackend.isTxKnown(
                                           finalizationTxHash
                                         )
                                         mbInitAction <- txResp match {
                                             case Left(err) =>
                                                 for {
                                                     _ <- IO.println(
-                                                      s"error when getting finalization tx info: ${err}"
+                                                      s"error when getting finalization tx info: $err"
                                                     )
                                                 } yield Seq.empty
                                             case Right(isKnown) =>
@@ -415,7 +418,7 @@ trait CardanoLiaison(
                     submitRet <-
                         if actionsToSubmit.nonEmpty then
                             IO.traverse(actionsToSubmit.flatMap(actionTxs).toList)(
-                              config.cardanoBackend.submitTx
+                              cardanoBackend.submitTx
                             )
                         else IO.pure(List.empty)
 

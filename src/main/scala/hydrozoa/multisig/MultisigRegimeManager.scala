@@ -35,18 +35,7 @@ trait MultisigRegimeManager(config: NodeConfig, cardanoBackend: CardanoBackend[I
             blockWeaver <- context.actorOf(BlockWeaver(config, pendingConnections))
 
             cardanoLiaison <-
-                context.actorOf(
-                  CardanoLiaison(
-                    CardanoLiaison.Config(
-                      cardanoBackend = cardanoBackend,
-                      initializationTx = config.initializationTx,
-                      initializationFallbackTx = config.initialFallbackTx,
-                      receiveTimeout = 10.seconds,
-                      slotConfig = config.slotConfig
-                    ),
-                    pendingConnections
-                  )
-                )
+                context.actorOf(CardanoLiaison(config, cardanoBackend, pendingConnections))
 
             consensusActor <- context.actorOf(
               ConsensusActor(
