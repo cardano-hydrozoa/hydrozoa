@@ -32,18 +32,7 @@ trait MultisigRegimeManager(config: NodeConfig, cardanoBackend: CardanoBackend[I
         for {
             pendingConnections <- Deferred[IO, MultisigRegimeManager.Connections]
 
-            blockWeaver <-
-                context.actorOf(
-                  BlockWeaver(
-                    BlockWeaver.Config(
-                      lastKnownBlock = ???,
-                      peerId = config.ownHeadPeerId,
-                      recoveredMempool = BlockWeaver.Mempool.empty,
-                      slotConfig = ???
-                    ),
-                    pendingConnections
-                  )
-                )
+            blockWeaver <- context.actorOf(BlockWeaver(config, pendingConnections))
 
             cardanoLiaison <-
                 context.actorOf(
