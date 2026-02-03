@@ -7,21 +7,20 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.NoSendActorRef
 import com.suprnation.actor.SupervisorStrategy.Escalate
 import com.suprnation.actor.{OneForOneStrategy, SupervisionStrategy}
+import hydrozoa.config.node.NodeConfig
 import hydrozoa.multisig.MultisigRegimeManager.*
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
 import hydrozoa.multisig.consensus.ack.AckBlock
 import hydrozoa.multisig.consensus.peer.HeadPeerId
 import hydrozoa.multisig.ledger.JointLedger
-import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, InitializationTx}
 import scala.concurrent.duration.DurationInt
-import scala.language.postfixOps
-import scalus.cardano.ledger.SlotConfig
 
-trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
+trait MultisigRegimeManager(config: NodeConfig, cardanoBackend: CardanoBackend[IO])
+    extends Actor[IO, Request] {
 
     override def supervisorStrategy: SupervisionStrategy[IO] =
-        OneForOneStrategy[IO](maxNrOfRetries = 3, withinTimeRange = 1 minute) {
+        OneForOneStrategy[IO](maxNrOfRetries = 3, withinTimeRange = 1.minute) {
             case _: IllegalArgumentException =>
                 Escalate // Normally `Stop` but we can't handle stopped actors yet
             case _: RuntimeException =>
@@ -38,7 +37,7 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
                   BlockWeaver(
                     BlockWeaver.Config(
                       lastKnownBlock = ???,
-                      peerId = config.peerId,
+                      peerId = config.ownHeadPeerId,
                       recoveredMempool = BlockWeaver.Mempool.empty,
                       slotConfig = ???
                     ),
@@ -50,9 +49,9 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
                 context.actorOf(
                   CardanoLiaison(
                     CardanoLiaison.Config(
-                      cardanoBackend = config.cardanoBackend,
+                      cardanoBackend = cardanoBackend,
                       initializationTx = config.initializationTx,
-                      initializationFallbackTx = config.fallbackTx,
+                      initializationFallbackTx = config.initialFallbackTx,
                       receiveTimeout = 10.seconds,
                       slotConfig = config.slotConfig
                     ),
@@ -73,7 +72,7 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
 
             eventSequencer <- context.actorOf(
               EventSequencer(
-                EventSequencer.Config(peerId = config.peerId),
+                EventSequencer.Config(peerId = config.ownHeadPeerId),
                 pendingConnections
               )
             )
@@ -82,14 +81,14 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
             jointLedger <- context.actorOf(???)
 
             localPeerLiaisons <-
-                config.peers
-                    .filterNot(_ == config.peerId)
+                config.headPeerIds
+                    .filterNot(_ == config.ownHeadPeerId)
                     .traverse(pid =>
                         for {
                             localPeerLiaison <- context.actorOf(
                               PeerLiaison(
                                 PeerLiaison.Config(
-                                  ownPeerId = config.peerId,
+                                  ownPeerId = config.ownHeadPeerId,
                                   remotePeerId = pid
                                 ),
                                 pendingConnections
@@ -157,15 +156,6 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
 /** Multisig regime manager starts-up and monitors all the actors of the multisig regime.
   */
 object MultisigRegimeManager {
-    final case class Config(
-        peerId: HeadPeerId,
-        peers: List[HeadPeerId],
-        cardanoBackend: CardanoBackend[IO],
-        initializationTx: InitializationTx,
-        fallbackTx: FallbackTx,
-        slotConfig: SlotConfig
-    )
-
     final case class Connections(
         blockWeaver: BlockWeaver.Handle,
         cardanoLiaison: CardanoLiaison.Handle,
@@ -178,8 +168,8 @@ object MultisigRegimeManager {
 
     type PendingConnections = Deferred[IO, Connections]
 
-    def apply(config: Config): IO[MultisigRegimeManager] =
-        IO(new MultisigRegimeManager(config) {})
+    def apply(config: NodeConfig, cardanoBackend: CardanoBackend[IO]): IO[MultisigRegimeManager] =
+        IO(new MultisigRegimeManager(config, cardanoBackend) {})
 
     /** Multisig regime's protocol for actor requests and responses. See diagram:
       * [[https://app.excalidraw.com/s/9N3iw9j24UW/9eRJ7Dwu42X]]
