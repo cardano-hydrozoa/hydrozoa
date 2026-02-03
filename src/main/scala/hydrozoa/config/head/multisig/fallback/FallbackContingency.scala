@@ -5,6 +5,9 @@ import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.number.PositiveInt
 import scalus.cardano.ledger.{Coin, Value}
 
+export FallbackContingency.{totalFallbackContingency, multisigRegimeUtxoValue}
+export FallbackContingency.{mkFallbackContingencyWithDefaults, mkCollectiveContingencyWithDefaults, mkIndividualContingencyWithDefaults}
+
 final case class FallbackContingency(
     override val collectiveContingency: FallbackContingency.Collective,
     override val individualContingency: FallbackContingency.Individual,
@@ -43,7 +46,7 @@ object FallbackContingency {
     extension (config: FallbackContingency.Section & HeadPeers.Section)
         def totalFallbackContingency: Coin = Coin(
           config.collectiveContingency.totalCollectiveContingency.value +
-              config.nPeers.convert * config.individualContingency.totalIndividualContingency.value
+              config.nHeadPeers.convert * config.individualContingency.totalIndividualContingency.value
         )
 
         def multisigRegimeUtxoValue: Value = Value(config.totalFallbackContingency)

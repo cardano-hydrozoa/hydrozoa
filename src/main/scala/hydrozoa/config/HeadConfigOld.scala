@@ -5,7 +5,7 @@ import hydrozoa.config.HeadConfig.Error.*
 import hydrozoa.config.HeadConfig.{HeadInstanceL1, HeadParameters, InitialBlock, OwnPeer, PrivateNodeSettings}
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
-import hydrozoa.multisig.consensus.peer.{PeerId, PeerWallet}
+import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerWallet}
 import hydrozoa.multisig.ledger.block.BlockEffects
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.HeadTokenNames
@@ -18,7 +18,6 @@ import scala.collection.immutable.TreeMap
 import scala.concurrent.duration.FiniteDuration
 import scala.util.Try
 import scalus.cardano.address.Network
-import scalus.cardano.address.Network.{Mainnet, Testnet}
 import scalus.cardano.ledger.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import spire.math.{Rational, UByte}
@@ -45,7 +44,7 @@ case class RawConfig(
     // blockfrost to query the chain. Thus, we pass in the UTxOs directly.
     resolvedUtxosForInitialization: ResolvedUtxos,
     // FIXME: I guess we need both the public and private key?
-    withdrawalFeeWallet: PeerWallet,
+    withdrawalFeeWallet: HeadPeerWallet,
     pollingPeriod: FiniteDuration
 
     // Augmented Initial block
@@ -180,7 +179,7 @@ object HeadConfig {
               headPeers = HeadPeers(
                 TreeMap.from(
                   verificationKeys.map((id, pubKey) =>
-                      (PeerId(id.toInt, verificationKeys.size), pubKey)
+                      (HeadPeerId(id.toInt, verificationKeys.size), pubKey)
                   )
                 )
               ),
@@ -255,9 +254,11 @@ object HeadConfig {
         liquidationActorOperationalSettings: LiquidationActorOperationalSettings
     )
 
-    final case class OwnPeer private[config] (
-        peerId: PeerId,
-        wallet: PeerWallet
+    // TODO: can we remove private here?
+    // final case class OwnPeer private[config] (
+    final case class OwnPeer(
+        peerId: HeadPeerId,
+        wallet: HeadPeerWallet
     )
 
     final case class InitialBlock private[config] (
@@ -291,7 +292,7 @@ object HeadConfig {
     )
 
     final case class HeadPeers private[config] (
-        peerKeys: TreeMap[PeerId, VerificationKeyBytes]
+        peerKeys: TreeMap[HeadPeerId, VerificationKeyBytes]
     ) {
         def headMultisigScript: HeadMultisigScript =
             HeadMultisigScript(NonEmptyList.fromListUnsafe(peerKeys.values.toList))
@@ -329,7 +330,7 @@ object HeadConfig {
       *   when idle, the liquidation actor waits this long before polling the Cardano backend again.
       */
     final case class LiquidationActorOperationalSettings private[config] (
-        withdrawalFeeWallet: PeerWallet,
+        withdrawalFeeWallet: HeadPeerWallet,
         pollingPeriod: FiniteDuration
     )
 

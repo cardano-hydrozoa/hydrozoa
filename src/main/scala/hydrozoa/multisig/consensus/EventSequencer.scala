@@ -8,7 +8,7 @@ import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.EventSequencer.*
 import hydrozoa.multisig.consensus.PeerLiaison.Handle
-import hydrozoa.multisig.consensus.peer.PeerId
+import hydrozoa.multisig.consensus.peer.HeadPeerId
 import hydrozoa.multisig.ledger.block.{BlockBody, BlockEffects, BlockStatus}
 import hydrozoa.multisig.ledger.dapp.tx.RefundTx
 import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag
@@ -102,7 +102,7 @@ object EventSequencer {
     ): IO[EventSequencer] =
         IO(new EventSequencer(config, pendingConnections) {})
 
-    final case class Config(peerId: PeerId)
+    final case class Config(peerId: HeadPeerId)
 
     final case class Connections(
         blockWeaver: BlockWeaver.Handle,

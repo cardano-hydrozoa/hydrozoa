@@ -10,7 +10,7 @@ import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.lib.actor.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, toEpochQuantizedInstant}
 import hydrozoa.multisig.MultisigRegimeManager
-import hydrozoa.multisig.consensus.peer.{PeerId, PeerWallet}
+import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerWallet}
 import hydrozoa.multisig.consensus.{ConsensusActor, PeerLiaison}
 import hydrozoa.multisig.ledger.DappLedgerM.runDappLedgerM
 import hydrozoa.multisig.ledger.JointLedger.*
@@ -537,8 +537,8 @@ object JointLedger {
     // TODO: review
     case class Config(
         initialBlock: Block.MultiSigned.Initial,
-        peerId: PeerId,
-        wallet: PeerWallet,
+        peerId: HeadPeerId,
+        wallet: HeadPeerWallet,
         // TODO: can be obtained from initialBlock?
         initialBlockTime: QuantizedInstant,
         cardanoInfo: CardanoInfo,

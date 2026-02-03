@@ -8,7 +8,7 @@ import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.UtxoIdL1
 import hydrozoa.lib.cardano.scalus.QuantizedTime.toEpochQuantizedInstant
 import hydrozoa.multisig.MultisigRegimeManager
-import hydrozoa.multisig.consensus.peer.PeerId
+import hydrozoa.multisig.consensus.peer.HeadPeerId
 import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockHeader, BlockNumber, BlockStatus}
@@ -51,7 +51,7 @@ object BlockWeaver:
       */
     final case class Config(
         lastKnownBlock: BlockNumber,
-        peerId: PeerId,
+        peerId: HeadPeerId,
         // TODO: shall we use just Seq[LedgerEvent here] not to expose Mempool?
         recoveredMempool: Mempool,
         slotConfig: SlotConfig

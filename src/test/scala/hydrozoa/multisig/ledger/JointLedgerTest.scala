@@ -14,7 +14,7 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.multisig.consensus.ConsensusActor
 import hydrozoa.multisig.consensus.ConsensusActor.Request
-import hydrozoa.multisig.consensus.peer.PeerId
+import hydrozoa.multisig.consensus.peer.HeadPeerId
 import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.ledger.JointLedger.{Done, Producing}
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.*
@@ -191,7 +191,7 @@ object JointLedgerTestHelpers {
                 JointLedger(
                   JointLedger.Config(
                     initialBlock = initialBlock,
-                    peerId = PeerId(peers.head.ordinal, peers.size),
+                    peerId = HeadPeerId(peers.head.ordinal, peers.size),
                     wallet = peers.head.wallet,
                     tallyFeeAllowance = Coin.ada(2),
                     tokenNames = tokenNames,

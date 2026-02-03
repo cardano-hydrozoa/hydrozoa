@@ -458,9 +458,9 @@ object Generators {
 
         // TODO: improve
         def genEventId: Gen[LedgerEventId] = for {
-            peerNumber <- Gen.choose(0, 10)
+            headPeerNumber <- Gen.choose(0, 10)
             eventNumber <- Gen.choose(0, 1024)
-        } yield LedgerEventId(peerNumber, eventNumber)
+        } yield LedgerEventId(headPeerNumber, eventNumber)
 
         /** NOTE: These will generate _fully_ arbitrary data. It is probably not what you want, but
           * may be a good starting point. For example, an arbitrary payout obligation may be for a

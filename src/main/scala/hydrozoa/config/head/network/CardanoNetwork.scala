@@ -4,8 +4,6 @@ import hydrozoa.lib.number.PositiveInt
 import scalus.cardano.address.Network
 import scalus.cardano.ledger.{CardanoInfo, Coin, ProtocolParams, SlotConfig}
 
-export hydrozoa.config.head.multisig.fallback.FallbackContingency.mkFallbackContingencyWithDefaults
-
 enum CardanoNetwork(_cardanoInfo: CardanoInfo) extends CardanoNetwork.Section {
     case Mainnet extends CardanoNetwork(CardanoInfo.mainnet)
     case Preprod extends CardanoNetwork(CardanoInfo.preprod)

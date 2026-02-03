@@ -8,7 +8,7 @@ import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.PeerLiaison.*
 import hydrozoa.multisig.consensus.PeerLiaison.Request.*
 import hydrozoa.multisig.consensus.ack.{AckBlock, AckId, AckNumber}
-import hydrozoa.multisig.consensus.peer.PeerId
+import hydrozoa.multisig.consensus.peer.HeadPeerId
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber, BlockStatus, BlockType}
 import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId, LedgerEventNumber}
 import scala.collection.immutable.Queue
@@ -282,8 +282,8 @@ object PeerLiaison {
         IO(new PeerLiaison(config, pendingLocalConnections) {})
 
     final case class Config(
-        ownPeerId: PeerId,
-        remotePeerId: PeerId,
+        ownPeerId: HeadPeerId,
+        remotePeerId: HeadPeerId,
         maxLedgerEventsPerBatch: Int = 25
     )
 

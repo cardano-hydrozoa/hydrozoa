@@ -7,7 +7,7 @@ import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{AckBlock, AckId}
-import hydrozoa.multisig.consensus.peer.PeerNumber
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockHeader.Minor.HeaderSignature
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader, BlockNumber}
 import hydrozoa.multisig.ledger.dapp.tx.{DeinitTx, RefundTx, RolloutTx, Tx, TxSignature}
@@ -243,10 +243,10 @@ object ConsensusActor:
 
     final case class Config(
         /** Own peer number */
-        peerId: PeerNumber,
+        headPeerNumber: HeadPeerNumber,
 
         /** The mapping from head's peers to their verification keys. */
-        verificationKeys: Map[PeerNumber, VerificationKeyBytes],
+        verificationKeys: Map[HeadPeerNumber, VerificationKeyBytes],
 
         /** Requests that haven't been handled, initially empty. */
         recoveredRequests: Seq[Request] = Seq.empty,
@@ -379,10 +379,14 @@ class ConsensusActor(
         _ <- ack match {
             case minor: AckBlock.Minor =>
                 state.withCellFor(minor)(_.applyAck(minor)) >>
-                    IO.whenA(ack.peerNum == config.peerId)(state.scheduleOwnImmediateAck(minor))
+                    IO.whenA(ack.peerNum == config.headPeerNumber)(
+                      state.scheduleOwnImmediateAck(minor)
+                    )
             case major1: AckBlock.Major1 =>
                 state.withCellFor(major1)(_.applyAck(major1)) >>
-                    IO.whenA(ack.peerNum == config.peerId)(state.scheduleOwnImmediateAck(major1))
+                    IO.whenA(ack.peerNum == config.headPeerNumber)(
+                      state.scheduleOwnImmediateAck(major1)
+                    )
             case major2: AckBlock.Major2 =>
                 state.withCellFor(major2) {
                     case round1: MajorRoundOneCell => round1.applyAck(major2)
@@ -390,7 +394,9 @@ class ConsensusActor(
                 }
             case final1: AckBlock.Final1 =>
                 state.withCellFor(final1)(_.applyAck(final1)) >>
-                    IO.whenA(ack.peerNum == config.peerId)(state.scheduleOwnImmediateAck(final1))
+                    IO.whenA(ack.peerNum == config.headPeerNumber)(
+                      state.scheduleOwnImmediateAck(final1)
+                    )
             case final2: AckBlock.Final2 =>
                 state.withCellFor(final2) {
                     case round1: FinalRoundOneCell => round1.applyAck(final2)
@@ -486,7 +492,7 @@ class ConsensusActor(
           */
         def scheduleOwnImmediateAck(ack: RoundOneOwnAck): IO[Unit] = for {
             // Check again it's our own ack
-            _ <- IO.raiseWhen(ack.peerNum != config.peerId)(Error.AlienAckAnnouncement)
+            _ <- IO.raiseWhen(ack.peerNum != config.headPeerNumber)(Error.AlienAckAnnouncement)
             // The number of the block an ack may depend - the previous block
             prevBlockNum = ack.blockNum.decrement
             _ <- state.cells.get(prevBlockNum) match {
@@ -886,7 +892,7 @@ class ConsensusActor(
                       postponedNextBlockOwnAck = postponedNextBlockOwnAck
                     )
                     ownAck <- config.verificationKeys
-                        .get(config.peerId)
+                        .get(config.headPeerNumber)
                         .flatMap(vkey => this.acks2.get(vkey))
                         .liftTo[IO](
                           new IllegalStateException(s"Own Major2 ack not found for block $blockNum")
@@ -1095,7 +1101,7 @@ class ConsensusActor(
                     )
                     // Own ack should always be present
                     ownAck <- config.verificationKeys
-                        .get(config.peerId)
+                        .get(config.headPeerNumber)
                         .flatMap(vkey => this.acks2.get(vkey))
                         .liftTo[IO](
                           new IllegalStateException(s"Own Final2 ack not found for block $blockNum")
@@ -1211,9 +1217,9 @@ class ConsensusActor(
 
         enum CollectingError extends Throwable:
             case UnexpectedBlockNumber(roundBlockNumber: BlockNumber, blockNumber: BlockNumber)
-            case UnexpectedAck(blockNum: BlockNumber, peerId: PeerNumber)
+            case UnexpectedAck(blockNum: BlockNumber, peerId: HeadPeerNumber)
             case UnexpectedBlock(blockNum: BlockNumber)
-            case UnexpectedPeer(peer: PeerNumber)
+            case UnexpectedPeer(peer: HeadPeerNumber)
             case PostponedAckAlreadySet
             case UnexpectedPostponedAck
 

@@ -8,7 +8,7 @@ import com.suprnation.actor.test.TestKit
 import com.suprnation.typelevel.actors.syntax.*
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
-import hydrozoa.multisig.consensus.peer.PeerId
+import hydrozoa.multisig.consensus.peer.HeadPeerId
 import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
@@ -36,7 +36,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
 
         val peers = p.pick(genTestPeers(minPeers = 3, maxPeers = 5), "test peers")
         val peer = p.pick(Gen.oneOf(peers.toList))
-        val peerId = PeerId(peer.ordinal, peers.size)
+        val peerId = HeadPeerId(peer.ordinal, peers.size)
 
         // Either the initialization block or any arbitrary block
         val lastKnownBlock =
@@ -114,7 +114,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
             val peers = p.pick(genTestPeers(), "test peers")
             // The second peer (i=1) or the first one if there is only one
             val leader = peers.tail.headOption.getOrElse(peers.head)
-            val peerId = PeerId(leader.ordinal, peers.size)
+            val peerId = HeadPeerId(leader.ordinal, peers.size)
             val lastKnownBlock = 0
 
             // Joint ledger mock
@@ -161,7 +161,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
 
             val peers = p.pick(genTestPeers(), "test peers")
             val peer = p.pick(Gen.oneOf(peers.toList))
-            val peerId = PeerId(peer.ordinal, peers.size)
+            val peerId = HeadPeerId(peer.ordinal, peers.size)
 
             // Joint ledger mock
             val system = p.runIO(ActorSystem[IO]("Weaver SUT").allocated)._1
@@ -215,7 +215,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
         // blocks (since we don't want its leader StartBlock gets into our way).
         val peers = p.pick(genTestPeers(4, 10), "test peers")
         val peer = p.pick(Gen.oneOf(peers.toList), "own peer")
-        val peerId = PeerId(peer.ordinal, peers.size)
+        val peerId = HeadPeerId(peer.ordinal, peers.size)
 
         // Joint ledger mock
         val system = p.runIO(ActorSystem[IO]("Weaver SUT").allocated)._1

@@ -3,38 +3,45 @@ package hydrozoa.config.head.peers
 import hydrozoa.VerificationKeyBytes
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.number.PositiveInt
-import hydrozoa.multisig.consensus.peer.{PeerId, PeerNumber}
+import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import scalus.cardano.address.ShelleyAddress
 
 final case class HeadPeers(
-    peerVKeys: IArray[VerificationKeyBytes]
+    override val headPeerVKeys: IArray[VerificationKeyBytes]
 ) extends HeadPeers.Section {
-    require(peerVKeys.size > 0)
+    require(headPeerVKeys.size > 0)
 
     override transparent inline def headPeers: HeadPeers = this
 
-    def apply(p: PeerId): VerificationKeyBytes = {
-        require(p.nPeers == nPeers)
-        peerVKeys(p.peerNum)
+    def apply(p: HeadPeerId): VerificationKeyBytes = {
+        require(p.nHeadPeers == nHeadPeers)
+        headPeerVKeys(p.peerNum)
     }
 
-    override def peerVKey(p: PeerId): VerificationKeyBytes = apply(p)
+    override def headPeerIds: List[HeadPeerId] =
+        Range.Exclusive(0, nHeadPeers, 1).map(HeadPeerId(_, nHeadPeers)).toList
 
-    override val nPeers: PositiveInt = PositiveInt.unsafeApply(peerVKeys.size)
+    override def headPeerVKey(p: HeadPeerId): VerificationKeyBytes = apply(p)
 
     override lazy val headMultisigScript: HeadMultisigScript = HeadMultisigScript(this)
+
+    override val nHeadPeers: PositiveInt = PositiveInt.unsafeApply(headPeerVKeys.size)
 }
 
 object HeadPeers {
     trait Section {
         def headPeers: HeadPeers
 
-        def peerVKey(p: PeerId): VerificationKeyBytes
+        def headPeerIds: List[HeadPeerId]
 
-        def nPeers: PositiveInt
+        def headPeerVKeys: IArray[VerificationKeyBytes]
+
+        def headPeerVKey(p: HeadPeerId): VerificationKeyBytes
 
         def headMultisigScript: HeadMultisigScript
+
+        def nHeadPeers: PositiveInt
     }
 
     extension (config: HeadPeers.Section & CardanoNetwork.Section)

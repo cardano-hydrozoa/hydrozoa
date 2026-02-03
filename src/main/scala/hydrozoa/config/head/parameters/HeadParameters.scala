@@ -13,25 +13,6 @@ final case class HeadParameters(
 ) extends HeadParameters.Section {
     override transparent inline def headParams: HeadParameters = this
 
-    override transparent inline def minSettlementDuration: QuantizedFiniteDuration =
-        txTiming.minSettlementDuration
-    override transparent inline def inactivityMarginDuration: QuantizedFiniteDuration =
-        txTiming.inactivityMarginDuration
-    override transparent inline def silenceDuration: QuantizedFiniteDuration =
-        txTiming.silenceDuration
-    override transparent inline def depositMaturityDuration: QuantizedFiniteDuration =
-        txTiming.depositMaturityDuration
-    override transparent inline def depositAbsorptionDuration: QuantizedFiniteDuration =
-        txTiming.depositAbsorptionDuration
-
-    override transparent inline def collectiveContingency: FallbackContingency.Collective =
-        fallbackContingency.collectiveContingency
-    override transparent inline def individualContingency: FallbackContingency.Individual =
-        fallbackContingency.individualContingency
-
-    override transparent inline def votingDuration: QuantizedFiniteDuration =
-        disputeResolutionConfig.votingDuration
-
     // TODO: We need this hash to put into the initialization tx's metadata,
     //  so that the head parameters are pinned by something signed by all peers.
     override lazy val headParamsHash: Hash32 = {
@@ -48,5 +29,29 @@ object HeadParameters {
         def headParams: HeadParameters
 
         def headParamsHash: Hash32
+
+        override transparent inline def minSettlementDuration: QuantizedFiniteDuration =
+            txTiming.minSettlementDuration
+
+        override transparent inline def inactivityMarginDuration: QuantizedFiniteDuration =
+            txTiming.inactivityMarginDuration
+
+        override transparent inline def silenceDuration: QuantizedFiniteDuration =
+            txTiming.silenceDuration
+
+        override transparent inline def depositMaturityDuration: QuantizedFiniteDuration =
+            txTiming.depositMaturityDuration
+
+        override transparent inline def depositAbsorptionDuration: QuantizedFiniteDuration =
+            txTiming.depositAbsorptionDuration
+
+        override transparent inline def collectiveContingency: FallbackContingency.Collective =
+            fallbackContingency.collectiveContingency
+
+        override transparent inline def individualContingency: FallbackContingency.Individual =
+            fallbackContingency.individualContingency
+
+        override transparent inline def votingDuration: QuantizedFiniteDuration =
+            disputeResolutionConfig.votingDuration
     }
 }

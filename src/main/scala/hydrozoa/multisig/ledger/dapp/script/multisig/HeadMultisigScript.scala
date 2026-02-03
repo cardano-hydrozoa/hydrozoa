@@ -59,7 +59,7 @@ object HeadMultisigScript:
         HeadMultisigScript(
           Script.Native(
             AllOf(
-              headPeers.peerVKeys
+              headPeers.headPeerVKeys
                   .map(key => key.verKeyHash)
                   .toList
                   .toIndexedSeq

@@ -8,10 +8,8 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.HeadParameters
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
-import hydrozoa.lib.cardano.scalus.QuantizedTime
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedFiniteDuration
 import hydrozoa.lib.number.PositiveInt
-import hydrozoa.multisig.consensus.peer.{PeerId, PeerNumber}
+import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
 import hydrozoa.multisig.ledger.block.Block
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
@@ -24,7 +22,9 @@ final case class HeadConfig(
     override val headPeers: HeadPeers,
     override val initialBlock: Block.MultiSigned.Initial,
     override val initializationParams: InitializationParameters,
-) extends HeadConfig.Section
+) extends HeadConfig.Section {
+    override transparent inline def headConfig: HeadConfig = this
+}
 
 object HeadConfig {
     trait Section
@@ -33,6 +33,7 @@ object HeadConfig {
           HeadPeers.Section,
           InitialBlock.Section,
           InitializationParameters.Section {
+        def headConfig: HeadConfig
 
         override transparent inline def cardanoInfo: CardanoInfo = cardanoNetwork.cardanoInfo
         override transparent inline def network: Network = cardanoNetwork.network
@@ -40,42 +41,29 @@ object HeadConfig {
         override transparent inline def cardanoParams: ProtocolParams = cardanoNetwork.cardanoParams
 
         override transparent inline def txTiming: TxTiming = headParams.txTiming
-        override transparent inline def minSettlementDuration: QuantizedFiniteDuration =
-            headParams.minSettlementDuration
-        override transparent inline def inactivityMarginDuration: QuantizedFiniteDuration =
-            headParams.inactivityMarginDuration
-        override transparent inline def silenceDuration: QuantizedFiniteDuration =
-            headParams.silenceDuration
-        override transparent inline def depositMaturityDuration: QuantizedFiniteDuration =
-            headParams.depositMaturityDuration
-        override transparent inline def depositAbsorptionDuration: QuantizedFiniteDuration =
-            headParams.depositAbsorptionDuration
 
         override transparent inline def fallbackContingency: FallbackContingency =
             headParams.fallbackContingency
-        override transparent inline def collectiveContingency: FallbackContingency.Collective =
-            headParams.collectiveContingency
-        override transparent inline def individualContingency: FallbackContingency.Individual =
-            headParams.individualContingency
 
         override transparent inline def disputeResolutionConfig: DisputeResolutionConfig =
             headParams.disputeResolutionConfig
-        override transparent inline def votingDuration: QuantizedFiniteDuration =
-            headParams.votingDuration
 
         override transparent inline def headParamsHash: Hash32 =
             headParams.headParamsHash
 
-        override transparent inline def peerVKey(p: PeerId): VerificationKeyBytes =
-            headPeers.peerVKey(p)
-        override transparent inline def nPeers: PositiveInt =
-            headPeers.nPeers
+        override transparent inline def headPeerIds: List[HeadPeerId] = headPeers.headPeerIds
+        override transparent inline def headPeerVKeys: IArray[VerificationKeyBytes] =
+            headPeers.headPeerVKeys
+        override transparent inline def headPeerVKey(p: HeadPeerId): VerificationKeyBytes =
+            headPeers.headPeerVKey(p)
+        override transparent inline def nHeadPeers: PositiveInt =
+            headPeers.nHeadPeers
         override transparent inline def headMultisigScript: HeadMultisigScript =
             headPeers.headMultisigScript
 
         override transparent inline def initialL2Utxos: Utxos =
             initializationParams.initialL2Utxos
-        override transparent inline def initialEquityContributions: Map[PeerNumber, Coin] =
+        override transparent inline def initialEquityContributions: Map[HeadPeerNumber, Coin] =
             initializationParams.initialEquityContributions
         override transparent inline def initialSeedUtxo: Utxo =
             initializationParams.initialSeedUtxo

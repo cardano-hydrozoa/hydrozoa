@@ -15,7 +15,7 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuanti
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, quantize}
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.CardanoLiaisonTest.BlockWeaverMock
-import hydrozoa.multisig.consensus.peer.PeerId
+import hydrozoa.multisig.consensus.peer.HeadPeerId
 import hydrozoa.multisig.consensus.{CardanoLiaison, ConsensusActor, EventSequencer}
 import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
@@ -116,7 +116,7 @@ case class Stage1(
 
             // Consensus actor
             consensusConfig = ConsensusActor.Config(
-              peerNumber = privateNodeSettings.ownPeer.peerId.peerNum,
+              headPeerNumber = privateNodeSettings.ownPeer.peerId.peerNum,
               verificationKeys =
                   headParameters.headPeers.peerKeys.map((peerId, key) => peerId.peerNum -> key)
             )
@@ -211,7 +211,7 @@ case class Stage1(
             ownPeerIndex = 0
             equityShares <- genEquityShares(peers, cardanoInfo.network).label("Equity shares")
             ownPeer = (
-              OwnPeer(PeerId(ownPeerIndex, peers.size), ownTestPeer.wallet),
+              OwnPeer(HeadPeerId(ownPeerIndex, peers.size), ownTestPeer.wallet),
               Address[L1](ownTestPeer.address()),
               equityShares.peerShares(UByte(ownPeerIndex)).equityShare
             )

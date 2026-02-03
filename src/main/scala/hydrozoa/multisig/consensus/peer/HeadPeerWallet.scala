@@ -8,13 +8,13 @@ import hydrozoa.multisig.ledger.dapp.tx.TxSignature
 import scala.language.implicitConversions
 import scalus.cardano.ledger.{Transaction, VKeyWitness}
 
-final class PeerWallet(
-    peerNum: PeerNumber,
+final class HeadPeerWallet(
+    peerNum: HeadPeerNumber,
     walletModule: WalletModule,
     verificationKey: walletModule.VerificationKey,
     signingKey: walletModule.SigningKey
-):
-    def getPeerNum: PeerNumber = peerNum
+) {
+    def getPeerNum: HeadPeerNumber = peerNum
 
     private lazy val verificationKeysBytes =
         walletModule.exportVerificationKeyBytes(verificationKey)
@@ -100,3 +100,4 @@ final class PeerWallet(
           finalizationTx = mkTxSignature(finalizationTx.tx)
         )
     }
+}

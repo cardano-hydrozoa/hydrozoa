@@ -11,7 +11,7 @@ import hydrozoa.multisig.MultisigRegimeManager.*
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
 import hydrozoa.multisig.consensus.ack.AckBlock
-import hydrozoa.multisig.consensus.peer.PeerId
+import hydrozoa.multisig.consensus.peer.HeadPeerId
 import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, InitializationTx}
 import scala.concurrent.duration.DurationInt
@@ -63,7 +63,7 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
             consensusActor <- context.actorOf(
               ConsensusActor(
                 ConsensusActor.Config(
-                  peerId = ???,
+                  headPeerNumber = ???,
                   verificationKeys = ???,
                   recoveredRequests = ???
                 ),
@@ -158,8 +158,8 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
   */
 object MultisigRegimeManager {
     final case class Config(
-        peerId: PeerId,
-        peers: List[PeerId],
+        peerId: HeadPeerId,
+        peers: List[HeadPeerId],
         cardanoBackend: CardanoBackend[IO],
         initializationTx: InitializationTx,
         fallbackTx: FallbackTx,
@@ -173,7 +173,7 @@ object MultisigRegimeManager {
         eventSequencer: EventSequencer.Handle,
         jointLedger: JointLedger.Handle,
         peerLiaisons: List[PeerLiaison.Handle],
-        remotePeerLiaisons: Map[PeerId, PeerLiaison.Handle],
+        remotePeerLiaisons: Map[HeadPeerId, PeerLiaison.Handle],
     )
 
     type PendingConnections = Deferred[IO, Connections]

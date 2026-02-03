@@ -1,7 +1,7 @@
 package hydrozoa.multisig.ledger.event
 
 import cats.implicits.catsSyntaxOrder
-import hydrozoa.multisig.consensus.peer.PeerNumber
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import scala.annotation.targetName
 
 type LedgerEventId = LedgerEventId.Id
@@ -15,15 +15,16 @@ object LedgerEventId {
         case Valid
         case Invalid
 
-    opaque type Id = (PeerNumber, LedgerEventNumber)
+    opaque type Id = (HeadPeerNumber, LedgerEventNumber)
 
-    def apply(peerNum: PeerNumber, eventNum: LedgerEventNumber): Id = (peerNum, eventNum)
+    def apply(peerNum: HeadPeerNumber, eventNum: LedgerEventNumber): Id = (peerNum, eventNum)
 
     @targetName("apply_Int")
-    def apply(peerNum: Int, eventNum: Int): Id = (PeerNumber(peerNum), LedgerEventNumber(eventNum))
+    def apply(peerNum: Int, eventNum: Int): Id =
+        (HeadPeerNumber(peerNum), LedgerEventNumber(eventNum))
 
-    def unapply(self: Id): (PeerNumber, LedgerEventNumber) =
-        (PeerNumber(self._1), LedgerEventNumber(self._2))
+    def unapply(self: Id): (HeadPeerNumber, LedgerEventNumber) =
+        (HeadPeerNumber(self._1), LedgerEventNumber(self._2))
 
     given Conversion[Id, (Int, Int)] = identity
 
@@ -34,7 +35,7 @@ object LedgerEventId {
 
     extension (self: Id)
         def increment: Id = LedgerEventId(self._1, self._2 + 1)
-        def peerNum: PeerNumber = PeerNumber(self._1)
+        def peerNum: HeadPeerNumber = HeadPeerNumber(self._1)
         def eventNum: LedgerEventNumber = LedgerEventNumber(self._2)
 
         def precedes(other: Id): Boolean =

@@ -7,7 +7,7 @@ import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath
 import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath.createExternalAddressDerivationPathForAccount
 import hydrozoa.*
 import hydrozoa.lib.cardano.wallet.WalletModule
-import hydrozoa.multisig.consensus.peer.{PeerNumber, PeerWallet}
+import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, HeadPeerWallet}
 import org.scalacheck.Gen
 import scala.collection.mutable
 import scalus.builtin.Builtins.blake2b_224
@@ -49,9 +49,9 @@ enum TestPeer derives CanEqual:
 
     def account: Account = TestPeer.mkAccount(this)
 
-    def wallet: PeerWallet = TestPeer.mkWallet(this)
+    def wallet: HeadPeerWallet = TestPeer.mkWallet(this)
 
-    def peerNum: PeerNumber = TestPeer.peerNum(this)
+    def peerNum: HeadPeerNumber = TestPeer.peerNum(this)
 
     def address(network: Network = testNetwork): ShelleyAddress = TestPeer.address(this, network)
 
@@ -76,10 +76,10 @@ object TestPeer:
             )
         )
 
-    private val walletCache: mutable.Map[TestPeer, PeerWallet] = mutable.Map.empty
+    private val walletCache: mutable.Map[TestPeer, HeadPeerWallet] = mutable.Map.empty
         .withDefault(peer =>
-            PeerWallet(
-              PeerNumber(peer.ordinal),
+            HeadPeerWallet(
+              HeadPeerNumber(peer.ordinal),
               WalletModule.BloxBean,
               mkAccount(peer).hdKeyPair().getPublicKey,
               mkAccount(peer).hdKeyPair().getPrivateKey
@@ -96,9 +96,9 @@ object TestPeer:
 
     def mkAccount(peer: TestPeer): Account = accountCache.useOrCreate(peer)
 
-    def mkWallet(peer: TestPeer): PeerWallet = walletCache.useOrCreate(peer)
+    def mkWallet(peer: TestPeer): HeadPeerWallet = walletCache.useOrCreate(peer)
 
-    def peerNum(peer: TestPeer): PeerNumber = PeerNumber(peer.ordinal)
+    def peerNum(peer: TestPeer): HeadPeerNumber = HeadPeerNumber(peer.ordinal)
 
     def address(network: Network)(peer: TestPeer): ShelleyAddress = address(peer, network)
 
@@ -122,7 +122,7 @@ object TestPeer:
             val keyWitness = peer.wallet.mkVKeyWitness(txUnsigned)
             attachVKeyWitnesses(txUnsigned, List(keyWitness))
 
-    extension (wallet: PeerWallet)
+    extension (wallet: HeadPeerWallet)
         def testPeerName: String = {
             val i = wallet.getPeerNum.convert
             if peerNumRange.contains(i) then TestPeer.fromOrdinal(i).toString else "Unknown"
