@@ -65,6 +65,11 @@ final case class TxTiming(
       */
     def newFallbackStartTime(blockStartTime: QuantizedInstant): QuantizedInstant =
         blockStartTime + minSettlementDuration + inactivityMarginDuration + silenceDuration
+
+    def currentSettlementExpiringTime(
+        competingFallbackStartTime: QuantizedInstant
+    ): QuantizedInstant =
+        competingFallbackStartTime - silenceDuration
 }
 
 /** Timing is hard. The precision we have to use is going to be dependent on the slot config.

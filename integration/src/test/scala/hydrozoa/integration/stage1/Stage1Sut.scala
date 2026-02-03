@@ -8,21 +8,32 @@ import com.suprnation.actor.ActorSystem
 import hydrozoa.integration.stage1
 import hydrozoa.integration.stage1.AgentActor.CompleteBlock
 import hydrozoa.lib.actor.SyncRequest
+import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.ConsensusActor
 import hydrozoa.multisig.consensus.ack.AckBlock
 import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
-import hydrozoa.multisig.ledger.block.{Block, BlockNumber}
+import hydrozoa.multisig.ledger.block.{Block, BlockEffects, BlockNumber}
 import hydrozoa.multisig.ledger.event.LedgerEvent
 
 /** Stage 1 SUT. */
 case class Stage1Sut(
     system: ActorSystem[IO],
-    agent: AgentActor.Handle
+    cardanoBackend: CardanoBackend[IO],
+    agent: AgentActor.Handle,
+    effectsAcc: Ref[IO, List[BlockEffects.Unsigned]] = Ref.unsafe(List.empty)
 )
 
 object AgentActor:
 
+    /** Synchronous complete block msg that returns unsigned block. This is needed for at least one
+      * command should return a meaningful result - the block brief. Additionally, the Stage 1 test
+      * suite saves all block L1 effects in [[Stage1Sut.effectsAcc]] to verify that all needed were
+      * submitted to L1.
+      *
+      * @param block
+      * @param blockNumber
+      */
     case class CompleteBlock(
         block: CompleteBlockRegular | CompleteBlockFinal,
         blockNumber: BlockNumber

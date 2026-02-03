@@ -74,7 +74,7 @@ trait ModelBasedSuite {
     /** Shutdown the SUT instance, and release any resources related to it. May also run some checks
       * upon shutting SUT down.
       */
-    def shutdownSut(sut: Sut): IO[Prop]
+    def shutdownSut(state: State, sut: Sut): IO[Prop]
 
     /** The precondition for the initial state, when no commands yet have run.
       *
@@ -499,7 +499,7 @@ trait ModelBasedSuite {
                 }
             }
             (sut, prop, s, lastCmd) = result
-            shutdownProp <- shutdownSut(sut)
+            shutdownProp <- shutdownSut(s, sut)
         } yield (sut, propAnd(prop, shutdownProp), s, lastCmd)
         io.unsafeRunSync()
     }
