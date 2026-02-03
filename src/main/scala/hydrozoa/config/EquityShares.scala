@@ -1,6 +1,7 @@
 package hydrozoa.config
-import hydrozoa.AddressL1
+import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.lib.cardano.value.coin.Coin
+import hydrozoa.{AddressL1, config}
 import spire.compat.numeric
 import spire.math.Number.apply
 import spire.math.{Rational, SafeLong, UByte}
@@ -34,25 +35,31 @@ case class PeerEquityShare(
 
 object EquityShares:
 
+    enum Error:
+        case SharesMustSumToOne(sum: Rational)
+
     def apply(
         shares: Map[UByte, (AddressL1, Rational)],
-        collectiveContingency: CollectiveContingency,
-        individualContingency: IndividualContingency
-    ): Either[HeadConfig.Error, EquityShares] = {
+        collectiveContingency: FallbackContingency.Collective,
+        individualContingency: FallbackContingency.Individual
+    ): Either[EquityShares.Error, EquityShares] = {
         import collectiveContingency.*
         import individualContingency.*
 
         val sharesSum = shares.values.map(_._2).sum
         for {
             // Check sum(quity shares) = 1
-            _ <- Either.cond(sharesSum === r"1", (), HeadConfig.Error.SharesMustSumToOne(sharesSum))
+            _ <- Either.cond(sharesSum === r"1", (), Error.SharesMustSumToOne(sharesSum))
 
-            collateralUtxo = collateralDeposit +~ voteTxFee
-            voteUtxo = voteDeposit +~ tallyTxFee
+            collateralUtxo = Coin.unsafeApply(collateralDeposit.value) +~ Coin.unsafeApply(
+              voteTxFee.value
+            )
+            voteUtxo = Coin.unsafeApply(voteDeposit.value) +~ Coin.unsafeApply(tallyTxFee.value)
             peerShares = shares.view
                 .mapValues((address, share) => {
                     val collectiveContingencyShare =
-                        (fallbackTxFee +~ defaultVoteDeposit) *~ share
+                        (Coin.unsafeApply(fallbackTxFee.value) +~ Coin
+                            .unsafeApply(defaultVoteDeposit.value)) *~ share
                     val fallbackDeposit =
                         Coin.unsafeApply(
                           (collectiveContingencyShare +~ collateralUtxo +~ voteUtxo).underlying.ceil.toLong

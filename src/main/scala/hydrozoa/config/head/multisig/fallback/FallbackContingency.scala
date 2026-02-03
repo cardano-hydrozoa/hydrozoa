@@ -2,10 +2,11 @@ package hydrozoa.config.head.multisig.fallback
 
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
-import hydrozoa.lib.number.PositiveInt
+import hydrozoa.lib.number.{Distribution, PositiveInt}
 import scalus.cardano.ledger.{Coin, Value}
 
 export FallbackContingency.{totalFallbackContingency, multisigRegimeUtxoValue}
+export FallbackContingency.{distributeFallbackContingencyInMultisigRegime, distributeFallbackContingencyInRuleBasedRegime}
 export FallbackContingency.{mkFallbackContingencyWithDefaults, mkCollectiveContingencyWithDefaults, mkIndividualContingencyWithDefaults}
 
 final case class FallbackContingency(
@@ -20,7 +21,7 @@ object FallbackContingency {
         defaultVoteDeposit: Coin,
         fallbackTxFee: Coin,
     ) {
-        lazy val totalCollectiveContingency: Coin = defaultVoteDeposit + fallbackTxFee
+        lazy val total: Coin = defaultVoteDeposit + fallbackTxFee
     }
 
     final case class Individual(
@@ -33,7 +34,7 @@ object FallbackContingency {
 
         lazy val voteUtxo: Coin = voteDeposit + voteTxFee
 
-        lazy val totalIndividualContingency: Coin = collateralUtxo + voteUtxo
+        lazy val total: Coin = collateralUtxo + voteUtxo
     }
 
     trait Section {
@@ -45,9 +46,25 @@ object FallbackContingency {
 
     extension (config: FallbackContingency.Section & HeadPeers.Section)
         def totalFallbackContingency: Coin = Coin(
-          config.collectiveContingency.totalCollectiveContingency.value +
-              config.nHeadPeers.convert * config.individualContingency.totalIndividualContingency.value
+          config.collectiveContingency.total.value +
+              config.nHeadPeers.convert * config.individualContingency.total.value
         )
+
+        def distributeFallbackContingencyInMultisigRegime: List[Coin] =
+            distributeEvenlyToPeers(config.totalFallbackContingency)
+
+        def distributeFallbackContingencyInRuleBasedRegime: List[Coin] =
+            distributeEvenlyToPeers(
+              config.collectiveContingency.defaultVoteDeposit +
+                  config.individualContingency.voteDeposit
+            )
+
+        private def distributeEvenlyToPeers(amount: Coin): List[Coin] = {
+            val evenWeights = Distribution.evenWeights(config.nHeadPeers).get
+            val distSafeLong = evenWeights.distribute(amount.value)
+            val distCoin = distSafeLong.iterator.map(_.toLong).map(Coin.apply).toList
+            distCoin
+        }
 
         def multisigRegimeUtxoValue: Value = Value(config.totalFallbackContingency)
 
