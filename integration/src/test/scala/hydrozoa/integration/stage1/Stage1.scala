@@ -33,12 +33,14 @@ import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.rulebased.ledger.dapp.tx.genEquityShares
 import hydrozoa.{Address, L1, UtxoSetL1, attachVKeyWitnesses, maxNonPlutusTxFee}
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.commands.ModelBasedSuite
 import org.scalacheck.{Arbitrary, Gen, Prop, YetAnotherProperties}
 import scala.concurrent.duration.{DurationInt, FiniteDuration, HOURS}
-import scalus.cardano.ledger.{Coin, SlotConfig, TransactionHash, TransactionInput, TransactionOutput, Utxo, Value}
+import scalus.cardano.ledger.rules.{Context, UtxoEnv}
+import scalus.cardano.ledger.{CertState, Coin, SlotConfig, TransactionHash, TransactionInput, TransactionOutput, Utxo, Value}
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import spire.math.UByte
 import test.Generators.Hydrozoa.ArbitraryInstances.given_Arbitrary_LedgerEvent
@@ -57,7 +59,7 @@ import test.{TestPeer, minPubkeyAda, sumUtxoValues}
   *     fallback is expected to be submitted. Otherwise, only happy path effects are expected to be
   *     submitted.
   */
-object Stage1Properties extends YetAnotherProperties("Joint ledger and Cardano liaison (stage 1"):
+object Stage1Properties extends YetAnotherProperties("Integration Stage 1"):
 
     override def overrideParameters(
         p: org.scalacheck.Test.Parameters
@@ -91,6 +93,20 @@ case class Stage1(
         import state.headConfig.*
 
         for {
+
+            now <- IO.realTimeInstant
+            _ <- IO.println(s"Current time: $now")
+
+            // Before creating the actor system, if we are in the TestControl we need
+            // to fast-forward to the zero block creation time.
+            // TODO: make is optional
+            _ <- IO.sleep(
+              FiniteDuration(state.currentTime.instant.instant.toEpochMilli, TimeUnit.MILLISECONDS)
+            )
+
+            now <- IO.realTimeInstant
+            _ <- IO.println(s"Current time: $now")
+
             // Actor system
             system <- ActorSystem[IO]("Stage1").allocated.map(_._1)
 
@@ -101,7 +117,19 @@ case class Stage1(
             // Cardano L1 backend mock
             utxos = genesisUtxos.values.flatten.map((k, v) => k.untagged -> v.untagged).toMap
             mockState = MockState.apply(utxos)
-            cardanoBackend <- CardanoBackendMock.mockIO(mockState)
+            cardanoBackend <- CardanoBackendMock.mockIO(
+              initialState = mockState,
+              mkContext = slot =>
+                  Context(
+                    env = UtxoEnv(
+                      slot = slot,
+                      params = state.headConfig.cardanoInfo.protocolParams,
+                      certState = CertState.empty,
+                      network = state.headConfig.cardanoInfo.network
+                    ),
+                    slotConfig = state.headConfig.cardanoInfo.slotConfig
+                  )
+            )
 
             // Weaver stub
             blockWeaver <- system.actorOf(new BlockWeaverMock)
@@ -195,6 +223,7 @@ case class Stage1(
     override def shutdownSut(state: State, sut: Sut): IO[Prop] = for {
 
         // _ <- IO.println(s"shutdownSut state=${state}")
+        _ <- IO.println("shutdownSut")
 
         /** Important: this action should ensure that the actor system was not terminated.
           *
@@ -204,11 +233,14 @@ case class Stage1(
           * Luckily enough, [[waitForIdle]] does exactly what we need in addition to checking the
           * mailboxes it also verifies that the system was not terminated.
           */
-        _ <- sut.system.waitForIdle()
+        _ <- sut.system.waitForIdle(maxTimeout = 1.second)
 
-        // 1Next part of the property is to check that expected effects were submitted and are known to the Cardano backend.
+        _ <- IO.println("waitForIdle complete")
+
+        // Next part of the property is to check that expected effects were submitted and are known to the Cardano backend.
         effects <- sut.effectsAcc.get
-        _ <- IO.println(s"shutdownSut effects: ${effects.length}")
+
+        // _ <- IO.println(s"shutdownSut effects: ${effects.length}")
 
         expectedEffects: List[TransactionHash] = mkExpectedEffects(
           state.headConfig.initialBlock,
@@ -217,6 +249,10 @@ case class Stage1(
         )
 
         effectsResults <- IO.traverse(expectedEffects)(sut.cardanoBackend.isTxKnown)
+
+        // Finally we have to terminate the actor system, otherwise in TestControl
+        // this will loop indedinitely.
+        _ <- sut.system.terminate()
 
         // TODO shutdown Yaci? Clean up the public testnet?
     } yield {
@@ -288,6 +324,9 @@ case class Stage1(
             zeroBlockCreationTime <- Gen
                 .const(realTimeQuantizedInstant(cardanoInfo.slotConfig).unsafeRunSync())
                 .label("Zero block creation time")
+
+            // _ = println(s"zeroBlockCreationTime: $zeroBlockCreationTime")
+            // _ = println(s"zeroBlockCreationTime: ${zeroBlockCreationTime.toSlot}")
 
             ownTestPeer = Alice
             peers = NonEmptyList.one(ownTestPeer) // useful to have since many gens want it
@@ -434,7 +473,11 @@ case class Stage1(
         override type Result = Unit
 
         override def run(sut: Stage1Sut): IO[Unit] = for {
-            _ <- IO.delay(delay.duration)
+            duration <- IO.pure(delay.duration.finiteDuration)
+            _ <- IO.println(s"SUT is sleeping for: $duration ")
+            _ <- IO.sleep(duration)
+            _ <- IO.println("sleeping is done: TODO: measure the real time")
+
         } yield ()
 
         override def runState(state: ModelState): (Unit, ModelState) = {

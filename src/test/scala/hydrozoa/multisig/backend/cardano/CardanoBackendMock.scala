@@ -40,7 +40,7 @@ class CardanoBackendMock private (
     override def utxosAt(
         address: ShelleyAddress
     ): MockStateF[Either[CardanoBackend.Error, UtxoSetL1]] = {
-        println("utxosAt")
+        // println("utxosAt")
         for {
             state: MockState <- get
             ret: UtxoSetL1 = UtxoSet(
@@ -129,15 +129,15 @@ class CardanoBackendMock private (
     }
 
     override def submitTx(tx: Transaction): MockStateF[Either[CardanoBackend.Error, Unit]] = {
-        println(s"submitTx: ${tx.id}")
+        // println(s"submitTx: ${tx.id}")
         // println(s"submitTx: ${HexUtil.encodeHexString(tx.toCbor)}")
 
         for {
             state <- get[MockState]
-            _ = println(s"utxos count: ${state.ledgerState.utxos.values.size}")
-            _ = println(
-              s"missing utxos: ${tx.body.value.inputs.toSet &~ state.ledgerState.utxos.keySet}"
-            )
+            // _ = println(s"utxos count: ${state.ledgerState.utxos.values.size}")
+            // _ = println(
+            //  s"missing utxos: ${tx.body.value.inputs.toSet &~ state.ledgerState.utxos.keySet}"
+            // )
             // _ = println(s"tx utxos: ${state.ledgerState.utxos.filter((i, _) => tx.body.value.inputs.toSet.contains(i))}")
 
             ret <-
@@ -192,6 +192,8 @@ object CardanoBackendMock {
                 new FunctionK[MockStateF, IO] {
                     def apply[A](state: State[MockState, A]): IO[A] = for {
                         now <- IO.realTimeInstant
+                        // _ <- IO.println(s"transformer now=$now")
+                        // _ <- IO.println(s"transformer slotConfig=$slotConfig")
                         currentSlot = QuantizedInstant.apply(slotConfig, now).toSlot
                         ret <- stateRef
                             .modify(s => (mock.setSlot(currentSlot) >> state).run(s).value)

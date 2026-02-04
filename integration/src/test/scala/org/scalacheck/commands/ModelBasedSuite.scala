@@ -1,6 +1,7 @@
 package org.scalacheck.commands
 
 import cats.effect.IO
+import cats.effect.testkit.TestControl
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all.catsSyntaxFlatMapOps
 import org.scalacheck.{Gen, Prop, Shrink}
@@ -501,7 +502,10 @@ trait ModelBasedSuite {
             (sut, prop, s, lastCmd) = result
             shutdownProp <- shutdownSut(s, sut)
         } yield (sut, propAnd(prop, shutdownProp), s, lastCmd)
-        io.unsafeRunSync()
+
+        // TODO: make use of TestControl optional
+        TestControl.executeEmbed(io).unsafeRunSync()
+
     }
 
     private def prettyCmdsRes(rs: List[Command], maxLength: Int) = {

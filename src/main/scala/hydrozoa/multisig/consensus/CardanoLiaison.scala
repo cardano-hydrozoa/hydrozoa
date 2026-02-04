@@ -205,6 +205,8 @@ trait CardanoLiaison(
     override def preStart: IO[Unit] =
         for {
             _ <- initializeConnections
+            // Immediate Timeout triggers the initialization tx right away
+            _ <- context.self ! CardanoLiaison.Timeout
             _ <- context.setReceiveTimeout(config.receiveTimeout, CardanoLiaison.Timeout)
         } yield ()
 
@@ -213,7 +215,9 @@ trait CardanoLiaison(
             handleMajorBlockL1Effects(block) >> runEffects
         case block: BlockConfirmed.Final =>
             handleFinalBlockL1Effects(block) >> runEffects
-        case CardanoLiaison.Timeout => IO.println("Timeout") >> runEffects
+        case CardanoLiaison.Timeout =>
+            // IO.println("Timeout") >>
+            runEffects
     }
 
     // ===================================
@@ -225,7 +229,7 @@ trait CardanoLiaison(
       */
     protected[consensus] def handleMajorBlockL1Effects(block: BlockConfirmed.Major): IO[Unit] =
         for {
-            _ <- IO.println("handleMajorBlockL1Effects")
+            // _ <- IO.println("handleMajorBlockL1Effects")
             _ <- stateRef.update(s => {
                 val (blockEffectInputs, blockEffects) =
                     mkHappyPathEffectInputsAndEffects(block.settlementTx, block.rolloutTxs)
@@ -245,7 +249,7 @@ trait CardanoLiaison(
       */
     protected[consensus] def handleFinalBlockL1Effects(block: BlockConfirmed.Final): IO[Unit] =
         for {
-            _ <- IO.println("handleFinalBlockL1Effects")
+            // _ <- IO.println("handleFinalBlockL1Effects")
             _ <- stateRef.update(s => {
                 val (blockEffectInputs, blockEffects) =
                     mkHappyPathEffectInputsAndEffects(
@@ -322,7 +326,7 @@ trait CardanoLiaison(
       */
     private def runEffects: IO[Unit] = for {
 
-        _ <- IO.println("runEffects")
+        // _ <- IO.println("runEffects")
 
         // 1. Get the L1 state, i.e. the list of utxo ids at the multisig address  + the current time
         resp <- config.cardanoBackend.utxosAt(config.initializationTx.treasuryProduced.address)
@@ -409,8 +413,10 @@ trait CardanoLiaison(
                         }
 
                     // 4. Submit flattened txs for actions it there are some
-                    _ <- IO.println("\nLiaison's actions:")
-                    _ <- actionsToSubmit.traverse_(a => IO.println(s"\t- ${a.msg}"))
+                    _ <- IO.whenA(actionsToSubmit.nonEmpty)(
+                      IO.println("\nLiaison's actions:") >>
+                          actionsToSubmit.traverse_(a => IO.println(s"\t- ${a.msg}"))
+                    )
 
                     submitRet <-
                         if actionsToSubmit.nonEmpty then
@@ -419,8 +425,12 @@ trait CardanoLiaison(
                             )
                         else IO.pure(List.empty)
 
-                    // Submission errors are ignored, but just dumped here
-                    _ <- IO.println(submitRet)
+                    // Submission errors are ignored, but dumped here
+                    submissionErrors = submitRet.filter(_.isLeft)
+                    _ <- IO.whenA(submissionErrors.nonEmpty)(
+                      IO.println("Submission errors:") >>
+                          submissionErrors.traverse_(a => IO.println(s"\t- ${a.left}"))
+                    )
 
                 } yield ()
         }
@@ -502,7 +512,7 @@ trait CardanoLiaison(
             // we should address it somehow.
             case backboneEffectId @ (blockNum, 0) =>
 
-                println(s"mkDirectAction: backboneEffectId: $backboneEffectId")
+                // println(s"mkDirectAction: backboneEffectId: $backboneEffectId")
 
                 val happyPathEffect = state.happyPathEffects(backboneEffectId)
                 // May absent for phony "deinit" block number
