@@ -49,15 +49,8 @@ trait MultisigRegimeManager(config: NodeConfig, cardanoBackend: CardanoBackend[I
                     .filterNot(_ == config.ownHeadPeerId)
                     .traverse(pid =>
                         for {
-                            localPeerLiaison <- context.actorOf(
-                              PeerLiaison(
-                                PeerLiaison.Config(
-                                  ownPeerId = config.ownHeadPeerId,
-                                  remotePeerId = pid
-                                ),
-                                pendingConnections
-                              )
-                            )
+                            localPeerLiaison <-
+                                context.actorOf(PeerLiaison(config, pid, pendingConnections))
                         } yield localPeerLiaison
                     )
 

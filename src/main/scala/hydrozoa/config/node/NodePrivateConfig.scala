@@ -3,6 +3,7 @@ package hydrozoa.config.node
 import hydrozoa.config.node.operation.liquidation.NodeOperationLiquidationConfig
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.{OwnHeadPeerPrivate, OwnHeadPeerPublic}
+import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, HeadPeerWallet}
 import scala.concurrent.duration.FiniteDuration
 
@@ -33,5 +34,8 @@ object NodePrivateConfig {
 
         override def cardanoLiaisonPollingPeriod: FiniteDuration =
             nodeOperationMultisigConfig.cardanoLiaisonPollingPeriod
+
+        override def peerLiaisonMaxEventsPerBatch: PositiveInt =
+            nodeOperationMultisigConfig.peerLiaisonMaxEventsPerBatch
     }
 }

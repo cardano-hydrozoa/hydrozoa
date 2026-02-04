@@ -7,7 +7,6 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.UtxoIdL1
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
 import hydrozoa.lib.cardano.scalus.QuantizedTime.toEpochQuantizedInstant
 import hydrozoa.multisig.MultisigRegimeManager
@@ -34,7 +33,7 @@ object BlockWeaver:
     ): IO[BlockWeaver] =
         IO(new BlockWeaver(config = config, pendingConnections = pendingConnections) {})
 
-    type Config = CardanoNetwork.Section & OwnHeadPeerPublic.Section & HeadPeers.Section
+    type Config = CardanoNetwork.Section & OwnHeadPeerPublic.Section
 
     final case class Connections(
         jointLedger: JointLedger.Handle
