@@ -242,31 +242,44 @@ case class Stage1(
 
         // _ <- IO.println(s"shutdownSut effects: ${effects.length}")
 
-        expectedEffects: List[TransactionHash] = mkExpectedEffects(
+        expectedEffects: List[(TxLabel, TransactionHash)] = mkExpectedEffects(
           state.headConfig.initialBlock,
           effects,
           state.currentTime
         )
 
-        effectsResults <- IO.traverse(expectedEffects)(sut.cardanoBackend.isTxKnown)
+        _ <- IO.whenA(expectedEffects.nonEmpty)(
+          IO.println("\nExpected effects:") >>
+              IO.traverse_(expectedEffects) { case (label, hash) =>
+                  IO.println(s"\t- $label: $hash")
+              }
+        )
+
+        effectsResults <- IO.traverse(expectedEffects) { case (_, hash) =>
+            sut.cardanoBackend.isTxKnown(hash)
+        }
 
         // Finally we have to terminate the actor system, otherwise in TestControl
-        // this will loop indedinitely.
+        // this will loop indefinitely.
         _ <- sut.system.terminate()
 
         // TODO shutdown Yaci? Clean up the public testnet?
     } yield {
         val missing = expectedEffects.zip(effectsResults).collect {
-            case (txHash, Right(false)) => s"tx not found: $txHash"
-            case (txHash, Left(err))    => s"error checking tx $txHash: $err"
+            case ((label, txHash), Right(false)) => s"$label tx not found: $txHash"
+            case ((label, txHash), Left(err))    => s"error checking $label tx $txHash: $err"
         }
         missing.isEmpty :| s"missing effects: ${missing.mkString(", ")}"
     }
 
-    /** Compute the list of tx hashes expected to have been submitted to L1.
+    enum TxLabel:
+        case Init, Settlement, Rollout, Finalization, Deinit, Fallback
+
+    /** Compute the list of tx hashes expected to have been submitted to L1, each tagged with its
+      * role.
       *
-      * The initialization tx and happy-path backbone txs (settlementTx, * finalizationTx,
-      * rolloutTxs, deinitTx) are always expected.
+      * The initialization tx and happy-path backbone txs (settlementTx, finalizationTx, rolloutTxs,
+      * deinitTx) are always expected.
       *
       * If currentTime is AfterCompetingFallbackStartTime and the last effect is not Final, the
       * competing fallback is also expected. The competing fallback is the one from the last Major
@@ -276,19 +289,22 @@ case class Stage1(
         initialBlock: HeadConfig.InitialBlock,
         effects: List[BlockEffects.Unsigned],
         currentTime: CurrentTime
-    ): List[TransactionHash] = {
-        val initHash = initialBlock.initializationTx.tx.id
+    ): List[(TxLabel, TransactionHash)] = {
+        val initHash = (TxLabel.Init, initialBlock.initializationTx.tx.id)
 
-        val happyPathHashes: List[TransactionHash] = effects.flatMap {
+        val happyPathHashes: List[(TxLabel, TransactionHash)] = effects.flatMap {
             case e: BlockEffects.Unsigned.Major =>
-                e.settlementTx.tx.id :: e.rolloutTxs.map(_.tx.id)
+                (TxLabel.Settlement, e.settlementTx.tx.id) ::
+                    e.rolloutTxs.map(tx => (TxLabel.Rollout, tx.tx.id))
             case e: BlockEffects.Unsigned.Final =>
-                e.finalizationTx.tx.id :: e.rolloutTxs.map(_.tx.id) ++ e.deinitTx.map(_.tx.id)
+                (TxLabel.Finalization, e.finalizationTx.tx.id) ::
+                    e.rolloutTxs.map(tx => (TxLabel.Rollout, tx.tx.id)) ++
+                    e.deinitTx.map(tx => (TxLabel.Deinit, tx.tx.id))
             case _: BlockEffects.Unsigned.Minor   => Nil
             case _: BlockEffects.Unsigned.Initial => Nil
         }
 
-        val fallbackHash: List[TransactionHash] = currentTime match {
+        val fallbackHash: List[(TxLabel, TransactionHash)] = currentTime match {
             case AfterCompetingFallbackStartTime(_)
                 if !effects.lastOption.exists(_.isInstanceOf[BlockEffects.Unsigned.Final]) =>
                 // Last Major's fallback, or the init fallback if no Major block completed yet
@@ -296,6 +312,7 @@ case class Stage1(
                     .collect { case e: BlockEffects.Unsigned.Major => e.fallbackTx.tx.id }
                     .lastOption
                     .orElse(Some(initialBlock.initialFallbackTx.tx.id))
+                    .map((TxLabel.Fallback, _))
                     .toList
             case _ => Nil
         }
@@ -467,17 +484,19 @@ case class Stage1(
 
     final case class DelayCommand(
         override val id: Int,
-        delay: Delay
+        delaySpec: Delay
     ) extends Command {
 
         override type Result = Unit
 
-        override def run(sut: Stage1Sut): IO[Unit] = for {
-            duration <- IO.pure(delay.duration.finiteDuration)
-            _ <- IO.println(s"SUT is sleeping for: $duration ")
-            _ <- IO.sleep(duration)
-            _ <- IO.println("sleeping is done: TODO: measure the real time")
+        // Declares the virtual-time duration to advance before this command runs.
+        // The ModelBasedSuite outer driver handles the actual clock advancement.
+        override def delay: FiniteDuration = delaySpec.duration.finiteDuration
 
+        override def run(sut: Stage1Sut): IO[Unit] = for {
+            _ <- IO.println(s">> DelayCommand(id=$id, delay=$delay)")
+            now <- IO.realTimeInstant
+            _ <- IO.println(s"Current time: $now")
         } yield ()
 
         override def runState(state: ModelState): (Unit, ModelState) = {
@@ -486,10 +505,10 @@ case class Stage1(
                     Ready(blockNumber = blockNumber, prevVersion = version)
                 case _ => throw Error.UnexpectedState
             }
-            val instant = state.currentTime.instant + delay.duration
+            val instant = state.currentTime.instant + delaySpec.duration
             () -> state.copy(
               blockCycle = newBlock,
-              currentTime = delay match {
+              currentTime = delaySpec match {
                   case Delay.EndsBeforeHappyPathExpires(_) => BeforeHappyPathExpiration(instant)
                   case Delay.EndsInTheSilencePeriod(_)     => InSilencePeriod(instant)
                   case Delay.EndsAfterHappyPathExpires(_) =>
@@ -532,10 +551,11 @@ case class Stage1(
         }
 
         override def run(sut: Sut): IO[Result] =
-            sut.agent ! StartBlock(
-              blockNum = blockNumber,
-              blockCreationTime = creationTime
-            )
+            IO.println(s">> StartBlockCommand(id=$id, blockNumber=$blockNumber)") >>
+                (sut.agent ! StartBlock(
+                  blockNum = blockNumber,
+                  blockCreationTime = creationTime
+                ))
 
         override def preCondition(state: State): Boolean = true
     }
@@ -551,7 +571,9 @@ case class Stage1(
             () -> state.copy(currentBlockEvents = state.currentBlockEvents :+ event)
         }
 
-        override def run(sut: Sut): IO[Result] = sut.agent ! event
+        override def run(sut: Sut): IO[Result] =
+            IO.println(s">> LedgerEventCommand(id=$id)") >>
+                (sut.agent ! event)
 
         override def preCondition(state: State): Boolean = true
     }
@@ -642,6 +664,9 @@ case class Stage1(
         }
 
         override def run(sut: Sut): IO[Result] = for {
+            _ <- IO.println(
+              s">> CompleteBlockCommand(id=$id, blockNumber=$blockNumber, isFinal=$isFinal)"
+            )
             block <- IO.pure(
               if isFinal
               then CompleteBlockFinal(None)

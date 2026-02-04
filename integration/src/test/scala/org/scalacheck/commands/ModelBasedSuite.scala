@@ -5,6 +5,7 @@ import cats.effect.testkit.TestControl
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all.catsSyntaxFlatMapOps
 import org.scalacheck.{Gen, Prop, Shrink}
+import scala.concurrent.duration.{Duration, DurationInt, FiniteDuration}
 
 /** Yet another better/different [[Commands]]:
   *   - Support for [[IO]] genActions and [[TestControl]]
@@ -97,13 +98,20 @@ trait ModelBasedSuite {
       */
     def genCommand(state: State): Gen[Command]
 
+    /** Whether to use [[TestControl]] for time manipulation. When true (default), delays declared
+      * by commands are advanced via the [[TestControl]] virtual clock rather than real
+      * [[IO.sleep]]. Set to false for scenarios requiring a real backend (e.g. Yaci), where real
+      * wall-clock time must elapse.
+      */
+    def useTestControl: Boolean = true
+
     // ===================================
     // StateLikeCommand
     // ===================================
 
     trait Command:
 
-        /** A result of running the command against the SUT. The [[Result]] type should be
+        /** The result of running the command against the SUT. The [[Result]] type should be
           * immutable, and it should encode everything about the command run that is necessary to
           * know in order to correctly implement the [[Command.postCondition]] method.
           */
@@ -164,6 +172,13 @@ trait ModelBasedSuite {
             err: Throwable
         ): Prop = Prop.exception(err)
 
+        /** Virtual-time delay to advance *before* this command's [[run]] is executed. When
+          * [[useTestControl]] is true, the [[TestControl]] clock is advanced by this amount instead
+          * of sleeping. When false, a real [[IO.sleep]] of this duration is performed. Defaults to
+          * [[Duration.Zero]] (no delay).
+          */
+        def delay: FiniteDuration = Duration.Zero
+
         /** Wraps the run and postCondition methods in order not to leak the dependent Result type.
           * @param sut
           * @return
@@ -199,7 +214,8 @@ trait ModelBasedSuite {
 
     final case class NoOp(override val id: Int) extends Command {
         type Result = Unit
-        override def run(sut: Sut): IO[Result] = IO.pure(())
+        override def run(sut: Sut): IO[Result] =
+            IO.println(s">> NoOp(id=$id)") >> IO.pure(())
         override def runState(state: State): (Unit, State) = ((), state)
         override def preCondition(state: State) = true
         override def postCondition(stateBefore: State, result: Either[Throwable, Result]) = true
@@ -490,11 +506,23 @@ trait ModelBasedSuite {
         s0: State,
         cs: Commands
     ): (Sut, Prop, State, Int) = {
+        if useTestControl then runSeqCmdsWithTestControl(ioSut, s0, cs)
+        else runSeqCmdsPlain(ioSut, s0, cs)
+    }
+
+    /** Plain execution without [[TestControl]]. Command delays are real [[IO.sleep]]s. Used for
+      * backends like Yaci where wall-clock time must elapse.
+      */
+    private def runSeqCmdsPlain(
+        ioSut: IO[Sut],
+        s0: State,
+        cs: Commands
+    ): (Sut, Prop, State, Int) = {
         val io = for {
             initial <- ioSut.map(sut => (sut, Prop.proved, s0, 0))
             result <- cs.foldLeft(IO.pure(initial)) { case (acc, c) =>
                 acc >>= { case (sut, p, s, lastCmd) =>
-                    c.runPC(sut).map { pred =>
+                    IO.sleep(c.delay) >> c.runPC(sut).map { pred =>
                         (sut, propAnd(p, pred(s)), c.runState(s)._2, lastCmd + 1)
                     }
                 }
@@ -503,10 +531,173 @@ trait ModelBasedSuite {
             shutdownProp <- shutdownSut(s, sut)
         } yield (sut, propAnd(prop, shutdownProp), s, lastCmd)
 
-        // TODO: make use of TestControl optional
-        TestControl.executeEmbed(io).unsafeRunSync()
-
+        io.unsafeRunSync()
     }
+
+    /** [[TestControl]]-based execution. Command delays are advanced via the virtual clock using
+      * [[TestControl#advance]], which skips over the per-actor ping loops that would otherwise
+      * cause [[TestControl#tickAll]] to iterate once per second (or somewhat) of virtual time.
+      *
+      * Protocol: the inner IO (running on the TestControl runtime) and the outer driver (on the
+      * real runtime) communicate via a pair of [[java.util.concurrent.atomic.AtomicReference]]s:
+      *   - [[pendingDelay]]: the inner program writes the delay for the current command here before
+      *     blocking on [[gate]]. The outer driver reads it to know how much to advance.
+      *   - [[gate]]: a volatile flag. The inner program spins on it (yielding via [[IO.cede]]). The
+      *     outer driver sets it to true after advancing time, unblocking the inner.
+      *
+      * After each command completes, the inner signals completion by writing [[Duration.Zero]] to
+      * [[pendingDelay]] and blocking on the gate again. The outer ticks until it sees that signal,
+      * runs postCondition, and releases the gate for the next command.
+      */
+    private def runSeqCmdsWithTestControl(
+        ioSut: IO[Sut],
+        s0: State,
+        cs: Commands
+    ): (Sut, Prop, State, Int) = {
+        import java.util.concurrent.atomic.AtomicReference
+
+        // Shared mutable state between inner and outer runtimes.
+        // The inner writes a Some(delay) to request a time advance before its command runs.
+        // None means "not ready yet" / "waiting for outer to tick".
+        val pendingDelay = new AtomicReference[Option[FiniteDuration]](None)
+        // The outer sets this to true to release the inner after advancing time.
+        val gate = new AtomicReference[Boolean](false)
+
+        // How long to let actors settle (process pending messages) before each delay
+        // advance. The inner sleeps for this duration first; the outer ticks through it
+        // (giving actors their ping cycles), then reads the declared delay and advances
+        // only the remainder (delay - settling). Total virtual time per command = delay.
+        val settling = 2.seconds
+
+        // The inner program: newSut, then for each command:
+        //   1. sleep(settling) — keeps inner busy while outer ticks actors
+        //   2. signal delay — outer reads and advances (delay - settling)
+        //   3. wait for gate — outer releases after advancing
+        //   4. run command
+        // Finally shutdownSut.
+        val innerIO: IO[(Sut, Prop, State, Int)] = for {
+            initial <- ioSut.map(sut => (sut, Prop.proved, s0, 0))
+            result <- cs.foldLeft(IO.pure(initial)) { case (acc, c) =>
+                acc >>= { case (sut, p, s, lastCmd) =>
+                    // If the command declares a delay large enough, sleep first so the
+                    // outer can tick actors during the settling window.
+                    (if c.delay >= settling then IO.sleep(settling) else IO.unit) >>
+                        IO(pendingDelay.set(Some(c.delay))) >>
+                        IO.cede.whileM_(IO(!gate.get)) >>
+                        IO(gate.set(false)) >>
+                        c.runPC(sut).map { pred =>
+                            (sut, propAnd(p, pred(s)), c.runState(s)._2, lastCmd + 1)
+                        }
+                }
+            }
+            (sut, prop, s, lastCmd) = result
+            shutdownProp <- shutdownSut(s, sut)
+        } yield (sut, propAnd(prop, shutdownProp), s, lastCmd)
+
+        // Outer driver: start the inner on the TestControl runtime, then drive it command by
+        // command. Between commands, we advance the virtual clock by the declared delay.
+        //
+        // We cannot use tickAll/tick here: after actors are created, the per-actor ping loop
+        // (every 1s) and the inner gate spin (IO.cede.whileM_) both produce immediately-eligible
+        // fibers that cause tick/tickAll to loop too long. Instead, we use tickOne in a loop,
+        // stopping when the inner signals via the shared AtomicReferences.
+        //
+        // tickOne runs on the outer (real) runtime and synchronously executes one step of the
+        // inner runtime. advance also runs on the outer runtime and moves the inner clock.
+        val outerIO: IO[(Sut, Prop, State, Int)] = for {
+            tc <- TestControl.execute(innerIO)
+
+            // Tick the inner until it posts the first delay request (i.e. newSut has completed
+            // and the first command's gate spin has started), or until the program finishes
+            // (possible when cs is empty: newSut → shutdownSut with no commands in between).
+            _ <- tickUntil(
+              tc,
+              IO(pendingDelay.get().isDefined).flatMap { pending =>
+                  if pending then IO.pure(true)
+                  else tc.results.map(_.isDefined)
+              }
+            )
+
+            // Drive each command: read delay → advance → release gate → tick until next signal.
+            // If the program already finished (e.g. cs was empty), skip the command loop.
+            _ <- tc.results.flatMap {
+                case Some(_) => IO.unit
+                case None =>
+                    cs.foldLeft(IO.unit) { (acc, _c) =>
+                        acc >> tc.results.flatMap {
+                            case Some(_) => IO.unit // already finished, skip remaining
+                            case None =>
+                                for {
+                                    delay <- IO(pendingDelay.getAndSet(None).get)
+                                    // The inner already slept for `settling` before signalling
+                                    // this delay (when delay >= settling), so only advance the
+                                    // remainder. For small delays the inner skipped the sleep,
+                                    // so advance the full amount.
+                                    _ <- {
+                                        val remaining =
+                                            if delay >= settling then delay - settling else delay
+                                        if remaining > Duration.Zero then tc.advance(remaining)
+                                        else IO.unit
+                                    }
+                                    // Release the inner to execute the command.
+                                    _ <- IO(gate.set(true))
+                                    // Tick until either:
+                                    //   - the inner posts the next delay (next command's gate spin), or
+                                    //   - the inner program finishes (results become available).
+                                    _ <- tickUntil(
+                                      tc,
+                                      IO(pendingDelay.get().isDefined).flatMap { pending =>
+                                          if pending then IO.pure(true)
+                                          else tc.results.map(_.isDefined)
+                                      }
+                                    )
+                                } yield ()
+                        }
+                    }
+            }
+            // If results aren't available yet (shouldn't happen, but be safe), drain remaining.
+            _ <- tickUntil(tc, tc.results.map(_.isDefined))
+            result <- tc.results
+            _ <- IO(println(s"---- TC ---- seed: ${tc.seed}"))
+        } yield result match {
+            case Some(cats.effect.Outcome.Succeeded(value)) => value
+            case Some(cats.effect.Outcome.Errored(e))       => throw e
+            case Some(cats.effect.Outcome.Canceled()) =>
+                throw new RuntimeException("Inner program was canceled")
+            case None =>
+                throw new RuntimeException(
+                  "Inner program did not produce a result (deadlock or non-termination)"
+                )
+        }
+
+        outerIO.unsafeRunSync()
+    }
+
+    /** Tick the inner runtime one fiber at a time until [[done]] returns true. When no fibers are
+      * immediately eligible (tickOne returns false) but the predicate is still false, advance the
+      * virtual clock to the next scheduled task to avoid a hard deadlock.
+      */
+    private def tickUntil[A](tc: TestControl[A], done: IO[Boolean]): IO[Unit] =
+        done.flatMap {
+            case true => IO.unit
+            case false =>
+                tc.tickOne.flatMap {
+                    case true  => tickUntil(tc, done)
+                    case false =>
+                        // No immediately eligible fibers. Advance to the next scheduled task
+                        // (e.g. a ping or a sleep) so we don't spin forever.
+                        tc.nextInterval.flatMap { next =>
+                            if next > Duration.Zero then tc.advance(next) >> tickUntil(tc, done)
+                            else
+                                // nextInterval == 0 and no eligible tasks means deadlock.
+                                IO.raiseError(
+                                  new RuntimeException(
+                                    "TestControl deadlock: no eligible fibers and predicate not satisfied"
+                                  )
+                                )
+                        }
+                }
+        }
 
     private def prettyCmdsRes(rs: List[Command], maxLength: Int) = {
         val maxNumberWidth = "%d".format(maxLength).length
