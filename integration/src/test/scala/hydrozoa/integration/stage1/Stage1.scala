@@ -64,7 +64,9 @@ object Stage1Properties extends YetAnotherProperties("Integration Stage 1"):
     override def overrideParameters(
         p: org.scalacheck.Test.Parameters
     ): org.scalacheck.Test.Parameters = {
-        p.withWorkers(1).withMinSuccessfulTests(100)
+        p.withWorkers(1)
+            .withMinSuccessfulTests(10000)
+            .withMaxSize(500)
     }
 
     private val preprod = StandardCardanoNetwork.Preprod
@@ -745,7 +747,7 @@ case class Stage1(
     ): Gen[DelayCommand] = for {
         delay <- Gen
             .frequency(
-              10 -> Gen
+              50 -> Gen
                   .choose(currentTime, settlementExpirationTime)
                   .flatMap(d =>
                       DelayCommand(nextCmdCnt, Delay.EndsBeforeHappyPathExpires(d - currentTime))
@@ -784,7 +786,7 @@ case class Stage1(
     private def genCompleteBlock(blockNumber: BlockNumber): Gen[CompleteBlockCommand] = for {
         isFinal <- Gen.frequency(
           1 -> true,
-          20 -> false
+          40 -> false
         )
     } yield CompleteBlockCommand(nextCmdCnt, blockNumber, isFinal)
 

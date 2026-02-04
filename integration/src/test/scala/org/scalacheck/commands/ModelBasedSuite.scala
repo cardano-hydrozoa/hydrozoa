@@ -607,6 +607,7 @@ trait ModelBasedSuite {
         // inner runtime. advance also runs on the outer runtime and moves the inner clock.
         val outerIO: IO[(Sut, Prop, State, Int)] = for {
             tc <- TestControl.execute(innerIO)
+            totalAdvanced <- IO(new java.util.concurrent.atomic.AtomicLong(0L))
 
             // Tick the inner until it posts the first delay request (i.e. newSut has completed
             // and the first command's gate spin has started), or until the program finishes
@@ -630,6 +631,7 @@ trait ModelBasedSuite {
                             case None =>
                                 for {
                                     delay <- IO(pendingDelay.getAndSet(None).get)
+                                    _ <- IO(totalAdvanced.addAndGet(delay.toNanos): Unit)
                                     // The inner already slept for `settling` before signalling
                                     // this delay (when delay >= settling), so only advance the
                                     // remainder. For small delays the inner skipped the sleep,
@@ -659,7 +661,13 @@ trait ModelBasedSuite {
             // If results aren't available yet (shouldn't happen, but be safe), drain remaining.
             _ <- tickUntil(tc, tc.results.map(_.isDefined))
             result <- tc.results
-            _ <- IO(println(s"---- TC ---- seed: ${tc.seed}"))
+            _ <- IO {
+                val nanos = totalAdvanced.get
+                val days = nanos / 86_400_000_000_000L
+
+                ModelBasedSuite.addSimulatedNanos(nanos)
+                println(s"---- TC ---- seed: ${tc.seed}  simulated: ${days} days")
+            }
         } yield result match {
             case Some(cats.effect.Outcome.Succeeded(value)) => value
             case Some(cats.effect.Outcome.Errored(e))       => throw e
@@ -709,4 +717,27 @@ trait ModelBasedSuite {
         if cs.isEmpty then "  <no commands>"
         else cs.mkString("\n")
     }
+}
+
+object ModelBasedSuite {
+    private val totalSimulatedNanos = new java.util.concurrent.atomic.AtomicLong(0L)
+    private val startNanoTime = System.nanoTime()
+
+    Runtime.getRuntime.addShutdownHook(new Thread {
+        override def run(): Unit = {
+            val simNanos = totalSimulatedNanos.get
+            val simDays = simNanos / 86_400_000_000_000L
+            val realNanos = System.nanoTime() - startNanoTime
+            val realSecs = realNanos / 1_000_000_000L
+            val realMins = realSecs / 60L
+            val realRemSec = realSecs % 60L
+            println(
+              s"---- TC ---- GRAND TOTAL simulated time: ${simDays} days (across all test cases)"
+            )
+            println(s"---- TC ---- GRAND TOTAL real time:      ${realMins}m ${realRemSec}s")
+        }
+    })
+
+    private[commands] def addSimulatedNanos(nanos: Long): Unit =
+        totalSimulatedNanos.addAndGet(nanos): Unit
 }
