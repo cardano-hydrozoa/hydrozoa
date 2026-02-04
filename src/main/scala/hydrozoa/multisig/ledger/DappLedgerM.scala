@@ -3,27 +3,22 @@ package hydrozoa.multisig.ledger
 import cats.data.*
 import cats.effect.IO
 import cats.syntax.all.*
-import hydrozoa.config.EquityShares
-import hydrozoa.config.head.multisig.timing.TxTiming
-import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
+import hydrozoa.config.head.HeadConfig
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger
 import hydrozoa.multisig.ledger.DappLedgerM.Error.{AbsorptionPeriodExpired, ParseError, SettlementTxSeqBuilderError}
 import hydrozoa.multisig.ledger.block.BlockVersion
-import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.token.CIP67.HeadTokenNames
 import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.txseq
 import hydrozoa.multisig.ledger.dapp.txseq.{DepositRefundTxSeq, FinalizationTxSeq, SettlementTxSeq}
-import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo}
+import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.event.LedgerEvent.RegisterDeposit
 import hydrozoa.multisig.ledger.event.LedgerEventId
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import monocle.syntax.all.*
 import scala.collection.immutable.Queue
-import scala.language.implicitConversions
 import scala.math.Ordered.orderingToOrdered
-import scalus.cardano.ledger.*
 
 private type E[A] = Either[DappLedgerM.Error, A]
 private type S[A] = cats.data.StateT[E, DappLedgerM.State, A]
@@ -58,16 +53,7 @@ case class DappLedgerM[A] private (private val unDappLedger: RT[A]) {
 }
 
 object DappLedgerM {
-    case class Config(
-        txTiming: TxTiming,
-        equityShares: EquityShares,
-        multisigRegimeUtxo: MultisigRegimeUtxo,
-        headMultisigScript: HeadMultisigScript,
-        cardanoInfo: CardanoInfo,
-        tokenNames: HeadTokenNames,
-        votingDuration: QuantizedFiniteDuration,
-        tallyFeeAllowance: Coin,
-    )
+    type Config = HeadConfig.Section
 
     /** Extract the transaction builder configuration from a [[DappLedgerM]]
       */
@@ -167,10 +153,10 @@ object DappLedgerM {
                     SettlementTxSeq.Config(
                       headMultisigScript = config.headMultisigScript,
                       multisigRegimeUtxo = config.multisigRegimeUtxo,
-                      tokenNames = config.tokenNames,
+                      tokenNames = config.headTokenNames,
                       votingDuration = config.votingDuration,
                       txTiming = config.txTiming,
-                      tallyFeeAllowance = config.tallyFeeAllowance,
+                      tallyFeeAllowance = config.individualContingency.tallyTxFee,
                       cardanoInfo = config.cardanoInfo
                     )
                   )
@@ -235,7 +221,7 @@ object DappLedgerM {
                       multisigRegimeUtxo = config.multisigRegimeUtxo,
                       cardanoInfo = config.cardanoInfo,
                       headMultisigScript = config.headMultisigScript,
-                      equityShares = config.equityShares
+                      equityShares = ??? // FIXME: replace with config.initialEquityContributions
                     )
                   )
                   .build(args)
@@ -310,19 +296,9 @@ object DappLedgerM {
                 throw new RuntimeException(s"Error running DappLedgerM: $e"),
             onSuccess: A => IO[B]
         ): IO[B] = {
-            val dappLedgerMConfig: DappLedgerM.Config = DappLedgerM.Config(
-              txTiming = jl.config.txTiming,
-              equityShares = jl.config.equityShares,
-              headMultisigScript = jl.config.headMultisigScript,
-              multisigRegimeUtxo = jl.config.multisigRegimeUtxo,
-              cardanoInfo = jl.config.cardanoInfo,
-              tokenNames = jl.config.tokenNames,
-              votingDuration = jl.config.votingDuration,
-              tallyFeeAllowance = jl.config.tallyFeeAllowance
-            )
             for {
                 oldState <- jl.state.get
-                res = action.run(dappLedgerMConfig, oldState.dappLedgerState)
+                res = action.run(jl.config, oldState.dappLedgerState)
                 b <- res match {
                     case Left(error) => onFailure(error)
                     case Right(newState, a) =>

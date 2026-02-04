@@ -1,9 +1,10 @@
 package hydrozoa.multisig.ledger
 
 import cats.*
-import cats.data.*
+import cats.data.{Kleisli, ReaderT, StateT}
 import cats.effect.IO
-import cats.implicits.*
+import cats.syntax.bifunctor.*
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.VirtualLedgerM.Error.{CborParseError, TransactionInvalidError}
 import hydrozoa.multisig.ledger.dapp.tx.Tx
@@ -11,11 +12,10 @@ import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.*
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.{KzgCommitment, calculateCommitment, hashToScalar}
-import hydrozoa.{emptyContext, given}
 import io.bullet.borer.Cbor
 import monocle.syntax.all.*
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.rules.{Context, State as ScalusState, UtxoEnv}
+import scalus.cardano.ledger.rules.State as ScalusState
 
 private type EV[A] = Either[VirtualLedgerM.Error, A]
 private type SV[A] = cats.data.StateT[EV, VirtualLedgerM.State, A]
@@ -88,22 +88,25 @@ object VirtualLedgerM {
         // The question is what conditions we should check during deserialization -- our L2ConformanceValidator
         // is currently run as a ledger validation rule, but could also be run during parsing.
         for {
-            l2EventTx <- lift(
-              Cbor.decode(tx)
-                  .to[Transaction]
-                  .valueTry
-                  .toEither
-                  .bimap(CborParseError.apply, L2EventTransaction.apply)
-            )
+            config <- ask
+            l2EventTx <- {
+                given ProtocolVersion = config.cardanoProtocolParams.protocolVersion
+                lift(
+                  Cbor.decode(tx)
+                      .to[Transaction]
+                      .valueTry
+                      .toEither
+                      .bimap(CborParseError.apply, L2EventTransaction.apply)
+                )
+            }
 
             s <- get
-            config <- ask
 
             newState <- lift(
               HydrozoaTransactionMutator
                   .transit(
                     time = time,
-                    context = config,
+                    config = config,
                     state = s,
                     l2Event = l2EventTx
                   )
@@ -131,44 +134,13 @@ object VirtualLedgerM {
 
     sealed trait Error
 
-    final case class Config(
-        cardanoInfo: CardanoInfo
-    ) {
-
-        /** Turn into an L1 context with zero fee and an empty CertState
-          *
-          * @return
-          */
-        def toL1Context(time: QuantizedInstant, slotConfig: SlotConfig): Context = Context(
-          fee = Coin(0),
-          env = UtxoEnv(
-            time.toSlot.slot,
-            cardanoInfo.protocolParams,
-            CertState.empty,
-            cardanoInfo.network
-          ),
-          slotConfig = slotConfig
-        )
-    }
+    type Config = CardanoNetwork.Section
 
     final case class State(activeUtxos: Map[TransactionInput, TransactionOutput]) {
         lazy val kzgCommitment: KzgCommitment = calculateCommitment(hashToScalar(this.activeUtxos))
 
         def toScalusState: ScalusState = ScalusState(utxos = activeUtxos)
     }
-
-    object Config:
-        val empty: Config = Config.fromL1Context(emptyContext)
-
-        /** Project an L1 context into an L2 context
-          */
-        private def fromL1Context(l1Context: Context): Config = Config(
-          CardanoInfo(
-            slotConfig = l1Context.slotConfig,
-            protocolParams = l1Context.env.params,
-            network = l1Context.env.network
-          )
-        )
 
     object State {
 
@@ -209,13 +181,10 @@ object VirtualLedgerM {
                 throw new RuntimeException(s"Error running VirtualLedgerM: $e"),
             onSuccess: A => IO[B] = IO.pure[B]
         ): IO[B] = {
-            val virtualLedgerMConfig: VirtualLedgerM.Config = VirtualLedgerM.Config(
-              jl.config.cardanoInfo
-            )
             for {
                 oldState <- jl.state.get
                 res = action.run(
-                  virtualLedgerMConfig,
+                  jl.config,
                   oldState.virtualLedgerState
                 )
                 b <- res match {

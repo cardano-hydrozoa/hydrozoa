@@ -15,7 +15,7 @@ enum CardanoNetwork(_cardanoInfo: CardanoInfo) extends CardanoNetwork.Section {
     override def cardanoInfo: CardanoInfo = _cardanoInfo
     override def network: Network = _cardanoInfo.network
     override def slotConfig: SlotConfig = _cardanoInfo.slotConfig
-    override def cardanoParams: ProtocolParams = _cardanoInfo.protocolParams
+    override def cardanoProtocolParams: ProtocolParams = _cardanoInfo.protocolParams
 }
 
 object CardanoNetwork {
@@ -25,14 +25,14 @@ object CardanoNetwork {
         def cardanoInfo: CardanoInfo
         def network: Network
         def slotConfig: SlotConfig
-        def cardanoParams: ProtocolParams
+        def cardanoProtocolParams: ProtocolParams
 
         final def babbageUtxoMinLovelace(serializedSize: PositiveInt): Coin = Coin(
-          (160 + serializedSize.convert) * cardanoParams.utxoCostPerByte
+          (160 + serializedSize.convert) * cardanoProtocolParams.utxoCostPerByte
         )
 
         final def maxNonPlutusTxFee: Coin = Coin(
-          cardanoParams.txFeeFixed + cardanoParams.maxTxSize * cardanoParams.txFeePerByte
+          cardanoProtocolParams.txFeeFixed + cardanoProtocolParams.maxTxSize * cardanoProtocolParams.txFeePerByte
         )
     }
 }

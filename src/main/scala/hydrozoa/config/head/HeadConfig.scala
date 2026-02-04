@@ -38,7 +38,8 @@ object HeadConfig {
         override transparent inline def cardanoInfo: CardanoInfo = cardanoNetwork.cardanoInfo
         override transparent inline def network: Network = cardanoNetwork.network
         override transparent inline def slotConfig: SlotConfig = cardanoNetwork.slotConfig
-        override transparent inline def cardanoParams: ProtocolParams = cardanoNetwork.cardanoParams
+        override transparent inline def cardanoProtocolParams: ProtocolParams =
+            cardanoNetwork.cardanoProtocolParams
 
         override transparent inline def txTiming: TxTiming = headParams.txTiming
 

@@ -5,22 +5,19 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
 import hydrozoa.UtxoIdL1
-import hydrozoa.config.EquityShares
-import hydrozoa.config.head.multisig.timing.TxTiming
+import hydrozoa.config.head.HeadConfig
+import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.actor.*
-import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, toEpochQuantizedInstant}
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant}
 import hydrozoa.multisig.MultisigRegimeManager
-import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerWallet}
 import hydrozoa.multisig.consensus.{ConsensusActor, PeerLiaison}
 import hydrozoa.multisig.ledger.DappLedgerM.runDappLedgerM
 import hydrozoa.multisig.ledger.JointLedger.*
 import hydrozoa.multisig.ledger.JointLedger.Requests.*
 import hydrozoa.multisig.ledger.VirtualLedgerM.runVirtualLedgerM
 import hydrozoa.multisig.ledger.block.{Block, BlockBody, BlockBrief, BlockEffects, BlockHeader, BlockNumber}
-import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.token.CIP67.HeadTokenNames
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
-import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo}
+import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.event.LedgerEvent.*
 import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag
 import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag.{Invalid, Valid}
@@ -32,7 +29,7 @@ import monocle.Focus.focus
 import scala.collection.immutable.Queue
 import scala.math.Ordered.orderingToOrdered
 import scalus.builtin.{ByteString, platform}
-import scalus.cardano.ledger.{CardanoInfo, Coin, TransactionHash}
+import scalus.cardano.ledger.TransactionHash
 
 // Fields of a work-in-progress block, with an additional field for dealing with withdrawn utxos
 private case class TransientFields(
@@ -54,8 +51,9 @@ final case class JointLedger(
         Ref.unsafe[IO, JointLedger.State](
           Done(
             producedBlock = config.initialBlock,
-            lastFallbackValidityStart = config.initialFallbackValidityStart,
-            dappLedgerState = DappLedgerM.State(config.initialTreasury, Queue.empty),
+            lastFallbackValidityStart = config.initialFallbackTx.validityStart,
+            dappLedgerState =
+                DappLedgerM.State(config.initializationTx.treasuryProduced, Queue.empty),
             virtualLedgerState = VirtualLedgerM.State.empty
           )
         )
@@ -258,7 +256,7 @@ final case class JointLedger(
                   genesisObligations,
                   TransactionHash.fromByteString(
                     platform.blake2b_256(
-                      tokenNames.headTokenName.bytes ++
+                      headTokenNames.treasuryTokenName.bytes ++
                           ByteString.fromBigIntBigEndian(
                             BigInt(treasuryToSpend.datum.versionMajor.toInt + 1)
                           )
@@ -475,7 +473,7 @@ final case class JointLedger(
     ): IO[Unit] =
         for {
             conn <- getConnections
-            acks = wallet.mkAcks(block, localFinalization)
+            acks = ownHeadWallet.mkAcks(block, localFinalization)
             _ <- (conn.peerLiaisons ! block.blockBriefNext).parallel
             _ <- conn.consensusActor ! block
             _ <- IO.traverse_(acks)(ack => conn.consensusActor ! ack)
@@ -534,27 +532,7 @@ object JointLedger {
 
     type Handle = ActorRef[IO, Requests.Request]
 
-    // TODO: review
-    case class Config(
-        initialBlock: Block.MultiSigned.Initial,
-        peerId: HeadPeerId,
-        wallet: HeadPeerWallet,
-        // TODO: can be obtained from initialBlock?
-        initialBlockTime: QuantizedInstant,
-        cardanoInfo: CardanoInfo,
-        // TODO: can be obtained from initialBlock?
-        initialBlockKzg: KzgCommitment,
-        txTiming: TxTiming,
-        headMultisigScript: HeadMultisigScript,
-        tallyFeeAllowance: Coin,
-        equityShares: EquityShares,
-        multisigRegimeUtxo: MultisigRegimeUtxo,
-        votingDuration: QuantizedFiniteDuration,
-        initialTreasury: MultisigTreasuryUtxo,
-        tokenNames: HeadTokenNames,
-        // TODO: can be obtained from effects in the initialBlock?
-        initialFallbackValidityStart: QuantizedInstant
-    )
+    type Config = HeadConfig.Section & OwnHeadPeerPrivate.Section
 
     final case class Connections(
         consensusActor: ConsensusActor.Handle,

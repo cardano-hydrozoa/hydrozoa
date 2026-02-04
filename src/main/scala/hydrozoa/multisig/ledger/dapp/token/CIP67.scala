@@ -26,7 +26,7 @@ object CIP67 {
         private def prefixToken(cip67Tag: Long): AssetName =
             AssetName(ByteString.fromArray(BigInt(cip67Tag).toByteArray ++ tokenSuffix))
 
-        val headTokenName: AssetName = prefixToken(CIP67.Tags.head)
+        val treasuryTokenName: AssetName = prefixToken(CIP67.Tags.head)
 
         val voteTokenName: AssetName = prefixToken(CIP67.Tags.vote)
 

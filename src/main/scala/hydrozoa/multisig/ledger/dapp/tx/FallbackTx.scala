@@ -237,7 +237,7 @@ object FallbackTx {
                   Slot(setStartSlot.slot).toQuantizedInstant(config.cardanoInfo.slotConfig),
               treasurySpent = treasuryUtxoSpent,
               treasuryProduced = RuleBasedTreasuryUtxo(
-                treasuryTokenName = config.tokenNames.headTokenName,
+                treasuryTokenName = config.tokenNames.treasuryTokenName,
                 utxoId = TransactionInput(txId, 0),
                 address = disputeTreasuryAddress,
                 datum = RuleBasedTreasuryDatum.Unresolved(newTreasuryDatum),

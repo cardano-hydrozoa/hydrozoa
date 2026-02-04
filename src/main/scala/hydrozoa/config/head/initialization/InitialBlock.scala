@@ -3,6 +3,7 @@ package hydrozoa.config.head.initialization
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.block.Block
 import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, InitializationTx}
+import hydrozoa.multisig.ledger.dapp.utxo.MultisigRegimeUtxo
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 
 final case class InitialBlock(
@@ -19,5 +20,8 @@ object InitialBlock {
 
         transparent inline def initializationTx: InitializationTx = initialBlock.initializationTx
         transparent inline def initialFallbackTx: FallbackTx = initialBlock.fallbackTx
+
+        transparent inline def multisigRegimeUtxo: MultisigRegimeUtxo =
+            initializationTx.multisigRegimeUtxo
     }
 }

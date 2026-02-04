@@ -178,7 +178,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
             val multisigTreasuryUtxo = iTx.treasuryProduced
             val multisigRegimeUtxo = iTx.multisigRegimeUtxo
             val expectedHeadTokenName =
-                CIP67.HeadTokenNames(spentUtxos.seedUtxo.input).headTokenName
+                CIP67.HeadTokenNames(spentUtxos.seedUtxo.input).treasuryTokenName
             val expectedMulitsigRegimeTokenName =
                 CIP67.HeadTokenNames(spentUtxos.seedUtxo.input).multisigRegimeTokenName
             val expectedHeadNativeScript =
@@ -359,7 +359,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                     value = initialTreasury +
                         Value(
                           Coin.zero,
-                          MultiAsset(SortedMap(hns.policyId -> SortedMap(headTokenName -> 1L)))
+                          MultiAsset(SortedMap(hns.policyId -> SortedMap(treasuryTokenName -> 1L)))
                         )
                   ),
                   multisigRegimeUtxo = MultisigRegimeUtxo(

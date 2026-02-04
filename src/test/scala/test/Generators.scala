@@ -68,7 +68,7 @@ object Generators {
         val genHeadTokenName: Gen[AssetName] =
             for {
                 ti <- arbitrary[TransactionInput]
-            } yield CIP67.HeadTokenNames(ti).headTokenName
+            } yield CIP67.HeadTokenNames(ti).treasuryTokenName
 
         val genTreasuryDatum: Gen[MultisigTreasuryUtxo.Datum] = {
             for {

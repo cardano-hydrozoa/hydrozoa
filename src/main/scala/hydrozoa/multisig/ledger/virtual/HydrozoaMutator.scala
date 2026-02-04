@@ -1,4 +1,5 @@
 package hydrozoa.multisig.ledger.virtual
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.VirtualLedgerM
 import hydrozoa.multisig.ledger.VirtualLedgerM.{Config, State}
@@ -8,14 +9,38 @@ import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.Metadatum.Int
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.ledger.rules.{Context as _, State as L1State, *}
-import scalus.cardano.ledger.{KeepRaw, Metadatum, TransactionException, TransactionInput, TransactionOutput, Word64}
+import scalus.cardano.ledger.rules.{State as L1State, *}
+import scalus.cardano.ledger.{CertState, Coin, KeepRaw, Metadatum, TransactionException, TransactionInput, TransactionOutput, Word64}
 
 // FIXME: This is heavily inherited from the scalus STS. We don't really follow it too closely any more, so it
 // could probably just be folded into VirtualLedger
 object HydrozoaTransactionMutator {
+    private[virtual] object CardanoLedgerContext {
+
+        /** Turn into an L1 context with zero fee and an empty CertState
+          */
+        def fromCardanoNetwork(
+            cardanoNetwork: CardanoNetwork.Section,
+            time: QuantizedInstant
+        ): Context = {
+            import cardanoNetwork.*
+            require(time.slotConfig == slotConfig)
+            Context(
+              fee = Coin(0),
+              env = UtxoEnv(
+                time.toSlot.slot,
+                cardanoProtocolParams,
+                CertState.empty,
+                network
+              ),
+              slotConfig = slotConfig
+            )
+        }
+
+    }
+
     def transit(
-        context: Config,
+        config: Config,
         time: QuantizedInstant,
         state: State,
         l2Event: L2EventTransaction
@@ -24,12 +49,12 @@ object HydrozoaTransactionMutator {
         // A helper for mapping the error type and applying arguments
         def helper(v: Validator): Either[String | TransactionException, Unit] =
             v.validate(
-              context.toL1Context(time, context.cardanoInfo.slotConfig),
+              CardanoLedgerContext.fromCardanoNetwork(config, time),
               L1State(utxos = state.activeUtxos),
               event
             )
         for
-            _ <- L2ConformanceValidator.validate(context, state, l2Event)
+            _ <- L2ConformanceValidator.validate(config, state, l2Event)
             // Upstream validators (applied alphabetically for ease of comparison in a file browser
             // FIXME/Note (Peter, 2025-07-22): I don't know if all of these will apply or if this list is exhaustive,
             // but I've removed the rules that I'm certain won't apply
@@ -51,11 +76,11 @@ object HydrozoaTransactionMutator {
             _ <- helper(WrongNetworkValidator)
             _ <- helper(WrongNetworkInTxBodyValidator)
             // Native mutators
-            state <- AddOutputsToUtxoL2Mutator.transit(context, state, l2Event)
+            state <- AddOutputsToUtxoL2Mutator.transit(config, state, l2Event)
             // Upstream mutators
             state <-
                 PlutusScriptsTransactionMutator.transit(
-                  context.toL1Context(time, context.cardanoInfo.slotConfig),
+                  CardanoLedgerContext.fromCardanoNetwork(config, time),
                   state.toScalusState,
                   event
                 )
@@ -140,7 +165,7 @@ object AddOutputsToUtxoL2Mutator:
         } yield partition
 
     def transit(
-        context: Config,
+        config: Config,
         state: State,
         event: L2EventTransaction
     ): Either[String | TransactionException, State] =

@@ -88,7 +88,7 @@ object InitializationTx {
 
         val mintTreasuryToken = Mint(
           config.headMultisigScript.script.scriptHash,
-          config.tokenNames.headTokenName,
+          config.tokenNames.treasuryTokenName,
           1,
           config.headMultisigScript.witnessValue
         )
@@ -112,7 +112,7 @@ object InitializationTx {
                   MultiAsset(
                     SortedMap(
                       config.headMultisigScript.policyId -> SortedMap(
-                        config.tokenNames.headTokenName -> 1L
+                        config.tokenNames.treasuryTokenName -> 1L
                       )
                     )
                   )
@@ -174,7 +174,7 @@ object InitializationTx {
           validityEnd =
               config.startTime + config.txTiming.minSettlementDuration + config.txTiming.inactivityMarginDuration,
           treasuryProduced = MultisigTreasuryUtxo(
-            treasuryTokenName = config.tokenNames.headTokenName,
+            treasuryTokenName = config.tokenNames.treasuryTokenName,
             utxoId = TransactionInput(
               transactionId = finalized.transaction.id,
               index = 0
@@ -279,7 +279,7 @@ object InitializationTx {
                     "Head Native Script policy ID not found in treasury output value"
                   )
                 )
-            _ <- treasuryOutputInner.get(derivedTokenNames.headTokenName) match {
+            _ <- treasuryOutputInner.get(derivedTokenNames.treasuryTokenName) match {
                 case None =>
                     Left(
                       InvalidTransactionError(
@@ -402,7 +402,7 @@ object InitializationTx {
             mintInner <- mintOuter.assets
                 .get(expectedHNS.policyId)
                 .toRight(InvalidTransactionError("Mints don't contain the HNS policy id"))
-            _ <- mintInner.get(derivedTokenNames.headTokenName) match {
+            _ <- mintInner.get(derivedTokenNames.treasuryTokenName) match {
                 case None     => Left(InvalidTransactionError("head token not minted"))
                 case Some(1L) => Right(())
                 case Some(wrongNumber) =>
@@ -415,7 +415,7 @@ object InitializationTx {
             }
 
             treasury = MultisigTreasuryUtxo(
-              treasuryTokenName = derivedTokenNames.headTokenName,
+              treasuryTokenName = derivedTokenNames.treasuryTokenName,
               utxoId = TransactionInput(tx.id, imd.treasuryOutputIndex),
               address = expectedHeadAddress,
               datum = MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum,

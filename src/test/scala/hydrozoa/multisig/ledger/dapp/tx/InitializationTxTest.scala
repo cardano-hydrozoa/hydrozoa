@@ -34,7 +34,10 @@ val minInitTreasuryAda: Coin = {
             (
               genPolicyId.sample.get,
               SortedMap(
-                (CIP67.HeadTokenNames(genAdaOnlyPubKeyUtxo(Alice).sample.get._1).headTokenName, 1L)
+                (
+                  CIP67.HeadTokenNames(genAdaOnlyPubKeyUtxo(Alice).sample.get._1).treasuryTokenName,
+                  1L
+                )
               )
             )
           )
