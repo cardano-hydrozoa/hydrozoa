@@ -567,7 +567,7 @@ trait ModelBasedSuite {
         // advance. The inner sleeps for this duration first; the outer ticks through it
         // (giving actors their ping cycles), then reads the declared delay and advances
         // only the remainder (delay - settling). Total virtual time per command = delay.
-        val settling = 2.seconds
+        val settling = 1.seconds
 
         // The inner program: newSut, then for each command:
         //   1. sleep(settling) — keeps inner busy while outer ticks actors
@@ -592,6 +592,7 @@ trait ModelBasedSuite {
             }
             (sut, prop, s, lastCmd) = result
             shutdownProp <- shutdownSut(s, sut)
+            _ <- IO.println("innerIO is over")
         } yield (sut, propAnd(prop, shutdownProp), s, lastCmd)
 
         // Outer driver: start the inner on the TestControl runtime, then drive it command by

@@ -24,5 +24,9 @@ object BlockNumber {
 
     extension (self: BlockNumber)
         def increment: BlockNumber = BlockNumber(self + 1)
-        def decrement: BlockNumber = BlockNumber(self - 1)
+        def decrement: BlockNumber = {
+            if self == zero
+            then throw RuntimeException("Attempt of block number decrement on 0")
+            BlockNumber(self - 1)
+        }
 }
