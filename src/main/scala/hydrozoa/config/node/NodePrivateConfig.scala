@@ -2,11 +2,12 @@ package hydrozoa.config.node
 
 import hydrozoa.config.node.operation.liquidation.NodeOperationLiquidationConfig
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
-import hydrozoa.multisig.consensus.peer.HeadPeerWallet
+import hydrozoa.config.node.owninfo.{OwnHeadPeerPrivate, OwnHeadPeerPublic}
+import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, HeadPeerWallet}
 import scala.concurrent.duration.FiniteDuration
 
 final case class NodePrivateConfig(
-    override val ownHeadPeer: OwnHeadPeer,
+    override val ownHeadPeerPrivate: OwnHeadPeerPrivate,
     override val nodeOperationLiquidationConfig: NodeOperationLiquidationConfig,
     override val nodeOperationMultisigConfig: NodeOperationMultisigConfig,
 ) extends NodePrivateConfig.Section {
@@ -17,15 +18,20 @@ object NodePrivateConfig {
     trait Section
         extends NodeOperationMultisigConfig.Section,
           NodeOperationLiquidationConfig.Section,
-          OwnHeadPeer.Section {
+          OwnHeadPeerPrivate.Section {
         def nodePrivateConfig: NodePrivateConfig
 
-        override transparent inline def ownHeadWallet: HeadPeerWallet = ownHeadPeer.ownHeadWallet
+        override def ownHeadWallet: HeadPeerWallet =
+            ownHeadPeerPrivate.ownHeadWallet
+        override def ownHeadPeerPublic: OwnHeadPeerPublic =
+            ownHeadPeerPrivate.ownHeadPeerPublic
+        override def ownHeadPeerNum: HeadPeerNumber =
+            ownHeadPeerPrivate.ownHeadPeerNum
 
-        override transparent inline def liquidationBotPollingPeriod: FiniteDuration =
+        override def liquidationBotPollingPeriod: FiniteDuration =
             nodeOperationLiquidationConfig.liquidationBotPollingPeriod
 
-        override transparent inline def cardanoLiaisonPollingPeriod: FiniteDuration =
+        override def cardanoLiaisonPollingPeriod: FiniteDuration =
             nodeOperationMultisigConfig.cardanoLiaisonPollingPeriod
     }
 }

@@ -52,9 +52,13 @@ object HeadConfig {
             headParams.headParamsHash
 
         override transparent inline def headPeerIds: List[HeadPeerId] = headPeers.headPeerIds
-        override transparent inline def headPeerVKeys: IArray[VerificationKeyBytes] =
+        override transparent inline def headPeerVKeys: List[VerificationKeyBytes] =
             headPeers.headPeerVKeys
-        override transparent inline def headPeerVKey(p: HeadPeerId): VerificationKeyBytes =
+        override transparent inline def headPeerVKey(
+            p: HeadPeerNumber
+        ): Option[VerificationKeyBytes] =
+            headPeers.headPeerVKey(p)
+        override transparent inline def headPeerVKey(p: HeadPeerId): Option[VerificationKeyBytes] =
             headPeers.headPeerVKey(p)
         override transparent inline def nHeadPeers: PositiveInt =
             headPeers.nHeadPeers

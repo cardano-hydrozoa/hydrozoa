@@ -7,9 +7,11 @@ import hydrozoa.config.head.parameters.HeadParameters
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.operation.liquidation.NodeOperationLiquidationConfig
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
+import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
+import hydrozoa.multisig.consensus.peer.HeadPeerWallet
 import hydrozoa.multisig.ledger.block.Block
 
-final case class NodeConfig(
+final case class NodeConfig private (
     override val headConfig: HeadConfig,
     override val nodePrivateConfig: NodePrivateConfig,
 ) extends NodeConfig.Section {
@@ -17,6 +19,20 @@ final case class NodeConfig(
 }
 
 object NodeConfig {
+    def apply(
+        headConfig: HeadConfig,
+        ownHeadWallet: HeadPeerWallet,
+        nodeOperationLiquidationConfig: NodeOperationLiquidationConfig,
+        nodeOperationMultisigConfig: NodeOperationMultisigConfig
+    ): Option[NodeConfig] = for {
+        ownHeadPeerPrivate <- OwnHeadPeerPrivate(ownHeadWallet, headConfig.headPeers)
+        nodePrivateConfig = NodePrivateConfig(
+          ownHeadPeerPrivate,
+          nodeOperationLiquidationConfig,
+          nodeOperationMultisigConfig
+        )
+    } yield NodeConfig(headConfig, nodePrivateConfig)
+
     trait Section extends NodePrivateConfig.Section, HeadConfig.Section {
         def nodeConfig: NodeConfig
 
@@ -31,7 +47,8 @@ object NodeConfig {
         override transparent inline def initializationParams: InitializationParameters =
             headConfig.initializationParams
 
-        override transparent inline def ownHeadPeer: OwnHeadPeer = nodePrivateConfig.ownHeadPeer
+        override transparent inline def ownHeadPeerPrivate: OwnHeadPeerPrivate =
+            nodePrivateConfig.ownHeadPeerPrivate
         override transparent inline def nodeOperationLiquidationConfig
             : NodeOperationLiquidationConfig =
             nodePrivateConfig.nodeOperationLiquidationConfig

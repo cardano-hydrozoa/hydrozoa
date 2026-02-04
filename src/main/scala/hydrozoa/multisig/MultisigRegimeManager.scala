@@ -37,16 +37,7 @@ trait MultisigRegimeManager(config: NodeConfig, cardanoBackend: CardanoBackend[I
             cardanoLiaison <-
                 context.actorOf(CardanoLiaison(config, cardanoBackend, pendingConnections))
 
-            consensusActor <- context.actorOf(
-              ConsensusActor(
-                ConsensusActor.Config(
-                  headPeerNumber = ???,
-                  verificationKeys = ???,
-                  recoveredRequests = ???
-                ),
-                pendingConnections
-              )
-            )
+            consensusActor <- context.actorOf(ConsensusActor(config, pendingConnections))
 
             eventSequencer <- context.actorOf(EventSequencer(config, pendingConnections))
 

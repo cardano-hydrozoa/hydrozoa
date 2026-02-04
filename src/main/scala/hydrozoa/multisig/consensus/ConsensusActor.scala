@@ -5,6 +5,8 @@ import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
+import hydrozoa.config.head.peers.HeadPeers
+import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{AckBlock, AckId}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
@@ -241,16 +243,7 @@ sealed trait FinalConsensusCell[T] extends ConsensusCell[T]
   */
 object ConsensusActor:
 
-    final case class Config(
-        /** Own peer number */
-        headPeerNumber: HeadPeerNumber,
-
-        /** The mapping from head's peers to their verification keys. */
-        verificationKeys: Map[HeadPeerNumber, VerificationKeyBytes],
-
-        /** Requests that haven't been handled, initially empty. */
-        recoveredRequests: Seq[Request] = Seq.empty,
-    )
+    type Config = OwnHeadPeerPublic.Section & HeadPeers.Section
 
     final case class Connections(
         blockWeaver: BlockWeaver.Handle,
@@ -336,11 +329,7 @@ class ConsensusActor(
         case x: ConsensusActor.Connections => connections.set(Some(x))
     }
 
-    override def preStart: IO[Unit] =
-        for {
-            _ <- initializeConnections
-            _ <- IO.traverse_(config.recoveredRequests)(receive)
-        } yield ()
+    override def preStart: IO[Unit] = initializeConnections
 
     override def receive: Receive[IO, Request] = {
         case block: Block.Unsigned.Next => handleBlock(block)
@@ -379,12 +368,12 @@ class ConsensusActor(
         _ <- ack match {
             case minor: AckBlock.Minor =>
                 state.withCellFor(minor)(_.applyAck(minor)) >>
-                    IO.whenA(ack.peerNum == config.headPeerNumber)(
+                    IO.whenA(ack.peerNum == config.ownHeadPeerNum)(
                       state.scheduleOwnImmediateAck(minor)
                     )
             case major1: AckBlock.Major1 =>
                 state.withCellFor(major1)(_.applyAck(major1)) >>
-                    IO.whenA(ack.peerNum == config.headPeerNumber)(
+                    IO.whenA(ack.peerNum == config.ownHeadPeerNum)(
                       state.scheduleOwnImmediateAck(major1)
                     )
             case major2: AckBlock.Major2 =>
@@ -394,7 +383,7 @@ class ConsensusActor(
                 }
             case final1: AckBlock.Final1 =>
                 state.withCellFor(final1)(_.applyAck(final1)) >>
-                    IO.whenA(ack.peerNum == config.headPeerNumber)(
+                    IO.whenA(ack.peerNum == config.ownHeadPeerNum)(
                       state.scheduleOwnImmediateAck(final1)
                     )
             case final2: AckBlock.Final2 =>
@@ -492,7 +481,7 @@ class ConsensusActor(
           */
         def scheduleOwnImmediateAck(ack: RoundOneOwnAck): IO[Unit] = for {
             // Check again it's our own ack
-            _ <- IO.raiseWhen(ack.peerNum != config.headPeerNumber)(Error.AlienAckAnnouncement)
+            _ <- IO.raiseWhen(ack.peerNum != config.ownHeadPeerNum)(Error.AlienAckAnnouncement)
             // The number of the block an ack may depend - the previous block
             prevBlockNum = ack.blockNum.decrement
             _ <- state.cells.get(prevBlockNum) match {
@@ -721,8 +710,8 @@ class ConsensusActor(
                     )
                     // Check peer number
                     peerNum = ack.peerNum
-                    verificationKey <- config.verificationKeys
-                        .get(peerNum)
+                    verificationKey <- config
+                        .headPeerVKey(peerNum)
                         .liftTo[IO](UnexpectedPeer(peerNum))
                     // Check whether ack already exists
                     _ <- IO.raiseWhen(this.acks.contains(verificationKey))(
@@ -732,7 +721,7 @@ class ConsensusActor(
                 } yield newRound
 
             override def isSaturated: Boolean =
-                block.isDefined && acks.keys == config.verificationKeys.values
+                block.isDefined && acks.keys == config.headPeerVKeys
 
             override def complete
                 : IO[Either[(Void, Void), (Block.MultiSigned.Minor, Option[RoundOneOwnAck])]] = {
@@ -848,8 +837,8 @@ class ConsensusActor(
                       UnexpectedBlockNumber(this.blockNum, blockNum)
                     )
                     peerNum = ack.peerNum
-                    verificationKey <- config.verificationKeys
-                        .get(peerNum)
+                    verificationKey <- config
+                        .headPeerVKey(peerNum)
                         .liftTo[IO](UnexpectedPeer(peerNum))
                     _ <- IO.raiseWhen(this.acks1.contains(verificationKey))(
                       UnexpectedAck(blockNum, peerNum)
@@ -864,8 +853,8 @@ class ConsensusActor(
                       UnexpectedBlockNumber(this.blockNum, blockNum)
                     )
                     peerNum = ack.peerNum
-                    verificationKey <- config.verificationKeys
-                        .get(peerNum)
+                    verificationKey <- config
+                        .headPeerVKey(peerNum)
                         .liftTo[IO](UnexpectedPeer(peerNum))
                     _ <- IO.raiseWhen(this.acks2.contains(verificationKey))(
                       UnexpectedAck(blockNum, peerNum)
@@ -875,7 +864,7 @@ class ConsensusActor(
 
             override def isSaturated: Boolean =
                 this.block.isDefined &&
-                    this.acks1.keySet == config.verificationKeys.values.toSet
+                    this.acks1.keySet == config.headPeerVKeys.toSet
 
             override def complete
                 : IO[Either[(MajorRoundTwoCell, AckBlock.Major2), (Void, Option[RoundOneOwnAck])]] =
@@ -891,9 +880,8 @@ class ConsensusActor(
                       acks2 = this.acks2,
                       postponedNextBlockOwnAck = postponedNextBlockOwnAck
                     )
-                    ownAck <- config.verificationKeys
-                        .get(config.headPeerNumber)
-                        .flatMap(vkey => this.acks2.get(vkey))
+                    ownAck <- this.acks2
+                        .get(config.ownHeadVKey)
                         .liftTo[IO](
                           new IllegalStateException(s"Own Major2 ack not found for block $blockNum")
                         )
@@ -942,8 +930,8 @@ class ConsensusActor(
                       UnexpectedBlockNumber(this.blockNum, blockNum)
                     )
                     peerNum = ack.peerNum
-                    verificationKey <- config.verificationKeys
-                        .get(peerNum)
+                    verificationKey <- config
+                        .headPeerVKey(peerNum)
                         .liftTo[IO](UnexpectedPeer(peerNum))
                     _ <- IO.raiseWhen(this.acks2.contains(verificationKey))(
                       UnexpectedAck(blockNum, peerNum)
@@ -952,7 +940,7 @@ class ConsensusActor(
                 } yield newRound
 
             override def isSaturated: Boolean =
-                this.acks2.keySet == config.verificationKeys.values.toSet
+                this.acks2.keySet == config.headPeerVKeys.toSet
 
             override def complete
                 : IO[Either[(Void, Void), (Block.MultiSigned.Major, Option[RoundOneOwnAck])]] =
@@ -1058,8 +1046,8 @@ class ConsensusActor(
                       UnexpectedBlockNumber(this.blockNum, blockNum)
                     )
                     peerNum = ack.peerNum
-                    verificationKey <- config.verificationKeys
-                        .get(peerNum)
+                    verificationKey <- config
+                        .headPeerVKey(peerNum)
                         .liftTo[IO](UnexpectedPeer(peerNum))
                     _ <- IO.raiseWhen(this.acks1.contains(verificationKey))(
                       UnexpectedAck(blockNum, peerNum)
@@ -1074,8 +1062,8 @@ class ConsensusActor(
                       UnexpectedBlockNumber(this.blockNum, blockNum)
                     )
                     peerNum = ack.peerNum
-                    verificationKey <- config.verificationKeys
-                        .get(peerNum)
+                    verificationKey <- config
+                        .headPeerVKey(peerNum)
                         .liftTo[IO](UnexpectedPeer(peerNum))
                     _ <- IO.raiseWhen(this.acks2.contains(verificationKey))(
                       UnexpectedAck(blockNum, peerNum)
@@ -1085,7 +1073,7 @@ class ConsensusActor(
 
             override def isSaturated: Boolean =
                 this.block.isDefined &&
-                    this.acks1.keySet == config.verificationKeys.values.toSet
+                    this.acks1.keySet == config.headPeerVKeys.toSet
 
             override def complete
                 : IO[Either[(FinalRoundTwoCell, AckBlock.Final2), (Void, Option[RoundOneOwnAck])]] =
@@ -1100,9 +1088,8 @@ class ConsensusActor(
                       acks2 = this.acks2
                     )
                     // Own ack should always be present
-                    ownAck <- config.verificationKeys
-                        .get(config.headPeerNumber)
-                        .flatMap(vkey => this.acks2.get(vkey))
+                    ownAck <- this.acks2
+                        .get(config.ownHeadVKey)
                         .liftTo[IO](
                           new IllegalStateException(s"Own Final2 ack not found for block $blockNum")
                         )
@@ -1148,8 +1135,8 @@ class ConsensusActor(
                       UnexpectedBlockNumber(this.blockNum, blockNum)
                     )
                     peerNum = ack.peerNum
-                    verificationKey <- config.verificationKeys
-                        .get(peerNum)
+                    verificationKey <- config
+                        .headPeerVKey(peerNum)
                         .liftTo[IO](UnexpectedPeer(peerNum))
                     _ <- IO.raiseWhen(this.acks2.contains(verificationKey))(
                       UnexpectedAck(blockNum, peerNum)
@@ -1158,7 +1145,7 @@ class ConsensusActor(
                 } yield newRound
 
             override def isSaturated: Boolean =
-                this.acks2.keySet == config.verificationKeys.values.toSet
+                this.acks2.keySet == config.headPeerVKeys.toSet
 
             override def complete
                 : IO[Either[(Void, Void), (Block.MultiSigned.Final, Option[RoundOneOwnAck])]] =

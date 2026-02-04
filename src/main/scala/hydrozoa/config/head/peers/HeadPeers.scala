@@ -8,21 +8,25 @@ import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import scalus.cardano.address.ShelleyAddress
 
 final case class HeadPeers(
-    override val headPeerVKeys: IArray[VerificationKeyBytes]
+    override val headPeerVKeys: List[VerificationKeyBytes]
 ) extends HeadPeers.Section {
     require(headPeerVKeys.size > 0)
 
     override transparent inline def headPeers: HeadPeers = this
 
-    def apply(p: HeadPeerId): VerificationKeyBytes = {
-        require(p.nHeadPeers == nHeadPeers)
-        headPeerVKeys(p.peerNum)
+    def apply(p: HeadPeerNumber): Option[VerificationKeyBytes] = {
+        Option.when(p < nHeadPeers)(headPeerVKeys(p))
+    }
+
+    def apply(p: HeadPeerId): Option[VerificationKeyBytes] = {
+        Option.when(p.nHeadPeers == nHeadPeers)(headPeerVKeys(p.peerNum))
     }
 
     override def headPeerIds: List[HeadPeerId] =
         Range.Exclusive(0, nHeadPeers, 1).map(HeadPeerId(_, nHeadPeers)).toList
 
-    override def headPeerVKey(p: HeadPeerId): VerificationKeyBytes = apply(p)
+    override def headPeerVKey(p: HeadPeerNumber): Option[VerificationKeyBytes] = apply(p)
+    override def headPeerVKey(p: HeadPeerId): Option[VerificationKeyBytes] = apply(p)
 
     override lazy val headMultisigScript: HeadMultisigScript = HeadMultisigScript(this)
 
@@ -35,9 +39,10 @@ object HeadPeers {
 
         def headPeerIds: List[HeadPeerId]
 
-        def headPeerVKeys: IArray[VerificationKeyBytes]
+        def headPeerVKeys: List[VerificationKeyBytes]
 
-        def headPeerVKey(p: HeadPeerId): VerificationKeyBytes
+        def headPeerVKey(p: HeadPeerNumber): Option[VerificationKeyBytes]
+        def headPeerVKey(p: HeadPeerId): Option[VerificationKeyBytes]
 
         def headMultisigScript: HeadMultisigScript
 
