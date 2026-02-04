@@ -25,7 +25,6 @@ object TreasuryState:
         peersN: BigInt,
         deadlineVoting: PosixTime,
         versionMajor: BigInt,
-        params: L2ConsensusParamsH32,
         setup: List[ByteString]
     )
 
@@ -39,7 +38,6 @@ object TreasuryState:
         // FIXME: missing in the refactored version
         version: (BigInt, BigInt),
         // FIXME: missing in the refactored version
-        params: L2ConsensusParamsH32,
         setup: List[ByteString]
     )
 
@@ -52,9 +50,6 @@ object TreasuryState:
 
     // The result of `bls12_381_G1_compress` function
     type MembershipProof = ByteString
-
-    // Hash of consensus parameters
-    type L2ConsensusParamsH32 = ByteString
 
 //enum RuleBasedTreasuryDatum derives FromData, ToData:
 //    case UnresolvedDatum(

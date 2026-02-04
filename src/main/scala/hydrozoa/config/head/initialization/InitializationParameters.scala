@@ -2,6 +2,7 @@ package hydrozoa.config.head.initialization
 
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.peers.HeadPeers
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.dapp.token.CIP67.HeadTokenNames
 import scalus.cardano.ledger.{Coin, Hash32, TransactionOutput, Utxo, Utxos, Value}
@@ -26,6 +27,7 @@ export InitializationParameters.isBalancedInitializationFunding
   *   excess of the unbalanced treasury value ([[initialEquityContributed]] + [[initialL2Value]]).
   */
 final case class InitializationParameters(
+    override val headStartTime: QuantizedInstant,
     override val initialL2Utxos: Utxos,
     override val initialEquityContributions: Map[HeadPeerNumber, Coin],
     override val initialSeedUtxo: Utxo,
@@ -35,15 +37,14 @@ final case class InitializationParameters(
     override transparent inline def initializationParams: InitializationParameters = this
 
     override lazy val initialL2Value: Value =
-        initialL2Utxos.values.map(_.value).fold(Value(Coin(0)))(_ + _)
+        initialL2Utxos.values.map(_.value).fold(Value.zero)(_ + _)
 
     override lazy val initialEquityContributed: Coin =
-        initialEquityContributions.values.fold(Coin(0))(_ + _)
+        initialEquityContributions.values.fold(Coin.zero)(_ + _)
 
     override lazy val initialFundingValue: Value =
-        initialSeedUtxo.output.value +
-            initialAdditionalFundingUtxos.values.map(_.value).fold(Value(Coin(0)))(_ + _) -
-            initialChangeOutputs.map(_.value).fold(Value(Coin(0)))(_ + _)
+        initialFundingUtxos.values.map(_.value).fold(Value.zero)(_ + _) -
+            initialChangeOutputs.map(_.value).fold(Value.zero)(_ + _)
 
     override lazy val headTokenNames: HeadTokenNames = HeadTokenNames(initialSeedUtxo.input)
 
@@ -56,6 +57,8 @@ final case class InitializationParameters(
 
 object InitializationParameters {
     trait Section {
+        def headStartTime: QuantizedInstant
+
         def initializationParams: InitializationParameters
 
         def initialL2Utxos: Utxos
@@ -70,6 +73,9 @@ object InitializationParameters {
         def headTokenNames: HeadTokenNames
 
         def initialEquityContributionsHash: Hash32
+
+        final def initialFundingUtxos: Utxos =
+            initialAdditionalFundingUtxos + initialSeedUtxo.toTuple
     }
 
     extension (
@@ -77,9 +83,8 @@ object InitializationParameters {
     )
         def isBalancedInitializationFunding: Boolean = {
             config.initialFundingValue ==
-                config.initialL2Value + Value(
-                  config.initialEquityContributed
-                ) + config.multisigRegimeUtxoValue
+                config.initialL2Value +
+                Value(config.initialEquityContributed + config.totalFallbackContingency)
         }
 
 }

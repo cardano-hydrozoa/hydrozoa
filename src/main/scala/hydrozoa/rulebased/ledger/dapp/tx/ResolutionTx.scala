@@ -105,7 +105,6 @@ object ResolutionTx {
           headMp = unresolved.headMp,
           utxosActive = voteDetails._1,
           version = (unresolved.versionMajor, voteDetails._2),
-          params = unresolved.params,
           setup = unresolved.setup
         )
 

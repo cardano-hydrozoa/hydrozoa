@@ -202,11 +202,6 @@ object RuleBasedTreasuryValidator extends Validator {
                 )
 
                 require(
-                  unresolvedDatum.params === treasuryOutputDatum.params,
-                  ResolveTreasuryInputOutputParams
-                )
-
-                require(
                   unresolvedDatum.setup === treasuryOutputDatum.setup,
                   ResolveTreasuryInputOutputSetup
                 )

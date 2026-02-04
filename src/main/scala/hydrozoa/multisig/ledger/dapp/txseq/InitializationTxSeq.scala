@@ -1,44 +1,18 @@
 package hydrozoa.multisig.ledger.dapp.txseq
 
-import cats.data.NonEmptyList
-import hydrozoa.config.head.multisig.timing.TxTiming
+import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming.*
-import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedFiniteDuration
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.tx.{Metadata as _, *}
-import hydrozoa.multisig.ledger.dapp.utxo.MultisigTreasuryUtxo
-import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
-import hydrozoa.rulebased.ledger.dapp.state.VoteDatum as VD
-import hydrozoa.{VerificationKeyBytes, ensureMinAda, maxNonPlutusTxFee, given}
-import scala.collection.immutable.SortedMap
-import scalus.builtin.Data
-import scalus.builtin.Data.toData
-import scalus.cardano.address.*
-import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
-import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
-import scalus.ledger.api.v1.PubKeyHash
 
 final case class InitializationTxSeq(initializationTx: InitializationTx, fallbackTx: FallbackTx)
 
 object InitializationTxSeq {
-    case class Config(
-        tallyFeeAllowance: Coin,
-        votingDuration: QuantizedFiniteDuration,
-        cardanoInfo: CardanoInfo,
-        peerKeys: NonEmptyList[VerificationKeyBytes],
-        startTime: QuantizedInstant,
-        txTiming: TxTiming
-    ) {
-        def evaluator: PlutusScriptEvaluator =
-            PlutusScriptEvaluator(cardanoInfo, EvaluateAndComputeCost)
-        def headMultisigScript = HeadMultisigScript(peerKeys)
-    }
+    type Config = HeadConfig.PreInit.Section
 
     sealed trait ParseError
     case class InitializationTxParseError(wrapped: InitializationTx.ParseError) extends ParseError
@@ -60,27 +34,17 @@ object InitializationTxSeq {
       * secure. We are parsing primarily to ensure that the given transaction won't result in a head
       * that will immediately crash.
       *
+      * @param config
       * @param transactionSequence
-      * @param expectedNetwork
-      * @param peerKeys
-      * @param expectedTallyFeeAllowance
-      * @param expectedVotingDuration
-      * @param env
-      * @param evaluator
-      * @param validators
       * @param resolvedUtxos
       * @return
       */
     def parse(
+        config: Config,
         transactionSequence: (Transaction, Transaction),
-        tallyFeeAllowance: Coin,
-        votingDuration: QuantizedFiniteDuration,
-        cardanoInfo: CardanoInfo,
-        peerKeys: NonEmptyList[VerificationKeyBytes],
-        startTime: QuantizedInstant,
-        txTiming: TxTiming,
         resolvedUtxos: ResolvedUtxos,
     ): Either[ParseError, InitializationTxSeq] = {
+        given ProtocolVersion = config.cardanoProtocolVersion
 
         val initializationTx = transactionSequence._1
         val fallbackTx = transactionSequence._2
@@ -88,10 +52,7 @@ object InitializationTxSeq {
         for {
             iTx <- InitializationTx
                 .parse(
-                  peerKeys = peerKeys,
-                  cardanoInfo = cardanoInfo,
-                  txTiming = txTiming,
-                  startTime = startTime,
+                  config = config,
                   tx = initializationTx,
                   resolvedUtxos = resolvedUtxos
                 )
@@ -103,12 +64,12 @@ object InitializationTxSeq {
                 .map(Slot.apply)
 
             ftxConfig = FallbackTx.Config(
-              headMultisigScript = HeadMultisigScript(peerKeys),
+              headMultisigScript = config.headMultisigScript,
               multisigRegimeUtxo = iTx.multisigRegimeUtxo,
               tokenNames = iTx.tokenNames,
-              tallyFeeAllowance = tallyFeeAllowance,
-              cardanoInfo = cardanoInfo,
-              votingDuration = votingDuration
+              tallyFeeAllowance = config.individualContingency.tallyTxFee,
+              cardanoInfo = config.cardanoInfo,
+              votingDuration = config.votingDuration
             )
 
             ftxRecipe = FallbackTx.Recipe(
@@ -134,8 +95,8 @@ object InitializationTxSeq {
             // Check validity ranges are correct and match each other
             // Silence period is respected: fallbackTx.validityStart -initializationTx.ttl > txTiming.
             expectedFallbackValidityStart: Slot =
-                (iTx.validityEnd + txTiming.silenceDuration).toSlot
-
+                (iTx.validityEnd + config.txTiming.silenceDuration).toSlot
+            // ^ preview       ^ mainnet
             // TODO: Should this be in the fallback parser?
             _ <-
                 if fallbackValidityStartSlot == expectedFallbackValidityStart
@@ -173,88 +134,19 @@ object InitializationTxSeq {
      */
     object Builder {
 
-        def build(args: Args, config: Config): Either[Error, InitializationTxSeq] = {
-            val tokenNames = CIP67.HeadTokenNames(args.spentUtxos.seedUtxo.input)
-            val disputeResolutionAddress = ShelleyAddress(
-              network = config.cardanoInfo.network,
-              payment = ShelleyPaymentPart.Script(DisputeResolutionScript.compiledScriptHash),
-              delegation = Null
-            )
-
-            import tokenNames.*
-
+        def build(config: Config): Either[Error, InitializationTxSeq] = {
             // ===================================
             // Head Native Script
             // ===================================
 
             // Construct head native script directly from the list of peers
-            val hms = HeadMultisigScript(config.peerKeys)
-
-            // ===================================
-            // Init Treasury
-            // ===================================
-            val initTreasuryDatum = MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum
-
-            // ===================================
-            // Vote Utxos
-            // ===================================
-            def mkVoteToken(amount: Long): MultiAsset = MultiAsset(
-              SortedMap(
-                (
-                  hms.policyId,
-                  SortedMap((voteTokenName, amount))
-                )
-              )
-            )
-
-            def mkVoteUtxo(datum: Data): TransactionOutput = Babbage(
-              address = disputeResolutionAddress,
-              value = Value(config.tallyFeeAllowance, mkVoteToken(1)),
-              datumOption = Some(Inline(datum)),
-              scriptRef = None
-            ).ensureMinAda(config.cardanoInfo.protocolParams)
-
-            val initDefaultVoteUtxo: TransactionOutput = mkVoteUtxo(
-              VD.default(initTreasuryDatum.commit).toData
-            )
-
-            val peerVoteUtxos: NonEmptyList[TransactionOutput] = {
-                val datums = VD(
-                  NonEmptyList.fromListUnsafe(
-                    hms.requiredSigners.map(x => PubKeyHash(x.hash)).toList
-                  )
-                )
-                datums.map(datum => mkVoteUtxo(datum.toData))
-            }
-
-            // ===================================
-            // Collateral utxos
-            // ===================================
-
-            def collateralUtxos: NonEmptyList[TransactionOutput] = {
-                NonEmptyList.fromListUnsafe(
-                  hms.requiredSigners
-                      .map(es =>
-                          Babbage(
-                            address = ShelleyAddress(
-                              network = config.cardanoInfo.network,
-                              payment = ShelleyPaymentPart.Key(es.hash),
-                              delegation = Null
-                            ),
-                            value = Value(config.tallyFeeAllowance),
-                            datumOption = None,
-                            scriptRef = None
-                          ).ensureMinAda(config.cardanoInfo.protocolParams)
-                      )
-                      .toList
-                )
-            }
+            val hms = HeadMultisigScript(config.headPeerVKeys)
 
             // ===================================
             // Validity ranges
             // ===================================
             val initializationTxValidityEnd =
-                config.startTime + config.txTiming.minSettlementDuration +
+                config.headStartTime + config.txTiming.minSettlementDuration +
                     config.txTiming.inactivityMarginDuration
 
             val fallbackTxValidityStart =
@@ -263,39 +155,15 @@ object InitializationTxSeq {
             // ===================================
             // Init Tx
             // ===================================
-
-            val multisigRegimeWitnessCoin: Coin =
-                Coin(
-                  maxNonPlutusTxFee(config.cardanoInfo.protocolParams).value
-                      + initDefaultVoteUtxo.value.coin.value
-                      + peerVoteUtxos.map(_.value.coin.value).toList.sum
-                      + collateralUtxos.map(_.value.coin.value).toList.sum
-                )
-
-            val initializationTxConfig = InitializationTx.Config(
-              peerKeys = config.peerKeys,
-              cardanoInfo = config.cardanoInfo,
-              txTiming = config.txTiming,
-              startTime = config.startTime,
-              tokenNames = tokenNames
-            )
-
-            val initializationTxRecipe = InitializationTx.Recipe(
-              hmrwCoin = multisigRegimeWitnessCoin,
-              spentUtxos = args.spentUtxos,
-              initialTreasury = args.initialTreasury,
-              changePP = args.initializationTxChangePP
-            )
-
             for {
                 initializationTx <- InitializationTx
-                    .build(initializationTxConfig, initializationTxRecipe)
+                    .build(config)
                     .left
                     .map(InitializationTxError(_))
 
                 fallbackConfig = FallbackTx.Config(
                   headMultisigScript = hms,
-                  tallyFeeAllowance = config.tallyFeeAllowance,
+                  tallyFeeAllowance = config.individualContingency.tallyTxFee,
                   multisigRegimeUtxo = initializationTx.multisigRegimeUtxo,
                   tokenNames = initializationTx.tokenNames,
                   cardanoInfo = config.cardanoInfo,
@@ -321,12 +189,5 @@ object InitializationTxSeq {
         case class FallbackPRError(e: SomeBuildError) extends Error
         case class InitializationTxError(e: SomeBuildError) extends Error
         case class FallbackTxError(e: SomeBuildError) extends Error
-
-        // TODO: this is getting cumbersome, review
-        final case class Args(
-            spentUtxos: InitializationTx.SpentUtxos,
-            initialTreasury: Value,
-            initializationTxChangePP: ShelleyPaymentPart,
-        )
     }
 }

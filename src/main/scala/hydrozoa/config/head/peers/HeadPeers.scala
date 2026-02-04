@@ -1,5 +1,6 @@
 package hydrozoa.config.head.peers
 
+import cats.data.NonEmptyList
 import hydrozoa.VerificationKeyBytes
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.number.PositiveInt
@@ -7,23 +8,25 @@ import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import scalus.cardano.address.ShelleyAddress
 
-final case class HeadPeers(
-    override val headPeerVKeys: List[VerificationKeyBytes]
+final case class HeadPeers private (
+    override val headPeerVKeys: NonEmptyList[VerificationKeyBytes]
 ) extends HeadPeers.Section {
     require(headPeerVKeys.size > 0)
 
     override transparent inline def headPeers: HeadPeers = this
 
     def apply(p: HeadPeerNumber): Option[VerificationKeyBytes] = {
-        Option.when(p < nHeadPeers)(headPeerVKeys(p))
+        Option.when(p < nHeadPeers)(headPeerVKeys.toList(p))
     }
 
     def apply(p: HeadPeerId): Option[VerificationKeyBytes] = {
-        Option.when(p.nHeadPeers == nHeadPeers)(headPeerVKeys(p.peerNum))
+        Option.when(p.nHeadPeers == nHeadPeers)(headPeerVKeys.toList(p.peerNum))
     }
 
-    override def headPeerIds: List[HeadPeerId] =
-        Range.Exclusive(0, nHeadPeers, 1).map(HeadPeerId(_, nHeadPeers)).toList
+    override def headPeerIds: NonEmptyList[HeadPeerId] =
+        NonEmptyList.fromListUnsafe(
+          Range.Exclusive(0, nHeadPeers, 1).map(HeadPeerId(_, nHeadPeers)).toList
+        )
 
     override def headPeerVKey(p: HeadPeerNumber): Option[VerificationKeyBytes] = apply(p)
     override def headPeerVKey(p: HeadPeerId): Option[VerificationKeyBytes] = apply(p)
@@ -34,12 +37,19 @@ final case class HeadPeers(
 }
 
 object HeadPeers {
+    def apply(headPeerVKeys: NonEmptyList[VerificationKeyBytes]): HeadPeers =
+        new HeadPeers(headPeerVKeys)
+
+    def apply(headPeerVKeys: List[VerificationKeyBytes]): Option[HeadPeers] = for {
+        neHeadPeerVKeys <- NonEmptyList.fromList(headPeerVKeys)
+    } yield new HeadPeers(neHeadPeerVKeys)
+
     trait Section {
         def headPeers: HeadPeers
 
-        def headPeerIds: List[HeadPeerId]
+        def headPeerIds: NonEmptyList[HeadPeerId]
 
-        def headPeerVKeys: List[VerificationKeyBytes]
+        def headPeerVKeys: NonEmptyList[VerificationKeyBytes]
 
         def headPeerVKey(p: HeadPeerNumber): Option[VerificationKeyBytes]
         def headPeerVKey(p: HeadPeerId): Option[VerificationKeyBytes]

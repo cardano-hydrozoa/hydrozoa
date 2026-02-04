@@ -11,7 +11,7 @@ import hydrozoa.multisig.ledger.dapp.tx.Tx
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.*
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
-import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.{KzgCommitment, calculateCommitment, hashToScalar}
+import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.{KzgCommitment, kzgCommitment}
 import io.bullet.borer.Cbor
 import monocle.syntax.all.*
 import scalus.cardano.ledger.*
@@ -137,7 +137,7 @@ object VirtualLedgerM {
     type Config = CardanoNetwork.Section
 
     final case class State(activeUtxos: Map[TransactionInput, TransactionOutput]) {
-        lazy val kzgCommitment: KzgCommitment = calculateCommitment(hashToScalar(this.activeUtxos))
+        lazy val kzgCommitment: KzgCommitment = this.activeUtxos.kzgCommitment
 
         def toScalusState: ScalusState = ScalusState(utxos = activeUtxos)
     }

@@ -8,20 +8,23 @@ import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 
 final case class InitialBlock(
     override val initialBlock: Block.MultiSigned.Initial
-) extends InitialBlock.Section {}
+) extends InitialBlock.Section {
+    override transparent inline def initialBlockSection: InitialBlock = this
+}
 
 object InitialBlock {
     trait Section {
+        def initialBlockSection: InitialBlock
         def initialBlock: Block.MultiSigned.Initial
 
-        transparent inline def headStartTime: QuantizedInstant = initialBlock.startTime
+        def headStartTime: QuantizedInstant = initialBlock.startTime
 
-        transparent inline def initialKzgCommitment: KzgCommitment = initialBlock.kzgCommitment
+        def initialKzgCommitment: KzgCommitment = initialBlock.kzgCommitment
 
-        transparent inline def initializationTx: InitializationTx = initialBlock.initializationTx
-        transparent inline def initialFallbackTx: FallbackTx = initialBlock.fallbackTx
+        def initializationTx: InitializationTx = initialBlock.initializationTx
+        def initialFallbackTx: FallbackTx = initialBlock.fallbackTx
 
-        transparent inline def multisigRegimeUtxo: MultisigRegimeUtxo =
+        def multisigRegimeUtxo: MultisigRegimeUtxo =
             initializationTx.multisigRegimeUtxo
     }
 }

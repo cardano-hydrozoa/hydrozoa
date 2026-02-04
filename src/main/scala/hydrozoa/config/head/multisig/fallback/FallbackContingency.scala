@@ -3,9 +3,9 @@ package hydrozoa.config.head.multisig.fallback
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.number.{Distribution, PositiveInt}
-import scalus.cardano.ledger.{Coin, Value}
+import scalus.cardano.ledger.Coin
 
-export FallbackContingency.{totalFallbackContingency, multisigRegimeUtxoValue}
+export FallbackContingency.totalFallbackContingency
 export FallbackContingency.{distributeFallbackContingencyInMultisigRegime, distributeFallbackContingencyInRuleBasedRegime}
 export FallbackContingency.{mkFallbackContingencyWithDefaults, mkCollectiveContingencyWithDefaults, mkIndividualContingencyWithDefaults}
 
@@ -42,6 +42,7 @@ object FallbackContingency {
 
         def collectiveContingency: FallbackContingency.Collective
         def individualContingency: FallbackContingency.Individual
+
     }
 
     extension (config: FallbackContingency.Section & HeadPeers.Section)
@@ -65,8 +66,6 @@ object FallbackContingency {
             val distCoin = distSafeLong.iterator.map(_.toLong).map(Coin.apply).toList
             distCoin
         }
-
-        def multisigRegimeUtxoValue: Value = Value(config.totalFallbackContingency)
 
     extension (config: CardanoNetwork.Section) {
         def mkFallbackContingencyWithDefaults(

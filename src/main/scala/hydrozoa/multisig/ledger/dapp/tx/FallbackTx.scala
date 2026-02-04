@@ -108,7 +108,6 @@ object FallbackTx {
           deadlineVoting = cardanoInfo.slotConfig.slotToTime(validityStart.slot) +
               config.votingDuration.finiteDuration.toMillis,
           versionMajor = multisigDatum.versionMajor.toInt,
-          params = multisigDatum.paramsHash,
           // TODO: pull in N first elements of G2 CRS
           // KZG setup I think?
           setup = SList.empty

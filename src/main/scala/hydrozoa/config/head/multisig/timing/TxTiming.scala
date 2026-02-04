@@ -70,6 +70,12 @@ final case class TxTiming(
       */
     def newFallbackStartTime(blockStartTime: QuantizedInstant): QuantizedInstant =
         blockStartTime + minSettlementDuration + inactivityMarginDuration + silenceDuration
+
+    def newSettlementEndTime(competingFallbackStartTime: QuantizedInstant): QuantizedInstant =
+        competingFallbackStartTime - silenceDuration
+
+    def initializationEndTime(headStartTime: QuantizedInstant): QuantizedInstant =
+        headStartTime + minSettlementDuration + inactivityMarginDuration
 }
 
 // TODO: Update/fix comment

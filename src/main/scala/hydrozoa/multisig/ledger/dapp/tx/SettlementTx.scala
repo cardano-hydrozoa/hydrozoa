@@ -210,7 +210,6 @@ object SettlementTx {
                                   IArray.genericWrapArray(args.kzgCommitment).toArray
                                 ),
                                 versionMajor = args.majorVersionProduced,
-                                paramsHash = ByteString.empty
                               )
                               .toData
                         )

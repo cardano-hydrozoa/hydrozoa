@@ -2,7 +2,7 @@ package hydrozoa.config.head.network
 
 import hydrozoa.lib.number.PositiveInt
 import scalus.cardano.address.Network
-import scalus.cardano.ledger.{CardanoInfo, Coin, ProtocolParams, SlotConfig}
+import scalus.cardano.ledger.{CardanoInfo, Coin, EvaluatorMode, PlutusScriptEvaluator, ProtocolParams, ProtocolVersion, SlotConfig}
 
 enum CardanoNetwork(_cardanoInfo: CardanoInfo) extends CardanoNetwork.Section {
     case Mainnet extends CardanoNetwork(CardanoInfo.mainnet)
@@ -34,5 +34,10 @@ object CardanoNetwork {
         final def maxNonPlutusTxFee: Coin = Coin(
           cardanoProtocolParams.txFeeFixed + cardanoProtocolParams.maxTxSize * cardanoProtocolParams.txFeePerByte
         )
+
+        final def plutusScriptEvaluatorForTxBuild: PlutusScriptEvaluator =
+            PlutusScriptEvaluator(cardanoInfo, EvaluatorMode.EvaluateAndComputeCost)
+
+        final def cardanoProtocolVersion: ProtocolVersion = cardanoProtocolParams.protocolVersion
     }
 }

@@ -75,7 +75,7 @@ def genTreasuryResolvedDatum(
 def mkCommitment(withdrawals: Utxos): KzgCommitment.KzgCommitment =
     val utxoHashed = KzgCommitment.hashToScalar(withdrawals)
     // println(s"blst utxos active hashes: ${utxoHashed.map(e => BigInt.apply(e.to_bendian()))}")
-    val ret = KzgCommitment.calculateCommitment(utxoHashed)
+    val ret = KzgCommitment.calculateKzgCommitment(utxoHashed)
     // println(s"commitment=${HexUtil.encodeHexString(IArray.genericWrapArray(ret).toArray)}")
     ret
 
@@ -225,7 +225,7 @@ class WithdrawTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
             )
 
             // Accumulator
-            commitmentPoint = KzgCommitment.calculateCommitment(identityBlst)
+            commitmentPoint = KzgCommitment.calculateKzgCommitment(identityBlst)
             commitmentBS = ByteString.fromArray(IArray.genericWrapArray(commitmentPoint).toArray)
             commitmentG1 = BLS12_381_G1_Element(commitmentBS)
 
@@ -238,7 +238,7 @@ class WithdrawTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
               theRest.map(ss => Scalar().from_bendian(ss._1.toByteArray))
             )
 
-            proofPoint = KzgCommitment.calculateCommitment(theRestBlst)
+            proofPoint = KzgCommitment.calculateKzgCommitment(theRestBlst)
             proofBS = ByteString.fromArray(IArray.genericWrapArray(proofPoint).toArray)
             proofG1 = BLS12_381_G1_Element(proofBS)
 

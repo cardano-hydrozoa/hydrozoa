@@ -864,7 +864,7 @@ class ConsensusActor(
 
             override def isSaturated: Boolean =
                 this.block.isDefined &&
-                    this.acks1.keySet == config.headPeerVKeys.toSet
+                    this.acks1.keySet == config.headPeerVKeys.iterator.toSet
 
             override def complete
                 : IO[Either[(MajorRoundTwoCell, AckBlock.Major2), (Void, Option[RoundOneOwnAck])]] =
@@ -940,7 +940,7 @@ class ConsensusActor(
                 } yield newRound
 
             override def isSaturated: Boolean =
-                this.acks2.keySet == config.headPeerVKeys.toSet
+                this.acks2.keySet == config.headPeerVKeys.iterator.toSet
 
             override def complete
                 : IO[Either[(Void, Void), (Block.MultiSigned.Major, Option[RoundOneOwnAck])]] =
@@ -1073,7 +1073,7 @@ class ConsensusActor(
 
             override def isSaturated: Boolean =
                 this.block.isDefined &&
-                    this.acks1.keySet == config.headPeerVKeys.toSet
+                    this.acks1.keySet == config.headPeerVKeys.iterator.toSet
 
             override def complete
                 : IO[Either[(FinalRoundTwoCell, AckBlock.Final2), (Void, Option[RoundOneOwnAck])]] =
@@ -1145,7 +1145,7 @@ class ConsensusActor(
                 } yield newRound
 
             override def isSaturated: Boolean =
-                this.acks2.keySet == config.headPeerVKeys.toSet
+                this.acks2.keySet == config.headPeerVKeys.iterator.toSet
 
             override def complete
                 : IO[Either[(Void, Void), (Block.MultiSigned.Final, Option[RoundOneOwnAck])]] =
