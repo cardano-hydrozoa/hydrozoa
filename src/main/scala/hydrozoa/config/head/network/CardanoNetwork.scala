@@ -1,7 +1,8 @@
 package hydrozoa.config.head.network
 
+import hydrozoa.config.head.rulebased.scripts.RuleBasedScriptAddresses
 import hydrozoa.lib.number.PositiveInt
-import scalus.cardano.address.Network
+import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.{CardanoInfo, Coin, EvaluatorMode, PlutusScriptEvaluator, ProtocolParams, ProtocolVersion, SlotConfig}
 
 enum CardanoNetwork(_cardanoInfo: CardanoInfo) extends CardanoNetwork.Section {
@@ -16,10 +17,17 @@ enum CardanoNetwork(_cardanoInfo: CardanoInfo) extends CardanoNetwork.Section {
     override def network: Network = _cardanoInfo.network
     override def slotConfig: SlotConfig = _cardanoInfo.slotConfig
     override def cardanoProtocolParams: ProtocolParams = _cardanoInfo.protocolParams
+
+    lazy val ruleBasedScriptAddresses: RuleBasedScriptAddresses = RuleBasedScriptAddresses(this)
+
+    override transparent inline def ruleBasedTreasuryAddress: ShelleyAddress =
+        ruleBasedScriptAddresses.ruleBasedTreasuryAddress
+    override transparent inline def ruleBasedDisputeResolutionAddress: ShelleyAddress =
+        ruleBasedScriptAddresses.ruleBasedDisputeResolutionAddress
 }
 
 object CardanoNetwork {
-    trait Section {
+    trait Section extends RuleBasedScriptAddresses.Section {
         def cardanoNetwork: CardanoNetwork
 
         def cardanoInfo: CardanoInfo

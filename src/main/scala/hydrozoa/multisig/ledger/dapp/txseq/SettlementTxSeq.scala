@@ -57,14 +57,7 @@ object SettlementTxSeq {
               headMultisigScript = config.headMultisigScript,
               multisigRegimeUtxo = config.multisigRegimeUtxo
             )
-            lazy val ftxConfig = FallbackTx.Config(
-              headMultisigScript = config.headMultisigScript,
-              multisigRegimeUtxo = config.multisigRegimeUtxo,
-              tallyFeeAllowance = config.tallyFeeAllowance,
-              tokenNames = config.tokenNames,
-              votingDuration = config.votingDuration,
-              cardanoInfo = config.cardanoInfo
-            )
+            lazy val ftxConfig = ??? // FIXME
             lazy val rolloutTxSeqConfig = RolloutTxSeq.Config(
               cardanoInfo = config.cardanoInfo,
               headMultisigScript = config.headMultisigScript,
@@ -81,14 +74,9 @@ object SettlementTxSeq {
                             .left
                             .map(Builder.Error.SettlementError(_))
 
-                        ftxRecipe = FallbackTx.Recipe(
-                          treasuryUtxoSpent = settlementTx.transaction.treasuryProduced,
-                          validityStart = (args.blockCreatedOn
-                              + config.txTiming.minSettlementDuration
-                              + config.txTiming.inactivityMarginDuration).toSlot
-                        )
+                        ftxRecipe = ??? // FIXME
                         fallbackTx <- FallbackTx
-                            .build(ftxConfig, ftxRecipe)
+                            .build(???, ???, ???, ???) // FIXME
                             .left
                             .map(Builder.Error.FallbackError(_))
                     } yield Builder.Result(
@@ -126,15 +114,9 @@ object SettlementTxSeq {
                                         .map(SettlementTxSeq.WithRollouts(tx, _))
                             }
 
-                        ftxRecipe = FallbackTx.Recipe(
-                          treasuryUtxoSpent = settlementTxRes.transaction.treasuryProduced,
-                          validityStart = (args.blockCreatedOn
-                              + config.txTiming.minSettlementDuration
-                              + config.txTiming.inactivityMarginDuration
-                              + config.txTiming.silenceDuration).toSlot
-                        )
+                        ftxRecipe = ??? // FIXME
                         fallbackTx <- FallbackTx
-                            .build(config = ftxConfig, recipe = ftxRecipe)
+                            .build(???, ???, ???, ???) // FIXME
                             .left
                             .map(Builder.Error.FallbackError(_))
                     } yield Result(

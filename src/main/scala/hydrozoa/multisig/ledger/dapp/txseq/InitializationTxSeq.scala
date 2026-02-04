@@ -2,7 +2,6 @@ package hydrozoa.multisig.ledger.dapp.txseq
 
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming.*
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedFiniteDuration
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.{Metadata as _, *}
 import scalus.cardano.ledger.*
@@ -12,7 +11,7 @@ import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 final case class InitializationTxSeq(initializationTx: InitializationTx, fallbackTx: FallbackTx)
 
 object InitializationTxSeq {
-    type Config = HeadConfig.PreInit.Section
+    type Config = HeadConfig.Preinit.Section
 
     sealed trait ParseError
     case class InitializationTxParseError(wrapped: InitializationTx.ParseError) extends ParseError
@@ -63,22 +62,13 @@ object InitializationTxSeq {
                 .toRight(FallbackTxValidityStartIsMissing)
                 .map(Slot.apply)
 
-            ftxConfig = FallbackTx.Config(
-              headMultisigScript = config.headMultisigScript,
-              multisigRegimeUtxo = iTx.multisigRegimeUtxo,
-              tokenNames = iTx.tokenNames,
-              tallyFeeAllowance = config.individualContingency.tallyTxFee,
-              cardanoInfo = config.cardanoInfo,
-              votingDuration = config.votingDuration
-            )
-
-            ftxRecipe = FallbackTx.Recipe(
-              treasuryUtxoSpent = iTx.treasuryProduced,
-              // Time checks are done for the whole sequence later on, see down below.
-              validityStart = fallbackValidityStartSlot
-            )
             expectedFallbackTx <- FallbackTx
-                .build(ftxConfig, ftxRecipe)
+                .build(
+                  config = config,
+                  validityStartTime = config.txTiming.newFallbackStartTime(config.headStartTime),
+                  treasuryUtxoSpent = iTx.treasuryProduced,
+                  multisigRegimeUtxo = iTx.multisigRegimeUtxo
+                )
                 .left
                 .map(FallbackTxBuildError(_))
 
@@ -143,16 +133,6 @@ object InitializationTxSeq {
             val hms = HeadMultisigScript(config.headPeerVKeys)
 
             // ===================================
-            // Validity ranges
-            // ===================================
-            val initializationTxValidityEnd =
-                config.headStartTime + config.txTiming.minSettlementDuration +
-                    config.txTiming.inactivityMarginDuration
-
-            val fallbackTxValidityStart =
-                initializationTxValidityEnd + config.txTiming.silenceDuration
-
-            // ===================================
             // Init Tx
             // ===================================
             for {
@@ -161,22 +141,14 @@ object InitializationTxSeq {
                     .left
                     .map(InitializationTxError(_))
 
-                fallbackConfig = FallbackTx.Config(
-                  headMultisigScript = hms,
-                  tallyFeeAllowance = config.individualContingency.tallyTxFee,
-                  multisigRegimeUtxo = initializationTx.multisigRegimeUtxo,
-                  tokenNames = initializationTx.tokenNames,
-                  cardanoInfo = config.cardanoInfo,
-                  votingDuration = config.votingDuration
-                )
-
-                fallbackTxRecipe = FallbackTx.Recipe(
-                  treasuryUtxoSpent = initializationTx.treasuryProduced,
-                  validityStart = fallbackTxValidityStart.toSlot
-                )
-
                 fallbackTx <- FallbackTx
-                    .build(fallbackConfig, fallbackTxRecipe)
+                    .build(
+                      config = config,
+                      validityStartTime =
+                          config.txTiming.newFallbackStartTime(config.headStartTime),
+                      treasuryUtxoSpent = initializationTx.treasuryProduced,
+                      multisigRegimeUtxo = initializationTx.multisigRegimeUtxo,
+                    )
                     .left
                     .map(FallbackTxError(_))
 

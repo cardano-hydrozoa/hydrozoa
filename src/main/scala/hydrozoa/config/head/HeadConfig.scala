@@ -9,13 +9,14 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.HeadParameters
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
+import hydrozoa.config.head.rulebased.scripts.RuleBasedScriptAddresses
 import hydrozoa.lib.cardano.scalus.QuantizedTime
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
 import hydrozoa.multisig.ledger.block.Block
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
-import scalus.cardano.address.Network
+import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.{CardanoInfo, Coin, Hash32, ProtocolParams, SlotConfig, TransactionOutput, Utxo, Utxos, Value}
 
 final case class HeadConfig private (
@@ -40,15 +41,15 @@ object HeadConfig {
           new HeadConfig(cardanoNetwork, headParams, headPeers, initialBlock, initializationParams)
         )
 
-    trait Section extends HeadConfig.PreInit.Section, InitialBlock.Section {
+    trait Section extends HeadConfig.Preinit.Section, InitialBlock.Section {
         def headConfig: HeadConfig
 
         override transparent inline def initialBlockSection: InitialBlock = InitialBlock(
           initialBlock
         )
 
-        override transparent inline def headConfigPreInit: PreInit.HeadConfig = {
-            PreInit.HeadConfig(
+        override transparent inline def headConfigPreInit: Preinit.HeadConfig = {
+            Preinit.HeadConfig(
               headConfig.cardanoNetwork,
               headConfig.headParams,
               headConfig.headPeers,
@@ -60,14 +61,14 @@ object HeadConfig {
             initialBlockSection.headStartTime
     }
 
-    object PreInit {
+    object Preinit {
         final case class HeadConfig(
             override val cardanoNetwork: CardanoNetwork,
             override val headParams: HeadParameters,
             override val headPeers: HeadPeers,
             override val initializationParams: InitializationParameters,
-        ) extends PreInit.Section {
-            override transparent inline def headConfigPreInit: PreInit.HeadConfig = this
+        ) extends Preinit.Section {
+            override transparent inline def headConfigPreInit: Preinit.HeadConfig = this
         }
 
         trait Section
@@ -75,7 +76,7 @@ object HeadConfig {
               HeadParameters.Section,
               HeadPeers.Section,
               InitializationParameters.Section {
-            def headConfigPreInit: PreInit.HeadConfig
+            def headConfigPreInit: Preinit.HeadConfig
 
             override transparent inline def cardanoInfo: CardanoInfo = cardanoNetwork.cardanoInfo
             override transparent inline def network: Network = cardanoNetwork.network
@@ -133,6 +134,15 @@ object HeadConfig {
                 initializationParams.headTokenNames
             override transparent inline def initialEquityContributionsHash: Hash32 =
                 initializationParams.initialEquityContributionsHash
+
+            override transparent inline def ruleBasedScriptAddresses: RuleBasedScriptAddresses =
+                cardanoNetwork.ruleBasedScriptAddresses
+
+            override transparent inline def ruleBasedTreasuryAddress: ShelleyAddress =
+                ruleBasedScriptAddresses.ruleBasedTreasuryAddress
+
+            override transparent inline def ruleBasedDisputeResolutionAddress: ShelleyAddress =
+                ruleBasedScriptAddresses.ruleBasedDisputeResolutionAddress
         }
     }
 }
