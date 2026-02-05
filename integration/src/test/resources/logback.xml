@@ -1,0 +1,15 @@
+<configuration>
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} %highlight(%-5level) %cyan(%logger{64}) %msg%n
+            </pattern>
+        </encoder>
+    </appender>
+    <root level="error">
+        <appender-ref ref="STDOUT"/>
+    </root>
+    <logger name="org.scalacheck.commands.ModelBasedSuite" level="warn"/>
+    <logger name="hydrozoa.integration.stage1.Stage1" level="warn"/>
+    <logger name="CardanoLiaison" level="warn"/>
+    <logger name="scalus" level="warn"/>
+</configuration>

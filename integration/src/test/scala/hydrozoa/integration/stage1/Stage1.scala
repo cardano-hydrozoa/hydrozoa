@@ -15,6 +15,7 @@ import hydrozoa.integration.stage1.CurrentTime.{AfterCompetingFallbackStartTime,
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, quantize}
 import hydrozoa.lib.cardano.scalus.given_Choose_QuantizedInstant
+import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.CardanoLiaisonTest.BlockWeaverMock
 import hydrozoa.multisig.consensus.peer.PeerId
@@ -46,6 +47,7 @@ import spire.math.UByte
 import test.Generators.Hydrozoa.ArbitraryInstances.given_Arbitrary_LedgerEvent
 import test.TestPeer.Alice
 import test.{TestPeer, minPubkeyAda, sumUtxoValues}
+import org.slf4j.Logger
 
 /** Integration Stage 1 (the simplest).
   *   - Only three real actors are involved: [[JointLedger]], [[ConsensusActor]], and
@@ -58,6 +60,10 @@ import test.{TestPeer, minPubkeyAda, sumUtxoValues}
   *     long enough so the latest fallback becomes active, all next commands are NoOp and the
   *     fallback is expected to be submitted. Otherwise, only happy path effects are expected to be
   *     submitted.
+  *
+  * TODO:
+  *   - use different generators, let's say having only invalid events (or we can remove events
+  *     completely) allows to verify block promotion
   */
 object Stage1Properties extends YetAnotherProperties("Integration Stage 1"):
 
@@ -71,13 +77,13 @@ object Stage1Properties extends YetAnotherProperties("Integration Stage 1"):
 
     private val preprod = StandardCardanoNetwork.Preprod
 
-    val _ = property("Work well on L1 mock (fast, reproducible)") = Stage1(
+    val _ = property("Works well on L1 mock (fast, reproducible)") = Stage1(
       network = Left(preprod),
       genesisUtxos = yaciTestSauceGenesis(preprod.scalusNetwork)
     ).property()
 
-    // val _ = property("Work well on Yaci DevKit (slow, reproducible)") = ???
-    // val _ = property("Work well on Preview (slow, non-reproducible)") = ???
+    // val _ = property("Works well on Yaci DevKit (slower, reproducible)") = ???
+    // val _ = property("Works well on Preview (even slower, non-reproducible)") = ???
 
 case class Stage1(
     network: Either[StandardCardanoNetwork, NetworkInfo],
@@ -101,13 +107,17 @@ case class Stage1(
 
             // Before creating the actor system, if we are in the TestControl we need
             // to fast-forward to the zero block creation time.
-            // TODO: make is optional
+            // TODO: make it optional
+            // NB: Using advance for commands can be used here, but I (Ilia) think
+            // it s a bit different thing so I decided not to piggyback on commands.
             _ <- IO.sleep(
               FiniteDuration(state.currentTime.instant.instant.toEpochMilli, TimeUnit.MILLISECONDS)
             )
 
             now <- IO.realTimeInstant
             _ <- IO.println(s"Current time: $now")
+
+            logging <- Logging.create
 
             // Actor system
             system <- ActorSystem[IO]("Stage1").allocated.map(_._1)
@@ -142,7 +152,8 @@ case class Stage1(
               initializationTx = initialBlock.effects.initializationTx,
               initializationFallbackTx = initialBlock.effects.fallbackTx,
               receiveTimeout = 100.millis,
-              slotConfig = cardanoInfo.slotConfig
+              slotConfig = cardanoInfo.slotConfig,
+              logging = logging
             )
 
             liaisonConnections = CardanoLiaison.Connections(blockWeaver)
@@ -339,7 +350,7 @@ case class Stage1(
         val cardanoInfo = network.toCardanoInfo
 
         for {
-            // Can this be pure?
+            // TODO: Can this be pure? - Yes, for L1 mock it can be, for Yaci/testnet it cannot
             zeroBlockCreationTime <- Gen
                 .const(realTimeQuantizedInstant(cardanoInfo.slotConfig).unsafeRunSync())
                 .label("Zero block creation time")
@@ -459,10 +470,13 @@ case class Stage1(
                 case Right(value) => value
             }
 
-            // _ = println(txTiming.newFallbackStartTime(zeroBlockCreationTime))
+            _ = println(
+              s"txTiming.newFallbackStartTime(zeroBlockCreationTime)=${txTiming.newFallbackStartTime(zeroBlockCreationTime)}"
+            )
             // _ = println(initTxSeq.fallbackTx.validityStart)
 
         } yield ModelState(
+          ownTestPeer = ownTestPeer,
           headConfig = configParsed,
           // Initial (zero) block is "done"
           currentTime = BeforeHappyPathExpiration(zeroBlockCreationTime),
@@ -586,6 +600,8 @@ case class Stage1(
         isFinal: Boolean
     ) extends Command {
 
+        val logger: Logger = org.slf4j.LoggerFactory.getLogger(CompleteBlockCommand.getClass)
+
         override type Result = BlockBrief
 
         override def runState(state: ModelState): (Result, ModelState) = {
@@ -599,15 +615,19 @@ case class Stage1(
                       prevVersion,
                       isFinal
                     )
+                    val newCompetingFallbackStartTime =
+                        if result.isInstanceOf[Major]
+                        then
+                            state.headConfig.headParameters.multisigRegimeSettings.txTiming
+                                .newFallbackStartTime(creationTime)
+                        else state.competingFallbackStartTime
+                    logger.debug(s"newCompetingFallbackStartTime: $newCompetingFallbackStartTime")
+
                     val newState = state.copy(
                       blockCycle =
                           if isFinal then HeadFinalized else Done(blockNumber, result.blockVersion),
                       currentBlockEvents = List.empty,
-                      competingFallbackStartTime =
-                          if result.isInstanceOf[Major] then
-                              state.headConfig.headParameters.multisigRegimeSettings.txTiming
-                                  .newFallbackStartTime(creationTime)
-                          else state.competingFallbackStartTime
+                      competingFallbackStartTime = newCompetingFallbackStartTime
                     )
                     result -> newState
                 case _ => throw Error.UnexpectedState
@@ -622,6 +642,10 @@ case class Stage1(
             prevVersion: BlockVersion.Full,
             isFinal: Boolean
         ): BlockBrief = {
+
+            logger.debug(s"creationTime=$creationTime")
+            logger.debug(s"competingFallbackStartTime=$competingFallbackStartTime")
+            logger.debug(s"txTiming=$txTiming")
 
             if isFinal then
                 Final(

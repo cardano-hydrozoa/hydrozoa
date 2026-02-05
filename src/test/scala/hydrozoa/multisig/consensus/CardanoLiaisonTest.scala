@@ -11,6 +11,7 @@ import com.suprnation.actor.test.TestKit
 import com.suprnation.actor.{ActorSystem, test as _}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toQuantizedInstant}
 import hydrozoa.lib.cardano.scalus.given
+import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.BlockWeaver.Request
 import hydrozoa.multisig.consensus.CardanoLiaisonTest.BlockEffectsSignedChain.*
@@ -679,12 +680,15 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
 
                             blockWeaver <- system.actorOf(new BlockWeaverMock)
 
+                            logging <- Logging.create
+
                             config = CardanoLiaison.Config(
-                              cardanoBackend,
-                              skeleton._1.initializationTx,
-                              skeleton._1.fallbackTx,
-                              100.millis,
-                              slotConfig = testTxBuilderCardanoInfo.slotConfig
+                              cardanoBackend = cardanoBackend,
+                              initializationTx = skeleton._1.initializationTx,
+                              initializationFallbackTx = skeleton._1.fallbackTx,
+                              receiveTimeout = 100.millis,
+                              slotConfig = testTxBuilderCardanoInfo.slotConfig,
+                              logging = logging
                             )
 
                             connections = CardanoLiaison.Connections(blockWeaver)

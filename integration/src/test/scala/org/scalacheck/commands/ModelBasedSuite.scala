@@ -6,16 +6,23 @@ import cats.effect.unsafe.implicits.global
 import cats.syntax.all.catsSyntaxFlatMapOps
 import org.scalacheck.{Gen, Prop, Shrink}
 import scala.concurrent.duration.{Duration, DurationInt, FiniteDuration}
+import org.slf4j.Logger
 
 /** Yet another better/different [[Commands]]:
-  *   - Support for [[IO]] genActions and [[TestControl]]
-  *   - Haskell State-like commands with runState
+  *   - Support for CE [[IO]] and [[TestControl]]
+  *   - Modular commands to separate concerns and allow mixing:
+  *     - Separate traits for:
+  *       - generation / runState (Haskell State-like)
+  *       - running against the SUT using [[IO]]
+  *       - conditions checks
   *   - Readable and pretty output
   *
   * Limitations:
-  *   - Parallel commands are not supported yet.
+  *   - Parallel commands are not supported yet - we need a different approach
   */
 trait ModelBasedSuite {
+
+    val logger: Logger = org.slf4j.LoggerFactory.getLogger(ModelBasedSuite.getClass)
 
     /** The model state type. Must be immutable. The [[State]] type should model (some part) of the
       * system under test (SUT).
@@ -214,8 +221,11 @@ trait ModelBasedSuite {
 
     final case class NoOp(override val id: Int) extends Command {
         type Result = Unit
-        override def run(sut: Sut): IO[Result] =
+        override def run(sut: Sut): IO[Result] = {
+            // TODO: use logger
             IO.println(s">> NoOp(id=$id)") >> IO.pure(())
+        }
+
         override def runState(state: State): (Unit, State) = ((), state)
         override def preCondition(state: State) = true
         override def postCondition(stateBefore: State, result: Either[Throwable, Result]) = true
@@ -251,11 +261,14 @@ trait ModelBasedSuite {
         val suts = collection.mutable.Map.empty[AnyRef, (State, Option[IO[Sut]])]
 
         Prop.forAll(genActions(threadCount, maxParComb)) { as =>
-            // TODO: remove
-            println("----ACTIONS SEQ------------------------------------")
-            as.seqCmds.foreach(println)
-            println("----ACTIONS PAR------------------------------------")
-            as.parCmds.foreach(_.foreach(println))
+
+            logger.info("Running the next test case...")
+
+            logger.trace(
+              as.seqCmds.foldRight(
+                "---- Sequential actions ------------------------------------\n"
+              )((cmd, acc) => s"$acc\t - $cmd\n")
+            )
 
             try {
                 val sutId = suts.synchronized {
@@ -276,13 +289,13 @@ trait ModelBasedSuite {
                             val _ = suts.put(id, as.initialState -> Some(ioSut))
                             runActions(ioSut, as)
                         } else {
-                            println("WARNING: you should never not see that")
+                            logger.error("WARNING: you should never not see that")
                             Prop.undecided
                         }
 
                     case None =>
                         // TODO: Block until canCreateNewSut is true
-                        println("WARNING: you should never not see that")
+                        logger.error("WARNING: you should never not see that")
                         Prop.undecided
                 }
             } catch {
@@ -484,20 +497,33 @@ trait ModelBasedSuite {
 
         val maxLength = as.parCmds.map(_.length).foldLeft(as.seqCmds.length)(_.max(_))
         val (_sut, p, s, lastCmd) = runSeqCmds(ioSut, as.initialState, as.seqCmds)
-        println(s"lastCmd=$lastCmd")
-        val l =
-            s"Initial state:\n  ${as.initialState}\n" +
-                s"Sequential Commands:\n${prettyCmdsRes(as.seqCmds, maxLength)}\n" +
-                // TODO: fix me
-                // s"Sequential Commands:\n${prettyCmdsRes(as.seqCmds, maxLength)}\n" +
-                s"Last executed command: $lastCmd"
 
-        p :| l
+        p.flatMap { r =>
+            if r.failure then
+                logger.warn(
+                  "Property is falsified (see the labels down below). Additional information: \n" +
+                      s"Initial state:\n  ${as.initialState}\n" +
+                      s"Last state:\n  ${s}\n" +
+                      s"Sequential Commands:\n${prettyCmdsRes(as.seqCmds, maxLength)}\n" +
+                      s"Last executed command: $lastCmd"
+                )
+            Prop(_ => r)
+        } :| "Property failed, see the log for details"
     }
 
     /** Short-circuit property AND operator. (Should maybe be in Prop module) */
     private def propAnd(p1: => Prop, p2: => Prop) = p1.flatMap { r =>
         if r.success then Prop.secure(p2) else Prop(_ => r)
+    }
+
+    private def prettyCmdsRes(rs: List[Command], maxLength: Int) = {
+        val maxNumberWidth = "%d".format(maxLength).length
+        val lineLayout = "  %%%dd. %%s".format(maxNumberWidth)
+        val cs = rs.zipWithIndex.map { case (r, i) =>
+            lineLayout.format(i + 1, r)
+        }
+        if cs.isEmpty then "  <no commands>"
+        else cs.mkString("\n")
     }
 
     // TODO: Added the last succeeded command (last `Int`) - do we need it though?
@@ -592,7 +618,6 @@ trait ModelBasedSuite {
             }
             (sut, prop, s, lastCmd) = result
             shutdownProp <- shutdownSut(s, sut)
-            _ <- IO.println("innerIO is over")
         } yield (sut, propAnd(prop, shutdownProp), s, lastCmd)
 
         // Outer driver: start the inner on the TestControl runtime, then drive it command by
@@ -666,7 +691,7 @@ trait ModelBasedSuite {
                 val days = nanos / 86_400_000_000_000L
 
                 ModelBasedSuite.addSimulatedNanos(nanos)
-                println(s"---- TC ---- seed: ${tc.seed}  simulated: ${days} days")
+                logger.info(s"---- TC ---- seed: ${tc.seed}  simulated: ${days} days")
             }
         } yield result match {
             case Some(cats.effect.Outcome.Succeeded(value)) => value
@@ -707,34 +732,31 @@ trait ModelBasedSuite {
                         }
                 }
         }
-
-    private def prettyCmdsRes(rs: List[Command], maxLength: Int) = {
-        val maxNumberWidth = "%d".format(maxLength).length
-        val lineLayout = "  %%%dd. %%s".format(maxNumberWidth)
-        val cs = rs.zipWithIndex.map { case (r, i) =>
-            lineLayout.format(i + 1, r)
-        }
-        if cs.isEmpty then "  <no commands>"
-        else cs.mkString("\n")
-    }
 }
 
 object ModelBasedSuite {
     private val totalSimulatedNanos = new java.util.concurrent.atomic.AtomicLong(0L)
     private val startNanoTime = System.nanoTime()
 
+    // TODO: make optional
     Runtime.getRuntime.addShutdownHook(new Thread {
         override def run(): Unit = {
             val simNanos = totalSimulatedNanos.get
+
             val simDays = simNanos / 86_400_000_000_000L
             val realNanos = System.nanoTime() - startNanoTime
             val realSecs = realNanos / 1_000_000_000L
             val realMins = realSecs / 60L
             val realRemSec = realSecs % 60L
+
+            println
             println(
-              s"---- TC ---- GRAND TOTAL simulated time: ${simDays} days (across all test cases)"
+              s"---- TestControl ---- GRAND TOTAL simulated time: ${simDays} days (across all test cases)"
             )
-            println(s"---- TC ---- GRAND TOTAL real time:      ${realMins}m ${realRemSec}s")
+            println(
+              s"---- TestControl ---- GRAND TOTAL real time:      ${realMins}m ${realRemSec}s"
+            )
+
         }
     })
 

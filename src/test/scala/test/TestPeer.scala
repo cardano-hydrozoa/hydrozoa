@@ -55,6 +55,8 @@ enum TestPeer derives CanEqual:
 
     def address(network: Network): ShelleyAddress = TestPeer.address(this, network)
 
+    def name: String = toString
+
 object TestPeer:
     val nNamedPeers: Int = TestPeer.values.length
     val peerNumRange: Range = Range.Exclusive(0, nNamedPeers, 1)

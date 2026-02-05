@@ -41,7 +41,7 @@ lazy val core: Project = (project in file("."))
         // "com.softwaremill.ox" %% "mdc-logback" % "0.5.13",
         // Logging
         "ch.qos.logback" % "logback-classic" % "1.5.18",
-        "com.typesafe.scala-logging" %% "scala-logging" % "3.9.6",
+        "org.typelevel" %% "log4cats-slf4j" % "2.7.1",
         // Used for input/output
         "org.scala-lang" %% "toolkit" % "0.7.0",
         // jsoniter + tapit-jsoniter

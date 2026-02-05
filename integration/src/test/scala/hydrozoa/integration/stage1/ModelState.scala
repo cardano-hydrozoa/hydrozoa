@@ -5,9 +5,12 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.block.{BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.event.LedgerEvent
 import scalus.cardano.ledger.{TransactionInput, TransactionOutput}
+import test.TestPeer
 
 /** This should be immutable. */
 case class ModelState(
+    ownTestPeer: TestPeer,
+
     // Read-only: configuration, initialization
     headConfig: HeadConfig,
 
@@ -22,7 +25,9 @@ case class ModelState(
 
     // L2 state
     activeUtxos: Map[TransactionInput, TransactionOutput],
-)
+) {
+    override def toString: String = "<model state (hidden)>"
+}
 
 enum CurrentTime(qi: QuantizedInstant):
     case BeforeHappyPathExpiration(qi: QuantizedInstant) extends CurrentTime(qi)

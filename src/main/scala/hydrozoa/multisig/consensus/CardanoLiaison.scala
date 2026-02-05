@@ -6,6 +6,7 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.UtxoIdL1
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant}
+import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.BlockWeaver.PollResults
@@ -53,7 +54,8 @@ object CardanoLiaison:
         initializationTx: InitializationTx,
         initializationFallbackTx: FallbackTx,
         receiveTimeout: FiniteDuration,
-        slotConfig: SlotConfig
+        slotConfig: SlotConfig,
+        logging: Logging
     )
 
     final case class Connections(
@@ -112,7 +114,7 @@ object CardanoLiaison:
           */
         happyPathEffects: TreeMap[EffectId, HappyPathEffect],
 
-        /** Fallback effects, indexed by the block number they were created. */
+        /** Fallback effects, indexed by the major version of block where they were created. */
         fallbackEffects: Map[BlockVersion.Major, FallbackTx]
     )
 
@@ -182,6 +184,8 @@ trait CardanoLiaison(
     pendingConnections: MultisigRegimeManager.PendingConnections | CardanoLiaison.Connections,
 ) extends Actor[IO, CardanoLiaison.Request]:
     import CardanoLiaison.*
+
+    private val logger = config.logging.logger("CardanoLiaison")
 
     private val connections = Ref.unsafe[IO, Option[CardanoLiaison.Connections]](None)
 
@@ -346,7 +350,7 @@ trait CardanoLiaison(
                 // This may happen if L1 API is temporarily unavailable or misconfigured
                 // TODO: we need to address time when we work on autonomous mode
                 //   but for now we can just ignore it and skip till the next event/timeout
-                IO.println(s"error when getting Cardano L1 state: ${err}")
+                logger.error(s"error when getting Cardano L1 state: ${err}")
 
             case Right(l1State) =>
                 for {
@@ -408,7 +412,7 @@ trait CardanoLiaison(
                                         mbInitAction <- txResp match {
                                             case Left(err) =>
                                                 for {
-                                                    _ <- IO.println(
+                                                    _ <- logger.error(
                                                       s"error when getting finalization tx info: ${err}"
                                                     )
                                                 } yield Seq.empty
@@ -423,8 +427,8 @@ trait CardanoLiaison(
 
                     // 4. Submit flattened txs for actions it there are some
                     _ <- IO.whenA(actionsToSubmit.nonEmpty)(
-                      IO.println("\nLiaison's actions:") >>
-                          actionsToSubmit.traverse_(a => IO.println(s"\t- ${a.msg}"))
+                      logger.info("Liaison's actions:") >>
+                          actionsToSubmit.traverse_(a => logger.info(s"  - ${a.msg}"))
                     )
 
                     submitRet <-
@@ -437,8 +441,8 @@ trait CardanoLiaison(
                     // Submission errors are ignored, but dumped here
                     submissionErrors = submitRet.filter(_.isLeft)
                     _ <- IO.whenA(submissionErrors.nonEmpty)(
-                      IO.println("Submission errors:") >>
-                          submissionErrors.traverse_(a => IO.println(s"\t- ${a.left}"))
+                      logger.warn("Submission errors:") >>
+                          submissionErrors.traverse_(a => logger.warn(s"  - ${a.left}"))
                     )
 
                 } yield ()

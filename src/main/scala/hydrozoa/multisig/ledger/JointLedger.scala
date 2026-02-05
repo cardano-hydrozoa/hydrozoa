@@ -361,6 +361,7 @@ final case class JointLedger(
                 then {
                     // println(s"JL: producing.startTime=${producing.startTime}")
                     // println(s"JL: producing.competingFallbackValidityStart=${producing.competingFallbackValidityStart}")
+                    // println(s"JL: txTiming=${txTiming}")
                     previousHeader.nextHeaderIntermediate(
                       txTiming,
                       producing.startTime, // TODO: shall we use something like production.completeTime instead?
