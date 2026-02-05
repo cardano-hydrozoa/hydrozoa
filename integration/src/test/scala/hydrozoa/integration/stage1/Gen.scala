@@ -87,16 +87,15 @@ object ArbitraryEventsOnly extends CommandGen[ModelState, Stage1Sut]:
                 state.blockCycle match {
                     case Done(blockNumber, _) =>
                         val settlementExpirationTime =
-                            state.headConfig.headParameters.multisigRegimeSettings.txTiming
-                                .currentSettlementExpiringTime(
-                                  state.competingFallbackStartTime
-                                )
+                            state.txTiming.currentSettlementExpiringTime(
+                              state.competingFallbackStartTime
+                            )
                         Generators
                             .genDelay(
                               state.currentTime.instant,
                               settlementExpirationTime,
                               state.competingFallbackStartTime,
-                              state.headConfig.cardanoInfo.slotConfig
+                              state.slotConfig
                             )
                             .map(AnyCommand(_))
 

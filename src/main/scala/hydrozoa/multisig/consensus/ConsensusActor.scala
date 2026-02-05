@@ -1287,7 +1287,7 @@ class ConsensusActor(
             case PostponedAckAlreadySet
             case UnexpectedPostponedAck
 
-            def msg: String = this match {
+            override def getMessage: String = this match {
                 case UnexpectedBlockNumber(roundBlockNumber, blockNumber) =>
                     s"Unexpected block number $blockNumber in round for block number $roundBlockNumber"
                 case UnexpectedAck(blockNum, peerId) =>
@@ -1302,7 +1302,7 @@ class ConsensusActor(
                     "Unexpected postponed ack"
             }
 
-        // TODO: add block numbers / peer numbers
+        // TODO: add block numbers / peer numbers / getMessage
         enum CompletionError extends Throwable:
             case WrongHeaderSignature(vkey: ByteString)
             case WrongTxSignature(txId: TransactionHash, vkey: ByteString)

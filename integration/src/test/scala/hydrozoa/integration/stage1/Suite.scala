@@ -30,14 +30,14 @@ import java.util.concurrent.TimeUnit
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.commands.{CommandGen, ModelBasedSuite}
 import org.scalacheck.{Gen, Prop, YetAnotherProperties}
+import org.typelevel.log4cats.Logger
 import scala.concurrent.duration.{DurationInt, FiniteDuration, HOURS}
 import scalus.cardano.ledger.rules.{Context, UtxoEnv}
-import scalus.cardano.ledger.{CertState, Coin, TransactionHash, Utxo, Value}
+import scalus.cardano.ledger.{CardanoInfo, CertState, Coin, TransactionHash, Utxo, Value}
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import spire.math.UByte
 import test.TestPeer.Alice
 import test.{TestPeer, minPubkeyAda, sumUtxoValues}
-import org.typelevel.log4cats.Logger
 
 /** Integration Stage 1 (the simplest).
   *   - Only three real actors are involved: [[JointLedger]], [[ConsensusActor]], and
@@ -88,17 +88,59 @@ case class Suite(
     // SUT handling
     // ===================================
 
+    private val cardanoInfo: CardanoInfo = network.toCardanoInfo
+
     override def newSut(state: ModelState): IO[Sut] = {
-        import state.headConfig.*
 
         for {
+            _ <- logger.info("Creating new SUT")
+            ownTestPeer <- IO.pure(state.ownTestPeer)
 
+            ownPeer = (
+              OwnPeer(PeerId(0, 1), ownTestPeer.wallet),
+              Address[L1](ownTestPeer.address(cardanoInfo.network)),
+              state.equityShares.peerShares(UByte(0)).equityShare
+            )
+
+            // Create HeadConfig
+            rawConfig = RawConfig(
+              ownPeer = ownPeer,
+              otherPeers = List.empty,
+              receiveTimeout = 10.seconds,
+              initializationTxBytes = state.initTxSigned.toCbor,
+              initialFallbackTxBytes = state.fallbackTxSigned.toCbor,
+              network = network,
+              tallyFeeAllowance = Coin.ada(2),
+              votingDuration = QuantizedFiniteDuration(
+                finiteDuration = 24.hours,
+                slotConfig = cardanoInfo.slotConfig
+              ),
+              txTiming = state.txTiming,
+              startTime = state.currentTime.instant,
+              resolvedUtxosForInitialization =
+                  ResolvedUtxos(Map.from(state.spentUtxos.toList.map(_.toTuple))),
+              // Can it be the peer's automated wallet though, at least for now?
+              withdrawalFeeWallet = ownTestPeer.wallet,
+              pollingPeriod = 5.seconds
+            )
+
+            // Parse HeadConfig to extract initialBlock
+            headConfig = HeadConfig.parse(rawConfig) match {
+                case Left(err) =>
+                    throw RuntimeException(s"error parsing raw config: ${err.explain}")
+                case Right(value) => value
+            }
+
+            _ <- logger.debug(s"peerKeys: ${headConfig.headParameters.headPeers.peerKeys}")
+            _ <- logger.debug(s"ownPeer: ${headConfig.privateNodeSettings.ownPeer}")
+
+            // TODO: make it optional, not needed for Yaci
+            // Fast-forward to the current time
             now <- IO.realTimeInstant
             _ <- logger.debug(s"Current time: $now")
 
             // Before creating the actor system, if we are in the TestControl we need
             // to fast-forward to the zero block creation time.
-            // TODO: make it optional
             _ <- IO.sleep(
               FiniteDuration(state.currentTime.instant.instant.toEpochMilli, TimeUnit.MILLISECONDS)
             )
@@ -122,11 +164,11 @@ case class Suite(
                   Context(
                     env = UtxoEnv(
                       slot = slot,
-                      params = state.headConfig.cardanoInfo.protocolParams,
+                      params = headConfig.cardanoInfo.protocolParams,
                       certState = CertState.empty,
-                      network = state.headConfig.cardanoInfo.network
+                      network = headConfig.cardanoInfo.network
                     ),
-                    slotConfig = state.headConfig.cardanoInfo.slotConfig
+                    slotConfig = headConfig.cardanoInfo.slotConfig
                   )
             )
 
@@ -136,8 +178,8 @@ case class Suite(
             // Cardano liaison
             liaisonConfig = CardanoLiaison.Config(
               cardanoBackend = cardanoBackend,
-              initializationTx = initialBlock.effects.initializationTx,
-              initializationFallbackTx = initialBlock.effects.fallbackTx,
+              initializationTx = headConfig.initialBlock.effects.initializationTx,
+              initializationFallbackTx = headConfig.initialBlock.effects.fallbackTx,
               receiveTimeout = 100.millis,
               slotConfig = cardanoInfo.slotConfig
             )
@@ -155,9 +197,10 @@ case class Suite(
 
             // Consensus actor
             consensusConfig = ConsensusActor.Config(
-              peerNumber = privateNodeSettings.ownPeer.peerId.peerNum,
-              verificationKeys =
-                  headParameters.headPeers.peerKeys.map((peerId, key) => peerId.peerNum -> key)
+              peerNumber = headConfig.privateNodeSettings.ownPeer.peerId.peerNum,
+              verificationKeys = headConfig.headParameters.headPeers.peerKeys.map((peerId, key) =>
+                  peerId.peerNum -> key
+              )
             )
 
             consensusConnections = ConsensusActor.Connections(
@@ -177,28 +220,30 @@ case class Suite(
             initialBlock1 = Block.MultiSigned.Initial(
               blockBrief = BlockBrief.Initial(
                 header = BlockHeader.Initial(
-                  startTime = initialBlock.startTime,
-                  kzgCommitment = initialBlock.initialKzgCommitment
+                  startTime = headConfig.initialBlock.startTime,
+                  kzgCommitment = headConfig.initialBlock.initialKzgCommitment
                 )
               ),
-              effects = initialBlock.effects
+              effects = headConfig.initialBlock.effects
             )
+
             jointLedgerConfig = JointLedger.Config(
               initialBlock = initialBlock1,
-              peerId = privateNodeSettings.ownPeer.peerId,
-              wallet = privateNodeSettings.ownPeer.wallet,
-              tallyFeeAllowance = headParameters.fallbackSettings.tallyFeeAllowance,
-              tokenNames = initialBlock.tokenNames,
-              headMultisigScript = headParameters.headPeers.headMultisigScript,
+              peerId = headConfig.privateNodeSettings.ownPeer.peerId,
+              wallet = headConfig.privateNodeSettings.ownPeer.wallet,
+              tallyFeeAllowance = headConfig.headParameters.fallbackSettings.tallyFeeAllowance,
+              tokenNames = headConfig.initialBlock.tokenNames,
+              headMultisigScript = headConfig.headParameters.headPeers.headMultisigScript,
               cardanoInfo = cardanoInfo,
-              initialBlockTime = initialBlock.startTime,
-              initialBlockKzg = initialBlock.initialKzgCommitment,
-              equityShares = headParameters.equityShares,
-              multisigRegimeUtxo = initialBlock.multisigRegimeUtxo,
-              votingDuration = headParameters.ruleBasedRegimeSettings.votingDuration,
-              initialTreasury = initialBlock.initialTreasury,
-              txTiming = headParameters.multisigRegimeSettings.txTiming,
-              initialFallbackValidityStart = initialBlock.effects.fallbackTx.validityStart
+              initialBlockTime = headConfig.initialBlock.startTime,
+              initialBlockKzg = headConfig.initialBlock.initialKzgCommitment,
+              equityShares = headConfig.headParameters.equityShares,
+              multisigRegimeUtxo = headConfig.initialBlock.multisigRegimeUtxo,
+              votingDuration = headConfig.headParameters.ruleBasedRegimeSettings.votingDuration,
+              initialTreasury = headConfig.initialBlock.initialTreasury,
+              txTiming = headConfig.headParameters.multisigRegimeSettings.txTiming,
+              initialFallbackValidityStart =
+                  headConfig.initialBlock.effects.fallbackTx.validityStart
             )
 
             jointLedgerConnections = JointLedger.Connections(
@@ -237,7 +282,8 @@ case class Suite(
         effects <- sut.effectsAcc.get
 
         expectedEffects: List[(TxLabel, TransactionHash)] = mkExpectedEffects(
-          state.headConfig.initialBlock,
+          state.initTxSigned.id,
+          state.fallbackTxSigned.id,
           effects,
           state.currentTime
         )
@@ -279,11 +325,12 @@ case class Suite(
       * effect, or the initialization fallback if no Major effect exists yet.
       */
     private def mkExpectedEffects(
-        initialBlock: HeadConfig.InitialBlock,
+        initTxHash: TransactionHash,
+        fallbackTxHash: TransactionHash,
         effects: List[BlockEffects.Unsigned],
         currentTime: CurrentTime
     ): List[(TxLabel, TransactionHash)] = {
-        val initHash = (TxLabel.Init, initialBlock.initializationTx.tx.id)
+        val initHash = (TxLabel.Init, initTxHash)
 
         val happyPathHashes: List[(TxLabel, TransactionHash)] = effects.flatMap {
             case e: BlockEffects.Unsigned.Major =>
@@ -304,7 +351,7 @@ case class Suite(
                 effects
                     .collect { case e: BlockEffects.Unsigned.Major => e.fallbackTx.tx.id }
                     .lastOption
-                    .orElse(Some(initialBlock.initialFallbackTx.tx.id))
+                    .orElse(Some(fallbackTxHash))
                     .map((TxLabel.Fallback, _))
                     .toList
             case _ => Nil
@@ -325,30 +372,28 @@ case class Suite(
     // ===================================
 
     override def genInitialState: Gen[State] = {
-        val cardanoInfo = network.toCardanoInfo
 
         for {
-            zeroBlockCreationTime <- Gen
+            headStartTime <- Gen
                 .const(realTimeQuantizedInstant(cardanoInfo.slotConfig).unsafeRunSync())
                 .label("Zero block creation time")
 
+            // If we want to use different peers we have to rework test peers' wallets
+            // since now those wallets use ordinal from TestPeer - Bob is always peerNumber = 1
+            // if it's the only peer in the head. But I don't see what it buys us.
             ownTestPeer = Alice
             peers = NonEmptyList.one(ownTestPeer) // useful to have since many gens want it
             ownPeerIndex = 0
-            equityShares <- genEquityShares(peers, cardanoInfo.network).label("Equity shares")
 
-            ownPeer = (
-              OwnPeer(PeerId(ownPeerIndex, peers.size), ownTestPeer.wallet),
-              Address[L1](ownTestPeer.address(cardanoInfo.network)),
-              equityShares.peerShares(UByte(ownPeerIndex)).equityShare
-            )
+            equityShares <- genEquityShares(NonEmptyList.one(ownTestPeer), cardanoInfo.network)
+                .label("Equity shares")
 
             seedUtxo <- Gen
                 .oneOf(
                   genesisUtxos(ownTestPeer)
                       .map(u => Utxo(u._1.untagged, u._2.untagged))
                 )
-                .label("seed utxo")
+                .label("Seed utxo")
 
             // NB: I don't think funding utxos make sense for this scenario
             spentUtxos = NonEmptyList.one(seedUtxo)
@@ -375,7 +420,7 @@ case class Suite(
               votingDuration = FiniteDuration(24, HOURS).quantize(cardanoInfo.slotConfig),
               cardanoInfo = cardanoInfo,
               peerKeys = peers.map(_.wallet.exportVerificationKeyBytes),
-              startTime = zeroBlockCreationTime,
+              startTime = headStartTime,
               txTiming = txTiming
             )
 
@@ -412,40 +457,18 @@ case class Suite(
               List(ownTestPeer.wallet.mkVKeyWitness(initTxSeq.fallbackTx.tx))
             )
 
-            rawConfig: RawConfig = RawConfig(
-              ownPeer = ownPeer,
-              otherPeers = List.empty,
-              receiveTimeout = 10.seconds,
-              initializationTxBytes = initTxSigned.toCbor,
-              initialFallbackTxBytes = fallbackTxSigned.toCbor,
-              network = network,
-              tallyFeeAllowance = Coin.ada(2),
-              votingDuration = QuantizedFiniteDuration(
-                finiteDuration = 24.hours,
-                slotConfig = cardanoInfo.slotConfig
-              ),
-              txTiming = txTiming,
-              startTime = zeroBlockCreationTime,
-              resolvedUtxosForInitialization =
-                  ResolvedUtxos(Map.from(spentUtxos.toList.map(_.toTuple))),
-              // Can it be the peer's automated wallet though, at least for now?
-              withdrawalFeeWallet = ownTestPeer.wallet,
-              pollingPeriod = 5.seconds
-            )
-
-            configParsed = HeadConfig.parse(rawConfig) match {
-                case Left(err) =>
-                    throw RuntimeException(s"error parsing the config: ${err.explain}")
-                case Right(value) => value
-            }
-
         } yield ModelState(
           ownTestPeer = ownTestPeer,
-          headConfig = configParsed,
+          spentUtxos = spentUtxos,
+          txTiming = txTiming,
+          equityShares = equityShares,
+          initTxSigned = initTxSigned,
+          fallbackTxSigned = fallbackTxSigned,
+          slotConfig = cardanoInfo.slotConfig,
           // Initial (zero) block is "done"
-          currentTime = BeforeHappyPathExpiration(zeroBlockCreationTime),
+          currentTime = BeforeHappyPathExpiration(headStartTime),
           blockCycle = BlockCycle.Done(BlockNumber.zero, BlockVersion.Full.zero),
-          competingFallbackStartTime = txTiming.newFallbackStartTime(zeroBlockCreationTime),
+          competingFallbackStartTime = txTiming.newFallbackStartTime(headStartTime),
           activeUtxos = Map.empty
         )
     }

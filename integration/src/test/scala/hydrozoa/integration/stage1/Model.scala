@@ -1,23 +1,32 @@
 package hydrozoa.integration.stage1
 
-import hydrozoa.config.HeadConfig
+import cats.data.NonEmptyList
+import hydrozoa.config.EquityShares
 import hydrozoa.integration.stage1.Error.UnexpectedState
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.block.{BlockNumber, BlockVersion}
+import hydrozoa.multisig.ledger.dapp.tx.TxTiming
 import hydrozoa.multisig.ledger.event.LedgerEvent
-import scalus.cardano.ledger.{TransactionInput, TransactionOutput}
+import scalus.cardano.ledger.{SlotConfig, Transaction, TransactionInput, TransactionOutput, Utxo}
 import test.TestPeer
 
 // ===================================
 // Model state
 // ===================================
 
-/** This should be immutable. */
+/** This should be immutable. Only contains what's needed for model operations and SUT construction.
+  */
 case class ModelState(
+    // Read-only: minimal configuration needed for model and SUT
+    // We don't want to have the whole Head/Peer config here
     ownTestPeer: TestPeer,
-
-    // Read-only: configuration, initialization
-    headConfig: HeadConfig,
+    txTiming: TxTiming,
+    equityShares: EquityShares,
+    spentUtxos: NonEmptyList[Utxo],
+    initTxSigned: Transaction,
+    fallbackTxSigned: Transaction,
+    // Needed for command generators
+    slotConfig: SlotConfig,
 
     // Block producing cycle
     currentTime: CurrentTime,
@@ -78,7 +87,6 @@ enum BlockCycle:
 
 import hydrozoa.multisig.ledger.block.BlockBrief.{Final, Major, Minor}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockBody, BlockHeader}
-import hydrozoa.multisig.ledger.dapp.tx.TxTiming
 import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import org.scalacheck.commands.ModelCommand
@@ -155,16 +163,14 @@ implicit object CompleteBlockCommandModel
                   cmd.blockNumber,
                   state.currentBlockEvents,
                   state.competingFallbackStartTime,
-                  state.headConfig.headParameters.multisigRegimeSettings.txTiming,
+                  state.txTiming,
                   creationTime,
                   prevVersion,
                   cmd.isFinal
                 )
                 val newCompetingFallbackStartTime =
                     if result.isInstanceOf[Major]
-                    then
-                        state.headConfig.headParameters.multisigRegimeSettings.txTiming
-                            .newFallbackStartTime(creationTime)
+                    then state.txTiming.newFallbackStartTime(creationTime)
                     else state.competingFallbackStartTime
                 logger.debug(s"newCompetingFallbackStartTime: $newCompetingFallbackStartTime")
 
