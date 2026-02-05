@@ -141,7 +141,7 @@ def noOp[State, Sut]: AnyCommand[State, Sut] =
       preCondition = _ => true,
       advanceState = s => s,
       delay = Duration.Zero,
-      runPC = _ => IO.println(">> NoOp").as(_ => Prop.passed),
+      runPC = _ => IO.pure(_ => Prop.passed),
       repr = "NoOp"
     )
 
@@ -174,7 +174,7 @@ trait CommandGen[State, Sut]:
   */
 trait ModelBasedSuite {
 
-    val logger: Logger = org.slf4j.LoggerFactory.getLogger(ModelBasedSuite.getClass)
+    private val logger: Logger = org.slf4j.LoggerFactory.getLogger(ModelBasedSuite.getClass)
 
     /** The model state type.  Must be immutable. */
     type State
@@ -187,7 +187,7 @@ trait ModelBasedSuite {
       * [[IO.sleep]]. Set to false for scenarios requiring a real backend (e.g. Yaci), where real
       * wall-clock time must elapse.
       */
-    def useTestControl: Boolean = true
+    def useTestControl: Boolean
 
     /** How long to let actors settle (process pending messages) before each command runs when using
       * [[TestControl]]. The inner program always sleeps this duration first; the outer ticks

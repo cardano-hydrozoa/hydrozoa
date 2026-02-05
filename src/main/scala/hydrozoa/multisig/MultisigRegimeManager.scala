@@ -21,7 +21,7 @@ import scalus.cardano.ledger.SlotConfig
 
 trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
 
-    private val logger = config.logging.logger("hydrozoa.multisig.MultisigRegimeManager")
+    private val logger = Logging.loggerIO("hydrozoa.multisig.MultisigRegimeManager")
 
     override def supervisorStrategy: SupervisionStrategy[IO] =
         OneForOneStrategy[IO](maxNrOfRetries = 3, withinTimeRange = 1 minute) {
@@ -57,8 +57,7 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
                       initializationTx = config.initializationTx,
                       initializationFallbackTx = config.fallbackTx,
                       receiveTimeout = 10.seconds,
-                      slotConfig = config.slotConfig,
-                      logging = config.logging
+                      slotConfig = config.slotConfig
                     ),
                     pendingConnections
                   )
@@ -167,8 +166,7 @@ object MultisigRegimeManager {
         cardanoBackend: CardanoBackend[IO],
         initializationTx: InitializationTx,
         fallbackTx: FallbackTx,
-        slotConfig: SlotConfig,
-        logging: Logging
+        slotConfig: SlotConfig
     )
 
     final case class Connections(

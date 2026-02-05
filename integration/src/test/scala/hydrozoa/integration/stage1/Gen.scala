@@ -70,10 +70,11 @@ object Generators:
 // Default command generator
 // ===================================
 
-/** The standard generator: orchestrates per-command gens from [[Generators]] and wraps each result
-  * into [[AnyCommand]].
+/** There is a customizable delay before starting every new block. If the delay happens to be long
+  * enough so the latest fallback becomes active, all next commands are NoOp and the fallback is
+  * expected to be submitted. Otherwise, only happy path effects are expected to be submitted.
   */
-object DefaultCommandGen extends CommandGen[ModelState, Stage1Sut]:
+object ArbitraryEventsOnly extends CommandGen[ModelState, Stage1Sut]:
 
     override def genNextCommand(
         state: ModelState

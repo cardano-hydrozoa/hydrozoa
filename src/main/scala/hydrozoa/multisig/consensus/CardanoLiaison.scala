@@ -54,8 +54,7 @@ object CardanoLiaison:
         initializationTx: InitializationTx,
         initializationFallbackTx: FallbackTx,
         receiveTimeout: FiniteDuration,
-        slotConfig: SlotConfig,
-        logging: Logging
+        slotConfig: SlotConfig
     )
 
     final case class Connections(
@@ -185,7 +184,7 @@ trait CardanoLiaison(
 ) extends Actor[IO, CardanoLiaison.Request]:
     import CardanoLiaison.*
 
-    private val logger = config.logging.logger("CardanoLiaison")
+    private val logger = Logging.loggerIO("CardanoLiaison")
 
     private val connections = Ref.unsafe[IO, Option[CardanoLiaison.Connections]](None)
 
@@ -216,7 +215,6 @@ trait CardanoLiaison(
         for {
             _ <- initializeConnections
             // Immediate Timeout triggers the initialization tx right away (not strictly needed)
-            // TODO: do we need it though?
             _ <- context.self ! CardanoLiaison.Timeout
             _ <- context.setReceiveTimeout(config.receiveTimeout, CardanoLiaison.Timeout)
         } yield ()
@@ -287,7 +285,7 @@ trait CardanoLiaison(
         val treasurySpent = settlementTx.treasurySpent
         val effects: List[(TransactionInput, HappyPathEffect)] =
             List(treasurySpent.utxoId -> settlementTx)
-            // TODO: add utxoId
+            // TODO: implement utxoId?
                 ++ rollouts.map(r => r.rolloutSpent.utxo.input -> r)
         indexWithEffectId(effects, settlementTx.majorVersionProduced).unzip
     }
@@ -305,7 +303,7 @@ trait CardanoLiaison(
 
         val effects: List[(TransactionInput, HappyPathEffect)] =
             List(treasurySpent.utxoId -> finalizationTx)
-            // TODO: add utxoId
+            // TODO: implement utxoId?
                 ++ rollouts.map(r => r.rolloutSpent.utxo.input -> r)
 
         val ret = indexWithEffectId(effects, versionMajor).unzip
@@ -427,8 +425,9 @@ trait CardanoLiaison(
 
                     // 4. Submit flattened txs for actions it there are some
                     _ <- IO.whenA(actionsToSubmit.nonEmpty)(
-                      logger.info("Liaison's actions:") >>
-                          actionsToSubmit.traverse_(a => logger.info(s"  - ${a.msg}"))
+                      logger.info(
+                        "Liaison's actions:" + actionsToSubmit.map(a => s"\n\t- ${a.msg}").mkString
+                      )
                     )
 
                     submitRet <-
@@ -441,8 +440,11 @@ trait CardanoLiaison(
                     // Submission errors are ignored, but dumped here
                     submissionErrors = submitRet.filter(_.isLeft)
                     _ <- IO.whenA(submissionErrors.nonEmpty)(
-                      logger.warn("Submission errors:") >>
-                          submissionErrors.traverse_(a => logger.warn(s"  - ${a.left}"))
+                      logger.warn(
+                        "Submission errors:" + submissionErrors
+                            .map(a => s"\n\t- ${a.left}")
+                            .mkString
+                      )
                     )
 
                 } yield ()
@@ -521,8 +523,8 @@ trait CardanoLiaison(
         effectId match {
             // Backbone effect - settlement/finalization/deinit
             // TODO: Can't be initialization tx though. If we want to allow
-            // initialization txs to spend utxos from the same head address
-            // we should address it somehow.
+            //   initialization txs to spend utxos from the same head address
+            //   we should address it somehow.
             case backboneEffectId @ (versionMajor, 0) =>
 
                 // println(s"mkDirectAction: backboneEffectId: $backboneEffectId")

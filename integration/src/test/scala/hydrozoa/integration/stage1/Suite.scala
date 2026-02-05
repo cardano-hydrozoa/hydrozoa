@@ -37,6 +37,7 @@ import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import spire.math.UByte
 import test.TestPeer.Alice
 import test.{TestPeer, minPubkeyAda, sumUtxoValues}
+import org.typelevel.log4cats.Logger
 
 /** Integration Stage 1 (the simplest).
   *   - Only three real actors are involved: [[JointLedger]], [[ConsensusActor]], and
@@ -45,10 +46,6 @@ import test.{TestPeer, minPubkeyAda, sumUtxoValues}
   * Notes:
   *   - The absence of the weaver prevents automatic block creation, including timed-out major
   *     blocks.
-  *   - There is a customizable delay before starting every new block. If the delay happens to be
-  *     long enough so the latest fallback becomes active, all next commands are NoOp and the
-  *     fallback is expected to be submitted. Otherwise, only happy path effects are expected to be
-  *     submitted.
   */
 object Stage1Properties extends YetAnotherProperties("Integration Stage 1"):
 
@@ -62,23 +59,30 @@ object Stage1Properties extends YetAnotherProperties("Integration Stage 1"):
 
     private val preprod = StandardCardanoNetwork.Preprod
 
-    val _ = property("Works well on L1 mock (fast, reproducible)") = Suite(
+    /** This property uses [[ArbitraryEventsOnly]] which gives L2 events that are invalid. It's
+      * useful to check that block promotion Minor -> Major works correctly.
+      */
+    val _ = property("Block propagation works well on L1 mock") = Suite(
+      useTestControl = true,
       network = Left(preprod),
       genesisUtxos = yaciTestSauceGenesis(preprod.scalusNetwork),
-      commandGen = DefaultCommandGen
+      commandGen = ArbitraryEventsOnly
     ).property()
 
     // val _ = property("Works well on Yaci DevKit (slower, reproducible)") = ???
     // val _ = property("Works well on Preview (even slower, non-reproducible)") = ???
 
 case class Suite(
+    override val useTestControl: Boolean,
+    override val commandGen: CommandGen[ModelState, Stage1Sut],
     network: Either[StandardCardanoNetwork, NetworkInfo],
     genesisUtxos: Map[TestPeer, UtxoSetL1],
-    commandGen: CommandGen[ModelState, Stage1Sut]
 ) extends ModelBasedSuite {
 
     override type State = ModelState
     override type Sut = Stage1Sut
+
+    val logger: Logger[IO] = Logging.loggerIO("Stage1.Suite")
 
     // ===================================
     // SUT handling
@@ -90,21 +94,17 @@ case class Suite(
         for {
 
             now <- IO.realTimeInstant
-            _ <- IO.println(s"Current time: $now")
+            _ <- logger.debug(s"Current time: $now")
 
             // Before creating the actor system, if we are in the TestControl we need
             // to fast-forward to the zero block creation time.
             // TODO: make it optional
-            // NB: Using advance for commands can be used here, but I (Ilia) think
-            // it s a bit different thing so I decided not to piggyback on commands.
             _ <- IO.sleep(
               FiniteDuration(state.currentTime.instant.instant.toEpochMilli, TimeUnit.MILLISECONDS)
             )
 
             now <- IO.realTimeInstant
-            _ <- IO.println(s"Current time: $now")
-
-            logging <- Logging.create
+            _ <- logger.info(s"Current time: $now")
 
             // Actor system
             system <- ActorSystem[IO]("Stage1").allocated.map(_._1)
@@ -139,8 +139,7 @@ case class Suite(
               initializationTx = initialBlock.effects.initializationTx,
               initializationFallbackTx = initialBlock.effects.fallbackTx,
               receiveTimeout = 100.millis,
-              slotConfig = cardanoInfo.slotConfig,
-              logging = logging
+              slotConfig = cardanoInfo.slotConfig
             )
 
             liaisonConnections = CardanoLiaison.Connections(blockWeaver)
@@ -222,8 +221,7 @@ case class Suite(
     // TODO: split up:  preShutdownCondition / shutdownSut
     override def shutdownSut(state: State, sut: Sut): IO[Prop] = for {
 
-        // _ <- IO.println(s"shutdownSut state=${state}")
-        _ <- IO.println("shutdownSut")
+        _ <- logger.info("shutdownSut")
 
         /** Important: this action should ensure that the actor system was not terminated.
           *
@@ -235,12 +233,8 @@ case class Suite(
           */
         _ <- sut.system.waitForIdle(maxTimeout = 1.second)
 
-        _ <- IO.println("waitForIdle complete")
-
         // Next part of the property is to check that expected effects were submitted and are known to the Cardano backend.
         effects <- sut.effectsAcc.get
-
-        // _ <- IO.println(s"shutdownSut effects: ${effects.length}")
 
         expectedEffects: List[(TxLabel, TransactionHash)] = mkExpectedEffects(
           state.headConfig.initialBlock,
@@ -249,10 +243,9 @@ case class Suite(
         )
 
         _ <- IO.whenA(expectedEffects.nonEmpty)(
-          IO.println("\nExpected effects:") >>
-              IO.traverse_(expectedEffects) { case (label, hash) =>
-                  IO.println(s"\t- $label: $hash")
-              }
+          logger.info("Expected effects:" + expectedEffects.map { case (label, hash) =>
+              s"\n\t- $label: $hash"
+          }.mkString)
         )
 
         effectsResults <- IO.traverse(expectedEffects) { case (_, hash) =>
@@ -335,20 +328,14 @@ case class Suite(
         val cardanoInfo = network.toCardanoInfo
 
         for {
-            // TODO: Can this be pure? - Yes, for L1 mock it can be, for Yaci/testnet it cannot
             zeroBlockCreationTime <- Gen
                 .const(realTimeQuantizedInstant(cardanoInfo.slotConfig).unsafeRunSync())
                 .label("Zero block creation time")
-
-            // _ = println(s"zeroBlockCreationTime: $zeroBlockCreationTime")
-            // _ = println(s"zeroBlockCreationTime: ${zeroBlockCreationTime.toSlot}")
 
             ownTestPeer = Alice
             peers = NonEmptyList.one(ownTestPeer) // useful to have since many gens want it
             ownPeerIndex = 0
             equityShares <- genEquityShares(peers, cardanoInfo.network).label("Equity shares")
-
-            // _ = println(s"equityShares: $equityShares")
 
             ownPeer = (
               OwnPeer(PeerId(ownPeerIndex, peers.size), ownTestPeer.wallet),
@@ -446,19 +433,11 @@ case class Suite(
               pollingPeriod = 5.seconds
             )
 
-            // _ = println(rawConfig)
-            // _ = println(HexUtil.encodeHexString(rawConfig.initializationTxBytes))
-
             configParsed = HeadConfig.parse(rawConfig) match {
                 case Left(err) =>
                     throw RuntimeException(s"error parsing the config: ${err.explain}")
                 case Right(value) => value
             }
-
-            // _ = println(
-            //  s"txTiming.newFallbackStartTime(zeroBlockCreationTime)=${txTiming.newFallbackStartTime(zeroBlockCreationTime)}"
-            // )
-            // _ = println(initTxSeq.fallbackTx.validityStart)
 
         } yield ModelState(
           ownTestPeer = ownTestPeer,

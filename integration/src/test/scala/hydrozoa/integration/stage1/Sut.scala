@@ -8,6 +8,7 @@ import com.suprnation.actor.ActorSystem
 import hydrozoa.integration.stage1
 import hydrozoa.integration.stage1.AgentActor.CompleteBlock
 import hydrozoa.lib.actor.SyncRequest
+import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.ConsensusActor
 import hydrozoa.multisig.consensus.ack.AckBlock
@@ -117,17 +118,19 @@ end AgentActor
 // SutCommand instances
 // ===================================
 
+val logger = Logging.loggerIO("Stage1.Commands")
+
 implicit object DelayCommandSut extends SutCommand[DelayCommand, Unit, Stage1Sut] {
     override def run(cmd: DelayCommand, sut: Stage1Sut): IO[Unit] = for {
-        _ <- IO.println(s">> DelayCommand(delay=${cmd.delaySpec.duration})")
+        _ <- logger.debug(s">> DelayCommand(delay=${cmd.delaySpec.duration})")
         now <- IO.realTimeInstant
-        _ <- IO.println(s"Current time: $now")
+        _ <- logger.debug(s"Current time: $now")
     } yield ()
 }
 
 implicit object StartBlockCommandSut extends SutCommand[StartBlockCommand, Unit, Stage1Sut] {
     override def run(cmd: StartBlockCommand, sut: Stage1Sut): IO[Unit] =
-        IO.println(s">> StartBlockCommand(blockNumber=${cmd.blockNumber})") >>
+        logger.debug(s">> StartBlockCommand(blockNumber=${cmd.blockNumber})") >>
             (sut.agent ! StartBlock(
               blockNum = cmd.blockNumber,
               blockCreationTime = cmd.creationTime
@@ -136,14 +139,14 @@ implicit object StartBlockCommandSut extends SutCommand[StartBlockCommand, Unit,
 
 implicit object LedgerEventCommandSut extends SutCommand[LedgerEventCommand, Unit, Stage1Sut] {
     override def run(cmd: LedgerEventCommand, sut: Stage1Sut): IO[Unit] =
-        IO.println(">> LedgerEventCommand") >>
+        logger.debug(">> LedgerEventCommand") >>
             (sut.agent ! cmd.event)
 }
 
 implicit object CompleteBlockCommandSut
     extends SutCommand[CompleteBlockCommand, BlockBrief, Stage1Sut] {
     override def run(cmd: CompleteBlockCommand, sut: Stage1Sut): IO[BlockBrief] = for {
-        _ <- IO.println(
+        _ <- logger.debug(
           s">> CompleteBlockCommand(blockNumber=${cmd.blockNumber}, isFinal=${cmd.isFinal})"
         )
         block <- IO.pure(

@@ -1,6 +1,7 @@
 package hydrozoa.integration.stage1
 
 import hydrozoa.config.HeadConfig
+import hydrozoa.integration.stage1.Error.UnexpectedState
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.block.{BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.event.LedgerEvent
@@ -88,7 +89,7 @@ implicit object DelayCommandModel extends ModelCommand[DelayCommand, Unit, Model
         val newBlock = state.blockCycle match {
             case BlockCycle.Done(blockNumber, version) =>
                 BlockCycle.Ready(blockNumber = blockNumber, prevVersion = version)
-            case _ => throw Error.UnexpectedState
+            case _ => throw Error.UnexpectedState("DelayCommand requires BlockCycle.Done")
         }
         val instant = state.currentTime.instant + cmd.delaySpec.duration
         () -> state.copy(
@@ -121,11 +122,13 @@ implicit object StartBlockCommandModel extends ModelCommand[StartBlockCommand, U
                           creationTime = cmd.creationTime,
                           prevVersion = prevVersion
                         )
-                    case _ => throw Error.UnexpectedState
+                    case _ => throw UnexpectedState("StartBlockCommand requires BlockCycle.Ready")
                 }
                 () -> state.copy(blockCycle = newBlock)
-            // TODO: improve output for those type of exceptions
-            case _ => throw Error.UnexpectedState
+            case _ =>
+                throw Error.UnexpectedState(
+                  "StartBlockCommand requires CurrentTime.BeforeHappyPathExpiration"
+                )
         }
     }
 }
@@ -173,7 +176,7 @@ implicit object CompleteBlockCommandModel
                   competingFallbackStartTime = newCompetingFallbackStartTime
                 )
                 result -> newState
-            case _ => throw Error.UnexpectedState
+            case _ => throw UnexpectedState("CompleteBlockCommand requires BlockCycle.InProgress")
         }
     }
 
@@ -237,6 +240,9 @@ implicit object CompleteBlockCommandModel
         }
 }
 
-// TODO: do we need it? Improve logging on it.
 enum Error extends Throwable:
-    case UnexpectedState
+    case UnexpectedState(msg: String)
+
+    override def getMessage: String = this match {
+        case Error.UnexpectedState(msg) => s"Unexpected state while stepping the model: $msg"
+    }
