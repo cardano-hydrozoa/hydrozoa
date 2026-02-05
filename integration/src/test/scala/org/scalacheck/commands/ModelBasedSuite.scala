@@ -5,50 +5,186 @@ import cats.effect.testkit.TestControl
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all.catsSyntaxFlatMapOps
 import org.scalacheck.{Gen, Prop, Shrink}
-import scala.concurrent.duration.{Duration, DurationInt, FiniteDuration}
 import org.slf4j.Logger
+import scala.concurrent.duration.{Duration, DurationInt, FiniteDuration}
 
-/** Yet another better/different [[Commands]]:
+// ===================================
+// Command typeclasses
+// ===================================
+
+/** Model-side facet: state transitions, preconditions, scheduling. These members depend only on the
+  * abstract model state — no SUT interaction.
+  *
+  * @tparam Cmd
+  *   the command type
+  * @tparam Result
+  *   the result produced by [[runState]]
+  * @tparam State
+  *   the model-state type
+  */
+trait ModelCommand[Cmd, Result, State] {
+
+    /** Returns the result and the new [[State]] after this command has run. */
+    def runState(cmd: Cmd, state: State): (Result, State)
+
+    /** Precondition that decides if this command is allowed to run when the model is in the
+      * provided state.
+      */
+    def preCondition(cmd: Cmd, state: State): Boolean = true
+
+    /** Virtual-time delay to advance *before* this command's run is executed. Defaults to
+      * [[Duration.Zero]] (no delay).
+      */
+    def delay(cmd: Cmd): FiniteDuration = Duration.Zero
+}
+
+/** SUT-side facet: executes the command against the system under test. */
+trait SutCommand[Cmd, Result, Sut] {
+
+    /** Executes the command against the SUT and returns the result. */
+    def run(cmd: Cmd, sut: Sut): IO[Result]
+}
+
+/** Postcondition facet: verifies the SUT result against the model's expectation.
+  *
+  * The default [[postCondition]] calls [[ModelCommand.runState]] (via the implicit instance) to
+  * obtain the expected result and the state-after, then dispatches to [[onSuccessCheck]] or
+  * [[onFailureCheck]].
+  */
+trait CommandProp[Cmd, Result, State] {
+
+    def postCondition(
+        cmd: Cmd,
+        stateBefore: State,
+        result: Either[Throwable, Result]
+    )(implicit mc: ModelCommand[Cmd, Result, State]): Prop = {
+        val (expectedResult, stateAfter) = mc.runState(cmd, stateBefore)
+        result match
+            case Right(realResult) =>
+                onSuccessCheck(cmd, expectedResult, stateBefore, stateAfter, realResult)
+            case Left(e) =>
+                onFailureCheck(cmd, expectedResult, stateBefore, stateAfter, e)
+    }
+
+    def onSuccessCheck(
+        cmd: Cmd,
+        expectedResult: Result,
+        stateBefore: State,
+        stateAfter: State,
+        result: Result
+    ): Prop = Prop.passed
+
+    def onFailureCheck(
+        cmd: Cmd,
+        expectedResult: Result,
+        stateBefore: State,
+        stateAfter: State,
+        err: Throwable
+    ): Prop = Prop.exception(err)
+}
+
+// ===================================
+// AnyCommand — type-erased command wrapper
+// ===================================
+
+/** A command with its [[Result]] and [[Cmd]] type erased. This is what the test runner operates on.
+  *
+  * Constructed via the companion [[AnyCommand.apply]] factory, which captures the three typeclass
+  * instances and wires [[runPC]] in a type-safe way before erasing [[Result]].
+  */
+final class AnyCommand[State, Sut](
+    /** Precondition check. */
+    val preCondition: State => Boolean,
+    /** Advances the model state (the Result half of runState is erased). */
+    val advanceState: State => State,
+    /** Time delay to advance before running. */
+    val delay: FiniteDuration,
+    /** Runs the command and returns a postcondition predicate over the state *before* the command
+      * ran.
+      */
+    val runPC: Sut => IO[State => Prop],
+    private val repr: String
+) {
+    override def toString: String = repr
+}
+
+object AnyCommand {
+
+    /** Package a concrete command value together with its three typeclass instances into an
+      * [[AnyCommand]], erasing the [[Result]] type.
+      */
+    def apply[Cmd, Result, State, Sut](cmd: Cmd)(implicit
+        mc: ModelCommand[Cmd, Result, State],
+        sc: SutCommand[Cmd, Result, Sut],
+        cp: CommandProp[Cmd, Result, State]
+    ): AnyCommand[State, Sut] =
+        new AnyCommand(
+          preCondition = state => mc.preCondition(cmd, state),
+          advanceState = state => mc.runState(cmd, state)._2,
+          delay = mc.delay(cmd),
+          runPC = sut => {
+              import Prop.propBoolean
+              sc.run(cmd, sut).attempt.map { r => (s: State) =>
+                  mc.preCondition(cmd, s) ==> cp.postCondition(cmd, s, r)
+              }
+          },
+          repr = cmd.toString
+        )
+}
+
+// ===================================
+// NoOp
+// ===================================
+
+/** Produce a no-op [[AnyCommand]]: does nothing, advances no state, always passes. */
+def noOp[State, Sut]: AnyCommand[State, Sut] =
+    new AnyCommand(
+      preCondition = _ => true,
+      advanceState = s => s,
+      delay = Duration.Zero,
+      runPC = _ => IO.println(">> NoOp").as(_ => Prop.passed),
+      repr = "NoOp"
+    )
+
+// ===================================
+// Command generation strategy
+// ===================================
+
+/** Abstracts the command-generation strategy. Different properties can supply different
+  * implementations to drive generation differently (e.g. only invalid events, only minor blocks,
+  * etc.).
+  */
+trait CommandGen[State, Sut]:
+    /** Generates the next command based on the current model state. */
+    def genNextCommand(state: State): Gen[AnyCommand[State, Sut]]
+
+// ===================================
+// ModelBasedSuite
+// ===================================
+
+/** Yet another better/different Commands:
   *   - Support for CE [[IO]] and [[TestControl]]
-  *   - Modular commands to separate concerns and allow mixing:
-  *     - Separate traits for:
-  *       - generation / runState (Haskell State-like)
-  *       - running against the SUT using [[IO]]
-  *       - conditions checks
-  *   - Readable and pretty output
+  *   - Modular commands via typeclasses to separate concerns:
+  *     - [[ModelCommand]]: state transitions, preconditions, scheduling
+  *     - [[SutCommand]]: execution against the SUT
+  *     - [[CommandProp]]: postcondition checks
+  *   - [[AnyCommand]] erases the per-command [[Result]] type so the runner loop is monomorphic.
   *
   * Limitations:
-  *   - Parallel commands are not supported yet - we need a different approach
+  *   - Parallel commands have been removed - we need a different approach
   */
 trait ModelBasedSuite {
 
     val logger: Logger = org.slf4j.LoggerFactory.getLogger(ModelBasedSuite.getClass)
 
-    /** The model state type. Must be immutable. The [[State]] type should model (some part) of the
-      * system under test (SUT).
-      *
-      * It should only contain details needed for command generation, specifying our pre- and
-      * post-conditions, and for creating SUT instances.
-      */
+    /** The model state type.  Must be immutable. */
     type State
 
-    /** A type representing one instance of the system under test (SUT). The [[Sut]] type should be
-      * a proxy/facade to the actual system under test and is therefore, by definition, a mutable
-      * type. It is used by the [[Command.run]] method to execute commands in the system under test.
-      * It should be possible to have any number of co-existing instances of the [[Sut]] type, as
-      * long as [[canCreateNewSut]] isn't violated, and each [[Sut]] instance should be a proxy to a
-      * distinct SUT instance. There should be no dependencies between the [[Sut]] instances, as
-      * they might be used in parallel by ScalaCheck. [[Sut]] instances are created by [[newSut]]
-      * and destroyed by [[shutdownSut]]. [[newSut]] and [[shutdownSut]] might be called at any time
-      * by ScalaCheck, as long as [[canCreateNewSut]] isn't violated.
-      */
+    /** A type representing one instance of the system under test (SUT). */
     type Sut
 
     /** Decides if [[newSut]] should be allowed to be called with the specified state value. This
-      * can be used to limit the number of co-existing [[Sut]] instances. The list of existing
-      * states represents the initial states (not the current states) for all [[Sut]] instances that
-      * are active for the moment. If this method is implemented incorrectly, for example if it
-      * returns false even if the list of existing states is empty, ScalaCheck might hang.
+      * can be used to limit the number of co-existing [[Sut]] instances.
       *
       * If you want to allow only one [[Sut]] instance to exist at any given time (a singleton
       * [[Sut]]), implement this method the following way:
@@ -58,13 +194,6 @@ trait ModelBasedSuite {
       *    runningSuts: Iterable[State]
       *  ) = inactiveSuts.isEmpty && runningSuts.isEmpty
       * }}}
-      *
-      * @param candidateState
-      *   the initial state of the SUT that the suite wants to create
-      * @param inactiveSuts
-      *   the initial states for SUTs that are planned to be run
-      * @param runningSuts
-      *   the initial states for SUTs that are currently active
       */
     def canCreateNewSut(
         candidateState: State,
@@ -74,9 +203,6 @@ trait ModelBasedSuite {
 
     /** Create a new [[Sut]] instance with an internal state that corresponds to the provided
       * abstract state instance.
-      *
-      * The provided state is guaranteed to fulfill [[initialPreCondition]], and [[newSut]] will
-      * never be called if [[canCreateNewSut]] is not true for the [[state]].
       */
     def newSut(state: State): IO[Sut]
 
@@ -85,151 +211,30 @@ trait ModelBasedSuite {
       */
     def shutdownSut(state: State, sut: Sut): IO[Prop]
 
-    /** The precondition for the initial state, when no commands yet have run.
-      *
-      * This is used by ScalaCheck when command sequences are shrunk and the first state might
-      * differ from what is returned from [[genInitialState]].
-      */
-    def initialPreCondition(state: State): Boolean
+    /** The precondition for the initial state, when no commands yet have run. */
+    def initialPreCondition(state: State): Boolean = true
 
     /** A generator that should produce an initial [[State]] instance that is usable by [[newSut]]
-      * to create a new system under test. The state returned by this generator is always checked
-      * with the [[initialPreCondition]] method before it is used.
+      * to create a new system under test.
       */
     def genInitialState: Gen[State]
 
-    /** A generator that, given the current model state, should produce a suitable Command instance.
-      * The command should always be well-formed, but MUST NOT be correct, i.e. it may be expected
-      * to error upon running against the SUT. The correctness is indicated by
-      * [[Command.preCondition]] and the expected behavior of SUT is checked based on that flag.
+    /** A generator that, given the current model state, should produce a suitable command. The
+      * command should always be well-formed, but MUST NOT necessarily be correct, i.e. it may be
+      * expected to error upon running against the SUT. The correctness is indicated by
+      * [[ModelCommand.preCondition]] and the expected behavior of SUT is checked based on that
+      * flag.
       */
-    def genCommand(state: State): Gen[Command]
+    def commandGen: CommandGen[State, Sut]
 
     /** Whether to use [[TestControl]] for time manipulation. When true (default), delays declared
       * by commands are advanced via the [[TestControl]] virtual clock rather than real
       * [[IO.sleep]]. Set to false for scenarios requiring a real backend (e.g. Yaci), where real
       * wall-clock time must elapse.
+      *
+      * TODO: make a parameter
       */
     def useTestControl: Boolean = true
-
-    // ===================================
-    // StateLikeCommand
-    // ===================================
-
-    trait Command:
-
-        /** The result of running the command against the SUT. The [[Result]] type should be
-          * immutable, and it should encode everything about the command run that is necessary to
-          * know in order to correctly implement the [[Command.postCondition]] method.
-          */
-        type Result
-
-        // TODO: rework, rename num
-
-        /** The sequential number of command. */
-        def id: Int
-
-        /** Executes the command against the SUT and returns the result of the command run. The
-          * result value is later used for verifying that the command behaved according to the
-          * specification, by the [[Command.postCondition]] method.
-          */
-        def run(sut: Sut): IO[Result]
-
-        /** Returns a new [[State]] instance that represents the state of the system after this
-          * command has run, given the system was in the provided state before the run.
-          *
-          * @param state
-          * @return
-          */
-        def runState(state: State): (Result, State)
-
-        /** Precondition that decides if this command is allowed to run when the system under test
-          * is in the provided state.
-          */
-        def preCondition(state: State): Boolean
-
-        /** Postcondition that decides if this command produced the correct result or not, given the
-          * system was in the provided state before the command ran.
-          */
-        def postCondition(stateBefore: State, result: Either[Throwable, Result]): Prop =
-
-            val (expectedResult, stateAfter) = runState(stateBefore)
-            result match
-                case Right(realResult: Result) =>
-                    onSuccessCheck(
-                      expectedResult,
-                      stateBefore,
-                      stateAfter,
-                      realResult
-                    )
-                case Left(e) =>
-                    onFailureCheck(expectedResult, stateBefore, stateAfter, e)
-
-        def onSuccessCheck(
-            expectedResult: Result,
-            stateBefore: State,
-            stateAfter: State,
-            result: Result
-        ): Prop = Prop.passed
-
-        def onFailureCheck(
-            expectedResult: Result,
-            stateBefore: State,
-            stateAfter: State,
-            err: Throwable
-        ): Prop = Prop.exception(err)
-
-        /** Virtual-time delay to advance *before* this command's [[run]] is executed. When
-          * [[useTestControl]] is true, the [[TestControl]] clock is advanced by this amount instead
-          * of sleeping. When false, a real [[IO.sleep]] of this duration is performed. Defaults to
-          * [[Duration.Zero]] (no delay).
-          */
-        def delay: FiniteDuration = Duration.Zero
-
-        /** Wraps the run and postCondition methods in order not to leak the dependent Result type.
-          * @param sut
-          * @return
-          *   the predicate on State in IO
-          */
-        private[commands] def runPC(sut: Sut): IO[State => Prop] = {
-            import Prop.propBoolean
-            for {
-                r <- run(sut).attempt
-            } yield s => preCondition(s) ==> postCondition(s, r)
-        }
-
-    /** A command that never should throw an exception on execution. */
-    trait SuccessCommand extends Command {
-        def postCondition(state: State, result: Result): Prop
-
-        final override def postCondition(state: State, result: Either[Throwable, Result]): Prop =
-            result match {
-                case Left(e)  => Prop.exception(e)
-                case Right(r) => postCondition(state, r)
-            }
-    }
-
-    /** A command that doesn't return a result, only succeeds or fails. */
-    trait UnitCommand extends Command {
-        final type Result = Unit
-
-        def postCondition(state: State, success: Boolean): Prop
-
-        final override def postCondition(state: State, result: Either[Throwable, Result]): Prop =
-            postCondition(state, result.isRight)
-    }
-
-    final case class NoOp(override val id: Int) extends Command {
-        type Result = Unit
-        override def run(sut: Sut): IO[Result] = {
-            // TODO: use logger
-            IO.println(s">> NoOp(id=$id)") >> IO.pure(())
-        }
-
-        override def runState(state: State): (Unit, State) = ((), state)
-        override def preCondition(state: State) = true
-        override def postCondition(stateBefore: State, result: Either[Throwable, Result]) = true
-    }
 
     /** A property that attests that SUT complies to the model.
       *
@@ -245,9 +250,9 @@ trait ModelBasedSuite {
       * evaluate all possible command interleavings (and the end State instances they produce),
       * since parallel command execution is non-deterministic.
       *
-      * ScalaCheck tries out all possible end states with the [[Command.postCondition]] function of
-      * the very last command executed (there is always exactly one command executed after all
-      * parallel command executions).
+      * ScalaCheck tries out all possible end states with the postcondition of the very last command
+      * executed (there is always exactly one command executed after all parallel command
+      * executions).
       *
       * If it fails to find an end state that satisfies the postcondition, the test fails. However,
       * the number of possible end states grows rapidly with increasing values of [[threadCount]].
@@ -312,7 +317,7 @@ trait ModelBasedSuite {
     // Actions generation
     // ===================================
 
-    private type Commands = List[Command]
+    private type Commands = List[AnyCommand[State, Sut]]
 
     /** @param initialState
       *   the initial state
@@ -344,8 +349,8 @@ trait ModelBasedSuite {
                 for {
                     (s0, cs) <- g
                     // TODO: this implies I was wrong in the comment for preCondition!
-                    c <- genCommand(s0).suchThat(_.preCondition(s0))
-                } yield (c.runState(s0)._2, cs :+ c)
+                    c <- commandGen.genNextCommand(s0).suchThat(_.preCondition(s0))
+                } yield (c.advanceState(s0), cs :+ c)
             }
         }
 
@@ -355,7 +360,7 @@ trait ModelBasedSuite {
           */
         def cmdsPrecond(s: State, cmds: Commands): (State, Boolean) = cmds match {
             case Nil                          => (s, true)
-            case c :: cs if c.preCondition(s) => cmdsPrecond(c.runState(s)._2, cs)
+            case c :: cs if c.preCondition(s) => cmdsPrecond(c.advanceState(s), cs)
             case _                            => (s, false)
         }
 
@@ -477,9 +482,8 @@ trait ModelBasedSuite {
 
         val g = for {
             s0 <- genInitialState
-            // (s1, seqCmds) <- resize(100, sized(sizedCmds(s0)))
             (s1, seqCmds) <- sized(sizedCmds(s0))
-
+            // TODO: remove
             parCmds <-
                 if parSz <= 0
                 then const(Nil)
@@ -516,7 +520,7 @@ trait ModelBasedSuite {
         if r.success then Prop.secure(p2) else Prop(_ => r)
     }
 
-    private def prettyCmdsRes(rs: List[Command], maxLength: Int) = {
+    private def prettyCmdsRes(rs: List[AnyCommand[State, Sut]], maxLength: Int) = {
         val maxNumberWidth = "%d".format(maxLength).length
         val lineLayout = "  %%%dd. %%s".format(maxNumberWidth)
         val cs = rs.zipWithIndex.map { case (r, i) =>
@@ -526,7 +530,7 @@ trait ModelBasedSuite {
         else cs.mkString("\n")
     }
 
-    // TODO: Added the last succeeded command (last `Int`) - do we need it though?
+    // TODO: Added the last succeeded command (last `Int`) - do we need it though? It doesn't work properly now.
     private def runSeqCmds(
         ioSut: IO[Sut],
         s0: State,
@@ -549,7 +553,7 @@ trait ModelBasedSuite {
             result <- cs.foldLeft(IO.pure(initial)) { case (acc, c) =>
                 acc >>= { case (sut, p, s, lastCmd) =>
                     IO.sleep(c.delay) >> c.runPC(sut).map { pred =>
-                        (sut, propAnd(p, pred(s)), c.runState(s)._2, lastCmd + 1)
+                        (sut, propAnd(p, pred(s)), c.advanceState(s), lastCmd + 1)
                     }
                 }
             }
@@ -612,7 +616,7 @@ trait ModelBasedSuite {
                         IO.cede.whileM_(IO(!gate.get)) >>
                         IO(gate.set(false)) >>
                         c.runPC(sut).map { pred =>
-                            (sut, propAnd(p, pred(s)), c.runState(s)._2, lastCmd + 1)
+                            (sut, propAnd(p, pred(s)), c.advanceState(s), lastCmd + 1)
                         }
                 }
             }
