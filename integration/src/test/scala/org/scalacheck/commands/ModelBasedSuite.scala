@@ -3,7 +3,6 @@ package org.scalacheck.commands
 import cats.effect.IO
 import cats.effect.testkit.TestControl
 import cats.effect.unsafe.implicits.global
-import cats.syntax.all.catsSyntaxFlatMapOps
 import org.scalacheck.{Gen, Prop, Shrink}
 import org.slf4j.Logger
 import scala.concurrent.duration.{Duration, DurationInt, FiniteDuration}
@@ -168,7 +167,7 @@ trait CommandGen[State, Sut]:
   *     - [[ModelCommand]]: state transitions, preconditions, scheduling
   *     - [[SutCommand]]: execution against the SUT
   *     - [[CommandProp]]: postcondition checks
-  *   - [[AnyCommand]] erases the per-command [[Result]] type so the runner loop is monomorphic.
+  *   - Better failure reporting (commands list, the last executed command)
   *
   * Limitations:
   *   - Parallel commands have been removed - we need a different approach
@@ -182,6 +181,22 @@ trait ModelBasedSuite {
 
     /** A type representing one instance of the system under test (SUT). */
     type Sut
+
+    /** Whether to use [[TestControl]] for time manipulation. When true (default), delays declared
+      * by commands are advanced via the [[TestControl]] virtual clock rather than real
+      * [[IO.sleep]]. Set to false for scenarios requiring a real backend (e.g. Yaci), where real
+      * wall-clock time must elapse.
+      */
+    def useTestControl: Boolean = true
+
+    /** How long to let actors settle (process pending messages) before each command runs when using
+      * [[TestControl]]. The inner program always sleeps this duration first; the outer ticks
+      * through it (giving actors their ping cycles), then advances the remainder. Total virtual
+      * time per command = max(delay, settling).
+      *
+      * Only used when [[useTestControl]] is true.
+      */
+    def settling: FiniteDuration = 1.second
 
     /** Decides if [[newSut]] should be allowed to be called with the specified state value. This
       * can be used to limit the number of co-existing [[Sut]] instances.
@@ -211,13 +226,13 @@ trait ModelBasedSuite {
       */
     def shutdownSut(state: State, sut: Sut): IO[Prop]
 
-    /** The precondition for the initial state, when no commands yet have run. */
-    def initialPreCondition(state: State): Boolean = true
-
     /** A generator that should produce an initial [[State]] instance that is usable by [[newSut]]
       * to create a new system under test.
       */
     def genInitialState: Gen[State]
+
+    /** The precondition for the initial state, when no commands yet have run. */
+    def initialPreCondition(state: State): Boolean = true
 
     /** A generator that, given the current model state, should produce a suitable command. The
       * command should always be well-formed, but MUST NOT necessarily be correct, i.e. it may be
@@ -226,15 +241,6 @@ trait ModelBasedSuite {
       * flag.
       */
     def commandGen: CommandGen[State, Sut]
-
-    /** Whether to use [[TestControl]] for time manipulation. When true (default), delays declared
-      * by commands are advanced via the [[TestControl]] virtual clock rather than real
-      * [[IO.sleep]]. Set to false for scenarios requiring a real backend (e.g. Yaci), where real
-      * wall-clock time must elapse.
-      *
-      * TODO: make a parameter
-      */
-    def useTestControl: Boolean = true
 
     /** A property that attests that SUT complies to the model.
       *
@@ -262,7 +268,6 @@ trait ModelBasedSuite {
       */
     final def property(threadCount: Int = 1, maxParComb: Int = 1000000): Prop = {
 
-        // TODO: saving IO[Sut] doesn't make much sense
         val suts = collection.mutable.Map.empty[AnyRef, (State, Option[IO[Sut]])]
 
         Prop.forAll(genActions(threadCount, maxParComb)) { as =>
@@ -270,7 +275,7 @@ trait ModelBasedSuite {
             logger.info("Running the next test case...")
 
             logger.trace(
-              as.seqCmds.foldRight(
+              as.commands.foldRight(
                 "---- Sequential actions ------------------------------------\n"
               )((cmd, acc) => s"$acc\t - $cmd\n")
             )
@@ -299,7 +304,7 @@ trait ModelBasedSuite {
                         }
 
                     case None =>
-                        // TODO: Block until canCreateNewSut is true
+                        // Here we might wait until canCreateNewSut is true
                         logger.error("WARNING: you should never not see that")
                         Prop.undecided
                 }
@@ -321,21 +326,18 @@ trait ModelBasedSuite {
 
     /** @param initialState
       *   the initial state
-      * @param seqCmds
-      *   sequentional commands, come first
-      * @param parCmds
-      *   optional parallel commands, come after sequential commands
+      * @param commands
+      *   sequential commands (now the only type of commands supported)
       */
     private case class Actions(
         initialState: State,
-        seqCmds: Commands,
-        parCmds: List[Commands]
+        commands: Commands
     )
 
     /** Actions generator.
       */
     private def genActions(threadCount: Int, maxParComb: Int): Gen[Actions] = {
-        import Gen.{const, listOfN, sized}
+        import Gen.{const, sized}
 
         /** Generates the sequence of commands of size [[size]] using initial state
           * [[initialState]].
@@ -348,15 +350,20 @@ trait ModelBasedSuite {
             l.foldLeft(const((initialState, Nil: Commands))) { (g, _) =>
                 for {
                     (s0, cs) <- g
-                    // TODO: this implies I was wrong in the comment for preCondition!
                     c <- commandGen.genNextCommand(s0).suchThat(_.preCondition(s0))
                 } yield (c.advanceState(s0), cs :+ c)
             }
         }
 
+        def precondition(as: Actions): Boolean =
+            initialPreCondition(as.initialState)
+                && cmdsPrecond(as.initialState, as.commands)._2
+
         /** Checks all preconditions and evaluates the final state.
+          *
           * @return
-          *   the final state and the && over preconditions.
+          *   the final state and the && over preconditions (the state was used for parallel
+          *   commands)
           */
         def cmdsPrecond(s: State, cmds: Commands): (State, Boolean) = cmds match {
             case Nil                          => (s, true)
@@ -364,133 +371,12 @@ trait ModelBasedSuite {
             case _                            => (s, false)
         }
 
-        def actionsPrecond(as: Actions): Boolean = {
-            // TODO: why is that?
-            as.parCmds.sizeIs != 1
-            && as.parCmds.forall(_.nonEmpty)
-            && initialPreCondition(as.initialState)
-            && (cmdsPrecond(as.initialState, as.seqCmds) match {
-                // The final state of seqCmds is used for parCmds if they exist
-                case (s, true) => as.parCmds.forall(cmdsPrecond(s, _)._2)
-                case _         => false
-            })
-        }
-
-        /** The size of parallel commands is determined by the number of parallel threads
-          * [[threadCount]] and the limit of all possible state combinations [[maxParComb]].
-          *
-          *  This is a conservative overestimate of the actual state space, used to limit commands
-          *  generation.
-          *
-          * The Key Insight
-          *
-          * When you have n threads running in parallel, and you're tracking their
-          * relative execution order, here's what happens:
-          *
-          * Thread 1 (i=1)
-          *
-          *   - It's the first thread, so there's only 1 way it can be ordered (it's
-          *     alone)
-          *   - Across m rounds: 1 × 1 × ... × 1 = 1^m = 1 possibility
-          *
-          * Thread 2 (i=2)
-          *
-          *   - Thread 2 can be either:
-          *     - Before thread 1, or
-          *     - After thread 1
-          *   - That's 2 positions for thread 2
-          *   - In each of m rounds, thread 2 can be in either position
-          *   - Total: 2 × 2 × ... × 2 = 2^m possibilities
-          *
-          * Thread 3 (i=3)
-          *
-          *   - Thread 3 can be:
-          *     - Position 1: Before both thread 1 and thread 2
-          *     - Position 2: Between thread 1 and thread 2
-          *     - Position 3: After both thread 1 and thread 2
-          *   - That's 3 positions for thread 3
-          *   - In each of m rounds, thread 3 independently chooses one of these 3
-          *     positions
-          *   - Total: 3 × 3 × ... × 3 = 3^m possibilities
-          *
-          * Thread i (general case)
-          *
-          *   - When thread i joins, there are already (i-1) threads
-          *   - Thread i can be inserted in i different positions:
-          *     - Before all existing threads
-          *     - Between any two existing threads (i-2 positions)
-          *     - After all existing threads
-          *     - Total: 1 + (i-2) + 1 = i positions
-          *   - Across m rounds, thread i makes this choice m times
-          *   - Total: i^m possibilities
-          *
-          * Each thread's choices are independent of other threads' choices (in
-          * terms of counting possibilities). So we use the multiplication principle:
-          *
-          * Total combinations =
-          *             (choices for thread 1) × (choices for thread 2) × ...
-          *               × (choices for thread n)
-          *     = 1^m × 2^m × 3^m × ... × n^m
-          *     = ∏(i=1 to n) i^m
-          *     = (n!)^m
-          *
-          * Concrete Example: n=3, m=2
-          *
-          * Let's verify with 3 threads, 2 rounds:
-          *
-          * Round 1 choices:
-          *   - Thread 1: 1 position
-          *   - Thread 2: 2 positions (before/after thread 1)
-          *   - Thread 3: 3 positions (before all, between 1&2, after all)
-          *
-          * Round 2 choices:
-          *   - Same: 1 × 2 × 3 possibilities
-          *
-          * Total across both rounds:
-          * (1 × 2 × 3) × (1 × 2 × 3) = 6 × 6 = 36
-          *
-          * {{{
-          *       m=1    m=2      m=3        m=4           m=5
-          *  n=1    1      1        1          1             1
-          *  n=2    2      4        8         16            32
-          *  n=3    6     36      216       1296          7776
-          *  n=4   24    576    13824     331776       7962624
-          *  n=5  120  14400  1728000  207360000   24883200000
-          * }}}
-          */
-        val parSz = {
-
-            /** The upper bound on the number of distinct state combinations that can arise from
-              * [[n]] threads each executing [[m]] parallel commands. It's used to prevent
-              * generating too many test cases by limiting parSz (parallel size) based on
-              * maxParComb.
-              *
-              * @param n
-              * @param m
-              * @return
-              */
-            def seqs(n: Long, m: Long): Long =
-                if n == 1 then 1 else math.round(math.pow(n.toDouble, m.toDouble)) * seqs(n - 1, m)
-
-            if threadCount < 2 then 0
-            else {
-                var parSz = 1
-                while seqs(threadCount.toLong, parSz.toLong) < maxParComb do parSz += 1
-                parSz
-            }
-        }
-
         val g = for {
             s0 <- genInitialState
             (s1, seqCmds) <- sized(sizedCmds(s0))
-            // TODO: remove
-            parCmds <-
-                if parSz <= 0
-                then const(Nil)
-                else listOfN(threadCount, sizedCmds(s1)(parSz).map(_._2))
-        } yield Actions(s0, seqCmds, parCmds)
+        } yield Actions(s0, seqCmds)
 
-        g.suchThat(actionsPrecond)
+        g.suchThat(precondition)
     }
 
     // ===================================
@@ -499,8 +385,8 @@ trait ModelBasedSuite {
 
     private def runActions(ioSut: IO[Sut], as: Actions): Prop = {
 
-        val maxLength = as.parCmds.map(_.length).foldLeft(as.seqCmds.length)(_.max(_))
-        val (_sut, p, s, lastCmd) = runSeqCmds(ioSut, as.initialState, as.seqCmds)
+        val maxLength = as.commands.length
+        val (_sut, p, s, lastCmd) = runCommands(ioSut, as.initialState, as.commands)
 
         p.flatMap { r =>
             if r.failure then
@@ -508,16 +394,11 @@ trait ModelBasedSuite {
                   "Property is falsified (see the labels down below). Additional information: \n" +
                       s"Initial state:\n  ${as.initialState}\n" +
                       s"Last state:\n  ${s}\n" +
-                      s"Sequential Commands:\n${prettyCmdsRes(as.seqCmds, maxLength)}\n" +
+                      s"Sequential Commands:\n${prettyCmdsRes(as.commands, maxLength)}\n" +
                       s"Last executed command: $lastCmd"
                 )
             Prop(_ => r)
-        } :| "Property failed, see the log for details"
-    }
-
-    /** Short-circuit property AND operator. (Should maybe be in Prop module) */
-    private def propAnd(p1: => Prop, p2: => Prop) = p1.flatMap { r =>
-        if r.success then Prop.secure(p2) else Prop(_ => r)
+        } :| "Property failed, see the log above for details"
     }
 
     private def prettyCmdsRes(rs: List[AnyCommand[State, Sut]], maxLength: Int) = {
@@ -530,20 +411,25 @@ trait ModelBasedSuite {
         else cs.mkString("\n")
     }
 
-    // TODO: Added the last succeeded command (last `Int`) - do we need it though? It doesn't work properly now.
-    private def runSeqCmds(
+    /** @param ioSut
+      * @param s0
+      * @param cs
+      * @return
+      *   sut, property, final state, last executed command number
+      */
+    private def runCommands(
         ioSut: IO[Sut],
         s0: State,
         cs: Commands
     ): (Sut, Prop, State, Int) = {
-        if useTestControl then runSeqCmdsWithTestControl(ioSut, s0, cs)
-        else runSeqCmdsPlain(ioSut, s0, cs)
+        if useTestControl then runCommandsWithTestControl(ioSut, s0, cs)
+        else runCommandsPlain(ioSut, s0, cs)
     }
 
     /** Plain execution without [[TestControl]]. Command delays are real [[IO.sleep]]s. Used for
       * backends like Yaci where wall-clock time must elapse.
       */
-    private def runSeqCmdsPlain(
+    private def runCommandsPlain(
         ioSut: IO[Sut],
         s0: State,
         cs: Commands
@@ -551,15 +437,19 @@ trait ModelBasedSuite {
         val io = for {
             initial <- ioSut.map(sut => (sut, Prop.proved, s0, 0))
             result <- cs.foldLeft(IO.pure(initial)) { case (acc, c) =>
-                acc >>= { case (sut, p, s, lastCmd) =>
-                    IO.sleep(c.delay) >> c.runPC(sut).map { pred =>
-                        (sut, propAnd(p, pred(s)), c.advanceState(s), lastCmd + 1)
-                    }
+                acc.flatMap { case (sut, p, s, lastCmd) =>
+                    // Short-circuit: if the property has already failed, skip remaining commands
+                    val currentResult = p.apply(Gen.Parameters.default)
+                    if currentResult.failure then IO.pure((sut, p, s, lastCmd))
+                    else
+                        IO.sleep(c.delay) >> c.runPC(sut).map { pred =>
+                            (sut, p && pred(s), c.advanceState(s), lastCmd + 1)
+                        }
                 }
             }
             (sut, prop, s, lastCmd) = result
             shutdownProp <- shutdownSut(s, sut)
-        } yield (sut, propAnd(prop, shutdownProp), s, lastCmd)
+        } yield (sut, prop && shutdownProp, s, lastCmd)
 
         io.unsafeRunSync()
     }
@@ -579,7 +469,7 @@ trait ModelBasedSuite {
       * [[pendingDelay]] and blocking on the gate again. The outer ticks until it sees that signal,
       * runs postCondition, and releases the gate for the next command.
       */
-    private def runSeqCmdsWithTestControl(
+    private def runCommandsWithTestControl(
         ioSut: IO[Sut],
         s0: State,
         cs: Commands
@@ -593,12 +483,6 @@ trait ModelBasedSuite {
         // The outer sets this to true to release the inner after advancing time.
         val gate = new AtomicReference[Boolean](false)
 
-        // How long to let actors settle (process pending messages) before each delay
-        // advance. The inner sleeps for this duration first; the outer ticks through it
-        // (giving actors their ping cycles), then reads the declared delay and advances
-        // only the remainder (delay - settling). Total virtual time per command = delay.
-        val settling = 1.seconds
-
         // The inner program: newSut, then for each command:
         //   1. sleep(settling) — keeps inner busy while outer ticks actors
         //   2. signal delay — outer reads and advances (delay - settling)
@@ -608,21 +492,25 @@ trait ModelBasedSuite {
         val innerIO: IO[(Sut, Prop, State, Int)] = for {
             initial <- ioSut.map(sut => (sut, Prop.proved, s0, 0))
             result <- cs.foldLeft(IO.pure(initial)) { case (acc, c) =>
-                acc >>= { case (sut, p, s, lastCmd) =>
-                    // If the command declares a delay large enough, sleep first so the
-                    // outer can tick actors during the settling window.
-                    (if c.delay >= settling then IO.sleep(settling) else IO.unit) >>
-                        IO(pendingDelay.set(Some(c.delay))) >>
-                        IO.cede.whileM_(IO(!gate.get)) >>
-                        IO(gate.set(false)) >>
-                        c.runPC(sut).map { pred =>
-                            (sut, propAnd(p, pred(s)), c.advanceState(s), lastCmd + 1)
-                        }
+                acc.flatMap { case (sut, p, s, lastCmd) =>
+                    // Short-circuit: if the property has already failed, skip remaining commands
+                    val currentResult = p.apply(Gen.Parameters.default)
+                    if currentResult.failure then IO.pure((sut, p, s, lastCmd))
+                    else
+                        for {
+                            // Sleep for the settling window so the outer can tick actors
+                            // and let pending messages propagate before the command runs.
+                            _ <- IO.sleep(settling)
+                            _ <- IO(pendingDelay.set(Some(c.delay)))
+                            _ <- IO.cede.whileM_(IO(!gate.get))
+                            _ <- IO(gate.set(false))
+                            pred <- c.runPC(sut)
+                        } yield (sut, p && pred(s), c.advanceState(s), lastCmd + 1)
                 }
             }
             (sut, prop, s, lastCmd) = result
             shutdownProp <- shutdownSut(s, sut)
-        } yield (sut, propAnd(prop, shutdownProp), s, lastCmd)
+        } yield (sut, prop && shutdownProp, s, lastCmd)
 
         // Outer driver: start the inner on the TestControl runtime, then drive it command by
         // command. Between commands, we advance the virtual clock by the declared delay.
@@ -635,9 +523,11 @@ trait ModelBasedSuite {
         // tickOne runs on the outer (real) runtime and synchronously executes one step of the
         // inner runtime. advance also runs on the outer runtime and moves the inner clock.
         val outerIO: IO[(Sut, Prop, State, Int)] = for {
+            // 1. Start the inner on the mocked runtime. It's paused — nothing runs yet.
             tc <- TestControl.execute(innerIO)
             totalAdvanced <- IO(new java.util.concurrent.atomic.AtomicLong(0L))
 
+            // 2. Pump until the first signal.
             // Tick the inner until it posts the first delay request (i.e. newSut has completed
             // and the first command's gate spin has started), or until the program finishes
             // (possible when cs is empty: newSut → shutdownSut with no commands in between).
@@ -649,30 +539,38 @@ trait ModelBasedSuite {
               }
             )
 
+            // 3. Guard: if the inner already finished (empty command list), skip the loop.
             // Drive each command: read delay → advance → release gate → tick until next signal.
             // If the program already finished (e.g. cs was empty), skip the command loop.
             _ <- tc.results.flatMap {
-                case Some(_) => IO.unit
-                case None =>
+                case Some(_) => IO.unit //   empty command list, done
+                case None    =>
+                    // 4. Otherwise, run per-command iteration.
+                    // Note _c is unused — the outer doesn't need the command object.
+                    // It just needs to iterate the right number of times.
                     cs.foldLeft(IO.unit) { (acc, _c) =>
                         acc >> tc.results.flatMap {
                             case Some(_) => IO.unit // already finished, skip remaining
                             case None =>
                                 for {
+                                    // 5. Read the delay the inner posted and clear it atomically
                                     delay <- IO(pendingDelay.getAndSet(None).get)
                                     _ <- IO(totalAdvanced.addAndGet(delay.toNanos): Unit)
-                                    // The inner already slept for `settling` before signalling
-                                    // this delay (when delay >= settling), so only advance the
-                                    // remainder. For small delays the inner skipped the sleep,
-                                    // so advance the full amount.
+
+                                    // 6. The inner already slept for `settling` before
+                                    // signalling. Advance the remainder so total virtual
+                                    // time equals max(delay, settling). When delay < settling
+                                    // the settling sleep already covered it; no further
+                                    // advance is needed.
                                     _ <- {
-                                        val remaining =
-                                            if delay >= settling then delay - settling else delay
+                                        val remaining = delay - settling
                                         if remaining > Duration.Zero then tc.advance(remaining)
                                         else IO.unit
                                     }
-                                    // Release the inner to execute the command.
+                                    // 7. Release the inner to execute the command.
                                     _ <- IO(gate.set(true))
+
+                                    // 8. Pump until the next signal.
                                     // Tick until either:
                                     //   - the inner posts the next delay (next command's gate spin), or
                                     //   - the inner program finishes (results become available).
@@ -687,8 +585,9 @@ trait ModelBasedSuite {
                         }
                     }
             }
-            // If results aren't available yet (shouldn't happen, but be safe), drain remaining.
+            // 9. If results aren't available yet (shouldn't happen, but be safe), drain remaining.
             _ <- tickUntil(tc, tc.results.map(_.isDefined))
+            // 10. Extract the result
             result <- tc.results
             _ <- IO {
                 val nanos = totalAdvanced.get
@@ -722,8 +621,9 @@ trait ModelBasedSuite {
                 tc.tickOne.flatMap {
                     case true  => tickUntil(tc, done)
                     case false =>
-                        // No immediately eligible fibers. Advance to the next scheduled task
+                        // Here is no immediately eligible fibers. Advance to the next scheduled task
                         // (e.g. a ping or a sleep) so we don't spin forever.
+                        // NB: nextInterval: how long until the nearest sleeper wakes up?
                         tc.nextInterval.flatMap { next =>
                             if next > Duration.Zero then tc.advance(next) >> tickUntil(tc, done)
                             else

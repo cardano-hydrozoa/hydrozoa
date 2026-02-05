@@ -62,5 +62,7 @@ implicit object CompleteBlockCommandProp
         result: BlockBrief
     ): Prop =
         (expectedResult == result) :|
-            s"block briefs should be identical: \n\texpected: $expectedResult\n\tgot: $result"
+            "block briefs should be identical: " +
+            s"\n\texpected: $expectedResult" +
+            s"\n\tgot: $result"
 }
