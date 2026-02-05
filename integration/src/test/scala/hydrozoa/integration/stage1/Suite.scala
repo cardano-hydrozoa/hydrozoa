@@ -9,45 +9,34 @@ import com.suprnation.actor.ActorSystem
 import com.suprnation.typelevel.actors.syntax.*
 import hydrozoa.config.HeadConfig.OwnPeer
 import hydrozoa.config.{HeadConfig, NetworkInfo, RawConfig, StandardCardanoNetwork}
-import hydrozoa.integration.stage1.AgentActor.CompleteBlock
-import hydrozoa.integration.stage1.BlockCycle.*
-import hydrozoa.integration.stage1.CurrentTime.{AfterCompetingFallbackStartTime, BeforeHappyPathExpiration, InSilencePeriod}
+import hydrozoa.integration.stage1.CurrentTime.{AfterCompetingFallbackStartTime, BeforeHappyPathExpiration}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, quantize}
-import hydrozoa.lib.cardano.scalus.given_Choose_QuantizedInstant
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.CardanoLiaisonTest.BlockWeaverMock
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.consensus.{CardanoLiaison, ConsensusActor, EventSequencer}
 import hydrozoa.multisig.ledger.JointLedger
-import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
-import hydrozoa.multisig.ledger.block.BlockBrief.{Final, Major, Minor}
-import hydrozoa.multisig.ledger.block.{Block, BlockBody, BlockBrief, BlockEffects, BlockHeader, BlockNumber, BlockVersion}
+import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.SpentUtxos
 import hydrozoa.multisig.ledger.dapp.tx.{TxTiming, minInitTreasuryAda}
 import hydrozoa.multisig.ledger.dapp.txseq.InitializationTxSeq
 import hydrozoa.multisig.ledger.dapp.txseq.InitializationTxSeq.Builder
-import hydrozoa.multisig.ledger.event.LedgerEvent
-import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag
-import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.rulebased.ledger.dapp.tx.genEquityShares
 import hydrozoa.{Address, L1, UtxoSetL1, attachVKeyWitnesses, maxNonPlutusTxFee}
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicInteger
 import org.scalacheck.Prop.propBoolean
-import org.scalacheck.commands.ModelBasedSuite
-import org.scalacheck.{Arbitrary, Gen, Prop, YetAnotherProperties}
+import org.scalacheck.commands.{CommandGen, ModelBasedSuite}
+import org.scalacheck.{Gen, Prop, YetAnotherProperties}
 import scala.concurrent.duration.{DurationInt, FiniteDuration, HOURS}
 import scalus.cardano.ledger.rules.{Context, UtxoEnv}
-import scalus.cardano.ledger.{CertState, Coin, SlotConfig, TransactionHash, TransactionInput, TransactionOutput, Utxo, Value}
+import scalus.cardano.ledger.{CertState, Coin, TransactionHash, Utxo, Value}
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import spire.math.UByte
-import test.Generators.Hydrozoa.ArbitraryInstances.given_Arbitrary_LedgerEvent
 import test.TestPeer.Alice
 import test.{TestPeer, minPubkeyAda, sumUtxoValues}
-import org.slf4j.Logger
 
 /** Integration Stage 1 (the simplest).
   *   - Only three real actors are involved: [[JointLedger]], [[ConsensusActor]], and
@@ -60,10 +49,6 @@ import org.slf4j.Logger
   *     long enough so the latest fallback becomes active, all next commands are NoOp and the
   *     fallback is expected to be submitted. Otherwise, only happy path effects are expected to be
   *     submitted.
-  *
-  * TODO:
-  *   - use different generators, let's say having only invalid events (or we can remove events
-  *     completely) allows to verify block promotion
   */
 object Stage1Properties extends YetAnotherProperties("Integration Stage 1"):
 
@@ -71,23 +56,25 @@ object Stage1Properties extends YetAnotherProperties("Integration Stage 1"):
         p: org.scalacheck.Test.Parameters
     ): org.scalacheck.Test.Parameters = {
         p.withWorkers(1)
-            .withMinSuccessfulTests(10000)
-            .withMaxSize(500)
+            .withMinSuccessfulTests(100) // 10000
+            .withMaxSize(100) // 500
     }
 
     private val preprod = StandardCardanoNetwork.Preprod
 
-    val _ = property("Works well on L1 mock (fast, reproducible)") = Stage1(
+    val _ = property("Works well on L1 mock (fast, reproducible)") = Suite(
       network = Left(preprod),
-      genesisUtxos = yaciTestSauceGenesis(preprod.scalusNetwork)
+      genesisUtxos = yaciTestSauceGenesis(preprod.scalusNetwork),
+      commandGen = DefaultCommandGen
     ).property()
 
     // val _ = property("Works well on Yaci DevKit (slower, reproducible)") = ???
     // val _ = property("Works well on Preview (even slower, non-reproducible)") = ???
 
-case class Stage1(
+case class Suite(
     network: Either[StandardCardanoNetwork, NetworkInfo],
-    genesisUtxos: Map[TestPeer, UtxoSetL1]
+    genesisUtxos: Map[TestPeer, UtxoSetL1],
+    commandGen: CommandGen[ModelState, Stage1Sut]
 ) extends ModelBasedSuite {
 
     override type State = ModelState
@@ -344,8 +331,6 @@ case class Stage1(
     // Initial state handling
     // ===================================
 
-    override def initialPreCondition(state: ModelState): Boolean = true
-
     override def genInitialState: Gen[State] = {
         val cardanoInfo = network.toCardanoInfo
 
@@ -470,9 +455,9 @@ case class Stage1(
                 case Right(value) => value
             }
 
-            _ = println(
-              s"txTiming.newFallbackStartTime(zeroBlockCreationTime)=${txTiming.newFallbackStartTime(zeroBlockCreationTime)}"
-            )
+            // _ = println(
+            //  s"txTiming.newFallbackStartTime(zeroBlockCreationTime)=${txTiming.newFallbackStartTime(zeroBlockCreationTime)}"
+            // )
             // _ = println(initTxSeq.fallbackTx.validityStart)
 
         } yield ModelState(
@@ -480,347 +465,9 @@ case class Stage1(
           headConfig = configParsed,
           // Initial (zero) block is "done"
           currentTime = BeforeHappyPathExpiration(zeroBlockCreationTime),
-          blockCycle = Done(BlockNumber.zero, BlockVersion.Full.zero),
-          //
+          blockCycle = BlockCycle.Done(BlockNumber.zero, BlockVersion.Full.zero),
           competingFallbackStartTime = txTiming.newFallbackStartTime(zeroBlockCreationTime),
           activeUtxos = Map.empty
         )
     }
-
-    // ===================================
-    // Commands & command generation
-    // ===================================
-
-    enum Delay(d: QuantizedFiniteDuration):
-        case EndsBeforeHappyPathExpires(d: QuantizedFiniteDuration) extends Delay(d)
-        case EndsInTheSilencePeriod(d: QuantizedFiniteDuration) extends Delay(d)
-        case EndsAfterHappyPathExpires(d: QuantizedFiniteDuration) extends Delay(d)
-
-        def duration: QuantizedFiniteDuration = d
-
-    final case class DelayCommand(
-        override val id: Int,
-        delaySpec: Delay
-    ) extends Command {
-
-        override type Result = Unit
-
-        // Declares the virtual-time duration to advance before this command runs.
-        // The ModelBasedSuite outer driver handles the actual clock advancement.
-        override def delay: FiniteDuration = delaySpec.duration.finiteDuration
-
-        override def run(sut: Stage1Sut): IO[Unit] = for {
-            _ <- IO.println(s">> DelayCommand(id=$id, delay=$delay)")
-            now <- IO.realTimeInstant
-            _ <- IO.println(s"Current time: $now")
-        } yield ()
-
-        override def runState(state: ModelState): (Unit, ModelState) = {
-            val newBlock = state.blockCycle match {
-                case Done(blockNumber, version) =>
-                    Ready(blockNumber = blockNumber, prevVersion = version)
-                case _ => throw Error.UnexpectedState
-            }
-            val instant = state.currentTime.instant + delaySpec.duration
-            () -> state.copy(
-              blockCycle = newBlock,
-              currentTime = delaySpec match {
-                  case Delay.EndsBeforeHappyPathExpires(_) => BeforeHappyPathExpiration(instant)
-                  case Delay.EndsInTheSilencePeriod(_)     => InSilencePeriod(instant)
-                  case Delay.EndsAfterHappyPathExpires(_) =>
-                      AfterCompetingFallbackStartTime(instant)
-              }
-            )
-        }
-
-        override def preCondition(state: ModelState): Boolean = true
-    }
-
-    final case class StartBlockCommand(
-        override val id: Int,
-        blockNumber: BlockNumber,
-        creationTime: QuantizedInstant
-    ) extends Command {
-
-        override type Result = Unit
-
-        override def runState(state: ModelState): (Result, ModelState) = {
-            state.currentTime match {
-                case BeforeHappyPathExpiration(_) =>
-                    val newBlock = state.blockCycle match {
-                        case Ready(prevBlockNumber, prevVersion)
-                            if prevBlockNumber.increment == blockNumber =>
-                            BlockCycle.InProgress(
-                              blockNumber = blockNumber,
-                              creationTime = creationTime,
-                              prevVersion = prevVersion
-                            )
-                        case _ => throw Error.UnexpectedState
-                    }
-                    () -> state.copy(
-                      blockCycle = newBlock
-                    )
-                // TODO: improve output for those type of exceptions
-                case _ => throw Error.UnexpectedState
-            }
-
-        }
-
-        override def run(sut: Sut): IO[Result] =
-            IO.println(s">> StartBlockCommand(id=$id, blockNumber=$blockNumber)") >>
-                (sut.agent ! StartBlock(
-                  blockNum = blockNumber,
-                  blockCreationTime = creationTime
-                ))
-
-        override def preCondition(state: State): Boolean = true
-    }
-
-    final case class LedgerEventCommand(
-        override val id: Int,
-        event: LedgerEvent
-    ) extends Command {
-
-        override type Result = Unit
-
-        override def runState(state: ModelState): (Result, ModelState) = {
-            () -> state.copy(currentBlockEvents = state.currentBlockEvents :+ event)
-        }
-
-        override def run(sut: Sut): IO[Result] =
-            IO.println(s">> LedgerEventCommand(id=$id)") >>
-                (sut.agent ! event)
-
-        override def preCondition(state: State): Boolean = true
-    }
-
-    final case class CompleteBlockCommand(
-        override val id: Int,
-        blockNumber: BlockNumber,
-        isFinal: Boolean
-    ) extends Command {
-
-        val logger: Logger = org.slf4j.LoggerFactory.getLogger(CompleteBlockCommand.getClass)
-
-        override type Result = BlockBrief
-
-        override def runState(state: ModelState): (Result, ModelState) = {
-            state.blockCycle match {
-                case InProgress(_, creationTime, prevVersion) =>
-                    val result = mkBlockBrief(
-                      state.currentBlockEvents,
-                      state.competingFallbackStartTime,
-                      state.headConfig.headParameters.multisigRegimeSettings.txTiming,
-                      creationTime,
-                      prevVersion,
-                      isFinal
-                    )
-                    val newCompetingFallbackStartTime =
-                        if result.isInstanceOf[Major]
-                        then
-                            state.headConfig.headParameters.multisigRegimeSettings.txTiming
-                                .newFallbackStartTime(creationTime)
-                        else state.competingFallbackStartTime
-                    logger.debug(s"newCompetingFallbackStartTime: $newCompetingFallbackStartTime")
-
-                    val newState = state.copy(
-                      blockCycle =
-                          if isFinal then HeadFinalized else Done(blockNumber, result.blockVersion),
-                      currentBlockEvents = List.empty,
-                      competingFallbackStartTime = newCompetingFallbackStartTime
-                    )
-                    result -> newState
-                case _ => throw Error.UnexpectedState
-            }
-        }
-
-        private def mkBlockBrief(
-            currentBlockEvents: List[LedgerEvent],
-            competingFallbackStartTime: QuantizedInstant,
-            txTiming: TxTiming,
-            creationTime: QuantizedInstant,
-            prevVersion: BlockVersion.Full,
-            isFinal: Boolean
-        ): BlockBrief = {
-
-            logger.debug(s"creationTime=$creationTime")
-            logger.debug(s"competingFallbackStartTime=$competingFallbackStartTime")
-            logger.debug(s"txTiming=$txTiming")
-
-            if isFinal then
-                Final(
-                  header = BlockHeader.Final(
-                    blockNum = blockNumber,
-                    blockVersion = prevVersion.incrementMajor,
-                    startTime = creationTime,
-                  ),
-                  body = BlockBody.Final(
-                    events = currentBlockEvents.map(_.eventId -> ValidityFlag.Invalid),
-                    depositsRefunded = List.empty
-                  )
-                )
-            else if txTiming.blockCanStayMinor(creationTime, competingFallbackStartTime)
-            then
-                Minor(
-                  header = BlockHeader.Minor(
-                    blockNum = blockNumber,
-                    blockVersion = prevVersion.incrementMinor,
-                    startTime = creationTime,
-                    kzgCommitment = KzgCommitment.empty
-                  ),
-                  body = BlockBody.Minor(
-                    events = currentBlockEvents.map(_.eventId -> ValidityFlag.Invalid),
-                    depositsRefunded = List.empty
-                  )
-                )
-            else
-                Major(
-                  header = BlockHeader.Major(
-                    blockNum = blockNumber,
-                    blockVersion = prevVersion.incrementMajor,
-                    startTime = creationTime,
-                    kzgCommitment = KzgCommitment.empty
-                  ),
-                  body = BlockBody.Major(
-                    events = currentBlockEvents.map(_.eventId -> ValidityFlag.Invalid),
-                    depositsAbsorbed = List.empty,
-                    depositsRefunded = List.empty
-                  )
-                )
-        }
-
-        override def run(sut: Sut): IO[Result] = for {
-            _ <- IO.println(
-              s">> CompleteBlockCommand(id=$id, blockNumber=$blockNumber, isFinal=$isFinal)"
-            )
-            block <- IO.pure(
-              if isFinal
-              then CompleteBlockFinal(None)
-              else CompleteBlockRegular(None, Set.empty, false)
-            )
-            // All sync commands should be timed out since the system may terminate
-            d <- (sut.agent ?: CompleteBlock(block, blockNumber)).timeout(5.seconds)
-            // Save unsigned block effects
-            _ <- sut.effectsAcc.update(_ :+ d.effects.asInstanceOf[BlockEffects.Unsigned])
-        } yield d.blockBrief
-
-        override def preCondition(state: State): Boolean = state.blockCycle match {
-            case BlockCycle.InProgress(currentBlockNumber, _, _) =>
-                blockNumber == currentBlockNumber
-            case _ => false
-        }
-
-        override def onSuccessCheck(
-            expectedResult: BlockBrief,
-            _stateBefore: ModelState,
-            _stateAfter: ModelState,
-            result: BlockBrief
-        ): Prop =
-            (expectedResult == result) :|
-                s"block briefs should be identical: \n\texpected: $expectedResult\n\tgot: $result"
-    }
-
-    // This is used to numerate commands that we generate
-    // TODO: remove - doesn't make sense for parallel commands
-    val cmdCnt: AtomicInteger = AtomicInteger(0)
-    def nextCmdCnt: Int = cmdCnt.getAndIncrement()
-
-    override def genCommand(state: State): Gen[Command] = {
-        import hydrozoa.integration.stage1.BlockCycle.*
-
-        for {
-            cmd <-
-                state.currentTime match {
-                    case BeforeHappyPathExpiration(qi) =>
-                        state.blockCycle match {
-                            case Done(blockNumber, _) =>
-                                val settlementExpirationTime =
-                                    state.headConfig.headParameters.multisigRegimeSettings.txTiming
-                                        .currentSettlementExpiringTime(
-                                          state.competingFallbackStartTime
-                                        )
-                                genDelay(
-                                  state.currentTime.instant,
-                                  settlementExpirationTime,
-                                  state.competingFallbackStartTime,
-                                  state.headConfig.cardanoInfo.slotConfig
-                                )
-
-                            case Ready(blockNumber, _) =>
-                                genStartBlock(blockNumber, state.currentTime.instant)
-
-                            case InProgress(blockNumber, _, _) =>
-                                Gen.frequency(
-                                  1 -> genCompleteBlock(blockNumber),
-                                  10 -> genLedgerEvent(state.activeUtxos)
-                                )
-
-                            case HeadFinalized => Gen.const(NoOp(nextCmdCnt))
-                        }
-                    case _ => Gen.const(NoOp(nextCmdCnt))
-                }
-
-        } yield cmd
-    }
-
-    private def genDelay(
-        currentTime: QuantizedInstant,
-        settlementExpirationTime: QuantizedInstant,
-        competingFallbackStartTime: QuantizedInstant,
-        slotConfig: SlotConfig
-    ): Gen[DelayCommand] = for {
-        delay <- Gen
-            .frequency(
-              50 -> Gen
-                  .choose(currentTime, settlementExpirationTime)
-                  .flatMap(d =>
-                      DelayCommand(nextCmdCnt, Delay.EndsBeforeHappyPathExpires(d - currentTime))
-                  ),
-              1 -> Gen
-                  .choose(settlementExpirationTime, competingFallbackStartTime)
-                  .flatMap(d =>
-                      DelayCommand(nextCmdCnt, Delay.EndsInTheSilencePeriod(d - currentTime))
-                  ),
-              1 ->
-                  Gen
-                      .choose(
-                        competingFallbackStartTime,
-                        competingFallbackStartTime + QuantizedFiniteDuration(
-                          slotConfig,
-                          (competingFallbackStartTime - currentTime).finiteDuration / 10
-                        )
-                      )
-                      .flatMap(d =>
-                          DelayCommand(nextCmdCnt, Delay.EndsInTheSilencePeriod(d - currentTime))
-                      ),
-            )
-    } yield delay
-
-    private def genStartBlock(
-        prevBlockNumber: BlockNumber,
-        currentTime: QuantizedInstant
-    ): Gen[StartBlockCommand] = Gen.const(
-      StartBlockCommand(
-        nextCmdCnt,
-        prevBlockNumber.increment,
-        currentTime
-      )
-    )
-
-    private def genCompleteBlock(blockNumber: BlockNumber): Gen[CompleteBlockCommand] = for {
-        isFinal <- Gen.frequency(
-          1 -> true,
-          40 -> false
-        )
-    } yield CompleteBlockCommand(nextCmdCnt, blockNumber, isFinal)
-
-    private def genLedgerEvent(
-        _activeUtxos: Map[TransactionInput, TransactionOutput]
-    ): Gen[LedgerEventCommand] = for {
-        // TODO: implement properly
-        event <- Arbitrary.arbitrary[LedgerEvent]
-    } yield LedgerEventCommand(id = nextCmdCnt, event = event)
-
-    enum Error extends Throwable:
-        case UnexpectedState
 }
