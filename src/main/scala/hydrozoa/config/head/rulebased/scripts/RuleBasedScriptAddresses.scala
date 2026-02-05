@@ -2,7 +2,7 @@ package hydrozoa.config.head.rulebased.scripts
 
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
-import scalus.cardano.address.ShelleyAddress
+import scalus.cardano.address.{Network, ShelleyAddress}
 
 final case class RuleBasedScriptAddresses private (
     override val ruleBasedTreasuryAddress: ShelleyAddress,
@@ -12,11 +12,13 @@ final case class RuleBasedScriptAddresses private (
 }
 
 object RuleBasedScriptAddresses {
-    def apply(cardanoNetwork: CardanoNetwork): RuleBasedScriptAddresses =
+    def apply(cardanoNetwork: CardanoNetwork.Section): RuleBasedScriptAddresses =
+        RuleBasedScriptAddresses(cardanoNetwork.network)
+
+    def apply(network: Network): RuleBasedScriptAddresses =
         new RuleBasedScriptAddresses(
-          ruleBasedTreasuryAddress = RuleBasedTreasuryScript.address(cardanoNetwork.network),
-          ruleBasedDisputeResolutionAddress =
-              DisputeResolutionScript.address(cardanoNetwork.network)
+          ruleBasedTreasuryAddress = RuleBasedTreasuryScript.address(network),
+          ruleBasedDisputeResolutionAddress = DisputeResolutionScript.address(network)
         )
 
     trait Section {

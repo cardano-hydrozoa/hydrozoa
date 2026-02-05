@@ -15,21 +15,16 @@ final case class HeadPeers private (
 
     override transparent inline def headPeers: HeadPeers = this
 
-    def apply(p: HeadPeerNumber): Option[VerificationKeyBytes] = {
-        Option.when(p < nHeadPeers)(headPeerVKeys.toList(p))
-    }
-
-    def apply(p: HeadPeerId): Option[VerificationKeyBytes] = {
-        Option.when(p.nHeadPeers == nHeadPeers)(headPeerVKeys.toList(p.peerNum))
-    }
-
     override def headPeerIds: NonEmptyList[HeadPeerId] =
         NonEmptyList.fromListUnsafe(
           Range.Exclusive(0, nHeadPeers, 1).map(HeadPeerId(_, nHeadPeers)).toList
         )
 
-    override def headPeerVKey(p: HeadPeerNumber): Option[VerificationKeyBytes] = apply(p)
-    override def headPeerVKey(p: HeadPeerId): Option[VerificationKeyBytes] = apply(p)
+    override def headPeerVKey(p: HeadPeerNumber): Option[VerificationKeyBytes] =
+        Option.when(p < nHeadPeers)(headPeerVKeys.toList(p))
+
+    override def headPeerVKey(p: HeadPeerId): Option[VerificationKeyBytes] =
+        Option.when(p.nHeadPeers == nHeadPeers)(headPeerVKeys.toList(p.peerNum))
 
     override lazy val headMultisigScript: HeadMultisigScript = HeadMultisigScript(this)
 

@@ -5,7 +5,8 @@ import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.dapp.token.CIP67.HeadTokenNames
-import scalus.cardano.ledger.{Coin, Hash32, TransactionOutput, Utxo, Utxos, Value}
+import scalus.builtin.{ByteString, platform}
+import scalus.cardano.ledger.{Blake2b_256, Coin, Hash, Hash32, TransactionOutput, Utxo, Utxos, Value}
 
 export InitializationParameters.isBalancedInitializationFunding
 
@@ -50,16 +51,16 @@ final case class InitializationParameters(
 
     // TODO: We need this hash to put into the initialization tx's metadata,
     //  so that the equity contributions are pinned by something signed by all peers.
-    override lazy val initialEquityContributionsHash: Hash32 =
-        val cbor = ???
-        ???
+    override lazy val initialEquityContributionsHash: Hash32 = Hash[Blake2b_256, Any](
+      platform.blake2b_256(ByteString.unsafeFromArray(???))
+    )
 }
 
 object InitializationParameters {
     trait Section {
-        def headStartTime: QuantizedInstant
-
         def initializationParams: InitializationParameters
+
+        def headStartTime: QuantizedInstant
 
         def initialL2Utxos: Utxos
         def initialEquityContributions: Map[HeadPeerNumber, Coin]
