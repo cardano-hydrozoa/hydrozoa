@@ -98,29 +98,26 @@ object FallbackTx {
           setup = SList.empty
         )
 
-        def mkVoteToken(amount: Long): MultiAsset = MultiAsset(
-          SortedMap(
-            (
-              hns.policyId,
-              SortedMap((config.headTokenNames.voteTokenName, amount))
-            )
-          )
-        )
-
-        def mkVoteUtxo(datum: Data): TransactionOutput = Babbage(
+        def mkVoteUtxo(datum: Data, voteDeposit: Coin): TransactionOutput = Babbage(
           address = config.ruleBasedDisputeResolutionAddress,
-          value = Value(config.individualContingency.tallyTxFee, mkVoteToken(1)),
+          value = Value(
+            voteDeposit,
+            MultiAsset.asset(hns.policyId, config.headTokenNames.voteTokenName, 1L)
+          ),
           datumOption = Some(Inline(datum)),
           scriptRef = None
         ).ensureMinAda(config.cardanoProtocolParams)
 
-        val defaultVoteUtxo = mkVoteUtxo(VD.default(treasuryUtxoSpent.datum.commit).toData)
+        val defaultVoteUtxo = mkVoteUtxo(
+          VD.default(treasuryUtxoSpent.datum.commit).toData,
+          config.collectiveContingency.defaultVoteDeposit
+        )
 
         val peerVoteUtxos: NonEmptyList[TransactionOutput] = {
             val datums = VD(
               NonEmptyList.fromListUnsafe(hns.requiredSigners.map(x => PubKeyHash(x.hash)).toList)
             )
-            datums.map(datum => mkVoteUtxo(datum.toData))
+            datums.map(datum => mkVoteUtxo(datum.toData, config.individualContingency.voteDeposit))
         }
 
         def collateralUtxos: NonEmptyList[TransactionOutput] = {
@@ -133,7 +130,7 @@ object FallbackTx {
                           payment = ShelleyPaymentPart.Key(es.hash),
                           delegation = Null
                         ),
-                        value = Value(config.individualContingency.tallyTxFee),
+                        value = Value(config.individualContingency.collateralDeposit),
                         datumOption = None,
                         scriptRef = None
                       ).ensureMinAda(config.cardanoProtocolParams)
