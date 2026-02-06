@@ -53,7 +53,9 @@ enum TestPeer derives CanEqual:
 
     def peerNum: PeerNumber = TestPeer.peerNum(this)
 
-    def address(network: Network = testNetwork): ShelleyAddress = TestPeer.address(this, network)
+    def address(network: Network): ShelleyAddress = TestPeer.address(this, network)
+
+    def name: String = toString
 
 object TestPeer:
     val nNamedPeers: Int = TestPeer.values.length

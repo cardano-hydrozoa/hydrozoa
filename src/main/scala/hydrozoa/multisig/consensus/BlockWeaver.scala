@@ -73,6 +73,10 @@ object BlockWeaver:
 
     final case class Leader(
         blockNumber: BlockNumber
+        // TODO
+        // creationTime: QuantizedInstant
+        // hasAtLeastOneEvent: Boolean
+        // completeBlockCondition: previousBlockConfirmed && (hasAtLeastOneEvent || timeIsUp)
     ) extends State {
         def isFirstBlock: Boolean = blockNumber == BlockNumber.zero.increment
     }

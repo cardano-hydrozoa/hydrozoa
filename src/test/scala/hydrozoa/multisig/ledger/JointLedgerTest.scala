@@ -55,8 +55,8 @@ import test.TestM.*
   *
   *   - A [[JLTest]] type alias over [[TestM]], to cut down on type signature noise
   *   - A [[TestR]] environment, specific to the joint ledger tests
-  *   - A [[defaultInitializer]] that initializers the TestR environment under which the joint leder
-  *     tests run
+  *   - A [[defaultInitializer]] that initializers the TestR environment under which the joint
+  *     ledger tests run
   *   - A [[Requests]] object that "thinly" lifts [[IO]] actor requests into [[JLTest]], which
   *     simplifies writing monadic code. "Thinly" here means that the defined functions don't
   *     _morally_ add additional effects.
@@ -393,7 +393,7 @@ object JointLedgerTestHelpers {
                 depositRefundSeqBuilder = DepositRefundTxSeq.Builder(
                   config = depositRefundSeqConfig,
                   refundInstructions = DepositUtxo.Refund.Instructions(
-                    LedgerToPlutusTranslation.getAddress(peer.address()),
+                    LedgerToPlutusTranslation.getAddress(peer.address(testNetwork)),
                     SOption.None,
                     validityEnd
                         + env.txTiming.depositMaturityDuration
@@ -403,7 +403,7 @@ object JointLedgerTestHelpers {
                   donationToTreasury = Coin.zero,
                   refundValue = virtualOutputsValue,
                   virtualOutputs = virtualOutputs,
-                  changeAddress = peer.address(),
+                  changeAddress = peer.address(testNetwork),
                   utxosFunding = utxosFunding,
                 )
 
@@ -578,21 +578,18 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                     condition = jlState.virtualLedgerState.activeUtxos == expectedUtxos
                   )
 
-                  kzgCommit = IArray
-                      .genericWrapArray(jlState.virtualLedgerState.kzgCommitment)
-                      .toArray
+                  kzgCommit = jlState.virtualLedgerState.kzgCommitment
 
-                  expectedKzg = IArray
-                      .genericWrapArray(
-                        KzgCommitment.calculateCommitment(KzgCommitment.hashToScalar(expectedUtxos))
-                      )
-                      .toArray
+                  expectedKzg = KzgCommitment.calculateCommitment(
+                    KzgCommitment.hashToScalar(expectedUtxos)
+                  )
 
                   _ <- assertWith(
                     msg =
-                        s"KZG Commitment is correct.\n\tObtained: ${kzgCommit.mkString("Array(", ", ", ")")}\n\tExpected: ${expectedKzg.mkString("Array(", ", ", ")")}",
-                    condition = kzgCommit.sameElements(expectedKzg)
+                        s"KZG Commitment is correct.\n\tObtained: ${kzgCommit}\n\tExpected: ${expectedKzg}",
+                    condition = kzgCommit == expectedKzg
                   )
+
               } yield ()
 
               // Step 5: Finalize

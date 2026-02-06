@@ -15,11 +15,12 @@ import supranational.blst.{P1, Scalar}
 object KzgCommitment {
 
     // WARNING: you can't just `==` IArray, because it doesn't compare on the value of the elements.
-    type KzgCommitment = IArray[Byte]
+    // Let's stop using tedious IArray in favor of ByteString
+    type KzgCommitment = ByteString
 
     extension (self: KzgCommitment)
-        def asByteString: ByteString = ByteString.fromArray(IArray.genericWrapArray(self).toArray)
-        def asG1Element: BLS12_381_G1_Element = BLS12_381_G1_Element(self.asByteString)
+        // def asByteString: ByteString = ByteString.fromArray(IArray.genericWrapArray(self).toArray)
+        def asG1Element: BLS12_381_G1_Element = BLS12_381_G1_Element(self)
 
     def empty: KzgCommitment = calculateCommitment(hashToScalar(Map.empty))
 
@@ -76,7 +77,7 @@ object KzgCommitment {
 
         val commitment = evalFinalPoly(srs, finalPoly).compress()
 //        println(s"UTxO set commitment is: ${HexUtil.encodeHexString(commitment)}")
-        IArray.from(commitment)
+        ByteString.fromArray(commitment)
     }
 
     /** Multiply normalized N binomials represented by their only coeeficients to get a final

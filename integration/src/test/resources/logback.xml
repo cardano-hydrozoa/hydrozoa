@@ -1,0 +1,16 @@
+<configuration>
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>{HH:mm:ss} %highlight(%-5level) %cyan(%logger{64}) %n%msg%n
+            </pattern>
+        </encoder>
+    </appender>
+    <root level="error">
+        <appender-ref ref="STDOUT"/>
+    </root>
+    <logger name="org.scalacheck.commands.ModelBasedSuite" level="warn"/>
+    <logger name="Stage1.Commands" level="warn"/>
+    <logger name="Stage1.Suite" level="warn"/>
+    <logger name="CardanoLiaison" level="warn"/>
+    <logger name="scalus" level="warn"/>
+</configuration>

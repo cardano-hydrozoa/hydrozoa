@@ -16,7 +16,7 @@ import hydrozoa.multisig.consensus.BlockWeaver.Request
 import hydrozoa.multisig.consensus.CardanoLiaisonTest.BlockEffectsSignedChain.*
 import hydrozoa.multisig.consensus.CardanoLiaisonTest.Rollback.SettlementTiming
 import hydrozoa.multisig.consensus.CardanoLiaisonTest.Rollback.SettlementTiming.*
-import hydrozoa.multisig.ledger.block.{BlockEffects, BlockNumber}
+import hydrozoa.multisig.ledger.block.{BlockEffects, BlockVersion}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, FinalizationTx, RolloutTx, SettlementTx, Tx, TxTiming, genFinalizationTxSeqBuilder, genNextSettlementTxSeqBuilder}
@@ -680,10 +680,10 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                             blockWeaver <- system.actorOf(new BlockWeaverMock)
 
                             config = CardanoLiaison.Config(
-                              cardanoBackend,
-                              skeleton._1.initializationTx,
-                              skeleton._1.fallbackTx,
-                              100.millis,
+                              cardanoBackend = cardanoBackend,
+                              initializationTx = skeleton._1.initializationTx,
+                              initializationFallbackTx = skeleton._1.fallbackTx,
+                              receiveTimeout = 100.millis,
                               slotConfig = testTxBuilderCardanoInfo.slotConfig
                             )
 
@@ -695,7 +695,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                             _ <- skeleton._2.zipWithIndex.traverse_((s, i) =>
                                 cardanoLiaison.handleMajorBlockL1Effects(
                                   CardanoLiaison.BlockConfirmed.Minimal.Major(
-                                    blockNum = BlockNumber(i + 1),
+                                    blockVersion = BlockVersion.Full(i + 1, 0),
                                     settlementTx = s.settlementTx,
                                     rolloutTxs = s.rolloutTxs,
                                     fallbackTx = s.fallbackTx,
@@ -706,7 +706,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
 
                             _ <- cardanoLiaison.handleFinalBlockL1Effects(
                               CardanoLiaison.BlockConfirmed.Minimal.Final(
-                                blockNum = BlockNumber(skeleton._2.length + 1),
+                                blockVersion = BlockVersion.Full(skeleton._2.length + 1, 0),
                                 finalizationTx = skeleton._3.finalizationTx,
                                 rolloutTxs = skeleton._3.rolloutTxs,
                                 deinitTx = skeleton._3.deinitTx

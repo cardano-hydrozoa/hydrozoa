@@ -358,14 +358,17 @@ final case class JointLedger(
 
             headerIntermediate: BlockHeader.Intermediate =
                 if eligibleForAbsorption.isEmpty && producing.nextBlockData.blockWithdrawnUtxos.isEmpty
-                then
+                then {
+                    // println(s"JL: producing.startTime=${producing.startTime}")
+                    // println(s"JL: producing.competingFallbackValidityStart=${producing.competingFallbackValidityStart}")
+                    // println(s"JL: txTiming=${txTiming}")
                     previousHeader.nextHeaderIntermediate(
                       txTiming,
-                      producing.startTime,
+                      producing.startTime, // TODO: shall we use something like production.completeTime instead?
                       producing.competingFallbackValidityStart,
                       kzgCommitment
                     )
-                else previousHeader.nextHeaderMajor(producing.startTime, kzgCommitment)
+                } else previousHeader.nextHeaderMajor(producing.startTime, kzgCommitment)
 
             block <- headerIntermediate match {
                 case header: BlockHeader.Minor =>
@@ -534,12 +537,15 @@ object JointLedger {
 
     type Handle = ActorRef[IO, Requests.Request]
 
+    // TODO: review
     case class Config(
         initialBlock: Block.MultiSigned.Initial,
         peerId: PeerId,
         wallet: PeerWallet,
+        // TODO: can be obtained from initialBlock?
         initialBlockTime: QuantizedInstant,
         cardanoInfo: CardanoInfo,
+        // TODO: can be obtained from initialBlock?
         initialBlockKzg: KzgCommitment,
         txTiming: TxTiming,
         headMultisigScript: HeadMultisigScript,
@@ -549,6 +555,7 @@ object JointLedger {
         votingDuration: QuantizedFiniteDuration,
         initialTreasury: MultisigTreasuryUtxo,
         tokenNames: TokenNames,
+        // TODO: can be obtained from effects in the initialBlock?
         initialFallbackValidityStart: QuantizedInstant
     )
 
@@ -559,6 +566,7 @@ object JointLedger {
 
     final case class CompleteBlockError() extends Throwable
 
+    // TODO: Can we unify this with other actors?
     object Requests {
         type Request =
             // RegisterDeposit is exactly the DappLedger type, we're simply forwarding it through.

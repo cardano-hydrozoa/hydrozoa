@@ -69,7 +69,7 @@ object EquityShares:
     // ===================================
 
     case class Distribution(
-        payouts: Map[AddressL1, Coin],
+        disbursements: Map[AddressL1, Coin],
         dust: Dust // Round leftover after the distribution
     )
 

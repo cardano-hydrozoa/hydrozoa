@@ -82,9 +82,11 @@ object SettlementTxSeq {
 
                         ftxRecipe = FallbackTx.Recipe(
                           treasuryUtxoSpent = settlementTx.transaction.treasuryProduced,
+                          // TODO: use TxTiming for things like that
                           validityStart = (args.blockCreatedOn
                               + config.txTiming.minSettlementDuration
-                              + config.txTiming.inactivityMarginDuration).toSlot
+                              + config.txTiming.inactivityMarginDuration
+                              + config.txTiming.silenceDuration).toSlot
                         )
                         fallbackTx <- FallbackTx
                             .build(ftxConfig, ftxRecipe)

@@ -42,7 +42,7 @@ object InitializationTxSeq {
     sealed trait ParseError
     case class InitializationTxParseError(wrapped: InitializationTx.ParseError) extends ParseError
     case class FallbackTxBuildError(wrapped: SomeBuildError) extends ParseError
-    case class FallbackTxMismatch(expected: FallbackTx, actual: Transaction) extends ParseError
+    case class FallbackTxMismatch(expected: Transaction, actual: Transaction) extends ParseError
     case object FallbackTxValidityStartIsMissing extends ParseError
     case class FallbackTxValidityStartError(lowerPossible: Slot, upperPossible: Slot, actual: Slot)
         extends ParseError
@@ -121,11 +121,13 @@ object InitializationTxSeq {
                 .map(FallbackTxBuildError(_))
 
             _ <-
-                if expectedFallbackTx.tx == fallbackTx then Right(())
+                // We compare bodies only since witnesses are missing in the expected tx
+                // TODO: we need to check the witnesses of the fallbackTx
+                if expectedFallbackTx.tx.body == fallbackTx.body then Right(())
                 else
                     Left(
                       FallbackTxMismatch(
-                        expected = expectedFallbackTx,
+                        expected = expectedFallbackTx.tx,
                         actual = fallbackTx
                       )
                     )
@@ -134,7 +136,7 @@ object InitializationTxSeq {
             // Silence period is respected: fallbackTx.validityStart -initializationTx.ttl > txTiming.
             expectedFallbackValidityStart: Slot =
                 (iTx.validityEnd + txTiming.silenceDuration).toSlot
-
+            // ^ preview       ^ mainnet
             // TODO: Should this be in the fallback parser?
             _ <-
                 if fallbackValidityStartSlot == expectedFallbackValidityStart
@@ -321,7 +323,6 @@ object InitializationTxSeq {
         case class InitializationTxError(e: SomeBuildError) extends Error
         case class FallbackTxError(e: SomeBuildError) extends Error
 
-        // TODO: this is getting cumbersome, review
         final case class Args(
             spentUtxos: InitializationTx.SpentUtxos,
             initialTreasury: Value,

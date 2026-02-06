@@ -6,10 +6,12 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.UtxoIdL1
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant}
+import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.BlockWeaver.PollResults
-import hydrozoa.multisig.ledger.block.{BlockEffects, BlockHeader, BlockNumber}
+import hydrozoa.multisig.ledger.block.BlockVersion.Major.increment
+import hydrozoa.multisig.ledger.block.{BlockEffects, BlockHeader, BlockVersion}
 import hydrozoa.multisig.ledger.dapp.tx.*
 import scala.collection.immutable.{Seq, TreeMap}
 import scala.concurrent.duration.FiniteDuration
@@ -32,7 +34,7 @@ import scalus.cardano.ledger.{Block as _, BlockHeader as _, SlotConfig, Transact
   *     effects.
   *   - The core concept the liaison is built around the "effect", which can be any L1 transaction
   *     like initialization, settlement, rollback, deinit or a fallback tx.
-  *   - Every effect is tagged with an _effect id_ which is a pair: (block number, index). This
+  *   - Every effect is tagged with an _effect id_ which is a pair: (major version, index). This
   *     allows running range queries.
   *   - Every effect is associated with a utxo id it can handle (i.e. spend). This is more efficient
   *     than monitoring which transactions have been already submitted.
@@ -63,14 +65,19 @@ object CardanoLiaison:
     // Actor's Internal state
     // ===================================
 
-    /** The second part of the EffectId is a number:
+    /** The first part is major version, not block number, since having contigious numbering is
+      * better.
+      *
+      * The second part of the EffectId is a number:
       *   - 0 - settlement
       *   - 1,2,3,... - rollouts
+      *
+      * For deinit we use phony "next major version", i.e. treat it as just extra backbone tx.
       */
-    type EffectId = (BlockNumber, Int)
+    type EffectId = (BlockVersion.Major, Int)
 
     object EffectId:
-        val initializationEffectId: EffectId = BlockNumber(0) -> 0
+        val initializationEffectId: EffectId = BlockVersion.Major.zero -> 0
 
     /** The state we want to achieve on L1. */
     enum TargetState:
@@ -106,8 +113,8 @@ object CardanoLiaison:
           */
         happyPathEffects: TreeMap[EffectId, HappyPathEffect],
 
-        /** Fallback effects, indexed by the block number they were created. */
-        fallbackEffects: Map[BlockNumber, FallbackTx]
+        /** Fallback effects, indexed by the major version of block where they were created. */
+        fallbackEffects: Map[BlockVersion.Major, FallbackTx]
     )
 
     object State:
@@ -118,7 +125,7 @@ object CardanoLiaison:
               effectInputs = Map.empty,
               happyPathEffects =
                   TreeMap(EffectId.initializationEffectId -> config.initializationTx),
-              fallbackEffects = Map(BlockNumber(0) -> config.initializationFallbackTx)
+              fallbackEffects = Map(BlockVersion.Major.zero -> config.initializationFallbackTx)
             )
         }
 
@@ -128,18 +135,18 @@ object CardanoLiaison:
     object Timeout
 
     object BlockConfirmed {
-        type Major = BlockHeader.Fields.HasBlockNum & BlockEffects.MultiSigned.Major.Section
-        type Final = BlockHeader.Fields.HasBlockNum & BlockEffects.MultiSigned.Final.Section
+        type Major = BlockHeader.Fields.HasBlockVersion & BlockEffects.MultiSigned.Major.Section
+        type Final = BlockHeader.Fields.HasBlockVersion & BlockEffects.MultiSigned.Final.Section
 
         /** For testing purposes, where we may not want to construct a whole Block.MultiSigned. */
-        sealed trait Minimal extends BlockHeader.Fields.HasBlockNum
+        sealed trait Minimal extends BlockHeader.Fields.HasBlockVersion
 
         object Minimal {
 
             /** For testing purposes, where we may not want to construct a whole Block.MultiSigned.
               */
             final case class Major(
-                override val blockNum: BlockNumber,
+                override val blockVersion: BlockVersion.Full,
                 override val settlementTx: SettlementTx,
                 override val fallbackTx: FallbackTx,
                 override val rolloutTxs: List[RolloutTx],
@@ -153,7 +160,7 @@ object CardanoLiaison:
             /** For testing purposes, where we may not want to construct a whole Block.MultiSigned.
               */
             final case class Final(
-                override val blockNum: BlockNumber,
+                override val blockVersion: BlockVersion.Full,
                 override val finalizationTx: FinalizationTx,
                 override val rolloutTxs: List[RolloutTx],
                 override val deinitTx: Option[DeinitTx],
@@ -176,6 +183,8 @@ trait CardanoLiaison(
     pendingConnections: MultisigRegimeManager.PendingConnections | CardanoLiaison.Connections,
 ) extends Actor[IO, CardanoLiaison.Request]:
     import CardanoLiaison.*
+
+    private val logger = Logging.loggerIO("CardanoLiaison")
 
     private val connections = Ref.unsafe[IO, Option[CardanoLiaison.Connections]](None)
 
@@ -205,6 +214,8 @@ trait CardanoLiaison(
     override def preStart: IO[Unit] =
         for {
             _ <- initializeConnections
+            // Immediate Timeout triggers the initialization tx right away (not strictly needed)
+            _ <- context.self ! CardanoLiaison.Timeout
             _ <- context.setReceiveTimeout(config.receiveTimeout, CardanoLiaison.Timeout)
         } yield ()
 
@@ -213,7 +224,9 @@ trait CardanoLiaison(
             handleMajorBlockL1Effects(block) >> runEffects
         case block: BlockConfirmed.Final =>
             handleFinalBlockL1Effects(block) >> runEffects
-        case CardanoLiaison.Timeout => IO.println("Timeout") >> runEffects
+        case CardanoLiaison.Timeout =>
+            // IO.println("Timeout") >>
+            runEffects
     }
 
     // ===================================
@@ -225,17 +238,18 @@ trait CardanoLiaison(
       */
     protected[consensus] def handleMajorBlockL1Effects(block: BlockConfirmed.Major): IO[Unit] =
         for {
-            _ <- IO.println("handleMajorBlockL1Effects")
+            // _ <- IO.println(s"handleMajorBlockL1Effects for block ${block.blockVersion}")
             _ <- stateRef.update(s => {
                 val (blockEffectInputs, blockEffects) =
-                    mkHappyPathEffectInputsAndEffects(block.settlementTx, block.rolloutTxs)
+                    mkHappyPathEffectInputsAndEffectsMajor(block.settlementTx, block.rolloutTxs)
                 State(
                   targetState = TargetState.Active(
                     UtxoIdL1(block.settlementTx.treasuryProduced.utxoId)
                   ),
                   effectInputs = s.effectInputs ++ blockEffectInputs,
                   happyPathEffects = s.happyPathEffects ++ blockEffects,
-                  fallbackEffects = s.fallbackEffects + (block.blockNum -> block.fallbackTx)
+                  fallbackEffects =
+                      s.fallbackEffects + (block.blockVersion.major -> block.fallbackTx)
                 )
             })
         } yield ()
@@ -245,10 +259,10 @@ trait CardanoLiaison(
       */
     protected[consensus] def handleFinalBlockL1Effects(block: BlockConfirmed.Final): IO[Unit] =
         for {
-            _ <- IO.println("handleFinalBlockL1Effects")
+            // _ <- IO.println(s"handleFinalBlockL1Effects for block ${block.blockVersion}")
             _ <- stateRef.update(s => {
                 val (blockEffectInputs, blockEffects) =
-                    mkHappyPathEffectInputsAndEffects(
+                    mkHappyPathEffectInputsAndEffectsFinal(
                       block.finalizationTx,
                       block.rolloutTxs,
                       block.deinitTx
@@ -261,7 +275,7 @@ trait CardanoLiaison(
             })
         } yield ()
 
-    private def mkHappyPathEffectInputsAndEffects(
+    private def mkHappyPathEffectInputsAndEffectsMajor(
         settlementTx: SettlementTx,
         rollouts: List[RolloutTx]
     ): (
@@ -271,25 +285,12 @@ trait CardanoLiaison(
         val treasurySpent = settlementTx.treasurySpent
         val effects: List[(TransactionInput, HappyPathEffect)] =
             List(treasurySpent.utxoId -> settlementTx)
-            // TODO: add utxoId
+            // TODO: implement utxoId?
                 ++ rollouts.map(r => r.rolloutSpent.utxo.input -> r)
-        val blockNumber = BlockNumber(settlementTx.majorVersionProduced)
-        indexWithEffectId(effects, blockNumber).unzip
+        indexWithEffectId(effects, settlementTx.majorVersionProduced).unzip
     }
 
-    private def indexWithEffectId(
-        effects: List[(TransactionInput, HappyPathEffect)],
-        blockNumber: BlockNumber
-    ): List[((UtxoIdL1, EffectId), (EffectId, HappyPathEffect))] =
-        effects.zipWithIndex
-            .map((utxoIdAndEffect, index) => {
-                val effectId = blockNumber -> index
-                (UtxoIdL1(
-                  utxoIdAndEffect._1
-                ) -> effectId) -> (effectId -> utxoIdAndEffect._2)
-            })
-
-    private def mkHappyPathEffectInputsAndEffects(
+    private def mkHappyPathEffectInputsAndEffectsFinal(
         finalizationTx: FinalizationTx,
         rollouts: List[RolloutTx],
         mbDeinitTx: Option[DeinitTx]
@@ -298,21 +299,35 @@ trait CardanoLiaison(
         Seq[(EffectId, HappyPathEffect)]
     ) =
         val treasurySpent = finalizationTx.treasurySpent
-        val blockNumber = BlockNumber(finalizationTx.majorVersionProduced)
+        val versionMajor = finalizationTx.majorVersionProduced
 
         val effects: List[(TransactionInput, HappyPathEffect)] =
             List(treasurySpent.utxoId -> finalizationTx)
-            // TODO: add utxoId
+            // TODO: implement utxoId?
                 ++ rollouts.map(r => r.rolloutSpent.utxo.input -> r)
 
-        val ret = indexWithEffectId(effects, blockNumber).unzip
+        val ret = indexWithEffectId(effects, versionMajor).unzip
 
         val deinitEffect = indexWithEffectId(
           mbDeinitTx.toList.map(d => d.residualTreasurySpent.utxoId -> d),
-          blockNumber.increment
+          versionMajor.increment
         ).unzip
 
-        (ret._1 ++ deinitEffect._1, ret._2 ++ deinitEffect._2)
+        val result = (ret._1 ++ deinitEffect._1) -> (ret._2 ++ deinitEffect._2)
+        // println(s"mkHappyPathEffectInputsAndEffectsFinal: result._1) = ${result._1}")
+        result
+
+    private def indexWithEffectId(
+        effects: List[(TransactionInput, HappyPathEffect)],
+        versionMajor: BlockVersion.Major
+    ): List[((UtxoIdL1, EffectId), (EffectId, HappyPathEffect))] =
+        effects.zipWithIndex
+            .map((utxoIdAndEffect, index) => {
+                val effectId = versionMajor -> index
+                (UtxoIdL1(
+                  utxoIdAndEffect._1
+                ) -> effectId) -> (effectId -> utxoIdAndEffect._2)
+            })
 
     /** The core part of the liaison that decides whether an action is needed and submits them.
       *
@@ -322,7 +337,7 @@ trait CardanoLiaison(
       */
     private def runEffects: IO[Unit] = for {
 
-        _ <- IO.println("runEffects")
+        // _ <- IO.println("runEffects")
 
         // 1. Get the L1 state, i.e. the list of utxo ids at the multisig address  + the current time
         resp <- config.cardanoBackend.utxosAt(config.initializationTx.treasuryProduced.address)
@@ -333,7 +348,7 @@ trait CardanoLiaison(
                 // This may happen if L1 API is temporarily unavailable or misconfigured
                 // TODO: we need to address time when we work on autonomous mode
                 //   but for now we can just ignore it and skip till the next event/timeout
-                IO.println(s"error when getting Cardano L1 state: ${err}")
+                logger.error(s"error when getting Cardano L1 state: ${err}")
 
             case Right(l1State) =>
                 for {
@@ -395,7 +410,7 @@ trait CardanoLiaison(
                                         mbInitAction <- txResp match {
                                             case Left(err) =>
                                                 for {
-                                                    _ <- IO.println(
+                                                    _ <- logger.error(
                                                       s"error when getting finalization tx info: ${err}"
                                                     )
                                                 } yield Seq.empty
@@ -409,8 +424,11 @@ trait CardanoLiaison(
                         }
 
                     // 4. Submit flattened txs for actions it there are some
-                    _ <- IO.println("\nLiaison's actions:")
-                    _ <- actionsToSubmit.traverse_(a => IO.println(s"\t- ${a.msg}"))
+                    _ <- IO.whenA(actionsToSubmit.nonEmpty)(
+                      logger.info(
+                        "Liaison's actions:" + actionsToSubmit.map(a => s"\n\t- ${a.msg}").mkString
+                      )
+                    )
 
                     submitRet <-
                         if actionsToSubmit.nonEmpty then
@@ -419,8 +437,15 @@ trait CardanoLiaison(
                             )
                         else IO.pure(List.empty)
 
-                    // Submission errors are ignored, but just dumped here
-                    _ <- IO.println(submitRet)
+                    // Submission errors are ignored, but dumped here
+                    submissionErrors = submitRet.filter(_.isLeft)
+                    _ <- IO.whenA(submissionErrors.nonEmpty)(
+                      logger.warn(
+                        "Submission errors:" + submissionErrors
+                            .map(a => s"\n\t- ${a.left}")
+                            .mkString
+                      )
+                    )
 
                 } yield ()
         }
@@ -498,23 +523,27 @@ trait CardanoLiaison(
         effectId match {
             // Backbone effect - settlement/finalization/deinit
             // TODO: Can't be initialization tx though. If we want to allow
-            // initialization txs to spend utxos from the same head address
-            // we should address it somehow.
-            case backboneEffectId @ (blockNum, 0) =>
+            //   initialization txs to spend utxos from the same head address
+            //   we should address it somehow.
+            case backboneEffectId @ (versionMajor, 0) =>
 
-                println(s"mkDirectAction: backboneEffectId: $backboneEffectId")
+                // println(s"mkDirectAction: backboneEffectId: $backboneEffectId")
 
                 val happyPathEffect = state.happyPathEffects(backboneEffectId)
-                // May absent for phony "deinit" block number
-                val mbCompetingFallbackEffect = state.fallbackEffects.get(blockNum.decrement)
+
+                // MUST absent ONLY for phony "deinit" block number
+                // now it holds since we use major versions and not block numbers
+                // println(s"state.fallbackEffects=${state.fallbackEffects.keySet}")
+                val mbCompetingFallbackEffect = state.fallbackEffects.get(versionMajor.decrement)
 
                 // Invariant: there should be always one sensible outcome:
                 // - (1) either the settlement/finalization/deinit tx for block N+1 is valid
                 // - (2) or we are inside the silence period
-                // - (2) or the fallback tx for N is valid
+                // - (3) or the fallback tx for N is valid
 
                 // This is obvious for a regular settlement(finalization)/fallback pair, and for
                 // the deinit, that has neither has ttl, nor a competing fallback, (1) is always true.
+
                 mbCompetingFallbackEffect match {
 
                     // Not a deinit effect
@@ -532,9 +561,9 @@ trait CardanoLiaison(
 
                             fallbackValidityStart = fallback.validityStart
 
-                            _ = println(
-                              s"currentTime: $currentTime, happyPathTxTtl: $happyPathTxTtl, fallbackValidityStart: $fallbackValidityStart"
-                            )
+                            // _ = println(
+                            //  s"currentTime: $currentTime, happyPathTxTtl: $happyPathTxTtl, fallbackValidityStart: $fallbackValidityStart"
+                            // )
 
                             // Choose between (1), (2), and (3)
                             ret <- (
@@ -549,6 +578,7 @@ trait CardanoLiaison(
                                             .rangeFrom(backboneEffectId)
                                             .toSeq
                                             .map(_._2)
+                                    // println(s"effectTxs.size=${effectTxs.size}")
                                     Right(PushForwardMultisig(effectTxs.map(_.tx)))
                                 // (2)
                                 case _
@@ -575,16 +605,16 @@ trait CardanoLiaison(
 
                     // This is a deinit effect, always the last tx in the backbone
                     case None =>
-                        println("-------> mbCompetingFallbackEffect == None")
+                        // println("-------> mbCompetingFallbackEffect == None, it's a deinit tx")
                         val deinitTxEffectId = backboneEffectId
                         Right(PushForwardMultisig(Seq(state.happyPathEffects(deinitTxEffectId).tx)))
                 }
 
             // Rollout tx
-            case rolloutTx @ (blockNum, _notZero) =>
-                println(s"mkDirectAction: rolloutEffectId: $rolloutTx")
+            case rolloutTx @ (versionMajor, _notZero) =>
+                // println(s"mkDirectAction: rolloutEffectId: $rolloutTx")
 
-                val nextBackboneTx = blockNum.increment -> 0
+                val nextBackboneTx = versionMajor.increment -> 0
                 val effectTxs =
                     state.happyPathEffects.range(rolloutTx, nextBackboneTx).toSeq.map(_._2)
                 Right(Rollout(effectTxs.map(_.tx)))

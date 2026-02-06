@@ -14,6 +14,7 @@ import java.time.Instant
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
 import scala.jdk.CollectionConverters.*
+import scalus.builtin.ByteString
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
@@ -115,7 +116,9 @@ def genStandaloneFinalizationTxSeqBuilder(
         shares <- genEquityShares(peers)
 
         kzg: KzgCommitment <- kzgCommitment match {
-            case None      => Gen.listOfN(48, Arbitrary.arbitrary[Byte]).map(IArray.from(_))
+            case None =>
+                Gen.listOfN(48, Arbitrary.arbitrary[Byte])
+                    .map(list => ByteString.fromArray(list.toArray))
             case Some(kzg) => Gen.const(kzg)
         }
     } yield (
@@ -169,7 +172,9 @@ def genFinalizationTxSeqBuilder(
         payouts <- Gen.sequence(coins.map(l => genKnownCoinPayoutObligation(network, Coin(l))))
 
         kzg: KzgCommitment <- kzgCommitment match {
-            case None      => Gen.listOfN(48, Arbitrary.arbitrary[Byte]).map(IArray.from(_))
+            case None =>
+                Gen.listOfN(48, Arbitrary.arbitrary[Byte])
+                    .map(list => ByteString.fromArray(list.toArray))
             case Some(kzg) => Gen.const(kzg)
         }
     } yield (

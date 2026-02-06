@@ -18,19 +18,19 @@ import scalus.cardano.txbuilder.TransactionBuilderStep.*
 
 /** The Deinit tx in the multisig regime acts mostly the same way the eponymous tx in the rule-based
   * regime:
-  *   - It spends the empty treasury utxo (combined with the multisig utxo by the finalization tx)
-  *     that contains peers' deposits, and the remaining head equity.
-  *   - It pays out to every peer as one output (the deposits guarantee that every payout is at
+  *   - It spends the empty treasury utxo combined with the multisig witness utxo (it's done by the
+  *     finalization tx) which contains peers' deposits and the remaining head equity.
+  *   - It disburse to every peer one output (the deposits guarantee that every disbursement is at
   *     least >= 2 * minAda):
   *     - Their collateral deposit
   *     - Their voting deposit
   *     - Their share of fallback deposits (according to equity shares)
   *     - Their share of equity
-  *   - All those payouts will always fit the single tx. This holds, because the number of peers is
-  *     limited by the fallback tx that should be able _simultaneously_ distribute collaterals and
-  *     (N+1) vote utxos in one go, the 2x+1 number of outputs.
+  *   - All those disbursements will always fit the single tx. This holds, because the number of
+  *     peers is limited by the fallback tx that should be able to _simultaneously_ distribute
+  *     collaterals and (N+1) vote utxos in one go, the 2x+1 number of outputs.
   *   - The fees are paid from the treasury, reducing the equity. To calculate the fees the outputs
-  *     amounts recalculated after the fees are calculated.
+  *     amounts recalculated after the fees are calculated using [[RedistributeDiffHandler]].
   */
 final case class DeinitTx(
     override val residualTreasurySpent: ResidualTreasuryUtxo,
@@ -64,7 +64,7 @@ object DeinitTx:
         private val steps = Steps(residualTreasuryToSpend)
 
         def build: BuildErrorOr[DeinitTx] = for {
-            payouts <- steps.mkPayouts.left
+            disbursements <- steps.mkDisbursements.left
                 .map(s =>
                     // TODO: Allow errors other than SomeBuildError to be raised
                     SomeBuildError.BalancingError.apply(
@@ -77,14 +77,14 @@ object DeinitTx:
             ctx <- TransactionBuilder
                 .build(
                   config.cardanoInfo.network,
-                  steps.commonSteps ++ payouts
+                  steps.commonSteps ++ disbursements
                 )
                 .explain(const("Could not build deinit transaction"))
 
             res <- ctx
                 .finalizeContext(
                   config.cardanoInfo.protocolParams,
-                  SharePayoutsDiffHandler.handler(residualTreasuryToSpend),
+                  RedistributeDiffHandler.handler(residualTreasuryToSpend),
                   config.evaluator,
                   Tx.Validators.nonSigningValidators
                 )
@@ -98,8 +98,9 @@ object DeinitTx:
             def commonSteps: List[TransactionBuilderStep] =
                 spendTreasury +: burnHeadTokens
 
-            private def spendTreasury =
+            private def spendTreasury = {
                 Spend(residualTreasuryToSpend.asUtxo, config.headMultisigScript.witnessValue)
+            }
 
             private def burnHeadTokens = {
                 List(
@@ -116,7 +117,7 @@ object DeinitTx:
                     )
             }
 
-            def mkPayouts: Either[String, List[TransactionBuilderStep]] = {
+            def mkDisbursements: Either[String, List[TransactionBuilderStep]] = {
                 // FIXME: remove later
                 val treasuryNewCoin = Coin.unsafeApply(residualTreasuryToSpend.value.coin.value)
 
@@ -125,11 +126,13 @@ object DeinitTx:
                 for {
                     equity <-
                         (treasuryNewCoin -~ config.equityShares.totalFallbackDeposit).toCoin.left
-                            .map(_ => "residual treasury can't be less then total deposits")
+                            .map(_ =>
+                                "residual treasury can't be less then total fallback deposits"
+                            )
 
                     distribution = distribute(equity)
 
-                    outputs = distribution.payouts
+                    outputs = distribution.disbursements
                         .map(p =>
                             Send(TransactionOutput.apply(p._1, Value.lovelace(p._2.underlying)))
                         )
@@ -144,9 +147,11 @@ object DeinitTx:
         /** A handler that re-distributes diff amount over all shares. Outputs (and optionally fee)
           * are replaced.
           *
-          * NB: diff is inputs - (outputs + fee)
+          * It re-distributes shares based on the feeCoin value, using the dust as extra fees.
+          *
+          * NB: diff = inputs - (outputs + fee),
           */
-        private object SharePayoutsDiffHandler:
+        private object RedistributeDiffHandler:
 
             def handler(
                 residualTreasuryToSpend: ResidualTreasuryUtxo,
@@ -171,14 +176,14 @@ object DeinitTx:
                                 .map(_ =>
                                     TxBalancingError.Failed(
                                       IllegalStateException(
-                                        "residual treasury can't be less then total deposits"
+                                        "residual treasury can't be less then total fallback deposits and deinit tx fees"
                                       )
                                     )
                                 )
 
                         distribution = distribute(equity)
 
-                        outputs = distribution.payouts
+                        outputs = distribution.disbursements
                             .map(p =>
                                 Sized(
                                   TransactionOutput.apply(p._1, Value.lovelace(p._2.underlying))
