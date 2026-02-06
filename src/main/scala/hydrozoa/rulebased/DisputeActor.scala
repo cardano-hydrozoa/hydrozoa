@@ -28,8 +28,9 @@ import scala.util.{Failure, Success, Try}
 import scalus.builtin.Data.fromData
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
-import scalus.cardano.ledger.{CardanoInfo, DatumOption, PlutusScriptEvaluator}
+import scalus.cardano.ledger.{AddrKeyHash, CardanoInfo, DatumOption, PlutusScriptEvaluator}
 import scalus.cardano.txbuilder.SomeBuildError
+import scalus.ledger.api.v3.PubKeyHash
 
 // QUESTION: The `OwnVoteUtxo` type is pretty sparse. Should I augment it directly, or did we want to keep
 // it small for some reason?<
@@ -87,7 +88,7 @@ final case class DisputeActor(
                 // Cast Vote
                 case (Some(ownVoteUtxo), _) =>
                     val recipe = VoteTx.Recipe(
-                      voteUtxo = OwnVoteUtxo(config.ownPeerPkh.verKeyHash, ownVoteUtxo._1),
+                      voteUtxo = OwnVoteUtxo(AddrKeyHash(config.ownPeerPkh.hash), ownVoteUtxo._1),
                       treasuryUtxo = treasuryUtxo,
                       collateralUtxo = collateralUtxo,
                       blockHeader = blockHeader,
@@ -231,7 +232,7 @@ final case class DisputeActor(
 
 object DisputeActor {
     case class Config(
-        ownPeerPkh: VerificationKeyBytes,
+        ownPeerPkh: PubKeyHash,
         tokenNames: TokenNames,
         headMultisigScript: HeadMultisigScript,
         receiveTimeout: FiniteDuration,

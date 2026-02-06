@@ -42,14 +42,15 @@ object HeadConfigTest extends Properties("HeadConfig Test") {
 
 case class TestRawConfig(
     rawConfig: RawConfig,
-    // Includes withdrawal wallet and "own peer"
-    allPeers: NonEmptyList[TestPeer]
+    withdrawalPeer: TestPeer,
+    headPeers: NonEmptyList[TestPeer]
 )
 
 case class TestHeadConfig(
     rawConfig: RawConfig,
     headConfig: HeadConfig,
-    allPeers: NonEmptyList[TestPeer]
+    withdrawalPeer: TestPeer,
+    headPeers: NonEmptyList[TestPeer]
 )
 
 /** Generate a RawConfig.
@@ -218,7 +219,11 @@ val genRawConfig: PropertyM[IO, TestRawConfig] =
           withdrawalFeeWallet = withdrawalPlusPeers.head.wallet,
           pollingPeriod = 5.seconds
         )
-    } yield TestRawConfig(rawConfig, withdrawalPlusPeers)
+    } yield TestRawConfig(
+      rawConfig = rawConfig,
+      withdrawalPeer = withdrawalPlusPeers.head,
+      headPeers = NonEmptyList.fromListUnsafe(withdrawalPlusPeers.tail)
+    )
 
 /** Can be used as the initializer (or a component thereof) for a TestM[HeadConfig, A]
   */
@@ -228,4 +233,9 @@ val genHeadConfig: PropertyM[IO, TestHeadConfig] =
         headConfig <- PropertyM.run[IO, HeadConfig](
           HeadConfig.parse(rawConfigAndPeers._1).liftTo[IO]
         )
-    } yield TestHeadConfig(rawConfigAndPeers._1, headConfig, rawConfigAndPeers._2)
+    } yield TestHeadConfig(
+      rawConfig = rawConfigAndPeers.rawConfig,
+      headConfig = headConfig,
+      withdrawalPeer = rawConfigAndPeers.withdrawalPeer,
+      headPeers = rawConfigAndPeers.headPeers
+    )

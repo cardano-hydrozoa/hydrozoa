@@ -18,6 +18,12 @@ object VoteDatum {
       voteStatus = VoteStatus.Voted(commitment = commitment, versionMinor = 0)
     )
 
+    // TODO: This should probably also create the default, and should probably be renamed.
+    /** Given a non empty list of peers, create a nonempty list of vote datums awaiting votes (one
+      * for each peer)
+      * @param peers
+      * @return
+      */
     def apply(peers: NonEmptyList[PubKeyHash]): NonEmptyList[VoteState.VoteDatum] = {
         {
             val numPeers = peers.length
@@ -38,7 +44,10 @@ object VoteDatum {
 @Compile
 object VoteState:
     case class VoteDatum(
+        // Uniquely identifies a vote utxo. The default vote utxo has key number 0,
+        // according to the spec draft 2025-11-07
         key: Key,
+        // Uniquely references another vote utxo by its key
         link: Link,
         voteStatus: VoteStatus
     )

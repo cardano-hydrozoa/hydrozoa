@@ -33,7 +33,7 @@ case class RuleBasedRegimeManager(
     override def preStart: IO[Unit] = {
         import config.*
         val disputeActorConfig: DisputeActor.Config = DisputeActor.Config(
-          ownPeerPkh = ownPeerPkh,
+          ownPeerPkh = ownPeerPkh.pubKeyHash,
           tokenNames = tokenNames,
           headMultisigScript = headMultisigScript,
           receiveTimeout = receiveTimeout,
