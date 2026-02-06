@@ -7,6 +7,7 @@ import cats.syntax.all.{catsSyntaxEither, toFlatMapOps}
 import hydrozoa.config.HeadConfig.OwnPeer
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, quantize}
+import hydrozoa.maxNonPlutusTxFee
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.SpentUtxos
@@ -14,7 +15,6 @@ import hydrozoa.multisig.ledger.dapp.tx.{TxTiming, minInitTreasuryAda}
 import hydrozoa.multisig.ledger.dapp.txseq.InitializationTxSeq
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.genShelleyAddress
 import hydrozoa.rulebased.ledger.dapp.tx.genEquityShares
-import hydrozoa.{Address, L1, maxNonPlutusTxFee}
 import org.scalacheck.{Gen, Properties, PropertyM}
 import scala.concurrent.duration.{DurationInt, FiniteDuration, HOURS}
 import scalus.builtin.ByteString
@@ -98,7 +98,7 @@ val genRawConfig: PropertyM[IO, RawConfig] =
 
         ownPeer = (
           OwnPeer(PeerId(ownPeerIndex, peers.size), peers.toList(ownPeerIndex).wallet),
-          Address[L1](payoutAddresses(ownPeerIndex)),
+          payoutAddresses(ownPeerIndex),
           equityShares.peerShares(UByte(ownPeerIndex)).equityShare
         )
 
@@ -111,7 +111,7 @@ val genRawConfig: PropertyM[IO, RawConfig] =
                       PeerSection(
                         verificationKeyBytes =
                             testPeerWithIndex._1.wallet.exportVerificationKeyBytes,
-                        payoutAddress = Address[L1](payoutAddresses(testPeerWithIndex._2)),
+                        payoutAddress = payoutAddresses(testPeerWithIndex._2),
                         equityShare =
                             equityShares.peerShares(UByte(testPeerWithIndex._2)).equityShare
                       )

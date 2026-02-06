@@ -11,6 +11,7 @@ import com.suprnation.actor.{ActorSystem, test as _}
 import hydrozoa.config.EquityShares
 import hydrozoa.lib.cardano.scalus.QuantizedTime.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
+import hydrozoa.maxNonPlutusTxFee
 import hydrozoa.multisig.consensus.ConsensusActor
 import hydrozoa.multisig.consensus.ConsensusActor.Request
 import hydrozoa.multisig.consensus.peer.PeerId
@@ -32,7 +33,6 @@ import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag.{Invalid, Valid
 import hydrozoa.multisig.ledger.virtual.L2EventGenesis
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.rulebased.ledger.dapp.tx.genEquityShares
-import hydrozoa.{UtxoIdL1, maxNonPlutusTxFee}
 import io.bullet.borer.Cbor
 import java.util.concurrent.TimeUnit
 import org.scalacheck.*
@@ -291,10 +291,10 @@ object JointLedgerTestHelpers {
 
         def completeBlockRegular(
             referenceBlock: Option[BlockBrief.Intermediate],
-            pollResults: Set[UtxoIdL1]
+            pollResults: Set[TransactionInput]
         ): JLTest[Unit] =
             completeBlockRegular(
-              CompleteBlockRegular(referenceBlock, pollResults: Set[UtxoIdL1], false)
+              CompleteBlockRegular(referenceBlock, pollResults: Set[TransactionInput], false)
             )
 
         def completeBlockFinal(req: CompleteBlockFinal): JLTest[Unit] =
@@ -525,7 +525,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               _ <- startBlockNow(BlockNumber.zero.increment.increment)
               _ <- completeBlockRegular(
                 None,
-                Set(UtxoIdL1(depositRefundTxSeq.depositTx.depositProduced.toUtxo.input))
+                Set(depositRefundTxSeq.depositTx.depositProduced.toUtxo.input)
               )
               _ <- for {
                   jointLedgerState <- getState
@@ -545,7 +545,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               )
               _ <- completeBlockRegular(
                 None,
-                Set(UtxoIdL1(depositRefundTxSeq.depositTx.depositProduced.toUtxo.input))
+                Set(depositRefundTxSeq.depositTx.depositProduced.toUtxo.input)
               )
 
               _ <- for {
@@ -704,7 +704,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               // Now we complete the block, including this deposit in the poll results.
               _ <- completeBlockRegular(
                 None,
-                Set(UtxoIdL1(depositRefundTxSeq.depositTx.depositProduced.toUtxo.input))
+                Set(depositRefundTxSeq.depositTx.depositProduced.toUtxo.input)
               )
               jlState <- unsafeGetDone
 
@@ -763,7 +763,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               // Now we complete the block, including this deposit in the poll results.
               _ <- completeBlockRegular(
                 None,
-                Set(UtxoIdL1(depositRefundTxSeq.depositTx.depositProduced.toUtxo.input))
+                Set(depositRefundTxSeq.depositTx.depositProduced.toUtxo.input)
               )
               jlState <- unsafeGetDone
 

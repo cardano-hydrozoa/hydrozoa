@@ -23,7 +23,7 @@ import scalus.prelude.List as SList
 final case class WithdrawTx(
     treasuryUtxoSpent: RuleBasedTreasuryUtxo,
     treasuryUtxoProduced: RuleBasedTreasuryUtxo,
-    withdrawalOutputs: List[OutputL2],
+    withdrawalOutputs: List[TransactionOutput],
     tx: Transaction
 )
 
@@ -32,7 +32,7 @@ object WithdrawTx {
     case class Recipe(
         treasuryUtxo: RuleBasedTreasuryUtxo,
         // NB: The order doesn't matter in the recipe, since either all withdrawals should make it to the tx.
-        withdrawals: UtxoSetL2,
+        withdrawals: Utxos,
         membershipProof: KzgCommitment,
         validityEndSlot: Long,
         network: Network,
@@ -71,7 +71,7 @@ object WithdrawTx {
 
     private def calculateResidualTreasury(
         treasuryUtxo: RuleBasedTreasuryUtxo,
-        withdrawals: UtxoSetL2
+        withdrawals: Utxos
     ): Either[WithdrawalTxError, Value] = {
         import WithdrawalTxError.*
 
@@ -94,7 +94,7 @@ object WithdrawTx {
         // From this point we should choose and stick to a particular order of withdrawals, so
         // to order of outputs in the tx (starting from index 1) and the order of utxo ids in
         // the redeemer should be the same.
-        val withdrawalsList = withdrawals.untagged.toList
+        val withdrawalsList = withdrawals.toList
 
         val withdrawRedeemer = TreasuryRedeemer.Withdraw(
           WithdrawRedeemer(

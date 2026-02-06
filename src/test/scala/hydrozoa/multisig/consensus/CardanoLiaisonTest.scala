@@ -9,6 +9,7 @@ import cats.syntax.all.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.test.TestKit
 import com.suprnation.actor.{ActorSystem, test as _}
+import hydrozoa.attachVKeyWitnesses
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toQuantizedInstant}
 import hydrozoa.lib.cardano.scalus.given
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState, yaciTestSauceGenesis}
@@ -22,7 +23,6 @@ import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, FinalizationTx, RolloutTx, SettlementTx, Tx, TxTiming, genFinalizationTxSeqBuilder, genNextSettlementTxSeqBuilder}
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, InitializationTxSeq, InitializationTxSeqTest, SettlementTxSeq}
 import hydrozoa.rulebased.ledger.dapp.tx.genEquityShares
-import hydrozoa.{L1, Output, UtxoId, UtxoSet, UtxoSetL1, attachVKeyWitnesses}
 import java.util.concurrent.TimeUnit
 import monocle.Focus.focus
 import org.scalacheck.*
@@ -436,7 +436,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
         /** Utxo ids + transaction partitions (survived/lost). */
         final case class Rollback(
             /** Utxos that exist immediately after the rollback is done. */
-            utxos: UtxoSetL1,
+            utxos: Utxos,
             // NB: this field can be useful for debugging purposes, it's not used directly in the tests
             txsSurvived: Set[TransactionHash],
             /** Lost backbone txs and rollout txs that branch off them. */
@@ -596,7 +596,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
             // println(s"edge txs: ${edgeTxs.map(_.id)}")
             val edgeTxsResolvedUtxos = edgeTxs
                 .flatMap(_.resolvedUtxos.utxos.toList)
-                .map((i, o) => UtxoId[L1](i) -> Output[L1](o))
+                .map((i, o) => i -> o)
                 .toMap
 
             val depositUtxos = backboneLost
@@ -604,11 +604,11 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                 .map(_.asInstanceOf[SettlementTx])
                 .flatMap(s => s.depositsSpent)
                 .map(_.toUtxo)
-                .map(u => UtxoId[L1](u.input) -> Output[L1](u.output))
+                .map(u => (u.input) -> (u.output))
 
             // Result
             Rollback(
-              utxos = UtxoSet[L1](edgeTxsResolvedUtxos ++ depositUtxos),
+              utxos = edgeTxsResolvedUtxos ++ depositUtxos,
               txsSurvived =
                   (backboneSurvived ++ rolloutTxsPartitions.flatMap(_._1)).map(_.tx.id).toSet,
               txsLost = (backboneLost.map(_.tx) ++ rolloutLost).map(_.id).toSet,
@@ -674,7 +674,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                             now <- IO.realTimeInstant
                             _ <- IO.println(s"now=$now")
 
-                            state = MockState.apply(rollback.utxos.asScalus)
+                            state = MockState.apply(rollback.utxos)
                             cardanoBackend <- CardanoBackendMock.mockIO(state)
 
                             blockWeaver <- system.actorOf(new BlockWeaverMock)

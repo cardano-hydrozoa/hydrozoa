@@ -14,7 +14,7 @@ import scalus.cardano.address.Network
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.ledger.{Utxo as _, *}
+import scalus.cardano.ledger.{Utxo, *}
 import scalus.cardano.txbuilder.Datum.DatumInlined
 import scalus.cardano.txbuilder.ScriptSource.PlutusScriptValue
 import scalus.cardano.txbuilder.TransactionBuilderStep.{AddCollateral, Send, Spend, ValidityEndSlot}
@@ -32,7 +32,7 @@ object ResolutionTx {
     case class Recipe(
         talliedVoteUtxo: TallyVoteUtxo,
         treasuryUtxo: RuleBasedTreasuryUtxo,
-        collateralUtxo: Utxo[L1],
+        collateralUtxo: Utxo,
         validityEndSlot: Long,
         network: Network,
         protocolParams: ProtocolParams,
@@ -41,8 +41,8 @@ object ResolutionTx {
     )
 
     enum ResolutionTxError:
-        case AbsentVoteDatum(utxo: UtxoIdL1)
-        case InvalidVoteDatum(utxo: UtxoIdL1, msg: String)
+        case AbsentVoteDatum(utxo: TransactionInput)
+        case InvalidVoteDatum(utxo: TransactionInput, msg: String)
         case InvalidTreasuryDatum(msg: String)
         case TalliedNoVote
         case TreasuryAlreadyResolved
@@ -62,7 +62,7 @@ object ResolutionTx {
     ): Either[ResolutionTxError, (KzgCommitment, BigInt)] = {
         import ResolutionTxError.*
 
-        val voteOutput = talliedUtxo.utxo.output.untagged
+        val voteOutput = talliedUtxo.utxo.output
         voteOutput.datumOption match {
             case Some(DatumOption.Inline(datumData)) =>
                 Try(fromData[VoteDatum](datumData)) match {
@@ -130,7 +130,7 @@ object ResolutionTx {
                   List(
                     // Spend the tallied vote utxo
                     Spend(
-                      talliedVoteUtxo.utxo.toScalus,
+                      talliedVoteUtxo.utxo,
                       ThreeArgumentPlutusScriptWitness(
                         PlutusScriptValue(DisputeResolutionScript.compiledPlutusV3Script),
                         voteRedeemer.toData,
@@ -157,7 +157,7 @@ object ResolutionTx {
                         scriptRef = None
                       )
                     ),
-                    AddCollateral(collateralUtxo.toScalus),
+                    AddCollateral(collateralUtxo),
                     ValidityEndSlot(recipe.validityEndSlot)
                   )
                 )

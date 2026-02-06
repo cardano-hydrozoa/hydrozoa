@@ -6,7 +6,7 @@ import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explainConst}
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo}
-import hydrozoa.{Utxo as _, prebalancedLovelaceDiffHandler, *}
+import hydrozoa.{prebalancedLovelaceDiffHandler, *}
 import monocle.{Focus, Lens}
 import scala.annotation.tailrec
 import scala.language.implicitConversions

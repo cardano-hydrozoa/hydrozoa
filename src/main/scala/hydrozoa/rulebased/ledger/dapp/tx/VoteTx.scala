@@ -15,7 +15,7 @@ import scalus.cardano.address.Network
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.ledger.{BlockHeader as _, Utxo as SUtxo, *}
+import scalus.cardano.ledger.{BlockHeader as _, *}
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.Datum.DatumInlined
 import scalus.cardano.txbuilder.ScriptSource.PlutusScriptValue
@@ -34,7 +34,7 @@ object VoteTx {
     case class Recipe(
         voteUtxo: OwnVoteUtxo,
         treasuryUtxo: RuleBasedTreasuryUtxo,
-        collateralUtxo: Utxo[L1],
+        collateralUtxo: Utxo,
         blockHeader: BlockHeader.Minor.Onchain,
         signatures: List[BlockHeader.Minor.HeaderSignature],
         validityEndSlot: Long,
@@ -52,7 +52,7 @@ object VoteTx {
         import VoteTxError.*
 
         // Extract current vote datum from the UTXO
-        val voteOutput = recipe.voteUtxo.utxo.output.untagged
+        val voteOutput = recipe.voteUtxo.utxo.output
 
         voteOutput.datumOption match {
             case Some(DatumOption.Inline(datumData)) =>
@@ -90,7 +90,7 @@ object VoteTx {
 
         // Get the TransactionInput and TransactionOutput from VoteUtxo
         val (voteInput, voteOutput) =
-            (recipe.voteUtxo.utxo.input.untagged, recipe.voteUtxo.utxo.output.untagged)
+            (recipe.voteUtxo.utxo.input, recipe.voteUtxo.utxo.output)
 
         // Create redeemer for dispute resolution script
         val redeemer = DisputeRedeemer.Vote(
@@ -111,12 +111,12 @@ object VoteTx {
                   recipe.network,
                   List(
                     // Use collateral to pay fees
-                    Spend(recipe.collateralUtxo.toScalus, PubKeyWitness),
+                    Spend(recipe.collateralUtxo, PubKeyWitness),
                     Send(recipe.collateralUtxo._2),
                     // Spend the vote utxo with dispute resolution script witness
                     // So far we use in-place script
                     Spend(
-                      SUtxo(voteInput, voteOutput),
+                      Utxo(voteInput, voteOutput),
                       ThreeArgumentPlutusScriptWitness(
                         // TODO: use a reference utxo
                         //  Rule-based regime scripts will be deployed as reference script with well-known coordinates.
@@ -137,8 +137,8 @@ object VoteTx {
                         scriptRef = None
                       )
                     ),
-                    ReferenceOutput(SUtxo(recipe.treasuryUtxo.asTuple)),
-                    AddCollateral(recipe.collateralUtxo.toScalus),
+                    ReferenceOutput(Utxo(recipe.treasuryUtxo.asTuple)),
+                    AddCollateral(recipe.collateralUtxo),
                     ValidityEndSlot(recipe.validityEndSlot)
                   )
                 )
@@ -156,11 +156,10 @@ object VoteTx {
         } yield VoteTx(
           voteUtxoSpent = recipe.voteUtxo,
           voteUtxoProduced = VoteUtxoCast(
-            Utxo[L1](
-              UtxoId[L1](finalized.transaction.id, 0), // Vote output is at index 0
-              Output[L1](
-                finalized.transaction.body.value.outputs(0).value
-              ) // The updated vote output
+            Utxo(
+              TransactionInput(finalized.transaction.id, 0), // Vote output is at index 0
+              finalized.transaction.body.value.outputs(0).value
+              // The updated vote output
             )
           ),
           tx = finalized.transaction

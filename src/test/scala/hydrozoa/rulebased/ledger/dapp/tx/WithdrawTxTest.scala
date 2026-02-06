@@ -4,6 +4,7 @@ import cats.data.NonEmptyList
 import cats.effect.unsafe.implicits.global
 import hydrozoa.*
 import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
+import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Validators.nonSigningValidators
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.asG1Element
 import hydrozoa.multisig.ledger.virtual.commitment.{KzgCommitment, Membership, TrustedSetup}
@@ -99,14 +100,14 @@ def genWithdrawTxRecipe: Gen[WithdrawTx.Recipe] =
         _ = println(s"utxosL2: ${utxosL2.keys.size}")
 
         // Calculate the whole L2 utxo set commitment
-        utxoCommitment = mkCommitment(utxosL2.asScalus)
+        utxoCommitment = mkCommitment(utxosL2)
 
         // Select some random number of withdrawals
         // TODO: find the limit with refscripts
-        wn <- Gen.choose(1, Integer.min(5, utxosL2.untagged.keys.size))
-        withdrawals0 <- Gen.pick(wn, utxosL2.untagged)
+        wn <- Gen.choose(1, Integer.min(5, utxosL2.keys.size))
+        withdrawals0 <- Gen.pick(wn, utxosL2)
         _ = println(s"withdrawals length: ${withdrawals0.length}")
-        withdrawals = UtxoSet(withdrawals0.toMap)
+        withdrawals = withdrawals0.toMap
 
         // Check
         // _ = println(s"withdrawals: {$withdrawals0}")
@@ -115,14 +116,14 @@ def genWithdrawTxRecipe: Gen[WithdrawTx.Recipe] =
         // )
 
         // Calculate and validate the membership proof
-        theRest = UtxoSet(utxosL2.untagged -- withdrawals.untagged.keys)
+        theRest = utxosL2 -- withdrawals.keys
         _ = println(s"theRest: ${theRest.keys.size}")
 
         membershipProof = Membership
             .mkMembershipProofValidated(
               utxoCommitment,
-              utxosL2.asScalus,
-              withdrawals.asScalus
+              utxosL2,
+              withdrawals
             )
             .unsafeRunSync()
             .fold(err => throw RuntimeException(err.explain), x => x)
@@ -142,7 +143,7 @@ def genWithdrawTxRecipe: Gen[WithdrawTx.Recipe] =
         )
 
         // Ensure treasury has sufficient funds
-        totalL2Value = utxosL2.untagged.values.foldLeft(Value.zero)(_ + _.untagged.value)
+        totalL2Value = utxosL2.values.foldLeft(Value.zero)(_ + _.value)
         sufficientTreasuryValue = treasuryUtxo.value + totalL2Value +
             Value(Coin(20_000_000L))
         adjustedTreasuryUtxo = treasuryUtxo.copy(value = sufficientTreasuryValue)
@@ -191,7 +192,7 @@ class WithdrawTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
 
                     // Verify residual treasury value is correct
                     val totalWithdrawals =
-                        recipe.withdrawals.values.foldLeft(Value.zero)(_ + _.untagged.value)
+                        recipe.withdrawals.values.foldLeft(Value.zero)(_ + _.value)
                     val expectedResidual = recipe.treasuryUtxo.value - totalWithdrawals
                     assert(
                       withdrawTx.treasuryUtxoProduced.value == expectedResidual,
