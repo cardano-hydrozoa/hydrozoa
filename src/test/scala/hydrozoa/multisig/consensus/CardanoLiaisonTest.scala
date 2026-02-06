@@ -11,11 +11,14 @@ import com.suprnation.actor.test.TestKit
 import com.suprnation.actor.{ActorSystem, test as _}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toQuantizedInstant}
 import hydrozoa.lib.cardano.scalus.given
+import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.BlockWeaver.Request
 import hydrozoa.multisig.consensus.CardanoLiaisonTest.BlockEffectsSignedChain.*
-import hydrozoa.multisig.consensus.CardanoLiaisonTest.Rollback.SettlementTiming
-import hydrozoa.multisig.consensus.CardanoLiaisonTest.Rollback.SettlementTiming.*
+import hydrozoa.multisig.consensus.CardanoLiaisonTest.Rollback.CompetingTiming.*
+import hydrozoa.multisig.consensus.CardanoLiaisonTest.Rollback.DepthAndTiming.{Competing, Complete, Deinit}
+import hydrozoa.multisig.consensus.CardanoLiaisonTest.Rollback.InitializationTiming.{AfterInitializationExpires, BeforeInitializationExpires}
+import hydrozoa.multisig.consensus.CardanoLiaisonTest.Rollback.{CompetingTiming, InitializationTiming}
 import hydrozoa.multisig.ledger.block.{BlockEffects, BlockVersion}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
@@ -29,8 +32,6 @@ import org.scalacheck.*
 import org.scalacheck.Gen.{choose, tailRecM}
 import org.scalacheck.Prop.forAll
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
-import scala.jdk.CollectionConverters.*
-import scala.math.Ordered.orderingToOrdered
 import scalus.cardano.ledger.{Block as _, BlockHeader as _, *}
 import test.Generators.Hydrozoa.*
 import test.{TestPeer, testNetwork, testTxBuilderCardanoInfo}
@@ -41,14 +42,13 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
         p
             .withWorkers(1) // useful for debugging
             .withMinSuccessfulTests(100)
-        // .withInitialSeed(Seed.fromBase64("SEAube5f5bBsTlLeYTuh3am1vO5iJvmzNRFEXSOlXlD=").get)
     }
+
+    val logger = Logging.logger("CardanoLiaisonTest")
 
     /** This is the "skeleton" of the Hydrozoa transactions (see diagrams to get an idea what it
       * looks like). After introducing [[BlockEffects.MultiSigned]] we use it rather than tx
       * sequences which are unwieldy and were designed to be used with the tx builders.
-      *
-      * TODO: case class?
       */
     type BlockEffectsSignedChain = (
         BlockEffects.MultiSigned.Initial,
@@ -78,7 +78,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
               mbUtxosAvailable = Some(yaciTestSauceGenesis(testNetwork))
             )
 
-            _ = println(s"peers: ${peers.map(_.peerNum)}")
+            _ = logger.debug(s"gen: peers: ${peers.map(_.peerNum)}")
 
             // Initial block effects
             initializationTxSeq = InitializationTxSeq.Builder
@@ -316,6 +316,8 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                     ++ finalizationTxs(skeleton._3)).toSet
             }
 
+            def mbDeinitTxId: Option[TransactionHash] = skeleton._3.deinitTx.map(_.tx.id)
+
             /** All backbone transactions from the skeleton. */
             def backboneTxs: List[Tx[?]] =
                 (skeleton._1.initializationTx +: skeleton._2.map(_.settlementTx)) ++
@@ -377,61 +379,40 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                     .filter(_._2.nonEmpty)
                     .map(_._2.map(_.tx))
 
-            def earliestTtl: QuantizedInstant =
+            def initializationTxValidityEnd: QuantizedInstant =
                 skeleton._1.initializationTx.validityEnd
 
-            def dumpSkeletonInfo: Unit =
-
-                println("--------- Hydrozoa L1 effects chain sample --------- ")
-
+            def dumpSkeletonInfo: Unit = {
                 val initTx = skeleton._1.initializationTx
+                val initFallbackTx = skeleton._1.fallbackTx
 
-                println(s"Initialization tx: ${initTx.tx.id}, TTL: ${initTx.validityEnd}")
+                val settlementsInfo = skeleton._2.map { effects =>
+                    val rolloutLines =
+                        effects.rolloutTxs.map(r => s"\n\t\t - rollout: ${r.tx.id}").mkString
+                    s"\nSettlement: ${effects.settlementTx.tx.id}, TTL: ${effects.settlementTx.validityEnd}, " +
+                        s"deposits: ${effects.settlementTx.depositsSpent.length}, rollouts: ${effects.rolloutTxs.size}${rolloutLines}" +
+                        s"\n\t=> Fallback: ${effects.fallbackTx.tx.id}, validity start: ${effects.fallbackTx.validityStart}"
+                }.mkString
 
-                val fallbackTx = skeleton._1.fallbackTx
-                println(
-                  s"\t=> Fallback 0 tx: ${fallbackTx.tx.id}, validity start: ${fallbackTx.validityStart}"
+                val finalizationRollouts =
+                    skeleton._3.rolloutTxs.map(r => s"\n\t\t - rollout: ${r.tx.id}").mkString
+                val deinitInfo =
+                    skeleton._3.deinitTx.map(d => s"\nDeinit: ${d.tx.id}").getOrElse("")
+
+                logger.info(
+                  "--------- Hydrozoa L1 effects chain sample --------- " +
+                      s"\nInitialization tx: ${initTx.tx.id}, TTL: ${initTx.validityEnd}" +
+                      s"\n\t=> Fallback 0 tx: ${initFallbackTx.tx.id}, validity start: ${initFallbackTx.validityStart}" +
+                      settlementsInfo +
+                      s"\nFinalization: ${skeleton._3.finalizationTx.tx.id}, TTL: ${skeleton._3.finalizationTx.validityEnd}, rollouts: ${skeleton._3.rolloutTxs.size}${finalizationRollouts}" +
+                      deinitInfo +
+                      "\n--------- END of Hydrozoa L1 effects chain sample --------- "
                 )
-
-                // Settlements
-                skeleton._2.foreach(effects => {
-                    val fallbackTx = effects.fallbackTx
-
-                    println(
-                      "Settlement: " + // FIXME: block ${effects.blockNum}
-                          s"${effects.settlementTx.tx.id}, TTL: ${effects.settlementTx.validityEnd}, " +
-                          s"deposits: ${effects.settlementTx.depositsSpent.length}, " +
-                          s"rollouts: ${effects.rolloutTxs.size}"
-                    )
-
-                    effects.rolloutTxs.foreach(r => println(s"\t\t - rollout: ${r.tx.id}"))
-                    println(
-                      "\t=> Fallback: " + // FIXME: block ${effects.blockNum}
-                          s"${fallbackTx.tx.id}, validity start: ${fallbackTx.validityStart}"
-                    )
-                })
-
-                // Finalization
-                println(
-                  s"Finalization: ${skeleton._3.finalizationTx.tx.id}, TTL: ${skeleton._3.finalizationTx.validityEnd}" +
-                      s", rollouts: ${skeleton._3.rolloutTxs.size}"
-                )
-                skeleton._3.rolloutTxs.foreach(r => println(s"\t\t - rollout: ${r.tx.id}"))
-                skeleton._3.deinitTx.foreach(d => println(s"Deinit: ${d.tx.id}"))
-
-                println("--------- END of Hydrozoa L1 effects chain sample --------- ")
+            }
 
     end BlockEffectsSignedChain
 
     object Rollback:
-
-        /** The relation between [[Rollback.rollbackTime]] end the settlement/finalization tx, may
-          * absent if only deinit is rolled back or all transactions are rolled back.
-          */
-        enum SettlementTiming:
-            case BeforeBackboneTtlExpires
-            case WithinSilencePeriod
-            case AfterFallbackBecomesValid
 
         /** Utxo ids + transaction partitions (survived/lost). */
         final case class Rollback(
@@ -445,15 +426,40 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
             txsLostPreviousRollout: Set[TransactionHash],
             /** The rollback time, i.e. the time when rollback was done. */
             rollbackTime: QuantizedInstant,
-            // The tx id of the competing fallback transaction and timing relation.
-            // It's not defined if only deinit tx or the whole skeleton was rolled back.
-            // TODO: do we use the second element of the tuple in the liaison?
-            //   I think now we do, but we would like to get rig of it.
-            mbFallback: Option[(TransactionHash, SettlementTiming)]
+            // Depth of the rollback and the corresponding timing relation.
+            depthAndTiming: DepthAndTiming
         )
 
+        // It's not defined if only deinit tx or the whole skeleton was rolled back. */
+        enum DepthAndTiming:
+            /** Rollback point id a tx with a competing fallback, i.e. settlement or finalization.
+              */
+            case Competing(
+                competingFallback: TransactionHash,
+                timing: CompetingTiming
+            )
+
+            /** All head txs are rolled back. */
+            case Complete(timing: InitializationTiming)
+
+            /** Only deinit is rolled back. */
+            case Deinit
+
+        /** The relation between [[Rollback.rollbackTime]] and the settlement/finalization tx and
+          * their competing fallback.
+          */
+        enum CompetingTiming:
+            case BeforeBackboneTtlExpires
+            case WithinSilencePeriod
+            case AfterFallbackBecomesValid
+
+        /** The relation  between [[Rollback.rollbackTime]] and the initialization tx. */
+        enum InitializationTiming:
+            case BeforeInitializationExpires
+            case AfterInitializationExpires
+
         def genRollback(skeleton: BlockEffectsSignedChain): Gen[Rollback] =
-            import SettlementTiming.*
+            import CompetingTiming.*
 
             for {
                 // All possible point on the backbone
@@ -465,41 +471,38 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                     .rolloutSeqsBefore(rollbackBackbonePoint)
                     .map(_.map(_.tx.id))
                 // Choose rollback points for every survived rollout sequence
-                // TODO: Why does it default to java ArrayList?
                 rollbackRolloutSeqPoints <- Gen
-                    .sequence(rolloutSeqsSurvived.map(xs => Gen.oneOf(xs)))
-                    .map(_.asScala.toList)
+                    .sequence[List[TransactionHash], TransactionHash](
+                      rolloutSeqsSurvived.map(xs => Gen.oneOf(xs))
+                    )
 
-                // TODO: use time not slots
-                // The time when the rollback occurred - the "rollback time".
-                // There are several possible options depending on the rollback depth, or
-                // more precisely on which type of tx the rollback point fell down.
-                //
-                // - (1) The rollback backbone point is settlement/finalization tx:
-                //   - (a) The rollback time is before the backbone tx TTL expires -
-                //         sort of a "quick" rollback [[BeforeBackboneTtlExpires]].
-                //   - (b) The rollback time falls exactly on the silence period between
-                //         that tx and the competing fallback tx [[WithinSilencePeriod]].
-                //   - (c) The rollback time is equals or greater than the competing fallback
-                //         tx validity start - sort of late rollback [[AfterFallbackBecomesValid]].
-                //
-                // - (2) The deinit tx was chosen as the rollback backbone point:
-                //       The TTL and competing fallbacks are absent.
-                //       It means we can pick up an arbitrary rollback time that makes sense.
-                //
-                // - (3) The whole skeleton was rolled back.
-                //       We can choose an instant of time around the block zero creation time.
-                //
+                /** The time when the rollback occurred - the "rollback time". There are several
+                  * possible options depending on the rollback depth, or more precisely on which
+                  * type of tx the rollback point fell down.
+                  *
+                  *   - (1) The rollback backbone point is settlement/finalization tx:
+                  *     - (a) The rollback time is before the backbone tx TTL expires - sort of
+                  *       "quick" rollback [[BeforeBackboneTtlExpires]].
+                  *     - (b) The rollback time falls exactly on the silence period between that tx
+                  *       and the competing fallback tx [[WithinSilencePeriod]].
+                  *     - (c) The rollback time is equals or greater than the competing fallback tx
+                  *       validity start - sort of late rollback [[AfterFallbackBecomesValid]].
+                  *   - (2) The whole skeleton was rolled back. We can choose an instant of time
+                  *     around the block zero creation time with two possible cases represented by
+                  *     [[InitializationTiming]]
+                  *   - (3) The deinit tx was chosen as the rollback backbone point: The TTL and *
+                  *     competing fallbacks are absent. It means we can pick up an arbitrary *
+                  *     rollback time that makes sense.
+                  */
                 backboneTx = skeleton.backboneTxs.find(_.tx.id == rollbackBackbonePoint).get
-
-                (rollbackTime, mbFallback) <-
+                (rollbackTime, depthAndTiming: DepthAndTiming) <-
                     skeleton.competingFallbackFor(rollbackBackbonePoint) match {
                         // This maybe not the easiest way to put it, but by the presence of
                         // competing fallback tx for the rollback backbone point we effectively
                         // differentiate the type of that point:
 
                         case Some(fallbackTx) =>
-                            // -> we have a settlement/finalization and need to decide on the timing
+                            // we have a settlement/finalization
 
                             Gen.oneOf(
                               BeforeBackboneTtlExpires,
@@ -517,7 +520,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                                         .flatMap(instant =>
                                             (
                                               instant,
-                                              Some(fallbackTx.tx.id, BeforeBackboneTtlExpires)
+                                              Competing(fallbackTx.tx.id, BeforeBackboneTtlExpires)
                                             )
                                         )
                                 case WithinSilencePeriod =>
@@ -529,7 +532,10 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                                     val fallbackValidityStart = fallbackTx.validityStart
                                     Gen.choose(validityEnd, fallbackValidityStart)
                                         .flatMap(instant =>
-                                            (instant, Some(fallbackTx.tx.id, WithinSilencePeriod))
+                                            (
+                                              instant,
+                                              Competing(fallbackTx.tx.id, WithinSilencePeriod)
+                                            )
                                         )
                                 case AfterFallbackBecomesValid =>
                                     val fallbackValidityStart = fallbackTx.validityStart
@@ -539,27 +545,38 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                                     ).flatMap(instant =>
                                         (
                                           instant,
-                                          Some(fallbackTx.tx.id, AfterFallbackBecomesValid)
+                                          Competing(fallbackTx.tx.id, AfterFallbackBecomesValid)
                                         )
                                     )
                             }
-                        case None =>
-                            // The rollback point points to the initialization ot deinit
-                            // Rollback time doesn't affect the deinit tx since it doesn't have validity range.
 
-                            // We choose the slot in a way so initialization/first settlement
-                            // is valid or not valid.
-                            // TODO: maybe that should be represented by constructors as well
-                            val earliestTtl = skeleton.earliestTtl
-                            Gen.choose(earliestTtl - 1000.seconds, earliestTtl + 1000.seconds)
-                                .flatMap(instant => (instant, None))
+                        case None =>
+                            // The rollback point points to the initialization tx ot the deinit tx.
+                            // Rollback time doesn't affect the deinit tx since it doesn't have a validity range.
+                            // So we choose the slot in a way the initialization tx is valid or not valid.
+                            val ttl = skeleton.initializationTxValidityEnd
+                            Gen.frequency(
+                              3 -> BeforeInitializationExpires,
+                              1 -> AfterInitializationExpires
+                            ).flatMap(r =>
+                                r match {
+                                    case BeforeInitializationExpires =>
+                                        Gen.choose(ttl - 1000.seconds, ttl)
+                                    case AfterInitializationExpires =>
+                                        Gen.choose(ttl, ttl + 1000.seconds)
+                                }
+                            ).flatMap(instant =>
+                                if skeleton.mbDeinitTxId.fold(false)(_ == rollbackBackbonePoint)
+                                then (instant, Deinit)
+                                else (instant, Complete)
+                            )
                     }
             } yield mkRollback(
               skeleton,
               rollbackBackbonePoint,
               rollbackRolloutSeqPoints,
               rollbackTime,
-              mbFallback
+              depthAndTiming
             )
 
         def mkRollback(
@@ -567,7 +584,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
             rollbackBackbonePoint: TransactionHash,
             rollbackRolloutPoints: List[TransactionHash],
             rollbackTime: QuantizedInstant,
-            mbFallback: Option[(TransactionHash, SettlementTiming)]
+            depthAndTiming: DepthAndTiming
         ): Rollback = {
             // Backbone
             val backboneTxs1 = skeleton.backboneTxs
@@ -593,7 +610,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
 
             // Txs at the verge: these are needed to build the utxo state
             val edgeTxs = backboneLost.head +: rolloutTxsPartitions.map(_._2.head)
-            // println(s"edge txs: ${edgeTxs.map(_.id)}")
+
             val edgeTxsResolvedUtxos = edgeTxs
                 .flatMap(_.resolvedUtxos.utxos.toList)
                 .map((i, o) => UtxoId[L1](i) -> Output[L1](o))
@@ -614,11 +631,11 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
               txsLost = (backboneLost.map(_.tx) ++ rolloutLost).map(_.id).toSet,
               txsLostPreviousRollout = rolloutTxsPartitions.flatMap(_._2).map(_.tx.id).toSet,
               rollbackTime = rollbackTime,
-              mbFallback = mbFallback
+              depthAndTiming = depthAndTiming
             )
         }
 
-    // TODO: this maybe useful for debugging
+    // this maybe useful for debugging
     // val _ = property("Fish skeleton gets generated") = {
     //   val sample = genL1BlockEffectsChain().sample.get
     //   dumpSkeletonInfo(sample)
@@ -650,14 +667,14 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
 
         forAll(Rollback.genRollback(skeleton)) { rollback =>
 
-            println("<~~ ROLLBACK ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~")
-            println(
-              s"Rollback is (utxos: ${rollback.utxos.size}, " +
+            logger.debug(
+              "<~~ ROLLBACK ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~\n" +
+                  s"Rollback is (utxos: ${rollback.utxos.size}, " +
                   s"\nsurvived: ${rollback.txsSurvived}, " +
                   s"\nlost: ${rollback.txsLost}" +
                   s"\nlost previous rollouts: ${rollback.txsLostPreviousRollout}" +
                   s"\ncurrent slot: ${rollback.rollbackTime}" +
-                  s"\ndepth: ${rollback.mbFallback}"
+                  s"\ndepth: ${rollback.depthAndTiming}"
             )
 
             val program = TestControl.executeEmbed {
@@ -672,7 +689,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                     ActorSystem[IO]("Cardano Liaison SUT").use { system =>
                         for {
                             now <- IO.realTimeInstant
-                            _ <- IO.println(s"now=$now")
+                            _ = logger.debug(s"now=$now")
 
                             state = MockState.apply(rollback.utxos.asScalus)
                             cardanoBackend <- CardanoBackendMock.mockIO(state)
@@ -714,52 +731,49 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                             )
 
                             cardanoLiaisonActor <-
-                                // TODO: uncomment if you want to see all msgs passing
+                                // uncomment if you want to see all msgs passing to the actor
                                 // system.actorOfWithDebug(
                                 system.actorOf(cardanoLiaison)
 
-                            expectedTxs = rollback.mbFallback match {
-                                // Settlement/finalization tx is involved, we need to analyze
-                                // timing
-                                case Some(fallback, timing) =>
-                                    timing match {
-                                        case BeforeBackboneTtlExpires =>
-                                            rollback.txsLost ++ rollback.txsLostPreviousRollout
-                                        case WithinSilencePeriod => rollback.txsLostPreviousRollout
-                                        case AfterFallbackBecomesValid =>
-                                            Set(fallback) ++ rollback.txsLostPreviousRollout
-                                    }
-                                // This can happen in two cases
-                                //   - only deinit was rolled back
-                                //   - or all the effects were rolled  back
-                                case None =>
-                                    import hydrozoa.lib.cardano.scalus.QuantizedTime.given
+                            // Calculate expected txs
+                            rolloutTxs = rollback.txsLostPreviousRollout
+                            allLostTxs = rollback.txsLost ++ rolloutTxs
 
-                                    rollback.txsLost.size match {
-                                        // Only deinit
-                                        case 1 =>
-                                            rollback.txsLost ++ rollback.txsLostPreviousRollout
-                                        // All effects
-                                        case _ =>
-                                            if rollback.rollbackTime > skeleton.earliestTtl
-                                            then rollback.txsLostPreviousRollout
-                                            else rollback.txsLost ++ rollback.txsLostPreviousRollout
+                            expectedTxs = rollback.depthAndTiming match {
+                                case Competing(fallback, timing) =>
+                                    timing match {
+                                        case BeforeBackboneTtlExpires => allLostTxs
+                                        case WithinSilencePeriod      => rolloutTxs
+                                        case AfterFallbackBecomesValid =>
+                                            Set(fallback) ++ rolloutTxs
                                     }
+
+                                case Complete(timing) =>
+                                    timing match {
+                                        case BeforeInitializationExpires => allLostTxs
+                                        case AfterInitializationExpires  => rolloutTxs
+                                    }
+
+                                case Deinit => allLostTxs
                             }
 
-                            _ <- IO.println(s"===> Expected txs: $expectedTxs")
+                            _ = logger.info(s"===> Expected txs: $expectedTxs")
 
                             // Timeouts doesn't work under TestControl since the current implementation of
                             // [[ReceiveTimeout]] uses System.currentTimeMillis
                             // So for now we send timeout signals explicitly which is just fine.
 
+                            // This is not needed anymore, since we added immediate Timeout to CardanoLiaison.
+                            // NB: The repetitive timeout here MAY lead to Cardano Liaison tries to submit
+                            // the whole skeleton, which is fine.
+
                             // One timeout is enough for the Cardano Liaison to send all the effects
-                            _ <- cardanoLiaisonActor ! CardanoLiaison.Timeout
+                            // _ <- cardanoLiaisonActor ! CardanoLiaison.Timeout
 
                             check <- awaitCond(
                               p = IO
                                   .traverse(expectedTxs.toList)(cardanoBackend.isTxKnown)
-                                  .flatMap(l => IO.println(l) >> IO.pure(l))
+                                  // .flatMap(l => IO.println(s"$l") >> IO.pure(l))
                                   .flatMap(l =>
                                       IO.pure(l.map(_.fold(_ => false, b => b)).forall(identity))
                                   ),
@@ -772,7 +786,6 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                         } yield check
                     }
             }
-
             program.unsafeRunSync()
         }
 
