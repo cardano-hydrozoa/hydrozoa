@@ -59,7 +59,7 @@ class CardanoBackendBlockfrostTest extends AnyFunSuite {
             } yield utxoSet
         )
         println(ret)
-        assert(ret.isRight && ret.exists(set => set.untagged.size == 6))
+        assert(ret.isRight && ret.exists(set => set.size == 6))
     }
 
     test("Fetch some utxos, multi-page", RequiresBlockfrostApiKey) {
@@ -70,7 +70,7 @@ class CardanoBackendBlockfrostTest extends AnyFunSuite {
             } yield utxoSet
         )
         println(ret)
-        assert(ret.isRight && ret.exists(set => set.untagged.size == 6))
+        assert(ret.isRight && ret.exists(set => set.size == 6))
     }
 
     test("Fetch utxos with specific asset 1", RequiresBlockfrostApiKey) {
@@ -85,7 +85,7 @@ class CardanoBackendBlockfrostTest extends AnyFunSuite {
             } yield utxoSet
         )
         println(ret)
-        assert(ret.isRight && ret.exists(set => set.untagged.size == 1))
+        assert(ret.isRight && ret.exists(set => set.size == 1))
     }
 
     test("Fetch utxos with specific asset 2", RequiresBlockfrostApiKey) {
@@ -100,7 +100,7 @@ class CardanoBackendBlockfrostTest extends AnyFunSuite {
             } yield utxoSet
         )
         println(ret)
-        assert(ret.isRight && ret.exists(set => set.untagged.size == 1))
+        assert(ret.isRight && ret.exists(set => set.size == 1))
     }
 
     test("Known tx is reported correctly", RequiresBlockfrostApiKey) {

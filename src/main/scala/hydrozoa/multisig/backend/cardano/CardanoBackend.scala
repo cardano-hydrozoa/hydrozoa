@@ -1,9 +1,8 @@
 package hydrozoa.multisig.backend.cardano
 
-import hydrozoa.UtxoSetL1
 import scalus.builtin.Data
 import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.{AssetName, PolicyId, Transaction, TransactionHash}
+import scalus.cardano.ledger.{AssetName, PolicyId, Transaction, TransactionHash, Utxos}
 
 /** Notes:
   *   - Only [[ShelleyAddress]] are supported
@@ -21,7 +20,7 @@ trait CardanoBackend[F[_]]:
       * @param address
       * @return
       */
-    def utxosAt(address: ShelleyAddress): F[Either[Error, UtxoSetL1]]
+    def utxosAt(address: ShelleyAddress): F[Either[Error, Utxos]]
 
     /** All the utxos that contain [[asset]] at the [[address]]. The ordering of items from the
       * point of view of the blockchain - oldest first, newest last.
@@ -30,7 +29,7 @@ trait CardanoBackend[F[_]]:
       * @param asset
       * @return
       */
-    def utxosAt(address: ShelleyAddress, asset: (PolicyId, AssetName)): F[Either[Error, UtxoSetL1]]
+    def utxosAt(address: ShelleyAddress, asset: (PolicyId, AssetName)): F[Either[Error, Utxos]]
 
     /** Checks whether a tx specified by [[txHash]] is known to the backend ledger.
       *

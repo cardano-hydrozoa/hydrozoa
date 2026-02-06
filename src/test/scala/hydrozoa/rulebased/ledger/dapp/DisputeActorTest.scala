@@ -117,7 +117,7 @@ object DisputeActorTestHelpers {
         versionMajor: BigInt,
         versionMinor: BigInt,
         initialL1Utxos: Utxos,
-        initialL2Utxos: UtxoSetL2,
+        initialL2Utxos: Utxos,
         addCollateralUtxo: Boolean = true
     ): TestM[TestHeadConfig, DisputeActor] =
         for {
@@ -150,7 +150,7 @@ object DisputeActorTestHelpers {
                 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.*
                 ByteString.fromArray(
                   IArray
-                      .genericWrapArray(calculateCommitment(hashToScalar(initialL2Utxos.asScalus)))
+                      .genericWrapArray(calculateCommitment(hashToScalar(initialL2Utxos)))
                       .toArray
                 )
             }
@@ -175,8 +175,7 @@ object DisputeActorTestHelpers {
             )
             disputeActor = DisputeActor(
               config = disputeActorConfig,
-              collateralUtxo = hydrozoa
-                  .Utxo[L1](UtxoId[L1](collateralUtxo.input), Output[L1](collateralUtxo.output)),
+              collateralUtxo = Utxo(collateralUtxo.input, collateralUtxo.output),
               blockHeader = blockHeader,
               cardanoBackend = cardanoBackend,
               signatures = signBlockHeader(blockHeader, env.headPeers)
@@ -227,13 +226,13 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
 //            versionMajor = 100,
 //            versionMinor = 2,
 //            initialL1Utxos = Map((voteInput, voteOutput)),
-//            initialL2Utxos = UtxoSet[L2]()
+//            initialL2Utxos = Utxos()
 //          )
 //          // Should throw here
 //          res <- lift(disputeActor.handleDisputeRes.attempt)
 //          _ <- assertWith(
 //            msg = "Missing vote datum throws",
-//            condition = res == Left(DisputeActor.Error.ParseError.Vote.MissingDatum(hydrozoa.Utxo[L1](UtxoId[L1](voteInput), Output[L1](voteOutput))))
+//            condition = res == Left(DisputeActor.Error.ParseError.Vote.MissingDatum(Utxo((voteInput), (voteOutput))))
 //
 //          )
 //
@@ -248,7 +247,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
 //          versionMajor = 100,
 //          versionMinor = 2,
 //          initialL1Utxos = Map.empty,
-//          initialL2Utxos = UtxoSet[L2](Map.empty)
+//          initialL2Utxos = Utxos(Map.empty)
 //        )
 //        res <- lift(disputeActor.handleDisputeRes)
 //        _ <- assertWith(
@@ -313,7 +312,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
                 condition = queryRes.size == 2
               )
 
-              votedOutput = queryRes.asScalus
+              votedOutput = queryRes
                   .filter((input, _) => !(otherVoteUtxo.input == input))
                   .head
               _ <- assertWith(
@@ -335,7 +334,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
                           commitment = ByteString.fromArray(
                             KzgCommitment
                                 .calculateCommitment(
-                                  KzgCommitment.hashToScalar(initialL2Utxos.asScalus)
+                                  KzgCommitment.hashToScalar(initialL2Utxos)
                                 )
                                 .toArray
                           ),

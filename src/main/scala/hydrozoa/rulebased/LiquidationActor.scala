@@ -11,6 +11,7 @@ import hydrozoa.multisig.consensus.peer.PeerWallet
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.virtual.commitment.Membership
+import hydrozoa.rulebased
 import hydrozoa.rulebased.LiquidationActor.{Error, Requests}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryScript
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.WithdrawRedeemer
@@ -18,7 +19,6 @@ import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.Resolved
 import hydrozoa.rulebased.ledger.dapp.tx.Withdrawal
 import hydrozoa.rulebased.ledger.dapp.utxo.RuleBasedTreasuryUtxo
-import hydrozoa.{L1, L2, Output, UtxoId, UtxoIdL2, UtxoSet, UtxoSetL1, UtxoSetL2, rulebased}
 import scala.concurrent.duration.FiniteDuration
 import scala.util.{Failure, Success, Try}
 import scalus.builtin.Data
@@ -26,13 +26,13 @@ import scalus.builtin.Data.fromData
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
-import scalus.cardano.ledger.{CardanoInfo, PlutusScriptEvaluator, TransactionHash, TransactionInput, TransactionOutput}
+import scalus.cardano.ledger.{CardanoInfo, PlutusScriptEvaluator, TransactionHash, TransactionInput, TransactionOutput, Utxo, Utxos}
 import scalus.cardano.txbuilder.SomeBuildError
 
 case class LiquidationActor(
-    allUtxosToWithdraw: UtxoSetL2,
+    allUtxosToWithdraw: Utxos,
     cardanoBackend: CardanoBackend[IO],
-    l2SetAtFallback: UtxoSetL2,
+    l2SetAtFallback: Utxos,
     fallbackTxHash: TransactionHash,
     /** The PKH of the wallet that will pay for withdrawal TX fees and receive the change NOTE: The
       * is no coin selection algorithm right now. This means that:
@@ -126,24 +126,23 @@ case class LiquidationActor(
                 }
 
                 // All L2 utxos that were withdrawn in previous withdrawal transactions.
-                previouslyWithdrawnUtxos: Set[UtxoIdL2] = redeemers.foldLeft(Set.empty[UtxoIdL2])(
-                  (acc, redeemer) =>
-                      acc ++
-                          redeemer.utxoIds
-                              .map(id =>
-                                  UtxoIdL2(
-                                    TransactionInput(
-                                      TransactionHash.fromByteString(id.id.hash),
-                                      id.idx.toInt
-                                    )
-                                  )
-                              )
-                              .toScalaList
+                previouslyWithdrawnUtxos: Set[TransactionInput] = redeemers.foldLeft(
+                  Set.empty[TransactionInput]
+                )((acc, redeemer) =>
+                    acc ++
+                        redeemer.utxoIds
+                            .map(id =>
+                                TransactionInput(
+                                  TransactionHash.fromByteString(id.id.hash),
+                                  id.idx.toInt
+                                )
+                            )
+                            .toScalaList
                 )
 
                 // The set of utxos that should currently exist on L2
                 currentActiveSet: Map[TransactionInput, TransactionOutput] =
-                    l2SetAtFallback.asScalus.removedAll(previouslyWithdrawnUtxos.map(_.convert))
+                    l2SetAtFallback.removedAll(previouslyWithdrawnUtxos)
 
                 /////////////////////////////////
                 // Step 2: Figure out the current treasury
@@ -184,13 +183,10 @@ case class LiquidationActor(
 
                 recipe = Withdrawal.Builder.Recipe(
                   treasuryUtxo = treasuryUtxoAndDatum._1,
-                  withdrawalsSubset = UtxoSet[L2](
-                    currentActiveSet
-                        .filter((k, _) => allUtxosToWithdraw.contains(UtxoIdL2(k)))
-                        .map((k, v) => (UtxoId[L2](k), Output[L2](v)))
-                  ),
-                  activeSet =
-                      UtxoSet[L2](currentActiveSet.map((k, v) => (UtxoId[L2](k), Output[L2](v)))),
+                  withdrawalsSubset = currentActiveSet
+                      .filter((k, _) => allUtxosToWithdraw.contains(k))
+                      .map((k, v) => (k, v)),
+                  activeSet = currentActiveSet.map((k, v) => (k, v)),
                   feeUtxos = feeUtxos
                 )
 
@@ -240,7 +236,7 @@ object LiquidationActor {
         }
 
         object ParseError {
-            case class MultipleTreasuryTokensFound(utxoSetL1: UtxoSetL1) extends Unrecoverable
+            case class MultipleTreasuryTokensFound(utxoSetL1: Utxos) extends Unrecoverable
 
             case object TreasuryMissing extends Recoverable
 
@@ -263,13 +259,13 @@ object LiquidationActor {
 
     // NOTE: some duplication with the same function in DisputeActor
     def parseRBTreasury(
-        utxos: UtxoSetL1
+        utxos: Utxos
     ): EitherT[IO, Error.RecoverableErrors, (RuleBasedTreasuryUtxo, Resolved)] =
         for {
             utxo <- utxos.size match {
                 // May happen due to rollback, ignore and try again
                 case 0 => EitherT.left(IO.pure(Error.ParseError.TreasuryMissing))
-                case 1 => EitherT.right(IO.pure(hydrozoa.Utxo[L1](utxos.head)))
+                case 1 => EitherT.right(IO.pure(utxos.head))
                 case _ =>
                     EitherT.liftF(
                       IO.raiseError(Error.ParseError.MultipleTreasuryTokensFound(utxos))
@@ -277,7 +273,7 @@ object LiquidationActor {
             }
 
             treasuryUtxo <- RuleBasedTreasuryUtxo
-                .parse(utxo) match {
+                .parse(Utxo(utxo)) match {
                 case Left(e) =>
                     EitherT.liftF(
                       IO.raiseError(

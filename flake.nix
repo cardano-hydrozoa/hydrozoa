@@ -17,6 +17,8 @@
         # https://www.graalvm.org/
         sbt0 = pkgs.sbt.override { jre = jdk; };
         visualvm = pkgs.visualvm.override { jdk = jdk; };
+        bloop0 = pkgs.bloop.override {jre = jdk;};
+ 	metals0 = pkgs.metals.override { jre = jdk;};
         # Define the hooks
         pre-commit-check = git-hooks.lib.${system}.run {
           src = ./.;
@@ -35,6 +37,8 @@
           # This fixes bash prompt/autocomplete issues with subshells (i.e. in VSCode) under `nix develop`/direnv
           buildInputs = [ pkgs.bashInteractive ];
           packages = with pkgs; [
+            metals0
+            bloop0
             ammonite # modernized scala repl: https://ammonite.io/
             async-profiler # Low-overhead profiler for the JVM: https://github.com/async-profiler/async-profiler
             jdk

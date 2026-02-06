@@ -106,27 +106,23 @@ def genWithdrawTxRecipe: Gen[(Withdrawal.Builder.Recipe, TestPeer)] = {
           headMp = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes)).policyId,
           beaconTokenName = beaconTokenName,
           utxosCommitment = KzgCommitment.calculateCommitment(
-            KzgCommitment.hashToScalar(activeSet.asScalus)
+            KzgCommitment.hashToScalar(activeSet)
           ),
           setupSize = withdrawalSubset.size + 1
         )
 
         sufficientTreasuryValue =
             treasuryUtxo.value
-                + activeSet.asScalus.values.toList.foldLeft(Value.zero)((v, to) => v + to.value)
+                + activeSet.values.toList.foldLeft(Value.zero)((v, to) => v + to.value)
                 + Value.ada(20)
         adjustedTreasuryUtxo = treasuryUtxo.copy(value = sufficientTreasuryValue)
 
     } yield (
       Withdrawal.Builder.Recipe(
         treasuryUtxo = adjustedTreasuryUtxo,
-        withdrawalsSubset = UtxoSet[L2](withdrawalSubset.toMap),
+        withdrawalsSubset = withdrawalSubset.toMap,
         activeSet = activeSet,
-        feeUtxos = UtxoSet[L1](
-          feeUtxos
-              .map(utxo => (UtxoId[L1](utxo.input), Output[L1](utxo.output)))
-              .toMap
-        )
+        feeUtxos = feeUtxos.map(_.toTuple).toMap
       ),
       peers.head
     )

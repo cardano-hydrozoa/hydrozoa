@@ -11,7 +11,7 @@ import hydrozoa.multisig.ledger.dapp.tx.{InitializationTx, Metadata as MD, TxTim
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.dapp.state.VoteDatum
-import hydrozoa.{L1, Output, UtxoId, UtxoSetL1, ensureMinAda, maxNonPlutusTxFee, given}
+import hydrozoa.{ensureMinAda, maxNonPlutusTxFee, given}
 import io.bullet.borer.Cbor
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.{Gen, Prop, Properties, Test}
@@ -48,7 +48,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
       */
     def genArgs(
         txTiming: TxTiming = default(testTxBuilderCardanoInfo.slotConfig),
-        mbUtxosAvailable: Option[Map[TestPeer, UtxoSetL1]] = None
+        mbUtxosAvailable: Option[Map[TestPeer, Utxos]] = None
     ): Gen[(InitializationTxSeq.Config, InitializationTxSeq.Builder.Args, NonEmptyList[TestPeer])] =
         for {
             peers <- genTestPeers()
@@ -60,20 +60,19 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                         // Random prime peer's utxo
                         seedUtxo <- Gen
                             .oneOf(utxos(prime))
-                            .map(u => Utxo(u._1.untagged, u._2.untagged))
+                            .map(u => Utxo(u._1, u._2))
                         // Utxos of the other peers
                         rest = utxos.view
                             .filterKeys(peers.tail.contains)
                             .values
-                            .map(_.untagged)
                             .foldLeft(
-                              Map.empty[UtxoId[L1], Output[L1]]
+                              Map.empty[TransactionInput, TransactionOutput]
                             )((l, r) => l ++ r)
                             .toList
                         // Some random utxos
                         fundingUtxos <- Gen
                             .someOf(rest)
-                            .flatMap(l => l.map(u => Utxo(u._1.untagged, u._2.untagged)).toList)
+                            .flatMap(l => l.map(u => Utxo(u._1, u._2)).toList)
                     } yield (seedUtxo, fundingUtxos)
 
                 case None =>

@@ -86,7 +86,7 @@ def genEquityShares(peers: NonEmptyList[TestPeer]): Gen[EquityShares] =
             .zipWithIndex
             .map { case ((addr, share), index) =>
                 import spire.math.UByte
-                UByte(index) -> (Address[L1](addr), share)
+                UByte(index) -> (addr, share)
             }
             .toMap
 

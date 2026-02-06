@@ -1,6 +1,5 @@
 package hydrozoa.rulebased.ledger.dapp.utxo
 
-import hydrozoa.L1
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum
 import scala.util.{Failure, Success, Try}
 import scalus.*
@@ -39,16 +38,15 @@ final case class RuleBasedTreasuryUtxo(
 object RuleBasedTreasuryUtxo {
     trait ParseError extends Throwable
 
-    case class TreasuryDatumMissing(utxo: hydrozoa.Utxo[L1]) extends ParseError
+    case class TreasuryDatumMissing(utxo: Utxo) extends ParseError
 
-    case class TreasuryDatumNotInline(utxo: hydrozoa.Utxo[L1]) extends ParseError
+    case class TreasuryDatumNotInline(utxo: Utxo) extends ParseError
 
-    case class TreasuryDatumDeserializationError(utxo: hydrozoa.Utxo[L1], e: Throwable)
-        extends ParseError
+    case class TreasuryDatumDeserializationError(utxo: Utxo, e: Throwable) extends ParseError
 
-    case class TreasuryAddressNotShelley(utxo: hydrozoa.Utxo[L1]) extends ParseError
+    case class TreasuryAddressNotShelley(utxo: Utxo) extends ParseError
 
-    def parse(utxo: hydrozoa.Utxo[L1]): Either[ParseError, RuleBasedTreasuryUtxo] =
+    def parse(utxo: Utxo): Either[ParseError, RuleBasedTreasuryUtxo] =
         for {
             d1 <- utxo.output.datumOption.toRight(TreasuryDatumMissing(utxo))
 

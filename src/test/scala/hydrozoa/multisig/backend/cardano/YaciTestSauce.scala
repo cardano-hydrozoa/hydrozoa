@@ -1,13 +1,12 @@
 package hydrozoa.multisig.backend.cardano
 
-import hydrozoa.{L1, Output, UtxoIdL1, UtxoSet, UtxoSetL1}
 import scalus.builtin.ByteString
 import scalus.cardano.address.Network
-import scalus.cardano.ledger.{Blake2b_256, Hash, HashPurpose, TransactionInput, TransactionOutput, Value}
+import scalus.cardano.ledger.{Blake2b_256, Hash, HashPurpose, TransactionInput, TransactionOutput, Utxos, Value}
 import test.TestPeer
 import test.TestPeer.*
 
-def yaciTestSauceGenesis(network: Network): Map[TestPeer, UtxoSetL1] =
+def yaciTestSauceGenesis(network: Network): Map[TestPeer, Utxos] =
     val mkAddress = TestPeer.address(network)
 
     List(
@@ -94,13 +93,13 @@ def yaciTestSauceGenesis(network: Network): Map[TestPeer, UtxoSetL1] =
     ).map((txHash, peer) =>
         peer ->
             (
-              UtxoIdL1(
+              (
                 TransactionInput(
                   Hash[Blake2b_256, HashPurpose.TransactionHash](ByteString.fromHex(txHash)),
                   0
                 )
               ),
-              Output[L1](
+              (
                 TransactionOutput
                     .Babbage(address = mkAddress(peer), value = Value.lovelace(10_000_000_000L))
               )
@@ -108,5 +107,5 @@ def yaciTestSauceGenesis(network: Network): Map[TestPeer, UtxoSetL1] =
     ).toMap
         .groupBy((peer, _) => peer)
         .view
-        .mapValues(a => UtxoSet[L1](a.values.toMap))
+        .mapValues(a => a.values.toMap)
         .toMap

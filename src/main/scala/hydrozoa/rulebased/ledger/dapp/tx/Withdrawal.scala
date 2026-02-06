@@ -31,7 +31,7 @@ object Withdrawal {
     case class Tx(
         treasuryUtxoSpent: RuleBasedTreasuryUtxo,
         treasuryUtxoProduced: RuleBasedTreasuryUtxo,
-        withdrawalOutputs: List[OutputL2],
+        withdrawalOutputs: List[TransactionOutput],
         tx: Transaction
     )
 
@@ -48,7 +48,7 @@ object Withdrawal {
 
         def calculateResidualTreasury(
             treasuryUtxo: RuleBasedTreasuryUtxo,
-            withdrawals: UtxoSetL2
+            withdrawals: Utxos
         ): Either[Builder.Error, Value] = {
 
             val totalWithdrawalValue = withdrawals.foldLeft(Value.zero)(_ + _._2.value)
@@ -62,15 +62,15 @@ object Withdrawal {
 
         case class Recipe(
             treasuryUtxo: RuleBasedTreasuryUtxo,
-            withdrawalsSubset: UtxoSetL2,
-            activeSet: UtxoSetL2,
-            feeUtxos: UtxoSetL1
+            withdrawalsSubset: Utxos,
+            activeSet: Utxos,
+            feeUtxos: Utxos
         ) {
             def halve: Recipe =
                 val newSubset = withdrawalsSubset.drop(withdrawalsSubset.size / 2)
                 Recipe(
                   treasuryUtxo,
-                  UtxoSet[L2](newSubset),
+                  newSubset,
                   activeSet,
                   feeUtxos
                 )
@@ -81,7 +81,7 @@ object Withdrawal {
             case TreasuryNotResolved
             case InsufficientTreasuryFunds(negativeDiff: Value)
             case NoWithdrawals
-            case NotASubset(withdrawalsSubset: UtxoSetL2, activeSet: UtxoSetL2)
+            case NotASubset(withdrawalsSubset: Utxos, activeSet: Utxos)
 
     }
 }
@@ -103,8 +103,8 @@ case class Withdrawal(config: Withdrawal.Config) {
                 if recipe.withdrawalsSubset.nonEmpty then Right(())
                 else Left(Withdrawal.Builder.Error.NoWithdrawals)
             _ <-
-                if recipe.withdrawalsSubset.asScalus.keySet
-                        .subsetOf(recipe.activeSet.asScalus.keySet)
+                if recipe.withdrawalsSubset.keySet
+                        .subsetOf(recipe.activeSet.keySet)
                 then Right(())
                 else
                     Left(
@@ -118,8 +118,8 @@ case class Withdrawal(config: Withdrawal.Config) {
             treasuryDatum <- Withdrawal.Builder.extractTreasuryDatum(recipe.treasuryUtxo)
 
             membershipProof <- Membership.mkMembershipProofValidated(
-              recipe.activeSet.asScalus,
-              recipe.withdrawalsSubset.asScalus
+              recipe.activeSet,
+              recipe.withdrawalsSubset
             )
 
             proofBS = ByteString.fromArray(IArray.genericWrapArray(membershipProof).toArray)
@@ -127,7 +127,7 @@ case class Withdrawal(config: Withdrawal.Config) {
             // From this point we should choose and stick to a particular order of withdrawals, so
             // to order of outputs in the tx (starting from index 1) and the order of utxo ids in
             // the redeemer should be the same.
-            withdrawalsList = recipe.withdrawalsSubset.asScalus.toList
+            withdrawalsList = recipe.withdrawalsSubset.toList
 
             withdrawRedeemer = TreasuryRedeemer.Withdraw(
               WithdrawRedeemer(
@@ -213,7 +213,7 @@ case class Withdrawal(config: Withdrawal.Config) {
         } yield Withdrawal.Tx(
           treasuryUtxoSpent = recipe.treasuryUtxo,
           treasuryUtxoProduced = newTreasuryUtxo,
-          withdrawalOutputs = withdrawalOutputs.map(Output[L2]),
+          withdrawalOutputs = withdrawalOutputs,
           tx = finalized.transaction
         )) match {
             case Right(w) => Right(w)

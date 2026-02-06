@@ -10,22 +10,22 @@ import hydrozoa.multisig.consensus.peer.PeerWallet
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
-import hydrozoa.{L1, UtxoSetL2, VerificationKeyBytes, rulebased}
+import hydrozoa.{VerificationKeyBytes, rulebased}
 import scala.concurrent.duration.FiniteDuration
-import scalus.cardano.ledger.{CardanoInfo, TransactionHash}
+import scalus.cardano.ledger.{CardanoInfo, TransactionHash, Utxo, Utxos}
 
 /** This doesn't actually do much of anything right now. It just starts the dispute and liquidation
   * actors, and those proceed autonomously. I don't think we need actors for these.
   */
 case class RuleBasedRegimeManager(
     config: RuleBasedRegimeManager.Config,
-    collateralUtxo: hydrozoa.Utxo[L1],
+    collateralUtxo: Utxo,
     blockHeader: BlockHeader.Minor.Onchain,
     signatures: List[BlockHeader.Minor.HeaderSignature],
     cardanoBackend: CardanoBackend[IO],
     votingDeadline: QuantizedInstant,
-    utxosToWithdrawL2: UtxoSetL2,
-    l2SetAtFallback: UtxoSetL2,
+    utxosToWithdrawL2: Utxos,
+    l2SetAtFallback: Utxos,
     fallbackTxHash: TransactionHash
 ) extends Actor[IO, Unit] {
 

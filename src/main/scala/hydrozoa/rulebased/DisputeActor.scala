@@ -28,13 +28,13 @@ import scala.util.{Failure, Success, Try}
 import scalus.builtin.Data.fromData
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
-import scalus.cardano.ledger.{AddrKeyHash, CardanoInfo, DatumOption, PlutusScriptEvaluator}
+import scalus.cardano.ledger.{AddrKeyHash, CardanoInfo, DatumOption, PlutusScriptEvaluator, Utxo, Utxos}
 import scalus.cardano.txbuilder.SomeBuildError
 import scalus.ledger.api.v3.PubKeyHash
 
 // QUESTION: The `OwnVoteUtxo` type is pretty sparse. Should I augment it directly, or did we want to keep
 // it small for some reason?<
-type VoteUtxoWithDatum = (hydrozoa.Utxo[L1], VoteDatum)
+type VoteUtxoWithDatum = (Utxo, VoteDatum)
 
 /** Pulls in vote/treasury utxo from cardano backend, and decides whether to submit a vote tx, tally
   * tx, or dispute resolution tx. If none of these need to be submitted, it tells the rule-based
@@ -58,7 +58,7 @@ type VoteUtxoWithDatum = (hydrozoa.Utxo[L1], VoteDatum)
   */
 final case class DisputeActor(
     config: DisputeActor.Config,
-    collateralUtxo: hydrozoa.Utxo[L1],
+    collateralUtxo: Utxo,
     blockHeader: BlockHeader.Minor.Onchain,
     cardanoBackend: CardanoBackend[IO],
     signatures: List[BlockHeader.Minor.HeaderSignature],
@@ -190,14 +190,14 @@ final case class DisputeActor(
       *   "Some" if the dispute actor still needs to cast a vote. The second element is all other
       *   vote utxos.
       */
-    private def parseDisputeUtxos(utxos: hydrozoa.UtxoSetL1): IO[
+    private def parseDisputeUtxos(utxos: Utxos): IO[
       (
           Option[VoteUtxoWithDatum],
           Seq[VoteUtxoWithDatum]
       )
     ] =
         for {
-            voteUtxos <- utxos.toList.traverse((i, o) => utxoToVoteUtxo(hydrozoa.Utxo[L1](i, o)))
+            voteUtxos <- utxos.toList.traverse((i, o) => utxoToVoteUtxo(Utxo(i, o)))
 
             votePartition = voteUtxos.partition {
                 case (_, VoteDatum(_, _, VoteStatus.AwaitingVote(peerPkh))) =>
@@ -207,7 +207,7 @@ final case class DisputeActor(
         } yield (votePartition._1.headOption, votePartition._2)
 
     private def utxoToVoteUtxo(
-        utxo: hydrozoa.Utxo[L1]
+        utxo: Utxo
     ): IO[VoteUtxoWithDatum] = {
         for {
             d1: DatumOption <- utxo._2.datumOption match {
@@ -271,16 +271,15 @@ object DisputeActor {
         sealed trait ParseError
         object ParseError {
             object Vote {
-                case class MissingDatum(utxo: hydrozoa.Utxo[L1]) extends Unrecoverable
+                case class MissingDatum(utxo: Utxo) extends Unrecoverable
 
-                case class DatumNotInline(utxo: hydrozoa.Utxo[L1]) extends Unrecoverable
+                case class DatumNotInline(utxo: Utxo) extends Unrecoverable
 
-                case class DatumDeserializationError(utxo: hydrozoa.Utxo[L1], e: Throwable)
-                    extends Unrecoverable
+                case class DatumDeserializationError(utxo: Utxo, e: Throwable) extends Unrecoverable
             }
 
             object Treasury {
-                case class MultipleTreasuryTokensFound(utxos: UtxoSetL1) extends Unrecoverable
+                case class MultipleTreasuryTokensFound(utxos: Utxos) extends Unrecoverable
 
                 case class WrappedTreasuryParseError(wrapped: RuleBasedTreasuryUtxo.ParseError)
                     extends Unrecoverable
@@ -304,13 +303,13 @@ object DisputeActor {
     // TODO: Factor out. Its shared between this and the li
     // obtained from the parameters to this class
     def parseRBTreasury(
-        utxos: UtxoSetL1
+        utxos: Utxos
     ): EitherT[IO, Error.RecoverableErrors, RuleBasedTreasuryUtxo] =
         for {
             utxo <- utxos.size match {
                 // May happen due to rollback, ignore and try again
                 case 0 => EitherT.left(IO.pure(Error.ParseError.Treasury.TreasuryMissing))
-                case 1 => EitherT.right(IO.pure(hydrozoa.Utxo[L1](utxos.head)))
+                case 1 => EitherT.right(IO.pure(Utxo(utxos.head)))
                 case _ =>
                     EitherT.liftF(
                       IO.raiseError(Error.ParseError.Treasury.MultipleTreasuryTokensFound(utxos))
