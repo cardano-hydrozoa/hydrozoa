@@ -65,7 +65,7 @@ object Stage1Properties extends YetAnotherProperties("Integration Stage 1"):
     val _ = property("Block propagation works well on L1 mock") = Suite(
       useTestControl = true,
       network = Left(preprod),
-      genesisUtxos = yaciTestSauceGenesis(preprod.scalusNetwork),
+      getGenesisUtxos = yaciTestSauceGenesis(preprod.scalusNetwork),
       commandGen = ArbitraryEventsOnly
     ).property()
 
@@ -76,7 +76,7 @@ case class Suite(
     override val useTestControl: Boolean,
     override val commandGen: CommandGen[ModelState, Stage1Sut],
     network: Either[StandardCardanoNetwork, NetworkInfo],
-    genesisUtxos: Map[TestPeer, UtxoSetL1],
+    getGenesisUtxos: List[TestPeer] => Map[TestPeer, UtxoSetL1],
 ) extends ModelBasedSuite {
 
     override type State = ModelState
@@ -156,7 +156,10 @@ case class Suite(
             // system was not terminated in the [[shutdownSut]] action.
 
             // Cardano L1 backend mock
-            utxos = genesisUtxos.values.flatten.map((k, v) => k.untagged -> v.untagged).toMap
+            // TODO: save utxos in the model state?
+            utxos = getGenesisUtxos(List(ownTestPeer)).values.flatten
+                .map((k, v) => k.untagged -> v.untagged)
+                .toMap
             mockState = MockState.apply(utxos)
             cardanoBackend <- CardanoBackendMock.mockIO(
               initialState = mockState,
@@ -390,7 +393,7 @@ case class Suite(
 
             seedUtxo <- Gen
                 .oneOf(
-                  genesisUtxos(ownTestPeer)
+                  getGenesisUtxos(List(ownTestPeer))(ownTestPeer)
                       .map(u => Utxo(u._1.untagged, u._2.untagged))
                 )
                 .label("Seed utxo")

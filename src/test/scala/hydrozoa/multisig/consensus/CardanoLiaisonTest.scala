@@ -58,9 +58,98 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
 
     object BlockEffectsSignedChain:
 
-        // TODO: figure out why this fails with (minSettlements=1, maxSettlements=1)
-        // TODO: this gives no result sometimes
-        // TODO: this is always very slow
+        private def time[A](label: String)(block: => A): A = {
+            val start = System.nanoTime()
+            val result = block
+            val elapsed = (System.nanoTime() - start) / 1_000_000.0
+            logger.info(f"\t\t⏱️ $label: ${elapsed}%.2f ms")
+            result
+        }
+
+        /** TODO: this is always very slow TODO: this gives no result sometimes
+          *
+          * Complete Performance Analysis
+          *
+          * InitializationTxSeq.build (4,166ms)
+          *
+          *   - DisputeResolutionScript compilation: 2,906ms (70%)
+          *   - RuleBasedTreasuryScript compilation: 780ms (19%)
+          *   - Total Scalus overhead: 3,686ms (88%)
+          *   - InitializationTx.build: 388ms (9%)
+          *   - Other: ~92ms (3%)
+          *
+          * Settlement Performance Deep Dive
+          *
+          * Settlement #1 (2,283ms - NO payouts, 395 deposits):
+          *   - SettlementTx.NoPayouts.build: 2,266ms
+          *     - basePessimistic: 16ms
+          *     - addDeposits: 2,227ms (98%!) ⚠️⚠️⚠️
+          *     - finalizeContext: 7ms
+          *     - complete: 9ms
+          *   - FallbackTx.build: 6ms (cached)
+          *
+          * Settlement #2 (1,298ms - NO payouts, 395 deposits):
+          *   - SettlementTx.NoPayouts.build: 1,294ms
+          *     - basePessimistic: 3ms
+          *     - addDeposits: 1,284ms (99%!) ⚠️⚠️⚠️
+          *     - finalizeContext: 4ms
+          *     - complete: 0.16ms
+          *   - FallbackTx.build: 4ms (cached)
+          *
+          * Settlement #3 (1,414ms - WITH 4 rollouts, 100 deposits):
+          *   - RolloutTxSeq.buildPartial: 1,193ms (84%)
+          *   - SettlementTx.WithPayouts.build: 142ms
+          *     - basePessimistic: 3ms
+          *     - addDeposits: 123ms (87%)
+          *     - finalizeContext: 1ms
+          *     - complete: 11ms
+          *   - finishPostProcess: 71ms
+          *   - FallbackTx.build: 3ms (cached)
+          *
+          * Settlement #4 (2,130ms - WITH 4 rollouts, 394 deposits):
+          *   - RolloutTxSeq.buildPartial: 961ms (45%)
+          *   - SettlementTx.WithPayouts.build: 1,158ms (54%)
+          *     - basePessimistic: 2ms
+          *     - addDeposits: 1,143ms (99%!) ⚠️⚠️⚠️
+          *     - finalizeContext: 4ms
+          *     - complete: 8ms
+          *   - finishPostProcess: 7ms
+          *   - FallbackTx.build: 2ms (cached)
+          *
+          * Settlement #5 (1,673ms - WITH 4 rollouts, 394 deposits):
+          *   - RolloutTxSeq.buildPartial: 640ms (38%)
+          *   - SettlementTx.WithPayouts.build: 1,019ms (61%)
+          *     - basePessimistic: 2ms
+          *     - addDeposits: 998ms (98%!) ⚠️⚠️⚠️
+          *     - finalizeContext: 6ms
+          *     - complete: 12ms
+          *   - finishPostProcess: 9ms
+          *   - FallbackTx.build: 4ms (cached)
+          *
+          * Key Findings
+          *
+          *   1. 88% of initialization time is Scalus compilation (3.7s out of 4.2s)
+          *      - DisputeResolutionScript: 2.9s
+          *      - RuleBasedTreasuryScript: 0.78s
+          *      - Both are one-time costs, fully cached afterward
+          *   2. addDeposits is the main bottleneck in settlements - consuming 87-99% of
+          *      SettlementTx build time:
+          *      - 123ms for 100 deposits
+          *      - 998-1,284ms for 394-395 deposits
+          *      - ~3-3.3ms per deposit on average
+          *      - This is the deposit loop that iteratively adds deposits to the transaction
+          *   3. RolloutTxSeq.buildPartial varies dramatically (640ms to 1,193ms) based on rollout
+          *      complexity
+          *   4. Total time breakdown for 5 settlements + init + finalization: ~13 seconds
+          *      - Initialization: 4.2s (32%)
+          *      - Settlements: 8.8s (68%)
+          *        - addDeposits: ~6.9s (78% of settlements, 53% of total!)
+          *        - RolloutTxSeq: ~2.8s
+          *
+          * The primary performance bottleneck is addDeposits - the incremental deposit-adding loop
+          * that takes ~3ms per deposit.
+          */
+
         /** Generates the "skeleton", i.e. random chain of happy-path transactions and fallbacks
           * with requested parameters.
           */
@@ -70,20 +159,25 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
             mkTxTiming: SlotConfig => TxTiming = TxTiming.default,
             slotConfig: SlotConfig = testTxBuilderCardanoInfo.slotConfig
         ): Gen[BlockEffectsSignedChain] = for {
-
+            _ <- Gen.const(())
             // Init tx is generated using the available set of utxos.
+            _ = logger.info("🔧 Starting skeleton generation...")
             txTiming <- Gen.const(mkTxTiming(slotConfig))
-            (initTxConfig, initialArgs, peers) <- InitializationTxSeqTest.genArgs(
-              txTiming = txTiming,
-              mbUtxosAvailable = Some(yaciTestSauceGenesis(testNetwork))
-            )
+            (initTxConfig, initialArgs, peers) <- time("genArgs") {
+                InitializationTxSeqTest.genArgs(
+                  txTiming = txTiming,
+                  mbUtxosAvailable = Some(yaciTestSauceGenesis(testNetwork))
+                )
+            }
 
             _ = logger.debug(s"gen: peers: ${peers.map(_.peerNum)}")
 
             // Initial block effects
-            initializationTxSeq = InitializationTxSeq.Builder
-                .build(initialArgs, initTxConfig)
-                .fold(e => throw RuntimeException(e.toString), x => x)
+            initializationTxSeq = time("InitializationTxSeq.build") {
+                InitializationTxSeq.Builder
+                    .build(initialArgs, initTxConfig)
+                    .fold(e => throw RuntimeException(e.toString), x => x)
+            }
             initializationTx = initializationTxSeq.initializationTx
             fallbackTx = initializationTxSeq.fallbackTx
 
@@ -115,9 +209,9 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
             )
 
             // Settlement txs uses RANDOM deposit utxos so far, we don't use
-            // deposit txs per se in this test suite. After generation, the
+            // deposit txs per se in this test suite. After generation the
             // deposit utxos are added to the "genesis" utxos to allow the mock
-            // handling settlement transactions.
+            // handling settlement transactions.2
 
             settlementTxSeqConfig = SettlementTxSeq.Config(
               headMultisigScript = initTxConfig.headMultisigScript,
@@ -130,6 +224,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
             )
 
             numOfSettlements <- choose(minSettlements, maxSettlements)
+            _ = logger.info(s"📊 Generating $numOfSettlements settlements...")
 
             (majorBlocksEffectsSigned, lastSettlementBlockTimestamp, fallbackValidityStart) <-
                 tailRecM(
@@ -155,23 +250,31 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                             )
                         else
                             for {
+                                _ <- Gen.const(())
+                                _ = logger.debug(s"  Settlement $settlementNum/$numOfSettlements")
                                 blockCreatedOn <- Gen.choose(
                                   previousBlockTimestamp + 10.seconds,
                                   fallbackValidityStart - txTiming.silenceDuration - 10.seconds
                                 )
-                                settlementBuilderAndArgs <- genNextSettlementTxSeqBuilder(
-                                  settlementTxSeqConfig,
-                                  treasuryToSpend,
-                                  fallbackValidityStart,
-                                  blockCreatedOn,
-                                  settlementNum,
-                                  hns,
-                                  txTiming
-                                )
+                                settlementBuilderAndArgs <- time(
+                                  s"  genNextSettlementTxSeqBuilder #$settlementNum"
+                                ) {
+                                    genNextSettlementTxSeqBuilder(
+                                      settlementTxSeqConfig,
+                                      treasuryToSpend,
+                                      fallbackValidityStart,
+                                      blockCreatedOn,
+                                      settlementNum,
+                                      hns,
+                                      txTiming
+                                    )
+                                }
                                 (builder, args) = settlementBuilderAndArgs
-                                result = builder
-                                    .build(args)
-                                    .fold(e => throw RuntimeException(e.toString), x => x)
+                                result = time(s"  SettlementTxSeq.build #$settlementNum") {
+                                    builder
+                                        .build(args)
+                                        .fold(e => throw RuntimeException(e.toString), x => x)
+                                }
 
                                 settlementTx = result.settlementTxSeq.settlementTx
                                 settlementTxWitnesses: List[VKeyWitness] =
@@ -224,6 +327,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                 }
 
             // Finalization seq
+            _ = logger.info("🏁 Generating finalization...")
             lastSettlementTreasury =
                 majorBlocksEffectsSigned.last.settlementTx.treasuryProduced
 
@@ -237,7 +341,9 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
 
             finalBlockNum = numOfSettlements + 1
 
-            equityShares <- genEquityShares(peers)
+            equityShares <- time("genEquityShares") {
+                genEquityShares(peers)
+            }
 
             finalizationTxSeqConfig = FinalizationTxSeq.Config(
               headMultisigScript = settlementTxSeqConfig.headMultisigScript,
@@ -247,20 +353,24 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
               equityShares = equityShares
             )
 
-            (builder, finalArgs) <- genFinalizationTxSeqBuilder(
-              finalizationTxSeqConfig,
-              lastSettlementTreasury,
-              finalBlockNum,
-              fallbackValidityStart,
-              finalizationBlockCreatedOn,
-              txTiming,
-              peers
-            )
+            (builder, finalArgs) <- time("genFinalizationTxSeqBuilder") {
+                genFinalizationTxSeqBuilder(
+                  finalizationTxSeqConfig,
+                  lastSettlementTreasury,
+                  finalBlockNum,
+                  fallbackValidityStart,
+                  finalizationBlockCreatedOn,
+                  txTiming,
+                  peers
+                )
+            }
 
             // Run the builder
-            finalizationTxSeq = builder
-                .build(finalArgs)
-                .fold(e => throw RuntimeException(e.toString), x => x)
+            finalizationTxSeq = time("FinalizationTxSeq.build") {
+                builder
+                    .build(finalArgs)
+                    .fold(e => throw RuntimeException(e.toString), x => x)
+            }
 
             finalizationTx = finalizationTxSeq.finalizationTx
             finalizationTxWitnesses: List[VKeyWitness] =
@@ -389,8 +499,21 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                 val settlementsInfo = skeleton._2.map { effects =>
                     val rolloutLines =
                         effects.rolloutTxs.map(r => s"\n\t\t - rollout: ${r.tx.id}").mkString
+
+                    val deposits = effects.settlementTx.depositsSpent.length
+
+                    val directWithdrawals =
+                        effects.settlementTx.tx.body.value.outputs.length - 1 - (if effects.rolloutTxs.nonEmpty
+                                                                                 then 1
+                                                                                 else 0)
+                    val rolloutWithdrawals =
+                        effects.rolloutTxs.map(_.tx.body.value.outputs.length).sum
+                            - (effects.rolloutTxs.size - 1)
+
                     s"\nSettlement: ${effects.settlementTx.tx.id}, TTL: ${effects.settlementTx.validityEnd}, " +
-                        s"deposits: ${effects.settlementTx.depositsSpent.length}, rollouts: ${effects.rolloutTxs.size}${rolloutLines}" +
+                        s"deposits: $deposits, " +
+                        s"withdrawals: ${directWithdrawals + rolloutWithdrawals}, " +
+                        s"rollouts: ${effects.rolloutTxs.size}${rolloutLines}" +
                         s"\n\t=> Fallback: ${effects.fallbackTx.tx.id}, validity start: ${effects.fallbackTx.validityStart}"
                 }.mkString
 
@@ -635,17 +758,10 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
             )
         }
 
-    // this maybe useful for debugging
-    // val _ = property("Fish skeleton gets generated") = {
-    //   val sample = genL1BlockEffectsChain().sample.get
-    //   dumpSkeletonInfo(sample)
-    //   Prop.proved
-    // }
-
     // Test skeletons against which the (multiple) properties are checked.
     val testSkeletons: Seq[BlockEffectsSignedChain] =
         List(
-          (5, 5), // short skeleton for fast feedback loop
+          (5, 10), // short skeleton for fast feedback loop
           // (20, 20) // more realistic skeleton
         ).flatMap((min, max) => {
             // val seed = Seed.fromBase64("SEAube5f5bBsTlLeYTuh3am1vO5iJvmzNRFEXSOlXlD=").get
@@ -659,7 +775,8 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
 
     testSkeletons.distinct.zipWithIndex.foreach { case (skeleton, idx) =>
         include(new Properties(s"Skeleton $idx") {
-            val _ = property("rollbacks are handled") = mkRollbackAreHandled(skeleton)
+            // Comment this out to see only generated skeletons
+            // val _ = property("rollbacks are handled") = mkRollbackAreHandled(skeleton)
         })
     }
 

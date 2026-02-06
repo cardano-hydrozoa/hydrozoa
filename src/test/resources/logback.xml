@@ -10,5 +10,10 @@
     </root>
     <logger name="CardanoLiaison" level="debug"/>
     <logger name="CardanoLiaisonTest" level="debug"/>
+    <logger name="InitializationTxSeq" level="info"/>
+    <logger name="InitializationTx" level="info"/>
+    <logger name="FallbackTx" level="info"/>
+    <logger name="SettlementTxSeq" level="info"/>
+    <logger name="SettlementTx" level="info"/>
     <logger name="scalus" level="warn"/>
 </configuration>

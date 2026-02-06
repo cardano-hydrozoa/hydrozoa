@@ -214,7 +214,7 @@ trait CardanoLiaison(
     override def preStart: IO[Unit] =
         for {
             _ <- initializeConnections
-            // Immediate Timeout triggers the initialization tx right away (not strictly needed)
+            // Immediate + periodic Timeout
             _ <- context.self ! CardanoLiaison.Timeout
             _ <- context.setReceiveTimeout(config.receiveTimeout, CardanoLiaison.Timeout)
         } yield ()
