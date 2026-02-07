@@ -26,15 +26,16 @@ import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, FinalizationTx, RolloutTx, 
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, InitializationTxSeq, InitializationTxSeqTest, SettlementTxSeq}
 import hydrozoa.rulebased.ledger.dapp.tx.genEquityShares
 import hydrozoa.{L1, Output, UtxoId, UtxoSet, UtxoSetL1, attachVKeyWitnesses}
-import java.util.concurrent.TimeUnit
 import monocle.Focus.focus
 import org.scalacheck.*
 import org.scalacheck.Gen.{choose, tailRecM}
 import org.scalacheck.Prop.forAll
-import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scalus.cardano.ledger.{Block as _, BlockHeader as _, *}
 import test.Generators.Hydrozoa.*
 import test.{TestPeer, testNetwork, testTxBuilderCardanoInfo}
+
+import java.util.concurrent.TimeUnit
+import scala.concurrent.duration.{DurationInt, FiniteDuration}
 
 object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
 
@@ -610,9 +611,9 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                   *       and the competing fallback tx [[WithinSilencePeriod]].
                   *     - (c) The rollback time is equals or greater than the competing fallback tx
                   *       validity start - sort of late rollback [[AfterFallbackBecomesValid]].
-                  *   - (2) The whole skeleton was rolled back. We can choose an instant of time
-                  *     around the block zero creation time with two possible cases represented by
-                  *     [[InitializationTiming]]
+                  *   - (2) The whole skeleton was rolled back. We can choose an ininterval =
+                  *     1.second,stant of time around the block zero creation time with two possible
+                  *     cases represented by [[InitializationTiming]]
                   *   - (3) The deinit tx was chosen as the rollback backbone point: The TTL and *
                   *     competing fallbacks are absent. It means we can pick up an arbitrary *
                   *     rollback time that makes sense.
@@ -761,7 +762,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
     // Test skeletons against which the (multiple) properties are checked.
     val testSkeletons: Seq[BlockEffectsSignedChain] =
         List(
-          (5, 10), // short skeleton for fast feedback loop
+          (5, 5), // short skeleton for fast feedback loop
           // (20, 20) // more realistic skeleton
         ).flatMap((min, max) => {
             // val seed = Seed.fromBase64("SEAube5f5bBsTlLeYTuh3am1vO5iJvmzNRFEXSOlXlD=").get
@@ -776,7 +777,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
     testSkeletons.distinct.zipWithIndex.foreach { case (skeleton, idx) =>
         include(new Properties(s"Skeleton $idx") {
             // Comment this out to see only generated skeletons
-            // val _ = property("rollbacks are handled") = mkRollbackAreHandled(skeleton)
+            val _ = property("rollbacks are handled") = mkRollbackAreHandled(skeleton)
         })
     }
 
@@ -882,10 +883,11 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
 
                             // This is not needed anymore, since we added immediate Timeout to CardanoLiaison.
                             // NB: The repetitive timeout here MAY lead to Cardano Liaison tries to submit
-                            // the whole skeleton, which is fine.
+                            // the whole skeleton due to the way we set up the L1 mock: we specify utxo
+                            // set but not "already known tx", so the finalization tx happens to be missing.
 
                             // One timeout is enough for the Cardano Liaison to send all the effects
-                            // _ <- cardanoLiaisonActor ! CardanoLiaison.Timeout
+                            //_ <- cardanoLiaisonActor ! CardanoLiaison.Timeout
 
                             check <- awaitCond(
                               p = IO

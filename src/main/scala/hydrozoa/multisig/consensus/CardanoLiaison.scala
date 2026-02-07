@@ -407,6 +407,7 @@ trait CardanoLiaison(
                                         txResp <- config.cardanoBackend.isTxKnown(
                                           finalizationTxHash
                                         )
+                                        _ <- logger.debug(s"finalizationTx: hash: $finalizationTxHash txResp: $txResp")
                                         mbInitAction <- txResp match {
                                             case Left(err) =>
                                                 for {
