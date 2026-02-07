@@ -28,6 +28,16 @@ enum SettlementTxSeq {
 
 object SettlementTxSeq {
 
+    private val logger = org.slf4j.LoggerFactory.getLogger("SettlementTxSeq")
+
+    private def time[A](label: String)(block: => A): A = {
+        val start = System.nanoTime()
+        val result = block
+        val elapsed = (System.nanoTime() - start) / 1_000_000.0
+        logger.info(f"\t\t⏱️ $label: ${elapsed}%.2f ms")
+        result
+    }
+
     case class Config(
         headMultisigScript: HeadMultisigScript,
         multisigRegimeUtxo: MultisigRegimeUtxo,
@@ -74,11 +84,13 @@ object SettlementTxSeq {
                 case None =>
 
                     for {
-                        settlementTx <- SettlementTx.Builder
-                            .NoPayouts(settlementTxConfig)
-                            .build(args.toArgsNoPayouts(config.txTiming))
-                            .left
-                            .map(Builder.Error.SettlementError(_))
+                        settlementTx <- time("SettlementTx.NoPayouts.build") {
+                            SettlementTx.Builder
+                                .NoPayouts(settlementTxConfig)
+                                .build(args.toArgsNoPayouts(config.txTiming))
+                                .left
+                                .map(Builder.Error.SettlementError(_))
+                        }
 
                         ftxRecipe = FallbackTx.Recipe(
                           treasuryUtxoSpent = settlementTx.transaction.treasuryProduced,
@@ -88,10 +100,12 @@ object SettlementTxSeq {
                               + config.txTiming.inactivityMarginDuration
                               + config.txTiming.silenceDuration).toSlot
                         )
-                        fallbackTx <- FallbackTx
-                            .build(ftxConfig, ftxRecipe)
-                            .left
-                            .map(Builder.Error.FallbackError(_))
+                        fallbackTx <- time("FallbackTx.build") {
+                            FallbackTx
+                                .build(ftxConfig, ftxRecipe)
+                                .left
+                                .map(Builder.Error.FallbackError(_))
+                        }
                     } yield Builder.Result(
                       settlementTxSeq = SettlementTxSeq.NoRollouts(settlementTx.transaction),
                       fallbackTx = fallbackTx,
@@ -101,19 +115,23 @@ object SettlementTxSeq {
                 case Some(nePayouts) =>
 
                     for {
-                        rolloutTxSeqPartial <- RolloutTxSeq
-                            .Builder(rolloutTxSeqConfig)
-                            .buildPartial(nePayouts)
-                            .left
-                            .map(Error.RolloutSeqError(_))
+                        rolloutTxSeqPartial <- time("RolloutTxSeq.buildPartial") {
+                            RolloutTxSeq
+                                .Builder(rolloutTxSeqConfig)
+                                .buildPartial(nePayouts)
+                                .left
+                                .map(Error.RolloutSeqError(_))
+                        }
 
-                        settlementTxRes <- SettlementTx.Builder
-                            .WithPayouts(settlementTxConfig)
-                            .build(args.toArgsWithPayouts(rolloutTxSeqPartial, config.txTiming))
-                            .left
-                            .map(Error.SettlementError(_))
+                        settlementTxRes <- time("SettlementTx.WithPayouts.build") {
+                            SettlementTx.Builder
+                                .WithPayouts(settlementTxConfig)
+                                .build(args.toArgsWithPayouts(rolloutTxSeqPartial, config.txTiming))
+                                .left
+                                .map(Error.SettlementError(_))
+                        }
 
-                        settlementTxSeq <-
+                        settlementTxSeq <- time("finishPostProcess") {
                             import SettlementTx.Builder.Result
                             settlementTxRes match {
                                 case res: Result.WithOnlyDirectPayouts =>
@@ -126,6 +144,7 @@ object SettlementTxSeq {
                                         .map(Error.RolloutSeqError(_))
                                         .map(SettlementTxSeq.WithRollouts(tx, _))
                             }
+                        }
 
                         ftxRecipe = FallbackTx.Recipe(
                           treasuryUtxoSpent = settlementTxRes.transaction.treasuryProduced,
@@ -134,10 +153,12 @@ object SettlementTxSeq {
                               + config.txTiming.inactivityMarginDuration
                               + config.txTiming.silenceDuration).toSlot
                         )
-                        fallbackTx <- FallbackTx
-                            .build(config = ftxConfig, recipe = ftxRecipe)
-                            .left
-                            .map(Builder.Error.FallbackError(_))
+                        fallbackTx <- time("FallbackTx.build") {
+                            FallbackTx
+                                .build(config = ftxConfig, recipe = ftxRecipe)
+                                .left
+                                .map(Builder.Error.FallbackError(_))
+                        }
                     } yield Result(
                       settlementTxSeq = settlementTxSeq,
                       fallbackTx = fallbackTx,

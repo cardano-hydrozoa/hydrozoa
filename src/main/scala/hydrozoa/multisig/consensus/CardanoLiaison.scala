@@ -214,7 +214,7 @@ trait CardanoLiaison(
     override def preStart: IO[Unit] =
         for {
             _ <- initializeConnections
-            // Immediate Timeout triggers the initialization tx right away (not strictly needed)
+            // Immediate + periodic Timeout
             _ <- context.self ! CardanoLiaison.Timeout
             _ <- context.setReceiveTimeout(config.receiveTimeout, CardanoLiaison.Timeout)
         } yield ()
@@ -407,6 +407,7 @@ trait CardanoLiaison(
                                         txResp <- config.cardanoBackend.isTxKnown(
                                           finalizationTxHash
                                         )
+                                        _ <- logger.debug(s"finalizationTx: hash: $finalizationTxHash txResp: $txResp")
                                         mbInitAction <- txResp match {
                                             case Left(err) =>
                                                 for {

@@ -76,6 +76,17 @@ Fallback tx spec:
 // NOTE TO SELF: The multisig witness utxo is a FIXED SIZE utxo. We know the amount in it -- it is
 // maxNonPlutusTxFee + the vote allowance + the collateral allowance
 object FallbackTx {
+
+    private val logger = org.slf4j.LoggerFactory.getLogger("FallbackTx")
+
+    private def time[A](label: String)(block: => A): A = {
+        val start = System.nanoTime()
+        val result = block
+        val elapsed = (System.nanoTime() - start) / 1_000_000.0
+        logger.info(f"\t\t⏱️ $label: ${elapsed}%.2f ms")
+        result
+    }
+
     case class Config(
         headMultisigScript: HeadMultisigScript,
         multisigRegimeUtxo: MultisigRegimeUtxo,
@@ -88,6 +99,7 @@ object FallbackTx {
             PlutusScriptEvaluator(cardanoInfo, EvaluateAndComputeCost)
         def headAddress: ShelleyAddress = headMultisigScript.mkAddress(cardanoInfo.network)
     }
+
     def build(config: Config, recipe: Recipe): Either[SomeBuildError, FallbackTx] = {
         import recipe.*
         import config.*
@@ -100,18 +112,20 @@ object FallbackTx {
 
         val hns = headMultisigScript
 
-        val newTreasuryDatum = UnresolvedDatum(
-          headMp = hns.policyId,
-          disputeId = voteTokenName.bytes,
-          peers = SList.from(hns.requiredSigners.map(_.hash)),
-          peersN = hns.numSigners,
-          deadlineVoting = config.votingDuration.finiteDuration.toMillis,
-          versionMajor = multisigDatum.versionMajor.toInt,
-          params = multisigDatum.paramsHash,
-          // TODO: pull in N first elements of G2 CRS
-          // KZG setup I think?
-          setup = SList.empty
-        )
+        val newTreasuryDatum = time("newTreasuryDatum") {
+            UnresolvedDatum(
+              headMp = hns.policyId,
+              disputeId = voteTokenName.bytes,
+              peers = SList.from(hns.requiredSigners.map(_.hash)),
+              peersN = hns.numSigners,
+              deadlineVoting = config.votingDuration.finiteDuration.toMillis,
+              versionMajor = multisigDatum.versionMajor.toInt,
+              params = multisigDatum.paramsHash,
+              // TODO: pull in N first elements of G2 CRS
+              // KZG setup I think?
+              setup = SList.empty
+            )
+        }
 
         def mkVoteToken(amount: Long): MultiAsset = MultiAsset(
           SortedMap(
@@ -129,16 +143,18 @@ object FallbackTx {
           scriptRef = None
         ).ensureMinAda(cardanoInfo.protocolParams)
 
-        val defaultVoteUtxo = mkVoteUtxo(VD.default(treasuryUtxoSpent.datum.commit).toData)
+        val defaultVoteUtxo = time("defaultVoteUtxo") {
+            mkVoteUtxo(VD.default(treasuryUtxoSpent.datum.commit).toData)
+        }
 
-        val peerVoteUtxos: NonEmptyList[TransactionOutput] = {
+        val peerVoteUtxos: NonEmptyList[TransactionOutput] = time("peerVoteUtxos") {
             val datums = VD(
               NonEmptyList.fromListUnsafe(hns.requiredSigners.map(x => PubKeyHash(x.hash)).toList)
             )
             datums.map(datum => mkVoteUtxo(datum.toData))
         }
 
-        def collateralUtxos: NonEmptyList[TransactionOutput] = {
+        val collateralUtxos = time("collateralUtxos") {
             NonEmptyList.fromListUnsafe(
               hns.requiredSigners
                   .map(es =>
@@ -183,7 +199,9 @@ object FallbackTx {
 
         val createCollateralUtxos: NonEmptyList[Send] = collateralUtxos.map(Send(_))
 
-        val disputeTreasuryAddress = RuleBasedTreasuryScript.address(network)
+        val disputeTreasuryAddress = time("RuleBasedTreasuryScript.address") {
+            RuleBasedTreasuryScript.address(network)
+        }
         val createDisputeTreasury = Send(
           Babbage(
             address = disputeTreasuryAddress,
@@ -193,17 +211,19 @@ object FallbackTx {
           )
         )
 
-        val setMetaData = ModifyAuxiliaryData(_ =>
-            Some(
-              MD.apply(
-                Fallback(RuleBasedTreasuryScript.address(network))
-              )
+        val setMetaData = time("setMetaData") {
+            ModifyAuxiliaryData(_ =>
+                Some(
+                  MD.apply(
+                    Fallback(RuleBasedTreasuryScript.address(network))
+                  )
+                )
             )
-        )
+        }
 
         val setStartSlot = ValidityStartSlot(validityStart.slot)
 
-        val steps = {
+        val steps = time("defineSteps") {
             Seq(
               spendHMRW,
               spendMultisigTreasury,
@@ -219,15 +239,19 @@ object FallbackTx {
         }
 
         for {
-            unbalanced <- TransactionBuilder.build(network = network, steps = steps)
-            finalized <- unbalanced.finalizeContext(
-              protocolParams = protocolParams,
-              // We balance the excess to the treasury. This will _not_ be pre-balanced, because the
-              // HMRW Utxo contains extra ada to account for _any_ fallback transaction fee.
-              diffHandler = Change.changeOutputDiffHandler(_, _, protocolParams, 0),
-              evaluator = evaluator,
-              validators = Tx.Validators.nonSigningNonValidityChecksValidators
-            )
+            unbalanced <- time("TransactionBuilder.build") {
+                TransactionBuilder.build(network = network, steps = steps)
+            }
+            finalized <- time("finalizeContext") {
+                unbalanced.finalizeContext(
+                  protocolParams = protocolParams,
+                  // We balance the excess to the treasury. This will _not_ be pre-balanced, because the
+                  // HMRW Utxo contains extra ada to account for _any_ fallback transaction fee.
+                  diffHandler = Change.changeOutputDiffHandler(_, _, protocolParams, 0),
+                  evaluator = evaluator,
+                  validators = Tx.Validators.nonSigningNonValidityChecksValidators
+                )
+            }
         } yield {
             val txId = finalized.transaction.id
             FallbackTx(
