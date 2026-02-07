@@ -1,23 +1,24 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
+import hydrozoa.config.head.initialization.InitialBlock
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toQuantizedInstant}
 import hydrozoa.multisig.ledger.block.BlockVersion
-import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.Settlement
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, HasCtx, explainConst}
 import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq
-import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo, RolloutUtxo}
+import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigTreasuryUtxo, RolloutUtxo}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import monocle.{Focus, Lens}
 import scala.annotation.tailrec
 import scala.collection.immutable.Vector
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
-import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
-import scalus.cardano.ledger.{CardanoInfo, PlutusScriptEvaluator, Sized, Slot, Transaction, TransactionInput, TransactionOutput as TxOutput, Utxo, Value}
+import scalus.cardano.ledger.{PlutusScriptEvaluator, Sized, Slot, Transaction, TransactionInput, TransactionOutput as TxOutput, Utxo, Value}
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.ScriptSource.NativeScriptAttached
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
@@ -90,7 +91,7 @@ object SettlementTx {
                         protocolParams = config.cardanoInfo.protocolParams,
                         changeOutputIdx = 0
                       ),
-                      evaluator = config.evaluator,
+                      evaluator = config.plutusScriptEvaluatorForTxBuild,
                       validators = Tx.Validators.nonSigningValidators
                     )
                     .explainConst(
@@ -159,7 +160,7 @@ object SettlementTx {
                           protocolParams = config.cardanoInfo.protocolParams,
                           diffHandler = Change
                               .changeOutputDiffHandler(_, _, config.cardanoInfo.protocolParams, 0),
-                          evaluator = config.evaluator,
+                          evaluator = config.plutusScriptEvaluatorForTxBuild,
                           validators = Tx.Validators.nonSigningValidators
                         )
                         .explainConst(
@@ -182,7 +183,9 @@ object SettlementTx {
                     )
 
                 private def stepSettlementMetadata: ModifyAuxiliaryData =
-                    ModifyAuxiliaryData(_ => Some(MD(Settlement(headAddress = config.headAddress))))
+                    ModifyAuxiliaryData(_ =>
+                        Some(MD(Settlement(headAddress = config.headMultisigAddress)))
+                    )
 
                 private def referenceHMS =
                     ReferenceOutput(config.multisigRegimeUtxo.asUtxo)
@@ -547,16 +550,7 @@ object SettlementTx {
     ) extends WithPayouts,
           RolloutUtxo.Produced
 
-    case class Config(
-        cardanoInfo: CardanoInfo,
-        headMultisigScript: HeadMultisigScript,
-        multisigRegimeUtxo: MultisigRegimeUtxo
-    ) {
-        def evaluator: PlutusScriptEvaluator =
-            PlutusScriptEvaluator(cardanoInfo, EvaluateAndComputeCost)
-
-        def headAddress: ShelleyAddress = headMultisigScript.mkAddress(cardanoInfo.network)
-    }
+    type Config = CardanoNetwork.Section & HeadPeers.Section & InitialBlock.Section
 
     object Builder {
         trait Result[T <: SettlementTx]
@@ -609,7 +603,7 @@ object SettlementTx {
                         config.cardanoInfo.protocolParams,
                         diffHandler = Change
                             .changeOutputDiffHandler(_, _, config.cardanoInfo.protocolParams, 0),
-                        evaluator = config.evaluator,
+                        evaluator = config.plutusScriptEvaluatorForTxBuild,
                         validators = Tx.Validators.nonSigningValidators
                       ),
                   state,

@@ -1,17 +1,15 @@
 package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.data.NonEmptyVector
+import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
-import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.block.BlockVersion
-import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.token.CIP67.HeadTokenNames
 import hydrozoa.multisig.ledger.dapp.tx
 import hydrozoa.multisig.ledger.dapp.tx.*
-import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo}
+import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
-import scalus.cardano.ledger.{CardanoInfo, Coin}
 import scalus.cardano.txbuilder.SomeBuildError
 
 enum SettlementTxSeq {
@@ -29,15 +27,7 @@ enum SettlementTxSeq {
 
 object SettlementTxSeq {
 
-    case class Config(
-        headMultisigScript: HeadMultisigScript,
-        multisigRegimeUtxo: MultisigRegimeUtxo,
-        tokenNames: HeadTokenNames,
-        votingDuration: QuantizedFiniteDuration,
-        txTiming: TxTiming,
-        tallyFeeAllowance: Coin,
-        cardanoInfo: CardanoInfo
-    )
+    type Config = HeadConfig.Section
 
     extension (settlementTxSeq: SettlementTxSeq)
 
@@ -52,24 +42,12 @@ object SettlementTxSeq {
         config: SettlementTxSeq.Config
     ) {
         def build(args: Args): Either[Builder.Error, Builder.Result] = {
-            lazy val settlementTxConfig: SettlementTx.Config = SettlementTx.Config(
-              cardanoInfo = config.cardanoInfo,
-              headMultisigScript = config.headMultisigScript,
-              multisigRegimeUtxo = config.multisigRegimeUtxo
-            )
-            lazy val ftxConfig = ??? // FIXME
-            lazy val rolloutTxSeqConfig = RolloutTxSeq.Config(
-              cardanoInfo = config.cardanoInfo,
-              headMultisigScript = config.headMultisigScript,
-              multisigRegimeUtxo = config.multisigRegimeUtxo
-            )
-
             NonEmptyVector.fromVector(args.payoutObligationsRemaining) match {
                 case None =>
 
                     for {
                         settlementTx <- SettlementTx.Builder
-                            .NoPayouts(settlementTxConfig)
+                            .NoPayouts(config)
                             .build(args.toArgsNoPayouts(config.txTiming))
                             .left
                             .map(Builder.Error.SettlementError(_))
@@ -89,13 +67,13 @@ object SettlementTxSeq {
 
                     for {
                         rolloutTxSeqPartial <- RolloutTxSeq
-                            .Builder(rolloutTxSeqConfig)
+                            .Builder(config)
                             .buildPartial(nePayouts)
                             .left
                             .map(Error.RolloutSeqError(_))
 
                         settlementTxRes <- SettlementTx.Builder
-                            .WithPayouts(settlementTxConfig)
+                            .WithPayouts(config)
                             .build(args.toArgsWithPayouts(rolloutTxSeqPartial, config.txTiming))
                             .left
                             .map(Error.SettlementError(_))

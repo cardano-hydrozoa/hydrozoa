@@ -14,7 +14,6 @@ import hydrozoa.rulebased.ledger.dapp.state.VoteDatum as VD
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteDatum
 import hydrozoa.rulebased.ledger.dapp.utxo.RuleBasedTreasuryUtxo
 import monocle.{Focus, Lens}
-import scala.collection.immutable.SortedMap
 import scalus.builtin.Data
 import scalus.builtin.Data.*
 import scalus.cardano.address.ShelleyDelegationPart.Null

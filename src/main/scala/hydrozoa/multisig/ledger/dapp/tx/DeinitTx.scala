@@ -2,16 +2,16 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa.config.EquityShares
 import hydrozoa.config.EquityShares.MultisigRegimeDistribution
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.value.coin.Coin
 import hydrozoa.lib.cardano.value.coin.Coin.Unbounded
-import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explain}
 import hydrozoa.multisig.ledger.dapp.utxo.ResidualTreasuryUtxo
 import monocle.Focus.focus
 import monocle.{Focus, Lens}
 import scala.Function.const
-import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
-import scalus.cardano.ledger.{CardanoInfo, Coin as OldCoin, KeepRaw, PlutusScriptEvaluator, Sized, Transaction, TransactionOutput, Value}
+import scalus.cardano.ledger.{Coin as OldCoin, KeepRaw, Sized, Transaction, TransactionOutput, Value}
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
@@ -41,14 +41,7 @@ final case class DeinitTx(
       ResidualTreasuryUtxo.Spent
 
 object DeinitTx:
-    final case class Config(
-        cardanoInfo: CardanoInfo,
-        headMultisigScript: HeadMultisigScript,
-        equityShares: EquityShares
-    ) {
-        def evaluator: PlutusScriptEvaluator =
-            PlutusScriptEvaluator(cardanoInfo, EvaluateAndComputeCost)
-    }
+    type Config = CardanoNetwork.Section & HeadPeers.Section
 
     final case class Builder(
         residualTreasuryToSpend: ResidualTreasuryUtxo,
@@ -85,7 +78,7 @@ object DeinitTx:
                 .finalizeContext(
                   config.cardanoInfo.protocolParams,
                   SharePayoutsDiffHandler.handler(residualTreasuryToSpend),
-                  config.evaluator,
+                  config.plutusScriptEvaluatorForTxBuild,
                   Tx.Validators.nonSigningValidators
                 )
                 .explain(const("Could not balance deinit transaction"))
@@ -120,12 +113,13 @@ object DeinitTx:
                 // FIXME: remove later
                 val treasuryNewCoin = Coin.unsafeApply(residualTreasuryToSpend.value.coin.value)
 
-                val distribute = MultisigRegimeDistribution.distribute(config.equityShares)
+                val distribute =
+                    MultisigRegimeDistribution.distribute(???) // FIXME config.equityShares
 
                 for {
-                    equity <-
-                        (treasuryNewCoin -~ config.equityShares.totalFallbackDeposit).toCoin.left
-                            .map(_ => "residual treasury can't be less then total deposits")
+                    equity <- Right(???) // FIXME
+//                        (treasuryNewCoin -~ config.equityShares.totalFallbackDeposit).toCoin.left
+//                            .map(_ => "residual treasury can't be less then total deposits")
 
                     distribution = distribute(equity)
 
@@ -157,7 +151,7 @@ object DeinitTx:
 
                 if diff == Value.zero then Right(tx)
                 else
-                    val distribute = MultisigRegimeDistribution.distribute(config.equityShares)
+                    val distribute = MultisigRegimeDistribution.distribute(???) // FIXME
 
                     // FIXME: remove later
                     val treasuryVCoin = Unbounded.apply(residualTreasuryToSpend.value.coin.value)
@@ -166,15 +160,15 @@ object DeinitTx:
 
                     for {
                         // equityShares.totalFallbackDeposit is added by the distributor
-                        equity <-
-                            (treasuryVCoin -~ config.equityShares.totalFallbackDeposit -~ feeCoin).toCoin.left
-                                .map(_ =>
-                                    TxBalancingError.Failed(
-                                      IllegalStateException(
-                                        "residual treasury can't be less then total deposits"
-                                      )
-                                    )
-                                )
+                        equity <- Right(???) // FIXME
+//                            (treasuryVCoin -~ config.equityShares.totalFallbackDeposit -~ feeCoin).toCoin.left
+//                                .map(_ =>
+//                                    TxBalancingError.Failed(
+//                                      IllegalStateException(
+//                                        "residual treasury can't be less then total deposits"
+//                                      )
+//                                    )
+//                                )
 
                         distribution = distribute(equity)
 

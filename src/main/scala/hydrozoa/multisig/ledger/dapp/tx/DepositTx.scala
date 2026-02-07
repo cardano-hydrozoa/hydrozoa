@@ -3,6 +3,8 @@ package hydrozoa.multisig.ledger.dapp.tx
 import cats.data.NonEmptyList
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.*
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, quantizeLosslessUnsafe, toEpochQuantizedInstant}
 import hydrozoa.lib.cardano.scalus.ledger.api.TransactionOutputEncoders.given
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
@@ -16,7 +18,6 @@ import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, platform}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend, ValidityEndSlot}
@@ -30,11 +31,10 @@ final case class DepositTx private (
 ) extends Tx[DepositTx]
 
 object DepositTx {
-    case class Config(cardanoInfo: CardanoInfo, headAddress: ShelleyAddress, txTiming: TxTiming) {
-        def evaluator: PlutusScriptEvaluator =
-            PlutusScriptEvaluator(cardanoInfo, EvaluateAndComputeCost)
-
-    }
+    type Config = CardanoNetwork.Section & HeadPeers.Section & TxTiming.Section
+    // FIXME: We need InitialBlock.Section in the config, so that we can add
+    //  multisigRegimeUtxo as a reference input (not for its script).
+    //  This is how the deposit tx gets rolled back if the init tx is rolled back.
 
     final case class Builder(
         config: Config,
@@ -59,7 +59,7 @@ object DepositTx {
                     Some(
                       MD(
                         MD.Deposit(
-                          headAddress = config.headAddress,
+                          headAddress = config.headMultisigAddress,
                           depositUtxoIx = 0, // This builder produces the deposit utxo at index 0
                           virtualOutputsHash = virtualOutputsHash
                         )
@@ -74,7 +74,7 @@ object DepositTx {
             val depositDatum: DepositUtxo.Datum = DepositUtxo.Datum(refundInstructions)
 
             val rawDepositProduced = TransactionOutput.Babbage(
-              address = config.headAddress,
+              address = config.headMultisigAddress,
               value = depositValue,
               datumOption = Some(DatumOption.Inline(toData(depositDatum))),
               scriptRef = None
@@ -113,7 +113,7 @@ object DepositTx {
                       config.cardanoInfo.protocolParams,
                       diffHandler = Change
                           .changeOutputDiffHandler(_, _, config.cardanoInfo.protocolParams, 1),
-                      evaluator = config.evaluator,
+                      evaluator = config.plutusScriptEvaluatorForTxBuild,
                       validators = Tx.Validators.nonSigningNonValidityChecksValidators
                     )
                     .explainConst("balancing deposit tx failed")
@@ -122,7 +122,7 @@ object DepositTx {
 
                 depositProduced = DepositUtxo(
                   TransactionInput(tx.id, 0),
-                  config.headAddress,
+                  config.headMultisigAddress,
                   depositDatum,
                   rawDepositProduced.value,
                   virtualOutputs
@@ -208,7 +208,7 @@ object DepositTx {
                     depositUtxo <- DepositUtxo
                         .fromUtxo(
                           Utxo(TransactionInput(tx.id, depositUtxoIx), depositOutput.value),
-                          config.headAddress,
+                          config.headMultisigAddress,
                           virtualOutputs,
                           absorptionStart = validityEnd + config.txTiming.depositMaturityDuration,
                           absorptionEnd =

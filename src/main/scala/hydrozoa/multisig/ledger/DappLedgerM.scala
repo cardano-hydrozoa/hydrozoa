@@ -85,18 +85,12 @@ object DappLedgerM {
         import req.*
         for {
             config <- ask
-            depositRefundTxSeqConfig = DepositRefundTxSeq.Config(
-              txTiming = config.txTiming,
-              cardanoInfo = config.cardanoInfo,
-              headMultisigScript = config.headMultisigScript,
-              multisigRegimeUtxo = config.multisigRegimeUtxo
-            )
             parseRes =
                 DepositRefundTxSeq
                     .parse(
                       depositTxBytes = depositTxBytes,
                       refundTxBytes = refundTxBytes,
-                      config = depositRefundTxSeqConfig,
+                      config = config,
                       virtualOutputsBytes = virtualOutputsBytes,
                       donationToTreasury = donationToTreasury,
                     )
@@ -149,17 +143,7 @@ object DappLedgerM {
 
             settlementTxSeqRes <- lift(
               SettlementTxSeq
-                  .Builder(
-                    SettlementTxSeq.Config(
-                      headMultisigScript = config.headMultisigScript,
-                      multisigRegimeUtxo = config.multisigRegimeUtxo,
-                      tokenNames = config.headTokenNames,
-                      votingDuration = config.votingDuration,
-                      txTiming = config.txTiming,
-                      tallyFeeAllowance = config.individualContingency.tallyTxFee,
-                      cardanoInfo = config.cardanoInfo
-                    )
-                  )
+                  .Builder(config)
                   .build(args)
                   .left
                   .map(SettlementTxSeqBuilderError.apply)
@@ -215,15 +199,7 @@ object DappLedgerM {
             )
             ftxSeq <- lift(
               FinalizationTxSeq
-                  .Builder(
-                    FinalizationTxSeq.Config(
-                      txTiming = config.txTiming,
-                      multisigRegimeUtxo = config.multisigRegimeUtxo,
-                      cardanoInfo = config.cardanoInfo,
-                      headMultisigScript = config.headMultisigScript,
-                      equityShares = ??? // FIXME: replace with config.initialEquityContributions
-                    )
-                  )
+                  .Builder(config)
                   .build(args)
                   .left
                   .map(Error.FinalizationTxSeqBuilderError.apply)

@@ -1,21 +1,21 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
+import hydrozoa.config.head.initialization.InitialBlock
 import hydrozoa.config.head.multisig.timing.TxTiming.*
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant, toQuantizedInstant}
-import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explainConst}
-import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo}
+import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.{Utxo as _, prebalancedLovelaceDiffHandler, *}
 import monocle.{Focus, Lens}
 import scala.annotation.tailrec
 import scala.language.implicitConversions
 import scala.util.{Failure, Success}
 import scalus.builtin.ByteString
-import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.rules.TransactionSizeValidator
 import scalus.cardano.ledger.utils.TxBalance
@@ -34,15 +34,7 @@ sealed trait RefundTx {
 }
 
 object RefundTx {
-    final case class Config(
-        multisigRegimeUtxo: MultisigRegimeUtxo,
-        headMultisigScript: HeadMultisigScript,
-        cardanoInfo: CardanoInfo
-    ) {
-        def evaluator: PlutusScriptEvaluator =
-            PlutusScriptEvaluator(cardanoInfo, EvaluateAndComputeCost)
-        def headAddress: ShelleyAddress = headMultisigScript.mkAddress(cardanoInfo.network)
-    }
+    type Config = CardanoNetwork.Section & HeadPeers.Section & InitialBlock.Section
 
     // TODO: shall we keep it for now?
     final case class Immediate(override val tx: Transaction) extends RefundTx, Tx[Immediate] {
@@ -65,7 +57,9 @@ object RefundTx {
         ) extends Builder[RefundTx.Immediate] {
             override val mValidityStart: None.type = None
             override val stepRefundMetadata =
-                ModifyAuxiliaryData(_ => Some(MD(MD.Refund(headAddress = config.headAddress))))
+                ModifyAuxiliaryData(_ =>
+                    Some(MD(MD.Refund(headAddress = config.headMultisigAddress)))
+                )
 
             override def mkPartialResult(
                 ctx: TransactionBuilder.Context,
@@ -86,7 +80,9 @@ object RefundTx {
                   )
                 )
             override val stepRefundMetadata =
-                ModifyAuxiliaryData(_ => Some(MD(MD.Refund(headAddress = config.headAddress))))
+                ModifyAuxiliaryData(_ =>
+                    Some(MD(MD.Refund(headAddress = config.headMultisigAddress)))
+                )
 
             override def mkPartialResult(
                 ctx: TransactionBuilder.Context,
@@ -128,7 +124,7 @@ object RefundTx {
                     .finalizeContext(
                       config.cardanoInfo.protocolParams,
                       prebalancedLovelaceDiffHandler,
-                      config.evaluator,
+                      config.plutusScriptEvaluatorForTxBuild,
                       Tx.Validators.nonSigningNonValidityChecksValidators
                     )
                     .explainConst("finalizing partial result completion failed")
@@ -185,9 +181,11 @@ object RefundTx {
 
         final def partialResult: BuildErrorOr[Builder.PartialResult[T]] = {
             val stepReferenceHNS = ReferenceOutput(config.multisigRegimeUtxo.asUtxo)
+            // FIXME: We are not allowed to assumed the existence of the multisigRegimeUtxo here.
+            //   We must attach the multisig script inline to the transaction.
 
             val refundOutput: TransactionOutput = TransactionOutput.Babbage(
-              address = config.headAddress,
+              address = config.headMultisigAddress,
               value = refundValue,
               datumOption = refundInstructions.datum.asScala.map(Inline(_)),
               scriptRef = None
@@ -221,7 +219,7 @@ object RefundTx {
             val spendDeposit = Utxo(
               BuilderOps.Placeholder.utxoId,
               TransactionOutput.Babbage(
-                address = config.headAddress,
+                address = config.headMultisigAddress,
                 value = trialValue,
                 datumOption =
                     None, // Datum is not really empty, but that doesn't affect balancing here.
@@ -245,7 +243,7 @@ object RefundTx {
                 res <- addedSpendDeposit.finalizeContext(
                   config.cardanoInfo.protocolParams,
                   prebalancedLovelaceDiffHandler,
-                  config.evaluator,
+                  config.plutusScriptEvaluatorForTxBuild,
                   List(TransactionSizeValidator)
                 )
             } yield res

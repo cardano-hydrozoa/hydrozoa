@@ -1,17 +1,19 @@
 package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.data.NonEmptyList
+import hydrozoa.config.head.initialization.InitialBlock
 import hydrozoa.config.head.multisig.timing.TxTiming
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.QuantizedTime.toEpochQuantizedInstant
-import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.{DepositTx, RefundTx, Tx}
 import hydrozoa.multisig.ledger.dapp.txseq.DepositRefundTxSeq.ParseError.VirtualOutputRefScriptInvalid
-import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo}
+import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.virtual.GenesisObligation
 import io.bullet.borer.Cbor
 import monocle.syntax.all.*
 import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.{CardanoInfo, Coin, TransactionOutput, TransactionWitnessSet, Utxo, Value}
+import scalus.cardano.ledger.{Coin, TransactionOutput, TransactionWitnessSet, Utxo, Value}
 import scalus.cardano.txbuilder.SomeBuildError
 
 final case class DepositRefundTxSeq(
@@ -20,14 +22,8 @@ final case class DepositRefundTxSeq(
 )
 
 object DepositRefundTxSeq {
-    case class Config(
-        txTiming: TxTiming,
-        cardanoInfo: CardanoInfo,
-        headMultisigScript: HeadMultisigScript,
-        multisigRegimeUtxo: MultisigRegimeUtxo
-    ) {
-        def headAddress: ShelleyAddress = headMultisigScript.mkAddress(cardanoInfo.network)
-    }
+    type Config = CardanoNetwork.Section & HeadPeers.Section & InitialBlock.Section &
+        TxTiming.Section
 
     object Builder {
         sealed trait Error extends Throwable
@@ -52,27 +48,16 @@ object DepositRefundTxSeq {
         changeAddress: ShelleyAddress,
     ) {
         def build: Either[Builder.Error, DepositRefundTxSeq] = {
-            val depositTxConfig: DepositTx.Config = DepositTx.Config(
-              cardanoInfo = config.cardanoInfo,
-              headAddress = config.headAddress,
-              txTiming = config.txTiming
-            )
-            val refundTxConfig: RefundTx.Config = RefundTx.Config(
-              multisigRegimeUtxo = config.multisigRegimeUtxo,
-              headMultisigScript = config.headMultisigScript,
-              cardanoInfo = config.cardanoInfo
-            )
-
             for {
                 partialRefundTx <- RefundTx.Builder
-                    .PostDated(refundTxConfig, refundInstructions, refundValue)
+                    .PostDated(config, refundInstructions, refundValue)
                     .partialResult
                     .left
                     .map(Builder.Error.Refund(_))
 
                 depositTx <- DepositTx
                     .Builder(
-                      depositTxConfig,
+                      config,
                       partialRefundTx,
                       utxosFunding,
                       virtualOutputs,
@@ -84,7 +69,7 @@ object DepositRefundTxSeq {
                     .map(Builder.Error.Deposit(_))
 
                 refundTx <- partialRefundTx
-                    .complete(depositTx.depositProduced, refundTxConfig)
+                    .complete(depositTx.depositProduced, config)
                     .left
                     .map(Builder.Error.Refund(_))
 
@@ -181,17 +166,6 @@ object DepositRefundTxSeq {
         donationToTreasury: Coin,
         config: DepositRefundTxSeq.Config,
     ): Either[ParseError, DepositRefundTxSeq] = {
-        val depositTxConfig = DepositTx.Config(
-          cardanoInfo = config.cardanoInfo,
-          headAddress = config.headAddress,
-          txTiming = config.txTiming
-        )
-        val refundTxConfig: RefundTx.Config = RefundTx.Config(
-          multisigRegimeUtxo = config.multisigRegimeUtxo,
-          headMultisigScript = config.headMultisigScript,
-          cardanoInfo = config.cardanoInfo
-        )
-
         for {
             virtualOutputs: NonEmptyList[GenesisObligation] <- for {
                 parsed <- Cbor
@@ -212,7 +186,7 @@ object DepositRefundTxSeq {
             depositTx <- DepositTx
                 .parse(
                   txBytes = depositTxBytes,
-                  config = depositTxConfig,
+                  config = config,
                   virtualOutputs = virtualOutputs,
                 )
                 .left
@@ -237,9 +211,9 @@ object DepositRefundTxSeq {
             expectedDepositValue = virtualValue + Value(donationToTreasury + refundFee)
 
             expectedRefundTx <- RefundTx.Builder
-                .PostDated(refundTxConfig, refundInstructions, refundValue)
+                .PostDated(config, refundInstructions, refundValue)
                 .partialResult
-                .flatMap(_.complete(depositUtxo, refundTxConfig))
+                .flatMap(_.complete(depositUtxo, config))
                 .left
                 .map(ParseError.ExpectedRefundBuildError(_))
 

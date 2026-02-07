@@ -1,22 +1,20 @@
 package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.data.NonEmptyVector
-import hydrozoa.config.EquityShares
+import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.dapp
-import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx
 import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.tx.FinalizationTx.Builder.Args.toArgs1
 import hydrozoa.multisig.ledger.dapp.tx.FinalizationTx.Builder.PartialResult
 import hydrozoa.multisig.ledger.dapp.tx.SettlementTx.Builder.Args as SingleArgs
-import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo}
+import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
-import scalus.cardano.ledger.CardanoInfo
 import scalus.cardano.txbuilder.SomeBuildError
 
 enum FinalizationTxSeq {
@@ -48,13 +46,7 @@ enum FinalizationTxSeq {
 }
 
 object FinalizationTxSeq {
-    case class Config(
-        txTiming: TxTiming,
-        multisigRegimeUtxo: MultisigRegimeUtxo,
-        cardanoInfo: CardanoInfo,
-        headMultisigScript: HeadMultisigScript,
-        equityShares: EquityShares
-    )
+    type Config = HeadConfig.Section
 
     extension (finalizationTxSeq: FinalizationTxSeq)
 
@@ -78,28 +70,7 @@ object FinalizationTxSeq {
     ) {
         def build(args: Args): Either[Builder.Error, FinalizationTxSeq] = {
 
-            val finalizationTxConfig: FinalizationTx.Config = FinalizationTx.Config(
-              cardanoInfo = config.cardanoInfo,
-              headMultisigScript = config.headMultisigScript,
-              multisigRegimeUtxo = config.multisigRegimeUtxo
-            )
-            val settlementTxConfig: SettlementTx.Config = SettlementTx.Config(
-              cardanoInfo = config.cardanoInfo,
-              multisigRegimeUtxo = config.multisigRegimeUtxo,
-              headMultisigScript = config.headMultisigScript
-            )
-            val rolloutTxSeqConfig: RolloutTxSeq.Config = RolloutTxSeq.Config(
-              cardanoInfo = config.cardanoInfo,
-              multisigRegimeUtxo = config.multisigRegimeUtxo,
-              headMultisigScript = config.headMultisigScript
-            )
-            val deinitConfig: DeinitTx.Config = DeinitTx.Config(
-              cardanoInfo = config.cardanoInfo,
-              headMultisigScript = config.headMultisigScript,
-              equityShares = config.equityShares
-            )
-
-            val upgrade = FinalizationTx.Builder.upgrade(finalizationTxConfig)
+            val upgrade = FinalizationTx.Builder.upgrade(config)
 
             NonEmptyVector.fromVector(args.payoutObligationsRemaining) match {
 
@@ -107,7 +78,7 @@ object FinalizationTxSeq {
                     for {
                         // SettlementTx, but with no deposits
                         settlementTxRes <- SettlementTx.Builder
-                            .NoPayouts(settlementTxConfig)
+                            .NoPayouts(config)
                             .build(args.toArgsNoPayouts(config.txTiming))
                             .left
                             .map(Builder.Error.SettlementError(_))
@@ -125,17 +96,14 @@ object FinalizationTxSeq {
 
                         // Build deinit tx
                         deinitTx <- DeinitTx.Builder
-                            .apply(
-                              finalizationPartial.residualTreasuryProduced,
-                              deinitConfig
-                            )
+                            .apply(finalizationPartial.residualTreasuryProduced, config)
                             .build
                             .left
                             .map(Builder.Error.DeinitTxError(_))
 
                         // Complete finalization tx
                         finalizationTx <- finalizationPartial
-                            .complete(deinitTx, args.majorVersionProduced, finalizationTxConfig)
+                            .complete(deinitTx, args.majorVersionProduced, config)
                             .left
                             .map(Builder.Error.FinalizationCompleteError(_))
 
@@ -148,14 +116,14 @@ object FinalizationTxSeq {
                     for {
 
                         rolloutTxSeqPartial <- RolloutTxSeq
-                            .Builder(rolloutTxSeqConfig)
+                            .Builder(config)
                             .buildPartial(nePayouts)
                             .left
                             .map(Error.RolloutSeqError(_))
 
                         // SettlementTx, but with no deposits
                         settlementTxRes <- SettlementTx.Builder
-                            .WithPayouts(settlementTxConfig)
+                            .WithPayouts(config)
                             .build(
                               args.toArgsWithPayouts(
                                 rolloutTxSeqPartial,
@@ -176,10 +144,7 @@ object FinalizationTxSeq {
 
                         // Build deinit tx
                         deinitTx <- DeinitTx.Builder
-                            .apply(
-                              finalizationPartial.residualTreasuryProduced,
-                              deinitConfig
-                            )
+                            .apply(finalizationPartial.residualTreasuryProduced, config)
                             .build
                             .left
                             .map(Builder.Error.DeinitTxError(_))
@@ -193,7 +158,7 @@ object FinalizationTxSeq {
                                             .complete(
                                               deinitTx,
                                               args.majorVersionProduced,
-                                              finalizationTxConfig
+                                              config
                                             )
                                             .left
                                             .map(Builder.Error.FinalizationCompleteError(_))
@@ -210,7 +175,7 @@ object FinalizationTxSeq {
                                             .complete(
                                               deinitTx,
                                               args.majorVersionProduced,
-                                              finalizationTxConfig
+                                              config
                                             )
                                             .left
                                             .map(Builder.Error.FinalizationCompleteError(_))

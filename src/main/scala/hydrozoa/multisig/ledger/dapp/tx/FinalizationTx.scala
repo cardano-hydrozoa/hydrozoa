@@ -1,12 +1,14 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
+import hydrozoa.config.head.initialization.InitialBlock
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toQuantizedInstant}
 import hydrozoa.multisig.ledger.block.BlockVersion
-import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.FinalizationTx.{MergedDeinit, WithDeinit}
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, HasCtx, explain}
 import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq
-import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo, ResidualTreasuryUtxo, RolloutUtxo}
+import hydrozoa.multisig.ledger.dapp.utxo.{MultisigTreasuryUtxo, ResidualTreasuryUtxo, RolloutUtxo}
 import hydrozoa.prebalancedLovelaceDiffHandler
 import monocle.Focus.focus
 import monocle.Monocle.refocus
@@ -14,7 +16,6 @@ import monocle.{Focus, Lens}
 import scala.Function.const
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.{ResolvedUtxos, unsafeCtxTxOutputsL, unsafeCtxTxReferenceInputsL}
@@ -34,15 +35,7 @@ sealed trait FinalizationTx
 }
 
 object FinalizationTx {
-
-    case class Config(
-        cardanoInfo: CardanoInfo,
-        headMultisigScript: HeadMultisigScript,
-        multisigRegimeUtxo: MultisigRegimeUtxo
-    ) {
-        def evaluator: PlutusScriptEvaluator =
-            PlutusScriptEvaluator(cardanoInfo, EvaluateAndComputeCost)
-    }
+    type Config = CardanoNetwork.Section & HeadPeers.Section & InitialBlock.Section
 
     sealed trait Monolithic extends FinalizationTx
 
@@ -186,7 +179,7 @@ object FinalizationTx {
                     .finalizeContext(
                       config.cardanoInfo.protocolParams,
                       diffHandler,
-                      config.evaluator,
+                      config.plutusScriptEvaluatorForTxBuild,
                       Tx.Validators.nonSigningNonValidityChecksValidators
                     )
                     .explain(const("Could not finalize context for finalization partial result"))
@@ -354,7 +347,7 @@ object FinalizationTx {
                         .finalizeContext(
                           config.cardanoInfo.protocolParams,
                           prebalancedLovelaceDiffHandler,
-                          config.evaluator,
+                          config.plutusScriptEvaluatorForTxBuild,
                           Tx.Validators.nonSigningValidators
                         )
                 } yield res

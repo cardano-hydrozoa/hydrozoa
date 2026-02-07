@@ -1,22 +1,22 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyVector
-import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
+import hydrozoa.config.head.initialization.InitialBlock
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explain, explainAppendConst, explainConst}
-import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, RolloutUtxo}
+import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.{WrappedCoin, prebalancedLovelaceDiffHandler}
 import monocle.{Focus, Lens}
 import scala.Function.const
 import scala.annotation.tailrec
 import scalus.builtin.ByteString
-import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.rules.TransactionSizeValidator
 import scalus.cardano.ledger.utils.TxBalance
-import scalus.cardano.ledger.{CardanoInfo, Coin, PlutusScriptEvaluator, ProtocolParams, Transaction, TransactionHash, TransactionInput, TransactionOutput as TxOutput, Utxo, Value}
+import scalus.cardano.ledger.{Coin, ProtocolParams, Transaction, TransactionHash, TransactionInput, TransactionOutput as TxOutput, Utxo, Value}
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, ReferenceOutput, Send, Spend}
 import scalus.cardano.txbuilder.{SomeBuildError, TransactionBuilder, TransactionBuilderStep, TxBalancingError}
@@ -126,7 +126,9 @@ object RolloutTx {
                     List(stepRolloutMetadata, stepReferenceHNS)
 
                 private def stepRolloutMetadata: ModifyAuxiliaryData =
-                    ModifyAuxiliaryData(_ => Some(MD(MD.Rollout(headAddress = config.headAddress))))
+                    ModifyAuxiliaryData(_ =>
+                        Some(MD(MD.Rollout(headAddress = config.headMultisigAddress)))
+                    )
 
                 private def stepReferenceHNS =
                     ReferenceOutput(config.multisigRegimeUtxo.asUtxo)
@@ -143,7 +145,7 @@ object RolloutTx {
                     rolloutOutputValue: Value
                 ): TxOutput.Babbage = {
                     TxOutput.Babbage(
-                      address = config.headAddress,
+                      address = config.headMultisigAddress,
                       value = rolloutOutputValue,
                       datumOption = None,
                       scriptRef = None
@@ -197,7 +199,7 @@ object RolloutTx {
                         res <- addedPlaceholderRolloutInput.finalizeContext(
                           config.cardanoInfo.protocolParams,
                           prebalancedLovelaceDiffHandler,
-                          builder.config.evaluator,
+                          builder.config.plutusScriptEvaluatorForTxBuild,
                           List(TransactionSizeValidator)
                         )
 
@@ -236,7 +238,7 @@ object RolloutTx {
                     Utxo(
                       Placeholder.utxoId,
                       TxOutput.Babbage(
-                        address = config.headAddress,
+                        address = config.headMultisigAddress,
                         value = value
                       )
                     )
@@ -347,15 +349,7 @@ object RolloutTx {
 
     import Builder.*
 
-    case class Config(
-        cardanoInfo: CardanoInfo,
-        multisigRegimeUtxo: MultisigRegimeUtxo,
-        headMultisigScript: HeadMultisigScript
-    ) {
-        def evaluator: PlutusScriptEvaluator =
-            PlutusScriptEvaluator(cardanoInfo, EvaluateAndComputeCost)
-        def headAddress: ShelleyAddress = headMultisigScript.mkAddress(cardanoInfo.network)
-    }
+    type Config = CardanoNetwork.Section & HeadPeers.Section & InitialBlock.Section
 
     object Builder {
 
@@ -403,7 +397,7 @@ object RolloutTx {
                         .finalizeContext(
                           protocolParams = builder.config.cardanoInfo.protocolParams,
                           diffHandler = prebalancedLovelaceDiffHandler,
-                          evaluator = builder.config.evaluator,
+                          evaluator = builder.config.plutusScriptEvaluatorForTxBuild,
                           validators = Tx.Validators.nonSigningValidators
                         )
                         .explain(const("Could not finalize context after spending rollout input"))
