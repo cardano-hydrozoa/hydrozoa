@@ -59,9 +59,9 @@ object SettlementTx {
                 // Balancing and fees
                 finished <- addedDeposits.ctx
                     .finalizeContext(
-                      protocolParams = config.cardanoInfo.protocolParams,
+                      protocolParams = config.cardanoProtocolParams,
                       diffHandler = Change
-                          .changeOutputDiffHandler(_, _, config.cardanoInfo.protocolParams, 0),
+                          .changeOutputDiffHandler(_, _, config.cardanoProtocolParams, 0),
                       evaluator = PlutusScriptEvaluator(config.cardanoInfo, EvaluateAndComputeCost),
                       validators = Tx.Validators.nonSigningValidators
                     )
@@ -76,7 +76,7 @@ object SettlementTx {
                 BuilderOps.BasePessimistic.steps(args)
             for {
                 ctx <- TransactionBuilder
-                    .build(config.cardanoInfo.network, steps)
+                    .build(config.network, steps)
                     .explainConst("base pessimistic build failed")
                 addedPessimisticRollout <- BuilderOps.BasePessimistic.mbApplySendRollout(
                   args.treasuryToSpend,
@@ -84,11 +84,11 @@ object SettlementTx {
                 )(ctx)
                 _ <- addedPessimisticRollout
                     .finalizeContext(
-                      config.cardanoInfo.protocolParams,
+                      config.cardanoProtocolParams,
                       diffHandler = Change.changeOutputDiffHandler(
                         _,
                         _,
-                        protocolParams = config.cardanoInfo.protocolParams,
+                        protocolParams = config.cardanoProtocolParams,
                         changeOutputIdx = 0
                       ),
                       evaluator = config.plutusScriptEvaluatorForTxBuild,
@@ -157,9 +157,9 @@ object SettlementTx {
                     addedPessimisticRollout <- addPessimisticRollout(newCtx)
                     _ <- addedPessimisticRollout
                         .finalizeContext(
-                          protocolParams = config.cardanoInfo.protocolParams,
+                          protocolParams = config.cardanoProtocolParams,
                           diffHandler = Change
-                              .changeOutputDiffHandler(_, _, config.cardanoInfo.protocolParams, 0),
+                              .changeOutputDiffHandler(_, _, config.cardanoProtocolParams, 0),
                           evaluator = config.plutusScriptEvaluatorForTxBuild,
                           validators = Tx.Validators.nonSigningValidators
                         )

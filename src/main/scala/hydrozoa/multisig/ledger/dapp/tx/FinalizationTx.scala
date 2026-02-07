@@ -171,13 +171,13 @@ object FinalizationTx {
                 diffHandler = Change.changeOutputDiffHandler(
                   _,
                   _,
-                  config.cardanoInfo.protocolParams,
+                  config.cardanoProtocolParams,
                   treasuryOutputIndex
                 )
 
                 rebalanced <- ctx
                     .finalizeContext(
-                      config.cardanoInfo.protocolParams,
+                      config.cardanoProtocolParams,
                       diffHandler,
                       config.plutusScriptEvaluatorForTxBuild,
                       Tx.Validators.nonSigningNonValidityChecksValidators

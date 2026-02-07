@@ -93,7 +93,7 @@ object DepositTx {
 
             val validityEndQuantizedInstant =
                 partialRefundTx.refundInstructions.startTime.toEpochQuantizedInstant(
-                  config.cardanoInfo.slotConfig
+                  config.slotConfig
                 )
                     - config.txTiming.depositAbsorptionDuration
                     - config.txTiming.depositMaturityDuration
@@ -103,16 +103,16 @@ object DepositTx {
             for {
                 ctx <- TransactionBuilder
                     .build(
-                      config.cardanoInfo.network,
+                      config.network,
                       spendUtxosFunding ++ List(stepRefundMetadata, sendDeposit, sendChange, ttl)
                     )
                     .explainConst("building unbalanced deposit tx failed")
 
                 finalized <- ctx
                     .finalizeContext(
-                      config.cardanoInfo.protocolParams,
+                      config.cardanoProtocolParams,
                       diffHandler = Change
-                          .changeOutputDiffHandler(_, _, config.cardanoInfo.protocolParams, 1),
+                          .changeOutputDiffHandler(_, _, config.cardanoProtocolParams, 1),
                       evaluator = config.plutusScriptEvaluatorForTxBuild,
                       validators = Tx.Validators.nonSigningNonValidityChecksValidators
                     )
@@ -160,7 +160,7 @@ object DepositTx {
         config: DepositTx.Config,
         virtualOutputs: NonEmptyList[GenesisObligation]
     ): Either[ParseError, DepositTx] = {
-        given ProtocolVersion = config.cardanoInfo.protocolParams.protocolVersion
+        given ProtocolVersion = config.cardanoProtocolVersion
         given OriginalCborByteArray = OriginalCborByteArray(txBytes)
 
         val virtualOutputsList = virtualOutputs.toList
@@ -197,9 +197,9 @@ object DepositTx {
 
                     validityEnd <- Try {
                         val ttlSlot = tx.body.value.ttl.get
-                        val ttlPosixMillis = config.cardanoInfo.slotConfig.slotToTime(ttlSlot)
+                        val ttlPosixMillis = config.slotConfig.slotToTime(ttlSlot)
                         val instant = java.time.Instant.ofEpochMilli(ttlPosixMillis)
-                        instant.quantizeLosslessUnsafe(config.cardanoInfo.slotConfig)
+                        instant.quantizeLosslessUnsafe(config.slotConfig)
                     } match {
                         case Failure(exception) => Left(ValidityEndParseError(exception))
                         case Success(v)         => Right(v)

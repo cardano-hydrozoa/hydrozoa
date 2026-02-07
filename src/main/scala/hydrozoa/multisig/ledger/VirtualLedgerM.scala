@@ -90,7 +90,7 @@ object VirtualLedgerM {
         for {
             config <- ask
             l2EventTx <- {
-                given ProtocolVersion = config.cardanoProtocolParams.protocolVersion
+                given ProtocolVersion = config.cardanoProtocolVersion
                 lift(
                   Cbor.decode(tx)
                       .to[Transaction]

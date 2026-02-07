@@ -54,7 +54,7 @@ object RolloutTx {
             for {
                 ctx <- TransactionBuilder
                     .build(
-                      config.cardanoInfo.network,
+                      config.network,
                       BuilderOps.BasePessimistic.commonSteps ++ BuilderOps.RolloutOutput
                           .mbSendRollout(args.mbRolloutOutputValue)
                           .toList
@@ -182,7 +182,7 @@ object RolloutTx {
                 ): BuildErrorOr[Value] = {
                     // The deficit in the inputs to the transaction prior to adding the placeholder
                     val valueNeeded =
-                        Placeholder.inputValueNeeded(ctx, config.cardanoInfo.protocolParams)
+                        Placeholder.inputValueNeeded(ctx, config.cardanoProtocolParams)
                     trialFinishLoop(builder, ctx, valueNeeded)
                 }
 
@@ -197,7 +197,7 @@ object RolloutTx {
                         // TODO: move out of loop
                         addedPlaceholderRolloutInput <- TransactionBuilder.modify(ctx, placeholder)
                         res <- addedPlaceholderRolloutInput.finalizeContext(
-                          config.cardanoInfo.protocolParams,
+                          config.cardanoProtocolParams,
                           prebalancedLovelaceDiffHandler,
                           builder.config.plutusScriptEvaluatorForTxBuild,
                           List(TransactionSizeValidator)

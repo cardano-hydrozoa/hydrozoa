@@ -61,7 +61,7 @@ object DeinitTx:
                 .map(s =>
                     // TODO: Allow errors other than SomeBuildError to be raised
                     SomeBuildError.BalancingError.apply(
-                      context = TransactionBuilder.Context.empty(config.cardanoInfo.network),
+                      context = TransactionBuilder.Context.empty(config.network),
                       e = TxBalancingError.Failed(IllegalStateException(s))
                     )
                 )
@@ -69,14 +69,14 @@ object DeinitTx:
 
             ctx <- TransactionBuilder
                 .build(
-                  config.cardanoInfo.network,
+                  config.network,
                   steps.commonSteps ++ payouts
                 )
                 .explain(const("Could not build deinit transaction"))
 
             res <- ctx
                 .finalizeContext(
-                  config.cardanoInfo.protocolParams,
+                  config.cardanoProtocolParams,
                   SharePayoutsDiffHandler.handler(residualTreasuryToSpend),
                   config.plutusScriptEvaluatorForTxBuild,
                   Tx.Validators.nonSigningValidators

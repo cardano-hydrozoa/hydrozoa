@@ -119,7 +119,7 @@ object DepositRefundTxSeq {
                           + config.txTiming.silenceDuration
                           == refundTx.startTime
                           && refundTx.startTime == depositTx.depositProduced.datum.refundInstructions.startTime
-                              .toEpochQuantizedInstant(config.cardanoInfo.slotConfig),
+                              .toEpochQuantizedInstant(config.slotConfig),
                       (),
                       Builder.Error.TimingIncoherence // we don't return a DepositRefundTxSeq, because it's not valid
                     )
@@ -237,7 +237,7 @@ object DepositRefundTxSeq {
                       + config.txTiming.silenceDuration
                       == refundTx.startTime
                       && refundTx.startTime == depositTx.depositProduced.datum.refundInstructions.startTime
-                          .toEpochQuantizedInstant(config.cardanoInfo.slotConfig),
+                          .toEpochQuantizedInstant(config.slotConfig),
                   (),
                   ParseError.TimingIncoherence // we don't return a DepositRefundTxSeq, because it's not valid
                 )

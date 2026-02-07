@@ -76,7 +76,7 @@ object RefundTx {
             override val mValidityStart: Some[QuantizedInstant] =
                 Some(
                   refundInstructions.startTime.toEpochQuantizedInstant(
-                    config.cardanoInfo.slotConfig
+                    config.slotConfig
                   )
                 )
             override val stepRefundMetadata =
@@ -92,7 +92,7 @@ object RefundTx {
                   ctx,
                   valueNeeded,
                   refundInstructions,
-                  config.cardanoInfo.slotConfig
+                  config.slotConfig
                 )
         }
 
@@ -122,7 +122,7 @@ object RefundTx {
                     .explainConst("adding real spend deposit failed.")
                 finalized <- addedDepositSpent
                     .finalizeContext(
-                      config.cardanoInfo.protocolParams,
+                      config.cardanoProtocolParams,
                       prebalancedLovelaceDiffHandler,
                       config.plutusScriptEvaluatorForTxBuild,
                       Tx.Validators.nonSigningNonValidityChecksValidators
@@ -194,17 +194,17 @@ object RefundTx {
             val sendRefund = Send(refundOutput)
 
             val setValidity = ValidityStartSlot(
-              config.cardanoInfo.slotConfig.timeToSlot(refundInstructions.startTime.toLong)
+              config.slotConfig.timeToSlot(refundInstructions.startTime.toLong)
             )
 
             val steps = List(stepRefundMetadata, stepReferenceHNS, setValidity, sendRefund)
 
             for {
                 ctx <- TransactionBuilder
-                    .build(config.cardanoInfo.network, steps)
+                    .build(config.network, steps)
                     .explainConst("adding base refund steps failed")
 
-                valueNeeded = Placeholder.inputValueNeeded(ctx, config.cardanoInfo.protocolParams)
+                valueNeeded = Placeholder.inputValueNeeded(ctx, config.cardanoProtocolParams)
 
                 valueNeededWithFee <- trialFinishLoop(ctx, valueNeeded)
             } yield mkPartialResult(ctx, valueNeededWithFee)
@@ -241,7 +241,7 @@ object RefundTx {
                   )
                 )
                 res <- addedSpendDeposit.finalizeContext(
-                  config.cardanoInfo.protocolParams,
+                  config.cardanoProtocolParams,
                   prebalancedLovelaceDiffHandler,
                   config.plutusScriptEvaluatorForTxBuild,
                   List(TransactionSizeValidator)
