@@ -5,7 +5,6 @@ import cats.effect.{IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
-import hydrozoa.UtxoIdL1
 import hydrozoa.lib.cardano.scalus.QuantizedTime.toEpochQuantizedInstant
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.peer.PeerId
@@ -13,7 +12,7 @@ import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockHeader, BlockNumber, BlockStatus}
 import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId}
-import scalus.cardano.ledger.SlotConfig
+import scalus.cardano.ledger.{SlotConfig, TransactionInput}
 
 /** Block weaver actor.
   *   - When the node is leading a block, the weaver packages all known unprocessed (by the time
@@ -99,7 +98,7 @@ object BlockWeaver:
       * @param utxos
       *   all utxos found
       */
-    final case class PollResults(utxos: Set[UtxoIdL1])
+    final case class PollResults(utxos: Set[TransactionInput])
 
     object PollResults:
         val empty: PollResults = PollResults(Set.empty)

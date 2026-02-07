@@ -4,7 +4,6 @@ import cats.effect.{IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
-import hydrozoa.UtxoIdL1
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant}
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
@@ -82,7 +81,7 @@ object CardanoLiaison:
     /** The state we want to achieve on L1. */
     enum TargetState:
         /** Regular state of an active head represented by id of the treasury utxo. */
-        case Active(treasuryUtxoId: UtxoIdL1)
+        case Active(treasuryUtxoId: TransactionInput)
 
         /** Final state of a head, represented by the transaction hash of the finalization tx. */
         case Finalized(finalizationTxHash: TransactionHash)
@@ -106,7 +105,7 @@ object CardanoLiaison:
           * usually it doesn't spend any utxos locked at the head's address, and even if this is the
           * case, the initialization tx is handled separately.
           */
-        effectInputs: Map[UtxoIdL1, EffectId],
+        effectInputs: Map[TransactionInput, EffectId],
 
         /** This contains all effects, the whole fish skeleton, including the initialization tx, but
           * with no fallback txs, which are stored separately in [[fallbackEffects]]
@@ -120,8 +119,7 @@ object CardanoLiaison:
     object State:
         def initialState(config: Config): State = {
             State(
-              targetState =
-                  TargetState.Active(UtxoIdL1(config.initializationTx.treasuryProduced.utxoId)),
+              targetState = TargetState.Active(config.initializationTx.treasuryProduced.utxoId),
               effectInputs = Map.empty,
               happyPathEffects =
                   TreeMap(EffectId.initializationEffectId -> config.initializationTx),
@@ -244,7 +242,7 @@ trait CardanoLiaison(
                     mkHappyPathEffectInputsAndEffectsMajor(block.settlementTx, block.rolloutTxs)
                 State(
                   targetState = TargetState.Active(
-                    UtxoIdL1(block.settlementTx.treasuryProduced.utxoId)
+                    block.settlementTx.treasuryProduced.utxoId
                   ),
                   effectInputs = s.effectInputs ++ blockEffectInputs,
                   happyPathEffects = s.happyPathEffects ++ blockEffects,
@@ -279,7 +277,7 @@ trait CardanoLiaison(
         settlementTx: SettlementTx,
         rollouts: List[RolloutTx]
     ): (
-        Seq[(UtxoIdL1, EffectId)],
+        Seq[(TransactionInput, EffectId)],
         Seq[(EffectId, HappyPathEffect)]
     ) = {
         val treasurySpent = settlementTx.treasurySpent
@@ -295,7 +293,7 @@ trait CardanoLiaison(
         rollouts: List[RolloutTx],
         mbDeinitTx: Option[DeinitTx]
     ): (
-        Seq[(UtxoIdL1, EffectId)],
+        Seq[(TransactionInput, EffectId)],
         Seq[(EffectId, HappyPathEffect)]
     ) =
         val treasurySpent = finalizationTx.treasurySpent
@@ -320,13 +318,13 @@ trait CardanoLiaison(
     private def indexWithEffectId(
         effects: List[(TransactionInput, HappyPathEffect)],
         versionMajor: BlockVersion.Major
-    ): List[((UtxoIdL1, EffectId), (EffectId, HappyPathEffect))] =
+    ): List[((TransactionInput, EffectId), (EffectId, HappyPathEffect))] =
         effects.zipWithIndex
             .map((utxoIdAndEffect, index) => {
                 val effectId = versionMajor -> index
-                (UtxoIdL1(
+                (
                   utxoIdAndEffect._1
-                ) -> effectId) -> (effectId -> utxoIdAndEffect._2)
+                ) -> effectId -> (effectId -> utxoIdAndEffect._2)
             })
 
     /** The core part of the liaison that decides whether an action is needed and submits them.
@@ -353,7 +351,7 @@ trait CardanoLiaison(
             case Right(l1State) =>
                 for {
                     // From the whole state we need to know only utxo ids
-                    utxoIds <- IO.pure(l1State.untagged.keySet)
+                    utxoIds <- IO.pure(l1State.keySet)
                     // This may not the ideal place to have it. Every time we get a new head state, we
                     // forward it to the block weaver.
                     conn <- getConnections
@@ -407,7 +405,9 @@ trait CardanoLiaison(
                                         txResp <- config.cardanoBackend.isTxKnown(
                                           finalizationTxHash
                                         )
-                                        _ <- logger.debug(s"finalizationTx: hash: $finalizationTxHash txResp: $txResp")
+                                        _ <- logger.debug(
+                                          s"finalizationTx: hash: $finalizationTxHash txResp: $txResp"
+                                        )
                                         mbInitAction <- txResp match {
                                             case Left(err) =>
                                                 for {
@@ -503,7 +503,7 @@ trait CardanoLiaison(
 
     private def mkDirectActions(
         state: State,
-        utxosFound: Set[UtxoIdL1],
+        utxosFound: Set[TransactionInput],
         currentTime: QuantizedInstant
     ): Either[EffectError, Seq[DirectAction]] =
         utxosFound

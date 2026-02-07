@@ -1,6 +1,6 @@
 package hydrozoa.config
-import hydrozoa.AddressL1
 import hydrozoa.lib.cardano.value.coin.Coin
+import scalus.cardano.address.Address
 import spire.compat.numeric
 import spire.math.Number.apply
 import spire.math.{Rational, SafeLong, UByte}
@@ -25,7 +25,7 @@ case class EquityShares private (
 /** Peers's equity share and deposit. */
 case class PeerEquityShare(
     // Address to pay out liabilities
-    payoutAddress: AddressL1,
+    payoutAddress: Address,
     // Peer's share of equity
     equityShare: Rational,
     // Peer's total deposit, stored in multisig utxo, the collective part depends on the equityShare
@@ -35,7 +35,7 @@ case class PeerEquityShare(
 object EquityShares:
 
     def apply(
-        shares: Map[UByte, (AddressL1, Rational)],
+        shares: Map[UByte, (Address, Rational)],
         collectiveContingency: CollectiveContingency,
         individualContingency: IndividualContingency
     ): Either[HeadConfig.Error, EquityShares] = {
@@ -69,7 +69,7 @@ object EquityShares:
     // ===================================
 
     case class Distribution(
-        disbursements: Map[AddressL1, Coin],
+        disbursements: Map[Address, Coin],
         dust: Dust // Round leftover after the distribution
     )
 
@@ -88,7 +88,7 @@ object EquityShares:
         def distribute(equityShares: EquityShares)(equity: Coin): Distribution = {
 
             // (AddressL1, (fallback deposit, equity share))
-            val payoutsParts: Iterable[(AddressL1, (Coin, Coin))] =
+            val payoutsParts: Iterable[(Address, (Coin, Coin))] =
                 equityShares.peerShares.values.map(v =>
                     v.payoutAddress -> (
                       v.fallbackDeposit,

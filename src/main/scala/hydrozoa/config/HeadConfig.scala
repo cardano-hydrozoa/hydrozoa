@@ -1,6 +1,7 @@
 package hydrozoa.config
 
 import cats.data.NonEmptyList
+import hydrozoa.VerificationKeyBytes
 import hydrozoa.config.HeadConfig.Error.*
 import hydrozoa.config.HeadConfig.{HeadInstanceL1, HeadParameters, InitialBlock, OwnPeer, PrivateNodeSettings}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
@@ -12,12 +13,11 @@ import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, InitializationTx, TxTiming}
 import hydrozoa.multisig.ledger.dapp.txseq.InitializationTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
-import hydrozoa.{AddressL1, VerificationKeyBytes}
 import scala.collection.immutable.TreeMap
 import scala.concurrent.duration.FiniteDuration
 import scala.util.Try
 import scalus.builtin.ByteString
-import scalus.cardano.address.Network
+import scalus.cardano.address.{Address, Network}
 import scalus.cardano.ledger.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import spire.math.{Rational, UByte}
@@ -52,7 +52,7 @@ import spire.math.{Rational, UByte}
 case class RawConfig(
     // OwnPeer (need private key), equity/contingency payout address, equity share
     // QUESTION: does it make sense to change the rational to PeerEquityShare?
-    ownPeer: (OwnPeer, AddressL1, Rational),
+    ownPeer: (OwnPeer, Address, Rational),
     otherPeers: List[PeerSection],
     receiveTimeout: FiniteDuration,
     initializationTxBytes: Array[Byte],
@@ -153,7 +153,7 @@ case class PeerSection(
     // and also for signing L2 block headers (what else?)
     verificationKeyBytes: VerificationKeyBytes,
     // The address to pay out back contingency deposits and equity shares.
-    payoutAddress: AddressL1,
+    payoutAddress: Address,
     // The peer's share of equity
     equityShare: Rational
 )

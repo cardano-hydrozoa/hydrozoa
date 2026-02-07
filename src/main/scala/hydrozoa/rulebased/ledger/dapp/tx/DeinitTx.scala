@@ -13,10 +13,10 @@ import hydrozoa.rulebased.ledger.dapp.utxo.RuleBasedTreasuryUtxo
 import scala.collection.immutable.SortedMap
 import scalus.builtin.ByteString.hex
 import scalus.builtin.Data.toData
+import scalus.cardano.ledger.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.utils.MinCoinSizedTransactionOutput
-import scalus.cardano.ledger.{Utxo as SUtxo, *}
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.Datum.DatumInlined
 import scalus.cardano.txbuilder.ScriptSource.{NativeScriptValue, PlutusScriptValue}
@@ -50,7 +50,7 @@ object DeinitTx {
         defaultVoteDeposit: Coin,
         voteDeposit: Coin,
         shares: EquityShares,
-        collateralUtxo: Utxo[L1],
+        collateralUtxo: Utxo,
         env: CardanoInfo,
         evaluator: PlutusScriptEvaluator,
         validators: Seq[Validator]
@@ -166,7 +166,7 @@ object DeinitTx {
                   List(
                     // Spend the treasury utxo
                     Spend(
-                      SUtxo(treasuryUtxo.asTuple._1, treasuryUtxo.asTuple._2),
+                      Utxo(treasuryUtxo.asTuple._1, treasuryUtxo.asTuple._2),
                       ThreeArgumentPlutusScriptWitness(
                         PlutusScriptValue(RuleBasedTreasuryScript.compiledPlutusV3Script),
                         TreasuryRedeemer.Deinit.toData,
@@ -175,8 +175,8 @@ object DeinitTx {
                       )
                     ),
                     // Fees are covered by the collateral to simplify the balancing
-                    Spend(collateralUtxo.toScalus, PubKeyWitness),
-                    AddCollateral(collateralUtxo.toScalus),
+                    Spend(collateralUtxo, PubKeyWitness),
+                    AddCollateral(collateralUtxo),
                     // Send collateral back as the first output
                     Send(collateralUtxo.output)
                   )

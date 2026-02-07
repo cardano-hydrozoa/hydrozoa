@@ -4,7 +4,6 @@ import cats.effect.{IO, Ref}
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
-import hydrozoa.UtxoIdL1
 import hydrozoa.config.EquityShares
 import hydrozoa.lib.actor.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, toEpochQuantizedInstant}
@@ -32,7 +31,7 @@ import monocle.Focus.focus
 import scala.collection.immutable.Queue
 import scala.math.Ordered.orderingToOrdered
 import scalus.builtin.{ByteString, platform}
-import scalus.cardano.ledger.{CardanoInfo, Coin, TransactionHash}
+import scalus.cardano.ledger.{CardanoInfo, Coin, TransactionHash, TransactionInput}
 
 // Fields of a work-in-progress block, with an additional field for dealing with withdrawn utxos
 private case class TransientFields(
@@ -330,13 +329,13 @@ final case class JointLedger(
                         if depositAbsorptionStart > producing.startTime
                         // Not yet mature
                         then acc.focus(_._1).modify(_.appended(deposit))
-                        else if pollResults.contains(UtxoIdL1(deposit._2.toUtxo.input)) &&
+                        else if pollResults.contains(deposit._2.toUtxo.input) &&
                         (depositAbsorptionStart <= producing.startTime) &&
                         (settlementValidityEnd <= depositAbsorptionEnd)
                         // Eligible for absorption
                         then acc.focus(_._2).modify(_.appended(deposit))
                         else if ((depositAbsorptionStart <= producing.startTime)
-                            && !pollResults.contains(UtxoIdL1(deposit._2.toUtxo.input))) ||
+                            && !pollResults.contains(deposit._2.toUtxo.input)) ||
                         (settlementValidityEnd > depositAbsorptionEnd)
                         // Never eligible for absorption
                         then acc.focus(_._3).modify(_.appended(deposit))
@@ -593,7 +592,7 @@ object JointLedger {
           */
         case class CompleteBlockRegular(
             referenceBlockBrief: Option[BlockBrief.Intermediate],
-            pollResults: Set[UtxoIdL1],
+            pollResults: Set[TransactionInput],
             finalizationLocallyTriggered: Boolean
         )
 

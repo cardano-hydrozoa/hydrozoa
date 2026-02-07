@@ -10,7 +10,7 @@ import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.*
 import hydrozoa.rulebased.ledger.dapp.utxo.TallyVoteUtxo
-import hydrozoa.{L1, Output, Utxo, UtxoId, singleton}
+import hydrozoa.singleton
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
@@ -20,7 +20,7 @@ import scalus.builtin.Data.toData
 import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{Utxo as _, *}
+import scalus.cardano.ledger.{Utxo, *}
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
 import scalus.ledger.api.v3.TokenName
 import test.*
@@ -67,7 +67,7 @@ def genResolutionTallyVoteUtxo(
     Gen.const(
       TallyVoteUtxo(
         voter = voter,
-        Utxo[L1](UtxoId[L1](txId), Output[L1](voteOutput))
+        Utxo(txId, voteOutput)
       )
     )
 }
@@ -128,7 +128,7 @@ def genResolutionTxRecipe(
     } yield ResolutionTx.Recipe(
       talliedVoteUtxo = talliedVoteUtxo,
       treasuryUtxo = treasuryUtxo,
-      collateralUtxo = Utxo[L1](UtxoId(collateralUtxo._1), Output(collateralUtxo._2)),
+      collateralUtxo = Utxo(collateralUtxo._1, collateralUtxo._2),
       validityEndSlot = 200,
       network = testNetwork,
       protocolParams = testProtocolParams,

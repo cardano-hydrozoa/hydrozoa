@@ -17,9 +17,9 @@ import scala.annotation.nowarn
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
+import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{Utxo as _, *}
 import scalus.ledger.api.v3.TokenName
 import test.*
 
@@ -65,7 +65,7 @@ def genVoteUtxo(
         )
     } yield OwnVoteUtxo(
       AddrKeyHash(voteDatum.voteStatus.asInstanceOf[AwaitingVote].peer.hash),
-      Utxo[L1](UtxoId[L1](txId), Output[L1](voteOutput))
+      Utxo(txId, voteOutput)
     )
 
 def genVoteTxRecipe(
@@ -122,7 +122,7 @@ def genVoteTxRecipe(
 
         // Create builder context (not needed for Recipe anymore)
         allUtxos = Map(
-          voteUtxo.utxo.input.untagged -> voteUtxo.utxo.output.untagged,
+          voteUtxo.utxo.input -> voteUtxo.utxo.output,
           treasuryUtxo.asTuple._1 -> treasuryUtxo.asTuple._2,
           collateralUtxo._1 -> collateralUtxo._2
         )
@@ -130,7 +130,7 @@ def genVoteTxRecipe(
     } yield VoteTx.Recipe(
       voteUtxo = voteUtxo,
       treasuryUtxo = treasuryUtxo,
-      collateralUtxo = Utxo[L1](UtxoId(collateralUtxo._1), Output(collateralUtxo._2)),
+      collateralUtxo = Utxo(collateralUtxo._1, collateralUtxo._2),
       blockHeader = blockHeader,
       signatures = signatures,
       // TODO: now sure how to do that properly
