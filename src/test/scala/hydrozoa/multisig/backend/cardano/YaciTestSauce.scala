@@ -94,17 +94,13 @@ def yaciTestSauceGenesis(network: Network)(peers: List[TestPeer]): Map[TestPeer,
         .map((txHash, peer) =>
             peer ->
                 (
-
-                    TransactionInput(
-                      Hash[Blake2b_256, HashPurpose.TransactionHash](ByteString.fromHex(txHash)),
-                      0
-                    )
-                  ,
-
-                    TransactionOutput
-                        .Babbage(address = mkAddress(peer), value = Value.lovelace(10_000_000_000L))
-                  )
-
+                  TransactionInput(
+                    Hash[Blake2b_256, HashPurpose.TransactionHash](ByteString.fromHex(txHash)),
+                    0
+                  ),
+                  TransactionOutput
+                      .Babbage(address = mkAddress(peer), value = Value.lovelace(10_000_000_000L))
+                )
         )
         .toMap
         .groupBy((peer, _) => peer)

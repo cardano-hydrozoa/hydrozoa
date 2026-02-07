@@ -25,7 +25,7 @@ import hydrozoa.multisig.ledger.dapp.tx.{TxTiming, minInitTreasuryAda}
 import hydrozoa.multisig.ledger.dapp.txseq.InitializationTxSeq
 import hydrozoa.multisig.ledger.dapp.txseq.InitializationTxSeq.Builder
 import hydrozoa.rulebased.ledger.dapp.tx.genEquityShares
-import hydrozoa.{Address, L1, UtxoSetL1, attachVKeyWitnesses, maxNonPlutusTxFee}
+import hydrozoa.{attachVKeyWitnesses, maxNonPlutusTxFee}
 import java.util.concurrent.TimeUnit
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.commands.{CommandGen, ModelBasedSuite}
@@ -33,7 +33,7 @@ import org.scalacheck.{Gen, Prop, YetAnotherProperties}
 import org.typelevel.log4cats.Logger
 import scala.concurrent.duration.{DurationInt, FiniteDuration, HOURS}
 import scalus.cardano.ledger.rules.{Context, UtxoEnv}
-import scalus.cardano.ledger.{CardanoInfo, CertState, Coin, TransactionHash, Utxo, Value}
+import scalus.cardano.ledger.{CardanoInfo, CertState, Coin, TransactionHash, Utxo, Utxos, Value}
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import spire.math.UByte
 import test.TestPeer.Alice
@@ -76,7 +76,7 @@ case class Suite(
     override val useTestControl: Boolean,
     override val commandGen: CommandGen[ModelState, Stage1Sut],
     network: Either[StandardCardanoNetwork, NetworkInfo],
-    getGenesisUtxos: List[TestPeer] => Map[TestPeer, UtxoSetL1],
+    getGenesisUtxos: List[TestPeer] => Map[TestPeer, Utxos],
 ) extends ModelBasedSuite {
 
     override type State = ModelState
@@ -98,7 +98,7 @@ case class Suite(
 
             ownPeer = (
               OwnPeer(PeerId(0, 1), ownTestPeer.wallet),
-              Address[L1](ownTestPeer.address(cardanoInfo.network)),
+              ownTestPeer.address(cardanoInfo.network),
               state.equityShares.peerShares(UByte(0)).equityShare
             )
 
@@ -157,9 +157,7 @@ case class Suite(
 
             // Cardano L1 backend mock
             // TODO: save utxos in the model state?
-            utxos = getGenesisUtxos(List(ownTestPeer)).values.flatten
-                .map((k, v) => k.untagged -> v.untagged)
-                .toMap
+            utxos = getGenesisUtxos(List(ownTestPeer)).values.flatten.toMap
             mockState = MockState.apply(utxos)
             cardanoBackend <- CardanoBackendMock.mockIO(
               initialState = mockState,
@@ -392,10 +390,8 @@ case class Suite(
                 .label("Equity shares")
 
             seedUtxo <- Gen
-                .oneOf(
-                  getGenesisUtxos(List(ownTestPeer))(ownTestPeer)
-                      .map(u => Utxo(u._1.untagged, u._2.untagged))
-                )
+                .oneOf(getGenesisUtxos(List(ownTestPeer))(ownTestPeer))
+                .flatMap((i, o) => Utxo(i, o))
                 .label("Seed utxo")
 
             // NB: I don't think funding utxos make sense for this scenario

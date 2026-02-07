@@ -31,12 +31,10 @@ import monocle.Focus.focus
 import org.scalacheck.*
 import org.scalacheck.Gen.{choose, tailRecM}
 import org.scalacheck.Prop.forAll
+import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scalus.cardano.ledger.{Block as _, BlockHeader as _, *}
 import test.Generators.Hydrozoa.*
 import test.{TestPeer, testNetwork, testTxBuilderCardanoInfo}
-
-import java.util.concurrent.TimeUnit
-import scala.concurrent.duration.{DurationInt, FiniteDuration}
 
 object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
 
@@ -888,7 +886,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                             // set but not "already known tx", so the finalization tx happens to be missing.
 
                             // One timeout is enough for the Cardano Liaison to send all the effects
-                            //_ <- cardanoLiaisonActor ! CardanoLiaison.Timeout
+                            // _ <- cardanoLiaisonActor ! CardanoLiaison.Timeout
 
                             check <- awaitCond(
                               p = IO
