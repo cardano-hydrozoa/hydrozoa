@@ -44,6 +44,16 @@ object SettlementTx {
 
     sealed trait NoRollouts extends SettlementTx
 
+    private val logger = org.slf4j.LoggerFactory.getLogger("SettlementTx")
+
+    private def time[A](label: String)(block: => A): A = {
+        val start = System.nanoTime()
+        val result = block
+        val elapsed = (System.nanoTime() - start) / 1_000_000.0
+        logger.info(f"\n\n⏱️ $label: ${elapsed}%.2f ms")
+        result
+    }
+
     trait Builder[T <: SettlementTx] {
         def config: SettlementTx.Config
         type ArgsType <: Args
@@ -53,49 +63,65 @@ object SettlementTx {
 
         final def build(args: ArgsType): BuildErrorOr[ResultType] = {
             for {
-                pessimistic <- basePessimistic(args)
-                addedDeposits <- addDeposits(args, pessimistic)
+                pessimistic <- time("basePessimistic") {
+                    basePessimistic(args)
+                }
+                addedDeposits <- time("addDeposits") {
+                    addDeposits(args, pessimistic)
+                }
                 // Balancing and fees
-                finished <- addedDeposits.ctx
-                    .finalizeContext(
-                      protocolParams = config.cardanoInfo.protocolParams,
-                      diffHandler = Change
-                          .changeOutputDiffHandler(_, _, config.cardanoInfo.protocolParams, 0),
-                      evaluator = PlutusScriptEvaluator(config.cardanoInfo, EvaluateAndComputeCost),
-                      validators = Tx.Validators.nonSigningValidators
-                    )
-                    .explainConst("finishing settlement tx failed")
+                finished <- time("finalizeContext") {
+                    addedDeposits.ctx
+                        .finalizeContext(
+                          protocolParams = config.cardanoInfo.protocolParams,
+                          diffHandler = Change
+                              .changeOutputDiffHandler(_, _, config.cardanoInfo.protocolParams, 0),
+                          evaluator =
+                              PlutusScriptEvaluator(config.cardanoInfo, EvaluateAndComputeCost),
+                          validators = Tx.Validators.nonSigningValidators
+                        )
+                        .explainConst("finishing settlement tx failed")
+                }
 
-                completed <- complete(args, addedDeposits.copy(ctx = finished))
+                completed <- time("complete") {
+                    complete(args, addedDeposits.copy(ctx = finished))
+                }
             } yield completed
         }
 
         private final def basePessimistic(args: ArgsType): BuildErrorOr[State[T]] = {
-            val steps =
+            val steps = time("BasePessimistic.steps") {
                 BuilderOps.BasePessimistic.steps(args)
+            }
             for {
-                ctx <- TransactionBuilder
-                    .build(config.cardanoInfo.network, steps)
-                    .explainConst("base pessimistic build failed")
-                addedPessimisticRollout <- BuilderOps.BasePessimistic.mbApplySendRollout(
-                  args.treasuryToSpend,
-                  args.mbRolloutValue
-                )(ctx)
-                _ <- addedPessimisticRollout
-                    .finalizeContext(
-                      config.cardanoInfo.protocolParams,
-                      diffHandler = Change.changeOutputDiffHandler(
-                        _,
-                        _,
-                        protocolParams = config.cardanoInfo.protocolParams,
-                        changeOutputIdx = 0
-                      ),
-                      evaluator = config.evaluator,
-                      validators = Tx.Validators.nonSigningValidators
-                    )
-                    .explainConst(
-                      "finishing base pessimistic failed"
-                    )
+                ctx <- time("TransactionBuilder.build") {
+                    TransactionBuilder
+                        .build(config.cardanoInfo.network, steps)
+                        .explainConst("base pessimistic build failed")
+                }
+                addedPessimisticRollout <- time("mbApplySendRollout") {
+                    BuilderOps.BasePessimistic.mbApplySendRollout(
+                      args.treasuryToSpend,
+                      args.mbRolloutValue
+                    )(ctx)
+                }
+                _ <- time("pessimistic.finalizeContext") {
+                    addedPessimisticRollout
+                        .finalizeContext(
+                          config.cardanoInfo.protocolParams,
+                          diffHandler = Change.changeOutputDiffHandler(
+                            _,
+                            _,
+                            protocolParams = config.cardanoInfo.protocolParams,
+                            changeOutputIdx = 0
+                          ),
+                          evaluator = config.evaluator,
+                          validators = Tx.Validators.nonSigningValidators
+                        )
+                        .explainConst(
+                          "finishing base pessimistic failed"
+                        )
+                }
             } yield State[T](
               ctx = ctx,
               depositsSpent = Vector.empty,

@@ -48,15 +48,16 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
       */
     def genArgs(
         txTiming: TxTiming = default(testTxBuilderCardanoInfo.slotConfig),
-        mbUtxosAvailable: Option[Map[TestPeer, Utxos]] = None
+        mbUtxosAvailable: Option[List[TestPeer] => Map[TestPeer, Utxos]] = None
     ): Gen[(InitializationTxSeq.Config, InitializationTxSeq.Builder.Args, NonEmptyList[TestPeer])] =
         for {
             peers <- genTestPeers()
             prime = peers.head
 
             (seedUtxo, fundingUtxos) <- mbUtxosAvailable match {
-                case Some(utxos) =>
+                case Some(getUtxos) =>
                     for {
+                        utxos <- Gen.const(getUtxos(peers.toList))
                         // Random prime peer's utxo
                         seedUtxo <- Gen
                             .oneOf(utxos(prime))

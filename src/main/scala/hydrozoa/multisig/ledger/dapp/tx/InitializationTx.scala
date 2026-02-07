@@ -38,6 +38,17 @@ final case class InitializationTx(
       HasValidityEnd
 
 object InitializationTx {
+
+    private val logger = org.slf4j.LoggerFactory.getLogger("InitializationTx")
+
+    private def time[A](label: String)(block: => A): A = {
+        val start = System.nanoTime()
+        val result = block
+        val elapsed = (System.nanoTime() - start) / 1_000_000.0
+        logger.info(f"\t\t⏱️ $label: ${elapsed}%.2f ms")
+        result
+    }
+
     case class Config(
         peerKeys: NonEmptyList[VerificationKeyBytes],
         cardanoInfo: CardanoInfo,
@@ -153,20 +164,24 @@ object InitializationTx {
         ////////////////////////////////////////////////////////////
         // Build and finalize
         for {
-            unbalanced <- TransactionBuilder
-                .build(
-                  config.cardanoInfo.network,
-                  steps
-                )
+            unbalanced <- time("TransactionBuilder.build") {
+                TransactionBuilder
+                    .build(
+                      config.cardanoInfo.network,
+                      steps
+                    )
+            }
 
-            finalized <- unbalanced
-                .finalizeContext(
-                  protocolParams = config.cardanoInfo.protocolParams,
-                  diffHandler =
-                      Change.changeOutputDiffHandler(_, _, config.cardanoInfo.protocolParams, 2),
-                  evaluator = config.evaluator,
-                  validators = Tx.Validators.nonSigningNonValidityChecksValidators
-                )
+            finalized <- time("finalizeContext") {
+                unbalanced
+                    .finalizeContext(
+                      protocolParams = config.cardanoInfo.protocolParams,
+                      diffHandler = Change
+                          .changeOutputDiffHandler(_, _, config.cardanoInfo.protocolParams, 2),
+                      evaluator = config.evaluator,
+                      validators = Tx.Validators.nonSigningNonValidityChecksValidators
+                    )
+            }
 
         } yield InitializationTx(
           validityEnd =

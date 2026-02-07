@@ -6,7 +6,7 @@ import scalus.cardano.ledger.{Blake2b_256, Hash, HashPurpose, TransactionInput, 
 import test.TestPeer
 import test.TestPeer.*
 
-def yaciTestSauceGenesis(network: Network): Map[TestPeer, Utxos] =
+def yaciTestSauceGenesis(network: Network)(peers: List[TestPeer]): Map[TestPeer, Utxos] =
     val mkAddress = TestPeer.address(network)
 
     List(
@@ -90,21 +90,23 @@ def yaciTestSauceGenesis(network: Network): Map[TestPeer, Utxos] =
         "a6ce90a9a5ef8ef73858effdae375ba50f302d3c6c8b587a15eaa8fa98ddf741",
         Thomas
       )
-    ).map((txHash, peer) =>
-        peer ->
-            (
-              (
-                TransactionInput(
-                  Hash[Blake2b_256, HashPurpose.TransactionHash](ByteString.fromHex(txHash)),
-                  0
-                )
-              ),
-              (
-                TransactionOutput
-                    .Babbage(address = mkAddress(peer), value = Value.lovelace(10_000_000_000L))
-              )
-            )
-    ).toMap
+    ).filter((_, peer) => peers.contains(peer))
+        .map((txHash, peer) =>
+            peer ->
+                (
+
+                    TransactionInput(
+                      Hash[Blake2b_256, HashPurpose.TransactionHash](ByteString.fromHex(txHash)),
+                      0
+                    )
+                  ,
+
+                    TransactionOutput
+                        .Babbage(address = mkAddress(peer), value = Value.lovelace(10_000_000_000L))
+                  )
+
+        )
+        .toMap
         .groupBy((peer, _) => peer)
         .view
         .mapValues(a => a.values.toMap)

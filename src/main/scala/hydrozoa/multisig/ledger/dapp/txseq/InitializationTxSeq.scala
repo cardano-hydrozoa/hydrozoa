@@ -26,6 +26,17 @@ import scalus.ledger.api.v1.PubKeyHash
 final case class InitializationTxSeq(initializationTx: InitializationTx, fallbackTx: FallbackTx)
 
 object InitializationTxSeq {
+
+    private val logger = org.slf4j.LoggerFactory.getLogger("InitializationTxSeq")
+
+    private def time[A](label: String)(block: => A): A = {
+        val start = System.nanoTime()
+        val result = block
+        val elapsed = (System.nanoTime() - start) / 1_000_000.0
+        logger.info(f"\t\t⏱️ $label: ${elapsed}%.2f ms")
+        result
+    }
+
     case class Config(
         tallyFeeAllowance: Coin,
         votingDuration: QuantizedFiniteDuration,
@@ -175,12 +186,16 @@ object InitializationTxSeq {
     object Builder {
 
         def build(args: Args, config: Config): Either[Error, InitializationTxSeq] = {
-            val tokenNames = CIP67.TokenNames(args.spentUtxos.seedUtxo.input)
-            val disputeResolutionAddress = ShelleyAddress(
-              network = config.cardanoInfo.network,
-              payment = ShelleyPaymentPart.Script(DisputeResolutionScript.compiledScriptHash),
-              delegation = Null
-            )
+            val tokenNames = time("tokenNames generation") {
+                CIP67.TokenNames(args.spentUtxos.seedUtxo.input)
+            }
+            val disputeResolutionAddress = time("disputeResolutionAddress") {
+                ShelleyAddress(
+                  network = config.cardanoInfo.network,
+                  payment = ShelleyPaymentPart.Script(DisputeResolutionScript.compiledScriptHash),
+                  delegation = Null
+                )
+            }
 
             import tokenNames.*
 
@@ -189,12 +204,16 @@ object InitializationTxSeq {
             // ===================================
 
             // Construct head native script directly from the list of peers
-            val hms = HeadMultisigScript(config.peerKeys)
+            val hms = time("HeadMultisigScript") {
+                HeadMultisigScript(config.peerKeys)
+            }
 
             // ===================================
             // Init Treasury
             // ===================================
-            val initTreasuryDatum = MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum
+            val initTreasuryDatum = time("mkInitMultisigTreasuryDatum") {
+                MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum
+            }
 
             // ===================================
             // Vote Utxos
@@ -215,11 +234,11 @@ object InitializationTxSeq {
               scriptRef = None
             ).ensureMinAda(config.cardanoInfo.protocolParams)
 
-            val initDefaultVoteUtxo: TransactionOutput = mkVoteUtxo(
-              VD.default(initTreasuryDatum.commit).toData
-            )
+            val initDefaultVoteUtxo: TransactionOutput = time("initDefaultVoteUtxo") {
+                mkVoteUtxo(VD.default(initTreasuryDatum.commit).toData)
+            }
 
-            val peerVoteUtxos: NonEmptyList[TransactionOutput] = {
+            val peerVoteUtxos: NonEmptyList[TransactionOutput] = time("peerVoteUtxos") {
                 val datums = VD(
                   NonEmptyList.fromListUnsafe(
                     hms.requiredSigners.map(x => PubKeyHash(x.hash)).toList
@@ -232,7 +251,7 @@ object InitializationTxSeq {
             // Collateral utxos
             // ===================================
 
-            def collateralUtxos: NonEmptyList[TransactionOutput] = {
+            def collateralUtxos: NonEmptyList[TransactionOutput] = time("collateralUtxos") {
                 NonEmptyList.fromListUnsafe(
                   hms.requiredSigners
                       .map(es =>
@@ -289,10 +308,12 @@ object InitializationTxSeq {
             )
 
             for {
-                initializationTx <- InitializationTx
-                    .build(initializationTxConfig, initializationTxRecipe)
-                    .left
-                    .map(InitializationTxError(_))
+                initializationTx <- time("InitializationTx.build") {
+                    InitializationTx
+                        .build(initializationTxConfig, initializationTxRecipe)
+                        .left
+                        .map(InitializationTxError(_))
+                }
 
                 fallbackConfig = FallbackTx.Config(
                   headMultisigScript = hms,
@@ -308,10 +329,12 @@ object InitializationTxSeq {
                   validityStart = fallbackTxValidityStart.toSlot
                 )
 
-                fallbackTx <- FallbackTx
-                    .build(fallbackConfig, fallbackTxRecipe)
-                    .left
-                    .map(FallbackTxError(_))
+                fallbackTx <- time("FallbackTx.build") {
+                    FallbackTx
+                        .build(fallbackConfig, fallbackTxRecipe)
+                        .left
+                        .map(FallbackTxError(_))
+                }
 
             } yield InitializationTxSeq(initializationTx, fallbackTx)
         }
