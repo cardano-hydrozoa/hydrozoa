@@ -158,7 +158,7 @@ private object FinalizationTxOps {
 
             finished <- TxBuilder
                 .finalizeContext(pessimistic.ctx)
-                .explainConst("finishing settlement tx failed")
+                .explainConst("finishing finalization tx failed")
 
             completed <- complete(pessimistic.copy(ctx = finished))
         } yield completed
@@ -169,8 +169,11 @@ private object FinalizationTxOps {
         private object BasePessimistic {
             def apply(): BuildErrorOr[State] = for {
                 _ <- Either
-                    .cond(checkTreasuryToSpend, (), ???)
+                    .cond(checkTreasuryToSpendAddress, (), ???)
                     .explainConst("treasury to spend has incorrect head address")
+                _ <- Either
+                    .cond(checkEquityAdaOnly, (), ???)
+                    .explainConst("L2 liabilities don't cover all L1 non-ADA assets")
                 ctx <- TransactionBuilder
                     .build(config.network, definiteSteps)
                     .explainConst("definite steps failed")
@@ -186,8 +189,10 @@ private object FinalizationTxOps {
             // Checks
 
             // TODO: Ensure this holds by construction
-            private def checkTreasuryToSpend: Boolean =
+            private def checkTreasuryToSpendAddress: Boolean =
                 treasuryToSpend.address == config.headMultisigAddress
+
+            private def checkEquityAdaOnly: Boolean = remainingEquityValue.assets.isEmpty
 
             /////////////////////////////////////////////////////////
             // Base steps
@@ -242,7 +247,7 @@ private object FinalizationTxOps {
             private val mbRolloutOutput: Option[TxOutput.Babbage] =
                 mbRolloutValue.map(mkRolloutOutput)
 
-            /** We apply this step if the first rollout tx doesn't get merged into the settlement
+            /** We apply this step if the first rollout tx doesn't get merged into the finalization
               * tx.
               */
             def mbApplySendRollout(
@@ -293,7 +298,7 @@ private object FinalizationTxOps {
 
         private[tx] object CompleteNoPayouts {
             def apply(state: State): Result.NoPayouts = {
-                val settlementTx: FinalizationTx.NoPayouts = FinalizationTx.NoPayouts(
+                val finalizationTx: FinalizationTx.NoPayouts = FinalizationTx.NoPayouts(
                   validityEnd = Slot(state.ctx.transaction.body.value.ttl.get)
                       .toQuantizedInstant(config.cardanoInfo.slotConfig),
                   tx = state.ctx.transaction,
@@ -301,18 +306,18 @@ private object FinalizationTxOps {
                   treasurySpent = treasuryToSpend,
                   resolvedUtxos = state.ctx.resolvedUtxos
                 )
-                Result.NoPayouts(transaction = settlementTx)
+                Result.NoPayouts(transaction = finalizationTx)
             }
         }
 
         private[tx] object CompleteWithPayouts {
 
-            /** When building a settlement transaction with payouts, try to merge the first rollout,
-              * and then apply post-processing to assemble the result. Assumes that:
+            /** When building a finalization transaction with payouts, try to merge the first
+              * rollout, and then apply post-processing to assemble the result. Assumes that:
               *
               *   - The spent treasury utxo is the first input (unchecked).
-              *   - The produced treasury utxo is the first output (asserted).
-              *   - The produced rollout utxo is the second output (asserted).
+              *   - The first N outputs are peer payouts (unchecked).
+              *   - The next output after that is the rollout utxo, if produced (asserted).
               *
               * @throws AssertionError
               *   when the asserted assumptions are broken.
@@ -374,7 +379,7 @@ private object FinalizationTxOps {
             /** Given the transaction context of a [[Builder.WithPayouts]] that has finished
               * building, apply post-processing to get the [[RolloutUtxo]] produced by the
               * [[FinalizationTx.WithRollouts]], if it was produced. Assumes that the rollout
-              * produced is the second output of the transaction.
+              * produced immediately follows the N peer payouts.
               *
               * @param ctx
               *   The transaction context of a finished builder state.
@@ -396,7 +401,7 @@ private object FinalizationTxOps {
 
                 RolloutUtxo(
                   Utxo(
-                    TransactionInput(transactionId = tx.id, index = 1),
+                    TransactionInput(transactionId = tx.id, index = config.nHeadPeers),
                     rolloutOutput
                   )
                 )
@@ -449,7 +454,7 @@ private object FinalizationTxOps {
                                 )
                         } yield finished
 
-                    // Keep the optimistic transaction (which merged the settlement tx with the first rollout tx)
+                    // Keep the optimistic transaction (which merged the finalization tx with the first rollout tx)
                     // if it worked out. Otherwise, use the pessimistic transaction.
                     for {
                         newCtx <- optimisticTrial.orElse(pessimisticBackup)
