@@ -1,8 +1,6 @@
 package hydrozoa.multisig.ledger.dapp.txseq
 
-import cats.data.NonEmptyVector
 import hydrozoa.config.head.HeadConfig
-import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.dapp.tx
@@ -41,75 +39,10 @@ object SettlementTxSeq {
     final case class Builder(
         config: SettlementTxSeq.Config
     ) {
-        def build(args: Args): Either[Builder.Error, Builder.Result] = {
-            NonEmptyVector.fromVector(args.payoutObligationsRemaining) match {
-                case None =>
-
-                    for {
-                        settlementTx <- SettlementTx.Builder
-                            .NoPayouts(config)
-                            .build(args.toArgsNoPayouts(config.txTiming))
-                            .left
-                            .map(Builder.Error.SettlementError(_))
-
-                        ftxRecipe = ??? // FIXME
-                        fallbackTx <- FallbackTx
-                            .build(???, ???, ???, ???) // FIXME
-                            .left
-                            .map(Builder.Error.FallbackError(_))
-                    } yield Builder.Result(
-                      settlementTxSeq = SettlementTxSeq.NoRollouts(settlementTx.transaction),
-                      fallbackTx = fallbackTx,
-                      depositsSpent = settlementTx.depositsSpent,
-                      depositsToSpend = settlementTx.depositsToSpend
-                    )
-                case Some(nePayouts) =>
-
-                    for {
-                        rolloutTxSeqPartial <- RolloutTxSeq
-                            .Builder(config)
-                            .buildPartial(nePayouts)
-                            .left
-                            .map(Error.RolloutSeqError(_))
-
-                        settlementTxRes <- SettlementTx.Builder
-                            .WithPayouts(config)
-                            .build(args.toArgsWithPayouts(rolloutTxSeqPartial, config.txTiming))
-                            .left
-                            .map(Error.SettlementError(_))
-
-                        settlementTxSeq <-
-                            import SettlementTx.Builder.Result
-                            settlementTxRes match {
-                                case res: Result.WithOnlyDirectPayouts =>
-                                    Right(SettlementTxSeq.NoRollouts(res.transaction))
-                                case res: Result.WithRollouts =>
-                                    val tx: SettlementTx.WithRollouts = res.transaction
-                                    res.rolloutTxSeqPartial
-                                        .finishPostProcess(tx.rolloutProduced)
-                                        .left
-                                        .map(Error.RolloutSeqError(_))
-                                        .map(SettlementTxSeq.WithRollouts(tx, _))
-                            }
-
-                        ftxRecipe = ??? // FIXME
-                        fallbackTx <- FallbackTx
-                            .build(???, ???, ???, ???) // FIXME
-                            .left
-                            .map(Builder.Error.FallbackError(_))
-                    } yield Result(
-                      settlementTxSeq = settlementTxSeq,
-                      fallbackTx = fallbackTx,
-                      depositsSpent = settlementTxRes.depositsSpent,
-                      depositsToSpend = settlementTxRes.depositsToSpend
-                    )
-            }
-        }
+        def build(args: Args): Either[Builder.Error, Builder.Result] = ???
     }
 
     object Builder {
-        import SettlementTx.Builder.Args as SingleArgs
-
         enum Error:
             case SettlementError(e: (SomeBuildError, String))
             case RolloutSeqError(e: (SomeBuildError, String))
@@ -133,27 +66,6 @@ object SettlementTxSeq {
         )
         // TODO: confirm: this one is not needed
         // extends SingleArgs(kzgCommitment),
-            extends Payout.Obligation.Many.Remaining {
-            def toArgsNoPayouts(txTiming: TxTiming): SingleArgs.NoPayouts =
-                SingleArgs.NoPayouts(
-                  majorVersionProduced = majorVersionProduced,
-                  kzgCommitment = kzgCommitment,
-                  treasuryToSpend = treasuryToSpend,
-                  depositsToSpend = depositsToSpend,
-                  validityEnd = competingFallbackValidityStart - txTiming.silenceDuration
-                )
-
-            def toArgsWithPayouts(
-                rolloutTxSeqPartial: RolloutTxSeq.Builder.PartialResult,
-                txTiming: TxTiming
-            ): SingleArgs.WithPayouts = SingleArgs.WithPayouts(
-              majorVersionProduced = majorVersionProduced,
-              treasuryToSpend = treasuryToSpend,
-              kzgCommitment = kzgCommitment,
-              depositsToSpend = depositsToSpend,
-              rolloutTxSeqPartial = rolloutTxSeqPartial,
-              validityEnd = competingFallbackValidityStart - txTiming.silenceDuration
-            )
-        }
+            extends Payout.Obligation.Many.Remaining {}
     }
 }

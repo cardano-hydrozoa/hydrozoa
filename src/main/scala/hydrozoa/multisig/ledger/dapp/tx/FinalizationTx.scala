@@ -6,20 +6,18 @@ import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toQuantizedInstant}
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.dapp.tx.FinalizationTx.{MergedDeinit, WithDeinit}
-import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, HasCtx, explain}
+import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, HasCtx}
 import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigTreasuryUtxo, ResidualTreasuryUtxo, RolloutUtxo}
 import hydrozoa.prebalancedLovelaceDiffHandler
 import monocle.Focus.focus
 import monocle.Monocle.refocus
 import monocle.{Focus, Lens}
-import scala.Function.const
-import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.txbuilder.*
-import scalus.cardano.txbuilder.TransactionBuilder.{ResolvedUtxos, unsafeCtxTxOutputsL, unsafeCtxTxReferenceInputsL}
-import scalus.cardano.txbuilder.TransactionBuilderStep.{Fee, Mint as MintStep, Send, Spend}
+import scalus.cardano.txbuilder.TransactionBuilder.{ResolvedUtxos, unsafeCtxTxOutputsL}
+import scalus.cardano.txbuilder.TransactionBuilderStep.{Fee, Mint as MintStep, Send}
 import scalus.|>
 
 sealed trait FinalizationTx
@@ -137,139 +135,66 @@ object FinalizationTx {
           */
         def upgrade(
             config: Config,
-        )(args: Args.Some): BuildErrorOr[args.Result] = {
+        )(args: Any): FinalizationTx = { // FIXME
 
-            val ctx = args.input.ctx
-            val tx = ctx.transaction
-
-            // Direct tx editing:
-            // - upgrade the treasury output
-            // - remove multisig regime utxo from referenced utxos by setting it to the empty set
-            val treasuryOutputIndex = args.input.transaction.treasuryProduced.utxoId.index
-            val treasuryOutput = tx.body.value.outputs(treasuryOutputIndex).value
-
-            val residualTreasuryOutput = TransactionOutput.apply(
-              treasuryOutput.address,
-              treasuryOutput.value + config.multisigRegimeUtxo.value
-            )
-
-            val ctxUpgraded: TransactionBuilder.Context =
-                ctx |> unsafeCtxTxOutputsL
-                    .modify(_.updated(treasuryOutputIndex, Sized.apply(residualTreasuryOutput)))
-                    |> unsafeCtxTxReferenceInputsL
-                        .replace(TaggedSortedSet.empty)
-
-            // Additional step - spend multisig regime utxo
-            val spendMultisigRegimeUtxoStep =
-                Spend(config.multisigRegimeUtxo.asUtxo, config.headMultisigScript.witnessAttached)
-
-            for {
-                ctx <- TransactionBuilder
-                    .modify(ctxUpgraded, List(spendMultisigRegimeUtxoStep))
-                    .explain(const("Could not modify (upgrade) settlement tx"))
-
-                diffHandler = Change.changeOutputDiffHandler(
-                  _,
-                  _,
-                  config.cardanoProtocolParams,
-                  treasuryOutputIndex
-                )
-
-                rebalanced <- ctx
-                    .finalizeContext(
-                      config.cardanoProtocolParams,
-                      diffHandler,
-                      config.plutusScriptEvaluatorForTxBuild,
-                      Tx.Validators.nonSigningNonValidityChecksValidators
-                    )
-                    .explain(const("Could not finalize context for finalization partial result"))
-
-            } yield {
-                val residualTreasuryUtxo = ResidualTreasuryUtxo.apply(
-                  treasuryTokenName = args.input.transaction.treasurySpent.treasuryTokenName,
-                  multisigRegimeTokenName = config.multisigRegimeUtxo.multisigRegimeTokenName,
-                  utxoId = TransactionInput(rebalanced.transaction.id, treasuryOutputIndex),
-                  // FIXME: Shall we be more specific about which outputs have which addresses?
-                  address = residualTreasuryOutput.address.asInstanceOf[ShelleyAddress],
-                  value = residualTreasuryOutput.value
-                )
-                args.mkResult(rebalanced, residualTreasuryUtxo)
-            }
+//            val ctx = args.input.ctx
+//            val tx = ctx.transaction
+//
+//            // Direct tx editing:
+//            // - upgrade the treasury output
+//            // - remove multisig regime utxo from referenced utxos by setting it to the empty set
+//            val treasuryOutputIndex = args.input.transaction.treasuryProduced.utxoId.index
+//            val treasuryOutput = tx.body.value.outputs(treasuryOutputIndex).value
+//
+//            val residualTreasuryOutput = TransactionOutput.apply(
+//              treasuryOutput.address,
+//              treasuryOutput.value + config.multisigRegimeUtxo.value
+//            )
+//
+//            val ctxUpgraded: TransactionBuilder.Context =
+//                ctx |> unsafeCtxTxOutputsL
+//                    .modify(_.updated(treasuryOutputIndex, Sized.apply(residualTreasuryOutput)))
+//                    |> unsafeCtxTxReferenceInputsL
+//                        .replace(TaggedSortedSet.empty)
+//
+//            // Additional step - spend multisig regime utxo
+//            val spendMultisigRegimeUtxoStep =
+//                Spend(config.multisigRegimeUtxo.asUtxo, config.headMultisigScript.witnessAttached)
+//
+//            for {
+//                ctx <- TransactionBuilder
+//                    .modify(ctxUpgraded, List(spendMultisigRegimeUtxoStep))
+//                    .explain(const("Could not modify (upgrade) settlement tx"))
+//
+//                diffHandler = Change.changeOutputDiffHandler(
+//                  _,
+//                  _,
+//                  config.cardanoProtocolParams,
+//                  treasuryOutputIndex
+//                )
+//
+//                rebalanced <- ctx
+//                    .finalizeContext(
+//                      config.cardanoProtocolParams,
+//                      diffHandler,
+//                      config.plutusScriptEvaluatorForTxBuild,
+//                      Tx.Validators.nonSigningNonValidityChecksValidators
+//                    )
+//                    .explain(const("Could not finalize context for finalization partial result"))
+//
+//            } yield {
+//                val residualTreasuryUtxo = ResidualTreasuryUtxo.apply(
+//                  treasuryTokenName = args.input.transaction.treasurySpent.treasuryTokenName,
+//                  multisigRegimeTokenName = config.multisigRegimeUtxo.multisigRegimeTokenName,
+//                  utxoId = TransactionInput(rebalanced.transaction.id, treasuryOutputIndex),
+//                  // FIXME: Shall we be more specific about which outputs have which addresses?
+//                  address = residualTreasuryOutput.address.asInstanceOf[ShelleyAddress],
+//                  value = residualTreasuryOutput.value
+//                )
+//                args.mkResult(rebalanced, residualTreasuryUtxo)
+//            }
+            ???
         }
-
-        object Args:
-
-            sealed trait Some:
-                def input: Input
-
-                type Input <: SettlementTx.Builder.Result[? <: SettlementTx]
-                type Result <: PartialResult
-
-                def mkResult(
-                    ctx: TransactionBuilder.Context,
-                    residualTreasuryProduced: ResidualTreasuryUtxo
-                ): Result
-
-            // no payouts
-            final case class NoPayoutsArg(override val input: SettlementTx.Builder.Result.NoPayouts)
-                extends Some:
-                override type Input = SettlementTx.Builder.Result.NoPayouts
-                override type Result = PartialResult.NoPayouts
-
-                override def mkResult(
-                    ctx: TransactionBuilder.Context,
-                    residualTreasuryProduced: ResidualTreasuryUtxo
-                ): Result =
-                    PartialResult.NoPayouts(
-                      this.input.transaction.treasurySpent,
-                      residualTreasuryProduced,
-                      ctx
-                    )
-
-            extension (self: SettlementTx.Builder.Result.NoPayouts) def toArgs1 = NoPayoutsArg(self)
-
-            // with only direct payouts
-            final case class WithOnlyDirectPayoutsArgs(
-                override val input: SettlementTx.Builder.Result.WithOnlyDirectPayouts
-            ) extends Some:
-                override type Input = SettlementTx.Builder.Result.WithOnlyDirectPayouts
-                override type Result = PartialResult.WithOnlyDirectPayouts
-
-                override def mkResult(
-                    ctx: TransactionBuilder.Context,
-                    residualTreasuryProduced: ResidualTreasuryUtxo
-                ): Result = PartialResult.WithOnlyDirectPayouts(
-                  this.input.transaction.treasurySpent,
-                  residualTreasuryProduced,
-                  ctx
-                )
-
-            extension (self: SettlementTx.Builder.Result.WithOnlyDirectPayouts)
-                def toArgs1 = WithOnlyDirectPayoutsArgs(self)
-
-            // with rollouts
-            final case class WithRolloutsArgs(
-                override val input: SettlementTx.Builder.Result.WithRollouts
-            ) extends Some:
-                override type Input = SettlementTx.Builder.Result.WithRollouts
-
-                override type Result = PartialResult.WithRollouts
-
-                override def mkResult(
-                    ctx: TransactionBuilder.Context,
-                    residualTreasuryProduced: ResidualTreasuryUtxo
-                ): Result = PartialResult.WithRollouts(
-                  input.transaction.treasurySpent,
-                  residualTreasuryProduced,
-                  input.transaction.rolloutProduced
-                      .focus(_.utxo.input.transactionId)
-                      .replace(ctx.transaction.id),
-                  ctx,
-                  input.rolloutTxSeqPartial
-                )
-
-            extension (self: SettlementTx.Builder.Result.WithRollouts)
-                def toArgs1 = WithRolloutsArgs(self)
 
         sealed trait PartialResult
             extends HasCtx,

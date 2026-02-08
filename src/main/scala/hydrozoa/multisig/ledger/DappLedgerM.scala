@@ -189,14 +189,15 @@ object DappLedgerM {
         for {
             s <- get
             config <- ask
-            args = FinalizationTxSeq.Builder.Args(
-              majorVersionProduced =
-                  BlockVersion.Major(s.treasury.datum.versionMajor.toInt).increment,
-              treasuryToSpend = s.treasury,
-              payoutObligationsRemaining = payoutObligationsRemaining,
-              competingFallbackValidityStart = competingFallbackValidityStart,
-              blockCreatedOn = blockCreatedOn,
-            )
+            args = ??? // FIXME
+//            // FinalizationTxSeq.Builder.Args(
+//              majorVersionProduced =
+//                  BlockVersion.Major(s.treasury.datum.versionMajor.toInt).increment,
+//              treasuryToSpend = s.treasury,
+//              payoutObligationsRemaining = payoutObligationsRemaining,
+//              competingFallbackValidityStart = competingFallbackValidityStart,
+//              blockCreatedOn = blockCreatedOn,
+//            )
             ftxSeq <- lift(
               FinalizationTxSeq
                   .Builder(config)
