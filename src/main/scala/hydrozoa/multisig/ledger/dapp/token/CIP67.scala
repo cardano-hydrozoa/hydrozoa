@@ -35,4 +35,8 @@ object CIP67 {
         val multisigRegimeTokenName: AssetName = prefixToken(CIP67.Tags.multiSigRegime)
     }
 
+    trait HasTokenNames {
+        def headTokenNames: HeadTokenNames
+    }
+
 }

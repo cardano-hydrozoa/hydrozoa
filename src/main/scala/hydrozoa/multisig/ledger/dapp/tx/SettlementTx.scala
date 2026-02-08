@@ -24,7 +24,6 @@ import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
 
-// TODO: why don't we have direct payouts here?
 sealed trait SettlementTx
     extends Tx[SettlementTx],
       BlockVersion.Major.Produced,

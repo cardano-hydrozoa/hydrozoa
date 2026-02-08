@@ -25,6 +25,6 @@ object InitialBlock {
         def initialFallbackTx: FallbackTx = initialBlock.fallbackTx
 
         def multisigRegimeUtxo: MultisigRegimeUtxo =
-            initializationTx.multisigRegimeUtxo
+            initializationTx.multisigRegimeProduced
     }
 }

@@ -10,7 +10,7 @@ import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.Finalization
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explainConst}
 import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq
-import hydrozoa.multisig.ledger.dapp.utxo.{MultisigTreasuryUtxo, RolloutUtxo}
+import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo, RolloutUtxo}
 import monocle.{Focus, Lens}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.{Coin, Sized, Slot, Transaction, TransactionInput, TransactionOutput as TxOutput, Utxo, Value}
@@ -18,11 +18,11 @@ import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
 
-// TODO: why don't we have direct payouts here?
 sealed trait FinalizationTx
     extends Tx[FinalizationTx],
       BlockVersion.Major.Produced,
       MultisigTreasuryUtxo.Spent,
+      MultisigRegimeUtxo.Spent,
       RolloutUtxo.MbProduced,
       HasResolvedUtxos,
       HasValidityEnd {
@@ -43,6 +43,7 @@ object FinalizationTx {
         override val tx: Transaction,
         override val majorVersionProduced: BlockVersion.Major,
         override val treasurySpent: MultisigTreasuryUtxo,
+        override val multisigRegimeUtxoSpent: MultisigRegimeUtxo,
         override val resolvedUtxos: ResolvedUtxos,
         override val txLens: Lens[FinalizationTx, Transaction] =
             Focus[NoPayouts](_.tx).asInstanceOf[Lens[FinalizationTx, Transaction]]
@@ -53,6 +54,7 @@ object FinalizationTx {
         override val tx: Transaction,
         override val majorVersionProduced: BlockVersion.Major,
         override val treasurySpent: MultisigTreasuryUtxo,
+        override val multisigRegimeUtxoSpent: MultisigRegimeUtxo,
         override val resolvedUtxos: ResolvedUtxos,
         override val txLens: Lens[FinalizationTx, Transaction] =
             Focus[WithOnlyDirectPayouts](_.tx).asInstanceOf[Lens[FinalizationTx, Transaction]]
@@ -64,6 +66,7 @@ object FinalizationTx {
         override val tx: Transaction,
         override val majorVersionProduced: BlockVersion.Major,
         override val treasurySpent: MultisigTreasuryUtxo,
+        override val multisigRegimeUtxoSpent: MultisigRegimeUtxo,
         override val rolloutProduced: RolloutUtxo,
         override val resolvedUtxos: ResolvedUtxos,
         override val txLens: Lens[FinalizationTx, Transaction] =
@@ -134,13 +137,12 @@ private object FinalizationTxOps {
 
     sealed trait Build[T <: FinalizationTx](
         mbRolloutTxSeqPartial: Option[RolloutTxSeq.PartialResult]
-    ) {
+    ) extends BlockVersion.Major.Produced,
+          MultisigTreasuryUtxo.ToSpend,
+          HasValidityEnd {
         import Build.*
 
         def config: Config
-        def majorVersionProduced: BlockVersion.Major
-        def treasuryToSpend: MultisigTreasuryUtxo
-        def validityEnd: QuantizedInstant
 
         def complete(state: State): BuildErrorOr[ResultFor[T]]
 
@@ -295,6 +297,7 @@ private object FinalizationTxOps {
                   tx = state.ctx.transaction,
                   majorVersionProduced = majorVersionProduced,
                   treasurySpent = treasuryToSpend,
+                  multisigRegimeUtxoSpent = config.multisigRegimeUtxo,
                   resolvedUtxos = state.ctx.resolvedUtxos
                 )
                 Result.NoPayouts(transaction = finalizationTx)
@@ -331,6 +334,7 @@ private object FinalizationTxOps {
                       transaction = FinalizationTx.WithOnlyDirectPayouts(
                         majorVersionProduced = majorVersionProduced,
                         treasurySpent = treasuryToSpend,
+                        multisigRegimeUtxoSpent = config.multisigRegimeUtxo,
                         tx = tx,
                         // this is safe since we always set ttl
                         validityEnd = Slot(tx.body.value.ttl.get)
@@ -346,6 +350,7 @@ private object FinalizationTxOps {
                       transaction = FinalizationTx.WithRollouts(
                         majorVersionProduced = majorVersionProduced,
                         treasurySpent = treasuryToSpend,
+                        multisigRegimeUtxoSpent = config.multisigRegimeUtxo,
                         rolloutProduced = unsafeGetRolloutProduced(finished.ctx),
                         tx = tx,
                         // this is safe since we always set ttl

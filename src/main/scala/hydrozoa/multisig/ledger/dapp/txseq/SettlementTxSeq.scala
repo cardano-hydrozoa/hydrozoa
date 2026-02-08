@@ -88,12 +88,12 @@ object SettlementTxSeq {
                             .map(Build.Error.SettlementError(_))
 
                         fallbackTx <- FallbackTx
-                            .build(
-                              config,
+                            .Build(config)(
                               newFallbackValidityEnd,
                               settlementTx.transaction.treasuryProduced,
                               config.multisigRegimeUtxo
                             )
+                            .result
                             .left
                             .map(Build.Error.FallbackError(_))
                     } yield Result(
@@ -125,12 +125,12 @@ object SettlementTxSeq {
                             .map(Error.SettlementError(_))
 
                         fallbackTx <- FallbackTx
-                            .build(
-                              config,
+                            .Build(config)(
                               newFallbackValidityEnd,
                               settlementTxRes.transaction.treasuryProduced,
                               config.multisigRegimeUtxo
                             )
+                            .result
                             .left
                             .map(Build.Error.FallbackError(_))
 

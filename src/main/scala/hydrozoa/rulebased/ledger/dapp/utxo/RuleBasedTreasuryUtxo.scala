@@ -36,8 +36,14 @@ final case class RuleBasedTreasuryUtxo(
 }
 
 object RuleBasedTreasuryUtxo {
+    trait Produced {
+        def treasuryProduced: RuleBasedTreasuryUtxo
+    }
 
-//def mkTreasuryDatumUnresolved(
+    trait Spent {
+        def treasurySpent: RuleBasedTreasuryUtxo
+    }
+    // def mkTreasuryDatumUnresolved(
 //    headMp: PolicyId,
 //    disputeId: TokenName,
 //    peers: List[VerificationKeyBytes],

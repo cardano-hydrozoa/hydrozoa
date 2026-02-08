@@ -2,10 +2,8 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
 import hydrozoa.config.head.HeadConfig
-import hydrozoa.config.head.multisig.timing.TxTiming.*
-import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.ensureMinAda
-import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toQuantizedInstant}
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.Fallback
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
@@ -15,248 +13,240 @@ import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteDatum
 import hydrozoa.rulebased.ledger.dapp.utxo.RuleBasedTreasuryUtxo
 import monocle.{Focus, Lens}
 import scalus.builtin.Data
-import scalus.builtin.Data.*
-import scalus.cardano.address.ShelleyDelegationPart.Null
-import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
-import scalus.cardano.ledger.*
+import scalus.builtin.Data.toData
+import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger.{Mint as _, *}
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.ScriptSource.NativeScriptAttached
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
-import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, *}
+import scalus.cardano.txbuilder.TransactionBuilderStep.*
 import scalus.ledger.api.v1.PubKeyHash
 import scalus.prelude.List as SList
 
 final case class FallbackTx(
     override val validityStart: QuantizedInstant,
-    treasurySpent: MultisigTreasuryUtxo,
-    treasuryProduced: RuleBasedTreasuryUtxo,
-    consumedHMRWUtxo: MultisigRegimeUtxo,
-    producedDefaultVoteUtxo: Utxo,
-    producedPeerVoteUtxos: NonEmptyList[Utxo],
-    producedCollateralUtxos: NonEmptyList[Utxo],
+    override val treasurySpent: MultisigTreasuryUtxo,
+    override val treasuryProduced: RuleBasedTreasuryUtxo,
+    override val multisigRegimeUtxoSpent: MultisigRegimeUtxo,
     override val tx: Transaction,
     override val txLens: Lens[FallbackTx, Transaction] = Focus[FallbackTx](_.tx),
     override val resolvedUtxos: ResolvedUtxos
 ) extends HasValidityStart,
-    // TODO: shall we add separate raw-type traits for that?
-    Tx[FallbackTx] {
-    def producedVoteUtxos: NonEmptyList[Utxo] =
-        NonEmptyList(producedDefaultVoteUtxo, producedPeerVoteUtxos.toList)
+      MultisigTreasuryUtxo.Spent,
+      MultisigRegimeUtxo.Spent,
+      RuleBasedTreasuryUtxo.Produced,
+      Tx[FallbackTx] {}
 
-    def producedNonTreasuryUtxos: NonEmptyList[Utxo] =
-        producedVoteUtxos ++ producedCollateralUtxos.toList
+object FallbackTx {
+    export FallbackTxOps.Build
 }
 
-/*
-Fallback tx spec:
-
- - [ ] Spend both the treasury and multisig regime utxos.
- - [ ] Burn the multisig regime token.
- - [ ] Mint N+1 vote tokens.
- - [ ] Produce a rule-based treasury utxo, containing all treasury utxo funds (i.e. don't deduct the fee)
- - [ ] Produce default vote utxo with minimum ADA, plus a vote token.
- - [ ] Produce one vote utxo per peer, containing minimum ADA plus a configured allowance for one tally tx fee, plus a vote token.
- - [ ] Produce one collateral utxo per peer, containing minimum ADA plus a configured allowance for one vote tx fee.
- - [ ] Cover the tx fee and ADA for all non-treasury outputs using funds from the multisig regime utxo.
- - [ ] TreasuryOutput at index 0
- - [ ] Default vote at index 1
- - [ ] Per-peer vote utxos at next indices
- - [ ] Collateral utxos at next indicies
- */
-
-// NOTE TO SELF: The multisig witness utxo is a FIXED SIZE utxo. We know the amount in it -- it is
-// maxNonPlutusTxFee + the vote allowance + the collateral allowance
-object FallbackTx {
+private object FallbackTxOps {
     type Config = HeadConfig.Preinit.Section
 
-    def build(
-        config: Config,
+    final case class Build(config: Config)(
         validityStartTime: QuantizedInstant,
         treasuryUtxoSpent: MultisigTreasuryUtxo,
         multisigRegimeUtxo: MultisigRegimeUtxo,
-    ): Either[SomeBuildError, FallbackTx] = {
-        //////////////////////////////////////
-        // Pre-processing
+    ) {
+        private val hns = config.headMultisigScript
 
-        val multisigDatum: MultisigTreasuryUtxo.Datum = treasuryUtxoSpent.datum
+        lazy val result: Either[SomeBuildError, FallbackTx] = for {
+            unbalanced <- TransactionBuilder.build(config.network, Steps())
 
-        val hns = config.headMultisigScript
+            finalized <- TxBuilder.finalizeContext(unbalanced)
 
-        val newTreasuryDatum = UnresolvedDatum(
-          headMp = hns.policyId,
-          disputeId = config.headTokenNames.voteTokenName.bytes,
-          peers = SList.from(hns.requiredSigners.map(_.hash)),
-          peersN = hns.numSigners,
-          deadlineVoting = config.slotConfig.slotToTime(validityStartTime.toSlot.slot) +
-              config.votingDuration.finiteDuration.toMillis,
-          versionMajor = multisigDatum.versionMajor.toInt,
-          // TODO: pull in N first elements of G2 CRS
-          // KZG setup I think?
-          setup = SList.empty
-        )
+            completed = Complete(finalized)
+        } yield completed
 
-        def mkVoteUtxo(datum: Data, voteDeposit: Coin): TransactionOutput = Babbage(
-          address = config.ruleBasedDisputeResolutionAddress,
-          value = Value(
-            voteDeposit,
-            MultiAsset.asset(hns.policyId, config.headTokenNames.voteTokenName, 1L)
-          ),
-          datumOption = Some(Inline(datum)),
-          scriptRef = None
-        ).ensureMinAda(config.cardanoProtocolParams)
+        object Steps {
+            def apply(): List[TransactionBuilderStep] = Base() ++ Spends() ++ Mints() ++ Sends()
 
-        val defaultVoteUtxo = mkVoteUtxo(
-          VD.default(treasuryUtxoSpent.datum.commit).toData,
-          config.collectiveContingency.defaultVoteDeposit
-        )
+            object Base {
+                def apply(): List[TransactionBuilderStep] =
+                    List(modifyAuxiliaryData, validityStartSlot)
 
-        val peerVoteUtxos: NonEmptyList[TransactionOutput] = {
-            val datums = VD(
-              NonEmptyList.fromListUnsafe(hns.requiredSigners.map(x => PubKeyHash(x.hash)).toList)
-            )
-            datums.map(datum => mkVoteUtxo(datum.toData, config.individualContingency.voteDeposit))
-        }
+                val modifyAuxiliaryData = ModifyAuxiliaryData(_ =>
+                    Some(MD.apply(Fallback(config.ruleBasedTreasuryAddress)))
+                )
 
-        def collateralUtxos: NonEmptyList[TransactionOutput] = {
-            NonEmptyList.fromListUnsafe(
-              hns.requiredSigners
-                  .map(es =>
+                val validityStartSlot = ValidityStartSlot(validityStartTime.toSlot.slot)
+            }
+
+            object Spends {
+                def apply(): List[Spend] = List(Treasury(), MultisigRegime())
+
+                object Treasury {
+                    def apply() = Spend(
+                      treasuryUtxoSpent.asUtxo,
+                      NativeScriptWitness(NativeScriptAttached, Set.empty)
+                    )
+
+                    val datum: MultisigTreasuryUtxo.Datum = treasuryUtxoSpent.datum
+                }
+
+                object MultisigRegime {
+                    def apply() = Spend(multisigRegimeUtxo.asUtxo, hns.witnessAttached)
+                }
+            }
+
+            object Mints {
+                def apply(): List[Mint] = List(BurnMultisigRegime(), MintVotes())
+
+                object BurnMultisigRegime {
+                    def apply() = Mint(
+                      hns.policyId,
+                      assetName = config.headTokenNames.multisigRegimeTokenName,
+                      amount = -1,
+                      witness = NativeScriptWitness(NativeScriptAttached, Set.empty)
+                    )
+                }
+
+                object MintVotes {
+                    def apply() = Mint(
+                      hns.policyId,
+                      assetName = config.headTokenNames.voteTokenName,
+                      amount = hns.numSigners + 1L,
+                      witness = NativeScriptWitness(NativeScriptAttached, Set.empty)
+                    )
+                }
+            }
+            object Sends {
+                def apply(): List[Send] = List(Treasury()) ++ Collaterals().toList ++ Votes().toList
+
+                object Treasury {
+                    def apply() = Send(
                       Babbage(
-                        address = ShelleyAddress(
-                          network = config.network,
-                          payment = ShelleyPaymentPart.Key(es.hash),
-                          delegation = Null
-                        ),
-                        value = Value(config.individualContingency.collateralDeposit),
-                        datumOption = None,
+                        address = config.ruleBasedDisputeResolutionAddress,
+                        value = treasuryUtxoSpent.value,
+                        datumOption = Some(Inline(datum.toData)),
                         scriptRef = None
-                      ).ensureMinAda(config.cardanoProtocolParams)
-                  )
-                  .toList
-            )
+                      )
+                    )
+
+                    val datum = UnresolvedDatum(
+                      headMp = hns.policyId,
+                      disputeId = config.headTokenNames.voteTokenName.bytes,
+                      peers = SList.from(hns.requiredSigners.map(_.hash)),
+                      peersN = hns.numSigners,
+                      deadlineVoting = config.slotConfig.slotToTime(validityStartTime.toSlot.slot) +
+                          config.votingDuration.finiteDuration.toMillis,
+                      versionMajor = Steps.Spends.Treasury.datum.versionMajor.toInt,
+                      // TODO: pull in N first elements of G2 CRS
+                      // KZG setup I think?
+                      setup = SList.empty
+                    )
+                }
+
+                object Votes {
+                    def apply(): NonEmptyList[Send] = Peers() :+ Default()
+
+                    private def mkVoteUtxo(datum: Data, voteDeposit: Coin): TransactionOutput =
+                        Babbage(
+                          address = config.ruleBasedDisputeResolutionAddress,
+                          value = Value(
+                            voteDeposit,
+                            MultiAsset.asset(hns.policyId, config.headTokenNames.voteTokenName, 1L)
+                          ),
+                          datumOption = Some(Inline(datum)),
+                          scriptRef = None
+                        ).ensureMinAda(config.cardanoProtocolParams)
+
+                    object Default {
+                        def apply() = Send(utxo)
+
+                        private val utxo = mkVoteUtxo(
+                          VD.default(treasuryUtxoSpent.datum.commit).toData,
+                          config.collectiveContingency.defaultVoteDeposit
+                        )
+                    }
+
+                    object Peers {
+                        def apply(): NonEmptyList[Send] = utxos.map(Send(_))
+
+                        private val utxos = {
+                            val datums = VD(
+                              NonEmptyList.fromListUnsafe(
+                                hns.requiredSigners.map(x => PubKeyHash(x.hash)).toList
+                              )
+                            )
+                            datums.map(datum =>
+                                mkVoteUtxo(datum.toData, config.individualContingency.voteDeposit)
+                            )
+                        }
+                    }
+                }
+
+                object Collaterals {
+                    def apply(): NonEmptyList[Send] = utxos.map(Send(_))
+
+                    val utxos: NonEmptyList[TransactionOutput] = {
+                        NonEmptyList.fromListUnsafe(
+                          hns.requiredSigners
+                              .map(es =>
+                                  Babbage(
+                                    address = ShelleyAddress(
+                                      network = config.network,
+                                      payment = ShelleyPaymentPart.Key(es.hash),
+                                      delegation = ShelleyDelegationPart.Null
+                                    ),
+                                    value = Value(config.individualContingency.collateralDeposit),
+                                    datumOption = None,
+                                    scriptRef = None
+                                  ).ensureMinAda(config.cardanoProtocolParams)
+                              )
+                              .toList
+                        )
+                    }
+                }
+
+            }
         }
 
-        ////////////////////////////////////////////////////
-        // Define steps
-        val spendHMRW: Spend = Spend(multisigRegimeUtxo.asUtxo, hns.witnessAttached)
+        object Complete {
+            def apply(finalized: TransactionBuilder.Context): FallbackTx = {
+                val txId = finalized.transaction.id
 
-        val spendMultisigTreasury: Spend =
-            Spend(treasuryUtxoSpent.asUtxo, NativeScriptWitness(NativeScriptAttached, Set.empty))
+                val treasuryProduced = RuleBasedTreasuryUtxo(
+                  treasuryTokenName = config.headTokenNames.treasuryTokenName,
+                  utxoId = TransactionInput(txId, 0),
+                  address = config.ruleBasedDisputeResolutionAddress,
+                  datum = RuleBasedTreasuryDatum.Unresolved(Steps.Sends.Treasury.datum),
+                  value = treasuryUtxoSpent.value
+                )
 
-        val burnMultisigRegimeToken: Mint = Mint(
-          hns.policyId,
-          assetName = config.headTokenNames.multisigRegimeTokenName,
-          amount = -1,
-          witness = NativeScriptWitness(NativeScriptAttached, Set.empty)
-        )
-
-        val mintVoteTokens = Mint(
-          hns.policyId,
-          assetName = config.headTokenNames.voteTokenName,
-          amount = hns.numSigners + 1L,
-          witness = NativeScriptWitness(NativeScriptAttached, Set.empty)
-        )
-
-        val createDefaultVoteUtxo: Send = Send(defaultVoteUtxo)
-        val createPeerVoteUtxos: NonEmptyList[Send] = peerVoteUtxos.map(Send(_))
-
-        val createCollateralUtxos: NonEmptyList[Send] = collateralUtxos.map(Send(_))
-
-        val disputeTreasuryAddress = config.ruleBasedDisputeResolutionAddress
-        val createDisputeTreasury = Send(
-          Babbage(
-            address = disputeTreasuryAddress,
-            value = treasuryUtxoSpent.value,
-            datumOption = Some(Inline(newTreasuryDatum.toData)),
-            scriptRef = None
-          )
-        )
-
-        val setMetaData = ModifyAuxiliaryData(_ =>
-            Some(
-              MD.apply(
-                Fallback(config.ruleBasedTreasuryAddress)
-              )
-            )
-        )
-
-        val setStartSlot = ValidityStartSlot(validityStartTime.toSlot.slot)
-
-        val steps = {
-            Seq(
-              spendHMRW,
-              spendMultisigTreasury,
-              burnMultisigRegimeToken,
-              mintVoteTokens,
-              createDisputeTreasury,
-              createDefaultVoteUtxo,
-              setMetaData,
-              setStartSlot
-            )
-                ++ createPeerVoteUtxos.toList
-                ++ createCollateralUtxos.toList
+                FallbackTx(
+                  validityStart = validityStartTime,
+                  treasurySpent = treasuryUtxoSpent,
+                  treasuryProduced = treasuryProduced,
+                  multisigRegimeUtxoSpent = multisigRegimeUtxo,
+                  tx = finalized.transaction,
+                  resolvedUtxos = finalized.resolvedUtxos
+                )
+            }
         }
 
-        for {
-            unbalanced <- TransactionBuilder.build(network = config.network, steps = steps)
-            finalized <- unbalanced.finalizeContext(
+        private object TxBuilder {
+            private val diffHandler = Change.changeOutputDiffHandler(
+              _,
+              _,
               protocolParams = config.cardanoProtocolParams,
-              // We balance the excess to the treasury. This will _not_ be pre-balanced, because the
-              // HMRW Utxo contains extra ada to account for _any_ fallback transaction fee.
-              diffHandler = Change.changeOutputDiffHandler(_, _, config.cardanoProtocolParams, 0),
-              evaluator = config.plutusScriptEvaluatorForTxBuild,
-              validators = Tx.Validators.nonSigningNonValidityChecksValidators
+              changeOutputIdx = 0
             )
-        } yield {
-            val txId = finalized.transaction.id
-            FallbackTx(
-              // This is safe since we always set it
-              validityStart =
-                  Slot(setStartSlot.slot).toQuantizedInstant(config.cardanoInfo.slotConfig),
-              treasurySpent = treasuryUtxoSpent,
-              treasuryProduced = RuleBasedTreasuryUtxo(
-                treasuryTokenName = config.headTokenNames.treasuryTokenName,
-                utxoId = TransactionInput(txId, 0),
-                address = disputeTreasuryAddress,
-                datum = RuleBasedTreasuryDatum.Unresolved(newTreasuryDatum),
-                value = createDisputeTreasury.output.value
-              ),
-              consumedHMRWUtxo = MultisigRegimeUtxo(
-                multisigRegimeTokenName = config.headTokenNames.multisigRegimeTokenName,
-                utxoId = TransactionInput(txId, 1),
-                address = config.headMultisigAddress,
-                value = spendHMRW.utxo.output.value,
-                script = config.headMultisigScript
-              ),
-              producedDefaultVoteUtxo =
-                  Utxo(TransactionInput(txId, 1), createDefaultVoteUtxo.output),
-              producedPeerVoteUtxos = createPeerVoteUtxos
-                  .map(_.output)
-                  .zipWithIndex
-                  .map(outputsZipped => {
-                      val output = outputsZipped._1
-                      val actualIndex = outputsZipped._2 + 2
-                      Utxo(
-                        TransactionInput(txId, actualIndex),
-                        output
-                      )
-                  }),
-              producedCollateralUtxos = createCollateralUtxos
-                  .map(_.output)
-                  .zipWithIndex
-                  .map(outputsZipped => {
-                      val output = outputsZipped._1
-                      val actualIndex = outputsZipped._2 + 2 + config.headMultisigScript.numSigners
-                      Utxo(
-                        TransactionInput(txId, actualIndex),
-                        output
-                      )
-                  }),
-              tx = finalized.transaction,
-              resolvedUtxos = finalized.resolvedUtxos
-            )
+
+            def finalizeContext(
+                ctx: TransactionBuilder.Context
+            ): Either[SomeBuildError, TransactionBuilder.Context] =
+                ctx.finalizeContext(
+                  config.cardanoProtocolParams,
+                  diffHandler = diffHandler,
+                  evaluator = config.plutusScriptEvaluatorForTxBuild,
+                  validators = Tx.Validators.nonSigningNonValidityChecksValidators
+                )
         }
+
     }
+
 }

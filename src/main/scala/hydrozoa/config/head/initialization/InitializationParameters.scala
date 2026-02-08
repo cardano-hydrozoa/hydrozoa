@@ -6,7 +6,7 @@ import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.number.Distribution
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.dapp.token.CIP67.HeadTokenNames
+import hydrozoa.multisig.ledger.dapp.token.CIP67.{HasTokenNames, HeadTokenNames}
 import scala.collection.immutable.TreeMap
 import scalus.builtin.{ByteString, platform}
 import scalus.cardano.ledger.{Blake2b_256, Coin, Hash, Hash32, TransactionOutput, Utxo, Utxos, Value}
@@ -61,7 +61,7 @@ final case class InitializationParameters(
 }
 
 object InitializationParameters {
-    trait Section {
+    trait Section extends HasTokenNames {
         def initializationParams: InitializationParameters
 
         def headStartTime: QuantizedInstant
@@ -75,7 +75,6 @@ object InitializationParameters {
         def initialEquityContributed: Coin
         def initialFundingValue: Value
         def initialL2Value: Value
-        def headTokenNames: HeadTokenNames
 
         def initialEquityContributionsHash: Hash32
 
