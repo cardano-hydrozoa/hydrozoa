@@ -16,6 +16,9 @@ export KzgCommitment.{asByteString, asG1Element}
 export KzgCommitment.kzgCommitment
 
 object KzgCommitment {
+    trait Produced {
+        def kzgCommitment: KzgCommitment
+    }
 
     // WARNING: you can't just `==` IArray, because it doesn't compare on the value of the elements.
     type KzgCommitment = IArray[Byte]

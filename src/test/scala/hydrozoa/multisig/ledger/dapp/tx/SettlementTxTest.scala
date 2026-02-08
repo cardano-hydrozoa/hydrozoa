@@ -126,7 +126,7 @@ def genSettlementTxSeqBuilder(
     blockCreatedOn: QuantizedInstant =
         java.time.Instant.now().quantize(testTxBuilderCardanoInfo.slotConfig),
     txTiming: TxTiming = TxTiming.default(testTxBuilderCardanoInfo.slotConfig)
-): Gen[(SettlementTxSeq.Builder, SettlementTxSeq.Builder.Args, NonEmptyList[TestPeer])] = {
+): Gen[(SettlementTxSeq.Build, SettlementTxSeq.Build.Args, NonEmptyList[TestPeer])] = {
     // A helper to generator empty, small, medium, large (up to 1000)
     def genHelper[T](gen: Gen[T]): Gen[Vector[T]] = Gen.sized(size =>
         Gen.frequency(
@@ -183,8 +183,8 @@ def genSettlementTxSeqBuilder(
           cardanoInfo = testTxBuilderCardanoInfo
         )
     } yield (
-      SettlementTxSeq.Builder(config),
-      SettlementTxSeq.Builder.Args(
+      SettlementTxSeq.Build(config),
+      SettlementTxSeq.Build.Args(
         kzgCommitment = kzg,
         majorVersionProduced = BlockVersion.Major(majorVersion),
         depositsToSpend = deposits,
@@ -218,7 +218,7 @@ def genNextSettlementTxSeqBuilder(
     // If passed, the kzg commitment will be set to the value.
     // If not, its randomly generated
     kzgCommitment: Option[KzgCommitment] = None
-): Gen[(SettlementTxSeq.Builder, SettlementTxSeq.Builder.Args)] = {
+): Gen[(SettlementTxSeq.Build, SettlementTxSeq.Build.Args)] = {
     // A helper to generator empty, small, medium, large (up to 1000)
     def genHelper[T](gen: Gen[T]): Gen[Vector[T]] = Gen.sized(size =>
         Gen.frequency(
@@ -256,8 +256,8 @@ def genNextSettlementTxSeqBuilder(
             case Some(kzg) => Gen.const(kzg)
         }
     } yield (
-      SettlementTxSeq.Builder(config),
-      SettlementTxSeq.Builder.Args(
+      SettlementTxSeq.Build(config),
+      SettlementTxSeq.Build.Args(
         kzgCommitment = kzg,
         majorVersionProduced = BlockVersion.Major(majorVersion),
         depositsToSpend = deposits,

@@ -92,7 +92,7 @@ private object FinalizationTxOps {
 
         case class WithRollouts(
             override val transaction: FinalizationTx.WithRollouts,
-            rolloutTxSeqPartial: RolloutTxSeq.Builder.PartialResult,
+            rolloutTxSeqPartial: RolloutTxSeq.PartialResult,
         ) extends WithPayouts
     }
 
@@ -128,7 +128,7 @@ private object FinalizationTxOps {
             override val treasuryToSpend: MultisigTreasuryUtxo,
             override val depositsToSpend: Vector[DepositUtxo],
             override val validityEnd: QuantizedInstant,
-            rolloutTxSeqPartial: RolloutTxSeq.Builder.PartialResult
+            rolloutTxSeqPartial: RolloutTxSeq.PartialResult
         ) extends Build[FinalizationTx.WithPayouts](
               mbRolloutTxSeqPartial = Some(rolloutTxSeqPartial)
             ) {
@@ -140,7 +140,7 @@ private object FinalizationTxOps {
     }
 
     sealed trait Build[T <: FinalizationTx](
-        mbRolloutTxSeqPartial: Option[RolloutTxSeq.Builder.PartialResult]
+        mbRolloutTxSeqPartial: Option[RolloutTxSeq.PartialResult]
     ) {
         import Build.*
 
@@ -325,7 +325,7 @@ private object FinalizationTxOps {
             @throws[AssertionError]
             def apply(
                 state: State,
-                rolloutTxSeqPartial: RolloutTxSeq.Builder.PartialResult,
+                rolloutTxSeqPartial: RolloutTxSeq.PartialResult,
             ): BuildErrorOr[Result.WithPayouts] = for {
                 mergeTrial <- TryMerge(state, rolloutTxSeqPartial)
             } yield {
@@ -349,7 +349,7 @@ private object FinalizationTxOps {
                     )
 
                 def withRollouts(
-                    rollouts: RolloutTxSeq.Builder.PartialResult,
+                    rollouts: RolloutTxSeq.PartialResult,
                 ): Result.WithRollouts =
                     Result.WithRollouts(
                       transaction = FinalizationTx.WithRollouts(
@@ -412,14 +412,14 @@ private object FinalizationTxOps {
                     case NotMerged
                     case Merged(
                         mbRolloutTxSeqPartialSkipped: Option[
-                          RolloutTxSeq.Builder.PartialResult.SkipFirst
+                          RolloutTxSeq.PartialResult.SkipFirst
                         ]
                     )
                 }
 
                 def apply(
                     state: State,
-                    rolloutTxSeqPartial: RolloutTxSeq.Builder.PartialResult
+                    rolloutTxSeqPartial: RolloutTxSeq.PartialResult
                 ): BuildErrorOr[(State, TryMerge.Result)] =
                     import TryMerge.Result.*
                     import state.*

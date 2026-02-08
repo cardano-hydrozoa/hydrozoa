@@ -241,7 +241,7 @@ final case class JointLedger(
         def doSettlement(
             validDeposits: Queue[(LedgerEventId, DepositUtxo)],
             immatureDeposits: Queue[(LedgerEventId, DepositUtxo)],
-        ): IO[DappLedgerM.SettleLedger.Result] =
+        ): IO[SettlementTxSeq] =
             for {
                 p <- unsafeGetProducing
                 treasuryToSpend = p.dappLedgerState.treasury
@@ -377,13 +377,13 @@ final case class JointLedger(
                     IO.pure(Block.Unsigned.Minor(blockBrief, blockEffects))
                 case header: BlockHeader.Major =>
                     for {
-                        settlementRes <- doSettlement(
+                        settlementTxSeq <- doSettlement(
                           validDeposits = eligibleForAbsorption,
                           immatureDeposits = notYetMature,
                         )
                         depositsAbsorbed = eligibleForAbsorption
                             .filter(deposit =>
-                                settlementRes.settlementTxSeq.settlementTx.depositsSpent
+                                settlementTxSeq.settlementTx.depositsSpent
                                     .contains(deposit._2)
                             )
                             .map(_._1)
@@ -391,9 +391,9 @@ final case class JointLedger(
                         blockBody = BlockBody.Major(events, depositsAbsorbed, depositsRefunded)
                         blockBrief = BlockBrief.Major(header, blockBody)
                         blockEffects = BlockEffects.Unsigned.Major(
-                          settlementTx = settlementRes.settlementTxSeq.settlementTx,
-                          rolloutTxs = settlementRes.settlementTxSeq.mbRollouts,
-                          fallbackTx = settlementRes.fallBack,
+                          settlementTx = settlementTxSeq.settlementTx,
+                          fallbackTx = settlementTxSeq.fallbackTx,
+                          rolloutTxs = settlementTxSeq.rolloutTxs,
                           postDatedRefundTxs = List() // FIXME: Where are they?
                         )
                     } yield Block.Unsigned.Major(blockBrief, blockEffects)

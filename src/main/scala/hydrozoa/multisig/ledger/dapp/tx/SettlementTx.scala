@@ -5,11 +5,13 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toQuantizedInstant}
 import hydrozoa.multisig.ledger.block.BlockVersion
+import hydrozoa.multisig.ledger.block.BlockVersion.Major.given_Conversion_Major_Int
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.Settlement
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explainConst}
 import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigTreasuryUtxo, RolloutUtxo}
+import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import monocle.{Focus, Lens}
 import scala.annotation.tailrec
@@ -26,9 +28,10 @@ import scalus.cardano.txbuilder.TransactionBuilderStep.*
 sealed trait SettlementTx
     extends Tx[SettlementTx],
       BlockVersion.Major.Produced,
+      DepositUtxo.Many.Spent,
+      KzgCommitment.Produced,
       MultisigTreasuryUtxo.Spent,
       MultisigTreasuryUtxo.Produced,
-      DepositUtxo.Many.Spent,
       RolloutUtxo.MbProduced,
       HasResolvedUtxos,
       HasValidityEnd {
@@ -38,6 +41,7 @@ sealed trait SettlementTx
 
 object SettlementTx {
     export SettlementTxOps.Build
+    export SettlementTxOps.Result
 
     sealed trait WithPayouts extends SettlementTx
 
@@ -47,6 +51,7 @@ object SettlementTx {
         override val validityEnd: QuantizedInstant,
         override val tx: Transaction,
         override val majorVersionProduced: BlockVersion.Major,
+        override val kzgCommitment: KzgCommitment,
         override val treasurySpent: MultisigTreasuryUtxo,
         override val treasuryProduced: MultisigTreasuryUtxo,
         override val depositsSpent: Vector[DepositUtxo],
@@ -59,6 +64,7 @@ object SettlementTx {
         override val validityEnd: QuantizedInstant,
         override val tx: Transaction,
         override val majorVersionProduced: BlockVersion.Major,
+        override val kzgCommitment: KzgCommitment,
         override val treasurySpent: MultisigTreasuryUtxo,
         override val treasuryProduced: MultisigTreasuryUtxo,
         override val depositsSpent: Vector[DepositUtxo],
@@ -72,6 +78,7 @@ object SettlementTx {
         override val validityEnd: QuantizedInstant,
         override val tx: Transaction,
         override val majorVersionProduced: BlockVersion.Major,
+        override val kzgCommitment: KzgCommitment,
         override val treasurySpent: MultisigTreasuryUtxo,
         override val treasuryProduced: MultisigTreasuryUtxo,
         override val depositsSpent: Vector[DepositUtxo],
@@ -110,7 +117,7 @@ private object SettlementTxOps {
             override val transaction: SettlementTx.WithRollouts,
             override val depositsSpent: Vector[DepositUtxo],
             override val depositsToSpend: Vector[DepositUtxo],
-            rolloutTxSeqPartial: RolloutTxSeq.Builder.PartialResult,
+            rolloutTxSeqPartial: RolloutTxSeq.PartialResult,
         ) extends WithPayouts
     }
 
@@ -124,8 +131,7 @@ private object SettlementTxOps {
     object Build {
         type Config = CardanoNetwork.Section & HeadPeers.Section & InitialBlock.Section
 
-        case class NoPayouts(
-            override val config: Config,
+        case class NoPayouts(override val config: Config)(
             override val kzgCommitment: KzgCommitment,
             override val majorVersionProduced: BlockVersion.Major,
             override val treasuryToSpend: MultisigTreasuryUtxo,
@@ -138,14 +144,13 @@ private object SettlementTxOps {
                 Right(CompleteNoPayouts(state))
         }
 
-        case class WithPayouts(
-            override val config: Config,
+        case class WithPayouts(override val config: Config)(
             override val kzgCommitment: KzgCommitment,
             override val majorVersionProduced: BlockVersion.Major,
             override val treasuryToSpend: MultisigTreasuryUtxo,
             override val depositsToSpend: Vector[DepositUtxo],
             override val validityEnd: QuantizedInstant,
-            rolloutTxSeqPartial: RolloutTxSeq.Builder.PartialResult
+            rolloutTxSeqPartial: RolloutTxSeq.PartialResult
         ) extends Build[SettlementTx.WithPayouts](
               mbRolloutTxSeqPartial = Some(rolloutTxSeqPartial)
             ) {
@@ -155,16 +160,15 @@ private object SettlementTxOps {
     }
 
     sealed trait Build[T <: SettlementTx](
-        mbRolloutTxSeqPartial: Option[RolloutTxSeq.Builder.PartialResult]
-    ) {
+        mbRolloutTxSeqPartial: Option[RolloutTxSeq.PartialResult]
+    ) extends BlockVersion.Major.Produced,
+          MultisigTreasuryUtxo.ToSpend,
+          DepositUtxo.Many.ToSpend,
+          KzgCommitment.Produced,
+          HasValidityEnd {
         import Build.*
 
         def config: Config
-        def kzgCommitment: KzgCommitment
-        def majorVersionProduced: BlockVersion.Major
-        def treasuryToSpend: MultisigTreasuryUtxo
-        def depositsToSpend: Vector[DepositUtxo]
-        def validityEnd: QuantizedInstant
 
         def complete(state: State): BuildErrorOr[ResultFor[T]]
 
@@ -354,6 +358,7 @@ private object SettlementTxOps {
                       .toQuantizedInstant(config.cardanoInfo.slotConfig),
                   tx = state.ctx.transaction,
                   majorVersionProduced = majorVersionProduced,
+                  kzgCommitment = kzgCommitment,
                   treasurySpent = treasuryToSpend,
                   treasuryProduced = treasuryProduced,
                   depositsSpent = state.depositsSpent,
@@ -382,7 +387,7 @@ private object SettlementTxOps {
             @throws[AssertionError]
             def apply(
                 state: State,
-                rolloutTxSeqPartial: RolloutTxSeq.Builder.PartialResult,
+                rolloutTxSeqPartial: RolloutTxSeq.PartialResult,
             ): BuildErrorOr[Result.WithPayouts] = for {
                 mergeTrial <- TryMerge(state, rolloutTxSeqPartial)
             } yield {
@@ -402,6 +407,7 @@ private object SettlementTxOps {
                     Result.WithOnlyDirectPayouts(
                       transaction = SettlementTx.WithOnlyDirectPayouts(
                         majorVersionProduced = majorVersionProduced,
+                        kzgCommitment = kzgCommitment,
                         treasurySpent = treasuryToSpend,
                         treasuryProduced = treasuryProduced,
                         depositsSpent = finished.depositsSpent,
@@ -416,11 +422,12 @@ private object SettlementTxOps {
                     )
 
                 def withRollouts(
-                    rollouts: RolloutTxSeq.Builder.PartialResult,
+                    rollouts: RolloutTxSeq.PartialResult,
                 ): Result.WithRollouts =
                     Result.WithRollouts(
                       transaction = SettlementTx.WithRollouts(
                         majorVersionProduced = majorVersionProduced,
+                        kzgCommitment = kzgCommitment,
                         treasurySpent = treasuryToSpend,
                         treasuryProduced = treasuryProduced,
                         depositsSpent = finished.depositsSpent,
@@ -483,14 +490,14 @@ private object SettlementTxOps {
                     case NotMerged
                     case Merged(
                         mbRolloutTxSeqPartialSkipped: Option[
-                          RolloutTxSeq.Builder.PartialResult.SkipFirst
+                          RolloutTxSeq.PartialResult.SkipFirst
                         ]
                     )
                 }
 
                 def apply(
                     state: State,
-                    rolloutTxSeqPartial: RolloutTxSeq.Builder.PartialResult
+                    rolloutTxSeqPartial: RolloutTxSeq.PartialResult
                 ): BuildErrorOr[(State, TryMerge.Result)] =
                     import TryMerge.Result.*
                     import state.*

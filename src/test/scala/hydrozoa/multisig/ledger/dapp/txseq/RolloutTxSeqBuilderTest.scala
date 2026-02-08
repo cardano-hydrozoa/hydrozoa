@@ -16,7 +16,7 @@ import test.TestPeer.mkWallet
 
 class RolloutTxSeqBuilderTest extends AnyFunSuite with ScalaCheckPropertyChecks {
 
-    val genBuilder: Gen[(RolloutTxSeq.Builder, NonEmptyVector[Payout.Obligation])] =
+    val genBuilder: Gen[(RolloutTxSeq.Build, NonEmptyVector[Payout.Obligation])] =
         for {
             payouts <- Gen
                 .containerOfN[Vector, Payout.Obligation](
@@ -31,7 +31,7 @@ class RolloutTxSeqBuilderTest extends AnyFunSuite with ScalaCheckPropertyChecks 
               testTxBuilderCardanoInfo.network
             )
         } yield (
-          RolloutTxSeq.Builder(RolloutTxSeq.Config(testTxBuilderCardanoInfo, mw, hms)),
+          RolloutTxSeq.Build(RolloutTxSeq.Config(testTxBuilderCardanoInfo, mw, hms)),
           payouts
         )
 
