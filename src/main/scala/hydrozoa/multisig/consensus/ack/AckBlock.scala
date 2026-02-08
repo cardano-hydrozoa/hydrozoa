@@ -46,7 +46,6 @@ object AckBlock {
         override val ackId: AckId,
         override val blockNum: BlockNumber,
         rolloutTxs: List[TxSignature],
-        deinitTx: Option[TxSignature],
     ) extends AckBlock,
           BlockType.Final,
           AckRound1 {

@@ -447,8 +447,7 @@ final case class JointLedger(
 
                 val blockEffects = BlockEffects.Unsigned.Final(
                   finalizationTx = finalizationTxSeq.finalizationTx,
-                  rolloutTxs = finalizationTxSeq.mbRollouts,
-                  deinitTx = finalizationTxSeq.mbDeinit
+                  rolloutTxs = finalizationTxSeq.rolloutTxs
                 )
 
                 Block.Unsigned.Final(blockBrief, blockEffects)

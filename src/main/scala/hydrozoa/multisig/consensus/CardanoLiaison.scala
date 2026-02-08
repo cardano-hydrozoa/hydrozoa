@@ -33,7 +33,7 @@ import scalus.cardano.ledger.{Block as _, BlockHeader as _, Transaction, Transac
   *     an L1 rollback may happen at any moment and that may require re-applying some of the
   *     effects.
   *   - The core concept the liaison is built around the "effect", which can be any L1 transaction
-  *     like initialization, settlement, rollback, deinit or a fallback tx.
+  *     like initialization, settlement, rollback, or a fallback tx.
   *   - Every effect is tagged with an _effect id_ which is a pair: (block number, index). This
   *     allows running range queries.
   *   - Every effect is associated with a utxo id it can handle (i.e. spend). This is more efficient
@@ -78,14 +78,13 @@ object CardanoLiaison:
         /** Final state of a head, represented by the transaction hash of the finalization tx. */
         case Finalized(finalizationTxHash: TransactionHash)
 
-    type HappyPathEffect = InitializationTx | SettlementTx | FinalizationTx | DeinitTx | RolloutTx
+    type HappyPathEffect = InitializationTx | SettlementTx | FinalizationTx | RolloutTx
 
     extension (effect: HappyPathEffect)
         def tx: Transaction = effect match
             case e: InitializationTx => e.tx
             case e: SettlementTx     => e.tx
             case e: FinalizationTx   => e.tx
-            case e: DeinitTx         => e.tx
             case e: RolloutTx        => e.tx
 
     /** Internal state of the actor. */
@@ -154,11 +153,10 @@ object CardanoLiaison:
                 override val blockNum: BlockNumber,
                 override val finalizationTx: FinalizationTx,
                 override val rolloutTxs: List[RolloutTx],
-                override val deinitTx: Option[DeinitTx],
             ) extends Minimal,
                   BlockEffects.MultiSigned.Final.Section {
                 override def effects: BlockEffects.MultiSigned.Final =
-                    BlockEffects.MultiSigned.Final(finalizationTx, rolloutTxs, deinitTx)
+                    BlockEffects.MultiSigned.Final(finalizationTx, rolloutTxs)
             }
         }
 
@@ -252,8 +250,7 @@ trait CardanoLiaison(
                 val (blockEffectInputs, blockEffects) =
                     mkHappyPathEffectInputsAndEffects(
                       block.finalizationTx,
-                      block.rolloutTxs,
-                      block.deinitTx
+                      block.rolloutTxs
                     )
                 s.copy(
                   targetState = TargetState.Finalized(block.finalizationTx.tx.id),
@@ -264,18 +261,19 @@ trait CardanoLiaison(
         } yield ()
 
     private def mkHappyPathEffectInputsAndEffects(
-        settlementTx: SettlementTx,
+        settlementTx: SettlementTx | FinalizationTx,
         rollouts: List[RolloutTx]
     ): (
         Seq[(UtxoIdL1, EffectId)],
         Seq[(EffectId, HappyPathEffect)]
     ) = {
         val treasurySpent = settlementTx.treasurySpent
+        val blockNumber = BlockNumber(settlementTx.majorVersionProduced)
+
         val effects: List[(TransactionInput, HappyPathEffect)] =
             List(treasurySpent.utxoId -> settlementTx)
             // TODO: add utxoId
                 ++ rollouts.map(r => r.rolloutSpent.utxo.input -> r)
-        val blockNumber = BlockNumber(settlementTx.majorVersionProduced)
         indexWithEffectId(effects, blockNumber).unzip
     }
 
@@ -290,31 +288,6 @@ trait CardanoLiaison(
                   utxoIdAndEffect._1
                 ) -> effectId) -> (effectId -> utxoIdAndEffect._2)
             })
-
-    private def mkHappyPathEffectInputsAndEffects(
-        finalizationTx: FinalizationTx,
-        rollouts: List[RolloutTx],
-        mbDeinitTx: Option[DeinitTx]
-    ): (
-        Seq[(UtxoIdL1, EffectId)],
-        Seq[(EffectId, HappyPathEffect)]
-    ) =
-        val treasurySpent = finalizationTx.treasurySpent
-        val blockNumber = BlockNumber(finalizationTx.majorVersionProduced)
-
-        val effects: List[(TransactionInput, HappyPathEffect)] =
-            List(treasurySpent.utxoId -> finalizationTx)
-            // TODO: add utxoId
-                ++ rollouts.map(r => r.rolloutSpent.utxo.input -> r)
-
-        val ret = indexWithEffectId(effects, blockNumber).unzip
-
-        val deinitEffect = indexWithEffectId(
-          mbDeinitTx.toList.map(d => d.residualTreasurySpent.utxoId -> d),
-          blockNumber.increment
-        ).unzip
-
-        (ret._1 ++ deinitEffect._1, ret._2 ++ deinitEffect._2)
 
     /** The core part of the liaison that decides whether an action is needed and submits them.
       *
@@ -498,28 +471,26 @@ trait CardanoLiaison(
         import EffectError.*
 
         effectId match {
-            // Backbone effect - settlement/finalization/deinit
+            // Backbone effect - settlement/finalization
             // TODO: Can't be initialization tx though. If we want to allow
-            // initialization txs to spend utxos from the same head address
-            // we should address it somehow.
+            //   initialization txs to spend utxos from the same head address
+            //   we should address it somehow.
             case backboneEffectId @ (blockNum, 0) =>
 
                 println(s"mkDirectAction: backboneEffectId: $backboneEffectId")
 
                 val happyPathEffect = state.happyPathEffects(backboneEffectId)
-                // May absent for phony "deinit" block number
                 val mbCompetingFallbackEffect = state.fallbackEffects.get(blockNum.decrement)
 
                 // Invariant: there should be always one sensible outcome:
-                // - (1) either the settlement/finalization/deinit tx for block N+1 is valid
+                // - (1) either the settlement/finalization tx for block N+1 is valid
                 // - (2) or we are inside the silence period
                 // - (2) or the fallback tx for N is valid
 
-                // This is obvious for a regular settlement(finalization)/fallback pair, and for
-                // the deinit, that has neither has ttl, nor a competing fallback, (1) is always true.
                 mbCompetingFallbackEffect match {
 
-                    // Not a deinit effect
+                    // This is the only correct case.
+                    // TODO: ensure this always holds by construction
                     case Some(fallback) =>
                         for {
                             happyPathTxTtl <- happyPathEffect match {
@@ -529,7 +500,6 @@ trait CardanoLiaison(
                                 case tx: InitializationTx =>
                                     Left(UnexpectedInitializationEffect(backboneEffectId))
                                 case _: RolloutTx => Left(UnexpectedRolloutEffect(backboneEffectId))
-                                case _: DeinitTx  => Left(DeinitEffectWithUnexpectedFallback)
                             }
 
                             fallbackValidityStart = fallback.validityStart
@@ -575,11 +545,10 @@ trait CardanoLiaison(
                             }
                         } yield ret
 
-                    // This is a deinit effect, always the last tx in the backbone
+                    // This should not be possible -- every non-initialization tx has a competing fallback tx.
                     case None =>
                         println("-------> mbCompetingFallbackEffect == None")
-                        val deinitTxEffectId = backboneEffectId
-                        Right(PushForwardMultisig(Seq(state.happyPathEffects(deinitTxEffectId).tx)))
+                        Left(MissingCompetingFallback(backboneEffectId))
                 }
 
             // Rollout tx
@@ -596,7 +565,7 @@ trait CardanoLiaison(
     private enum EffectError extends Throwable:
         case UnexpectedRolloutEffect(effectId: EffectId)
         case UnexpectedInitializationEffect(effectId: EffectId)
-        case DeinitEffectWithUnexpectedFallback
+        case MissingCompetingFallback(effectId: EffectId)
         case WrongValidityRange(
             currentTime: QuantizedInstant,
             happyPathTtl: QuantizedInstant,
@@ -611,8 +580,8 @@ trait CardanoLiaison(
                 s"Unexpected rollout effect with effectId = $effectId, check the integrity of effects."
             case UnexpectedInitializationEffect(effectId) =>
                 s"Unexpected initialization effect with effectId = $effectId, check the integrity of effects and the initialization tx."
-            case DeinitEffectWithUnexpectedFallback =>
-                "Impossible: the deinit tx with a competing fallback tx"
+            case MissingCompetingFallback(effectId) =>
+                s"Impossible: a settlement/finalization effect ($effectId) without a competing fallback tx."
             case WrongValidityRange(currentTime, happyPathTtl, fallbackValidityStart) =>
                 s"Validity range invariant is not hold: current time: $currentTime," +
                     s" happy path tx TTL: $happyPathTtl" +

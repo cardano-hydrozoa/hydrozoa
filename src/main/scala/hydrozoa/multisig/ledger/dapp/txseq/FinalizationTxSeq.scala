@@ -19,16 +19,15 @@ enum FinalizationTxSeq {
         override val finalizationTx: FinalizationTx.WithRollouts,
         rolloutTxSeq: RolloutTxSeq
     )
+
+    def rolloutTxs: List[RolloutTx] = this match {
+        case x: WithRollouts => x.rolloutTxSeq.rolloutTxs
+        case _               => List.empty
+    }
 }
 
 object FinalizationTxSeq {
     type Config = HeadConfig.Section
-
-    extension (finalizationTxSeq: FinalizationTxSeq)
-
-        def mbRollouts: List[RolloutTx] = ???
-
-        def mbDeinit: Option[DeinitTx] = ???
 
     import Builder.*
 

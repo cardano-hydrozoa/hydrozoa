@@ -48,8 +48,6 @@ trait CardanoBackend[F[_]]:
       * written in terms of common Scalus types, to keep it more general, but maybe we can switch to
       * concrete Hydrozoa types - like HeadMultisigScript/TokenNames/RuleBasedTreasuryDatum.
       *
-      * NB: this won't pick up the deinit tx since this one doesn't contain the continuing output.
-      *
       * @param asset
       *   the asset id that marks the continuing input
       * @param after

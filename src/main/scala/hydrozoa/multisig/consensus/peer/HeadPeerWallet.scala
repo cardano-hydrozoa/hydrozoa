@@ -87,8 +87,7 @@ final class HeadPeerWallet(
         AckBlock.Final1(
           ackId = AckId(peerNum, AckNumber.neededToConfirm(header).decrement),
           blockNum = blockNum,
-          rolloutTxs = rolloutTxs.map(_.tx).map(mkTxSignature),
-          deinitTx = deinitTx.map(_.tx).map(mkTxSignature)
+          rolloutTxs = rolloutTxs.map(_.tx).map(mkTxSignature)
         )
     }
 

@@ -28,7 +28,9 @@ import scalus.cardano.txbuilder.SomeBuildError
 final case class RolloutTxSeq(
     notLast: Vector[RolloutTx.NotLast],
     last: RolloutTx.Last
-)
+) {
+    def rolloutTxs: List[RolloutTx] = (notLast :+ last).toList
+}
 
 object RolloutTxSeq {
     type Config = CardanoNetwork.Section & HeadPeers.Section & InitialBlock.Section

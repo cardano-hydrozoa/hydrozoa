@@ -12,7 +12,7 @@ import hydrozoa.multisig.consensus.ack.{AckBlock, AckId}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockHeader.Minor.HeaderSignature
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader, BlockNumber}
-import hydrozoa.multisig.ledger.dapp.tx.{DeinitTx, RefundTx, RolloutTx, Tx, TxSignature}
+import hydrozoa.multisig.ledger.dapp.tx.{RefundTx, RolloutTx, Tx, TxSignature}
 import hydrozoa.{VerificationKeyBytes, attachVKeyWitnesses}
 import scala.Function.tupled
 import scala.util.control.NonFatal
@@ -153,8 +153,8 @@ sealed trait FinalConsensusCell[T] extends ConsensusCell[T]
   *   - Complete when all round 2 acks are collected
   *
   * '''Final Blocks''' (Two Rounds):
-  *   - Round 1: Collect block and Final1 acks with rollout/deinit signatures (though Final2 acks
-  *     may come as well)
+  *   - Round 1: Collect block and Final1 acks with rollout signatures (though Final2 acks may come
+  *     as well)
   *   - Switch between `FinalRoundOneCell` and `FinalRoundTwoCell`, announcing own Final2 ack
   *   - Round 2: Collect Final2 acks with finalization signatures
   *   - Complete when all round 2 acks are collected
@@ -1170,30 +1170,12 @@ class ConsensusActor(
                       block.effects.finalizationTx,
                       finalizationWitnessSet
                     )
-
-                    // 3. Optional deinit
-                    mbDeinitSigned <- block.effects.deinitTx match {
-                        case None => IO.pure(None)
-                        case Some(deinit) =>
-                            for {
-                                deinitWitnessSet <- acks1.toList.traverse { case (vk, ack) =>
-                                    ack.deinitTx
-                                        .liftTo[IO](CompletionError.MissingDeinitSignature)
-                                        .map(vk -> _)
-                                }
-                                deinitSigned <- validateAndAttachTxSignature(
-                                  deinit,
-                                  deinitWitnessSet
-                                )
-                            } yield Some(deinitSigned)
-                    }
                 } yield Right(
                   (
                     Block.MultiSigned.Final(
                       blockBrief = block.blockBrief,
                       effects = BlockEffects.MultiSigned.Final(
                         rolloutTxs = rolloutsSigned,
-                        deinitTx = mbDeinitSigned,
                         finalizationTx = finalizationSigned
                       )
                     ),
