@@ -10,26 +10,13 @@ enum FinalizationTxSeq {
     def finalizationTx: FinalizationTx
 
     /** Merged deinit, optional direct payouts */
-    case Monolithic(
-        override val finalizationTx: FinalizationTx.Monolithic
-    )
-
-    /** Separate deinit, optional direct payouts */
-    case WithDeinit(
-        override val finalizationTx: FinalizationTx.WithDeinit,
-        deinitTx: DeinitTx
+    case NoPayouts(
+        override val finalizationTx: FinalizationTx.NoPayouts
     )
 
     /** Merged deinit, optional direct payouts, and rollout */
     case WithRollouts(
-        override val finalizationTx: FinalizationTx.WithRolloutsMerged,
-        rolloutTxSeq: RolloutTxSeq
-    )
-
-    /** Separate deinit, optional direct payouts, and rollout */
-    case WithDeinitAndRollouts(
         override val finalizationTx: FinalizationTx.WithRollouts,
-        deinitTx: DeinitTx,
         rolloutTxSeq: RolloutTxSeq
     )
 }
@@ -39,18 +26,9 @@ object FinalizationTxSeq {
 
     extension (finalizationTxSeq: FinalizationTxSeq)
 
-        def mbRollouts: List[RolloutTx] = finalizationTxSeq match {
-            case FinalizationTxSeq.WithRollouts(_, rolloutTxSeq) => rolloutTxSeq.mbRollouts
-            case FinalizationTxSeq.WithDeinitAndRollouts(_, _, rolloutTxSeq) =>
-                rolloutTxSeq.mbRollouts
-            case _ => List.empty
-        }
+        def mbRollouts: List[RolloutTx] = ???
 
-        def mbDeinit: Option[DeinitTx] = finalizationTxSeq match {
-            case FinalizationTxSeq.WithDeinit(finalizationTx, deinitTx)  => Some(deinitTx)
-            case FinalizationTxSeq.WithDeinitAndRollouts(_, deinitTx, _) => Some(deinitTx)
-            case _                                                       => None
-        }
+        def mbDeinit: Option[DeinitTx] = ???
 
     import Builder.*
 

@@ -1,6 +1,6 @@
 package hydrozoa.config.head
 
-import cats.data.NonEmptyList
+import cats.data.{NonEmptyList, NonEmptyMap}
 import hydrozoa.VerificationKeyBytes
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
@@ -95,6 +95,8 @@ object HeadConfig {
             override transparent inline def headParamsHash: Hash32 =
                 headParams.headParamsHash
 
+            override def headPeerNums: NonEmptyList[HeadPeerNumber] =
+                headPeers.headPeerNums
             override transparent inline def headPeerIds: NonEmptyList[HeadPeerId] =
                 headPeers.headPeerIds
             override transparent inline def headPeerVKeys: NonEmptyList[VerificationKeyBytes] =
@@ -116,7 +118,8 @@ object HeadConfig {
                 initializationParams.headStartTime
             override transparent inline def initialL2Utxos: Utxos =
                 initializationParams.initialL2Utxos
-            override transparent inline def initialEquityContributions: Map[HeadPeerNumber, Coin] =
+            override transparent inline def initialEquityContributions
+                : NonEmptyMap[HeadPeerNumber, Coin] =
                 initializationParams.initialEquityContributions
             override transparent inline def initialSeedUtxo: Utxo =
                 initializationParams.initialSeedUtxo

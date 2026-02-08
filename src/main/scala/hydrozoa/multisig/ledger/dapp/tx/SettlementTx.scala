@@ -19,7 +19,6 @@ import scalus.builtin.Data.toData
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.{Sized, Slot, Transaction, TransactionInput, TransactionOutput as TxOutput, Utxo, Value}
 import scalus.cardano.txbuilder.*
-import scalus.cardano.txbuilder.ScriptSource.NativeScriptAttached
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
 
@@ -221,9 +220,13 @@ private object SettlementTxOps {
                 Some(MD(Settlement(headAddress = config.headMultisigAddress)))
             )
 
+            private val referenceMultisigRegime =
+                ReferenceOutput(config.multisigRegimeUtxo.asUtxo)
+
             private val validityEndSlot = ValidityEndSlot(validityEnd.toSlot.slot)
 
-            private val baseSteps = List(modifyAuxiliaryData, validityEndSlot)
+            private val baseSteps =
+                List(modifyAuxiliaryData, referenceMultisigRegime, validityEndSlot)
 
             /////////////////////////////////////////////////////////
             // Spend treasury
@@ -257,13 +260,13 @@ private object SettlementTxOps {
 
             /////////////////////////////////////////////////////////
             // Send treasury
-            private def calculateTreasuryOutputValue(treasurySpent: MultisigTreasuryUtxo): Value =
-                mbRolloutValue.fold(treasurySpent.value)(treasurySpent.value - _)
+            private val treasuryOutputValue: Value =
+                mbRolloutValue.fold(treasuryToSpend.value)(treasuryToSpend.value - _)
 
             private val treasuryOutput: TxOutput.Babbage = {
                 TxOutput.Babbage(
                   address = config.headMultisigAddress,
-                  value = calculateTreasuryOutputValue(treasuryToSpend),
+                  value = treasuryOutputValue,
                   datumOption = Some(
                     Inline(
                       MultisigTreasuryUtxo
@@ -334,13 +337,8 @@ private object SettlementTxOps {
                 } yield newCtx
             }
 
-            private def mkDepositStep(deposit: DepositUtxo): Spend = Spend(
-              deposit.toUtxo,
-              NativeScriptWitness(
-                NativeScriptAttached,
-                config.headMultisigScript.requiredSigners
-              )
-            )
+            private def mkDepositStep(deposit: DepositUtxo): Spend =
+                Spend(deposit.toUtxo, config.headMultisigScript.witnessAttached)
         }
 
         private[tx] object CompleteNoPayouts {

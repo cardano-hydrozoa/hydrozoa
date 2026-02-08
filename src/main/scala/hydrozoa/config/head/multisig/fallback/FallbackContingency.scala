@@ -1,12 +1,13 @@
 package hydrozoa.config.head.multisig.fallback
 
+import cats.data.NonEmptyMap
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
-import hydrozoa.lib.number.{Distribution, PositiveInt}
+import hydrozoa.lib.number.PositiveInt
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import scalus.cardano.ledger.Coin
 
 export FallbackContingency.totalFallbackContingency
-export FallbackContingency.{distributeFallbackContingencyInMultisigRegime, distributeFallbackContingencyInRuleBasedRegime}
 export FallbackContingency.{mkFallbackContingencyWithDefaults, mkCollectiveContingencyWithDefaults, mkIndividualContingencyWithDefaults}
 
 final case class FallbackContingency(
@@ -17,6 +18,12 @@ final case class FallbackContingency(
 }
 
 object FallbackContingency {
+
+    /** This amount is collected from the first peer, in addition to the first peer's
+      * [[FallbackContingency.Individual]]. Technically, this is on behalf of the whole group, but
+      * it's easier to just get it from the first peer and return back to that peer if/when
+      * necessary.
+      */
     final case class Collective(
         defaultVoteDeposit: Coin,
         fallbackTxFee: Coin,
@@ -24,6 +31,7 @@ object FallbackContingency {
         lazy val total: Coin = defaultVoteDeposit + fallbackTxFee
     }
 
+    /** This amount is collected from each peer in the initialization tx. */
     final case class Individual(
         collateralDeposit: Coin,
         tallyTxFee: Coin,
@@ -51,21 +59,17 @@ object FallbackContingency {
               config.nHeadPeers.convert * config.individualContingency.total.value
         )
 
-        def distributeFallbackContingencyInMultisigRegime: List[Coin] =
-            distributeEvenlyToPeers(config.totalFallbackContingency)
-
-        def distributeFallbackContingencyInRuleBasedRegime: List[Coin] =
-            distributeEvenlyToPeers(
-              config.collectiveContingency.defaultVoteDeposit +
-                  Coin(config.nHeadPeers.convert * config.individualContingency.voteDeposit.value)
-            )
-
-        private def distributeEvenlyToPeers(amount: Coin): List[Coin] = {
-            val evenWeights = Distribution.evenWeights(config.nHeadPeers).get
-            val distSafeLong = evenWeights.distribute(amount.value)
-            val distCoin = distSafeLong.iterator.map(_.toLong).map(Coin.apply).toList
-            distCoin
-        }
+    extension (config: CardanoNetwork.Section & FallbackContingency.Section & HeadPeers.Section)
+        /** In the finalization tx, distribute the fallback contingency as follows:
+          *   - Each peer gets the total individual contingency collected from that peer.
+          *   - The first peer also gets the entire collective contingency share, minus the actual
+          *     finalization fee.
+          */
+        def distributeFallbackContingencyInFinalization: NonEmptyMap[HeadPeerNumber, Coin] =
+            config.headPeerNums
+                .map((_, config.individualContingency.total))
+                .toNem
+                .updateWith(HeadPeerNumber.zero)(_ + config.collectiveContingency.total)
 
     extension (config: CardanoNetwork.Section) {
         def mkFallbackContingencyWithDefaults(

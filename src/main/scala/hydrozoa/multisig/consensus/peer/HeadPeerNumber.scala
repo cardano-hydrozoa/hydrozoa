@@ -1,5 +1,6 @@
 package hydrozoa.multisig.consensus.peer
 
+import cats.Order
 import hydrozoa.multisig.ledger.block.BlockHeader
 
 type HeadPeerNumber = HeadPeerNumber.HeadPeerNumber
@@ -25,6 +26,11 @@ object HeadPeerNumber {
     given Conversion[HeadPeerNumber, Int] = identity
 
     given Ordering[HeadPeerNumber] with {
+        override def compare(x: HeadPeerNumber, y: HeadPeerNumber): Int =
+            x.convert.compare(y.convert)
+    }
+
+    given Order[HeadPeerNumber] with {
         override def compare(x: HeadPeerNumber, y: HeadPeerNumber): Int =
             x.convert.compare(y.convert)
     }
