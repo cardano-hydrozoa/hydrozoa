@@ -183,19 +183,17 @@ object DappLedgerM {
         for {
             s <- get
             config <- ask
-            args = ??? // FIXME
-//            // FinalizationTxSeq.Builder.Args(
-//              majorVersionProduced =
-//                  BlockVersion.Major(s.treasury.datum.versionMajor.toInt).increment,
-//              treasuryToSpend = s.treasury,
-//              payoutObligationsRemaining = payoutObligationsRemaining,
-//              competingFallbackValidityStart = competingFallbackValidityStart,
-//              blockCreatedOn = blockCreatedOn,
-//            )
             ftxSeq <- lift(
               FinalizationTxSeq
-                  .Builder(config)
-                  .build(args)
+                  .Build(config)(
+                    majorVersionProduced =
+                        BlockVersion.Major(s.treasury.datum.versionMajor.toInt).increment,
+                    treasuryToSpend = s.treasury,
+                    payoutObligationsRemaining = payoutObligationsRemaining,
+                    competingFallbackValidityStart = competingFallbackValidityStart,
+                    blockCreatedOn = blockCreatedOn,
+                  )
+                  .result
                   .left
                   .map(Error.FinalizationTxSeqBuilderError.apply)
             )
@@ -234,7 +232,7 @@ object DappLedgerM {
         final case class SettlementTxSeqBuilderError(wrapped: SettlementTxSeq.Build.Error)
             extends DappLedgerM.Error
 
-        final case class FinalizationTxSeqBuilderError(wrapped: FinalizationTxSeq.Builder.Error)
+        final case class FinalizationTxSeqBuilderError(wrapped: FinalizationTxSeq.Build.Error)
             extends DappLedgerM.Error
     }
 

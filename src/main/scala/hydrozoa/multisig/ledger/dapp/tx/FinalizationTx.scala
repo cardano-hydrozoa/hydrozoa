@@ -10,10 +10,8 @@ import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.Finalization
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explainConst}
 import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq
-import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigTreasuryUtxo, RolloutUtxo}
-import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
+import hydrozoa.multisig.ledger.dapp.utxo.{MultisigTreasuryUtxo, RolloutUtxo}
 import monocle.{Focus, Lens}
-import scala.collection.immutable.Vector
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.{Coin, Sized, Slot, Transaction, TransactionInput, TransactionOutput as TxOutput, Utxo, Value}
 import scalus.cardano.txbuilder.*
@@ -34,6 +32,7 @@ sealed trait FinalizationTx
 
 object FinalizationTx {
     export FinalizationTxOps.Build
+    export FinalizationTxOps.Result
 
     sealed trait WithPayouts extends FinalizationTx
 
@@ -107,12 +106,9 @@ private object FinalizationTxOps {
         type Config = CardanoNetwork.Section & FallbackContingency.Section & HeadPeers.Section &
             InitialBlock.Section & InitializationParameters.Section
 
-        case class NoPayouts(
-            override val config: Config,
-            override val kzgCommitment: KzgCommitment,
+        case class NoPayouts(override val config: Config)(
             override val majorVersionProduced: BlockVersion.Major,
             override val treasuryToSpend: MultisigTreasuryUtxo,
-            override val depositsToSpend: Vector[DepositUtxo],
             override val validityEnd: QuantizedInstant,
         ) extends Build[FinalizationTx.NoPayouts](
               mbRolloutTxSeqPartial = None
@@ -121,12 +117,9 @@ private object FinalizationTxOps {
                 Right(CompleteNoPayouts(state))
         }
 
-        case class WithPayouts(
-            override val config: Config,
-            override val kzgCommitment: KzgCommitment,
+        case class WithPayouts(override val config: Config)(
             override val majorVersionProduced: BlockVersion.Major,
             override val treasuryToSpend: MultisigTreasuryUtxo,
-            override val depositsToSpend: Vector[DepositUtxo],
             override val validityEnd: QuantizedInstant,
             rolloutTxSeqPartial: RolloutTxSeq.PartialResult
         ) extends Build[FinalizationTx.WithPayouts](
@@ -145,10 +138,8 @@ private object FinalizationTxOps {
         import Build.*
 
         def config: Config
-        def kzgCommitment: KzgCommitment
         def majorVersionProduced: BlockVersion.Major
         def treasuryToSpend: MultisigTreasuryUtxo
-        def depositsToSpend: Vector[DepositUtxo]
         def validityEnd: QuantizedInstant
 
         def complete(state: State): BuildErrorOr[ResultFor[T]]
