@@ -6,8 +6,7 @@ import hydrozoa.config.head.initialization.InitialBlock
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.multisig.ledger.dapp.tx.RolloutTx
-import hydrozoa.multisig.ledger.dapp.tx.RolloutTx.Builder as SingleBuilder
-import hydrozoa.multisig.ledger.dapp.tx.RolloutTx.Builder.PartialResult as SinglePartialResult
+import hydrozoa.multisig.ledger.dapp.tx.RolloutTx.{Build as SingleBuilder, PartialResult as SinglePartialResult}
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.BuildErrorOr
 import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq.Builder.PartialResult.Many
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
@@ -207,19 +206,17 @@ object RolloutTxSeq {
             payouts: NonEmptyVector[Payout.Obligation]
         ): BuildErrorOr[PartialResult] =
             for {
-                lastRolloutTx <- singleBuilderLast.partialResult(SingleBuilder.Args.Last(payouts))
+                lastRolloutTx <- singleBuilderLast(payouts).partialResult
                 partialResult <- lastRolloutTx match {
                     case only: SinglePartialResult.First[RolloutTx.Last] =>
                         Right(PartialResult.Singleton(only))
                     case last: SinglePartialResult.NotFirst[RolloutTx.Last] =>
                         val initialState = State(last = last, notLast = Vector.empty)
                         for {
-                            current <- singleBuilderNotLast.partialResult(
-                              SingleBuilder.Args.NotLast(
-                                last.payoutObligationsRemaining,
-                                last.inputValueNeeded
-                              )
-                            )
+                            current <- singleBuilderNotLast(
+                              last.nePayoutObligationsRemaining,
+                              last.inputValueNeeded
+                            ).partialResult
                             loopResult <- loop(current, initialState)
                         } yield loopResult
                 }
@@ -233,12 +230,10 @@ object RolloutTxSeq {
             current match {
                 case intermediate: SinglePartialResult.NotFirst[RolloutTx.NotLast] =>
                     val newAcc = acc.copy(notLast = intermediate +: acc.notLast)
-                    val eNewCurrent = singleBuilderNotLast.partialResult(
-                      SingleBuilder.Args.NotLast(
-                        intermediate.payoutObligationsRemaining,
-                        intermediate.inputValueNeeded
-                      )
-                    )
+                    val eNewCurrent = singleBuilderNotLast(
+                      intermediate.nePayoutObligationsRemaining,
+                      intermediate.inputValueNeeded
+                    ).partialResult
                     eNewCurrent match {
                         case Right(newCurrent) => loop(newCurrent, newAcc)
                         case Left(err)         => Left(err)

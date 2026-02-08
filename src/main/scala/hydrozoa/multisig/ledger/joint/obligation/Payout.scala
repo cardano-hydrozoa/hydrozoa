@@ -29,7 +29,7 @@ object Payout {
 
             object Remaining {
                 trait NonEmpty {
-                    def payoutObligationsRemaining: NonEmptyVector[Payout.Obligation]
+                    def nePayoutObligationsRemaining: NonEmptyVector[Payout.Obligation]
                 }
             }
         }
