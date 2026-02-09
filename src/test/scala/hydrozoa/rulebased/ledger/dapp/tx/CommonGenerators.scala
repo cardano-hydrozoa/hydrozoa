@@ -2,6 +2,8 @@ package hydrozoa.rulebased.ledger.dapp.tx
 
 import cats.data.NonEmptyList
 import hydrozoa.*
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.virtual.commitment.TrustedSetup
@@ -15,15 +17,13 @@ import scalus.builtin.{BLS12_381_G2_Element, ByteString}
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{BlockHeader as _, Utxo, *}
+import scalus.cardano.ledger.{Utxo, BlockHeader as _, *}
+import scalus.crypto.ed25519.VerificationKey
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
 import scalus.ledger.api.v3.TokenName
 import scalus.prelude.List as SList
 import test.*
 import test.Generators.Hydrozoa.genPubkeyAddress
-
-// Alias for compatibility
-def genPubkeyAddr(network: Network = testNetwork): Gen[ShelleyAddress] = genPubkeyAddress(network)
 
 /** Common test generators for rule-based transaction tests */
 object CommonGenerators {
@@ -33,19 +33,19 @@ object CommonGenerators {
           HeadMultisigScript,
           TokenName,
           NonEmptyList[TestPeer],
-          NonEmptyList[VerificationKeyBytes],
+          NonEmptyList[VerificationKey],
           ByteString,
           BigInt,
           TransactionHash
       )
     ] =
         for {
+            
             // This is 4 bytes shorter to accommodate CIP-67 prefixes
             // NB: we use the same token name _suffix_ for all head tokens so far, which is not the case in reality
             headTokenSuffix <- genByteStringOfN(28)
             peers <- genTestPeers()
-            peersVKs = peers.map(_.wallet.exportVerificationKeyBytes)
-            hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
+            headPeers = HeadPeers(peers.map(_.wallet.exportVerificationKey))
             // L2 consensus parameters hash
             params <- genByteStringOfN(32)
             // Major version upon switching to the rule-based regime
@@ -53,20 +53,18 @@ object CommonGenerators {
             // Fallback tx id - should be common for the vote utxo and treasury utxo
             fallbackTxId <- genByteStringOfN(32).map(TransactionHash.fromByteString)
         } yield (
-          hns,
+          headPeers.headMultisigScript,
           headTokenSuffix,
           peers,
-          peersVKs,
+          headPeers.headPeerVKeys,
           params,
           versionMajor,
           fallbackTxId
         )
 
     def genTreasuryUnresolvedDatum(
-        headMp: PolicyId,
+        config: CardanoNetwork.Section & HeadPeers.Section,
         disputeId: TokenName,
-        peersVKs: NonEmptyList[VerificationKeyBytes],
-        params: ByteString,
         versionMajor: BigInt
     ): Gen[UnresolvedDatum] =
         for {
@@ -78,17 +76,17 @@ object CommonGenerators {
                 .takeSrsG2(10)
                 .map(p2 => BLS12_381_G2_Element(p2).toCompressedByteString)
         } yield UnresolvedDatum(
-          headMp = headMp,
+          headMp = config.headMultisigScript.policyId,
           disputeId = disputeId,
-          peers = SList.from(peersVKs.map(_.bytes).toList),
-          peersN = BigInt(peersVKs.length),
+          peers = SList.from(config.headPeerVKeys.iterator),
+          peersN = config.nHeadPeers.convert,
           deadlineVoting = deadlineVoting,
           versionMajor = versionMajor,
-          params = params,
           setup = setup
         )
 
     def genRuleBasedTreasuryUtxo(
+        config: CardanoNetwork.Section,
         fallbackTxId: TransactionHash,
         headMp: PolicyId,
         beaconTokenName: TokenName,
@@ -102,10 +100,10 @@ object CommonGenerators {
             // Treasury is always the first output of the fallback tx
             txId = TransactionInput(fallbackTxId, 0)
             spp = ShelleyPaymentPart.Script(RuleBasedTreasuryScript.compiledScriptHash)
-            scriptAddr = ShelleyAddress(testNetwork, spp, ShelleyDelegationPart.Null)
+            scriptAddr = ShelleyAddress(config.network, spp, ShelleyDelegationPart.Null)
 
             beaconTokenAssetName = AssetName(beaconTokenName)
-            beaconToken = singleton(headMp, beaconTokenAssetName)
+            beaconToken = Value.asset(headMp, beaconTokenAssetName, 1)
         } yield RuleBasedTreasuryUtxo(
           treasuryTokenName = beaconTokenAssetName,
           utxoId = txId,
@@ -114,13 +112,13 @@ object CommonGenerators {
           value = Value(adaAmount) + beaconToken
         )
 
-    def genCollateralUtxo(peer: TestPeer): Gen[(TransactionInput, Babbage)] =
+    def genCollateralUtxo(config: CardanoNetwork.Section, peer: TestPeer): Gen[(TransactionInput, Babbage)] =
         for {
             input <- arbitrary[TransactionInput]
         } yield (
           input,
           Babbage(
-            address = peer.address(testNetwork),
+            address = peer.address(config.network),
             value = Value(Coin(5_000_000L)),
             datumOption = None,
             scriptRef = None
@@ -128,11 +126,11 @@ object CommonGenerators {
         )
 
     /** Generate collateral UTXO with random address */
-    def genCollateralUtxo: Gen[Utxo] =
+    def genCollateralUtxo(config: CardanoNetwork.Section): Gen[Utxo] =
         for {
             txId <- arbitrary[TransactionHash]
             ix <- Gen.choose(0, 10)
-            addr <- genPubkeyAddress(testNetwork)
+            addr <- genPubkeyAddress(config)
             value <- Gen.choose(5_000_000L, 50_000_000L).map(v => Value(Coin(v)))
         } yield Utxo(
           TransactionInput(txId, ix),
@@ -168,26 +166,26 @@ object CommonGenerators {
     }
 
     /** Generator for Shelley address */
-    def genShelleyAddress(network: Network = testNetwork): Gen[ShelleyAddress] =
+    def genShelleyAddress(config: CardanoNetwork.Section): Gen[ShelleyAddress] =
         for {
             keyHash <- arbitrary[AddrKeyHash]
         } yield ShelleyAddress(
-          network = network,
+          network = config.network,
           payment = ShelleyPaymentPart.Key(keyHash),
           delegation = ShelleyDelegationPart.Null
         )
 
     /** Generator for L2 UTXO sets */
-    def genUtxosL2(count: Int = 2): Gen[Utxos] =
+    def genUtxosL2(config: CardanoNetwork.Section,count: Int = 2): Gen[Utxos] =
         for {
-            outputs <- Gen.listOfN(count, genOutputL2)
+            outputs <- Gen.listOfN(count, genOutputL2(config))
             utxoIds <- Gen.listOfN(count, arbitrary[TransactionInput])
         } yield utxoIds.zip(outputs).toMap
 
     /** Generator for a single L2 output */
-    def genOutputL2: Gen[TransactionOutput] =
+    def genOutputL2(config: CardanoNetwork.Section): Gen[TransactionOutput] =
         for {
-            address <- genShelleyAddress()
+            address <- genShelleyAddress(config)
             coin <- Gen.choose(1_000_000L, 10_000_000L)
             value = Value(Coin(coin))
         } yield Babbage(

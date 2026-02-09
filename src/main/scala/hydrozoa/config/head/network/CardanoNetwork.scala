@@ -6,6 +6,8 @@ import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.{CardanoInfo, Coin, EvaluatorMode, PlutusScriptEvaluator, ProtocolParams, ProtocolVersion, SlotConfig, TransactionOutput}
 import scalus.cardano.txbuilder.TransactionBuilder
 
+export CardanoNetwork.ensureMinAda
+
 enum CardanoNetwork(_cardanoInfo: CardanoInfo) extends CardanoNetwork.Section {
     case Mainnet extends CardanoNetwork(CardanoInfo.mainnet)
     case Preprod extends CardanoNetwork(CardanoInfo.preprod)
@@ -50,7 +52,7 @@ object CardanoNetwork {
         final def cardanoProtocolVersion: ProtocolVersion = cardanoProtocolParams.protocolVersion
     }
 
-    extension (self: TransactionOutput)
-        def ensureMinAda(config: CardanoNetwork.Section): TransactionOutput =
-            TransactionBuilder.ensureMinAda(self, config.cardanoProtocolParams)
+    extension[T <: TransactionOutput] (self: T)
+        def ensureMinAda(config: CardanoNetwork.Section): T =
+            TransactionBuilder.ensureMinAda(self, config.cardanoProtocolParams).asInstanceOf[T]
 }
