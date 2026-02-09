@@ -46,7 +46,7 @@ object SettlementTx {
 
     sealed trait NoRollouts extends SettlementTx
 
-    case class NoPayouts(
+    final case class NoPayouts(
         override val validityEnd: QuantizedInstant,
         override val tx: Transaction,
         override val majorVersionProduced: BlockVersion.Major,
@@ -59,7 +59,7 @@ object SettlementTx {
             Focus[NoPayouts](_.tx).asInstanceOf[Lens[SettlementTx, Transaction]]
     ) extends NoRollouts
 
-    case class WithOnlyDirectPayouts(
+    final case class WithOnlyDirectPayouts(
         override val validityEnd: QuantizedInstant,
         override val tx: Transaction,
         override val majorVersionProduced: BlockVersion.Major,
@@ -73,7 +73,7 @@ object SettlementTx {
     ) extends WithPayouts,
           NoRollouts
 
-    case class WithRollouts(
+    final case class WithRollouts(
         override val validityEnd: QuantizedInstant,
         override val tx: Transaction,
         override val majorVersionProduced: BlockVersion.Major,

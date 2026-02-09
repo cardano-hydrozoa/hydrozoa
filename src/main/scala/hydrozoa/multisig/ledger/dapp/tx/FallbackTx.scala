@@ -46,6 +46,7 @@ object FallbackTx {
 private object FallbackTxOps {
     type Config = HeadConfig.Preinit.Section
 
+    // TODO: Distribute equity
     final case class Build(config: Config)(
         validityStartTime: QuantizedInstant,
         treasuryUtxoSpent: MultisigTreasuryUtxo,
