@@ -10,18 +10,34 @@ import com.bloxbean.cardano.client.backend.blockfrost.common.Constants
 import com.bloxbean.cardano.client.backend.blockfrost.service.BFBackendService
 import com.bloxbean.cardano.client.backend.model.{AssetTransactionContent, ScriptDatumCbor, TxContentRedeemers, TxContentUtxo}
 import com.bloxbean.cardano.client.plutus.spec.RedeemerTag
-import com.bloxbean.cardano.client.quicktx.TxResult
+import hydrozoa.multisig.backend.cardano.CardanoBackend.Error
 import hydrozoa.multisig.backend.cardano.CardanoBackend.Error.*
 import io.bullet.borer.Cbor
 import scala.collection.mutable
+import scala.concurrent.Await
+import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.duration.DurationInt
 import scala.jdk.CollectionConverters.*
 import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.{Address, ShelleyAddress}
-import scalus.cardano.ledger.{AssetName, PolicyId, Transaction, TransactionHash, TransactionInput, TransactionOutput, Utxos}
+import scalus.cardano.ledger.{AssetName, PolicyId, ProtocolParams, Transaction, TransactionHash, TransactionInput, TransactionOutput, Utxos}
+import scalus.cardano.node.BlockfrostProvider
+import sttp.client4.DefaultFutureBackend
 
+/** Cardano backend to use with Blockfrost-compatible API. Currently uses both BloxBeans's
+  * [[BackendServive]] and Scalus' [[BlockfrostProvider]] for protocol parameters handle.
+  *
+  * @param backendService
+  *   BloxBean backend service
+  * @param pageSize
+  *   Used when paginating over methods of [[backendService]]
+  * @param blockfrostProvider
+  *   Used to fulfill get protocol parameters method
+  */
 class CardanoBackendBlockfrost private (
     private val backendService: BackendService,
-    private val pageSize: Int
+    private val pageSize: Int,
+    private val blockfrostProvider: BlockfrostProvider,
 ) extends CardanoBackend[IO] {
 
     override def utxosAt(address: ShelleyAddress): IO[Either[CardanoBackend.Error, Utxos]] =
@@ -333,30 +349,44 @@ class CardanoBackendBlockfrost private (
 
     override def submitTx(tx: Transaction): IO[Either[CardanoBackend.Error, Unit]] =
         IO {
-            backendService.getTransactionService.submitTransaction(tx.toCbor) match {
-                case result: TxResult if result.isSuccessful => Right(())
-                case result: TxResult                        => Left(Unexpected(result.getResponse))
-            }
+            val result = backendService.getTransactionService.submitTransaction(tx.toCbor)
+            if result.isSuccessful
+            then Right(())
+            else Left(Unexpected(result.getResponse))
         }.handleError(e =>
             Left(Unexpected(s"${e.getMessage}, caused by: ${
                     if e.getCause != null then e.getCause.getMessage else "N/A"
                 }"))
         )
+
+    def latestParams: IO[Either[Error, ProtocolParams]] =
+        IO { Right(Await.result(blockfrostProvider.fetchLatestParams, 10.seconds)) }
+            .handleError(e =>
+                Left(Unexpected(s"${e.getMessage}, caused by: ${
+                        if e.getCause != null then e.getCause.getMessage else "N/A"
+                    }"))
+            )
 }
 
 object CardanoBackendBlockfrost:
 
+    // TODO: use uri from sttp?
     type URL = String
     type ApiKey = String
 
     def apply(
         url: Either[Network, URL],
-        apiKey: ApiKey,
+        apiKey: ApiKey = "",
         pageSize: Int = 100
     ): IO[CardanoBackendBlockfrost] =
         IO {
-            val backendService = BFBackendService(url.fold(_.url, x => x), apiKey)
-            new CardanoBackendBlockfrost(backendService, pageSize)
+            val baseUrl = url.fold(_.url, x => x)
+            val backendService = BFBackendService(baseUrl, apiKey)
+            // Scalus Blockfrost provider
+            given sttp.client4.Backend[scala.concurrent.Future] = DefaultFutureBackend()
+            val blockfrostProvider = BlockfrostProvider(apiKey, baseUrl)
+            //
+            new CardanoBackendBlockfrost(backendService, pageSize, blockfrostProvider)
         }
 
     enum Network(val url: String):

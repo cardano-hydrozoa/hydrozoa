@@ -95,7 +95,7 @@ object ArbitraryEventsOnly extends CommandGen[ModelState, Stage1Sut]:
                               state.currentTime.instant,
                               settlementExpirationTime,
                               state.competingFallbackStartTime,
-                              state.slotConfig
+                              state.cardanoInfo.slotConfig
                             )
                             .map(AnyCommand(_))
 

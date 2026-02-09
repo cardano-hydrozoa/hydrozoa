@@ -2,6 +2,7 @@ package hydrozoa.multisig.consensus
 
 import cats.effect.{IO, Ref}
 import cats.implicits.*
+import com.bloxbean.cardano.client.util.HexUtil
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant}
@@ -219,12 +220,16 @@ trait CardanoLiaison(
 
     override def receive: Receive[IO, Request] = {
         case block: BlockConfirmed.Major =>
-            handleMajorBlockL1Effects(block) >> runEffects
+            logger.info("Handling major block effects...") >> handleMajorBlockL1Effects(
+              block
+            ) >> runEffects
         case block: BlockConfirmed.Final =>
-            handleFinalBlockL1Effects(block) >> runEffects
+            logger.info("Handling final block effects...") >> handleFinalBlockL1Effects(
+              block
+            ) >> runEffects
         case CardanoLiaison.Timeout =>
-            // IO.println("Timeout") >>
-            runEffects
+            logger.info("Timeout received, run effects...") >>
+                runEffects
     }
 
     // ===================================
@@ -433,8 +438,13 @@ trait CardanoLiaison(
 
                     submitRet <-
                         if actionsToSubmit.nonEmpty then
-                            IO.traverse(actionsToSubmit.flatMap(actionTxs).toList)(
-                              config.cardanoBackend.submitTx
+                            IO.traverse(actionsToSubmit.flatMap(actionTxs).toList)(tx =>
+                                for {
+                                    _ <- logger.trace(
+                                      s"Submitting tx hash: ${tx.id} cbor: ${HexUtil.encodeHexString(tx.toCbor)}"
+                                    )
+                                    ret <- config.cardanoBackend.submitTx(tx)
+                                } yield ret
                             )
                         else IO.pure(List.empty)
 

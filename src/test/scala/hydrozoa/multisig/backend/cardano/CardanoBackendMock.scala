@@ -6,12 +6,13 @@ import cats.effect.{IO, Ref}
 import cats.syntax.all.catsSyntaxFlatMapOps
 import cats.~>
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.multisig.backend.cardano.CardanoBackend.Error
 import monocle.Focus.focus
 import scalus.builtin.Data
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.rules.STS.Mutator
 import scalus.cardano.ledger.rules.{CardanoMutator, Context, State as LedgerState}
-import scalus.cardano.ledger.{AssetName, PolicyId, RedeemerTag, Slot, Transaction, TransactionHash, Utxos, Value}
+import scalus.cardano.ledger.{AssetName, PolicyId, ProtocolParams, RedeemerTag, Slot, Transaction, TransactionHash, Utxos, Value}
 
 final case class MockState(
     ledgerState: LedgerState,
@@ -161,6 +162,11 @@ class CardanoBackendMock private (
         } yield ret
     }
 
+    def latestParams: MockStateF[Either[Error, ProtocolParams]] = {
+        // As long as paramters don't depend on the slot number it's fine
+        State.pure(Right(mkContext(0).env.params))
+    }
+
     def setSlot(currentSlot: Slot): MockStateF[Unit] = {
         modify[MockState](s => s.focus(_.currentSlot).replace(currentSlot))
     }
@@ -222,6 +228,9 @@ object CardanoBackendMock {
 
                 override def submitTx(tx: Transaction): IO[Either[CardanoBackend.Error, Unit]] =
                     transformer(mock.submitTx(tx))
+
+                def latestParams: IO[Either[Error, ProtocolParams]] =
+                    transformer(mock.latestParams)
             }
         }
 }
