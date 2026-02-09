@@ -615,6 +615,9 @@ object Generators {
                 })
             } yield NonEmptyList.fromListUnsafe(summed)
 
+        /** Like [[genCoinDistributionWithMinAda]], but replaces the transaction output for a given
+          * list of utxos.
+          */
         def genCoinDistributionWithMinAdaUtxo(
             coin: Coin,
             utxoList: NonEmptyList[Utxo],
