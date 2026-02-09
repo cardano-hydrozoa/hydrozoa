@@ -22,7 +22,7 @@ import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend, ValidityEndSlot}
 
-final case class DepositTx private (
+final case class DepositTx(
     depositProduced: DepositUtxo,
     validityEnd: QuantizedInstant,
     override val tx: Transaction,
@@ -31,24 +31,29 @@ final case class DepositTx private (
 ) extends Tx[DepositTx]
 
 object DepositTx {
+    export DepositTxOps.{Build, Parse}
+}
+
+private object DepositTxOps {
     type Config = CardanoNetwork.Section & HeadPeers.Section & TxTiming.Section
     // FIXME: We need InitialBlock.Section in the config, so that we can add
     //  multisigRegimeUtxo as a reference input (not for its script).
     //  This is how the deposit tx gets rolled back if the init tx is rolled back.
 
-    final case class Builder(
-        config: Config,
-        partialRefundTx: RefundTx.Builder.PartialResult[RefundTx.PostDated],
+    final case class Build(config: Config)(
+        partialRefundTx: RefundTx.PartialResult[RefundTx.PostDated],
         utxosFunding: NonEmptyList[Utxo],
         virtualOutputs: NonEmptyList[GenesisObligation],
         donationToTreasury: Coin,
         changeAddress: ShelleyAddress,
     ) {
-        def build(): Either[(SomeBuildError, String), DepositTx] = {
+        def result: Either[(SomeBuildError, String), DepositTx] = {
             import partialRefundTx.refundInstructions
 
-            val virtualOutputsCbor: Array[Byte] =
-                Cbor.encode(virtualOutputs.toList.map(_.toBabbage)).toByteArray
+            val virtualOutputsRaw: List[TransactionOutput.Babbage] =
+                virtualOutputs.toList.map(_.toBabbage)
+
+            val virtualOutputsCbor: Array[Byte] = Cbor.encode(virtualOutputsRaw).toByteArray
 
             val virtualOutputsHash: Hash32 = Hash[Blake2b_256, Any](
               platform.blake2b_256(ByteString.unsafeFromArray(virtualOutputsCbor))
@@ -135,91 +140,98 @@ object DepositTx {
         }
     }
 
-    sealed trait ParseError extends Throwable
+    object Parse {
+        type ParseErrorOr[A] = Either[Error, A]
 
-    case class MetadataParseError(e: MD.ParseError) extends ParseError
-
-    case class HashMismatchVirtualOutputs(
-        virtualOutputs: NonEmptyList[GenesisObligation],
-        hash: Hash32
-    ) extends ParseError
-
-    case class MissingDepositOutputAtIndex(e: Int) extends ParseError
-
-    case class DepositUtxoError(e: DepositUtxo.DepositUtxoConversionError) extends ParseError
-
-    case class TxCborDeserializationFailed(e: Throwable) extends ParseError
-
-    case class ValidityEndParseError(e: Throwable) extends ParseError
+        enum Error extends Throwable {
+            case MetadataParseError(e: MD.ParseError)
+            case HashMismatchVirtualOutputs(
+                virtualOutputs: NonEmptyList[GenesisObligation],
+                hash: Hash32
+            )
+            case MissingDepositOutputAtIndex(e: Int)
+            case DepositUtxoError(e: DepositUtxo.DepositUtxoConversionError)
+            case TxCborDeserializationFailed(e: Throwable)
+            case ValidityEndParseError(e: Throwable)
+        }
+    }
 
     /** Parse a deposit transaction, ensuring that there is exactly one Babbage Utxo at the head
       * address (given in the transaction metadata) with an Inline datum that parses correctly.
       */
-    def parse(
+    final case class Parse(config: Config)(
         txBytes: Tx.Serialized,
-        config: DepositTx.Config,
         virtualOutputs: NonEmptyList[GenesisObligation]
-    ): Either[ParseError, DepositTx] = {
+    ) {
+        import Parse.*
+        import Parse.Error.*
+
         given ProtocolVersion = config.cardanoProtocolVersion
-        given OriginalCborByteArray = OriginalCborByteArray(txBytes)
 
-        val virtualOutputsList = virtualOutputs.toList
+        def result: ParseErrorOr[DepositTx] = {
+            given OriginalCborByteArray = OriginalCborByteArray(txBytes)
 
-        io.bullet.borer.Cbor.decode(txBytes).to[Transaction].valueTry match {
-            case Success(tx) =>
-                for {
-                    // Pull head address from metadata
-                    d <- MD
-                        .parse(tx) match {
-                        case Right(d: Metadata.Deposit) => Right(d)
-                        case Right(o) => Left(MetadataParseError(MD.UnexpectedTxType(o, "Deposit")))
-                        case Left(e)  => Left(MetadataParseError(e))
-                    }
-                    Metadata.Deposit(headAddress, depositUtxoIx, virtualOutputsHash) = d
+            val virtualOutputsList = virtualOutputs.toList
 
-                    // Compare hash with virtual outputs
-                    virtualOutputsCbor: Array[Byte] = Cbor
-                        .encode(virtualOutputsList.map(_.toBabbage))
-                        .toByteArray
-                    calculatedVirtualOutputsHash: Hash32 = Hash[Blake2b_256, Any](
-                      platform.blake2b_256(ByteString.unsafeFromArray(virtualOutputsCbor))
-                    )
-                    _ <- Either.cond(
-                      virtualOutputsHash == calculatedVirtualOutputsHash,
-                      (),
-                      HashMismatchVirtualOutputs(virtualOutputs, virtualOutputsHash)
-                    )
+            io.bullet.borer.Cbor.decode(txBytes).to[Transaction].valueTry match {
+                case Success(tx) =>
+                    for {
+                        // Pull head address from metadata
+                        d <- MD
+                            .parse(tx) match {
+                            case Right(d: Metadata.Deposit) => Right(d)
+                            case Right(o) =>
+                                Left(MetadataParseError(MD.UnexpectedTxType(o, "Deposit")))
+                            case Left(e) => Left(MetadataParseError(e))
+                        }
+                        Metadata.Deposit(headAddress, depositUtxoIx, virtualOutputsHash) = d
 
-                    // Grab the deposit output at the index specified in the metadata
-                    depositOutput <- tx.body.value.outputs
-                        .lift(depositUtxoIx)
-                        .toRight(MissingDepositOutputAtIndex(depositUtxoIx))
+                        // Compare hash with virtual outputs
+                        virtualOutputsRaw: List[TransactionOutput.Babbage] =
+                            virtualOutputsList.map(_.toBabbage)
 
-                    validityEnd <- Try {
-                        val ttlSlot = tx.body.value.ttl.get
-                        val ttlPosixMillis = config.slotConfig.slotToTime(ttlSlot)
-                        val instant = java.time.Instant.ofEpochMilli(ttlPosixMillis)
-                        instant.quantizeLosslessUnsafe(config.slotConfig)
-                    } match {
-                        case Failure(exception) => Left(ValidityEndParseError(exception))
-                        case Success(v)         => Right(v)
-                    }
-
-                    depositUtxo <- DepositUtxo
-                        .fromUtxo(
-                          Utxo(TransactionInput(tx.id, depositUtxoIx), depositOutput.value),
-                          config.headMultisigAddress,
-                          virtualOutputs,
-                          absorptionStart = validityEnd + config.txTiming.depositMaturityDuration,
-                          absorptionEnd =
-                              validityEnd + config.txTiming.depositMaturityDuration + config.txTiming.depositAbsorptionDuration
+                        virtualOutputsCbor: Array[Byte] = Cbor.encode(virtualOutputsRaw).toByteArray
+                        calculatedVirtualOutputsHash: Hash32 = Hash[Blake2b_256, Any](
+                          platform.blake2b_256(ByteString.unsafeFromArray(virtualOutputsCbor))
                         )
-                        .left
-                        .map(DepositUtxoError(_))
+                        _ <- Either.cond(
+                          virtualOutputsHash == calculatedVirtualOutputsHash,
+                          (),
+                          HashMismatchVirtualOutputs(virtualOutputs, virtualOutputsHash)
+                        )
 
-                } yield DepositTx(depositUtxo, validityEnd, tx)
-            case Failure(e) => Left(TxCborDeserializationFailed(e))
+                        // Grab the deposit output at the index specified in the metadata
+                        depositOutput <- tx.body.value.outputs
+                            .lift(depositUtxoIx)
+                            .toRight(MissingDepositOutputAtIndex(depositUtxoIx))
+
+                        validityEnd <- Try {
+                            val ttlSlot = tx.body.value.ttl.get
+                            val ttlPosixMillis = config.slotConfig.slotToTime(ttlSlot)
+                            val instant = java.time.Instant.ofEpochMilli(ttlPosixMillis)
+                            instant.quantizeLosslessUnsafe(config.slotConfig)
+                        } match {
+                            case Failure(exception) => Left(ValidityEndParseError(exception))
+                            case Success(v)         => Right(v)
+                        }
+
+                        depositUtxo <- DepositUtxo
+                            .fromUtxo(
+                              Utxo(TransactionInput(tx.id, depositUtxoIx), depositOutput.value),
+                              config.headMultisigAddress,
+                              virtualOutputs,
+                              absorptionStart =
+                                  validityEnd + config.txTiming.depositMaturityDuration,
+                              absorptionEnd =
+                                  validityEnd + config.txTiming.depositMaturityDuration + config.txTiming.depositAbsorptionDuration
+                            )
+                            .left
+                            .map(DepositUtxoError(_))
+
+                    } yield DepositTx(depositUtxo, validityEnd, tx)
+                case Failure(e) => Left(TxCborDeserializationFailed(e))
+            }
+
         }
-
     }
 }

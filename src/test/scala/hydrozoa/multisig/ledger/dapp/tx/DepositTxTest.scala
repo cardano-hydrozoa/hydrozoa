@@ -29,7 +29,7 @@ var counter = AtomicLong(0L)
 def genDepositRecipe(
     estimatedFee: Coin = Coin(5_000_000L),
     params: ProtocolParams = blockfrost544Params
-): Gen[DepositTx.Builder] =
+): Gen[DepositTx.Build] =
     for {
         depositor <- genTestPeer
         headAddress <- genScriptAddress()
@@ -86,7 +86,7 @@ def genDepositRecipe(
 
         refundAddr <- genPubkeyAddress()
 
-        partialRefundTx = RefundTx.Builder.PartialResult.PostDated(
+        partialRefundTx = RefundTx.Build.PartialResult.PostDated(
           ctx = TransactionBuilder.Context.empty(testNetwork),
           inputValueNeeded = depositAmount,
           refundInstructions = DepositUtxo.Refund.Instructions(
@@ -101,7 +101,7 @@ def genDepositRecipe(
 
         depositConfig = DepositTx.Config(testTxBuilderCardanoInfo, headAddress, testTxTiming)
 
-    } yield DepositTx.Builder(
+    } yield DepositTx.Build(
       config = depositConfig,
       partialRefundTx = partialRefundTx,
       utxosFunding = fundingUtxos,

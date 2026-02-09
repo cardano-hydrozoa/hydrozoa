@@ -86,13 +86,13 @@ object DappLedgerM {
             config <- ask
             parseRes =
                 DepositRefundTxSeq
-                    .parse(
+                    .Parse(config)(
                       depositTxBytes = depositTxBytes,
                       refundTxBytes = refundTxBytes,
-                      config = config,
                       virtualOutputsBytes = virtualOutputsBytes,
                       donationToTreasury = donationToTreasury,
                     )
+                    .result
                     .left
                     .map(ParseError(_))
             depositRefundTxSeq <- lift(parseRes)
@@ -216,7 +216,7 @@ object DappLedgerM {
 
         sealed trait RegisterDepositError extends DappLedgerM.Error
 
-        final case class ParseError(wrapped: txseq.DepositRefundTxSeq.ParseError)
+        final case class ParseError(wrapped: txseq.DepositRefundTxSeq.Parse.Error)
             extends RegisterDepositError
 
         /** This is raised during a call to `RegisterDeposit` if the deposit parses successfully,

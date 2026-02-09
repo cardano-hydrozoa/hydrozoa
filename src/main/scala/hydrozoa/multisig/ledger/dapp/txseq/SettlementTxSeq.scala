@@ -34,6 +34,12 @@ enum SettlementTxSeq {
 }
 
 object SettlementTxSeq {
+    export SettlementTxSeqOps.Build
+}
+
+private object SettlementTxSeqOps {
+    type Config = HeadConfig.Section
+
     final case class Result(
         settlementTxSeq: SettlementTxSeq,
         override val depositsSpent: Vector[DepositUtxo],
@@ -41,15 +47,13 @@ object SettlementTxSeq {
     ) extends DepositUtxo.Many.Spent.Partition
 
     object Build {
-        type Config = HeadConfig.Section
-
         enum Error:
             case SettlementError(e: (SomeBuildError, String))
             case RolloutSeqError(e: (SomeBuildError, String))
             case FallbackError(e: SomeBuildError)
     }
 
-    final case class Build(config: Build.Config)(
+    final case class Build(config: Config)(
         override val kzgCommitment: KzgCommitment,
         override val majorVersionProduced: BlockVersion.Major,
         override val treasuryToSpend: MultisigTreasuryUtxo,

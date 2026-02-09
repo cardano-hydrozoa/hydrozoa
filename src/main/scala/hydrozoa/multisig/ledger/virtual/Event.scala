@@ -2,11 +2,9 @@ package hydrozoa.multisig.ledger.virtual
 
 import cats.syntax.all.*
 import hydrozoa.*
-import hydrozoa.multisig.ledger.dapp.txseq.DepositRefundTxSeq.ParseError
-import hydrozoa.multisig.ledger.dapp.txseq.DepositRefundTxSeq.ParseError.*
+import hydrozoa.multisig.ledger.dapp.txseq.DepositRefundTxSeq
 import scala.collection.immutable.Queue
 import scalus.builtin.Data
-import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.Script.Native
@@ -60,7 +58,7 @@ case class GenesisObligation(
           address = ShelleyAddress(
             network = l2OutputNetwork,
             payment = l2OutputPaymentAddress,
-            delegation = Null
+            delegation = ShelleyDelegationPart.Null
           ),
           value = Value(l2OutputValue),
           datumOption = l2OutputDatum match {
@@ -72,7 +70,10 @@ case class GenesisObligation(
 }
 
 object GenesisObligation {
-    def fromTransactionOutput(to: TransactionOutput): Either[ParseError, GenesisObligation] =
+    import DepositRefundTxSeq.Parse.ParseErrorOr
+    import DepositRefundTxSeq.Parse.Error.*
+
+    def fromTransactionOutput(to: TransactionOutput): ParseErrorOr[GenesisObligation] =
         to match {
             case o: TransactionOutput.Babbage =>
                 for {

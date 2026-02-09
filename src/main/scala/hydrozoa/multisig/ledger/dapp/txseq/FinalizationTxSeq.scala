@@ -32,9 +32,13 @@ enum FinalizationTxSeq {
 }
 
 object FinalizationTxSeq {
-    object Build {
-        type Config = HeadConfig.Section
+    export FinalizationTxSeqOps.Build
+}
 
+private object FinalizationTxSeqOps {
+    type Config = HeadConfig.Section
+
+    object Build {
         enum Error:
             case SettlementError(e: (SomeBuildError, String))
             case DeinitTxError(e: (SomeBuildError, String))
@@ -42,7 +46,7 @@ object FinalizationTxSeq {
             case RolloutSeqError(e: (SomeBuildError, String))
     }
 
-    final case class Build(config: Build.Config)(
+    final case class Build(config: Config)(
         override val majorVersionProduced: BlockVersion.Major,
         override val treasuryToSpend: MultisigTreasuryUtxo,
         override val payoutObligationsRemaining: Vector[Payout.Obligation],

@@ -31,8 +31,7 @@ final case class RolloutTxSeq(
 }
 
 object RolloutTxSeq {
-    export RolloutTxSeqOps.Build
-    export RolloutTxSeqOps.PartialResult
+    export RolloutTxSeqOps.{Build, PartialResult}
 }
 
 private object RolloutTxSeqOps {
