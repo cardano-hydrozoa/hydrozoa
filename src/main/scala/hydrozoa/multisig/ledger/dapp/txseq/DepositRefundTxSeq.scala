@@ -166,6 +166,7 @@ private object DepositRefundTxSeqOps {
         donationToTreasury: Coin,
     ) {
         import Parse.*
+
         def result: ParseErrorOr[DepositRefundTxSeq] = {
             for {
                 virtualOutputs: NonEmptyList[GenesisObligation] <- for {
@@ -175,8 +176,8 @@ private object DepositRefundTxSeqOps {
                         .valueTry
                         .toEither
                         .left
-                        .map(ParseError.VirtualOutputs(_))
-                    nonEmpty <- NonEmptyList.fromList(parsed).toRight(ParseError.NoVirtualOutputs)
+                        .map(Parse.Error.VirtualOutputs(_))
+                    nonEmpty <- NonEmptyList.fromList(parsed).toRight(Parse.Error.NoVirtualOutputs)
                     // This whole inner traverse could probably be factored out just to parse a genesis obligation from
                     // a transaction output
                     genesisObligations <- nonEmpty.traverse[ParseErrorOr, GenesisObligation](
@@ -192,16 +193,16 @@ private object DepositRefundTxSeqOps {
                     .Parse(config)(txBytes = depositTxBytes, virtualOutputs = virtualOutputs)
                     .result
                     .left
-                    .map(ParseError.Deposit(_))
+                    .map(Parse.Error.Deposit(_))
 
                 refundTxAny <- RefundTx
                     .Parse(config)(refundTxBytes)
                     .result
                     .left
-                    .map(ParseError.Refund(_))
+                    .map(Parse.Error.Refund(_))
                 refundTx <- refundTxAny match {
                     case tx: RefundTx.PostDated => Right(tx)
-                    case _                      => Left(ParseError.RefundNotPostDated)
+                    case _                      => Left(Parse.Error.RefundNotPostDated)
                 }
 
                 depositUtxo = depositTx.depositProduced
@@ -218,12 +219,12 @@ private object DepositRefundTxSeqOps {
                     .partialResult
                     .flatMap(_.complete(depositUtxo, config))
                     .left
-                    .map(ParseError.ExpectedRefundBuildError(_))
+                    .map(Parse.Error.ExpectedRefundBuildError(_))
 
                 _ <- Either.cond(
                   depositValue == expectedDepositValue,
                   (),
-                  ParseError.DepositValueMismatch(depositValue, expectedDepositValue)
+                  Parse.Error.DepositValueMismatch(depositValue, expectedDepositValue)
                 )
 
                 _ <- Either.cond(
@@ -231,7 +232,7 @@ private object DepositRefundTxSeqOps {
                       .focus(_.tx.witnessSet)
                       .replace(TransactionWitnessSet.empty) == expectedRefundTx,
                   (),
-                  ParseError.RefundTxMismatch(refundTx, expectedRefundTx)
+                  Parse.Error.RefundTxMismatch(refundTx, expectedRefundTx)
                 )
 
                 _ <- Either
@@ -242,7 +243,7 @@ private object DepositRefundTxSeqOps {
                           && refundTx.startTime == depositTx.depositProduced.datum.refundInstructions.startTime
                               .toEpochQuantizedInstant(config.slotConfig),
                       (),
-                      ParseError.TimingIncoherence // we don't return a DepositRefundTxSeq, because it's not valid
+                      Parse.Error.TimingIncoherence // we don't return a DepositRefundTxSeq, because it's not valid
                     )
 
             } yield DepositRefundTxSeq(depositTx, refundTx)
