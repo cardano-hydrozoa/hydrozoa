@@ -1,15 +1,16 @@
 package hydrozoa.config.head.peers
 
 import cats.data.{NonEmptyList, NonEmptyMap}
-import hydrozoa.VerificationKeyBytes
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
+import scalus.cardano.ledger.AddrKeyHash
+import scalus.crypto.ed25519.VerificationKey
 
 final case class HeadPeers private (
-    override val headPeerVKeys: NonEmptyList[VerificationKeyBytes]
+    override val headPeerVKeys: NonEmptyList[VerificationKey]
 ) extends HeadPeers.Section {
     require(headPeerVKeys.size > 0)
 
@@ -23,10 +24,10 @@ final case class HeadPeers private (
     override def headPeerIds: NonEmptyList[HeadPeerId] =
         headPeerNums.map(HeadPeerId(_, nHeadPeers))
 
-    override def headPeerVKey(p: HeadPeerNumber): Option[VerificationKeyBytes] =
+    override def headPeerVKey(p: HeadPeerNumber): Option[VerificationKey] =
         Option.when(p < nHeadPeers)(headPeerVKeys.toList(p))
 
-    override def headPeerVKey(p: HeadPeerId): Option[VerificationKeyBytes] =
+    override def headPeerVKey(p: HeadPeerId): Option[VerificationKey] =
         Option.when(p.nHeadPeers == nHeadPeers)(headPeerVKeys.toList(p.peerNum))
 
     override lazy val headMultisigScript: HeadMultisigScript = HeadMultisigScript(this)
@@ -35,10 +36,10 @@ final case class HeadPeers private (
 }
 
 object HeadPeers {
-    def apply(headPeerVKeys: NonEmptyList[VerificationKeyBytes]): HeadPeers =
+    def apply(headPeerVKeys: NonEmptyList[VerificationKey]): HeadPeers =
         new HeadPeers(headPeerVKeys)
 
-    def apply(headPeerVKeys: List[VerificationKeyBytes]): Option[HeadPeers] = for {
+    def apply(headPeerVKeys: List[VerificationKey]): Option[HeadPeers] = for {
         neHeadPeerVKeys <- NonEmptyList.fromList(headPeerVKeys)
     } yield new HeadPeers(neHeadPeerVKeys)
 
@@ -48,10 +49,10 @@ object HeadPeers {
         def headPeerNums: NonEmptyList[HeadPeerNumber]
         def headPeerIds: NonEmptyList[HeadPeerId]
 
-        def headPeerVKeys: NonEmptyList[VerificationKeyBytes]
+        def headPeerVKeys: NonEmptyList[VerificationKey]
 
-        def headPeerVKey(p: HeadPeerNumber): Option[VerificationKeyBytes]
-        def headPeerVKey(p: HeadPeerId): Option[VerificationKeyBytes]
+        def headPeerVKey(p: HeadPeerNumber): Option[VerificationKey]
+        def headPeerVKey(p: HeadPeerId): Option[VerificationKey]
 
         def headMultisigScript: HeadMultisigScript
 
@@ -66,11 +67,11 @@ object HeadPeers {
 
             config.headPeerNums
                 .zip(config.headPeerVKeys)
-                .map((pNum, vKeyBytes) =>
+                .map((pNum, vKey) =>
                     pNum ->
                         ShelleyAddress(
                           network = config.network,
-                          payment = ShelleyPaymentPart.Key(vKeyBytes.verKeyHash),
+                          payment = ShelleyPaymentPart.Key(AddrKeyHash(vKey)),
                           delegation = ShelleyDelegationPart.Null
                         )
                 )

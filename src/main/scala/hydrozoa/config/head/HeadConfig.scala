@@ -1,7 +1,6 @@
 package hydrozoa.config.head
 
 import cats.data.{NonEmptyList, NonEmptyMap}
-import hydrozoa.VerificationKeyBytes
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.multisig.timing.TxTiming
@@ -18,6 +17,7 @@ import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.{CardanoInfo, Coin, Hash32, ProtocolParams, SlotConfig, TransactionOutput, Utxo, Utxos, Value}
+import scalus.crypto.ed25519.VerificationKey
 
 final case class HeadConfig private (
     override val cardanoNetwork: CardanoNetwork,
@@ -99,15 +99,15 @@ object HeadConfig {
                 headPeers.headPeerNums
             override transparent inline def headPeerIds: NonEmptyList[HeadPeerId] =
                 headPeers.headPeerIds
-            override transparent inline def headPeerVKeys: NonEmptyList[VerificationKeyBytes] =
+            override transparent inline def headPeerVKeys: NonEmptyList[VerificationKey] =
                 headPeers.headPeerVKeys
             override transparent inline def headPeerVKey(
                 p: HeadPeerNumber
-            ): Option[VerificationKeyBytes] =
+            ): Option[VerificationKey] =
                 headPeers.headPeerVKey(p)
             override transparent inline def headPeerVKey(
                 p: HeadPeerId
-            ): Option[VerificationKeyBytes] =
+            ): Option[VerificationKey] =
                 headPeers.headPeerVKey(p)
             override transparent inline def nHeadPeers: PositiveInt =
                 headPeers.nHeadPeers

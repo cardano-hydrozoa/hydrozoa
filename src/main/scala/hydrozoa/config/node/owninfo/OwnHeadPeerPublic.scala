@@ -1,13 +1,13 @@
 package hydrozoa.config.node.owninfo
 
-import hydrozoa.VerificationKeyBytes
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
+import scalus.crypto.ed25519.VerificationKey
 
 final case class OwnHeadPeerPublic private[owninfo] (
     override val ownHeadPeerId: HeadPeerId,
-    override val ownHeadVKey: VerificationKeyBytes,
+    override val ownHeadVKey: VerificationKey,
 ) extends OwnHeadPeerPublic.Section {
     override transparent inline def ownHeadPeerPublic: OwnHeadPeerPublic = this
 
@@ -29,6 +29,6 @@ object OwnHeadPeerPublic {
 
         def ownHeadPeerId: HeadPeerId
 
-        def ownHeadVKey: VerificationKeyBytes
+        def ownHeadVKey: VerificationKey
     }
 }

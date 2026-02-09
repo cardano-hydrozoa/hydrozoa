@@ -1,8 +1,8 @@
 package hydrozoa.config.node.owninfo
 
-import hydrozoa.VerificationKeyBytes
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber, HeadPeerWallet}
+import scalus.crypto.ed25519.VerificationKey
 
 final case class OwnHeadPeerPrivate private (
     override val ownHeadWallet: HeadPeerWallet,
@@ -14,7 +14,7 @@ final case class OwnHeadPeerPrivate private (
 object OwnHeadPeerPrivate {
     def apply(ownHeadWallet: HeadPeerWallet, headPeers: HeadPeers): Option[OwnHeadPeerPrivate] =
         val ownPeerNum: HeadPeerNumber = ownHeadWallet.getPeerNum
-        val walletKey: VerificationKeyBytes = ownHeadWallet.exportVerificationKeyBytes
+        val walletKey: VerificationKey = ownHeadWallet.exportVerificationKey
         for {
             ownHeadPeerPublic <- OwnHeadPeerPublic(ownPeerNum, headPeers)
             _ <- Option.when(walletKey == ownHeadPeerPublic.ownHeadVKey)(())
@@ -27,6 +27,6 @@ object OwnHeadPeerPrivate {
 
         override def ownHeadPeerId: HeadPeerId = ownHeadPeerPublic.ownHeadPeerId
         override def ownHeadPeerNum: HeadPeerNumber = ownHeadPeerPublic.ownHeadPeerNum
-        override def ownHeadVKey: VerificationKeyBytes = ownHeadPeerPublic.ownHeadVKey
+        override def ownHeadVKey: VerificationKey = ownHeadPeerPublic.ownHeadVKey
     }
 }

@@ -1,12 +1,12 @@
 package hydrozoa.multisig.consensus.peer
 
-import hydrozoa.VerificationKeyBytes
 import hydrozoa.lib.cardano.wallet.*
 import hydrozoa.multisig.consensus.ack.{AckBlock, AckId, AckNumber}
 import hydrozoa.multisig.ledger.block.{Block, BlockHeader}
 import hydrozoa.multisig.ledger.dapp.tx.TxSignature
 import scala.language.implicitConversions
 import scalus.cardano.ledger.{Transaction, VKeyWitness}
+import scalus.crypto.ed25519.VerificationKey
 
 final class HeadPeerWallet(
     peerNum: HeadPeerNumber,
@@ -17,9 +17,9 @@ final class HeadPeerWallet(
     def getPeerNum: HeadPeerNumber = peerNum
 
     private lazy val verificationKeysBytes =
-        walletModule.exportVerificationKeyBytes(verificationKey)
+        walletModule.exportVerificationKey(verificationKey)
 
-    def exportVerificationKeyBytes: VerificationKeyBytes = verificationKeysBytes
+    def exportVerificationKey: VerificationKey = verificationKeysBytes
 
     def mkVKeyWitness(tx: Transaction): VKeyWitness =
         walletModule.signTx(tx, verificationKey, signingKey)

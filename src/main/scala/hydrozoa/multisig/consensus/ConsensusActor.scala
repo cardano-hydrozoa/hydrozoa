@@ -5,6 +5,7 @@ import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
+import hydrozoa.attachVKeyWitnesses
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
 import hydrozoa.multisig.MultisigRegimeManager
@@ -13,11 +14,11 @@ import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockHeader.Minor.HeaderSignature
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader, BlockNumber}
 import hydrozoa.multisig.ledger.dapp.tx.{RefundTx, RolloutTx, Tx, TxSignature}
-import hydrozoa.{VerificationKeyBytes, attachVKeyWitnesses}
 import scala.Function.tupled
 import scala.util.control.NonFatal
 import scalus.builtin.{ByteString, platform}
 import scalus.cardano.ledger.{TransactionHash, VKeyWitness}
+import scalus.crypto.ed25519.VerificationKey
 
 /** Round one own acks, which must be scheduled immediately upon receiving. There is no way to
   * separate own acks from others' acks at the type level, but this alias is those alias is used
@@ -681,13 +682,13 @@ class ConsensusActor(
           */
         def validateAndAttachTxSignature[T <: Tx[T]](
             someTx: T,
-            vkeysAndSigs: List[(VerificationKeyBytes, TxSignature)]
+            vkeysAndSigs: List[(VerificationKey, TxSignature)]
         ): IO[T] = {
             import someTx.*
             for {
                 txId <- IO.pure(tx.id)
                 vkeyWitnesses <- IO.pure(
-                  vkeysAndSigs.map((vk, sig) => VKeyWitness.apply(vk.bytes, sig))
+                  vkeysAndSigs.map((vk, sig) => VKeyWitness.apply(vk, sig))
                 )
                 _ <- IO.traverse_(vkeyWitnesses)(w =>
                     IO.delay(platform.verifyEd25519Signature(w.vkey, txId, w.signature))
@@ -714,7 +715,7 @@ class ConsensusActor(
         final case class MinorConsensusCell(
             override val blockNum: BlockNumber,
             block: Option[Block.Unsigned.Minor],
-            acks: Map[VerificationKeyBytes, AckBlock.Minor],
+            acks: Map[VerificationKey, AckBlock.Minor],
             postponedNextBlockOwnAck: Option[RoundOneOwnAck]
         ) extends ConsensusCell[MinorConsensusCell]
             with PostponedAckSupport[MinorConsensusCell] {
@@ -770,11 +771,11 @@ class ConsensusActor(
 
                 def validateHeaderSignature(
                     msg: BlockHeader.Minor.Onchain.Serialized
-                )(vk: VerificationKeyBytes, sig: HeaderSignature): IO[Unit] =
-                    IO.delay(platform.verifyEd25519Signature(vk.bytes, msg, sig))
+                )(vk: VerificationKey, sig: HeaderSignature): IO[Unit] =
+                    IO.delay(platform.verifyEd25519Signature(vk, msg, sig))
                         .handleErrorWith {
                             case NonFatal(_) =>
-                                IO.raiseError(CompletionError.WrongHeaderSignature(vk.bytes))
+                                IO.raiseError(CompletionError.WrongHeaderSignature(vk))
                             case e => IO.raiseError(e)
                         }
                         .void
@@ -835,8 +836,8 @@ class ConsensusActor(
         final case class MajorRoundOneCell(
             override val blockNum: BlockNumber,
             block: Option[Block.Unsigned.Major],
-            acks1: Map[VerificationKeyBytes, AckBlock.Major1],
-            acks2: Map[VerificationKeyBytes, AckBlock.Major2],
+            acks1: Map[VerificationKey, AckBlock.Major1],
+            acks2: Map[VerificationKey, AckBlock.Major2],
             postponedNextBlockOwnAck: Option[RoundOneOwnAck]
         ) extends MajorConsensusCell[MajorRoundOneCell] {
             import CollectingError.*
@@ -952,8 +953,8 @@ class ConsensusActor(
         final case class MajorRoundTwoCell(
             override val blockNum: BlockNumber,
             block: Block.Unsigned.Major,
-            acks1: Map[VerificationKeyBytes, AckBlock.Major1],
-            acks2: Map[VerificationKeyBytes, AckBlock.Major2],
+            acks1: Map[VerificationKey, AckBlock.Major1],
+            acks2: Map[VerificationKey, AckBlock.Major2],
             postponedNextBlockOwnAck: Option[RoundOneOwnAck]
         ) extends MajorConsensusCell[MajorRoundTwoCell] {
             import CollectingError.*
@@ -1057,8 +1058,8 @@ class ConsensusActor(
         final case class FinalRoundOneCell(
             override val blockNum: BlockNumber,
             block: Option[Block.Unsigned.Final],
-            acks1: Map[VerificationKeyBytes, AckBlock.Final1],
-            acks2: Map[VerificationKeyBytes, AckBlock.Final2]
+            acks1: Map[VerificationKey, AckBlock.Final1],
+            acks2: Map[VerificationKey, AckBlock.Final2]
         ) extends FinalConsensusCell[FinalRoundOneCell] {
             import CollectingError.*
 
@@ -1168,8 +1169,8 @@ class ConsensusActor(
         final case class FinalRoundTwoCell(
             override val blockNum: BlockNumber,
             block: Block.Unsigned.Final,
-            acks1: Map[VerificationKeyBytes, AckBlock.Final1],
-            acks2: Map[VerificationKeyBytes, AckBlock.Final2]
+            acks1: Map[VerificationKey, AckBlock.Final1],
+            acks2: Map[VerificationKey, AckBlock.Final2]
         ) extends FinalConsensusCell[FinalRoundTwoCell] {
             import CollectingError.*
 
