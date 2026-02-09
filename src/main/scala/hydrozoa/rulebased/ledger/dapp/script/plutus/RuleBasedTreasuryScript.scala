@@ -66,8 +66,6 @@ object RuleBasedTreasuryValidator extends Validator {
         "The activeUtxo in resolved treasury must match voting results"
     private inline val ResolveTreasuryInputOutputHeadMp =
         "headMp in treasuryInput and treasuryOutput must match"
-    private inline val ResolveTreasuryInputOutputParams =
-        "params in treasuryInput and treasuryOutput must match"
     private inline val ResolveTreasuryInputOutputSetup =
         "setup in treasuryInput and treasuryOutput must match"
     private inline val ResolveTreasuryOutputFailure =

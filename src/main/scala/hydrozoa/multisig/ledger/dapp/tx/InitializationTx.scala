@@ -6,6 +6,7 @@ import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
+import hydrozoa.ensureMinAda
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.token.CIP67.{HasTokenNames, HeadTokenNames}
@@ -13,7 +14,6 @@ import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.Initialization
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explainConst}
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
-import hydrozoa.{Utxo as _, *}
 import monocle.{Focus, Lens}
 import scala.util.Try
 import scalus.builtin.Data
@@ -48,6 +48,16 @@ private object InitializationTxOps {
     type Config = CardanoNetwork.Section & HeadPeers.Section & FallbackContingency.Section &
         TxTiming.Section & InitializationParameters.Section
 
+    private val logger = org.slf4j.LoggerFactory.getLogger("InitializationTx")
+
+    private def time[A](label: String)(block: => A): A = {
+        val start = System.nanoTime()
+        val result = block
+        val elapsed = (System.nanoTime() - start) / 1_000_000.0
+        logger.info(f"\t\t⏱️ $label: ${elapsed}%.2f ms")
+        result
+    }
+
     final case class Build(config: Config) {
         import Build.*
 
@@ -56,13 +66,17 @@ private object InitializationTxOps {
                 .cond(config.isBalancedInitializationFunding, (), ???)
                 .explainConst("Initialization tx funding is unbalanced")
 
-            unbalanced <- TransactionBuilder
-                .build(config.network, Steps())
-                .explainConst("Initialization tx build steps failed.")
+            unbalanced <- time("TransactionBuilder.build") {
+                TransactionBuilder
+                    .build(config.network, Steps())
+                    .explainConst("Initialization tx build steps failed.")
+            }
 
-            finalized <- TxBuilder
-                .finalizeContext(unbalanced)
-                .explainConst("Initialization tx failed to finalize")
+            finalized <- time("finalizeContext") {
+                TxBuilder
+                    .finalizeContext(unbalanced)
+                    .explainConst("Initialization tx failed to finalize")
+            }
 
             completed = Complete(finalized)
         } yield completed

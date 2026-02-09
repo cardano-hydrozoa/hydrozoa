@@ -13,6 +13,7 @@ import java.time.Instant
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
 import scala.concurrent.duration.{FiniteDuration, HOURS}
+import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.*
@@ -167,7 +168,9 @@ def genSettlementTxSeqBuilder(
         )
 
         kzg: KzgCommitment <- kzgCommitment match {
-            case None      => Gen.listOfN(48, Arbitrary.arbitrary[Byte]).map(IArray.from(_))
+            case None =>
+                Gen.listOfN(48, Arbitrary.arbitrary[Byte])
+                    .map(list => ByteString.fromArray(list.toArray))
             case Some(kzg) => Gen.const(kzg)
         }
 
@@ -252,7 +255,9 @@ def genNextSettlementTxSeqBuilder(
             // Since we have empty prefix that always satisfies the condition this is safe
             .get
         kzg: KzgCommitment <- kzgCommitment match {
-            case None      => Gen.listOfN(48, Arbitrary.arbitrary[Byte]).map(IArray.from(_))
+            case None =>
+                Gen.listOfN(48, Arbitrary.arbitrary[Byte])
+                    .map(list => ByteString.fromArray(list.toArray))
             case Some(kzg) => Gen.const(kzg)
         }
     } yield (

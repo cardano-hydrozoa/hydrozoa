@@ -4,19 +4,19 @@
 # To enable this, add a `./.just/notify` file.
 
 fmt:
-  - sbt scalafmtAll
+  - sbt fmtAll
   just notify "fmt"
 
 fmt-check:
-  - sbt scalafmtCheck
+  - sbt fmtCheckAll
   just notify "fmt-check"
 
 lint:
-  - sbt scalafixAll
+  - sbt lintAll
   just notify "lint"
 
 lint-check:
-  - sbt "scalafixAll --check"
+  - sbt lintCheckAll
   just notify "lint-check"
 
 nixfmt:
@@ -30,6 +30,10 @@ nixfmt-check:
 test:
   - sbt test
   just notify "test"
+
+integration:
+  - sbt "integration/test"
+  just notify "integration"
 
 [parallel]
 precommit: lint-check fmt-check nixfmt-check

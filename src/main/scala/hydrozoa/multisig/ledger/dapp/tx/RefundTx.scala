@@ -7,7 +7,7 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuant
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explainConst}
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
-import hydrozoa.{Utxo as _, prebalancedLovelaceDiffHandler, *}
+import hydrozoa.{prebalancedLovelaceDiffHandler, *}
 import monocle.{Focus, Lens}
 import scala.annotation.tailrec
 import scala.util.{Failure, Success}

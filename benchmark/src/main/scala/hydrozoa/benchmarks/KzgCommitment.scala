@@ -1,6 +1,7 @@
 package hydrozoa.benchmarks
 
 import hydrozoa.multisig.ledger.virtual.commitment.{KzgCommitment, TrustedSetup}
+import java.util.concurrent.TimeUnit
 import org.openjdk.jmh.annotations.*
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Gen.frequency
@@ -15,8 +16,6 @@ import scalus.ledger.api.v3.TxInInfo
 import scalus.prelude.List as SList
 import scalus.|>
 import supranational.blst.{P1, Scalar}
-
-import java.util.concurrent.TimeUnit
 
 def genUtxos(size: Int) =
     genMapOfSizeFromArbitrary[TransactionInput, TransactionOutput](size, size)(using
@@ -77,7 +76,7 @@ class UtxoToPlutusBenchmark {
     def setup(): Unit = utxos = genUtxos(10_000).toList
 
     @Benchmark
-    def run() =
+    def run(): Unit =
         val utxo = utxos(nextIndex)
         val txInInfo = LedgerToPlutusTranslation.getTxInInfoV3(utxo._1, Map(utxo._1 -> utxo._2))
 }
@@ -104,7 +103,7 @@ class UtxoToDataBenchmark {
     )
 
     @Benchmark
-    def run() = sampleData(nextIndex).toData
+    def run(): Data = sampleData(nextIndex).toData
 
 }
 
@@ -130,7 +129,7 @@ class UtxoSerializationBenchmark {
     )
 
     @Benchmark
-    def run() = sampleData(nextIndex) |> serialiseData
+    def run(): ByteString = sampleData(nextIndex) |> serialiseData
 
 }
 
@@ -157,7 +156,7 @@ class HashByteStringBenchmark {
     )
 
     @Benchmark
-    def run() = sampleData(nextIndex) |> blake2b_224
+    def run(): ByteString = sampleData(nextIndex) |> blake2b_224
 
 }
 

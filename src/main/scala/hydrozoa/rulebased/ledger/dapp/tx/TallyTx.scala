@@ -31,7 +31,7 @@ object TallyTx {
         continuingVoteUtxo: TallyVoteUtxo,
         removedVoteUtxo: TallyVoteUtxo,
         treasuryUtxo: RuleBasedTreasuryUtxo,
-        collateralUtxo: Utxo[L1],
+        collateralUtxo: SUtxo,
         validityEndSlot: Long,
         network: Network,
         protocolParams: ProtocolParams,
@@ -40,8 +40,8 @@ object TallyTx {
     )
 
     enum TallyTxError:
-        case AbsentVoteDatum(utxo: UtxoIdL1)
-        case MalformedVoteDatum(utxo: UtxoIdL1, msg: String)
+        case AbsentVoteDatum(utxo: TransactionInput)
+        case MalformedVoteDatum(utxo: TransactionInput, msg: String)
         case IncompatibleVotes(continuing: (Key, Link), removed: (Key, Link))
 
     def build(recipe: Recipe): Either[SomeBuildError | TallyTxError, TallyTx] = {
@@ -58,7 +58,7 @@ object TallyTx {
     ): Either[TallyTxError, VoteDatum] = {
         import TallyTxError.*
 
-        val voteOutput = voteUtxo.utxo.output.untagged
+        val voteOutput = voteUtxo.utxo.output
         voteOutput.datumOption match {
             case Some(DatumOption.Inline(datumData)) =>
                 Try(fromData[VoteDatum](datumData)) match {
@@ -111,7 +111,7 @@ object TallyTx {
                   List(
                     // Spend the continuing vote utxo with tally redeemer
                     Spend(
-                      continuingVoteUtxo.utxo.toScalus,
+                      continuingVoteUtxo.utxo,
                       ThreeArgumentPlutusScriptWitness(
                         PlutusScriptValue(DisputeResolutionScript.compiledPlutusV3Script),
                         continuingRedeemer.toData,
@@ -121,7 +121,7 @@ object TallyTx {
                     ),
                     // Spend the removed vote utxo with tally redeemer
                     Spend(
-                      removedVoteUtxo.utxo.toScalus,
+                      removedVoteUtxo.utxo,
                       ThreeArgumentPlutusScriptWitness(
                         PlutusScriptValue(DisputeResolutionScript.compiledPlutusV3Script),
                         removedRedeemer.toData,
@@ -139,8 +139,7 @@ object TallyTx {
                       )
                     ),
                     ReferenceOutput(SUtxo(treasuryUtxo.asTuple._1, treasuryUtxo.asTuple._2)),
-                    AddCollateral(collateralUtxo.toScalus),
-                    ValidityEndSlot(validityEndSlot)
+                    AddCollateral(collateralUtxo),
                   )
                 )
 

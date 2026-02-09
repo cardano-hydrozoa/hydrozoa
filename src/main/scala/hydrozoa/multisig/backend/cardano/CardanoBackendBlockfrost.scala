@@ -12,34 +12,33 @@ import com.bloxbean.cardano.client.backend.model.{AssetTransactionContent, Scrip
 import com.bloxbean.cardano.client.plutus.spec.RedeemerTag
 import com.bloxbean.cardano.client.quicktx.TxResult
 import hydrozoa.multisig.backend.cardano.CardanoBackend.Error.*
-import hydrozoa.{L1, OutputL1, UtxoIdL1, UtxoSet, UtxoSetL1}
 import io.bullet.borer.Cbor
 import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
 import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.{Address, ShelleyAddress}
-import scalus.cardano.ledger.{AssetName, PolicyId, Transaction, TransactionHash}
+import scalus.cardano.ledger.{AssetName, PolicyId, Transaction, TransactionHash, TransactionInput, TransactionOutput, Utxos}
 
 class CardanoBackendBlockfrost private (
     private val backendService: BackendService,
     private val pageSize: Int
 ) extends CardanoBackend[IO] {
 
-    override def utxosAt(address: ShelleyAddress): IO[Either[CardanoBackend.Error, UtxoSetL1]] =
+    override def utxosAt(address: ShelleyAddress): IO[Either[CardanoBackend.Error, Utxos]] =
         paginate(page =>
             backendService.getUtxoService
                 .getUtxos(address.toBech32.get, pageSize, page, OrderEnum.asc)
-        ).map(ret => ret.map(utxos => UtxoSet[L1](utxos.map(convert).toMap)))
+        ).map(ret => ret.map(utxos => utxos.map(convert).toMap))
 
     override def utxosAt(
         address: ShelleyAddress,
         asset: (PolicyId, AssetName)
-    ): IO[Either[CardanoBackend.Error, UtxoSetL1]] = {
+    ): IO[Either[CardanoBackend.Error, Utxos]] = {
         val unit = s"${asset._1.toHex}${asset._2.bytes.toHex}"
         paginate(page =>
             backendService.getUtxoService
                 .getUtxos(address.toBech32.get, unit, pageSize, page, OrderEnum.asc)
-        ).map(ret => ret.map(utxos => UtxoSet[L1](utxos.map(convert).toMap)))
+        ).map(ret => ret.map(utxos => utxos.map(convert).toMap))
     }
 
     private def paginate[A](
@@ -80,8 +79,7 @@ class CardanoBackendBlockfrost private (
                 }"))
         )
 
-    private def convert(utxo: Utxo): (UtxoIdL1, OutputL1) = {
-        import hydrozoa.{Output, UtxoId}
+    private def convert(utxo: Utxo): (TransactionInput, TransactionOutput) = {
         import scalus.builtin.ByteString
         import scalus.cardano.ledger.{Blake2b_256, Coin, DatumOption, Hash, HashPurpose, MultiAsset, TransactionInput, TransactionOutput, Value}
 
@@ -89,7 +87,7 @@ class CardanoBackendBlockfrost private (
 
         val txHash =
             Hash[Blake2b_256, HashPurpose.TransactionHash](ByteString.fromHex(utxo.getTxHash))
-        val utxoId = UtxoId[L1](TransactionInput(txHash, utxo.getOutputIndex))
+        val utxoId = TransactionInput(txHash, utxo.getOutputIndex)
 
         // Parse address from bech32
         val address: Address = Address.fromBech32(utxo.getAddress) match {
@@ -146,14 +144,13 @@ class CardanoBackendBlockfrost private (
         // This would require a separate API call to fetch the script content
         val scriptRef = None // TODO: Fetch script from reference_script_hash if needed
 
-        val output = Output[L1](
-          TransactionOutput.Babbage(
-            address = address,
-            value = value,
-            datumOption = datumOption,
-            scriptRef = scriptRef
-          )
-        )
+        val output =
+            TransactionOutput.Babbage(
+              address = address,
+              value = value,
+              datumOption = datumOption,
+              scriptRef = scriptRef
+            )
 
         (utxoId, output)
     }

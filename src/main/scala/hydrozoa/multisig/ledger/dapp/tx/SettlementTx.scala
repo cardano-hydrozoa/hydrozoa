@@ -16,7 +16,6 @@ import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import monocle.{Focus, Lens}
 import scala.annotation.tailrec
 import scala.collection.immutable.Vector
-import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.{Sized, Slot, Transaction, TransactionInput, TransactionOutput as TxOutput, Utxo, Value}
@@ -274,9 +273,7 @@ private object SettlementTxOps {
                     Inline(
                       MultisigTreasuryUtxo
                           .Datum(
-                            commit = ByteString.fromArray(
-                              IArray.genericWrapArray(kzgCommitment).toArray
-                            ),
+                            commit = kzgCommitment,
                             versionMajor = majorVersionProduced.convert,
                           )
                           .toData

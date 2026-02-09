@@ -8,6 +8,7 @@ import com.suprnation.actor.ActorRef.NoSendActorRef
 import com.suprnation.actor.SupervisorStrategy.Escalate
 import com.suprnation.actor.{OneForOneStrategy, SupervisionStrategy}
 import hydrozoa.config.node.NodeConfig
+import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager.*
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
@@ -18,6 +19,8 @@ import scala.concurrent.duration.DurationInt
 
 trait MultisigRegimeManager(config: NodeConfig, cardanoBackend: CardanoBackend[IO])
     extends Actor[IO, Request] {
+
+    private val logger = Logging.loggerIO("hydrozoa.multisig.MultisigRegimeManager")
 
     override def supervisorStrategy: SupervisionStrategy[IO] =
         OneForOneStrategy[IO](maxNrOfRetries = 3, withinTimeRange = 1.minute) {
@@ -85,24 +88,24 @@ trait MultisigRegimeManager(config: NodeConfig, cardanoBackend: CardanoBackend[I
             case TerminatedChild(childType, _) =>
                 childType match {
                     case Actors.BlockWeaver =>
-                        IO.println("Terminated block weaver actor")
+                        logger.warn("Terminated block weaver actor")
                     case Actors.CardanoLiaison =>
-                        IO.println("Terminated Cardano liaison actor")
+                        logger.warn("Terminated Cardano liaison actor")
                     case Actors.Consensus =>
-                        IO.println("Terminated consensus actor")
+                        logger.warn("Terminated consensus actor")
                     case Actors.JointLedger =>
-                        IO.println("Terminated joint ledger actor")
+                        logger.warn("Terminated joint ledger actor")
                     case Actors.PeerLiaison =>
-                        IO.println("Terminated peer liaison actor")
+                        logger.warn("Terminated peer liaison actor")
                     case Actors.EventSequencer =>
-                        IO.println("Terminated event sequencer actor")
+                        logger.warn("Terminated event sequencer actor")
                 }
             case TerminatedDependency(dependencyType, _) =>
                 dependencyType match {
                     case Dependencies.CardanoBackend =>
-                        IO.println("Terminated cardano backend")
+                        logger.warn("Terminated cardano backend")
                     case Dependencies.Persistence =>
-                        IO.println("Terminated persistence")
+                        logger.warn("Terminated persistence")
                 }
             // TODO: Implement a way to receive a remote comm actor and connect it to its corresponding local comm actor
         }

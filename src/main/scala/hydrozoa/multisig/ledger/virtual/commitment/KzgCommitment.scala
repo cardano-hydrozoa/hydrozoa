@@ -12,7 +12,7 @@ import scalus.prelude.crypto.bls12_381.G1
 import scalus.|>
 import supranational.blst.{P1, Scalar}
 
-export KzgCommitment.{asByteString, asG1Element}
+export KzgCommitment.asG1Element
 export KzgCommitment.kzgCommitment
 
 object KzgCommitment {
@@ -21,11 +21,12 @@ object KzgCommitment {
     }
 
     // WARNING: you can't just `==` IArray, because it doesn't compare on the value of the elements.
-    type KzgCommitment = IArray[Byte]
+    // Let's stop using tedious IArray in favor of ByteString
+    type KzgCommitment = ByteString
 
     extension (self: KzgCommitment)
-        def asByteString: ByteString = ByteString.fromArray(IArray.genericWrapArray(self).toArray)
-        def asG1Element: BLS12_381_G1_Element = BLS12_381_G1_Element(self.asByteString)
+        // def asByteString: ByteString = ByteString.fromArray(IArray.genericWrapArray(self).toArray)
+        def asG1Element: BLS12_381_G1_Element = BLS12_381_G1_Element(self)
 
     extension (utxos: Utxos)
         def kzgCommitment: KzgCommitment =
@@ -60,7 +61,7 @@ object KzgCommitment {
 
     /** Calculates the commitment for the pairing-based accumulator.
       *
-      * @param utxo
+      * @param scalars
       *   utxo set (active, though might be any)
       * @return
       *   G1 point that corresponds to the commitment
@@ -77,7 +78,7 @@ object KzgCommitment {
         // Check the size of the setup is big enough
         assert(
           size == srs.length,
-          s"There are more UTxOs than supported by the setup: ${size}"
+          s"There are more UTxOs than supported by the setup: $size"
         )
 
         val finalPoly = mkFinalPoly(scalars)
@@ -86,7 +87,7 @@ object KzgCommitment {
 
         val commitment = evalFinalPoly(srs, finalPoly).compress()
 //        println(s"UTxO set commitment is: ${HexUtil.encodeHexString(commitment)}")
-        IArray.from(commitment)
+        ByteString.fromArray(commitment)
     }
 
     /** Multiply normalized N binomials represented by their only coeeficients to get a final

@@ -1,0 +1,19 @@
+<configuration>
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>{HH:mm:ss} %highlight(%-5level) %cyan(%logger{64}) %n%msg%n
+            </pattern>
+        </encoder>
+    </appender>
+    <root level="error">
+        <appender-ref ref="STDOUT"/>
+    </root>
+    <logger name="CardanoLiaison" level="debug"/>
+    <logger name="CardanoLiaisonTest" level="debug"/>
+    <logger name="InitializationTxSeq" level="warn"/>
+    <logger name="InitializationTx" level="warn"/>
+    <logger name="FallbackTx" level="warn"/>
+    <logger name="SettlementTxSeq" level="warn"/>
+    <logger name="SettlementTx" level="warn"/>
+    <logger name="scalus" level="warn"/>
+</configuration>

@@ -14,7 +14,7 @@ val bloxbeanVersion = "0.7.1"
 //dockerExposedVolumes := Seq("/opt/docker/.logs", "/opt/docker/.keys")
 
 // Main application
-lazy val core = (project in file("."))
+lazy val core: Project = (project in file("."))
     .settings(
       resolvers +=
           "Sonatype OSS New Snapshots" at "https://central.sonatype.com/repository/maven-snapshots/",
@@ -25,9 +25,9 @@ lazy val core = (project in file("."))
         // Using `org.scalus" %% "scalus` gives an error when using locally vendored version.
         "org.scalus" % "scalus_3" % scalusVersion withSources (),
         "org.scalus" % "scalus-cardano-ledger_3" % scalusVersion withSources (),
-        //"org.scalus" % "scalus-bloxbean-cardano-client-lib_3" % scalusVersion withSources (),
+        // "org.scalus" % "scalus-bloxbean-cardano-client-lib_3" % scalusVersion withSources (),
         // Cardano Client library
-        //"com.bloxbean.cardano" % "cardano-client-lib" % bloxbeanVersion,
+        // "com.bloxbean.cardano" % "cardano-client-lib" % bloxbeanVersion,
         "com.bloxbean.cardano" % "cardano-client-backend-blockfrost" % bloxbeanVersion,
         // Tapir for API definition
         // "com.softwaremill.sttp.tapir" %% "tapir-netty-server-sync" % "1.11.14",
@@ -41,7 +41,7 @@ lazy val core = (project in file("."))
         // "com.softwaremill.ox" %% "mdc-logback" % "0.5.13",
         // Logging
         "ch.qos.logback" % "logback-classic" % "1.5.18",
-        "com.typesafe.scala-logging" %% "scala-logging" % "3.9.6",
+        "org.typelevel" %% "log4cats-slf4j" % "2.7.1",
         // Used for input/output
         "org.scala-lang" %% "toolkit" % "0.7.0",
         // jsoniter + tapit-jsoniter
@@ -75,20 +75,19 @@ lazy val core = (project in file("."))
         "io.github.cdimascio" % "dotenv-java" % "3.0.0" % Test
       )
     )
+
 // Integration tests
-//lazy val integration = (project in file("integration"))
-//    .dependsOn(core)
-//    .settings(
-//      Compile / mainClass := Some("hydrozoa.demo.Workload"),
-//      publish / skip := true,
-//      // test dependencies
-//      libraryDependencies ++= Seq(
-//        "com.softwaremill.sttp.tapir" %% "tapir-sttp-client4" % "1.11.25",
-//        "org.scalameta" %% "munit" % "1.1.0" % Test,
-//        "org.scalameta" %% "munit-scalacheck" % "1.1.0" % Test,
-//        "org.scalacheck" %% "scalacheck" % "1.18.1" % Test
-//      )
-//    )
+lazy val integration: Project = (project in file("integration"))
+    .dependsOn(core % "compile->compile;test->test")
+    .settings(
+      // Compile / mainClass := Some("hydrozoa.demo.Workload"),
+      publish / skip := true,
+      // test dependencies
+      libraryDependencies ++= Seq(
+        "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
+        "org.typelevel" %% "cats-effect" % "3.6.3" % Test
+      )
+    )
 
 // Latest Scala 3 LTS version
 ThisBuild / scalaVersion := "3.3.6"
@@ -102,11 +101,17 @@ ThisBuild / scalacOptions ++= Seq(
   "-Wvalue-discard",
   "-Wunused:all",
   "-Wall",
-  "-Yretain-trees",  // Essential for incremental compilation
+  "-Yretain-trees", // Essential for incremental compilation
 )
 
 // Add the Scalus compiler plugin
 addCompilerPlugin("org.scalus" % "scalus-plugin_3" % scalusVersion)
+
+// Custom commands to format and lint all subprojects
+addCommandAlias("fmtAll", ";core/scalafmtAll ;integration/scalafmtAll ;benchmark/scalafmtAll")
+addCommandAlias("fmtCheckAll", ";core/scalafmtCheckAll ;integration/scalafmtCheckAll ;benchmark/scalafmtCheckAll")
+addCommandAlias("lintAll", ";core/scalafixAll ;integration/scalafixAll ;benchmark/scalafixAll")
+addCommandAlias("lintCheckAll", ";core/scalafixAll --check ;integration/scalafixAll --check ;benchmark/scalafixAll --check")
 
 // Demo workload
 //lazy val demo = (project in file("demo"))
@@ -131,7 +136,7 @@ inThisBuild(
 )
 
 // Benchmark subproject
-lazy val benchmark = (project in file("benchmark"))
+lazy val benchmark: Project = (project in file("benchmark"))
     .enablePlugins(JmhPlugin)
     .dependsOn(core) // access to your main code
     .settings(
@@ -157,4 +162,3 @@ excludeFilter in Global := {
     val default = (excludeFilter in Global).value
     default || ".direnv" || ".bloop" || ".metals" || ".idea" || ".vscode"
 }
-

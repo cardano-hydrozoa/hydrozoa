@@ -46,6 +46,16 @@ object FallbackTx {
 private object FallbackTxOps {
     type Config = HeadConfig.Preinit.Section
 
+    private val logger = org.slf4j.LoggerFactory.getLogger("FallbackTx")
+
+    private def time[A](label: String)(block: => A): A = {
+        val start = System.nanoTime()
+        val result = block
+        val elapsed = (System.nanoTime() - start) / 1_000_000.0
+        logger.info(f"\t\t⏱️ $label: ${elapsed}%.2f ms")
+        result
+    }
+
     // TODO: Distribute equity
     final case class Build(config: Config)(
         validityStartTime: QuantizedInstant,
@@ -127,18 +137,21 @@ private object FallbackTxOps {
                       )
                     )
 
-                    val datum = UnresolvedDatum(
-                      headMp = hns.policyId,
-                      disputeId = config.headTokenNames.voteTokenName.bytes,
-                      peers = SList.from(hns.requiredSigners.map(_.hash)),
-                      peersN = hns.numSigners,
-                      deadlineVoting = config.slotConfig.slotToTime(validityStartTime.toSlot.slot) +
-                          config.votingDuration.finiteDuration.toMillis,
-                      versionMajor = Steps.Spends.Treasury.datum.versionMajor.toInt,
-                      // TODO: pull in N first elements of G2 CRS
-                      // KZG setup I think?
-                      setup = SList.empty
-                    )
+                    val datum: UnresolvedDatum = time("newTreasuryDatum") {
+                        UnresolvedDatum(
+                          headMp = hns.policyId,
+                          disputeId = config.headTokenNames.voteTokenName.bytes,
+                          peers = SList.from(hns.requiredSigners.map(_.hash)),
+                          peersN = hns.numSigners,
+                          deadlineVoting =
+                              config.slotConfig.slotToTime(validityStartTime.toSlot.slot) +
+                                  config.votingDuration.finiteDuration.toMillis,
+                          versionMajor = Steps.Spends.Treasury.datum.versionMajor.toInt,
+                          // TODO: pull in N first elements of G2 CRS
+                          // KZG setup I think?
+                          setup = SList.empty
+                        )
+                    }
                 }
 
                 object Votes {
@@ -158,16 +171,18 @@ private object FallbackTxOps {
                     object Default {
                         def apply() = Send(utxo)
 
-                        private val utxo = mkVoteUtxo(
-                          VD.default(treasuryUtxoSpent.datum.commit).toData,
-                          config.collectiveContingency.defaultVoteDeposit
-                        )
+                        private val utxo = time("defaultVoteUtxo") {
+                            mkVoteUtxo(
+                              VD.default(treasuryUtxoSpent.datum.commit).toData,
+                              config.collectiveContingency.defaultVoteDeposit
+                            )
+                        }
                     }
 
                     object Peers {
                         def apply(): NonEmptyList[Send] = utxos.map(Send(_))
 
-                        private val utxos = {
+                        private val utxos = time("peerVoteUtxos") {
                             val datums = VD(
                               NonEmptyList.fromListUnsafe(
                                 hns.requiredSigners.map(x => PubKeyHash(x.hash)).toList
@@ -183,7 +198,7 @@ private object FallbackTxOps {
                 object Collaterals {
                     def apply(): NonEmptyList[Send] = utxos.map(Send(_))
 
-                    val utxos: NonEmptyList[TransactionOutput] = {
+                    val utxos: NonEmptyList[TransactionOutput] = time("collateralUtxos") {
                         NonEmptyList.fromListUnsafe(
                           hns.requiredSigners
                               .map(es =>

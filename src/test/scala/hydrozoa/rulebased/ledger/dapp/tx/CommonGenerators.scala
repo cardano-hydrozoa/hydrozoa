@@ -15,7 +15,7 @@ import scalus.builtin.{BLS12_381_G2_Element, ByteString}
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{BlockHeader as _, Utxo as _, *}
+import scalus.cardano.ledger.{BlockHeader as _, Utxo, *}
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
 import scalus.ledger.api.v3.TokenName
 import scalus.prelude.List as SList
@@ -128,21 +128,19 @@ object CommonGenerators {
         )
 
     /** Generate collateral UTXO with random address */
-    def genCollateralUtxo: Gen[Utxo[L1]] =
+    def genCollateralUtxo: Gen[Utxo] =
         for {
             txId <- arbitrary[TransactionHash]
             ix <- Gen.choose(0, 10)
             addr <- genPubkeyAddress(testNetwork)
             value <- Gen.choose(5_000_000L, 50_000_000L).map(v => Value(Coin(v)))
-        } yield Utxo[L1](
-          UtxoId[L1](TransactionInput(txId, ix)),
-          Output[L1](
-            Babbage(
-              address = Address[L1](addr),
-              value = value,
-              datumOption = None,
-              scriptRef = None
-            )
+        } yield Utxo(
+          TransactionInput(txId, ix),
+          Babbage(
+            address = addr,
+            value = value,
+            datumOption = None,
+            scriptRef = None
           )
         )
 
@@ -170,10 +168,9 @@ object CommonGenerators {
     }
 
     /** Generator for Shelley address */
-    def genShelleyAddress: Gen[ShelleyAddress] =
+    def genShelleyAddress(network: Network = testNetwork): Gen[ShelleyAddress] =
         for {
             keyHash <- arbitrary[AddrKeyHash]
-            network = testNetwork
         } yield ShelleyAddress(
           network = network,
           payment = ShelleyPaymentPart.Key(keyHash),
@@ -181,33 +178,24 @@ object CommonGenerators {
         )
 
     /** Generator for L2 UTXO sets */
-    def genUtxosL2(count: Int = 2): Gen[UtxoSetL2] =
+    def genUtxosL2(count: Int = 2): Gen[Utxos] =
         for {
             outputs <- Gen.listOfN(count, genOutputL2)
-            utxoIds <- Gen.listOfN(count, genUtxoIdL2)
-        } yield UtxoSet[L2](utxoIds.zip(outputs).toMap)
+            utxoIds <- Gen.listOfN(count, arbitrary[TransactionInput])
+        } yield utxoIds.zip(outputs).toMap
 
     /** Generator for a single L2 output */
-    def genOutputL2: Gen[OutputL2] =
+    def genOutputL2: Gen[TransactionOutput] =
         for {
-            address <- genShelleyAddress
+            address <- genShelleyAddress()
             coin <- Gen.choose(1_000_000L, 10_000_000L)
             value = Value(Coin(coin))
-        } yield Output[L2](
-          Babbage(
-            address = address,
-            value = value,
-            datumOption = None,
-            scriptRef = None
-          )
+        } yield Babbage(
+          address = address,
+          value = value,
+          datumOption = None,
+          scriptRef = None
         )
-
-    /** Generator for L2 UTXO ID */
-    def genUtxoIdL2: Gen[UtxoId[L2]] =
-        for {
-            txHash <- genByteStringOfN(32).map(TransactionHash.fromByteString)
-            index <- Gen.choose(0, 10)
-        } yield UtxoId[L2](TransactionInput(txHash, index))
 
     /** Generator for version tuple */
     def genVersion: Gen[(BigInt, BigInt)] =

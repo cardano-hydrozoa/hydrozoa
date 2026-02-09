@@ -40,6 +40,16 @@ object SettlementTxSeq {
 private object SettlementTxSeqOps {
     type Config = HeadConfig.Section
 
+    private val logger = org.slf4j.LoggerFactory.getLogger("SettlementTxSeq")
+
+    private def time[A](label: String)(block: => A): A = {
+        val start = System.nanoTime()
+        val result = block
+        val elapsed = (System.nanoTime() - start) / 1_000_000.0
+        logger.info(f"\t\t⏱️ $label: ${elapsed}%.2f ms")
+        result
+    }
+
     final case class Result(
         settlementTxSeq: SettlementTxSeq,
         override val depositsSpent: Vector[DepositUtxo],
@@ -79,27 +89,31 @@ private object SettlementTxSeqOps {
                 case None =>
 
                     for {
-                        settlementTx <- SettlementTx.Build
-                            .NoPayouts(config)(
-                              kzgCommitment,
-                              majorVersionProduced,
-                              treasuryToSpend,
-                              depositsToSpend,
-                              settlementValidityEnd
-                            )
-                            .result
-                            .left
-                            .map(Build.Error.SettlementError(_))
+                        settlementTx <- time("SettlementTx.NoPayouts.Build") {
+                            SettlementTx.Build
+                                .NoPayouts(config)(
+                                  kzgCommitment,
+                                  majorVersionProduced,
+                                  treasuryToSpend,
+                                  depositsToSpend,
+                                  settlementValidityEnd
+                                )
+                                .result
+                                .left
+                                .map(Build.Error.SettlementError(_))
+                        }
 
-                        fallbackTx <- FallbackTx
-                            .Build(config)(
-                              newFallbackValidityEnd,
-                              settlementTx.transaction.treasuryProduced,
-                              config.multisigRegimeUtxo
-                            )
-                            .result
-                            .left
-                            .map(Build.Error.FallbackError(_))
+                        fallbackTx <- time("FallbackTx.Build") {
+                            FallbackTx
+                                .Build(config)(
+                                  newFallbackValidityEnd,
+                                  settlementTx.transaction.treasuryProduced,
+                                  config.multisigRegimeUtxo
+                                )
+                                .result
+                                .left
+                                .map(Build.Error.FallbackError(_))
+                        }
                     } yield Result(
                       settlementTxSeq =
                           SettlementTxSeq.NoRollouts(settlementTx.transaction, fallbackTx),
@@ -109,34 +123,40 @@ private object SettlementTxSeqOps {
                 case Some(nePayouts) =>
 
                     for {
-                        rolloutTxSeqPartial <- RolloutTxSeq
-                            .Build(config)(nePayouts)
-                            .partialResult
-                            .left
-                            .map(Error.RolloutSeqError(_))
+                        rolloutTxSeqPartial <- time("RolloutTxSeq.Build.partialResult") {
+                            RolloutTxSeq
+                                .Build(config)(nePayouts)
+                                .partialResult
+                                .left
+                                .map(Error.RolloutSeqError(_))
+                        }
 
-                        settlementTxRes <- SettlementTx.Build
-                            .WithPayouts(config)(
-                              kzgCommitment,
-                              majorVersionProduced,
-                              treasuryToSpend,
-                              depositsToSpend,
-                              settlementValidityEnd,
-                              rolloutTxSeqPartial
-                            )
-                            .result
-                            .left
-                            .map(Error.SettlementError(_))
+                        settlementTxRes <- time("SettlementTx.WithPayouts.Build") {
+                            SettlementTx.Build
+                                .WithPayouts(config)(
+                                  kzgCommitment,
+                                  majorVersionProduced,
+                                  treasuryToSpend,
+                                  depositsToSpend,
+                                  settlementValidityEnd,
+                                  rolloutTxSeqPartial
+                                )
+                                .result
+                                .left
+                                .map(Error.SettlementError(_))
+                        }
 
-                        fallbackTx <- FallbackTx
-                            .Build(config)(
-                              newFallbackValidityEnd,
-                              settlementTxRes.transaction.treasuryProduced,
-                              config.multisigRegimeUtxo
-                            )
-                            .result
-                            .left
-                            .map(Build.Error.FallbackError(_))
+                        fallbackTx <- time("FallbackTx.Build") {
+                            FallbackTx
+                                .Build(config)(
+                                  newFallbackValidityEnd,
+                                  settlementTxRes.transaction.treasuryProduced,
+                                  config.multisigRegimeUtxo
+                                )
+                                .result
+                                .left
+                                .map(Build.Error.FallbackError(_))
+                        }
 
                         settlementTxSeq <-
                             settlementTxRes match {

@@ -4,7 +4,6 @@ import cats.effect.{IO, Ref}
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
-import hydrozoa.UtxoIdL1
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.actor.*
@@ -29,7 +28,7 @@ import monocle.Focus.focus
 import scala.collection.immutable.Queue
 import scala.math.Ordered.orderingToOrdered
 import scalus.builtin.{ByteString, platform}
-import scalus.cardano.ledger.TransactionHash
+import scalus.cardano.ledger.{TransactionHash, TransactionInput}
 
 // Fields of a work-in-progress block, with an additional field for dealing with withdrawn utxos
 private case class TransientFields(
@@ -328,13 +327,13 @@ final case class JointLedger(
                         if depositAbsorptionStart > producing.startTime
                         // Not yet mature
                         then acc.focus(_._1).modify(_.appended(deposit))
-                        else if pollResults.contains(UtxoIdL1(deposit._2.toUtxo.input)) &&
+                        else if pollResults.contains(deposit._2.toUtxo.input) &&
                         (depositAbsorptionStart <= producing.startTime) &&
                         (settlementValidityEnd <= depositAbsorptionEnd)
                         // Eligible for absorption
                         then acc.focus(_._2).modify(_.appended(deposit))
                         else if ((depositAbsorptionStart <= producing.startTime)
-                            && !pollResults.contains(UtxoIdL1(deposit._2.toUtxo.input))) ||
+                            && !pollResults.contains(deposit._2.toUtxo.input)) ||
                         (settlementValidityEnd > depositAbsorptionEnd)
                         // Never eligible for absorption
                         then acc.focus(_._3).modify(_.appended(deposit))
@@ -356,14 +355,17 @@ final case class JointLedger(
 
             headerIntermediate: BlockHeader.Intermediate =
                 if eligibleForAbsorption.isEmpty && producing.nextBlockData.blockWithdrawnUtxos.isEmpty
-                then
+                then {
+                    // println(s"JL: producing.startTime=${producing.startTime}")
+                    // println(s"JL: producing.competingFallbackValidityStart=${producing.competingFallbackValidityStart}")
+                    // println(s"JL: txTiming=${txTiming}")
                     previousHeader.nextHeaderIntermediate(
                       txTiming,
-                      producing.startTime,
+                      producing.startTime, // TODO: shall we use something like production.completeTime instead?
                       producing.competingFallbackValidityStart,
                       kzgCommitment
                     )
-                else previousHeader.nextHeaderMajor(producing.startTime, kzgCommitment)
+                } else previousHeader.nextHeaderMajor(producing.startTime, kzgCommitment)
 
             block <- headerIntermediate match {
                 case header: BlockHeader.Minor =>
@@ -566,7 +568,7 @@ object JointLedger {
           */
         case class CompleteBlockRegular(
             referenceBlockBrief: Option[BlockBrief.Intermediate],
-            pollResults: Set[UtxoIdL1],
+            pollResults: Set[TransactionInput],
             finalizationLocallyTriggered: Boolean
         )
 

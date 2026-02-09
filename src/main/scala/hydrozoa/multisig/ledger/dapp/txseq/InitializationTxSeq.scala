@@ -16,6 +16,16 @@ object InitializationTxSeq {
 private object InitializationTxSeqOps {
     type Config = HeadConfig.Preinit.Section
 
+    private val logger = org.slf4j.LoggerFactory.getLogger("InitializationTxSeq")
+
+    private def time[A](label: String)(block: => A): A = {
+        val start = System.nanoTime()
+        val result = block
+        val elapsed = (System.nanoTime() - start) / 1_000_000.0
+        logger.info(f"\t\t⏱️ $label: ${elapsed}%.2f ms")
+        result
+    }
+
     object Build {
         enum Error extends Throwable {
             case FallbackPRError(e: SomeBuildError)
@@ -94,14 +104,16 @@ private object InitializationTxSeqOps {
             val fallbackTx = transactionSequence._2
 
             for {
-                iTx <- InitializationTx
-                    .Parse(config = config)(
-                      tx = initializationTx,
-                      resolvedUtxos = resolvedUtxos
-                    )
-                    .result
-                    .left
-                    .map(InitializationTxParseError(_))
+                iTx <- time("InitializationTx.build") {
+                    InitializationTx
+                        .Parse(config)(
+                          tx = initializationTx,
+                          resolvedUtxos = resolvedUtxos
+                        )
+                        .result
+                        .left
+                        .map(InitializationTxParseError(_))
+                }
 
                 expectedFallbackValidityStart: Slot =
                     (iTx.validityEnd + config.txTiming.silenceDuration).toSlot
@@ -121,15 +133,17 @@ private object InitializationTxSeqOps {
                           )
                         )
 
-                expectedFallbackTx <- FallbackTx
-                    .Build(config)(
-                      config.txTiming.newFallbackStartTime(config.headStartTime),
-                      iTx.treasuryProduced,
-                      iTx.multisigRegimeProduced
-                    )
-                    .result
-                    .left
-                    .map(FallbackTxBuildError(_))
+                expectedFallbackTx <- time("FallbackTx.build") {
+                    FallbackTx
+                        .Build(config)(
+                          config.txTiming.newFallbackStartTime(config.headStartTime),
+                          iTx.treasuryProduced,
+                          iTx.multisigRegimeProduced
+                        )
+                        .result
+                        .left
+                        .map(FallbackTxBuildError(_))
+                }
 
                 _ <-
                     if expectedFallbackTx.tx == fallbackTx then Right(())

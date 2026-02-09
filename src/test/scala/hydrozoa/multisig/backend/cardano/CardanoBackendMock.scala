@@ -6,7 +6,6 @@ import cats.effect.{IO, Ref}
 import cats.syntax.all.catsSyntaxFlatMapOps
 import cats.~>
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
-import hydrozoa.{L1, Output, UtxoIdL1, UtxoSet, UtxoSetL1}
 import monocle.Focus.focus
 import scalus.builtin.Data
 import scalus.cardano.address.ShelleyAddress
@@ -39,22 +38,21 @@ class CardanoBackendMock private (
 
     override def utxosAt(
         address: ShelleyAddress
-    ): MockStateF[Either[CardanoBackend.Error, UtxoSetL1]] = {
-        println("utxosAt")
+    ): MockStateF[Either[CardanoBackend.Error, Utxos]] = {
+        // println("utxosAt")
         for {
             state: MockState <- get
-            ret: UtxoSetL1 = UtxoSet(
-              state.ledgerState.utxos
-                  .filter((_, o) => o.address == address)
-                  .map((in, out) => UtxoIdL1(in) -> Output[L1](out))
-            )
+            ret: Utxos =
+                state.ledgerState.utxos
+                    .filter((_, o) => o.address == address)
+                    .map((in, out) => in -> out)
         } yield Right(ret)
     }
 
     override def utxosAt(
         address: ShelleyAddress,
         asset: (PolicyId, AssetName)
-    ): MockStateF[Either[CardanoBackend.Error, UtxoSetL1]] = {
+    ): MockStateF[Either[CardanoBackend.Error, Utxos]] = {
 
         extension (v: Value)
             def contain(asset: (PolicyId, AssetName)): Boolean =
@@ -62,11 +60,10 @@ class CardanoBackendMock private (
 
         for {
             state: MockState <- get
-            ret: UtxoSetL1 = UtxoSet(
-              state.ledgerState.utxos
-                  .filter((_, o) => o.address == address && o.value.contain(asset))
-                  .map((in, out) => UtxoIdL1(in) -> Output[L1](out))
-            )
+            ret: Utxos =
+                state.ledgerState.utxos
+                    .filter((_, o) => o.address == address && o.value.contain(asset))
+                    .map((in, out) => in -> out)
 
         } yield Right(ret)
     }
@@ -129,15 +126,15 @@ class CardanoBackendMock private (
     }
 
     override def submitTx(tx: Transaction): MockStateF[Either[CardanoBackend.Error, Unit]] = {
-        println(s"submitTx: ${tx.id}")
+        // println(s"submitTx: ${tx.id}")
         // println(s"submitTx: ${HexUtil.encodeHexString(tx.toCbor)}")
 
         for {
             state <- get[MockState]
-            _ = println(s"utxos count: ${state.ledgerState.utxos.values.size}")
-            _ = println(
-              s"missing utxos: ${tx.body.value.inputs.toSet &~ state.ledgerState.utxos.keySet}"
-            )
+            // _ = println(s"utxos count: ${state.ledgerState.utxos.values.size}")
+            // _ = println(
+            //  s"missing utxos: ${tx.body.value.inputs.toSet &~ state.ledgerState.utxos.keySet}"
+            // )
             // _ = println(s"tx utxos: ${state.ledgerState.utxos.filter((i, _) => tx.body.value.inputs.toSet.contains(i))}")
 
             ret <-
@@ -192,6 +189,8 @@ object CardanoBackendMock {
                 new FunctionK[MockStateF, IO] {
                     def apply[A](state: State[MockState, A]): IO[A] = for {
                         now <- IO.realTimeInstant
+                        // _ <- IO.println(s"transformer now=$now")
+                        // _ <- IO.println(s"transformer slotConfig=$slotConfig")
                         currentSlot = QuantizedInstant.apply(slotConfig, now).toSlot
                         ret <- stateRef
                             .modify(s => (mock.setSlot(currentSlot) >> state).run(s).value)
@@ -201,13 +200,13 @@ object CardanoBackendMock {
             new CardanoBackend[IO] {
                 override def utxosAt(
                     address: ShelleyAddress
-                ): IO[Either[CardanoBackend.Error, UtxoSetL1]] =
+                ): IO[Either[CardanoBackend.Error, Utxos]] =
                     transformer(mock.utxosAt(address))
 
                 override def utxosAt(
                     address: ShelleyAddress,
                     asset: (PolicyId, AssetName)
-                ): IO[Either[CardanoBackend.Error, UtxoSetL1]] =
+                ): IO[Either[CardanoBackend.Error, Utxos]] =
                     transformer(mock.utxosAt(address, asset))
 
                 override def isTxKnown(

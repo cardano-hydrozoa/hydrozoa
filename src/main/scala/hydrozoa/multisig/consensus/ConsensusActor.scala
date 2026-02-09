@@ -278,7 +278,7 @@ object ConsensusActor:
 
     def apply(
         config: Config,
-        pendingConnections: MultisigRegimeManager.PendingConnections
+        pendingConnections: MultisigRegimeManager.PendingConnections | ConsensusActor.Connections
     ): IO[ConsensusActor] =
         for {
             stateRef <- Ref[IO].of(State.mkInitialState)
@@ -341,6 +341,8 @@ class ConsensusActor(
       * responsible for sending acks only.
       */
     def handleBlock(block: Block.Unsigned.Next): IO[Unit] = for {
+        // _ <- IO.println(s"---- CA ----: handleBlock: $block")
+        // _ <- IO.println(s"---- CA ----: handleBlock")
         state <- stateRef.get
         // This is a bit annoying but Scala cannot infer types unless we PM explicitly
         _ <- block match {
@@ -363,6 +365,7 @@ class ConsensusActor(
       *   an arbitrary ack, whether own one or someone else's one
       */
     def handleAck(ack: AckBlock): IO[Unit] = for {
+        // _ <- IO.println(s"---- CA ----: handleAck: $ack")
         state <- stateRef.get
         // This is a bit annoying but Scala cannot infer types unless we PM explicitly
         _ <- ack match {
@@ -398,6 +401,7 @@ class ConsensusActor(
     // State extension methods
     // ===================================
 
+    // TODO: remove this, it's not safe
     extension (state: State) {
 
         /**   - Gives access to a typed consensus cell or raise an error if it can't be done
@@ -410,32 +414,64 @@ class ConsensusActor(
         ): IO[Unit] = {
             for {
                 blockNum <- IO.pure(msgBlockNum(msg))
-                consensus <-
+                cell <-
                     state.cells.get(blockNum) match {
                         case Some(cell) => tryCastCell(msg)(cell)
                         case None       => spawnCell(msg)
                     }
                 // Run asked actions
-                consensus1 <- f(consensus)
+                cellUpdated <- f(cell)
                 _ <-
-                    if consensus1.isSaturated
+                    if cellUpdated.isSaturated
                     then {
                         // Complete the round/cell
                         for {
-                            ret <- consensus1.complete
+                            // _ <- IO.println("---- CA ----: complete updated cell")
+                            ret <- cellUpdated.complete
                             _ <- ret match {
                                 // Switch the cell to the next round
-                                case Left(newRound, ownAck) =>
-                                    // These casts are sound since the only alternative is Void
-                                    // Ack2 can be safely sent when round 1 is finished (i.e. all first-round acks of
-                                    // block N are received) because the peer liaisons guarantee that all acks of
-                                    // block (N-1) are received (i.e. block N-1 is confirmed)
-                                    // before the first-round acks of block N are received.
-                                    // Sanity check: the consensus cell for block N-1 cannot exist now when cell N switches to round two.
-                                    announceAck(ownAck.asInstanceOf[AckBlock]) >>
-                                        updateCell(newRound.asInstanceOf[ConsensusCell[?]])
+                                case Left(nextRoundCell, ownAck) =>
+                                    for {
+                                        // _ <- IO.println("---- CA ----: complete updated cell: Left")
+
+                                        // These casts are sound since the only alternative is Void
+                                        // Ack2 can be safely sent when round 1 is finished (i.e. all first-round acks of
+                                        // block N are received) because the peer liaisons guarantee that all acks of
+                                        // block (N-1) are received (i.e. block N-1 is confirmed)
+                                        // before the first-round acks of block N are received.
+                                        // Sanity check: the consensus cell for block N-1 cannot exist now when cell N switches to round two.
+                                        _ <- announceAck(ownAck.asInstanceOf[AckBlock])
+                                        nextCell = nextRoundCell.asInstanceOf[ConsensusCell[?]]
+
+                                        // Here is a little caveat:
+                                        //  - we require own Ack2 to complete round one (since we have to announce it when
+                                        //    switching to round two)
+                                        //  - in the degenerate case of a head with just one node, it breaks:
+                                        //     - First we receive own Ack1, and don't switch (we need own Ack2)
+                                        //     - Second we receive own Ack2, and do switch to round two
+                                        //     - nothing will happen, since only Ack2 is already here
+                                        // So we have to try to go further immediately to cover that case.
+                                        // TODO: originally the code (partially) assumed we may more than two rounds.
+                                        //   But in practice whe have only two, so I am not going to do any
+                                        //   recursive things there.
+                                        _ <-
+                                            if nextCell.isSaturated
+                                            then
+                                                for {
+                                                    ret <- nextCell.complete
+                                                    // This is safe as long as we have only two rounds (which unlikely will change)
+                                                    Right(result, mbAck) = ret: @unchecked
+                                                    // _ <- IO.println("---- CA ----: complete updated cell: Left-Right")
+                                                    _ <- completeCell(
+                                                      result.asInstanceOf[Block.MultiSigned.Next],
+                                                      mbAck
+                                                    )
+                                                } yield ()
+                                            else updateCell(nextCell)
+                                    } yield ()
                                 // Complete the consensus in the cell
                                 case Right(result, mbAck) =>
+                                    // IO.println("---- CA ----: complete updated cell: Right") >>
                                     // This cast is sound since the only alternative is Void
                                     completeCell(
                                       result.asInstanceOf[Block.MultiSigned.Next],
@@ -445,7 +481,7 @@ class ConsensusActor(
                         } yield ()
                     } else {
                         // Just update the state with the new consensus state
-                        updateCell(consensus1)
+                        updateCell(cellUpdated)
                     }
             } yield ()
         }
@@ -513,6 +549,7 @@ class ConsensusActor(
         private def spawnCell(msg: Block.Unsigned.Next | AckBlock): IO[ConsensusFor[msg.type]] = {
             for {
                 blockNum <- IO.pure(msgBlockNum(msg))
+                // _ <- IO.println(s"spawnCell: $blockNum")
                 result <- msg match {
                     case _: (Block.Unsigned.Minor | AckBlock.Minor) =>
                         MinorConsensusCell.apply(blockNum)
@@ -530,60 +567,65 @@ class ConsensusActor(
 
         private def tryCastCell(
             msg: Block.Unsigned.Next | AckBlock
-        )(cell: ConsensusCell[?]): IO[ConsensusFor[msg.type]] = {
-            import Error.*
+        )(cell: ConsensusCell[?]): IO[ConsensusFor[msg.type]] =
+            // IO.println("tryCastCell") >>
+            {
+                import Error.*
 
-            msg match {
-                case _: (Block.Unsigned.Minor | AckBlock.Minor) =>
-                    cell match {
-                        case c: MinorConsensusCell =>
-                            IO.pure(c.asInstanceOf[ConsensusFor[msg.type]])
-                        case _ => IO.raiseError(MsgCellMismatch)
-                    }
-                case _: (Block.Unsigned.Major | AckBlock.Major1) =>
-                    cell match {
-                        case c: MajorRoundOneCell =>
-                            IO.pure(c.asInstanceOf[ConsensusFor[msg.type]])
-                        case _ => IO.raiseError(MsgCellMismatch)
-                    }
-                case _: AckBlock.Major2 =>
-                    cell match {
-                        case c: MajorRoundOneCell =>
-                            IO.pure(c.asInstanceOf[ConsensusFor[msg.type]])
-                        case c: MajorRoundTwoCell =>
-                            IO.pure(c.asInstanceOf[ConsensusFor[msg.type]])
-                        case _ => IO.raiseError(MsgCellMismatch)
-                    }
-                case _: (Block.Unsigned.Final | AckBlock.Final1) =>
-                    cell match {
-                        case c: FinalRoundOneCell =>
-                            IO.pure(c.asInstanceOf[ConsensusFor[msg.type]])
-                        case _ => IO.raiseError(MsgCellMismatch)
-                    }
-                case _: AckBlock.Final2 =>
-                    cell match {
-                        case c: FinalRoundOneCell =>
-                            IO.pure(c.asInstanceOf[ConsensusFor[msg.type]])
-                        case c: FinalRoundTwoCell =>
-                            IO.pure(c.asInstanceOf[ConsensusFor[msg.type]])
-                        case _ => IO.raiseError(MsgCellMismatch)
-                    }
+                msg match {
+                    case _: (Block.Unsigned.Minor | AckBlock.Minor) =>
+                        cell match {
+                            case c: MinorConsensusCell =>
+                                IO.pure(c.asInstanceOf[ConsensusFor[msg.type]])
+                            case _ => IO.raiseError(MsgCellMismatch)
+                        }
+                    case _: (Block.Unsigned.Major | AckBlock.Major1) =>
+                        cell match {
+                            case c: MajorRoundOneCell =>
+                                IO.pure(c.asInstanceOf[ConsensusFor[msg.type]])
+                            case _ => IO.raiseError(MsgCellMismatch)
+                        }
+                    case _: AckBlock.Major2 =>
+                        cell match {
+                            case c: MajorRoundOneCell =>
+                                IO.pure(c.asInstanceOf[ConsensusFor[msg.type]])
+                            case c: MajorRoundTwoCell =>
+                                IO.pure(c.asInstanceOf[ConsensusFor[msg.type]])
+                            case _ => IO.raiseError(MsgCellMismatch)
+                        }
+                    case _: (Block.Unsigned.Final | AckBlock.Final1) =>
+                        cell match {
+                            case c: FinalRoundOneCell =>
+                                IO.pure(c.asInstanceOf[ConsensusFor[msg.type]])
+                            case _ => IO.raiseError(MsgCellMismatch)
+                        }
+                    case _: AckBlock.Final2 =>
+                        cell match {
+                            case c: FinalRoundOneCell =>
+                                IO.pure(c.asInstanceOf[ConsensusFor[msg.type]])
+                            case c: FinalRoundTwoCell =>
+                                IO.pure(c.asInstanceOf[ConsensusFor[msg.type]])
+                            case _ => IO.raiseError(MsgCellMismatch)
+                        }
+                }
             }
-        }
 
         private def updateCell(cell: ConsensusCell[?]): IO[Unit] =
-            stateRef.set(state.copy(cells = state.cells.updated(cell.blockNum, cell)))
+            // IO.println(s"---- CA ----: updateCell for block ${cell.blockNum}") >>
+            stateRef.update(s => s.copy(cells = s.cells.updated(cell.blockNum, cell)))
 
         private def completeCell(
             blockConfirmed: Block.MultiSigned.Next,
             mbAck: Option[AckBlock]
         ): IO[Unit] = {
             for {
+                // _ <- IO.println(s"---- CA ----: completeCell: blockConfirmed: ${blockConfirmed.blockNum}")
                 conn <- getConnections
                 // Handle the confirmed block
                 _ <- conn.blockWeaver ! blockConfirmed
                 _ <- blockConfirmed match {
                     case x: (Block.MultiSigned.Major | Block.MultiSigned.Final) =>
+                        // IO.println(s"---- CA ----: completeCell: sending multisigned block: ${x.blockNum}") >>
                         conn.cardanoLiaison ! x
                     case _ => IO.unit
                 }
@@ -592,7 +634,7 @@ class ConsensusActor(
                 // Announce the ack if present
                 _ <- mbAck.traverse_(announceAck)
                 // Remove the cell
-                _ <- stateRef.set(state.copy(cells = state.cells - blockConfirmed.blockNum))
+                _ <- stateRef.update(s => s.copy(cells = s.cells - blockConfirmed.blockNum))
             } yield ()
         }
 
@@ -864,14 +906,18 @@ class ConsensusActor(
 
             override def isSaturated: Boolean =
                 this.block.isDefined &&
-                    this.acks1.keySet == config.headPeerVKeys.iterator.toSet
+                    this.acks1.keySet == config.headPeerVKeys.iterator.toSet && this.acks2.contains(
+                      config.ownHeadVKey
+                    )
 
             override def complete
                 : IO[Either[(MajorRoundTwoCell, AckBlock.Major2), (Void, Option[RoundOneOwnAck])]] =
                 for {
                     block <- this.block.liftTo[IO](
-                      // This should never happen
-                      new IllegalStateException("Cannot complete without block")
+                      // This should never happen due to checks in [[isSaturated]]
+                      new IllegalStateException(
+                        s"Cannot complete major round one without block $blockNum"
+                      )
                     )
                     roundTwo = MajorRoundTwoCell(
                       blockNum = this.blockNum,
@@ -883,7 +929,10 @@ class ConsensusActor(
                     ownAck <- this.acks2
                         .get(config.ownHeadVKey)
                         .liftTo[IO](
-                          new IllegalStateException(s"Own Major2 ack not found for block $blockNum")
+                          // This should never happen due to checks in [[isSaturated]]
+                          new IllegalStateException(
+                            s"Cannot complete major round one without own Major2 ack for block $blockNum"
+                          )
                         )
                 } yield Left((roundTwo, ownAck))
         }
@@ -1073,13 +1122,17 @@ class ConsensusActor(
 
             override def isSaturated: Boolean =
                 this.block.isDefined &&
-                    this.acks1.keySet == config.headPeerVKeys.iterator.toSet
+                    this.acks1.keySet == config.headPeerVKeys.iterator.toSet &&
+                    this.acks2.contains(config.ownHeadVKey)
 
             override def complete
                 : IO[Either[(FinalRoundTwoCell, AckBlock.Final2), (Void, Option[RoundOneOwnAck])]] =
                 for {
                     block <- this.block.liftTo[IO](
-                      new IllegalStateException("Cannot complete without block")
+                      // This should never happen due to checks in [[isSaturated]]
+                      new IllegalStateException(
+                        s"Cannot complete final round one without block $blockNum"
+                      )
                     )
                     roundTwo = FinalRoundTwoCell(
                       blockNum = this.blockNum,
@@ -1091,7 +1144,10 @@ class ConsensusActor(
                     ownAck <- this.acks2
                         .get(config.ownHeadVKey)
                         .liftTo[IO](
-                          new IllegalStateException(s"Own Final2 ack not found for block $blockNum")
+                          // This should never happen due to checks in [[isSaturated]]
+                          new IllegalStateException(
+                            s"Cannot complete final round one without own Final2 ack for block $blockNum"
+                          )
                         )
                 } yield Left((roundTwo, ownAck))
         }
@@ -1192,7 +1248,7 @@ class ConsensusActor(
             case PostponedAckAlreadySet
             case UnexpectedPostponedAck
 
-            def msg: String = this match {
+            override def getMessage: String = this match {
                 case UnexpectedBlockNumber(roundBlockNumber, blockNumber) =>
                     s"Unexpected block number $blockNumber in round for block number $roundBlockNumber"
                 case UnexpectedAck(blockNum, peerId) =>
@@ -1207,7 +1263,7 @@ class ConsensusActor(
                     "Unexpected postponed ack"
             }
 
-        // TODO: add block numbers / peer numbers
+        // TODO: add block numbers / peer numbers / getMessage
         enum CompletionError extends Throwable:
             case WrongHeaderSignature(vkey: ByteString)
             case WrongTxSignature(txId: TransactionHash, vkey: ByteString)
