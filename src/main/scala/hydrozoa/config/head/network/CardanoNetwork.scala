@@ -3,7 +3,8 @@ package hydrozoa.config.head.network
 import hydrozoa.config.head.rulebased.scripts.RuleBasedScriptAddresses
 import hydrozoa.lib.number.PositiveInt
 import scalus.cardano.address.{Network, ShelleyAddress}
-import scalus.cardano.ledger.{CardanoInfo, Coin, EvaluatorMode, PlutusScriptEvaluator, ProtocolParams, ProtocolVersion, SlotConfig}
+import scalus.cardano.ledger.{CardanoInfo, Coin, EvaluatorMode, PlutusScriptEvaluator, ProtocolParams, ProtocolVersion, SlotConfig, TransactionOutput}
+import scalus.cardano.txbuilder.TransactionBuilder
 
 enum CardanoNetwork(_cardanoInfo: CardanoInfo) extends CardanoNetwork.Section {
     case Mainnet extends CardanoNetwork(CardanoInfo.mainnet)
@@ -48,4 +49,8 @@ object CardanoNetwork {
 
         final def cardanoProtocolVersion: ProtocolVersion = cardanoProtocolParams.protocolVersion
     }
+
+    extension (self: TransactionOutput)
+        def ensureMinAda(config: CardanoNetwork.Section): TransactionOutput =
+            TransactionBuilder.ensureMinAda(self, config.cardanoProtocolParams)
 }

@@ -4,11 +4,11 @@ import cats.data.NonEmptyVector
 import hydrozoa.config.head.initialization.InitialBlock
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
+import hydrozoa.lib.cardano.scalus.txbuilder.DiffHandler.{WrappedCoin, prebalancedLovelaceDiffHandler}
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explain, explainAppendConst, explainConst}
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import hydrozoa.{WrappedCoin, prebalancedLovelaceDiffHandler}
 import monocle.{Focus, Lens}
 import scala.Function.const
 import scala.annotation.tailrec

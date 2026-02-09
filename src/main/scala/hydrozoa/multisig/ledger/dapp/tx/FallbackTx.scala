@@ -2,7 +2,7 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
 import hydrozoa.config.head.HeadConfig
-import hydrozoa.ensureMinAda
+import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.Fallback
@@ -166,7 +166,7 @@ private object FallbackTxOps {
                           ),
                           datumOption = Some(Inline(datum)),
                           scriptRef = None
-                        ).ensureMinAda(config.cardanoProtocolParams)
+                        ).ensureMinAda(config)
 
                     object Default {
                         def apply() = Send(utxo)
@@ -211,7 +211,7 @@ private object FallbackTxOps {
                                     value = Value(config.individualContingency.collateralDeposit),
                                     datumOption = None,
                                     scriptRef = None
-                                  ).ensureMinAda(config.cardanoProtocolParams)
+                                  ).ensureMinAda(config)
                               )
                               .toList
                         )

@@ -4,10 +4,10 @@ import hydrozoa.config.head.initialization.InitialBlock
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant, toQuantizedInstant}
+import hydrozoa.lib.cardano.scalus.txbuilder.DiffHandler.{WrappedCoin, prebalancedLovelaceDiffHandler}
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explainConst}
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
-import hydrozoa.{prebalancedLovelaceDiffHandler, *}
 import monocle.{Focus, Lens}
 import scala.annotation.tailrec
 import scala.util.{Failure, Success}

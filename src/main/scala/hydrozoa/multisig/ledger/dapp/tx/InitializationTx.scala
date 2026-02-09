@@ -5,8 +5,8 @@ import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.*
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
 import hydrozoa.config.head.peers.HeadPeers
-import hydrozoa.ensureMinAda
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.token.CIP67.{HasTokenNames, HeadTokenNames}
@@ -172,7 +172,7 @@ private object InitializationTxOps {
                       multisigRegimeUtxoValue,
                       None,
                       Some(ScriptRef(config.headMultisigScript.script))
-                    ).ensureMinAda(config.cardanoInfo.protocolParams)
+                    ).ensureMinAda(config)
                 }
 
                 object ChangeOutputs {

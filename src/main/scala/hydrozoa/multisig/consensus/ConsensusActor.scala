@@ -5,9 +5,9 @@ import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
-import hydrozoa.attachVKeyWitnesses
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
+import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{AckBlock, AckId}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
@@ -698,7 +698,7 @@ class ConsensusActor(
                             case e => IO.raiseError(e)
                         }
                 )
-                signedTx = attachVKeyWitnesses(tx, vkeyWitnesses)
+                signedTx = tx.attachVKeyWitnesses(vkeyWitnesses)
             } yield txLens.replace(signedTx)(someTx)
         }
 
