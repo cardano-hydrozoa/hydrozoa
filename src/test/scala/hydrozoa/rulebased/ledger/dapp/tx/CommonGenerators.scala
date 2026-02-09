@@ -14,10 +14,10 @@ import hydrozoa.rulebased.ledger.dapp.utxo.RuleBasedTreasuryUtxo
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
 import scalus.builtin.{BLS12_381_G2_Element, ByteString}
-import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
+import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{Utxo, BlockHeader as _, *}
+import scalus.cardano.ledger.{BlockHeader as _, Utxo, *}
 import scalus.crypto.ed25519.VerificationKey
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
 import scalus.ledger.api.v3.TokenName
@@ -40,7 +40,7 @@ object CommonGenerators {
       )
     ] =
         for {
-            
+
             // This is 4 bytes shorter to accommodate CIP-67 prefixes
             // NB: we use the same token name _suffix_ for all head tokens so far, which is not the case in reality
             headTokenSuffix <- genByteStringOfN(28)
@@ -112,7 +112,10 @@ object CommonGenerators {
           value = Value(adaAmount) + beaconToken
         )
 
-    def genCollateralUtxo(config: CardanoNetwork.Section, peer: TestPeer): Gen[(TransactionInput, Babbage)] =
+    def genCollateralUtxo(
+        config: CardanoNetwork.Section,
+        peer: TestPeer
+    ): Gen[(TransactionInput, Babbage)] =
         for {
             input <- arbitrary[TransactionInput]
         } yield (
@@ -176,7 +179,7 @@ object CommonGenerators {
         )
 
     /** Generator for L2 UTXO sets */
-    def genUtxosL2(config: CardanoNetwork.Section,count: Int = 2): Gen[Utxos] =
+    def genUtxosL2(config: CardanoNetwork.Section, count: Int = 2): Gen[Utxos] =
         for {
             outputs <- Gen.listOfN(count, genOutputL2(config))
             utxoIds <- Gen.listOfN(count, arbitrary[TransactionInput])

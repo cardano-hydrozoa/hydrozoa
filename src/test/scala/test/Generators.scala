@@ -19,12 +19,10 @@ import monocle.*
 import monocle.syntax.all.*
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
-
 import scala.collection.immutable.SortedMap
 import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.*
-import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.{*, given}
@@ -187,8 +185,8 @@ object Generators {
           */
         // TODO: make this take all fields as Option and default to generation if None.
         def genAdaOnlyPubKeyUtxo(
-            peer: TestPeer,
             config: CardanoNetwork.Section,
+            peer: TestPeer,
             minimumCoin: Coin = Coin.zero,
             datumGenerator: Option[Gen[Option[DatumOption]]] = None
         ): Gen[Utxo] =
@@ -241,8 +239,8 @@ object Generators {
 
         // Has duplication with genAdaOnlyBabbageOutput
         def genGenesisObligation(
-            peer: TestPeer,
             config: CardanoNetwork.Section,
+            peer: TestPeer,
             minimumCoin: Coin = Coin.zero,
             datumGenerator: Option[Gen[Option[Inline]]] = None
         ): Gen[GenesisObligation] =

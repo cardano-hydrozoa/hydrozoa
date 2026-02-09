@@ -2,10 +2,14 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 //import cats.data.NonEmptyList
 //import cats.effect.unsafe.implicits.global
+//import hydrozoa.config.head.network.CardanoNetwork
+//import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
 //import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 //import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
+//import hydrozoa.lib.number.PositiveInt
 //import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 //import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
+//
 //import java.util.concurrent.atomic.AtomicLong
 //import org.scalacheck.Arbitrary.arbitrary
 //import org.scalacheck.Gen
@@ -27,12 +31,12 @@ package hydrozoa.multisig.ledger.dapp.tx
 //var counter = AtomicLong(0L)
 //
 //def genDepositRecipe(
+//    config: CardanoNetwork.Section,
 //    estimatedFee: Coin = Coin(5_000_000L),
-//    params: ProtocolParams = blockfrost544Params
 //): Gen[DepositTx.Build] =
 //    for {
 //        depositor <- genTestPeer
-//        headAddress <- genScriptAddress()
+//        headAddress <- genScriptAddress(config)
 //        genData = Gen.frequency(
 //          (99, genByteStringData.map(data => SOption.Some(data))),
 //          (1, SOption.None)
@@ -41,8 +45,8 @@ package hydrozoa.multisig.ledger.dapp.tx
 //        refundData <- genData
 //        deadline: BigInt <- Gen.posNum[BigInt]
 //
-//        l2Addr <- genPubkeyAddress()
-//        refundAddr <- genPubkeyAddress()
+//        l2Addr <- genPubkeyAddress(config)
+//        refundAddr <- genPubkeyAddress(config)
 //
 //        depositDatum = DepositUtxo.Datum(
 //          DepositUtxo.Refund.Instructions(
@@ -50,7 +54,7 @@ package hydrozoa.multisig.ledger.dapp.tx
 //            datum = refundData,
 //            startTime = QuantizedInstant(
 //              instant = java.time.Instant.ofEpochMilli(deadline.toLong),
-//              slotConfig = testTxBuilderCardanoInfo.slotConfig
+//              slotConfig = config.slotConfig
 //            )
 //          )
 //        )
@@ -63,51 +67,49 @@ package hydrozoa.multisig.ledger.dapp.tx
 //              value = Value.zero,
 //              datumOption = Some(Inline(depositDatum.toData)),
 //              scriptRef = None
-//            )
-//            ensureMinAda(candidate, params).value.coin
+//            ).ensureMinAda(config)
+//            candidate.value.coin
 //        }
 //
 //        virtualOutputs <- Gen
-//            .nonEmptyListOf(genGenesisObligation(Alice, minimumCoin = Coin.ada(2)))
+//            .nonEmptyListOf(genGenesisObligation(config, Alice, minimumCoin = Coin.ada(2)))
 //            .map(NonEmptyList.fromListUnsafe)
 //
 //        depositAmount = Value.combine(virtualOutputs.map(vo => Value(vo.l2OutputValue)).toList)
 //
+//        minAda = config.babbageUtxoMinLovelace(PositiveInt.unsafeApply(200))
+//
 //        // TODO: use arbitrary values, not just ADA only
 //        fundingUtxos <- Gen
-//            .nonEmptyListOf(genAdaOnlyPubKeyUtxo(depositor))
+//            .nonEmptyListOf(genAdaOnlyPubKeyUtxo(config, depositor))
 //            .map(NonEmptyList.fromListUnsafe)
 //            // FIXME: suchThat wastes a lot of generation time
 //            .suchThat(utxos =>
-//                sumUtxoValues(
-//                  utxos.toList
-//                ).coin > minPubkeyAda() + depositAmount.coin + estimatedFee
+//                utxos.iterator.map(_.output.value)
+//                    .foldLeft(Value.zero)(_ + _)
+//                    .coin > minAda + depositAmount.coin + estimatedFee
 //            )
 //
-//        refundAddr <- genPubkeyAddress()
+//        refundAddr <- genPubkeyAddress(config)
 //
-//        partialRefundTx = RefundTx.Build.PartialResult.PostDated(
-//          ctx = TransactionBuilder.Context.empty(testNetwork),
+//        partialRefundTx = RefundTx.PartialResult.PostDated(
+//          ctx = TransactionBuilder.Context.empty(config.network),
 //          inputValueNeeded = depositAmount,
 //          refundInstructions = DepositUtxo.Refund.Instructions(
 //            address = LedgerToPlutusTranslation.getAddress(refundAddr),
 //            datum = SOption.None,
 //            // TODO: move to propertyM
 //            startTime =
-//                realTimeQuantizedInstant(testTxBuilderCardanoInfo.slotConfig).unsafeRunSync()
+//                realTimeQuantizedInstant(config.slotConfig).unsafeRunSync()
 //          ),
-//          slotConfig = testTxBuilderCardanoInfo.slotConfig
+//          slotConfig = config.slotConfig
 //        )
-//
-//        depositConfig = DepositTx.Config(testTxBuilderCardanoInfo, headAddress, testTxTiming)
-//
-//    } yield DepositTx.Build(
-//      config = depositConfig,
+//    } yield DepositTx.Build(???)(
 //      partialRefundTx = partialRefundTx,
 //      utxosFunding = fundingUtxos,
 //      virtualOutputs = virtualOutputs,
 //      donationToTreasury = Coin(0), // TODO: generate non-zero
-//      changeAddress = depositor.address(testNetwork),
+//      changeAddress = depositor.address(config.network),
 //    )
 //
 //class DepositTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
@@ -122,7 +124,7 @@ package hydrozoa.multisig.ledger.dapp.tx
 //    test("Roundtrip deposit metadata") {
 //        val gen =
 //            for {
-//                addr <- genScriptAddress()
+//                addr <- genScriptAddress(???)
 //                hash <- genByteStringOfN(32)
 //                index <- Gen.posNum[Int].map(_ - 1)
 //            } yield (addr, index, Hash[Blake2b_256, Any](hash))
@@ -140,7 +142,7 @@ package hydrozoa.multisig.ledger.dapp.tx
 //    }
 //
 //    test("Build deposit tx") {
-//        forAll(genDepositRecipe()) { depositTxBuilder =>
+//        forAll(genDepositRecipe(???, ???)) { depositTxBuilder =>
 //            depositTxBuilder.build() match {
 //                case Left(e) => fail(s"Build failed $e")
 //                case Right(depositTx) =>

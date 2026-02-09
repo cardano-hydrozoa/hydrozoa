@@ -52,7 +52,7 @@ object CardanoNetwork {
         final def cardanoProtocolVersion: ProtocolVersion = cardanoProtocolParams.protocolVersion
     }
 
-    extension[T <: TransactionOutput] (self: T)
+    extension [T <: TransactionOutput](self: T)
         def ensureMinAda(config: CardanoNetwork.Section): T =
             TransactionBuilder.ensureMinAda(self, config.cardanoProtocolParams).asInstanceOf[T]
 }
