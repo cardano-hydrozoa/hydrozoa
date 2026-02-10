@@ -241,7 +241,8 @@ trait CardanoLiaison(
       */
     protected[consensus] def handleMajorBlockL1Effects(block: BlockConfirmed.Major): IO[Unit] =
         for {
-            // _ <- IO.println(s"handleMajorBlockL1Effects for block ${block.blockVersion}")
+            _ <- logger.info(s"handleMajorBlockL1Effects for block ${block.blockVersion}")
+            _ <- logger.debug(s"fallback tx validity start: ${block.fallbackTx.validityStart}")
             _ <- stateRef.update(s => {
                 val (blockEffectInputs, blockEffects) =
                     mkHappyPathEffectInputsAndEffectsMajor(block.settlementTx, block.rolloutTxs)
@@ -262,7 +263,7 @@ trait CardanoLiaison(
       */
     protected[consensus] def handleFinalBlockL1Effects(block: BlockConfirmed.Final): IO[Unit] =
         for {
-            // _ <- IO.println(s"handleFinalBlockL1Effects for block ${block.blockVersion}")
+            _ <- logger.info(s"handleFinalBlockL1Effects for block ${block.blockVersion}")
             _ <- stateRef.update(s => {
                 val (blockEffectInputs, blockEffects) =
                     mkHappyPathEffectInputsAndEffectsFinal(
@@ -340,8 +341,6 @@ trait CardanoLiaison(
       */
     private def runEffects: IO[Unit] = for {
 
-        // _ <- IO.println("runEffects")
-
         // 1. Get the L1 state, i.e. the list of utxo ids at the multisig address  + the current time
         resp <- config.cardanoBackend.utxosAt(config.initializationTx.treasuryProduced.address)
 
@@ -371,6 +370,8 @@ trait CardanoLiaison(
 
                     currentTime <- IO.realTime.map(_.toEpochQuantizedInstant(config.slotConfig))
 
+                    _ <- logger.debug(s"current time is $currentTime")
+
                     // (i.e. those that are directly caused by effect inputs in L1 response).
                     dueActions: Seq[DirectAction] = mkDirectActions(
                       state,
@@ -378,54 +379,72 @@ trait CardanoLiaison(
                       currentTime
                     ).fold(e => throw RuntimeException(e.msg), x => x)
 
-                    // 3. Determine whether the initialization requires submission.
                     actionsToSubmit <-
-                        // Empty direct actions is a precondition for the init (happy path) tx submission
                         if dueActions.nonEmpty
                         then IO.pure(dueActions)
                         else {
 
-                            lazy val initAction = {
-                                if currentTime < config.initializationTx.validityEnd
-                                then
-                                    Seq(
-                                      Action.InitializeHead(
-                                        state.happyPathEffects.values.map(_.tx).toSeq
-                                      )
-                                    )
-                                else {
-                                    Seq.empty
-                                }
-                            }
-                            // TODO: check the rule-based treasury, and if it exists, don't try to initialize the head.
-                            state.targetState match {
-                                case TargetState.Active(targetTreasuryUtxoId) =>
-                                    IO.pure(
-                                      if utxoIds.contains(targetTreasuryUtxoId)
-                                      then List.empty // everything is up-to-date on L1
-                                      else initAction
-                                    )
-                                case TargetState.Finalized(finalizationTxHash) =>
-                                    for {
-                                        txResp <- config.cardanoBackend.isTxKnown(
-                                          finalizationTxHash
-                                        )
-                                        _ <- logger.debug(
-                                          s"finalizationTx: hash: $finalizationTxHash txResp: $txResp"
-                                        )
-                                        mbInitAction <- txResp match {
-                                            case Left(err) =>
-                                                for {
-                                                    _ <- logger.error(
-                                                      s"error when getting finalization tx info: ${err}"
-                                                    )
-                                                } yield Seq.empty
-                                            case Right(isKnown) =>
-                                                IO.pure(
-                                                  if isKnown then Seq.empty else initAction
-                                                )
+                            // Empty direct actions indicate another actions should be considered:
+                            //  - the last fallback tx might have become valid
+                            //  - the init (whole happy path) tx submission might be needed
+
+                            // TODO: this is done in a bit a makeshift manner to fix the test, likely we want to do it
+                            //   more systematically
+                            val lastFallback: Option[Transaction] = for {
+                                maxKey <- state.fallbackEffects.keySet.maxOption
+                                fallbackTx = state.fallbackEffects(maxKey)
+                                if utxoIds.contains(
+                                  fallbackTx.treasurySpent.utxoId
+                                ) && fallbackTx.validityStart <= currentTime
+                            } yield fallbackTx.tx
+
+                            lastFallback match {
+                                case Some(fallback) =>
+                                    IO.pure(Seq(Action.FallbackToRuleBased(fallback)))
+                                case None => {
+                                    lazy val initAction = {
+                                        if currentTime < config.initializationTx.validityEnd
+                                        then
+                                            Seq(
+                                              Action.InitializeHead(
+                                                state.happyPathEffects.values.map(_.tx).toSeq
+                                              )
+                                            )
+                                        else {
+                                            Seq.empty
                                         }
-                                    } yield mbInitAction
+                                    }
+                                    // TODO: check the rule-based treasury, and if it exists, don't try to initialize the head.
+                                    state.targetState match {
+                                        case TargetState.Active(targetTreasuryUtxoId) =>
+                                            IO.pure(
+                                              if utxoIds.contains(targetTreasuryUtxoId)
+                                              then List.empty // everything is up-to-date on L1
+                                              else initAction
+                                            )
+                                        case TargetState.Finalized(finalizationTxHash) =>
+                                            for {
+                                                txResp <- config.cardanoBackend.isTxKnown(
+                                                  finalizationTxHash
+                                                )
+                                                _ <- logger.debug(
+                                                  s"finalizationTx: hash: $finalizationTxHash txResp: $txResp"
+                                                )
+                                                mbInitAction <- txResp match {
+                                                    case Left(err) =>
+                                                        for {
+                                                            _ <- logger.error(
+                                                              s"error when getting finalization tx info: ${err}"
+                                                            )
+                                                        } yield Seq.empty
+                                                    case Right(isKnown) =>
+                                                        IO.pure(
+                                                          if isKnown then Seq.empty else initAction
+                                                        )
+                                                }
+                                            } yield mbInitAction
+                                    }
+                                }
                             }
                         }
 

@@ -58,7 +58,7 @@ object Stage1Properties extends YetAnotherProperties("Integration Stage 1"):
     ): org.scalacheck.Test.Parameters = {
         p.withWorkers(1)
             .withMinSuccessfulTests(100) // 10000
-            .withMaxSize(100) // 500
+        // .withMaxSize(100) // 500
     }
 
     private val preprod = StandardCardanoNetwork.Preprod
@@ -71,10 +71,10 @@ object Stage1Properties extends YetAnotherProperties("Integration Stage 1"):
       * to check block briefs.
       */
     // val _ = property("Block propagation works well on L1 mock") = Suite(
-    //  suiteCardano = Mock(Left(preprod)),
-    //  mkTxTiming = TxTiming.default,
-    //  mkGenesisUtxos = yaciTestSauceGenesis(preprod.scalusNetwork),
-    //  commandGen = ArbitraryEventsOnly
+    // suiteCardano = Mock(Left(preprod)),
+    // mkTxTiming = TxTiming.default,
+    // mkGenesisUtxos = yaciTestSauceGenesis(preprod.scalusNetwork),
+    // commandGen = ArbitraryEventsOnly
     // ).property()
 
     val _ = property("Block propagation works well on Yaci devkit") = Suite(
@@ -115,7 +115,10 @@ case class Suite(
     override type State = ModelState
     override type Sut = Stage1Sut
 
-    override val useTestControl: Boolean = suiteCardano == Mock
+    override val useTestControl: Boolean = suiteCardano match {
+        case Mock(_)    => true
+        case Yaci(_, _) => false
+    }
 
     override def commandGenTweaker: [A] => (x$1: Gen[A]) => Gen[A] = suiteCardano match {
         case _: SuiteCardano.Mock => [A] => (g: Gen[A]) => g
@@ -294,7 +297,7 @@ case class Suite(
 
             // Agent actor
             jointLedgerD <- IO.deferred[JointLedger.Handle]
-            agent <- system.actorOf(AgentActor(jointLedgerD, consensusActor))
+            agent <- system.actorOf(AgentActor(jointLedgerD, consensusActor, cardanoLiaison))
 
             // Joint ledger
             initialBlock1 = Block.MultiSigned.Initial(
@@ -384,7 +387,7 @@ case class Suite(
                     _ <- loggerIO.info("Wait a bit Yaci is ready... (")
                     _ <- IO.sleep(1.second)
                     _ <- loggerIO.info(
-                      "Fetching last epoch parameters to check they match ones in the head config... ("
+                      "Fetching last epoch parameters to check they match ones in the head config..."
                     )
                     response <- cardanoBackend.latestParams
                     check = response

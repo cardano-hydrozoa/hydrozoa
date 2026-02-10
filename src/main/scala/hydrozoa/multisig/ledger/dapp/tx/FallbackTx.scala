@@ -25,7 +25,6 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.txbuilder.*
-import scalus.cardano.txbuilder.ScriptSource.NativeScriptAttached
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, *}
 import scalus.ledger.api.v1.PubKeyHash
@@ -175,23 +174,27 @@ object FallbackTx {
 
         ////////////////////////////////////////////////////
         // Define steps
-        val spendHMRW: Spend = Spend(config.multisigRegimeUtxo.asUtxo, hns.witnessAttached)
+        val spendHMRW: Spend = Spend(
+          config.multisigRegimeUtxo.asUtxo,
+          // TODO: switch back to witnessAttached after resolving https://github.com/scalus3/scalus/issues/207
+          hns.witnessValue
+        )
 
         val spendMultisigTreasury: Spend =
-            Spend(treasuryUtxoSpent.asUtxo, NativeScriptWitness(NativeScriptAttached, Set.empty))
+            Spend(treasuryUtxoSpent.asUtxo, hns.witnessAttached)
 
         val burnMultisigRegimeToken: Mint = Mint(
           hns.policyId,
           assetName = tokenNames.multisigRegimeTokenName,
           amount = -1,
-          witness = NativeScriptWitness(NativeScriptAttached, Set.empty)
+          witness = hns.witnessAttached
         )
 
         val mintVoteTokens = Mint(
           hns.policyId,
           assetName = voteTokenName,
           amount = hns.numSigners + 1L,
-          witness = NativeScriptWitness(NativeScriptAttached, Set.empty)
+          witness = hns.witnessAttached
         )
 
         val createDefaultVoteUtxo: Send = Send(defaultVoteUtxo)

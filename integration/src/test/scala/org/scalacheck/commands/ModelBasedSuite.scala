@@ -8,7 +8,12 @@ import org.slf4j.Logger
 import scala.annotation.tailrec
 import scala.concurrent.duration.{Duration, DurationInt, FiniteDuration}
 
-/** TODO: Add statistics: -- number of commands in cases -- types of commands -- what else?
+/** TODO:
+  *   - Add statistics:
+  *     - number of commands in cases
+  *     - types of commands
+  *   - Reproducibility (now seeding is broken)
+  *   - Shrinking?
   */
 
 // ===================================
@@ -285,11 +290,12 @@ trait ModelBasedSuite {
 
         val suts = collection.mutable.Map.empty[AnyRef, Option[State => IO[Sut]]]
 
-        Prop.forAll(genMkTestCase) { mkTestCase =>
-            logger.info("Preparing the next test case...")
+        Prop.forAll(genTestCase) { testCase =>
+            logger.info("Executing the next test case...")
 
             try {
                 val sutId = suts.synchronized {
+                    // TODO: now, when we have imperation initEnv we can revert this part
                     // val inactiveSuts = suts.values.collect { case (state, None) => state }
                     // val runningSuts = suts.values.collect { case (state, Some(_)) => state }
                     if canStartupNewSut() then {
@@ -304,7 +310,10 @@ trait ModelBasedSuite {
 
                         if suts.contains(id) then {
                             val _ = suts.put(id, Some(startupSut))
-                            runTestCase(initEnv, mkTestCase, startupSut)
+                            val prop = runTestCase(testCase, startupSut)
+                            logger.info("Test case property is evaluated.")
+                            prop
+
                         } else {
                             logger.error("WARNING: you should never not see that")
                             Prop.undecided
@@ -343,8 +352,8 @@ trait ModelBasedSuite {
 
     /** Test case generator.
       */
-    private def genMkTestCase: Gen[Env => TestCase] = {
-        import Gen.{const, sized}
+    private def genTestCase: Gen[TestCase] = {
+        import Gen.sized
 
         /** Generates the sequence of commands of size [[size]] using initial state
           * [[initialState]].
@@ -354,7 +363,7 @@ trait ModelBasedSuite {
           */
         def sizedCmds(initialState: State)(size: Int): Gen[(State, Commands)] = {
             val l: List[Unit] = List.fill(size)(())
-            l.foldLeft(const((initialState, Nil: Commands))) { (g, _) =>
+            l.foldLeft(Gen.const((initialState, Nil: Commands))) { (g, _) =>
                 for {
                     (s0, cs) <- g
                     c <- commandGen.genNextCommand(s0).suchThat(_.preCondition(s0))
@@ -379,18 +388,15 @@ trait ModelBasedSuite {
             case _                            => (s, false)
         }
 
-        val ret: Gen[Env => TestCase] = {
-            Gen.const((env: Env) => {
-                (for {
-                    s0: State <- genInitialState(env)
-                    (s1, seqCmds) <- commandGenTweaker(sized(sizedCmds(s0)))
-                } yield TestCase(s0, seqCmds))
-                    .suchThat(precondition)
-                    .sample
-                    .get
-            })
-        }
-        ret
+        for {
+            _ <- Gen.const(
+              logger.debug("Initializing the environment and generate the test case...")
+            )
+            s0: State <- genInitialState(initEnv)
+            (_, seqCmds) <- commandGenTweaker(sized(sizedCmds(s0)))
+            tc = TestCase(s0, seqCmds)
+            if precondition(tc)
+        } yield tc
     }
 
     // ===================================
@@ -398,14 +404,16 @@ trait ModelBasedSuite {
     // ===================================
 
     private def runTestCase(
-        initEnv: Env,
-        mkTestCase: Env => TestCase,
+        testCase: TestCase,
         startupSut: State => IO[Sut]
     ): Prop = {
+        val size = testCase.commands.size
+        logger.debug(s"Sequential Commands:\n${prettyCmdsRes(testCase.commands, size)}\n")
 
-        val (_sut, p, s, lastCmd, testCase) =
-            if useTestControl then runCommandsWithTestControl(initEnv, mkTestCase, startupSut)
-            else runCommandsPlain(initEnv, mkTestCase, startupSut)
+        val (_sut, p, s, lastCmd, _) =
+            if useTestControl
+            then runCommandsWithTestControl(testCase, startupSut)
+            else runCommandsPlain(testCase, startupSut)
 
         p.flatMap { r =>
             if r.failure then
@@ -434,14 +442,9 @@ trait ModelBasedSuite {
       * backends like Yaci where wall-clock time must elapse.
       */
     private def runCommandsPlain(
-        initEnv: Env,
-        mkTestCase: Env => TestCase,
+        testCase: TestCase,
         startupSut: State => IO[Sut]
     ): (Sut, Prop, State, Int, TestCase) = {
-        logger.debug("Initializing the environment and generate the test case...")
-        val env = initEnv
-        val testCase = mkTestCase(env)
-
         logger.debug("Using plain IO to run the test case...")
         val io = for {
             initial <- startupSut(testCase.initialState).map(sut =>
@@ -481,8 +484,7 @@ trait ModelBasedSuite {
       * runs postCondition, and releases the gate for the next command.
       */
     private def runCommandsWithTestControl(
-        initEnv: Env,
-        mkTestCase: Env => TestCase,
+        testCase: TestCase,
         startupSut: State => IO[Sut]
     ): (Sut, Prop, State, Int, TestCase) = {
         import java.util.concurrent.atomic.AtomicReference
@@ -493,9 +495,7 @@ trait ModelBasedSuite {
         // The outer sets this to true to release the inner after advancing time.
         val gate = new AtomicReference[Boolean](false)
 
-        logger.debug("Initializing the environment and generate the test case...")
-        val env = initEnv
-        val testCase = mkTestCase(env)
+        logger.debug("Using TestControl to run the test case...")
 
         // The inner program: newSut, then for each command:
         //   1. sleep(settling) — keeps inner busy while outer ticks actors
@@ -515,11 +515,13 @@ trait ModelBasedSuite {
                     else
                         for {
                             // Sleep for the settling window so the outer can tick actors
-                            // and let pending messages propagate before the command runs.
+                            // and let pending messages propagate before the advancing the time
+                            // and after, before running the command.
                             _ <- IO.sleep(settling)
                             _ <- IO(pendingDelay.set(Some(c.delay)))
                             _ <- IO.cede.whileM_(IO(!gate.get))
                             _ <- IO(gate.set(false))
+                            _ <- IO.sleep(settling)
                             pred <- c.runPC(sut)
                         } yield (sut, p && pred(s), c.advanceState(s), lastCmd + 1)
                 }
@@ -574,12 +576,14 @@ trait ModelBasedSuite {
                                     _ <- IO(totalAdvanced.addAndGet(delay.toNanos): Unit)
 
                                     // 6. The inner already slept for `settling` before
-                                    // signalling. Advance the remainder so total virtual
-                                    // time equals max(delay, settling). When delay < settling
+                                    // signalling and going to sleep after we advance the time.
+                                    // Advance the remainder so total virtual
+                                    // time equals max(delay, settling * 2).
+                                    // When delay < settling * 2
                                     // the settling sleep already covered it; no further
                                     // advance is needed.
                                     _ <- {
-                                        val remaining = delay - settling
+                                        val remaining = delay - settling * 2
                                         if remaining > Duration.Zero then tc.advance(remaining)
                                         else IO.unit
                                     }

@@ -201,7 +201,8 @@ object SettlementTx {
                 def steps(args: Args): List[TransactionBuilderStep] =
                     List(
                       stepSettlementMetadata,
-                      referenceHMS,
+                      // TODO: switch back to witnessAttached after resolving https://github.com/scalus3/scalus/issues/207
+                      // referenceHMS,
                       consumeTreasury(args.treasuryToSpend),
                       sendTreasury(args),
                       validityEndSlot(args.validityEnd.toSlot),
@@ -219,7 +220,11 @@ object SettlementTx {
                 private def consumeTreasury(
                     treasuryToSpend: MultisigTreasuryUtxo
                 ): Spend =
-                    Spend(treasuryToSpend.asUtxo, config.headMultisigScript.witnessAttached)
+                    Spend(
+                      treasuryToSpend.asUtxo,
+                      // TODO: switch back to witnessAttached after resolving https://github.com/scalus3/scalus/issues/207
+                      config.headMultisigScript.witnessValue
+                    )
 
                 private def sendTreasury(args: Args): Send =
                     Send(treasuryOutput(args))

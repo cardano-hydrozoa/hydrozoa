@@ -10,6 +10,7 @@ import hydrozoa.multisig.ledger.dapp.utxo.MultisigTreasuryUtxo
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.dapp.state.VoteDatum as VD
 import hydrozoa.{VerificationKeyBytes, ensureMinAda, maxNonPlutusTxFee, given}
+import monocle.Focus.focus
 import scala.collection.immutable.SortedMap
 import scalus.builtin.Data
 import scalus.builtin.Data.toData
@@ -160,7 +161,10 @@ object InitializationTxSeq {
                       )
                     )
 
-        } yield InitializationTxSeq(initializationTx = iTx, fallbackTx = expectedFallbackTx)
+        } yield InitializationTxSeq(
+          initializationTx = iTx,
+          fallbackTx = expectedFallbackTx.txLens.replace(fallbackTx)(expectedFallbackTx)
+        )
     }
 
     /* OUTLINE:

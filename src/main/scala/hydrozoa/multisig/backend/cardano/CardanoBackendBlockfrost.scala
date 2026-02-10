@@ -381,7 +381,8 @@ object CardanoBackendBlockfrost:
     ): IO[CardanoBackendBlockfrost] =
         IO {
             val baseUrl = url.fold(_.url, x => x)
-            val backendService = BFBackendService(baseUrl, apiKey)
+            // NB: Bloxbean requires the trailing slash
+            val backendService = BFBackendService(baseUrl + "/", apiKey)
             // Scalus Blockfrost provider
             given sttp.client4.Backend[scala.concurrent.Future] = DefaultFutureBackend()
             val blockfrostProvider = BlockfrostProvider(apiKey, baseUrl)

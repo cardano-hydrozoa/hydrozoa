@@ -108,8 +108,13 @@ object InitializationTx {
           1,
           config.headMultisigScript.witnessAttached
         )
+
+        // TODO: switch back to witnessAttached after resolving https://github.com/scalus3/scalus/issues/207
+        // val hmrwOutput =
+        //    Babbage(headAddress, mrValue, None, Some(ScriptRef(config.headMultisigScript.script)))
+        //        .ensureMinAda(config.cardanoInfo.protocolParams)
         val hmrwOutput =
-            Babbage(headAddress, mrValue, None, Some(ScriptRef(config.headMultisigScript.script)))
+            Babbage(headAddress, mrValue, None, None)
                 .ensureMinAda(config.cardanoInfo.protocolParams)
 
         val createTreasury: Send = Send(
@@ -201,6 +206,7 @@ object InitializationTx {
             config.tokenNames.multisigRegimeTokenName,
             utxoId = TransactionInput(finalized.transaction.id, 1),
             output = hmrwOutput,
+            // TODO: switch back to witnessAttached after resolving https://github.com/scalus3/scalus/issues/207
             script = config.headMultisigScript
           ),
           tokenNames = config.tokenNames,
@@ -381,19 +387,20 @@ object InitializationTx {
                       InvalidTransactionError("multisig witness utxo has a non-empty datum")
                     )
 
-            // script
-            _ <-
-                if actualMultisigRegimeOutput.scriptRef.contains(
-                      ScriptRef.apply(expectedHNS.script)
-                    )
-                then Right(())
-                else
-                    Left(
-                      InvalidTransactionError(
-                        "Multisig regime witness UTxO does not contain the expected head" +
-                            "native script"
-                      )
-                    )
+            // TODO: switch back to witnessAttached after resolving https://github.com/scalus3/scalus/issues/207
+            //// script
+            // _ <-
+            //    if actualMultisigRegimeOutput.scriptRef.contains(
+            //          ScriptRef.apply(expectedHNS.script)
+            //        )
+            //    then Right(())
+            //    else
+            //        Left(
+            //          InvalidTransactionError(
+            //            "Multisig regime witness UTxO does not contain the expected head" +
+            //                "native script"
+            //          )
+            //        )
 
             // ttl should be present
             validityEndSlot <- mbTtl

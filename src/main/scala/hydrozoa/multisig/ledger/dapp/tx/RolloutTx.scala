@@ -155,7 +155,11 @@ object RolloutTx {
                 def spendRollout(
                     resolvedUtxo: Utxo
                 ): Spend =
-                    Spend(resolvedUtxo, config.headMultisigScript.witnessAttached)
+                    Spend(
+                      resolvedUtxo,
+                      // TODO: switch back to witnessAttached after resolving https://github.com/scalus3/scalus/issues/207
+                      config.headMultisigScript.witnessValue
+                    )
             }
 
             object Placeholder {

@@ -21,28 +21,39 @@ object Generators:
         currentTime: QuantizedInstant,
         settlementExpirationTime: QuantizedInstant,
         competingFallbackStartTime: QuantizedInstant,
-        slotConfig: SlotConfig
-    ): Gen[DelayCommand] = for {
-        delay <- Gen
-            .frequency(
-              50 -> Gen
-                  .choose(currentTime, settlementExpirationTime)
-                  .flatMap(d => DelayCommand(Delay.EndsBeforeHappyPathExpires(d - currentTime))),
-              1 -> Gen
-                  .choose(settlementExpirationTime, competingFallbackStartTime)
-                  .flatMap(d => DelayCommand(Delay.EndsInTheSilencePeriod(d - currentTime))),
-              1 ->
-                  Gen
-                      .choose(
-                        competingFallbackStartTime,
-                        competingFallbackStartTime + QuantizedFiniteDuration(
-                          slotConfig,
-                          (competingFallbackStartTime - currentTime).finiteDuration / 10
+        slotConfig: SlotConfig,
+        blockNumber: BlockNumber
+    ): Gen[DelayCommand] =
+        val stayOnHappyPathDelay = Gen
+            .choose(currentTime, settlementExpirationTime)
+            .flatMap(d => DelayCommand(Delay.EndsBeforeHappyPathExpires(d - currentTime)))
+        for {
+            delay <-
+                if blockNumber < 1
+                then stayOnHappyPathDelay
+                else
+                    Gen
+                        .frequency(
+                          1 -> stayOnHappyPathDelay,
+                          1 -> Gen
+                              .choose(settlementExpirationTime, competingFallbackStartTime)
+                              .flatMap(d =>
+                                  DelayCommand(Delay.EndsInTheSilencePeriod(d - currentTime))
+                              ),
+                          1 ->
+                              Gen
+                                  .choose(
+                                    competingFallbackStartTime,
+                                    competingFallbackStartTime + QuantizedFiniteDuration(
+                                      slotConfig,
+                                      (competingFallbackStartTime - currentTime).finiteDuration / 10
+                                    )
+                                  )
+                                  .flatMap(d =>
+                                      DelayCommand(Delay.EndsAfterHappyPathExpires(d - currentTime))
+                                  ),
                         )
-                      )
-                      .flatMap(d => DelayCommand(Delay.EndsInTheSilencePeriod(d - currentTime))),
-            )
-    } yield delay
+        } yield delay
 
     def genStartBlock(
         prevBlockNumber: BlockNumber,
@@ -92,10 +103,11 @@ object ArbitraryEventsOnly extends CommandGen[ModelState, Stage1Sut]:
                             )
                         Generators
                             .genDelay(
-                              state.currentTime.instant,
-                              settlementExpirationTime,
-                              state.competingFallbackStartTime,
-                              state.cardanoInfo.slotConfig
+                              currentTime = state.currentTime.instant,
+                              settlementExpirationTime = settlementExpirationTime,
+                              competingFallbackStartTime = state.competingFallbackStartTime,
+                              slotConfig = state.cardanoInfo.slotConfig,
+                              blockNumber = blockNumber
                             )
                             .map(AnyCommand(_))
 
