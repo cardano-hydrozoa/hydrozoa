@@ -1,6 +1,9 @@
 package hydrozoa.multisig.ledger.dapp.txseq
 
 import hydrozoa.multisig.ledger.dapp.tx.*
+import hydrozoa.multisig.ledger.dapp.txseq.SeededFinalization.property
+import org.scalacheck.{Prop, Properties, Test}
+import org.scalacheck.Prop.{forAll, propBoolean}
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 import scalus.cardano.ledger.*
@@ -8,6 +11,20 @@ import scalus.cardano.ledger.rules.{CardanoMutator, Context, State}
 import scalus.cardano.txbuilder.TransactionBuilder
 import test.*
 import test.TransactionChain.*
+
+object SeededFinalization extends Properties("Finalization Tx Seq") {
+    import Prop.forAll
+    override def overrideParameters(p: Test.Parameters): Test.Parameters = {
+        p.withMinSuccessfulTests(10_000).withInitialSeed(-1574138723293646171L)
+    }
+
+    val _ = property("Build finalization tx sequence") =
+        forAll(genFinalizationTxSeqBuilder()) { (builder, args, _) =>
+            val res = builder.build(args)
+            s"Build failed with error: $res" |: res.isRight
+        }
+}
+
 
 class FinalizationTxSeqBuilderTest extends AnyFunSuite with ScalaCheckPropertyChecks {
 
