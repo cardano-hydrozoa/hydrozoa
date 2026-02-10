@@ -63,8 +63,21 @@ private object InitializationTxOps {
 
         lazy val result: BuildErrorOr[InitializationTx] = for {
             _ <- Either
-                .cond(config.isBalancedInitializationFunding, (), ???)
-                .explainConst("Initialization tx funding is unbalanced")
+                .cond(
+                  config.isBalancedInitializationFunding,
+                  (),
+                  SomeBuildError.BalancingError(
+                    TxBalancingError.Failed(new IllegalArgumentException),
+                    TransactionBuilder.Context.empty(networkId = config.network)
+                  )
+                )
+                .explainConst(
+                  "Initialization tx funding is unbalanced. We must have" +
+                      "\n\tconfig.initialFundingValue == config.initialL2Value " +
+                    "+ Value(config.initialEquityContributed " +
+                    "+ config.totalFallbackContingency)" +
+                      ""
+                )
 
             unbalanced <- time("TransactionBuilder.build") {
                 TransactionBuilder

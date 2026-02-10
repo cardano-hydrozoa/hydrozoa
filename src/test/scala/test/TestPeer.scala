@@ -6,6 +6,7 @@ import com.bloxbean.cardano.client.common.model.Network as BBNetwork
 import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath
 import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath.createExternalAddressDerivationPathForAccount
 import hydrozoa.*
+import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.cardano.wallet.WalletModule
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, HeadPeerWallet}
@@ -131,6 +132,10 @@ object TestPeer:
             if peerNumRange.contains(i) then TestPeer.fromOrdinal(i).toString else "Unknown"
         }
 
+    extension (testPeers: NonEmptyList[TestPeer])
+        def asHeadPeers: HeadPeers =
+            HeadPeers(testPeers.map(_.wallet.exportVerificationKey))
+
 // ===================================
 // Generators
 // ===================================
@@ -141,7 +146,7 @@ val genTestPeer: Gen[TestPeer] = {
     } yield TestPeer.fromOrdinal(i)
 }
 
-def genTestPeers(minPeers: Int = 2, maxPeers: Int = 5): Gen[NonEmptyList[TestPeer]] = {
+def testPeersGenerator(minPeers: Int = 2, maxPeers: Int = 5): Gen[NonEmptyList[TestPeer]] = {
     require(0 < minPeers && minPeers < TestPeer.nNamedPeers)
     require(minPeers <= maxPeers && maxPeers < TestPeer.nNamedPeers)
     for {

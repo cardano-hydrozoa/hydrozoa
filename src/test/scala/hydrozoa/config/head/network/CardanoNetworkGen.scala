@@ -4,7 +4,7 @@ import org.scalacheck.Gen
 
 /** Cannot generate a [[CardanoNetwork.Custom]] because we would need an arbitrary [[CardanoInfo]]
   */
-lazy val cardanoNetworkGen: Gen[CardanoNetwork] =
+lazy val cardanoNetworkGenerator: Gen[CardanoNetwork] =
     Gen.oneOf(
       Gen.const(CardanoNetwork.Mainnet),
       Gen.const(CardanoNetwork.Preprod),

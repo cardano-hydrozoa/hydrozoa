@@ -44,7 +44,7 @@ object CommonGenerators {
             // This is 4 bytes shorter to accommodate CIP-67 prefixes
             // NB: we use the same token name _suffix_ for all head tokens so far, which is not the case in reality
             headTokenSuffix <- genByteStringOfN(28)
-            peers <- genTestPeers()
+            peers <- testPeersGenerator()
             headPeers = HeadPeers(peers.map(_.wallet.exportVerificationKey))
             // L2 consensus parameters hash
             params <- genByteStringOfN(32)

@@ -34,8 +34,11 @@ object CardanoNetwork {
         def cardanoNetwork: CardanoNetwork
 
         def cardanoInfo: CardanoInfo
+
         def network: Network
+
         def slotConfig: SlotConfig
+
         def cardanoProtocolParams: ProtocolParams
 
         final def babbageUtxoMinLovelace(serializedSize: PositiveInt): Coin = Coin(
@@ -49,7 +52,7 @@ object CardanoNetwork {
         final def plutusScriptEvaluatorForTxBuild: PlutusScriptEvaluator =
             PlutusScriptEvaluator(cardanoInfo, EvaluatorMode.EvaluateAndComputeCost)
 
-        final def cardanoProtocolVersion: ProtocolVersion = cardanoProtocolParams.protocolVersion
+        final def cardanoProtocolVersion: ProtocolVersion = cardanoProtocolParams.protocolVersion         
     }
 
     extension [T <: TransactionOutput](self: T)
