@@ -25,7 +25,6 @@ lazy val core: Project = (project in file("."))
         // Using `org.scalus" %% "scalus` gives an error when using locally vendored version.
         "org.scalus" % "scalus_3" % scalusVersion withSources (),
         "org.scalus" % "scalus-cardano-ledger_3" % scalusVersion withSources (),
-        // "org.scalus" % "scalus-bloxbean-cardano-client-lib_3" % scalusVersion withSources (),
         // Cardano Client library
         // "com.bloxbean.cardano" % "cardano-client-lib" % bloxbeanVersion,
         "com.bloxbean.cardano" % "cardano-client-backend-blockfrost" % bloxbeanVersion,

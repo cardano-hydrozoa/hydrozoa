@@ -203,7 +203,8 @@ private object FinalizationTxOps {
               config.headMultisigScript.script.scriptHash,
               config.headTokenNames.treasuryTokenName,
               -1,
-              config.headMultisigScript.witnessValue
+                // TODO: switch back to witnessAttached after resolving https://github.com/scalus3/scalus/issues/207
+                config.headMultisigScript.witnessValue
             )
 
             private val burnMultisigRegimeToken = Mint(
@@ -218,7 +219,8 @@ private object FinalizationTxOps {
             /////////////////////////////////////////////////////////
             // Spend steps
             private val spendTreasury =
-                Spend(treasuryToSpend.asUtxo, config.headMultisigScript.witnessAttached)
+                // TODO: switch back to witnessAttached after resolving https://github.com/scalus3/scalus/issues/207
+                Spend(treasuryToSpend.asUtxo, config.headMultisigScript.witnessValue)
 
             private val spendMultisigRegime =
                 Spend(config.multisigRegimeUtxo.asUtxo, config.headMultisigScript.witnessAttached)

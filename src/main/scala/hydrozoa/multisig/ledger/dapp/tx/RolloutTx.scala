@@ -159,7 +159,8 @@ private object RolloutTxOps {
             /////////////////////////////////////////////////////////
             // Spend rollout
             def spendRollout(resolvedUtxo: Utxo): Spend =
-                Spend(resolvedUtxo, config.headMultisigScript.witnessAttached)
+                // TODO: switch back to witnessAttached after resolving https://github.com/scalus3/scalus/issues/207
+                Spend(resolvedUtxo, config.headMultisigScript.witnessValue)
 
             /////////////////////////////////////////////////////////
             // Send rollout (maybe)

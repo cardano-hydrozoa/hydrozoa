@@ -184,7 +184,9 @@ private object InitializationTxOps {
                       config.headMultisigAddress,
                       multisigRegimeUtxoValue,
                       None,
-                      Some(ScriptRef(config.headMultisigScript.script))
+                      // TODO: switch back to witnessAttached after resolving https://github.com/scalus3/scalus/issues/207
+                      //Some(ScriptRef(config.headMultisigScript.script))
+                      None
                     ).ensureMinAda(config)
                 }
 
@@ -437,19 +439,20 @@ private object InitializationTxOps {
                       InvalidTransactionError("multisig witness utxo has a non-empty datum")
                     )
 
-            // script
-            _ <-
-                if actualMultisigRegimeOutput.scriptRef.contains(
-                      ScriptRef.apply(expectedHNS.script)
-                    )
-                then Right(())
-                else
-                    Left(
-                      InvalidTransactionError(
-                        "Multisig regime witness UTxO does not contain the expected head" +
-                            "native script"
-                      )
-                    )
+            // TODO: switch back to witnessAttached after resolving https://github.com/scalus3/scalus/issues/207
+            //// script
+            // _ <-
+            //    if actualMultisigRegimeOutput.scriptRef.contains(
+            //          ScriptRef.apply(expectedHNS.script)
+            //        )
+            //    then Right(())
+            //    else
+            //        Left(
+            //          InvalidTransactionError(
+            //            "Multisig regime witness UTxO does not contain the expected head" +
+            //                "native script"
+            //          )
+            //        )
 
             // ttl should be present
             validityEndSlot <- mbTtl.toRight(TtlIsMissing)

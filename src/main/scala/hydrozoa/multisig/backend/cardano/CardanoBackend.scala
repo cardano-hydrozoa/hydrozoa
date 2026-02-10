@@ -2,7 +2,7 @@ package hydrozoa.multisig.backend.cardano
 
 import scalus.builtin.Data
 import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.{AssetName, PolicyId, Transaction, TransactionHash, Utxos}
+import scalus.cardano.ledger.{AssetName, PolicyId, ProtocolParams, Transaction, TransactionHash, Utxos}
 
 /** Notes:
   *   - Only [[ShelleyAddress]] are supported
@@ -63,6 +63,10 @@ trait CardanoBackend[F[_]]:
       * @return
       */
     def submitTx(tx: Transaction): F[Either[Error, Unit]]
+
+    /** Retrieve the latest protocol parameters.
+      */
+    def latestParams: F[Either[Error, ProtocolParams]]
 
 object CardanoBackend:
 
