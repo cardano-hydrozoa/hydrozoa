@@ -10,8 +10,9 @@ import hydrozoa.integration.stage1.AgentActor.CompleteBlock
 import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.backend.cardano.CardanoBackend
-import hydrozoa.multisig.consensus.ConsensusActor
+import hydrozoa.multisig.consensus.CardanoLiaison.Timeout
 import hydrozoa.multisig.consensus.ack.AckBlock
+import hydrozoa.multisig.consensus.{CardanoLiaison, ConsensusActor}
 import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockNumber}
@@ -56,13 +57,15 @@ object AgentActor:
         type Sync = SyncRequest.Envelope[IO, CompleteBlock, Block.Unsigned.Next]
 
     type Request =
-        LedgerEvent | StartBlock | CompleteBlock.Sync | ConsensusActor.Request | Unit
+        LedgerEvent | StartBlock | CompleteBlock.Sync | ConsensusActor.Request |
+            CardanoLiaison.Timeout.type | Unit
 
     type Handle = ActorRef[IO, Request]
 
 case class AgentActor(
     jointLedgerD: Deferred[IO, JointLedger.Handle],
-    consensusActor: ConsensusActor.Handle
+    consensusActor: ConsensusActor.Handle,
+    cardanoLiaison: CardanoLiaison.Handle
 ) extends Actor[IO, AgentActor.Request]:
 
     private val jointLedgerRef = Ref.unsafe[IO, Option[JointLedger.Handle]](None)
@@ -80,6 +83,8 @@ case class AgentActor(
                 jointLedger <- jointLedgerD.get
                 _ <- jointLedgerRef.set(Some(jointLedger))
             } yield ()
+
+        case t: CardanoLiaison.Timeout.type => cardanoLiaison ! t
 
         // Sync SUT commands
         case req: CompleteBlock.Sync =>
@@ -122,9 +127,10 @@ val logger = Logging.loggerIO("Stage1.Commands")
 
 implicit object DelayCommandSut extends SutCommand[DelayCommand, Unit, Stage1Sut] {
     override def run(cmd: DelayCommand, sut: Stage1Sut): IO[Unit] = for {
-        _ <- logger.debug(s">> DelayCommand(delay=${cmd.delaySpec.duration})")
+        _ <- logger.debug(s">> DelayCommand(delay=${cmd.delaySpec})")
         now <- IO.realTimeInstant
         _ <- logger.debug(s"Current time: $now")
+        _ <- sut.agent ! Timeout
     } yield ()
 }
 

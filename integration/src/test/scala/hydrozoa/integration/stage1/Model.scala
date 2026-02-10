@@ -7,7 +7,7 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.block.{BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming
 import hydrozoa.multisig.ledger.event.LedgerEvent
-import scalus.cardano.ledger.{SlotConfig, Transaction, TransactionInput, TransactionOutput, Utxo}
+import scalus.cardano.ledger.{CardanoInfo, Transaction, TransactionInput, TransactionOutput, Utxo}
 import test.TestPeer
 
 // ===================================
@@ -26,7 +26,7 @@ case class ModelState(
     initTxSigned: Transaction,
     fallbackTxSigned: Transaction,
     // Needed for command generators
-    slotConfig: SlotConfig,
+    cardanoInfo: CardanoInfo,
 
     // Block producing cycle
     currentTime: CurrentTime,

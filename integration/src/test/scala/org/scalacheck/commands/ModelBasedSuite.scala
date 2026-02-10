@@ -5,7 +5,16 @@ import cats.effect.testkit.TestControl
 import cats.effect.unsafe.implicits.global
 import org.scalacheck.{Gen, Prop, Shrink}
 import org.slf4j.Logger
+import scala.annotation.tailrec
 import scala.concurrent.duration.{Duration, DurationInt, FiniteDuration}
+
+/** TODO:
+  *   - Add statistics:
+  *     - number of commands in cases
+  *     - types of commands
+  *   - Reproducibility (now seeding is broken)
+  *   - Shrinking?
+  */
 
 // ===================================
 // Command typeclasses
@@ -167,6 +176,7 @@ trait CommandGen[State, Sut]:
   *     - [[ModelCommand]]: state transitions, preconditions, scheduling
   *     - [[SutCommand]]: execution against the SUT
   *     - [[CommandProp]]: postcondition checks
+  *   - [[Env]] was added to facilitate running on environments which you can't control
   *   - Better failure reporting (commands list, the last executed command)
   *
   * Limitations:
@@ -176,11 +186,83 @@ trait ModelBasedSuite {
 
     private val logger: Logger = org.slf4j.LoggerFactory.getLogger(ModelBasedSuite.getClass)
 
+    /** Represent [some parts of] the environment on which a test case is run.
+      *
+      * The flow of every test case is as follows (a bit simplified):
+      *
+      * initEnv -> Env -> genInitState -> State -> startupSut -> Sut -> ... Command.runPC ->
+      * shutdownSut -> Prop
+      */
+    type Env
+
     /** The model state type.  Must be immutable. */
     type State
 
     /** A type representing one instance of the system under test (SUT). */
     type Sut
+
+    // ===================================
+    // Environment, model, and commands
+    // ===================================
+
+    /** TODO:
+      */
+    def initEnv: Env
+
+    /** A generator that should produce an initial [[State]] instance that is usable by
+      * [[startupSut]] to create a new system under test.
+      */
+    def genInitialState(env: Env): Gen[State]
+
+    /** The precondition for the initial state, when no commands yet have run. */
+    def initialPreCondition(state: State): Boolean = true
+
+    /** A generator that, given the current model state, should produce a suitable command. The
+      * command should always be well-formed, but MUST NOT necessarily be correct, i.e. it may be
+      * expected to error upon running against the SUT. The correctness is indicated by
+      * [[ModelCommand.preCondition]] and the expected behavior of SUT is checked based on that
+      * flag.
+      */
+    def commandGen: CommandGen[State, Sut]
+
+    /** A custom command generator modificator like resize or something like that (noop by default).
+      */
+    def commandGenTweaker: [A] => Gen[A] => Gen[A] = [A] => (g: Gen[A]) => g
+
+    // ===================================
+    // SUT
+    // ===================================
+
+    /** Decides if [[startupSut]] should be allowed to be called with the specified state value.
+      * This can be used to limit the number of co-existing [[Sut]] instances.
+      *
+      * If you want to allow only one [[Sut]] instance to exist at any given time (a singleton
+      * [[Sut]]), implement this method the following way:
+      *
+      * {{{
+      *  def canCreateNewSut(inactiveSuts: Iterable[State]
+      *    runningSuts: Iterable[State]
+      *  ) = inactiveSuts.isEmpty && runningSuts.isEmpty
+      * }}}
+      */
+    def canStartupNewSut(
+    ): Boolean
+
+    /** Create a new [[Sut]] instance with an internal state that corresponds to the provided
+      * abstract state instance.
+      */
+    def startupSut(state: State): IO[Sut]
+
+    /** Shutdown the SUT instance, and release any resources related to it. May also run some checks
+      * upon shutting SUT down, for which the latest state can be used.
+      *
+      * TODO: split up: preShutdownCondition / shutdownSut
+      */
+    def shutdownSut(lastState: State, sut: Sut): IO[Prop]
+
+    // ===================================
+    // TestControl
+    // ===================================
 
     /** Whether to use [[TestControl]] for time manipulation. When true (default), delays declared
       * by commands are advanced via the [[TestControl]] virtual clock rather than real
@@ -198,95 +280,27 @@ trait ModelBasedSuite {
       */
     def settling: FiniteDuration = 1.second
 
-    /** Decides if [[newSut]] should be allowed to be called with the specified state value. This
-      * can be used to limit the number of co-existing [[Sut]] instances.
-      *
-      * If you want to allow only one [[Sut]] instance to exist at any given time (a singleton
-      * [[Sut]]), implement this method the following way:
-      *
-      * {{{
-      *  def canCreateNewSut(candidateState: State, inactiveSuts: Iterable[State]
-      *    runningSuts: Iterable[State]
-      *  ) = inactiveSuts.isEmpty && runningSuts.isEmpty
-      * }}}
-      */
-    def canCreateNewSut(
-        candidateState: State,
-        inactiveSuts: Iterable[State],
-        runningSuts: Iterable[State]
-    ): Boolean
-
-    /** Create a new [[Sut]] instance with an internal state that corresponds to the provided
-      * abstract state instance.
-      */
-    def newSut(state: State): IO[Sut]
-
-    /** Shutdown the SUT instance, and release any resources related to it. May also run some checks
-      * upon shutting SUT down.
-      */
-    def shutdownSut(state: State, sut: Sut): IO[Prop]
-
-    /** A generator that should produce an initial [[State]] instance that is usable by [[newSut]]
-      * to create a new system under test.
-      */
-    def genInitialState: Gen[State]
-
-    /** The precondition for the initial state, when no commands yet have run. */
-    def initialPreCondition(state: State): Boolean = true
-
-    /** A generator that, given the current model state, should produce a suitable command. The
-      * command should always be well-formed, but MUST NOT necessarily be correct, i.e. it may be
-      * expected to error upon running against the SUT. The correctness is indicated by
-      * [[ModelCommand.preCondition]] and the expected behavior of SUT is checked based on that
-      * flag.
-      */
-    def commandGen: CommandGen[State, Sut]
+    // ===================================
+    // Property entry point
+    // ===================================
 
     /** A property that attests that SUT complies to the model.
-      *
-      * The parameter [[threadCount]] specifies the number of commands that might be executed in
-      * parallel. Defaults to one, which means the commands will only be run serially for the same
-      * Sut instance.
-      *
-      * Distinct Sut instances might still receive commands in parallel, if the
-      * [[Test.Parameters.workers]] parameter is larger than one.
-      *
-      * Setting [[threadCount]] higher than one enables ScalaCheck to reveal thread-related issues
-      * in your system under test. When setting [[threadCount]] larger than one, ScalaCheck must
-      * evaluate all possible command interleavings (and the end State instances they produce),
-      * since parallel command execution is non-deterministic.
-      *
-      * ScalaCheck tries out all possible end states with the postcondition of the very last command
-      * executed (there is always exactly one command executed after all parallel command
-      * executions).
-      *
-      * If it fails to find an end state that satisfies the postcondition, the test fails. However,
-      * the number of possible end states grows rapidly with increasing values of [[threadCount]].
-      * Therefore, the lengths of the parallel command sequences are limited so that the number of
-      * possible end states don't exceed [[maxParComb]]. The default value of [[maxParComb]] is
-      * 1000000.
       */
-    final def property(threadCount: Int = 1, maxParComb: Int = 1000000): Prop = {
+    final def property(): Prop = {
 
-        val suts = collection.mutable.Map.empty[AnyRef, (State, Option[IO[Sut]])]
+        val suts = collection.mutable.Map.empty[AnyRef, Option[State => IO[Sut]]]
 
-        Prop.forAll(genActions(threadCount, maxParComb)) { as =>
-
-            logger.info("Running the next test case...")
-
-            logger.trace(
-              as.commands.foldRight(
-                "---- Sequential actions ------------------------------------\n"
-              )((cmd, acc) => s"$acc\t - $cmd\n")
-            )
+        Prop.forAll(genTestCase) { testCase =>
+            logger.info("Executing the next test case...")
 
             try {
                 val sutId = suts.synchronized {
-                    val inactiveSuts = suts.values.collect { case (state, None) => state }
-                    val runningSuts = suts.values.collect { case (state, Some(_)) => state }
-                    if canCreateNewSut(as.initialState, inactiveSuts, runningSuts) then {
+                    // TODO: now, when we have imperation initEnv we can revert this part
+                    // val inactiveSuts = suts.values.collect { case (state, None) => state }
+                    // val runningSuts = suts.values.collect { case (state, Some(_)) => state }
+                    if canStartupNewSut() then {
                         val sutId = new AnyRef
-                        suts += (sutId -> (as.initialState -> None))
+                        suts += (sutId -> None)
                         Some(sutId)
                     } else None
                 }
@@ -295,9 +309,11 @@ trait ModelBasedSuite {
                     case Some(id) =>
 
                         if suts.contains(id) then {
-                            val ioSut = newSut(as.initialState)
-                            val _ = suts.put(id, as.initialState -> Some(ioSut))
-                            runActions(ioSut, as)
+                            val _ = suts.put(id, Some(startupSut))
+                            val prop = runTestCase(testCase, startupSut)
+                            logger.info("Test case property is evaluated.")
+                            prop
+
                         } else {
                             logger.error("WARNING: you should never not see that")
                             Prop.undecided
@@ -319,7 +335,7 @@ trait ModelBasedSuite {
     }
 
     // ===================================
-    // Actions generation
+    // TestCase generation
     // ===================================
 
     private type Commands = List[AnyCommand[State, Sut]]
@@ -329,15 +345,15 @@ trait ModelBasedSuite {
       * @param commands
       *   sequential commands (now the only type of commands supported)
       */
-    private case class Actions(
+    private case class TestCase(
         initialState: State,
         commands: Commands
     )
 
-    /** Actions generator.
+    /** Test case generator.
       */
-    private def genActions(threadCount: Int, maxParComb: Int): Gen[Actions] = {
-        import Gen.{const, sized}
+    private def genTestCase: Gen[TestCase] = {
+        import Gen.sized
 
         /** Generates the sequence of commands of size [[size]] using initial state
           * [[initialState]].
@@ -347,7 +363,7 @@ trait ModelBasedSuite {
           */
         def sizedCmds(initialState: State)(size: Int): Gen[(State, Commands)] = {
             val l: List[Unit] = List.fill(size)(())
-            l.foldLeft(const((initialState, Nil: Commands))) { (g, _) =>
+            l.foldLeft(Gen.const((initialState, Nil: Commands))) { (g, _) =>
                 for {
                     (s0, cs) <- g
                     c <- commandGen.genNextCommand(s0).suchThat(_.preCondition(s0))
@@ -355,7 +371,7 @@ trait ModelBasedSuite {
             }
         }
 
-        def precondition(as: Actions): Boolean =
+        def precondition(as: TestCase): Boolean =
             initialPreCondition(as.initialState)
                 && cmdsPrecond(as.initialState, as.commands)._2
 
@@ -365,44 +381,55 @@ trait ModelBasedSuite {
           *   the final state and the && over preconditions (the state was used for parallel
           *   commands)
           */
+        @tailrec
         def cmdsPrecond(s: State, cmds: Commands): (State, Boolean) = cmds match {
             case Nil                          => (s, true)
             case c :: cs if c.preCondition(s) => cmdsPrecond(c.advanceState(s), cs)
             case _                            => (s, false)
         }
 
-        val g = for {
-            s0 <- genInitialState
-            (s1, seqCmds) <- sized(sizedCmds(s0))
-        } yield Actions(s0, seqCmds)
-
-        g.suchThat(precondition)
+        for {
+            _ <- Gen.const(
+              logger.debug("Initializing the environment and generate the test case...")
+            )
+            s0: State <- genInitialState(initEnv)
+            (_, seqCmds) <- commandGenTweaker(sized(sizedCmds(s0)))
+            tc = TestCase(s0, seqCmds)
+            if precondition(tc)
+        } yield tc
     }
 
     // ===================================
-    // Actions runner
+    // Test case runner
     // ===================================
 
-    private def runActions(ioSut: IO[Sut], as: Actions): Prop = {
+    private def runTestCase(
+        testCase: TestCase,
+        startupSut: State => IO[Sut]
+    ): Prop = {
+        val size = testCase.commands.size
+        logger.debug(s"Sequential Commands:\n${prettyCmdsRes(testCase.commands, size)}\n")
 
-        val maxLength = as.commands.length
-        val (_sut, p, s, lastCmd) = runCommands(ioSut, as.initialState, as.commands)
+        val (_sut, p, s, lastCmd, _) =
+            if useTestControl
+            then runCommandsWithTestControl(testCase, startupSut)
+            else runCommandsPlain(testCase, startupSut)
 
         p.flatMap { r =>
             if r.failure then
                 logger.warn(
                   "Property is falsified (see the labels down below). Additional information: \n" +
-                      s"Initial state:\n  ${as.initialState}\n" +
+                      s"Initial state:\n  ${testCase.initialState}\n" +
                       s"Last state:\n  ${s}\n" +
-                      s"Sequential Commands:\n${prettyCmdsRes(as.commands, maxLength)}\n" +
+                      s"Sequential Commands:\n${prettyCmdsRes(testCase.commands, lastCmd)}\n" +
                       s"Last executed command: $lastCmd"
                 )
             Prop(_ => r)
         } :| "Property failed, see the log above for details"
     }
 
-    private def prettyCmdsRes(rs: List[AnyCommand[State, Sut]], maxLength: Int) = {
-        val maxNumberWidth = "%d".format(maxLength).length
+    private def prettyCmdsRes(rs: List[AnyCommand[State, Sut]], lastCmd: Int) = {
+        val maxNumberWidth = "%d".format(lastCmd).length
         val lineLayout = "  %%%dd. %%s".format(maxNumberWidth)
         val cs = rs.zipWithIndex.map { case (r, i) =>
             lineLayout.format(i + 1, r)
@@ -411,32 +438,19 @@ trait ModelBasedSuite {
         else cs.mkString("\n")
     }
 
-    /** @param ioSut
-      * @param s0
-      * @param cs
-      * @return
-      *   sut, property, final state, last executed command number
-      */
-    private def runCommands(
-        ioSut: IO[Sut],
-        s0: State,
-        cs: Commands
-    ): (Sut, Prop, State, Int) = {
-        if useTestControl then runCommandsWithTestControl(ioSut, s0, cs)
-        else runCommandsPlain(ioSut, s0, cs)
-    }
-
     /** Plain execution without [[TestControl]]. Command delays are real [[IO.sleep]]s. Used for
       * backends like Yaci where wall-clock time must elapse.
       */
     private def runCommandsPlain(
-        ioSut: IO[Sut],
-        s0: State,
-        cs: Commands
-    ): (Sut, Prop, State, Int) = {
+        testCase: TestCase,
+        startupSut: State => IO[Sut]
+    ): (Sut, Prop, State, Int, TestCase) = {
+        logger.debug("Using plain IO to run the test case...")
         val io = for {
-            initial <- ioSut.map(sut => (sut, Prop.proved, s0, 0))
-            result <- cs.foldLeft(IO.pure(initial)) { case (acc, c) =>
+            initial <- startupSut(testCase.initialState).map(sut =>
+                (sut, Prop.proved, testCase.initialState, 0)
+            )
+            result <- testCase.commands.foldLeft(IO.pure(initial)) { case (acc, c) =>
                 acc.flatMap { case (sut, p, s, lastCmd) =>
                     // Short-circuit: if the property has already failed, skip remaining commands
                     val currentResult = p.apply(Gen.Parameters.default)
@@ -449,7 +463,7 @@ trait ModelBasedSuite {
             }
             (sut, prop, s, lastCmd) = result
             shutdownProp <- shutdownSut(s, sut)
-        } yield (sut, prop && shutdownProp, s, lastCmd)
+        } yield (sut, prop && shutdownProp, s, lastCmd, testCase)
 
         io.unsafeRunSync()
     }
@@ -470,18 +484,18 @@ trait ModelBasedSuite {
       * runs postCondition, and releases the gate for the next command.
       */
     private def runCommandsWithTestControl(
-        ioSut: IO[Sut],
-        s0: State,
-        cs: Commands
-    ): (Sut, Prop, State, Int) = {
+        testCase: TestCase,
+        startupSut: State => IO[Sut]
+    ): (Sut, Prop, State, Int, TestCase) = {
         import java.util.concurrent.atomic.AtomicReference
 
-        // Shared mutable state between inner and outer runtimes.
         // The inner writes a Some(delay) to request a time advance before its command runs.
         // None means "not ready yet" / "waiting for outer to tick".
         val pendingDelay = new AtomicReference[Option[FiniteDuration]](None)
         // The outer sets this to true to release the inner after advancing time.
         val gate = new AtomicReference[Boolean](false)
+
+        logger.debug("Using TestControl to run the test case...")
 
         // The inner program: newSut, then for each command:
         //   1. sleep(settling) — keeps inner busy while outer ticks actors
@@ -489,9 +503,11 @@ trait ModelBasedSuite {
         //   3. wait for gate — outer releases after advancing
         //   4. run command
         // Finally shutdownSut.
-        val innerIO: IO[(Sut, Prop, State, Int)] = for {
-            initial <- ioSut.map(sut => (sut, Prop.proved, s0, 0))
-            result <- cs.foldLeft(IO.pure(initial)) { case (acc, c) =>
+        val innerIO: IO[(Sut, Prop, State, Int, TestCase)] = for {
+            initial <- startupSut(testCase.initialState).map(sut =>
+                (sut, Prop.proved, testCase.initialState, 0)
+            )
+            result <- testCase.commands.foldLeft(IO.pure(initial)) { case (acc, c) =>
                 acc.flatMap { case (sut, p, s, lastCmd) =>
                     // Short-circuit: if the property has already failed, skip remaining commands
                     val currentResult = p.apply(Gen.Parameters.default)
@@ -499,18 +515,20 @@ trait ModelBasedSuite {
                     else
                         for {
                             // Sleep for the settling window so the outer can tick actors
-                            // and let pending messages propagate before the command runs.
+                            // and let pending messages propagate before the advancing the time
+                            // and after, before running the command.
                             _ <- IO.sleep(settling)
                             _ <- IO(pendingDelay.set(Some(c.delay)))
                             _ <- IO.cede.whileM_(IO(!gate.get))
                             _ <- IO(gate.set(false))
+                            _ <- IO.sleep(settling)
                             pred <- c.runPC(sut)
                         } yield (sut, p && pred(s), c.advanceState(s), lastCmd + 1)
                 }
             }
             (sut, prop, s, lastCmd) = result
             shutdownProp <- shutdownSut(s, sut)
-        } yield (sut, prop && shutdownProp, s, lastCmd)
+        } yield (sut, prop && shutdownProp, s, lastCmd, testCase)
 
         // Outer driver: start the inner on the TestControl runtime, then drive it command by
         // command. Between commands, we advance the virtual clock by the declared delay.
@@ -522,7 +540,7 @@ trait ModelBasedSuite {
         //
         // tickOne runs on the outer (real) runtime and synchronously executes one step of the
         // inner runtime. advance also runs on the outer runtime and moves the inner clock.
-        val outerIO: IO[(Sut, Prop, State, Int)] = for {
+        val outerIO: IO[(Sut, Prop, State, Int, TestCase)] = for {
             // 1. Start the inner on the mocked runtime. It's paused — nothing runs yet.
             tc <- TestControl.execute(innerIO)
             totalAdvanced <- IO(new java.util.concurrent.atomic.AtomicLong(0L))
@@ -546,9 +564,9 @@ trait ModelBasedSuite {
                 case Some(_) => IO.unit //   empty command list, done
                 case None    =>
                     // 4. Otherwise, run per-command iteration.
-                    // Note _c is unused — the outer doesn't need the command object.
+                    // Note that the outer doesn't need the command object.
                     // It just needs to iterate the right number of times.
-                    cs.foldLeft(IO.unit) { (acc, _c) =>
+                    testCase.commands.foldLeft(IO.unit) { (acc, _u) =>
                         acc >> tc.results.flatMap {
                             case Some(_) => IO.unit // already finished, skip remaining
                             case None =>
@@ -558,12 +576,14 @@ trait ModelBasedSuite {
                                     _ <- IO(totalAdvanced.addAndGet(delay.toNanos): Unit)
 
                                     // 6. The inner already slept for `settling` before
-                                    // signalling. Advance the remainder so total virtual
-                                    // time equals max(delay, settling). When delay < settling
+                                    // signalling and going to sleep after we advance the time.
+                                    // Advance the remainder so total virtual
+                                    // time equals max(delay, settling * 2).
+                                    // When delay < settling * 2
                                     // the settling sleep already covered it; no further
                                     // advance is needed.
                                     _ <- {
-                                        val remaining = delay - settling
+                                        val remaining = delay - settling * 2
                                         if remaining > Duration.Zero then tc.advance(remaining)
                                         else IO.unit
                                     }

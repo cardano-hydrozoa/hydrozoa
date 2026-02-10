@@ -168,7 +168,11 @@ object FinalizationTx {
 
             // Additional step - spend multisig regime utxo
             val spendMultisigRegimeUtxoStep =
-                Spend(config.multisigRegimeUtxo.asUtxo, config.headMultisigScript.witnessAttached)
+                Spend(
+                  config.multisigRegimeUtxo.asUtxo,
+                  // TODO: switch back to witnessAttached after resolving https://github.com/scalus3/scalus/issues/207
+                  config.headMultisigScript.witnessValue
+                )
 
             for {
                 ctx <- TransactionBuilder

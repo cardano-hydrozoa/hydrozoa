@@ -99,3 +99,11 @@ object TxTiming:
       depositMaturityDuration = 1.hours.quantize(slotConfig),
       depositAbsorptionDuration = 48.hours.quantize(slotConfig),
     )
+
+    def yaci(slotConfig: SlotConfig) = TxTiming(
+      minSettlementDuration = 30.seconds.quantize(slotConfig),
+      inactivityMarginDuration = 20.seconds.quantize(slotConfig),
+      silenceDuration = 1.minute.quantize(slotConfig),
+      depositMaturityDuration = 1.second.quantize(slotConfig),
+      depositAbsorptionDuration = 1.hours.quantize(slotConfig),
+    )

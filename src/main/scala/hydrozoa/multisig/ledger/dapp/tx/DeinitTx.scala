@@ -112,7 +112,8 @@ object DeinitTx:
                         config.headMultisigScript.policyId,
                         _,
                         -1L,
-                        config.headMultisigScript.witnessAttached
+                        // TODO: switch back to witnessAttached after resolving https://github.com/scalus3/scalus/issues/207
+                        config.headMultisigScript.witnessValue
                       )
                     )
             }
