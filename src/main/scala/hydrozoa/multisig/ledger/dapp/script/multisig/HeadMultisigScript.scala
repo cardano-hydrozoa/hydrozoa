@@ -2,6 +2,7 @@ package hydrozoa.multisig.ledger.dapp.script.multisig
 
 import hydrozoa.config.head.peers.HeadPeers
 import scala.collection.SortedSet
+import scalus.builtin.Builtins.blake2b_224
 import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
@@ -57,7 +58,7 @@ object HeadMultisigScript:
           Script.Native(
             AllOf(
               headPeers.headPeerVKeys
-                  .map(AddrKeyHash(_))
+                  .map(vkey => AddrKeyHash(blake2b_224(vkey)))
                   .toList
                   .toIndexedSeq
                   .sorted(using Ordering[AddrKeyHash])

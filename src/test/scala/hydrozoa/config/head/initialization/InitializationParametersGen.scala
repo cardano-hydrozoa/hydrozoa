@@ -8,10 +8,12 @@ import hydrozoa.config.head.peers.{TestPeers, generateTestPeers}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import java.time.Instant
+import monocle.syntax.all.*
 import org.scalacheck.{Gen, Prop, Properties}
 import scala.collection.immutable.SortedMap
 import scala.concurrent.duration.DurationInt
 import scalus.cardano.ledger.*
+import scalus.cardano.ledger.TransactionOutput.valueLens
 import test.Generators.Hydrozoa.*
 import test.Generators.Other.genCoinDistributionWithMinAdaUtxo
 import test.TestPeer
@@ -113,9 +115,12 @@ def generateInitializationParameters(testPeers: TestPeers)(
         fundingUtxosList <-
             for {
                 utxos <- Gen.nonEmptyListOf(genUtxoFromKnownPeer)
+                utxosWithZeroValue = utxos.map(
+                  _.focus(_.output).andThen(valueLens).replace(Value.zero)
+                )
                 distributed <- genCoinDistributionWithMinAdaUtxo(
                   coin = grossFundingAmount.coin,
-                  utxoList = NonEmptyList.fromListUnsafe(utxos),
+                  utxoList = NonEmptyList.fromListUnsafe(utxosWithZeroValue),
                   params = cardanoNetwork.cardanoProtocolParams
                 )
             } yield distributed

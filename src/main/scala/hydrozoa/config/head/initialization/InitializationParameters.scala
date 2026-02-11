@@ -108,6 +108,7 @@ object InitializationParameters {
         config: InitializationParameters.Section & FallbackContingency.Section & HeadPeers.Section
     )
         def isBalancedInitializationFunding: Boolean = {
+            val foo = config
             config.initialFundingValue ==
                 config.initialL2Value +
                 Value(config.initialEquityContributed + config.totalFallbackContingency)

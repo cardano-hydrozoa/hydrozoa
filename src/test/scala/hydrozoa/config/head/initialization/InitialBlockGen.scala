@@ -13,7 +13,6 @@ import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.kzgCommitment
 import monocle.Focus.focus
 import org.scalacheck.Test.Parameters
-import org.scalacheck.rng.Seed
 import org.scalacheck.{Gen, Prop, Properties}
 
 def generateInitialBlock(testPeers: TestPeers)(
@@ -76,7 +75,7 @@ def generateInitialBlock(testPeers: TestPeers)(
 
 object InitialBlockGenerator extends Properties("Sanity Check") {
     override def overrideParameters(p: Parameters): Parameters = {
-        p.withInitialSeed(Seed.fromBase64("ShMPS6wOudyfOt-X0UCllm6t-1R2OS3gG6HXxf21dhI=").get)
+        p.withMinSuccessfulTests(1_000)
     }
 
     val _ = property("Sanity Check") = Prop.forAll(generateTestPeers())(testPeers =>
