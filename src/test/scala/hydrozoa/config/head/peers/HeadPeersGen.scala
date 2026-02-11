@@ -64,7 +64,7 @@ object TestPeers {
 }
 
 def generateTestPeers(minPeers: Int = 1, maxPeers: Int = 20): Gen[TestPeers] = {
-    require(0 < minPeers && minPeers < TestPeer.nNamedPeers)
+    require(0 < minPeers && minPeers <= TestPeer.nNamedPeers)
     require(minPeers <= maxPeers && maxPeers <= TestPeer.nNamedPeers)
     for {
         numPeers <- Gen.choose(minPeers, maxPeers)

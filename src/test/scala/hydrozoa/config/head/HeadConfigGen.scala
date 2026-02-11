@@ -1,14 +1,15 @@
 package hydrozoa.config.head
 
+import hydrozoa.config.head.HeadPeersSpec.{Exact, Random}
 import hydrozoa.config.head.initialization.{GenInitializationParameters, currentTimeHeadStartTime, generateInitialBlock, generateInitializationParameters}
 import hydrozoa.config.head.multisig.fallback.{FallbackContingencyGen, generateFallbackContingency}
 import hydrozoa.config.head.multisig.timing.{TxTimingGen, generateDefaultTxTiming}
 import hydrozoa.config.head.network.{CardanoNetwork, generateStandardCardanoNetwork}
-import hydrozoa.config.head.parameters.{GenHeadParams, generateHeadParameters}
+import hydrozoa.config.head.parameters.{GenHeadParams, HeadParameters, generateHeadParameters}
 import hydrozoa.config.head.peers.{TestPeers, generateTestPeers}
 import hydrozoa.config.head.rulebased.{DisputeResolutionConfigGen, generateDisputeResolutionConfig}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
-import org.scalacheck.Gen
+import org.scalacheck.{Gen, Prop, Properties, Test}
 import scalus.cardano.ledger.SlotConfig
 
 enum HeadPeersSpec:
@@ -24,7 +25,7 @@ enum HeadPeersSpec:
         case Exact(peers)               => generateTestPeers(peers, peers)
     }
 
-def generateHeadConfig(headPeers: HeadPeersSpec)(
+def generateHeadConfigPreInit(headPeers: HeadPeersSpec)(
     generateCardanoNetwork: Gen[CardanoNetwork] = generateStandardCardanoNetwork,
     generateHeadStartTime: SlotConfig => Gen[QuantizedInstant] = currentTimeHeadStartTime,
     generateTxTiming: TxTimingGen = generateDefaultTxTiming,
@@ -33,7 +34,7 @@ def generateHeadConfig(headPeers: HeadPeersSpec)(
     generateHeadParameters: GenHeadParams = generateHeadParameters,
     generateInitializationParameters: GenInitializationParameters =
         generateInitializationParameters,
-): Gen[HeadConfig] = for {
+): Gen[HeadConfig.Preinit.HeadConfig] = for {
     testPeers <- headPeers.generate
     cardanoNetwork <- generateCardanoNetwork
     headParams <- generateHeadParameters(cardanoNetwork)(
@@ -46,17 +47,56 @@ def generateHeadConfig(headPeers: HeadPeersSpec)(
       generateHeadStartTime,
       generateFallbackContingency
     )
-    initialBlock <- generateInitialBlock(testPeers)(
-      generateCardanoNetwork = Gen.const(cardanoNetwork),
-      generateTxTiming = _ => Gen.const(headParams.txTiming),
-      generateHeadParameters = _ => (_, _, _) => Gen.const(headParams),
-      generateHeadStartTime = _ => Gen.const(initializationParams.headStartTime),
-      generateInitializationParameters = (_, _, _) => Gen.const(initializationParams)
-    )
-} yield HeadConfig(
+
+} yield HeadConfig.Preinit.HeadConfig(
   cardanoNetwork = cardanoNetwork,
   headParams = headParams,
   headPeers = testPeers.headPeers,
-  initialBlock = initialBlock.initialBlock,
   initializationParams = initializationParams
-).get
+)
+
+def generateHeadConfig(headPeers: HeadPeersSpec)(
+    generateCardanoNetwork: Gen[CardanoNetwork] = generateStandardCardanoNetwork,
+    generateHeadStartTime: SlotConfig => Gen[QuantizedInstant] = currentTimeHeadStartTime,
+    generateTxTiming: TxTimingGen = generateDefaultTxTiming,
+    generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
+    generateDisputeResolutionConfig: DisputeResolutionConfigGen = generateDisputeResolutionConfig,
+    generateHeadParameters: GenHeadParams = generateHeadParameters,
+    generateInitializationParameters: GenInitializationParameters =
+        generateInitializationParameters,
+): Gen[HeadConfig] =
+    for {
+        peers <- headPeers.generate
+        // we have to re-use this in generating the preinit config and the initial block
+        exactPeers = Exact(peers.headPeers.nHeadPeers.toInt)
+        preinit <- generateHeadConfigPreInit(exactPeers)(
+          generateCardanoNetwork,
+          generateHeadStartTime,
+          generateTxTiming,
+          generateFallbackContingency,
+          generateDisputeResolutionConfig,
+          generateHeadParameters,
+          generateInitializationParameters
+        )
+        initialBlock <- generateInitialBlock(TestPeers(peers._testPeers.map(_._2).toList))(
+          generateCardanoNetwork = Gen.const(preinit.cardanoNetwork),
+          generateTxTiming = _ => Gen.const(preinit.headParams.txTiming),
+          generateHeadParameters = _ => (_, _, _) => Gen.const(preinit.headParams),
+          generateHeadStartTime = _ => Gen.const(preinit.initializationParams.headStartTime),
+          generateInitializationParameters = (_, _, _) => Gen.const(preinit.initializationParams)
+        )
+    } yield HeadConfig(
+      cardanoNetwork = preinit.cardanoNetwork,
+      headParams = preinit.headParams,
+      headPeers = preinit.headPeers,
+      initializationParams = preinit.initializationParams,
+      initialBlock = initialBlock.initialBlock
+    ).get
+
+object HeadConfigGen extends Properties("Sanity Check") {
+    override def overrideParameters(p: Test.Parameters): Test.Parameters =
+        p.withMinSuccessfulTests(1000)
+
+    val _ = property("head config generator doesn't throw") =
+        Prop.forAll(generateHeadConfig(Random)())(_ => true)
+}
