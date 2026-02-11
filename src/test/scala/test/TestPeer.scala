@@ -20,6 +20,9 @@ import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, S
 import scalus.cardano.ledger.ArbitraryInstances.*
 import scalus.cardano.ledger.{Hash, Transaction as STransaction}
 
+/** Test peer names are just better indexes - you can have only Alice in one-peer head, Alice and
+  * Bob in two-peer head and so on.
+  */
 enum TestPeer derives CanEqual:
     case Alice
     case Bob
@@ -140,17 +143,8 @@ object TestPeer:
 // Generators
 // ===================================
 
-val genTestPeer: Gen[TestPeer] = {
+val generateTestPeer: Gen[TestPeer] = {
     for {
         i <- Gen.choose(TestPeer.peerNumRange.start, TestPeer.peerNumRange.last)
     } yield TestPeer.fromOrdinal(i)
-}
-
-def testPeersGenerator(minPeers: Int = 2, maxPeers: Int = 5): Gen[NonEmptyList[TestPeer]] = {
-    require(0 < minPeers && minPeers < TestPeer.nNamedPeers)
-    require(minPeers <= maxPeers && maxPeers < TestPeer.nNamedPeers)
-    for {
-        numPeers <- Gen.choose(minPeers, maxPeers)
-        peers = TestPeer.peerNumRange.take(numPeers).map(TestPeer.fromOrdinal)
-    } yield NonEmptyList.fromListUnsafe(peers.toList)
 }

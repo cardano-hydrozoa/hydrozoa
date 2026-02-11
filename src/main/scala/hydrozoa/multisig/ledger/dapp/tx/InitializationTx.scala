@@ -74,8 +74,8 @@ private object InitializationTxOps {
                 .explainConst(
                   "Initialization tx funding is unbalanced. We must have" +
                       "\n\tconfig.initialFundingValue == config.initialL2Value " +
-                    "+ Value(config.initialEquityContributed " +
-                    "+ config.totalFallbackContingency)" +
+                      "+ Value(config.initialEquityContributed " +
+                      "+ config.totalFallbackContingency)" +
                       ""
                 )
 
@@ -185,7 +185,7 @@ private object InitializationTxOps {
                       multisigRegimeUtxoValue,
                       None,
                       // TODO: switch back to witnessAttached after resolving https://github.com/scalus3/scalus/issues/207
-                      //Some(ScriptRef(config.headMultisigScript.script))
+                      // Some(ScriptRef(config.headMultisigScript.script))
                       None
                     ).ensureMinAda(config)
                 }

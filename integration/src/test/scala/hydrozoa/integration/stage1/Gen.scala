@@ -98,7 +98,7 @@ object ArbitraryEventsOnly extends CommandGen[ModelState, Stage1Sut]:
                 state.blockCycle match {
                     case Done(blockNumber, _) =>
                         val settlementExpirationTime =
-                            state.txTiming.newSettlementEndTime(
+                            state.headConfig.txTiming.newSettlementEndTime(
                               state.competingFallbackStartTime
                             )
                         Generators
@@ -106,7 +106,7 @@ object ArbitraryEventsOnly extends CommandGen[ModelState, Stage1Sut]:
                               currentTime = state.currentTime.instant,
                               settlementExpirationTime = settlementExpirationTime,
                               competingFallbackStartTime = state.competingFallbackStartTime,
-                              slotConfig = state.cardanoInfo.slotConfig,
+                              slotConfig = state.headConfig.slotConfig,
                               blockNumber = blockNumber
                             )
                             .map(AnyCommand(_))

@@ -2,41 +2,53 @@ package hydrozoa.config.head.initialization
 
 import cats.*
 import cats.data.*
-import hydrozoa.config.head.multisig.fallback.FallbackContingency.mkFallbackContingencyWithDefaults
-import hydrozoa.config.head.network.{CardanoNetwork, cardanoNetworkGenerator}
+import hydrozoa.config.head.multisig.fallback.{FallbackContingencyGen, generateFallbackContingency}
+import hydrozoa.config.head.network.{CardanoNetwork, generateStandardCardanoNetwork}
+import hydrozoa.config.head.peers.{TestPeers, generateTestPeers}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import monocle.Focus
-import org.scalacheck.{Gen, Prop, Properties}
-import scalus.cardano.ledger.*
-import scalus.cardano.ledger.TransactionOutput.valueLens
-import scalus.|>
-import test.Generators.Hydrozoa.*
-import test.Generators.Other.genCoinDistributionWithMinAdaUtxo
-import test.{TestPeer, testPeersGenerator}
-
 import java.time.Instant
+import org.scalacheck.{Gen, Prop, Properties}
 import scala.collection.immutable.SortedMap
 import scala.concurrent.duration.DurationInt
+import scalus.cardano.ledger.*
+import test.Generators.Hydrozoa.*
+import test.Generators.Other.genCoinDistributionWithMinAdaUtxo
+import test.TestPeer
 
-def genEquityShares(numPeers: Int)(
-    genNetwork: Option[Gen[CardanoNetwork]]
-): Gen[(NonEmptyMap[HeadPeerNumber, Coin])] =
-  for {
-    shares <- Gen.listOfN(numPeers, Gen.choose(5_000_000, 500_000_000).map(Coin(_)))
-        peerShares = NonEmptyMap.fromMapUnsafe(SortedMap.from(shares.zipWithIndex.map {
-            case (share, index) =>
-                HeadPeerNumber(index) -> share
-        }.toMap))
+type HeadStartTimeGen = SlotConfig => Gen[QuantizedInstant]
 
-    } yield (
-      peerShares
+/** Generate [[headStartTime]] between 0 and 10 years from the zero slot time. Good for all tests
+  * but Yaci-based ones.
+  */
+def generateHeadStartTime(slotConfig: SlotConfig): Gen[QuantizedInstant] =
+    Gen
+        .choose(0L, 10 * 365.days.toSeconds)
+        .map(offsetSeconds =>
+            QuantizedInstant(
+              slotConfig = slotConfig,
+              instant = Instant.ofEpochMilli(slotConfig.zeroTime + offsetSeconds * 1_000)
+            )
+        )
+
+/** This "generator" checks that [[slotConfig]] is usable right now and returns the current time as
+  * the head start time under given slot configuration. This is supposed to be used with Yaci, when
+  * we cannot set the time on L1.
+  */
+def currentTimeHeadStartTime(slotConfig: SlotConfig): Gen[QuantizedInstant] =
+    val now = Instant.now()
+    require(slotConfig.zeroSlot <= now.toEpochMilli, "zero slot time cannot be in the future")
+    Gen.const(
+      QuantizedInstant(
+        slotConfig = slotConfig,
+        instant = now
+      )
     )
 
 /** @param generateHeadPeers
   * @param generateCardanoNetwork
   * @return
-  *   - A [[headStartTime]] between 0 and 10 years from the zero slot time
+  *
   *   - An L2 utxo set that contains only pub key, ada-only utxos, spendable by some test peer
   *   - A seed utxo from a known peer with enough ada to cover the l2 utxo set
   *   - Arbitrary additional funding utxos from known peers, with a 10 to 10k ADA surplus
@@ -47,63 +59,57 @@ def genEquityShares(numPeers: Int)(
 // - Choose variable number of change utxos in advance, estimate surplus funding to cover at least min ADA
 // - Non ADA assets in funding utxos
 // - Distribute equity more randomly among seed + funding utxos
-def initializationParametersGen(testPeers: NonEmptyList[TestPeer])(
-    generateCardanoNetwork: Option[Gen[CardanoNetwork]],
+
+type GenInitializationParameters =
+    TestPeers => (Gen[CardanoNetwork], HeadStartTimeGen, FallbackContingencyGen) => Gen[
+      InitializationParameters
+    ]
+
+type GenInitializationParameters2 =
+    (Gen[CardanoNetwork], HeadStartTimeGen, FallbackContingencyGen) => Gen[InitializationParameters]
+
+def generateInitializationParameters(testPeers: TestPeers)(
+    generateCardanoNetwork: Gen[CardanoNetwork] = generateStandardCardanoNetwork,
+    generateHeadStartTime: HeadStartTimeGen = currentTimeHeadStartTime,
+    generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency
 ): Gen[InitializationParameters] =
     for {
-        // ===================================
-        // General data extraction and setup
-        // ===================================
-        cardanoNetwork <- generateCardanoNetwork.getOrElse(cardanoNetworkGenerator)
-        // Hardcoded to 3,3 right now. We can do a better estimate later
-        fallbackContingency = cardanoNetwork.mkFallbackContingencyWithDefaults(Coin.ada(3), Coin.ada(3))
+        cardanoNetwork <- generateCardanoNetwork
+        headStartTime <- generateHeadStartTime(cardanoNetwork.slotConfig)
+
+        fallbackContingency <- generateFallbackContingency(cardanoNetwork)
+
         // Helper generator for l2 utxos and seed utxo
         genUtxoFromKnownPeer: Gen[Utxo] =
-          for {
-            peer <- Gen.oneOf(testPeers.toList)
-            utxo <- genAdaOnlyPubKeyUtxo(
-              config = cardanoNetwork,
-              peer = peer
-            )
-          } yield utxo
-
-        // ===================================
-        // actual value generation
-        // ===================================    
-        headStartTime <-
-            Gen
-                .choose(0L, 10 * 365.days.toSeconds)
-                .map(offsetSeconds =>
-                    QuantizedInstant(
-                      slotConfig = cardanoNetwork.slotConfig,
-                      instant = Instant.ofEpochMilli(cardanoNetwork.slotConfig.zeroTime + offsetSeconds * 1000)
-                    )
+            for {
+                peer <- Gen.oneOf(testPeers._testPeers.toList).flatMap(_._2)
+                utxo <- genAdaOnlyPubKeyUtxo(
+                  config = cardanoNetwork,
+                  peer = peer
                 )
-        
+            } yield utxo
 
-        initialL2Utxos <- {
+        l2Utxos <- {
             Gen
                 .listOf(genUtxoFromKnownPeer)
                 .map(list => Map.from(list.map(_.toTuple)))
         }
-        initialL2Value = initialL2Utxos.values.map(_.value).fold(Value.zero)(_ + _)
+        l2Value = l2Utxos.values.map(_.value).fold(Value.zero)(_ + _)
 
-   
-        equityShares <- genEquityShares(testPeers.length)(
-            Some(Gen.const(cardanoNetwork))
-        )
-        equity = equityShares.toSortedMap.values.map(Value(_)).fold(Value.zero)(_ + _)
+        equityContributions <- generateEquityContributions(testPeers.headPeers.nHeadPeers)
+        equity = equityContributions.toSortedMap.values.map(Value(_)).fold(Value.zero)(_ + _)
 
-        
         changeUtxos <- Gen.listOf(genUtxoFromKnownPeer)
         changeAmount = changeUtxos.map(_.output.value).fold(Value.zero)(_ + _)
-                
+
         grossFundingAmount = equity
-          + initialL2Value
-          + Value(fallbackContingency.collectiveContingency.total)
-          + Value.lovelace(fallbackContingency.individualContingency.total.value * testPeers.length)
-          + changeAmount
-          
+            + l2Value
+            + Value(fallbackContingency.collectiveContingency.total)
+            + Value.lovelace(
+              fallbackContingency.individualContingency.total.value * testPeers.headPeers.nHeadPeers
+            )
+            + changeAmount
+
         fundingUtxosList <-
             for {
                 utxos <- Gen.nonEmptyListOf(genUtxoFromKnownPeer)
@@ -113,23 +119,42 @@ def initializationParametersGen(testPeers: NonEmptyList[TestPeer])(
                   params = cardanoNetwork.cardanoProtocolParams
                 )
             } yield distributed
+
         seedUtxo = fundingUtxosList.head
-        additionalFundingUtxos: Utxos = Map.from(fundingUtxosList.toList.map(_.toTuple)) - seedUtxo.input
-        
-        initParams = InitializationParameters(
-          headStartTime = headStartTime,
-          initialL2Utxos = initialL2Utxos,
-          initialEquityContributions = equityShares,
-          initialSeedUtxo = seedUtxo,
-          initialAdditionalFundingUtxos = additionalFundingUtxos,
-          initialChangeOutputs = changeUtxos.map(_.output)
-        )
-    } yield initParams
+        additionalFundingUtxos: Utxos = Map.from(
+          fundingUtxosList.toList.map(_.toTuple)
+        ) - seedUtxo.input
+
+    } yield InitializationParameters(
+      headStartTime = headStartTime,
+      initialL2Utxos = l2Utxos,
+      initialEquityContributions = equityContributions,
+      initialSeedUtxo = seedUtxo,
+      initialAdditionalFundingUtxos = additionalFundingUtxos,
+      initialChangeOutputs = changeUtxos.map(_.output)
+    )
+
+// TODO: improve?
+def generateEquityContributions(numPeers: Int): Gen[NonEmptyMap[HeadPeerNumber, Coin]] =
+    for {
+        shares <- Gen.listOfN(numPeers, Gen.choose(5_000_000, 500_000_000).map(Coin(_)))
+        peerShares = NonEmptyMap.fromMapUnsafe(SortedMap.from(shares.zipWithIndex.map {
+            case (share, index) =>
+                HeadPeerNumber(index) -> share
+        }.toMap))
+
+    } yield peerShares
+
+def arbitraryHeadPeerUtxo(cardanoNetwork: CardanoNetwork, peer: TestPeer): Gen[Utxo] =
+    genAdaOnlyPubKeyUtxo(
+      config = cardanoNetwork,
+      peer = peer
+    )
+
+def pickHeadPeerUtxo(availableUtxos: Utxos, peer: TestPeer) = ???
 
 object SanityCheck extends Properties("Initialization Parameters Sanity Check") {
-    val _ = property("sanity check") = Prop.forAll(testPeersGenerator())(testPeers =>
-        Prop.forAll(initializationParametersGen(testPeers)(generateCardanoNetwork = None))(_ =>
-            true
-        )
+    val _ = property("sanity check") = Prop.forAll(generateTestPeers())(testPeers =>
+        Prop.forAll(generateInitializationParameters(testPeers)())(_ => true)
     )
 }

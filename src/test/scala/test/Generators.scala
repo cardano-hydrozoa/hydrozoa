@@ -19,7 +19,6 @@ import monocle.*
 import monocle.syntax.all.*
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen, Prop, Properties}
-
 import scala.collection.immutable.SortedMap
 import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, Data}
@@ -585,13 +584,14 @@ object Generators {
         /** Distribute an amount of coin over transaction outputs, ensuring that min ada
           * requirements are first met. This will ONLY increase the lovelace in each transaction
           * output and will throw an exception if there is not enough ada to cover min ada.
-          * @param additionalCoin additional coin to add to the existing value in [[transactionOutputs]]
+          * @param additionalCoin
+          *   additional coin to add to the existing value in [[transactionOutputs]]
           * @param transactionOutputs
           */
         def genAdditionalCoinDistributionWithMinAda(
-                                                     additionalCoin: Coin,
-                                                     transactionOutputs: NonEmptyList[TransactionOutput],
-                                                     params: ProtocolParams
+            additionalCoin: Coin,
+            transactionOutputs: NonEmptyList[TransactionOutput],
+            params: ProtocolParams
         ): Gen[NonEmptyList[TransactionOutput]] =
 
             val sumBefore = transactionOutputs.toList.map(_.value.coin.value).sum
@@ -618,8 +618,8 @@ object Generators {
                 })
             } yield NonEmptyList.fromListUnsafe(summed)
 
-        /** Like [[genAdditionalCoinDistributionWithMinAda]], but replaces the transaction output for a given
-          * list of utxos.
+        /** Like [[genAdditionalCoinDistributionWithMinAda]], but replaces the transaction output
+          * for a given list of utxos.
           */
         def genCoinDistributionWithMinAdaUtxo(
             coin: Coin,
@@ -628,7 +628,11 @@ object Generators {
         ): Gen[NonEmptyList[Utxo]] =
             val transactionOutputs = utxoList.map(_.output)
             for {
-                outputDist <- genAdditionalCoinDistributionWithMinAda(coin, transactionOutputs, params)
+                outputDist <- genAdditionalCoinDistributionWithMinAda(
+                  coin,
+                  transactionOutputs,
+                  params
+                )
             } yield utxoList.map(_.input).zip(outputDist).map(Utxo(_))
 
     }
@@ -636,29 +640,35 @@ object Generators {
 }
 
 object GeneratorTests extends Properties("Generator Tests") {
-  val _ = property("distribution sums to original amount") =
-    Prop.forAll(Gen.posNum[Long], Gen.posNum[Int])((amount, n)
-      => Prop.forAll(Generators.Other.distribution(SafeLong(amount),n))(distribution =>
-        distribution.toList.map(_.toLong).sum == amount)
+    val _ = property("distribution sums to original amount") =
+        Prop.forAll(Gen.posNum[Long], Gen.posNum[Int])((amount, n) =>
+            Prop.forAll(Generators.Other.distribution(SafeLong(amount), n))(distribution =>
+                distribution.toList.map(_.toLong).sum == amount
+            )
+        )
+
+    val _ = property("coin distribution sums to original amount") =
+        Prop.forAll(Gen.posNum[Long], Gen.posNum[Int])((amount, n) =>
+            Prop.forAll(Generators.Other.genCoinDistribution(Coin(amount), n))(distribution =>
+                distribution.toList.map(_.value).sum == amount
+            )
+        )
+
+    val _ = property("genCoinDistributionWithMinAda sums to original amount") = Prop.forAll(
+      Gen.posNum[Long],
+      Gen.posNum[Int],
+      Gen.nonEmptyListOf(genAdaOnlyPubKeyUtxo(CardanoNetwork.Mainnet, Alice))
+    )((amount, n, utxos) =>
+        Prop.forAll(
+          Generators.Other.genCoinDistributionWithMinAdaUtxo(
+            coin = Coin(amount),
+            utxoList = NonEmptyList.fromListUnsafe(utxos),
+            params = CardanoNetwork.Mainnet.cardanoProtocolParams
+          )
+        )(distribution =>
+            val expectedAmount = distribution.toList.map(_.output.value.coin.value).sum
+            expectedAmount == amount + utxos.toList.map(_.output.value.coin.value).sum
+        )
     )
 
-  val _ = property("coin distribution sums to original amount") =
-    Prop.forAll(Gen.posNum[Long], Gen.posNum[Int])((amount, n)
-    => Prop.forAll(Generators.Other.genCoinDistribution(Coin(amount), n))(distribution =>
-        distribution.toList.map(_.value).sum == amount)
-    )
-    
-  val _ = property("genCoinDistributionWithMinAda sums to original amount") =
-    Prop.forAll(
-      Gen.posNum[Long], 
-      Gen.posNum[Int],
-      Gen.nonEmptyListOf(genAdaOnlyPubKeyUtxo(CardanoNetwork.Mainnet, Alice)))
-      ((amount, n, utxos)
-      => Prop.forAll(Generators.Other.genCoinDistributionWithMinAdaUtxo(coin = Coin(amount),
-          utxoList = NonEmptyList.fromListUnsafe(utxos),
-          params = CardanoNetwork.Mainnet.cardanoProtocolParams))
-          (distribution =>
-              val expectedAmount =  distribution.toList.map(_.output.value.coin.value).sum
-              expectedAmount == amount + utxos.toList.map(_.output.value.coin.value).sum))
-    
 }

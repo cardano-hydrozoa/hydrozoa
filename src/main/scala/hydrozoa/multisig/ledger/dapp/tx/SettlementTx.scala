@@ -229,7 +229,7 @@ private object SettlementTxOps {
 
             private val baseSteps =
                 // TODO: switch back to witnessAttached after resolving https://github.com/scalus3/scalus/issues/207
-                //List(modifyAuxiliaryData, referenceMultisigRegime, validityEndSlot)
+                // List(modifyAuxiliaryData, referenceMultisigRegime, validityEndSlot)
                 List(modifyAuxiliaryData, validityEndSlot)
 
             /////////////////////////////////////////////////////////

@@ -52,7 +52,7 @@ object CardanoNetwork {
         final def plutusScriptEvaluatorForTxBuild: PlutusScriptEvaluator =
             PlutusScriptEvaluator(cardanoInfo, EvaluatorMode.EvaluateAndComputeCost)
 
-        final def cardanoProtocolVersion: ProtocolVersion = cardanoProtocolParams.protocolVersion         
+        final def cardanoProtocolVersion: ProtocolVersion = cardanoProtocolParams.protocolVersion
     }
 
     extension [T <: TransactionOutput](self: T)

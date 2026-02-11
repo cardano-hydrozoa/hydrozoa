@@ -3,10 +3,10 @@ package hydrozoa.multisig.ledger.dapp.txseq
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.tx.{Metadata as _, *}
+import monocle.Focus.focus
 import scalus.cardano.ledger.*
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
-import monocle.Focus.focus
 
 final case class InitializationTxSeq(initializationTx: InitializationTx, fallbackTx: FallbackTx)
 
@@ -156,8 +156,8 @@ private object InitializationTxSeqOps {
                           )
                         )
             } yield InitializationTxSeq(
-                initializationTx = iTx,
-                fallbackTx = expectedFallbackTx.txLens.replace(fallbackTx)(expectedFallbackTx)
+              initializationTx = iTx,
+              fallbackTx = expectedFallbackTx.txLens.replace(fallbackTx)(expectedFallbackTx)
             )
         }
     }

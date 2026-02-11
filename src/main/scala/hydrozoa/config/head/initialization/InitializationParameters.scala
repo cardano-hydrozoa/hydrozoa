@@ -16,6 +16,8 @@ export InitializationParameters.isBalancedInitializationFunding
 
 /** Configuration settings for the head's initialization.
   *
+  * @param headStartTime
+  *   TODO:
   * @param initialL2Utxos
   *   the utxos with which the head's L2 ledger should be populated upon initialization.
   * @param initialEquityContributions

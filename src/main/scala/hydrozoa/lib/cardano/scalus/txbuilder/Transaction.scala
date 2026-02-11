@@ -20,6 +20,7 @@ object Transaction {
           *   A new Transaction with all witnesses added
           */
         // TODO: Replace with Scalus' [[Transaction.withWitness]] (recently added, so Scalus version bump required).
+        // TODO: Use NonEmptyList[VKeyWitness]
         def attachVKeyWitnesses(witnesses: Iterable[VKeyWitness]): Transaction = {
             tx.focus(_.witnessSet.vkeyWitnesses)
                 .modify(w => TaggedSortedSet(w.toSet ++ witnesses))
