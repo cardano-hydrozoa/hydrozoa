@@ -4,7 +4,10 @@ import hydrozoa.lib.number.PositiveInt
 import org.scalacheck.Gen
 import scala.concurrent.duration.DurationInt
 
-lazy val nodeOperationMultisigConfigGen: Gen[NodeOperationMultisigConfig] =
+/** Generates a cardano liaison polling period between 1 and 60 seconds, and between 1 and 100 max
+  * events per batch.
+  */
+lazy val generateNodeOperationMultisigConfig: Gen[NodeOperationMultisigConfig] =
     for {
         posNum <- Gen.choose(1, 100)
         seconds <- Gen.choose(1, 1 * 60)
