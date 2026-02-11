@@ -1,10 +1,23 @@
 package hydrozoa.config.node
 
+import hydrozoa.config.head.peers.{TestPeers, generateTestPeers}
 import hydrozoa.config.head.{HeadConfig, HeadPeersSpec}
 import hydrozoa.config.node.operation.liquidation.NodeOperationLiquidationConfig
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import org.scalacheck.{Gen, Prop, Properties}
+
+case class TestNodeConfig private (testPeers: TestPeers, nodeConfig: NodeConfig)
+
+object TestNodeConfig {
+    // TODO: If you think its worth it, feel free to make this generator more customizable.
+    // I just need to get the tests running again.
+    val generateTestNodeConfig: Gen[TestNodeConfig] =
+        for {
+            testPeers <- generateTestPeers()
+            nodeConfig <- generateNodeConfig(HeadPeersSpec.Exact(testPeers.nHeadPeers.toInt))()
+        } yield new TestNodeConfig(testPeers, nodeConfig)
+}
 
 // We pass in the exact head peers so that the head config and own private peer are parameterized on the same
 // peer set

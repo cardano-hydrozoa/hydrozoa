@@ -49,7 +49,8 @@ def generateInitialBlock(testPeers: TestPeers)(
 
         initTxSeq =
             InitializationTxSeq.Build(config).result match {
-                case Left(e)  => throw e
+                case Left(e) =>
+                    throw e
                 case Right(x) => x
             }
 

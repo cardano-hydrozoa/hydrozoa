@@ -101,7 +101,9 @@ def generateInitializationParameters(testPeers: TestPeers)(
         equityContributions <- generateEquityContributions(testPeers.headPeers.nHeadPeers)
         equity = equityContributions.toSortedMap.values.map(Value(_)).fold(Value.zero)(_ + _)
 
-        changeUtxos <- Gen.listOf(genUtxoFromKnownPeer)
+        // Need to limit the number so that we don't exceed tx size limits
+        nChangeUtxos <- Gen.choose(1, 50)
+        changeUtxos <- Gen.listOfN(nChangeUtxos, genUtxoFromKnownPeer)
         changeAmount = changeUtxos.map(_.output.value).fold(Value.zero)(_ + _)
 
         grossFundingAmount = equity
@@ -114,7 +116,8 @@ def generateInitializationParameters(testPeers: TestPeers)(
 
         fundingUtxosList <-
             for {
-                utxos <- Gen.nonEmptyListOf(genUtxoFromKnownPeer)
+                nFundingUtxos <- Gen.choose(1, 100)
+                utxos <- Gen.listOfN(nFundingUtxos, genUtxoFromKnownPeer)
                 utxosWithZeroValue = utxos.map(
                   _.focus(_.output).andThen(valueLens).replace(Value.zero)
                 )
