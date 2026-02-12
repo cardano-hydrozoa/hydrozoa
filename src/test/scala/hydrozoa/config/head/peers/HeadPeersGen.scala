@@ -4,10 +4,12 @@ import cats.data.NonEmptyList
 import hydrozoa.config.node.NodeConfig
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.number.PositiveInt
+import hydrozoa.multisig.backend.cardano.yaciTestSauceGenesis
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import org.scalacheck.Gen
-import scalus.cardano.ledger.{Transaction, VKeyWitness}
+import scalus.cardano.address.Network
+import scalus.cardano.ledger.{Transaction, Utxos, VKeyWitness}
 import scalus.crypto.ed25519.VerificationKey
 import scalus.|>
 import test.TestPeer
@@ -36,6 +38,11 @@ final case class TestPeers(
 
     override def mkVKeyWitnesses(tx: Transaction): NonEmptyList[VKeyWitness] =
         _testPeers.map(_._2.wallet.mkVKeyWitness(tx))
+
+    def genesisUtxos(network: Network): Map[HeadPeerNumber, Utxos] =
+        yaciTestSauceGenesis(network)(_testPeers.map(_._2).toList).map((k, v) =>
+            (k.ordinal |> HeadPeerNumber.apply) -> v
+        )
 }
 
 object TestPeers {

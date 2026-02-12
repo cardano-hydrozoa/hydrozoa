@@ -28,7 +28,7 @@ import monocle.Focus.focus
 import scala.collection.immutable.Queue
 import scala.math.Ordered.orderingToOrdered
 import scalus.builtin.{ByteString, platform}
-import scalus.cardano.ledger.{TransactionHash, TransactionInput}
+import scalus.cardano.ledger.{AssetName, TransactionHash, TransactionInput}
 
 // Fields of a work-in-progress block, with an additional field for dealing with withdrawn utxos
 private case class TransientFields(
@@ -253,13 +253,9 @@ final case class JointLedger(
                         .foldLeft(Queue.empty)((acc, ob) => acc.appendedAll(ob.toList))
                 genesisEvent = L2EventGenesis(
                   genesisObligations,
-                  TransactionHash.fromByteString(
-                    platform.blake2b_256(
-                      headTokenNames.treasuryTokenName.bytes ++
-                          ByteString.fromBigIntBigEndian(
-                            BigInt(treasuryToSpend.datum.versionMajor.toInt + 1)
-                          )
-                    )
+                  mkGenesisId(
+                    headTokenNames.treasuryTokenName,
+                    treasuryToSpend.datum.versionMajor.toInt + 1
                   )
                 )
 
@@ -606,4 +602,14 @@ object JointLedger {
         startTime: QuantizedInstant,
         nextBlockData: TransientFields
     ) extends State
+
+    def mkGenesisId(treasuryTokenName: AssetName, majorVersion: Int) =
+        TransactionHash.fromByteString(
+          platform.blake2b_256(
+            treasuryTokenName.bytes ++
+                ByteString.fromBigIntBigEndian(
+                  BigInt(majorVersion)
+                )
+          )
+        )
 }

@@ -1,7 +1,7 @@
 package hydrozoa.config.head
 
 import hydrozoa.config.head.HeadPeersSpec.{Exact, Random}
-import hydrozoa.config.head.initialization.{GenInitializationParameters, currentTimeHeadStartTime, generateInitialBlock, generateInitializationParameters}
+import hydrozoa.config.head.initialization.{GenInitializationParameters, GenesisUtxosGen, currentTimeHeadStartTime, generateInitialBlock, generateInitializationParameters, generateRandomPeersUtxosL1}
 import hydrozoa.config.head.multisig.fallback.{FallbackContingencyGen, generateFallbackContingency}
 import hydrozoa.config.head.multisig.timing.{TxTimingGen, generateDefaultTxTiming}
 import hydrozoa.config.head.network.{CardanoNetwork, generateStandardCardanoNetwork}
@@ -32,6 +32,7 @@ def generateHeadConfigPreInit(headPeers: HeadPeersSpec)(
     generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
     generateDisputeResolutionConfig: DisputeResolutionConfigGen = generateDisputeResolutionConfig,
     generateHeadParameters: GenHeadParams = generateHeadParameters,
+    generateGenesisUtxo: GenesisUtxosGen = generateRandomPeersUtxosL1,
     generateInitializationParameters: GenInitializationParameters =
         generateInitializationParameters,
 ): Gen[HeadConfig.Preinit.HeadConfig] = for {
@@ -45,7 +46,8 @@ def generateHeadConfigPreInit(headPeers: HeadPeersSpec)(
     initializationParams <- generateInitializationParameters(testPeers)(
       Gen.const(cardanoNetwork),
       generateHeadStartTime,
-      generateFallbackContingency
+      generateFallbackContingency,
+      generateGenesisUtxo
     )
 
 } yield HeadConfig.Preinit.HeadConfig(
@@ -62,6 +64,7 @@ def generateHeadConfig(headPeers: HeadPeersSpec)(
     generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
     generateDisputeResolutionConfig: DisputeResolutionConfigGen = generateDisputeResolutionConfig,
     generateHeadParameters: GenHeadParams = generateHeadParameters,
+    generateGenesisUtxo: GenesisUtxosGen = generateRandomPeersUtxosL1,
     generateInitializationParameters: GenInitializationParameters =
         generateInitializationParameters,
 ): Gen[HeadConfig] =
@@ -76,6 +79,7 @@ def generateHeadConfig(headPeers: HeadPeersSpec)(
           generateFallbackContingency,
           generateDisputeResolutionConfig,
           generateHeadParameters,
+          generateGenesisUtxo,
           generateInitializationParameters
         )
         initialBlock <- generateInitialBlock(TestPeers(peers._testPeers.map(_._2).toList))(
@@ -83,7 +87,7 @@ def generateHeadConfig(headPeers: HeadPeersSpec)(
           generateTxTiming = _ => Gen.const(preinit.headParams.txTiming),
           generateHeadParameters = _ => (_, _, _) => Gen.const(preinit.headParams),
           generateHeadStartTime = _ => Gen.const(preinit.initializationParams.headStartTime),
-          generateInitializationParameters = (_, _, _) => Gen.const(preinit.initializationParams)
+          generateInitializationParameters = (_, _, _, _) => Gen.const(preinit.initializationParams)
         )
     } yield HeadConfig(
       cardanoNetwork = preinit.cardanoNetwork,

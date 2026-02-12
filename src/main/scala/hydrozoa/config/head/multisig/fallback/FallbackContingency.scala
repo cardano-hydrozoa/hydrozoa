@@ -15,6 +15,11 @@ final case class FallbackContingency(
     override val individualContingency: FallbackContingency.Individual,
 ) extends FallbackContingency.Section {
     override transparent inline def fallbackContingency: FallbackContingency = this
+
+    def totalContingencyFor(headPeerNumber: HeadPeerNumber): Coin =
+        if headPeerNumber == HeadPeerNumber.zero
+        then individualContingency.total + collectiveContingency.total
+        else individualContingency.total
 }
 
 object FallbackContingency {

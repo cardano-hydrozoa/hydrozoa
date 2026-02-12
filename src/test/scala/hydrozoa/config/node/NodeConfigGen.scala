@@ -7,6 +7,7 @@ import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import org.scalacheck.{Gen, Prop, Properties}
 
+// TODO: Do we want to have it? I think TestPeers should not leave the generation context
 case class TestNodeConfig private (testPeers: TestPeers, nodeConfig: NodeConfig)
 
 object TestNodeConfig {

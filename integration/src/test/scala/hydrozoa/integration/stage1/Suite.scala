@@ -5,7 +5,7 @@ import cats.syntax.applicative.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorSystem
 import com.suprnation.typelevel.actors.syntax.*
-import hydrozoa.config.head.initialization.HeadStartTimeGen
+import hydrozoa.config.head.initialization.{HeadStartTimeGen, testPeersGenesisUtxosL1}
 import hydrozoa.config.head.multisig.timing.{TxTimingGen, generateDefaultTxTiming, generateYaciTxTiming}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.{HeadPeersSpec, generateHeadConfig}
@@ -172,6 +172,7 @@ case class Suite(
 
         for {
 
+            testPeers <- spec.generate
             // TODO: this is needed to be ported into new generators
             //   The idea is to use existing known utxos only
             // seedUtxo <- Gen
@@ -200,6 +201,7 @@ case class Suite(
               generateCardanoNetwork = generateCardanoNetwork,
               generateHeadStartTime = generateHeadStartTime,
               generateTxTiming = generateTxTiming,
+              generateGenesisUtxo = testPeersGenesisUtxosL1(testPeers)
             )
 
         } yield ModelState(
@@ -412,7 +414,7 @@ case class Suite(
             sut.cardanoBackend.isTxKnown(hash)
         }
 
-        // Finally we have to terminate the actor system, otherwise in TestControl
+        // Finally we have to terminate the actor system, otherwise in TestControlownTestPeer
         // this will loop indefinitely.
         _ <- sut.system.terminate()
     } yield {
