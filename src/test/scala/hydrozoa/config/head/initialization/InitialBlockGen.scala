@@ -14,6 +14,7 @@ import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.kzgCommitment
 import monocle.Focus.focus
 import org.scalacheck.Test.Parameters
 import org.scalacheck.{Gen, Prop, Properties}
+import scalus.cardano.ledger.Coin
 
 def generateInitialBlock(testPeers: TestPeers)(
     generateCardanoNetwork: Gen[CardanoNetwork] = generateStandardCardanoNetwork,
@@ -24,7 +25,8 @@ def generateInitialBlock(testPeers: TestPeers)(
     generateHeadStartTime: HeadStartTimeGen = currentTimeHeadStartTime,
     generateGenesisUtxo: GenesisUtxosGen = generateRandomPeersUtxosL1,
     generateInitializationParameters: GenInitializationParameters2 =
-        generateInitializationParameters(testPeers),
+        generateInitializationParametersTopDown(testPeers),
+    equityRange: (Coin, Coin) = Coin(5_000_000) -> Coin(500_000_000),
 ): Gen[InitialBlock] = {
     for {
         cardanoNetwork <- generateCardanoNetwork
@@ -36,10 +38,11 @@ def generateInitialBlock(testPeers: TestPeers)(
         )
 
         initializationParameters <- generateInitializationParameters(
-          Gen.const(cardanoNetwork),
-          generateHeadStartTime,
-          _ => Gen.const(headParams.fallbackContingency),
-          generateGenesisUtxo,
+          generateCardanoNetwork = Gen.const(cardanoNetwork),
+          generateHeadStartTime = generateHeadStartTime,
+          generateFallbackContingency = _ => Gen.const(headParams.fallbackContingency),
+          generateGenesisUtxosL1 = generateGenesisUtxo,
+          equityRange = equityRange,
         )
 
         config = HeadConfig.Preinit.HeadConfig(

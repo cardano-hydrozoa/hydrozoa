@@ -1,7 +1,7 @@
 package hydrozoa.config.head
 
 import hydrozoa.config.head.HeadPeersSpec.{Exact, Random}
-import hydrozoa.config.head.initialization.{GenInitializationParameters, GenesisUtxosGen, currentTimeHeadStartTime, generateInitialBlock, generateInitializationParameters, generateRandomPeersUtxosL1}
+import hydrozoa.config.head.initialization.{GenInitializationParameters, GenesisUtxosGen, currentTimeHeadStartTime, generateInitialBlock, generateInitializationParametersTopDown, generateRandomPeersUtxosL1}
 import hydrozoa.config.head.multisig.fallback.{FallbackContingencyGen, generateFallbackContingency}
 import hydrozoa.config.head.multisig.timing.{TxTimingGen, generateDefaultTxTiming}
 import hydrozoa.config.head.network.{CardanoNetwork, generateStandardCardanoNetwork}
@@ -10,7 +10,7 @@ import hydrozoa.config.head.peers.{TestPeers, generateTestPeers}
 import hydrozoa.config.head.rulebased.{DisputeResolutionConfigGen, generateDisputeResolutionConfig}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import org.scalacheck.{Gen, Prop, Properties, Test}
-import scalus.cardano.ledger.SlotConfig
+import scalus.cardano.ledger.{Coin, SlotConfig}
 
 enum HeadPeersSpec:
     case Random
@@ -34,7 +34,8 @@ def generateHeadConfigPreInit(headPeers: HeadPeersSpec)(
     generateHeadParameters: GenHeadParams = generateHeadParameters,
     generateGenesisUtxo: GenesisUtxosGen = generateRandomPeersUtxosL1,
     generateInitializationParameters: GenInitializationParameters =
-        generateInitializationParameters,
+        generateInitializationParametersTopDown,
+    equityRange: (Coin, Coin) = Coin(5_000_000) -> Coin(500_000_000),
 ): Gen[HeadConfig.Preinit.HeadConfig] = for {
     testPeers <- headPeers.generate
     cardanoNetwork <- generateCardanoNetwork
@@ -47,7 +48,8 @@ def generateHeadConfigPreInit(headPeers: HeadPeersSpec)(
       Gen.const(cardanoNetwork),
       generateHeadStartTime,
       generateFallbackContingency,
-      generateGenesisUtxo
+      generateGenesisUtxo,
+      equityRange
     )
 
 } yield HeadConfig.Preinit.HeadConfig(
@@ -66,28 +68,31 @@ def generateHeadConfig(headPeers: HeadPeersSpec)(
     generateHeadParameters: GenHeadParams = generateHeadParameters,
     generateGenesisUtxo: GenesisUtxosGen = generateRandomPeersUtxosL1,
     generateInitializationParameters: GenInitializationParameters =
-        generateInitializationParameters,
+        generateInitializationParametersTopDown,
+    equityRange: (Coin, Coin) = Coin(5_000_000) -> Coin(500_000_000),
 ): Gen[HeadConfig] =
     for {
         peers <- headPeers.generate
         // we have to re-use this in generating the preinit config and the initial block
         exactPeers = Exact(peers.headPeers.nHeadPeers.toInt)
         preinit <- generateHeadConfigPreInit(exactPeers)(
-          generateCardanoNetwork,
-          generateHeadStartTime,
-          generateTxTiming,
-          generateFallbackContingency,
-          generateDisputeResolutionConfig,
-          generateHeadParameters,
-          generateGenesisUtxo,
-          generateInitializationParameters
+          generateCardanoNetwork = generateCardanoNetwork,
+          generateHeadStartTime = generateHeadStartTime,
+          generateTxTiming = generateTxTiming,
+          generateFallbackContingency = generateFallbackContingency,
+          generateDisputeResolutionConfig = generateDisputeResolutionConfig,
+          generateHeadParameters = generateHeadParameters,
+          generateGenesisUtxo = generateGenesisUtxo,
+          generateInitializationParameters = generateInitializationParameters,
+          equityRange = equityRange
         )
         initialBlock <- generateInitialBlock(TestPeers(peers._testPeers.map(_._2).toList))(
           generateCardanoNetwork = Gen.const(preinit.cardanoNetwork),
           generateTxTiming = _ => Gen.const(preinit.headParams.txTiming),
           generateHeadParameters = _ => (_, _, _) => Gen.const(preinit.headParams),
           generateHeadStartTime = _ => Gen.const(preinit.initializationParams.headStartTime),
-          generateInitializationParameters = (_, _, _, _) => Gen.const(preinit.initializationParams)
+          generateInitializationParameters =
+              (_, _, _, _, _) => Gen.const(preinit.initializationParams)
         )
     } yield HeadConfig(
       cardanoNetwork = preinit.cardanoNetwork,

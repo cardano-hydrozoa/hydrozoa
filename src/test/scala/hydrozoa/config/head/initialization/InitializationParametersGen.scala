@@ -8,7 +8,9 @@ import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
 import hydrozoa.config.head.network.{CardanoNetwork, generateStandardCardanoNetwork}
 import hydrozoa.config.head.peers.{TestPeers, generateTestPeers}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.lib.cardano.scalus.given_Choose_Coin
 import hydrozoa.lib.cardano.scalus.ledger.{asUtxoList, asUtxos}
+import hydrozoa.lib.cardano.value.coin.Distribution.unsafeNormalizeWeights
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.dapp.token.CIP67.HeadTokenNames
@@ -18,8 +20,7 @@ import scala.collection.immutable.SortedMap
 import scala.concurrent.duration.DurationInt
 import scalus.cardano.address.Address
 import scalus.cardano.ledger.*
-import test.Generators.Hydrozoa.*
-import test.TestPeer
+import spire.math.{Rational, SafeLong}
 
 type HeadStartTimeGen = SlotConfig => Gen[QuantizedInstant]
 
@@ -40,7 +41,7 @@ def generateHeadStartTime(slotConfig: SlotConfig): Gen[QuantizedInstant] =
   * the head start time under given slot configuration. This is supposed to be used with Yaci, when
   * we cannot set the time on L1.
   */
-def currentTimeHeadStartTime(slotConfig: SlotConfig): Gen[QuantizedInstant] =
+final def currentTimeHeadStartTime(slotConfig: SlotConfig): Gen[QuantizedInstant] =
     val now = Instant.now()
     require(slotConfig.zeroSlot <= now.toEpochMilli, "zero slot time cannot be in the future")
     Gen.const(
@@ -51,21 +52,23 @@ def currentTimeHeadStartTime(slotConfig: SlotConfig): Gen[QuantizedInstant] =
     )
 
 type GenInitializationParameters =
-    TestPeers => (
-        Gen[CardanoNetwork],
-        HeadStartTimeGen,
-        FallbackContingencyGen,
-        GenesisUtxosGen
+    (testPeers: TestPeers) => (
+        generateCardanoNetwork: Gen[CardanoNetwork],
+        generateHeadStartTime: HeadStartTimeGen,
+        generateFallbackContingency: FallbackContingencyGen,
+        generateGenesisUtxosL1: GenesisUtxosGen,
+        equityRange: (Coin, Coin)
     ) => Gen[
       InitializationParameters
     ]
 
 type GenInitializationParameters2 =
     (
-        Gen[CardanoNetwork],
-        HeadStartTimeGen,
-        FallbackContingencyGen,
-        GenesisUtxosGen
+        generateCardanoNetwork: Gen[CardanoNetwork],
+        generateHeadStartTime: HeadStartTimeGen,
+        generateFallbackContingency: FallbackContingencyGen,
+        generateGenesisUtxosL1: GenesisUtxosGen,
+        equityRange: (Coin, Coin)
     ) => Gen[
       InitializationParameters
     ]
@@ -83,99 +86,47 @@ def testPeersGenesisUtxosL1(testPeers: TestPeers)(
   */
 def generateRandomPeersUtxosL1(network: CardanoNetwork): Gen[Map[HeadPeerNumber, Utxos]] = ???
 
-/**   - An L2 utxo set that contains only pub key, ada-only utxos, spendable by some test peer
-  *   - A seed utxo from a known peer with enough ada to cover the l2 utxo set
-  *   - Arbitrary additional funding utxos from known peers, with a 10 to 10k ADA surplus
-  *   - Exactly 4 change utxos, ada only, pubkey from a known peer, with the excess funding
-  *     distributed.
+/** This is a "bad" generator, that executes top-down approach that limits significantly its
+  * coverage. It exists for a reason:
+  *   - On Yaci you are limited to a set of initial utxos
+  *   - Even if you can spawn utxos on Yaci you can't on a public testnet
+  *   - When doing integration testing we don't want need to cover a wide space since we are very
+  *     constrained in number of test cases we can run.
   *
-  * TODO:
-  *   - Choose variable number of change utxos in advance, estimate surplus funding to cover at
-  *     least min ADA
-  *   - Non ADA assets in funding utxos
-  *   - Distribute equity more randomly among seed + funding utxos
+  * Top-down here means that we start with some existing utxos for every peer and breaks them into
+  * parts (contingency, change, initial deposits and so on).
+  *
+  * Support multi assets.
   */
-def generateInitializationParameters(testPeers: TestPeers)(
+def generateInitializationParametersTopDown(testPeers: TestPeers)(
     generateCardanoNetwork: Gen[CardanoNetwork] = generateStandardCardanoNetwork,
     generateHeadStartTime: HeadStartTimeGen = currentTimeHeadStartTime,
     generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
-    generateGenesisUtxosL1: GenesisUtxosGen = generateRandomPeersUtxosL1
+    generateGenesisUtxosL1: GenesisUtxosGen = generateRandomPeersUtxosL1,
+    equityRange: (Coin, Coin) = Coin(5_000_000) -> Coin(500_000_000)
 ): Gen[InitializationParameters] =
     for {
         cardanoNetwork <- generateCardanoNetwork
         headStartTime <- generateHeadStartTime(cardanoNetwork.slotConfig)
-
         fallbackContingency <- generateFallbackContingency(cardanoNetwork)
-
-        //// Helper generator for l2 utxos
-        // genUtxoFromKnownPeer: Gen[Utxo] =
-        //    for {
-        //        peer <- Gen.oneOf(testPeers._testPeers.toList).flatMap(_._2)
-        //        utxo <- genAdaOnlyPubKeyUtxo(
-        //          config = cardanoNetwork,
-        //          peer = peer
-        //        )
-        //    } yield utxo
-        //
-        // l2Utxos <- {
-        //    Gen
-        //        .listOf(genUtxoFromKnownPeer)
-        //        .map(list => Map.from(list.map(_.toTuple)))
-        // }
-        // l2Value = l2Utxos.values.map(_.value).fold(Value.zero)(_ + _)
-        //
-        // equityContributions <- generateEquityContributions(testPeers.headPeers.nHeadPeers)
-        // equity = equityContributions.toSortedMap.values.map(Value(_)).fold(Value.zero)(_ + _)
-        //
-        //// Need to limit the number so that we don't exceed tx size limits
-        // nChangeUtxos <- Gen.choose(1, 50)
-        // changeUtxos <- Gen.listOfN(nChangeUtxos, genUtxoFromKnownPeer)
-        // changeAmount = changeUtxos.map(_.output.value).fold(Value.zero)(_ + _)
-        //
-        // grossFundingAmount = equity
-        //    + l2Value
-        //    + Value(fallbackContingency.collectiveContingency.total)
-        //    + Value.lovelace(
-        //      fallbackContingency.individualContingency.total.value * testPeers.headPeers.nHeadPeers
-        //    )
-        //    + changeAmount
-        //
-        // fundingUtxosList <-
-        //    for {
-        //        nFundingUtxos <- Gen.choose(1, 100)
-        //        utxos <- Gen.listOfN(nFundingUtxos, genUtxoFromKnownPeer)
-        //        utxosWithZeroValue = utxos.map(
-        //          _.focus(_.output).andThen(valueLens).replace(Value.zero)
-        //        )
-        //        distributed <- genCoinDistributionWithMinAdaUtxo(
-        //          coin = grossFundingAmount.coin,
-        //          utxoList = NonEmptyList.fromListUnsafe(utxosWithZeroValue),
-        //          params = cardanoNetwork.cardanoProtocolParams
-        //        )
-        //    } yield distributed
-        //
-        // seedUtxo = fundingUtxosList.head
-        // additionalFundingUtxos: Utxos = Map.from(
-        //  fundingUtxosList.toList.map(_.toTuple)
-        // ) - seedUtxo.input
-
         genesisUtxos <- generateGenesisUtxosL1(cardanoNetwork)
 
-        // TODO: factor out mkGeneratePeerEquity?
-        generatePeerEquity: (Coin => Gen[Coin]) = coin =>
-            testPeers.nHeadPeers.convert match {
-                // One peer - big enough contribution
-                case 1 => Gen.choose(50_000_000L, coin.value).flatMap(Coin.apply)
-                // Two peers - smaller contributions
-                case 2 => Gen.choose(20_000_000L, coin.value).flatMap(Coin.apply)
-                // Three and more peers - some zero, some maximal
-                case _ =>
-                    Gen.frequency(
-                      2 -> Gen.const(Coin.zero),
-                      7 -> Gen.choose(5_000_000L, coin.value).flatMap(Coin.apply),
-                      1 -> Gen.const(coin.value).flatMap(Coin.apply)
-                    )
-            }
+        // We are calculating equity upfront to avoid using .suchThat
+        totalEquity <- Gen.choose(equityRange._1, equityRange._2)
+        peersEquity: SortedMap[HeadPeerNumber, Coin] <-
+            Gen.listOfN(
+              testPeers.nHeadPeers - 1,
+              Gen.frequency(3 -> Gen.const(0), 7 -> Gen.choose(1, 10))
+            ).map(tail => NonEmptyList.apply(1, tail))
+                .map(ws => unsafeNormalizeWeights[Int](ws, Rational.apply))
+                .map(_.distribute(SafeLong.apply(totalEquity.value)))
+                .map(_.zipWithIndex)
+                .map(
+                  _.map((coinSL, ix) => HeadPeerNumber(ix) -> Coin(coinSL.getLong.get)).toList
+                      .to(SortedMap)
+                )
+
+        // Peers' contributions
         contributions <- Gen.sequence[List[Contribution], Contribution](
           testPeers.headPeerNums
               .map(hpn =>
@@ -183,14 +134,15 @@ def generateInitializationParameters(testPeers: TestPeers)(
                     headPeerNumber = hpn,
                     peerUtxos = genesisUtxos(hpn),
                     fallbackContingency = fallbackContingency,
-                    generatePeerEquity = generatePeerEquity,
+                    peerEquity = peersEquity(hpn),
                     cardanoNetwork = cardanoNetwork
                   )
               )
               .toList
         )
 
-        total = Monoid.combineAll(contributions)
+        // Combining together, .get is safe since it's derived from non-empty [[testPeers]]
+        total = Semigroup.combineAllOption(contributions).get
         seedUtxo <- Gen.oneOf(total.fundingUtxos)
         genesisId = JointLedger.mkGenesisId(HeadTokenNames(seedUtxo.input).treasuryTokenName, 0)
         initialL2Utxos =
@@ -201,60 +153,38 @@ def generateInitializationParameters(testPeers: TestPeers)(
     } yield InitializationParameters(
       headStartTime = headStartTime,
       initialL2Utxos = initialL2Utxos,
-      initialEquityContributions = NonEmptyMap.fromMapUnsafe(total.equityContribution),
+      initialEquityContributions = NonEmptyMap.fromMapUnsafe(peersEquity),
       initialSeedUtxo = seedUtxo,
       initialAdditionalFundingUtxos = total.fundingUtxos.asUtxos - seedUtxo.input,
       initialChangeOutputs = total.changeOutputs
     )
 
-// TODO: improve?
-def generateEquityContributions(numPeers: Int): Gen[NonEmptyMap[HeadPeerNumber, Coin]] =
-    for {
-        shares <- Gen.listOfN(numPeers, Gen.choose(5_000_000, 500_000_000).map(Coin(_)))
-        peerShares = NonEmptyMap.fromMapUnsafe(SortedMap.from(shares.zipWithIndex.map {
-            case (share, index) =>
-                HeadPeerNumber(index) -> share
-        }.toMap))
-
-    } yield peerShares
-
-def arbitraryHeadPeerUtxo(cardanoNetwork: CardanoNetwork, peer: TestPeer): Gen[Utxo] =
-    genAdaOnlyPubKeyUtxo(
-      config = cardanoNetwork,
-      peer = peer
-    )
-
-def pickHeadPeerUtxo(availableUtxos: Utxos, peer: TestPeer) = ???
-
 object SanityCheck extends Properties("Initialization Parameters Sanity Check") {
     val _ = property("sanity check") = Prop.forAll(generateTestPeers())(testPeers =>
-        Prop.forAll(generateInitializationParameters(testPeers)())(_ => true)
+        Prop.forAll(generateInitializationParametersTopDown(testPeers)())(_ => true)
     )
 }
 
-// TODO: what do you think of expanding out shortening citizenship?
+// TODO: what do you think of expanding our shortening citizenship?
 //   - generate -> gen
-//   - initialization -> init or i12n ?
-//   - parameters -> params
+//   - initialization -> init or i12n ? (and the same for types)
+//   - parameters -> params (and the same for types)
 
 // ===================================
-// Monoidal contributions for initialization params
+// Semigroup contributions for initialization params
 // ===================================
 
 case class Contribution(
     fundingUtxos: List[Utxo] = List.empty,
-    equityContribution: SortedMap[HeadPeerNumber, Coin] = SortedMap.empty,
     changeOutputs: List[TransactionOutput] = List.empty,
     l2transactionOutput: List[TransactionOutput] = List.empty
 )
 
-implicit val contributionMonoid: Monoid[Contribution] =
-    Monoid.instance(
-      emptyValue = Contribution(),
+implicit val contributionSemigroup: Semigroup[Contribution] =
+    Semigroup.instance(
       cmb = (a, b) =>
           Contribution(
             fundingUtxos = a.fundingUtxos |+| b.fundingUtxos,
-            equityContribution = a.equityContribution |+| b.equityContribution,
             changeOutputs = a.changeOutputs |+| b.changeOutputs,
             l2transactionOutput = a.l2transactionOutput |+| b.l2transactionOutput
           )
@@ -264,26 +194,26 @@ def generatePeerContribution(
     headPeerNumber: HeadPeerNumber,
     peerUtxos: Utxos,
     fallbackContingency: FallbackContingency,
-    generatePeerEquity: Coin => Gen[Coin],
+    peerEquity: Coin,
     cardanoNetwork: CardanoNetwork
 ): Gen[Contribution] = {
     val generateCappedValueC = generateCappedValue(cardanoNetwork)
-    // This is a bit hacky, but should work
     val peerAddresses = peerUtxos.values.map(_.address).toSet
     for {
-        // 1. Funding utxos
-        fundingUtxos <- Gen.someOf(peerUtxos.asUtxoList)
+        // 1. Funding utxos, at least one since individual contingency is mandatory
+        fundingUtxos <- Gen.atLeastOne(peerUtxos.asUtxoList)
         fundingValue = fundingUtxos.map(_.output.value).fold(Value.zero)(_ + _)
-        // 2. Subtracting contingency
+
+        // 2. Subtracting contingency and equity
         contingency = fallbackContingency.totalContingencyFor(headPeerNumber)
         netFundingValue = fundingValue - Value.lovelace(contingency.value)
-        // 3. Equity contribution using specified strategy
-        equity <- generatePeerEquity(netFundingValue.coin)
-        // 4. Generate change
-        maxChange = netFundingValue - Value.lovelace(equity.value)
+        maxChange = netFundingValue - Value.lovelace(peerEquity.value)
+
+        // 3. Generate change
         change <- generateCappedValueC(maxChange)
         changeAddress <- Gen.oneOf(peerAddresses)
         rest = maxChange - change
+
         // Generate L2 utxos from the rest (if present)
         l2TransactionOutputs <- Gen.tailRecM(List.empty[TransactionOutput] -> rest)((acc, rest) =>
             for {
@@ -298,7 +228,6 @@ def generatePeerContribution(
 
     } yield Contribution(
       fundingUtxos = fundingUtxos.toList,
-      equityContribution = SortedMap(headPeerNumber -> equity),
       changeOutputs = List(TransactionOutput(address = changeAddress, value = change)),
       l2transactionOutput = l2TransactionOutputs
     )
@@ -309,7 +238,7 @@ def generatePeerContribution(
   * Invariants:
   *   - minAda requirement here leniently means "a value satisfies it being in a Babbage output
   *     locked at the base address with no datum/script"
-  *   - The generated Value always satisfied it
+  *   - The generated Value always satisfies it
   *   - The rest Value either does it alike, or it is empty
   *
   * To generate a small Coin (lovelace) out of a big Coin, chooses an amount between minLovelace and
