@@ -175,9 +175,9 @@ object SanityCheck extends Properties("Initialization Parameters Sanity Check") 
 // ===================================
 
 case class Contribution(
-    fundingUtxos: List[Utxo] = List.empty,
-    changeOutputs: List[TransactionOutput] = List.empty,
-    l2transactionOutput: List[TransactionOutput] = List.empty
+    fundingUtxos: List[Utxo],
+    changeOutputs: List[TransactionOutput],
+    l2transactionOutput: List[TransactionOutput],
 )
 
 implicit val contributionSemigroup: Semigroup[Contribution] =

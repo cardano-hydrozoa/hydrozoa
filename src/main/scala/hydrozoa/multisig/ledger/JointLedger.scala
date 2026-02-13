@@ -53,7 +53,7 @@ final case class JointLedger(
             lastFallbackValidityStart = config.initialFallbackTx.validityStart,
             dappLedgerState =
                 DappLedgerM.State(config.initializationTx.treasuryProduced, Queue.empty),
-            virtualLedgerState = VirtualLedgerM.State.empty
+            virtualLedgerState = VirtualLedgerM.State.apply(config.initialL2Utxos)
           )
         )
 

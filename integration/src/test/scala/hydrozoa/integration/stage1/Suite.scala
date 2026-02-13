@@ -196,7 +196,7 @@ case class Suite(
           blockCycle = BlockCycle.Done(BlockNumber.zero, BlockVersion.Full.zero),
           competingFallbackStartTime =
               headConfig.txTiming.newFallbackStartTime(headConfig.headStartTime),
-          activeUtxos = Map.empty
+          activeUtxos = headConfig.initialL2Utxos
         )
     }
 
