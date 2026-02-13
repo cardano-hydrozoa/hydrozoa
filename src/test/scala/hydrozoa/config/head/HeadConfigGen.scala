@@ -1,7 +1,7 @@
 package hydrozoa.config.head
 
 import hydrozoa.config.head.HeadPeersSpec.{Exact, Random}
-import hydrozoa.config.head.initialization.{GenInitializationParameters, GenesisUtxosGen, currentTimeHeadStartTime, generateInitialBlock, generateInitializationParametersTopDown, generateRandomPeersUtxosL1}
+import hydrozoa.config.head.initialization.{GenesisUtxosGen, InitializationParametersGenBottomUp, currentTimeHeadStartTime, generateInitialBlock, generateRandomPeersUtxosL1}
 import hydrozoa.config.head.multisig.fallback.{FallbackContingencyGen, generateFallbackContingency}
 import hydrozoa.config.head.multisig.timing.{TxTimingGen, generateDefaultTxTiming}
 import hydrozoa.config.head.network.{CardanoNetwork, generateStandardCardanoNetwork}
@@ -33,8 +33,8 @@ def generateHeadConfigPreInit(headPeers: HeadPeersSpec)(
     generateDisputeResolutionConfig: DisputeResolutionConfigGen = generateDisputeResolutionConfig,
     generateHeadParameters: GenHeadParams = generateHeadParameters,
     generateGenesisUtxo: GenesisUtxosGen = generateRandomPeersUtxosL1,
-    generateInitializationParameters: GenInitializationParameters =
-        generateInitializationParametersTopDown,
+    generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters =
+        InitializationParametersGenBottomUp.generateInitializationParameters,
     equityRange: (Coin, Coin) = Coin(5_000_000) -> Coin(500_000_000),
 ): Gen[HeadConfig.Preinit.HeadConfig] = for {
     testPeers <- headPeers.generate
@@ -48,8 +48,6 @@ def generateHeadConfigPreInit(headPeers: HeadPeersSpec)(
       Gen.const(cardanoNetwork),
       generateHeadStartTime,
       generateFallbackContingency,
-      generateGenesisUtxo,
-      equityRange
     )
 
 } yield HeadConfig.Preinit.HeadConfig(
@@ -67,8 +65,8 @@ def generateHeadConfig(headPeers: HeadPeersSpec)(
     generateDisputeResolutionConfig: DisputeResolutionConfigGen = generateDisputeResolutionConfig,
     generateHeadParameters: GenHeadParams = generateHeadParameters,
     generateGenesisUtxo: GenesisUtxosGen = generateRandomPeersUtxosL1,
-    generateInitializationParameters: GenInitializationParameters =
-        generateInitializationParametersTopDown,
+    generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters =
+        InitializationParametersGenBottomUp.generateInitializationParameters,
     equityRange: (Coin, Coin) = Coin(5_000_000) -> Coin(500_000_000),
 ): Gen[HeadConfig] =
     for {
