@@ -2,9 +2,6 @@ package hydrozoa.rulebased.ledger.dapp.tx
 
 import cats.implicits.*
 import hydrozoa.*
-import hydrozoa.config.EquityShares
-import hydrozoa.config.EquityShares.RuleBasedRegimeDistribution.*
-import hydrozoa.lib.cardano.value.coin.Coin as NewCoin
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryScript
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer
@@ -14,9 +11,7 @@ import scala.collection.immutable.SortedMap
 import scalus.builtin.ByteString.hex
 import scalus.builtin.Data.toData
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.ledger.utils.MinCoinSizedTransactionOutput
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.Datum.DatumInlined
 import scalus.cardano.txbuilder.ScriptSource.{NativeScriptValue, PlutusScriptValue}
@@ -24,7 +19,6 @@ import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, *}
 
 final case class DeinitTx(
     treasuryUtxoSpent: RuleBasedTreasuryUtxo,
-    equityOutputs: List[TransactionOutput],
     tx: Transaction
 )
 
@@ -49,7 +43,6 @@ object DeinitTx {
         treasuryUtxo: RuleBasedTreasuryUtxo,
         defaultVoteDeposit: Coin,
         voteDeposit: Coin,
-        shares: EquityShares,
         collateralUtxo: Utxo,
         env: CardanoInfo,
         evaluator: PlutusScriptEvaluator,
@@ -73,9 +66,7 @@ object DeinitTx {
 
             headTokens <- extractHeadTokens(policyId, treasuryUtxo)
 
-            equityOutputs = mkEquityProduced(recipe)
-
-            result <- buildDeinitTx(recipe, equityOutputs.outputs, equityOutputs.dust, headTokens)
+            result <- buildDeinitTx(recipe, headTokens)
         } yield result
     }
 
@@ -96,46 +87,6 @@ object DeinitTx {
 
         } yield ()
 
-    case class EquityProduced(
-        outputs: List[Babbage],
-        dust: Option[Coin]
-    )
-
-    object EquityProduced:
-        def apply(dust: Coin): EquityProduced =
-            EquityProduced(List.empty, Option.when(dust < Coin.zero)(dust))
-
-    private def mkEquityProduced(recipe: Recipe): EquityProduced =
-        import recipe.*
-
-        val minAda0 = minAda(env.protocolParams)
-
-        val defaultVoteDepositNewCoin = NewCoin.unsafeApply(defaultVoteDeposit.value)
-        val voteDepositNewCoin = NewCoin.unsafeApply(voteDeposit.value)
-        val treasuryNewCoin = NewCoin.unsafeApply(treasuryUtxo.value.coin.value)
-
-        val distribution =
-            shares.distribute(defaultVoteDepositNewCoin, voteDepositNewCoin)(treasuryNewCoin)
-
-        val initial = EquityProduced(Coin(distribution.dust.underlying))
-
-        distribution.disbursements.foldLeft(initial)((acc, share) => {
-            val shareAsCoin = Coin(share._2.underlying)
-            val output =
-                Babbage(
-                  address = share._1,
-                  value = Value.apply(shareAsCoin),
-                  datumOption = None,
-                  scriptRef = None
-                )
-            if shareAsCoin >= minAda0(output)
-            then EquityProduced(acc.outputs :+ output, acc.dust)
-            else EquityProduced(acc.outputs, Some(shareAsCoin + acc.dust.getOrElse(Coin.zero)))
-        })
-
-    private def minAda(params: ProtocolParams)(output: TransactionOutput) =
-        MinCoinSizedTransactionOutput.ensureMinAda(Sized(output), params)
-
     private def extractHeadTokens(
         policyId: PolicyId,
         treasuryUtxo: RuleBasedTreasuryUtxo
@@ -151,8 +102,6 @@ object DeinitTx {
 
     private def buildDeinitTx(
         recipe: Recipe,
-        equityOutputs: List[Babbage],
-        mbEquityFees: Option[Coin],
         headTokens: SortedMap[AssetName, Long]
     ): Either[SomeBuildError | DeinitTxError, DeinitTx] = {
         import recipe.*
@@ -180,11 +129,7 @@ object DeinitTx {
                     // Send collateral back as the first output
                     Send(collateralUtxo.output)
                   )
-                  // Possible fees from equity sares that are < minAda
-                      ++ mbEquityFees.toList.map(Fee(_))
-                      // Equity shares outputs
-                      ++ equityOutputs.map(o => Send(o))
-                      // Burn head tokens
+                  // Burn head tokens
                       ++ headTokens.map((assetName, amount) =>
                           Mint(
                             scriptHash = policyId,
@@ -213,7 +158,6 @@ object DeinitTx {
 
         } yield DeinitTx(
           treasuryUtxoSpent = treasuryUtxo,
-          equityOutputs = equityOutputs,
           tx = finalized.transaction
         )
     }

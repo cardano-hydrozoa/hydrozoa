@@ -1,25 +1,25 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
-import cats.data.NonEmptyList
-import hydrozoa.*
+import hydrozoa.config.head.initialization.InitializationParameters
+import hydrozoa.config.head.multisig.fallback.FallbackContingency
+import hydrozoa.config.head.multisig.timing.TxTiming
+import hydrozoa.config.head.multisig.timing.TxTiming.*
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
+import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
-import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
-import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
+import hydrozoa.multisig.ledger.dapp.token.CIP67.{HasTokenNames, HeadTokenNames}
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.Initialization
-import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
+import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuilderResultSimple, explainConst}
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import monocle.{Focus, Lens}
-import scala.collection.immutable.SortedMap
 import scala.util.Try
 import scalus.builtin.Data
 import scalus.builtin.Data.toData
-import scalus.cardano.address.ShelleyDelegationPart.Null
-import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
@@ -27,17 +27,26 @@ import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, ModifyAuxiliaryDat
 
 final case class InitializationTx(
     override val validityEnd: QuantizedInstant,
-    treasuryProduced: MultisigTreasuryUtxo,
-    multisigRegimeUtxo: MultisigRegimeUtxo,
-    tokenNames: TokenNames,
+    override val treasuryProduced: MultisigTreasuryUtxo,
+    override val multisigRegimeProduced: MultisigRegimeUtxo,
+    override val headTokenNames: HeadTokenNames,
     override val resolvedUtxos: ResolvedUtxos,
     override val tx: Transaction,
     override val txLens: Lens[InitializationTx, Transaction] = Focus[InitializationTx](_.tx)
 ) extends Tx[InitializationTx],
       HasResolvedUtxos,
+      MultisigTreasuryUtxo.Produced,
+      MultisigRegimeUtxo.Produced,
+      HasTokenNames,
       HasValidityEnd
 
 object InitializationTx {
+    export InitializationTxOps.{Build, Parse}
+}
+
+private object InitializationTxOps {
+    type Config = CardanoNetwork.Section & HeadPeers.Section & FallbackContingency.Section &
+        TxTiming.Section & InitializationParameters.Section
 
     private val logger = org.slf4j.LoggerFactory.getLogger("InitializationTx")
 
@@ -49,182 +58,221 @@ object InitializationTx {
         result
     }
 
-    case class Config(
-        peerKeys: NonEmptyList[VerificationKeyBytes],
-        cardanoInfo: CardanoInfo,
-        txTiming: TxTiming,
-        startTime: QuantizedInstant,
-        tokenNames: TokenNames
-    ) {
-        def evaluator: PlutusScriptEvaluator =
-            PlutusScriptEvaluator(cardanoInfo, EvaluateAndComputeCost)
-        def headMultisigScript: HeadMultisigScript = HeadMultisigScript(peerKeys)
+    final case class Build(config: Config) {
+        import Build.*
 
-    }
-
-    def build(config: Config, recipe: Recipe): Either[SomeBuildError, InitializationTx] = {
-        ////////////////////////////////////////////////////////////
-        // Data extraction
-        import recipe.*
-
-        val headAddress: ShelleyAddress =
-            config.headMultisigScript.mkAddress(config.cardanoInfo.network)
-        val changeAddress = ShelleyAddress(config.cardanoInfo.network, changePP, Null)
-
-        val mrTokenName = CIP67.TokenNames(recipe.spentUtxos.seedUtxo.input).multisigRegimeTokenName
-        val mrToken: MultiAsset = MultiAsset(
-          SortedMap(
-            config.headMultisigScript.policyId -> SortedMap(mrTokenName -> 1L)
-          )
-        )
-
-        // Lovelace per tx byte (a): 44 Lovelace per tx (b): 155381 Max tx bytes: 16 * 1024 = 16384
-        // Therefore, max non-Plutus tx fee: 16 * 1024 * 44 + 155381 = 720896 + 155381 = 876277
-        // (this is the deposit to cover the fallback transaction fee)
-        val mrValue = Value(recipe.hmrwCoin, mrToken)
-
-        /////////////////////////////////////////////////////////
-        // Steps
-        val spendAllUtxos: Seq[Spend] = Seq(Spend(recipe.spentUtxos.seedUtxo)) ++
-            recipe.spentUtxos.fundingUtxos
-                .map(utxo =>
-                    Spend(
-                      Utxo.apply(utxo._1, utxo._2),
-                      PubKeyWitness
-                    )
-                )
-                .toList
-
-        val mintTreasuryToken = Mint(
-          config.headMultisigScript.script.scriptHash,
-          config.tokenNames.headTokenName,
-          1,
-          config.headMultisigScript.witnessValue
-        )
-
-        val mintMRToken = Mint(
-          config.headMultisigScript.script.scriptHash,
-          mrTokenName,
-          1,
-          config.headMultisigScript.witnessAttached
-        )
-
-        // TODO: switch back to witnessAttached after resolving https://github.com/scalus3/scalus/issues/207
-        // val hmrwOutput =
-        //    Babbage(headAddress, mrValue, None, Some(ScriptRef(config.headMultisigScript.script)))
-        //        .ensureMinAda(config.cardanoInfo.protocolParams)
-        val hmrwOutput =
-            Babbage(headAddress, mrValue, None, None)
-                .ensureMinAda(config.cardanoInfo.protocolParams)
-
-        val createTreasury: Send = Send(
-          Babbage(
-            config.headMultisigScript.mkAddress(config.cardanoInfo.network),
-            value = initialTreasury +
-                Value(
-                  Coin.zero,
-                  MultiAsset(
-                    SortedMap(
-                      config.headMultisigScript.policyId -> SortedMap(
-                        config.tokenNames.headTokenName -> 1L
-                      )
-                    )
-                  )
-                ),
-            datumOption = Some(Inline(MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum.toData))
-          )
-        )
-
-        val createChangeOutput = Send(Babbage(changeAddress, Value.zero, None, None))
-
-        val modifyAuxiliaryData =
-            ModifyAuxiliaryData(_ =>
-                Some(
-                  MD.apply(
-                    Initialization(
-                      headAddress = headAddress,
-                      treasuryOutputIndex = 0,
-                      multisigRegimeOutputIndex = 1,
-                      seedInput = recipe.spentUtxos.seedUtxo.input
-                    )
+        lazy val result: BuilderResultSimple[InitializationTx] = for {
+            _ <- Either
+                .cond(
+                  config.isBalancedInitializationFunding,
+                  (),
+                  SomeBuildError.BalancingError(
+                    TxBalancingError.Failed(new IllegalArgumentException),
+                    TransactionBuilder.Context.empty(networkId = config.network)
                   )
                 )
-            )
+                .explainConst(
+                  "Initialization tx funding is unbalanced. We must have" +
+                      "\n\tconfig.initialFundingValue == config.initialL2Value " +
+                      "+ Value(config.initialEquityContributed " +
+                      "+ config.totalFallbackContingency)" +
+                      ""
+                )
 
-        // Not sure why we use Long in the builder step not Slot
-        val validityEndSlot = ValidityEndSlot(
-          (config.startTime
-              + config.txTiming.minSettlementDuration + config.txTiming.inactivityMarginDuration).toSlot.slot
-        )
-
-        val steps = spendAllUtxos
-            :+ mintTreasuryToken
-            :+ mintMRToken
-            :+ createTreasury
-            :+ Send(hmrwOutput)
-            :+ createChangeOutput
-            :+ modifyAuxiliaryData
-            :+ validityEndSlot
-
-        ////////////////////////////////////////////////////////////
-        // Build and finalize
-        for {
             unbalanced <- time("TransactionBuilder.build") {
                 TransactionBuilder
-                    .build(
-                      config.cardanoInfo.network,
-                      steps
-                    )
+                    .build(config.network, Steps())
+                    .explainConst("Initialization tx build steps failed.")
             }
 
             finalized <- time("finalizeContext") {
-                unbalanced
-                    .finalizeContext(
-                      protocolParams = config.cardanoInfo.protocolParams,
-                      diffHandler = Change
-                          .changeOutputDiffHandler(_, _, config.cardanoInfo.protocolParams, 2),
-                      evaluator = config.evaluator,
-                      validators = Tx.Validators.nonSigningNonValidityChecksValidators
-                    )
+                TxBuilder
+                    .finalizeContext(unbalanced)
+                    .explainConst("Initialization tx failed to finalize")
             }
 
-        } yield InitializationTx(
-          validityEnd =
-              config.startTime + config.txTiming.minSettlementDuration + config.txTiming.inactivityMarginDuration,
-          treasuryProduced = MultisigTreasuryUtxo(
-            treasuryTokenName = config.tokenNames.headTokenName,
-            utxoId = TransactionInput(
-              transactionId = finalized.transaction.id,
-              index = 0
-            ),
-            address = headAddress,
-            datum = MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum,
-            value = createTreasury.output.value
-          ),
-          tx = finalized.transaction,
-          multisigRegimeUtxo = MultisigRegimeUtxo(
-            config.tokenNames.multisigRegimeTokenName,
-            utxoId = TransactionInput(finalized.transaction.id, 1),
-            output = hmrwOutput,
-            // TODO: switch back to witnessAttached after resolving https://github.com/scalus3/scalus/issues/207
-            script = config.headMultisigScript
-          ),
-          tokenNames = config.tokenNames,
-          resolvedUtxos = finalized.resolvedUtxos
-        )
+            completed = Complete(finalized)
+        } yield completed
+
+        object Steps {
+            def apply(): List[TransactionBuilderStep] =
+                Base() ++ Spends() ++ Mints() ++ Sends()
+
+            object Base {
+                def apply(): List[TransactionBuilderStep] =
+                    List(modifyAuxiliaryData, validityEndSlot)
+
+                private val modifyAuxiliaryData =
+                    ModifyAuxiliaryData(_ =>
+                        Some(
+                          MD.apply(
+                            Initialization(
+                              headAddress = config.headMultisigAddress,
+                              treasuryOutputIndex = 0,
+                              multisigRegimeOutputIndex = 1,
+                              seedInput = config.initialSeedUtxo.input
+                            )
+                          )
+                        )
+                    )
+
+                private[tx] val validityEndTime =
+                    config.txTiming.initializationEndTime(config.headStartTime)
+
+                private val validityEndSlot = ValidityEndSlot(validityEndTime.toSlot.slot)
+            }
+
+            object Mints {
+                def apply(): List[Mint] = List(mintTreasuryToken, mintMultisigRegimeToken)
+
+                private val mintTreasuryToken = Mint(
+                  config.headMultisigScript.script.scriptHash,
+                  config.headTokenNames.treasuryTokenName,
+                  1,
+                  config.headMultisigScript.witnessValue
+                )
+
+                private val mintMultisigRegimeToken = Mint(
+                  config.headMultisigScript.script.scriptHash,
+                  config.headTokenNames.multisigRegimeTokenName,
+                  1,
+                  config.headMultisigScript.witnessAttached
+                )
+            }
+
+            object Spends {
+                def apply(): List[Spend] = config.initialFundingUtxos.iterator
+                    .map(kv => Spend(Utxo(kv), PubKeyWitness))
+                    .toList
+            }
+
+            object Sends {
+                def apply(): List[Send] = List(Treasury(), MultisigRegime()) ++ ChangeOutputs()
+
+                object Treasury {
+                    def apply(): Send = Send(treasuryOutput)
+
+                    private val treasuryValueUnbalanced: Value =
+                        config.initialL2Value + Value(config.initialEquityContributed) +
+                            Value.asset(
+                              config.headMultisigScript.policyId,
+                              config.headTokenNames.treasuryTokenName,
+                              1L
+                            )
+
+                    private[tx] val treasuryDatum =
+                        MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum(config.initialL2Utxos)
+
+                    private val treasuryOutput = Babbage(
+                      config.headMultisigAddress,
+                      treasuryValueUnbalanced,
+                      Some(Inline(treasuryDatum.toData))
+                    )
+                }
+
+                object MultisigRegime {
+                    def apply(): Send = Send(multisigRegimeOutput)
+
+                    private val multisigRegimeUtxoValue = Value(config.totalFallbackContingency) +
+                        Value.asset(
+                          config.headMultisigScript.policyId,
+                          config.headTokenNames.multisigRegimeTokenName,
+                          1L
+                        )
+
+                    private[tx] val multisigRegimeOutput = Babbage(
+                      config.headMultisigAddress,
+                      multisigRegimeUtxoValue,
+                      None,
+                      // TODO: switch back to witnessAttached after resolving https://github.com/scalus3/scalus/issues/207
+                      // Some(ScriptRef(config.headMultisigScript.script))
+                      None
+                    ).ensureMinAda(config)
+                }
+
+                object ChangeOutputs {
+                    def apply(): List[Send] = config.initialChangeOutputs.map(Send.apply)
+                }
+            }
+
+        }
+
+        private object Complete {
+            def apply(finalized: TransactionBuilder.Context): InitializationTx =
+                val treasuryIndex = 0
+                val multisigRegimeIndex = 1
+
+                val treasuryValue =
+                    finalized.transaction.body.value.outputs(treasuryIndex).value.value
+
+                val treasuryProduced = MultisigTreasuryUtxo(
+                  treasuryTokenName = config.headTokenNames.treasuryTokenName,
+                  utxoId = TransactionInput(finalized.transaction.id, treasuryIndex),
+                  address = config.headMultisigAddress,
+                  datum = Steps.Sends.Treasury.treasuryDatum,
+                  value = treasuryValue
+                )
+
+                val multisigRegimeProduced = MultisigRegimeUtxo(
+                  config.headTokenNames.multisigRegimeTokenName,
+                  utxoId = TransactionInput(finalized.transaction.id, multisigRegimeIndex),
+                  output = Steps.Sends.MultisigRegime.multisigRegimeOutput,
+                  script = config.headMultisigScript
+                )
+
+                InitializationTx(
+                  validityEnd = Steps.Base.validityEndTime,
+                  treasuryProduced = treasuryProduced,
+                  tx = finalized.transaction,
+                  multisigRegimeProduced = multisigRegimeProduced,
+                  headTokenNames = config.headTokenNames,
+                  resolvedUtxos = finalized.resolvedUtxos
+                )
+
+        }
+
+        private object TxBuilder {
+            private val diffHandler = Change.changeOutputDiffHandler(
+              _,
+              _,
+              protocolParams = config.cardanoProtocolParams,
+              changeOutputIdx = 0
+            )
+
+            def finalizeContext(
+                ctx: TransactionBuilder.Context
+            ): Either[SomeBuildError, TransactionBuilder.Context] =
+                ctx.finalizeContext(
+                  config.cardanoProtocolParams,
+                  diffHandler = diffHandler,
+                  evaluator = config.plutusScriptEvaluatorForTxBuild,
+                  validators = Tx.Validators.nonSigningNonValidityChecksValidators
+                )
+        }
     }
 
-    // TODO: use validation monad instead of Either?
-    def parse(
-        peerKeys: NonEmptyList[VerificationKeyBytes],
-        cardanoInfo: CardanoInfo,
-        txTiming: TxTiming,
-        startTime: QuantizedInstant,
+    object Parse {
+        type ParseErrorOr[A] = Either[Error, A]
+
+        enum Error extends Throwable {
+            case MetadataParseError(wrapped: MD.ParseError)
+            case InvalidTransactionError(msg: String)
+            case TtlIsMissing
+            case InvalidInitializationTtl
+        }
+
+    }
+
+    final case class Parse(config: Config)(
         tx: Transaction,
-        // FIXME: We need to parse that these are actually satisfactory, I guess?
         resolvedUtxos: ResolvedUtxos
-    )(using protocolVersion: ProtocolVersion): Either[ParseError, InitializationTx] =
-        for {
+    ) {
+        import Parse.*
+        import Error.*
+
+        private given ProtocolVersion = config.cardanoProtocolVersion
+
+        def result: ParseErrorOr[InitializationTx] = for {
             // ===================================
             // Metadata parsing
             // ===================================
@@ -251,11 +299,15 @@ object InitializationTx {
             // Data Extraction
             // ===================================
 
-            derivedTokenNames = CIP67.TokenNames(imd.seedInput)
+            expectedHNS = config.headMultisigScript
 
-            expectedHNS = HeadMultisigScript(peerKeys)
+            expectedHeadAddress = config.headMultisigAddress
 
-            expectedHeadAddress = expectedHNS.mkAddress(cardanoInfo.network)
+            expectedEndTime = config.txTiming.initializationEndTime(config.headStartTime)
+
+            expectedTreasuryDatum = MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum(
+              config.initialL2Utxos
+            )
 
             actualOutputs = tx.body.value.outputs.map(_.value)
 
@@ -298,7 +350,7 @@ object InitializationTx {
                     "Head Native Script policy ID not found in treasury output value"
                   )
                 )
-            _ <- treasuryOutputInner.get(derivedTokenNames.headTokenName) match {
+            _ <- treasuryOutputInner.get(config.headTokenNames.treasuryTokenName) match {
                 case None =>
                     Left(
                       InvalidTransactionError(
@@ -362,7 +414,7 @@ object InitializationTx {
                         "does not contain the head native script policyId"
                   )
                 )
-            _ <- mrValueOuter.get(derivedTokenNames.multisigRegimeTokenName) match {
+            _ <- mrValueOuter.get(config.headTokenNames.multisigRegimeTokenName) match {
                 case None =>
                     Left(
                       InvalidTransactionError(
@@ -403,15 +455,11 @@ object InitializationTx {
             //        )
 
             // ttl should be present
-            validityEndSlot <- mbTtl
-                .toRight(TtlIsMissing)
+            validityEndSlot <- mbTtl.toRight(TtlIsMissing)
 
             // Should this be in the init tx parser?
             _ <- Either.cond(
-              test = (startTime
-                  + txTiming.minSettlementDuration
-                  + txTiming.inactivityMarginDuration).toSlot
-                  == Slot(validityEndSlot),
+              test = expectedEndTime.toSlot == Slot(validityEndSlot),
               right = (),
               left = InvalidInitializationTtl
             )
@@ -422,23 +470,23 @@ object InitializationTx {
             mintInner <- mintOuter.assets
                 .get(expectedHNS.policyId)
                 .toRight(InvalidTransactionError("Mints don't contain the HNS policy id"))
-            _ <- mintInner.get(derivedTokenNames.headTokenName) match {
+            _ <- mintInner.get(config.headTokenNames.treasuryTokenName) match {
                 case None     => Left(InvalidTransactionError("head token not minted"))
                 case Some(1L) => Right(())
                 case Some(wrongNumber) =>
                     Left(InvalidTransactionError("multiple head tokens minted"))
             }
-            _ <- mintInner.get(derivedTokenNames.multisigRegimeTokenName) match {
+            _ <- mintInner.get(config.headTokenNames.multisigRegimeTokenName) match {
                 case None              => Left(InvalidTransactionError("MR token not minted"))
                 case Some(1L)          => Right(())
                 case Some(wrongNumber) => Left(InvalidTransactionError("multiple MR tokens minted"))
             }
 
             treasury = MultisigTreasuryUtxo(
-              treasuryTokenName = derivedTokenNames.headTokenName,
+              treasuryTokenName = config.headTokenNames.treasuryTokenName,
               utxoId = TransactionInput(tx.id, imd.treasuryOutputIndex),
               address = expectedHeadAddress,
-              datum = MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum,
+              datum = expectedTreasuryDatum,
               value = actualTreasuryOutput.value
             )
 
@@ -449,44 +497,20 @@ object InitializationTx {
 
         } yield InitializationTx(
           validityEnd = QuantizedInstant(
-            cardanoInfo.slotConfig,
-            java.time.Instant.ofEpochMilli(cardanoInfo.slotConfig.slotToTime(validityEndSlot))
+            config.slotConfig,
+            java.time.Instant.ofEpochMilli(config.slotConfig.slotToTime(validityEndSlot))
           ),
           treasuryProduced = treasury,
-          multisigRegimeUtxo = MultisigRegimeUtxo(
-            multisigRegimeTokenName = derivedTokenNames.multisigRegimeTokenName,
+          multisigRegimeProduced = MultisigRegimeUtxo(
+            multisigRegimeTokenName = config.headTokenNames.multisigRegimeTokenName,
             utxoId = TransactionInput(tx.id, imd.multisigRegimeOutputIndex),
             address = expectedHeadAddress,
             value = actualMultisigRegimeOutput.value,
             script = expectedHNS
           ),
-          tokenNames = derivedTokenNames,
+          headTokenNames = config.headTokenNames,
           resolvedUtxos = resolvedUtxos,
           tx = tx
         )
-
-    sealed trait ParseError extends Throwable
-
-    case class MetadataParseError(wrapped: MD.ParseError) extends ParseError
-
-    case class InvalidTransactionError(msg: String) extends ParseError
-
-    case object TtlIsMissing extends ParseError
-
-    case object InvalidInitializationTtl extends ParseError
-
-    // TODO: rename to Args for consistency?
-    final case class Recipe(
-        spentUtxos: SpentUtxos,
-        initialTreasury: Value,
-        hmrwCoin: Coin,
-        changePP: ShelleyPaymentPart,
-    ) {}
-
-    final case class SpentUtxos(
-        seedUtxo: Utxo,
-        fundingUtxos: List[Utxo]
-    ) {
-        def all: NonEmptyList[Utxo] = NonEmptyList(seedUtxo, fundingUtxos)
     }
 }

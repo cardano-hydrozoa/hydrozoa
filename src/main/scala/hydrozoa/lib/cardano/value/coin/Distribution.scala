@@ -5,6 +5,10 @@ import spire.implicits.toRational
 import spire.math.{Rational, SafeLong}
 
 object Distribution {
+    def evenWeights(n: Int): Option[NormalizedWeights] = {
+        if n <= 1 then None
+        else Some(unsafeNormalizeWeights(NonEmptyList.fromListUnsafe(List.fill(n)(Rational(1, n)))))
+    }
 
     /** A non-empty distribution of rational weights that sum to one.
       */

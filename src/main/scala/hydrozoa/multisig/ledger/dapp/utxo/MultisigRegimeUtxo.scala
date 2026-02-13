@@ -48,7 +48,7 @@ object MultisigRegimeUtxo {
 
     /** If some tx extends this, it means that tx is producing it. */
     trait Produced {
-        def multisigRegimeUtxoProduced: MultisigRegimeUtxo
+        def multisigRegimeProduced: MultisigRegimeUtxo
     }
 
     /** If some tx extends this, it means that tx is spending it. */

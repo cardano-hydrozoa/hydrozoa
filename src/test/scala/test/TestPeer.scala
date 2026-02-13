@@ -6,8 +6,10 @@ import com.bloxbean.cardano.client.common.model.Network as BBNetwork
 import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath
 import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath.createExternalAddressDerivationPathForAccount
 import hydrozoa.*
+import hydrozoa.config.head.peers.HeadPeers
+import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.cardano.wallet.WalletModule
-import hydrozoa.multisig.consensus.peer.{PeerNumber, PeerWallet}
+import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, HeadPeerWallet}
 import org.scalacheck.Gen
 import scala.collection.mutable
 import scalus.builtin.Builtins.blake2b_224
@@ -18,6 +20,9 @@ import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, S
 import scalus.cardano.ledger.ArbitraryInstances.*
 import scalus.cardano.ledger.{Hash, Transaction as STransaction}
 
+/** Test peer names are just better indexes - you can have only Alice in one-peer head, Alice and
+  * Bob in two-peer head and so on.
+  */
 enum TestPeer derives CanEqual:
     case Alice
     case Bob
@@ -49,9 +54,9 @@ enum TestPeer derives CanEqual:
 
     def account: Account = TestPeer.mkAccount(this)
 
-    def wallet: PeerWallet = TestPeer.mkWallet(this)
+    def wallet: HeadPeerWallet = TestPeer.mkWallet(this)
 
-    def peerNum: PeerNumber = TestPeer.peerNum(this)
+    def peerNum: HeadPeerNumber = TestPeer.peerNum(this)
 
     def address(network: Network): ShelleyAddress = TestPeer.address(this, network)
 
@@ -78,10 +83,10 @@ object TestPeer:
             )
         )
 
-    private val walletCache: mutable.Map[TestPeer, PeerWallet] = mutable.Map.empty
+    private val walletCache: mutable.Map[TestPeer, HeadPeerWallet] = mutable.Map.empty
         .withDefault(peer =>
-            PeerWallet(
-              PeerNumber(peer.ordinal),
+            HeadPeerWallet(
+              HeadPeerNumber(peer.ordinal),
               WalletModule.BloxBean,
               mkAccount(peer).hdKeyPair().getPublicKey,
               mkAccount(peer).hdKeyPair().getPrivateKey
@@ -98,9 +103,9 @@ object TestPeer:
 
     def mkAccount(peer: TestPeer): Account = accountCache.useOrCreate(peer)
 
-    def mkWallet(peer: TestPeer): PeerWallet = walletCache.useOrCreate(peer)
+    def mkWallet(peer: TestPeer): HeadPeerWallet = walletCache.useOrCreate(peer)
 
-    def peerNum(peer: TestPeer): PeerNumber = PeerNumber(peer.ordinal)
+    def peerNum(peer: TestPeer): HeadPeerNumber = HeadPeerNumber(peer.ordinal)
 
     def address(network: Network)(peer: TestPeer): ShelleyAddress = address(peer, network)
 
@@ -122,29 +127,24 @@ object TestPeer:
     extension (peer: TestPeer)
         def signTx(txUnsigned: STransaction): STransaction =
             val keyWitness = peer.wallet.mkVKeyWitness(txUnsigned)
-            attachVKeyWitnesses(txUnsigned, List(keyWitness))
+            txUnsigned.attachVKeyWitnesses(List(keyWitness))
 
-    extension (wallet: PeerWallet)
+    extension (wallet: HeadPeerWallet)
         def testPeerName: String = {
             val i = wallet.getPeerNum.convert
             if peerNumRange.contains(i) then TestPeer.fromOrdinal(i).toString else "Unknown"
         }
 
+    extension (testPeers: NonEmptyList[TestPeer])
+        def asHeadPeers: HeadPeers =
+            HeadPeers(testPeers.map(_.wallet.exportVerificationKey))
+
 // ===================================
 // Generators
 // ===================================
 
-val genTestPeer: Gen[TestPeer] = {
+val generateTestPeer: Gen[TestPeer] = {
     for {
         i <- Gen.choose(TestPeer.peerNumRange.start, TestPeer.peerNumRange.last)
     } yield TestPeer.fromOrdinal(i)
-}
-
-def genTestPeers(minPeers: Int = 2, maxPeers: Int = 5): Gen[NonEmptyList[TestPeer]] = {
-    require(0 < minPeers && minPeers < TestPeer.nNamedPeers)
-    require(minPeers <= maxPeers && maxPeers < TestPeer.nNamedPeers)
-    for {
-        numPeers <- Gen.choose(minPeers, maxPeers)
-        peers = TestPeer.peerNumRange.take(numPeers).map(TestPeer.fromOrdinal)
-    } yield NonEmptyList.fromListUnsafe(peers.toList)
 }

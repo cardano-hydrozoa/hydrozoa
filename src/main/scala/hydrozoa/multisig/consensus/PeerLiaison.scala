@@ -4,17 +4,20 @@ import cats.effect.{IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
+import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
+import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.PeerLiaison.*
 import hydrozoa.multisig.consensus.PeerLiaison.Request.*
 import hydrozoa.multisig.consensus.ack.{AckBlock, AckId, AckNumber}
-import hydrozoa.multisig.consensus.peer.PeerId
+import hydrozoa.multisig.consensus.peer.HeadPeerId
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber, BlockStatus, BlockType}
 import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId, LedgerEventNumber}
 import scala.collection.immutable.Queue
 
 trait PeerLiaison(
     config: Config,
+    remotePeerId: HeadPeerId,
     pendingConnections: MultisigRegimeManager.PendingConnections | PeerLiaison.Connections,
 ) extends Actor[IO, Request] {
     private val connections = Ref.unsafe[IO, Option[Connections]](None)
@@ -40,7 +43,7 @@ trait PeerLiaison(
                     Connections(
                       blockWeaver = _connections.blockWeaver,
                       consensusActor = _connections.consensusActor,
-                      remotePeerLiaison = _connections.remotePeerLiaisons(config.remotePeerId)
+                      remotePeerLiaison = _connections.remotePeerLiaisons(remotePeerId)
                     )
                   )
                 )
@@ -66,7 +69,7 @@ trait PeerLiaison(
                 } yield ()
             case x: GetMsgBatch =>
                 for {
-                    eNewBatch <- state.buildNewMsgBatch(x, config.maxLedgerEventsPerBatch)
+                    eNewBatch <- state.buildNewMsgBatch(x, config.peerLiaisonMaxEventsPerBatch)
                     _ <- eNewBatch match {
                         case Right(newBatch) =>
                             conn.remotePeerLiaison ! newBatch
@@ -138,7 +141,7 @@ trait PeerLiaison(
                     for {
                         nBlock <- this.nBlock.get
                         nY = y.blockNum
-                        _ <- IO.raiseWhen(config.ownPeerId.nextLeaderBlock(nBlock) != nY)(
+                        _ <- IO.raiseWhen(config.ownHeadPeerId.nextLeaderBlock(nBlock) != nY)(
                           Error("Bad BlockBrief.Next increment.")
                         )
                         _ <- this.nBlock.set(nY)
@@ -215,7 +218,7 @@ trait PeerLiaison(
             import x.*
             val ackNum: AckNumber = AckNumber.neededToConfirm(header)
             val eventNum: LedgerEventNumber = events.collect {
-                case x if x._1.peerNum == config.ownPeerId.peerNum => x._1.eventNum
+                case x if x._1.peerNum == config.ownHeadPeerId.peerNum => x._1.eventNum
             }.max
             for {
                 _ <- this.qAck.update(q => q.dropWhile(_.ackId._2 <= ackNum))
@@ -230,14 +233,14 @@ trait PeerLiaison(
                 current <- this.currentlyRequesting.get
                 nextBatchNum = current.batchNum.increment
                 nextAckNum = current.ackNum.increment
-                nextBlockNum = config.remotePeerId.nextLeaderBlock(current.blockNum)
+                nextBlockNum = remotePeerId.nextLeaderBlock(current.blockNum)
                 nextEventNum = current.eventNum.increment
 
                 correctBatchNum = current.batchNum == receivedBatch.batchNum
 
                 // Received ack num (if any) is the increment of the requested ack num
                 correctAckNum = ack.forall(x =>
-                    x.ackId.peerNum == config.remotePeerId.peerNum &&
+                    x.ackId.peerNum == remotePeerId.peerNum &&
                         x.ackNum == nextAckNum
                 )
 
@@ -277,15 +280,12 @@ trait PeerLiaison(
 object PeerLiaison {
     def apply(
         config: Config,
+        remotePeerId: HeadPeerId,
         pendingLocalConnections: MultisigRegimeManager.PendingConnections,
     ): IO[PeerLiaison] =
-        IO(new PeerLiaison(config, pendingLocalConnections) {})
+        IO(new PeerLiaison(config, remotePeerId, pendingLocalConnections) {})
 
-    final case class Config(
-        ownPeerId: PeerId,
-        remotePeerId: PeerId,
-        maxLedgerEventsPerBatch: Int = 25
-    )
+    type Config = OwnHeadPeerPublic.Section & NodeOperationMultisigConfig.Section
 
     final case class Connections(
         blockWeaver: BlockWeaver.Handle,

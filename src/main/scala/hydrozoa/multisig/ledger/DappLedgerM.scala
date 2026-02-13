@@ -3,26 +3,21 @@ package hydrozoa.multisig.ledger
 import cats.data.*
 import cats.effect.IO
 import cats.syntax.all.*
-import hydrozoa.config.EquityShares
-import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
+import hydrozoa.config.head.HeadConfig
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger
 import hydrozoa.multisig.ledger.DappLedgerM.Error.{AbsorptionPeriodExpired, ParseError, SettlementTxSeqBuilderError}
 import hydrozoa.multisig.ledger.block.BlockVersion
-import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
-import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.txseq
 import hydrozoa.multisig.ledger.dapp.txseq.{DepositRefundTxSeq, FinalizationTxSeq, SettlementTxSeq}
-import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo}
+import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.event.LedgerEvent.RegisterDeposit
 import hydrozoa.multisig.ledger.event.LedgerEventId
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import monocle.syntax.all.*
 import scala.collection.immutable.Queue
-import scala.language.implicitConversions
 import scala.math.Ordered.orderingToOrdered
-import scalus.cardano.ledger.*
 
 private type E[A] = Either[DappLedgerM.Error, A]
 private type S[A] = cats.data.StateT[E, DappLedgerM.State, A]
@@ -57,16 +52,7 @@ case class DappLedgerM[A] private (private val unDappLedger: RT[A]) {
 }
 
 object DappLedgerM {
-    case class Config(
-        txTiming: TxTiming,
-        equityShares: EquityShares,
-        multisigRegimeUtxo: MultisigRegimeUtxo,
-        headMultisigScript: HeadMultisigScript,
-        cardanoInfo: CardanoInfo,
-        tokenNames: TokenNames,
-        votingDuration: QuantizedFiniteDuration,
-        tallyFeeAllowance: Coin,
-    )
+    type Config = HeadConfig.Section
 
     /** Extract the transaction builder configuration from a [[DappLedgerM]]
       */
@@ -98,21 +84,15 @@ object DappLedgerM {
         import req.*
         for {
             config <- ask
-            depositRefundTxSeqConfig = DepositRefundTxSeq.Config(
-              txTiming = config.txTiming,
-              cardanoInfo = config.cardanoInfo,
-              headMultisigScript = config.headMultisigScript,
-              multisigRegimeUtxo = config.multisigRegimeUtxo
-            )
             parseRes =
                 DepositRefundTxSeq
-                    .parse(
+                    .Parse(config)(
                       depositTxBytes = depositTxBytes,
                       refundTxBytes = refundTxBytes,
-                      config = depositRefundTxSeqConfig,
                       virtualOutputsBytes = virtualOutputsBytes,
                       donationToTreasury = donationToTreasury,
                     )
+                    .result
                     .left
                     .map(ParseError(_))
             depositRefundTxSeq <- lift(parseRes)
@@ -143,37 +123,25 @@ object DappLedgerM {
         immatureDeposits: Queue[(LedgerEventId, DepositUtxo)],
         blockCreatedOn: QuantizedInstant,
         competingFallbackValidityStart: QuantizedInstant,
-    ): DappLedgerM[SettleLedger.Result] = {
+    ): DappLedgerM[SettlementTxSeq] = {
 
         for {
             config <- ask
             state <- get
 
-            args = SettlementTxSeq.Builder.Args(
-              kzgCommitment = nextKzg,
-              majorVersionProduced =
-                  BlockVersion.Major(state.treasury.datum.versionMajor.toInt + 1),
-              treasuryToSpend = state.treasury,
-              depositsToSpend = Vector.from(validDeposits.map(_._2).toList),
-              payoutObligationsRemaining = payoutObligations,
-              competingFallbackValidityStart = competingFallbackValidityStart,
-              blockCreatedOn = blockCreatedOn,
-            )
-
             settlementTxSeqRes <- lift(
               SettlementTxSeq
-                  .Builder(
-                    SettlementTxSeq.Config(
-                      headMultisigScript = config.headMultisigScript,
-                      multisigRegimeUtxo = config.multisigRegimeUtxo,
-                      tokenNames = config.tokenNames,
-                      votingDuration = config.votingDuration,
-                      txTiming = config.txTiming,
-                      tallyFeeAllowance = config.tallyFeeAllowance,
-                      cardanoInfo = config.cardanoInfo
-                    )
+                  .Build(config)(
+                    kzgCommitment = nextKzg,
+                    majorVersionProduced =
+                        BlockVersion.Major(state.treasury.datum.versionMajor.toInt + 1),
+                    treasuryToSpend = state.treasury,
+                    depositsToSpend = Vector.from(validDeposits.map(_._2).toList),
+                    payoutObligationsRemaining = payoutObligations,
+                    competingFallbackValidityStart = competingFallbackValidityStart,
+                    blockCreatedOn = blockCreatedOn
                   )
-                  .build(args)
+                  .result
                   .left
                   .map(SettlementTxSeqBuilderError.apply)
             )
@@ -195,10 +163,7 @@ object DappLedgerM {
               }
             )
             _ <- set(newState)
-        } yield SettleLedger.Result(
-          settlementTxSeqRes.settlementTxSeq,
-          settlementTxSeqRes.fallbackTx,
-        )
+        } yield settlementTxSeqRes.settlementTxSeq
 
     }
 
@@ -218,26 +183,17 @@ object DappLedgerM {
         for {
             s <- get
             config <- ask
-            args = FinalizationTxSeq.Builder.Args(
-              majorVersionProduced =
-                  BlockVersion.Major(s.treasury.datum.versionMajor.toInt).increment,
-              treasuryToSpend = s.treasury,
-              payoutObligationsRemaining = payoutObligationsRemaining,
-              competingFallbackValidityStart = competingFallbackValidityStart,
-              blockCreatedOn = blockCreatedOn,
-            )
             ftxSeq <- lift(
               FinalizationTxSeq
-                  .Builder(
-                    FinalizationTxSeq.Config(
-                      txTiming = config.txTiming,
-                      multisigRegimeUtxo = config.multisigRegimeUtxo,
-                      cardanoInfo = config.cardanoInfo,
-                      headMultisigScript = config.headMultisigScript,
-                      equityShares = config.equityShares
-                    )
+                  .Build(config)(
+                    majorVersionProduced =
+                        BlockVersion.Major(s.treasury.datum.versionMajor.toInt).increment,
+                    treasuryToSpend = s.treasury,
+                    payoutObligationsRemaining = payoutObligationsRemaining,
+                    competingFallbackValidityStart = competingFallbackValidityStart,
+                    blockCreatedOn = blockCreatedOn,
                   )
-                  .build(args)
+                  .result
                   .left
                   .map(Error.FinalizationTxSeqBuilderError.apply)
             )
@@ -255,19 +211,12 @@ object DappLedgerM {
         def depositUtxoByEventId(ledgerEventId: LedgerEventId): Option[DepositUtxo] = ???
     }
 
-    object SettleLedger {
-        final case class Result(
-            settlementTxSeq: SettlementTxSeq,
-            fallBack: FallbackTx,
-        )
-    }
-
     sealed trait Error
     object Error {
 
         sealed trait RegisterDepositError extends DappLedgerM.Error
 
-        final case class ParseError(wrapped: txseq.DepositRefundTxSeq.ParseError)
+        final case class ParseError(wrapped: txseq.DepositRefundTxSeq.Parse.Error)
             extends RegisterDepositError
 
         /** This is raised during a call to `RegisterDeposit` if the deposit parses successfully,
@@ -280,10 +229,10 @@ object DappLedgerM {
         final case class AbsorptionPeriodExpired(depositRefundTxSeq: DepositRefundTxSeq)
             extends RegisterDepositError
 
-        final case class SettlementTxSeqBuilderError(wrapped: SettlementTxSeq.Builder.Error)
+        final case class SettlementTxSeqBuilderError(wrapped: SettlementTxSeq.Build.Error)
             extends DappLedgerM.Error
 
-        final case class FinalizationTxSeqBuilderError(wrapped: FinalizationTxSeq.Builder.Error)
+        final case class FinalizationTxSeqBuilderError(wrapped: FinalizationTxSeq.Build.Error)
             extends DappLedgerM.Error
     }
 
@@ -309,19 +258,9 @@ object DappLedgerM {
                 throw new RuntimeException(s"Error running DappLedgerM: $e"),
             onSuccess: A => IO[B]
         ): IO[B] = {
-            val dappLedgerMConfig: DappLedgerM.Config = DappLedgerM.Config(
-              txTiming = jl.config.txTiming,
-              equityShares = jl.config.equityShares,
-              headMultisigScript = jl.config.headMultisigScript,
-              multisigRegimeUtxo = jl.config.multisigRegimeUtxo,
-              cardanoInfo = jl.config.cardanoInfo,
-              tokenNames = jl.config.tokenNames,
-              votingDuration = jl.config.votingDuration,
-              tallyFeeAllowance = jl.config.tallyFeeAllowance
-            )
             for {
                 oldState <- jl.state.get
-                res = action.run(dappLedgerMConfig, oldState.dappLedgerState)
+                res = action.run(jl.config, oldState.dappLedgerState)
                 b <- res match {
                     case Left(error) => onFailure(error)
                     case Right(newState, a) =>

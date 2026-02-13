@@ -2,14 +2,14 @@ package hydrozoa.multisig.ledger.dapp.utxo
 
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
-import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
+import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.{KzgCommitment, kzgCommitment}
 import scala.util.Try
 import scalus.*
 import scalus.builtin.Data.{FromData, ToData, fromData, toData}
 import scalus.builtin.{ByteString, Data, FromData, ToData}
 import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.{AssetName, TransactionInput, TransactionOutput, Utxo, Value}
+import scalus.cardano.ledger.{AssetName, TransactionInput, TransactionOutput, Utxo, Utxos, Value}
 
 // TODO: Make opaque
 final case class MultisigTreasuryUtxo(
@@ -57,25 +57,15 @@ object MultisigTreasuryUtxo {
     }
 
     final case class Datum(
-        commit: KzgCommit,
-        versionMajor: BigInt,
-        paramsHash: H32
+        commit: KzgCommitment,
+        versionMajor: BigInt
     ) derives FromData,
           ToData
 
-    /** This is all placeholder stuff: */
-
-    private type H32 = ByteString
-
-    private type KzgCommit = ByteString
-
-    // TODO: implement hashing for params
-    // TODO: implement root hash
-    def mkInitMultisigTreasuryDatum: Datum =
+    def mkInitMultisigTreasuryDatum(initialL2Utxos: Utxos): Datum =
         Datum(
-          KzgCommitment.empty,
-          BigInt(BlockVersion.Major(0).toLong),
-          ByteString.empty
+          initialL2Utxos.kzgCommitment,
+          BigInt(BlockVersion.Major(0).toLong)
         )
 
     // TODO: Make into Either?

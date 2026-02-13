@@ -17,7 +17,7 @@ object PeerIdTest extends Properties("Peer/RoundRobin") {
         forAll(genSmallInt, genSmallInt, genSmallInt) { (x, y, z) =>
             val peerNum = x.abs
             val nPeers = x.abs + y.abs + 1
-            val peerId = PeerId(peerNum, nPeers)
+            val peerId = HeadPeerId(peerNum, nPeers)
 
             val roundNum = z.abs
             val blockNum = BlockNumber(roundNum * nPeers + peerNum)
@@ -26,7 +26,7 @@ object PeerIdTest extends Properties("Peer/RoundRobin") {
 
             val otherPeersNotLeaders = Range(0, nPeers - 1)
                 .filter(_ != peerNum)
-                .forall((i: Int) => !PeerId(i, nPeers).isLeader(blockNum))
+                .forall((i: Int) => !HeadPeerId(i, nPeers).isLeader(blockNum))
 
             val nextLeaderBlock = peerId.nextLeaderBlock(blockNum)
             val peerIsLeaderNextTime = peerId.isLeader(nextLeaderBlock)

@@ -5,11 +5,11 @@ import com.bloxbean.cardano.client.crypto.api.SigningProvider
 import com.bloxbean.cardano.client.crypto.bip32.key.{HdPrivateKey, HdPublicKey}
 import com.bloxbean.cardano.client.crypto.config.CryptoConfiguration
 import com.bloxbean.cardano.client.transaction.util.TransactionBytes
-import hydrozoa.VerificationKeyBytes
 import scala.language.implicitConversions
 import scalus.builtin.ByteString
 import scalus.builtin.JVMPlatformSpecific.signEd25519
 import scalus.cardano.ledger.{Transaction, VKeyWitness}
+import scalus.crypto.ed25519.{SigningKey as ScalusSigningKey, VerificationKey as ScalusVerificationKey}
 
 /*
 Cardano adopted BIP-32: Hierarchical Deterministic Wallets in the form of Ed25529-BIP32:
@@ -53,7 +53,7 @@ trait WalletModule:
     type VerificationKey
     type SigningKey
 
-    def exportVerificationKeyBytes(publicKey: VerificationKey): VerificationKeyBytes
+    def exportVerificationKey(publicKey: VerificationKey): ScalusVerificationKey
 
     def signTx(
         tx: Transaction,
@@ -76,10 +76,12 @@ object WalletModule {
         override type VerificationKey = HdPublicKey
         override type SigningKey = HdPrivateKey
 
-        override def exportVerificationKeyBytes(
+        override def exportVerificationKey(
             verificationKey: VerificationKey
-        ): VerificationKeyBytes =
-            VerificationKeyBytes(ByteString.fromArray(verificationKey.getKeyData))
+        ): ScalusVerificationKey =
+            ScalusVerificationKey.unsafeFromByteString(
+              ByteString.fromArray(verificationKey.getKeyData)
+            )
 
         override def signTx(
             tx: Transaction,
@@ -106,11 +108,11 @@ object WalletModule {
             IArray.from(signature)
 
     object Scalus extends WalletModule:
-        override type VerificationKey = ByteString
-        override type SigningKey = ByteString
+        override type VerificationKey = ScalusVerificationKey
+        override type SigningKey = ScalusSigningKey
 
-        override def exportVerificationKeyBytes(publicKey: VerificationKey): VerificationKeyBytes =
-            VerificationKeyBytes(publicKey)
+        override def exportVerificationKey(publicKey: VerificationKey): ScalusVerificationKey =
+            publicKey
 
         override def signTx(
             tx: Transaction,

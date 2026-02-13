@@ -1,47 +1,44 @@
 package hydrozoa.integration.stage1
 
-import cats.data.NonEmptyList
 import cats.effect.IO
 import cats.syntax.applicative.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorSystem
 import com.suprnation.typelevel.actors.syntax.*
-import hydrozoa.config.HeadConfig.OwnPeer
-import hydrozoa.config.{HeadConfig, NetworkInfo, RawConfig, StandardCardanoNetwork}
+import hydrozoa.config.head.initialization.{HeadStartTimeGen, testPeersGenesisUtxosL1}
+import hydrozoa.config.head.multisig.timing.{TxTimingGen, generateDefaultTxTiming, generateYaciTxTiming}
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.{HeadPeersSpec, generateHeadConfig}
+import hydrozoa.config.node.NodeConfig
+import hydrozoa.config.node.operation.liquidation.generateNodeOperationLiquidationConfig
+import hydrozoa.config.node.operation.multisig.generateNodeOperationMultisigConfig
 import hydrozoa.integration.stage1.CurrentTime.{AfterCompetingFallbackStartTime, BeforeHappyPathExpiration}
 import hydrozoa.integration.stage1.SuiteCardano.*
 import hydrozoa.integration.yaci.DevKit
 import hydrozoa.integration.yaci.DevKit.DevnetInfo
-import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, quantize}
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, quantize}
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost.URL
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendMock, MockState, yaciTestSauceGenesis}
-import hydrozoa.multisig.consensus.CardanoLiaisonTest.BlockWeaverMock
-import hydrozoa.multisig.consensus.peer.PeerId
-import hydrozoa.multisig.consensus.{CardanoLiaison, ConsensusActor, EventSequencer}
+import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, ConsensusActor, EventSequencer}
 import hydrozoa.multisig.ledger.JointLedger
-import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader, BlockNumber, BlockVersion}
-import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.SpentUtxos
-import hydrozoa.multisig.ledger.dapp.tx.{TxTiming, minInitTreasuryAda}
-import hydrozoa.multisig.ledger.dapp.txseq.InitializationTxSeq
-import hydrozoa.multisig.ledger.dapp.txseq.InitializationTxSeq.Builder
-import hydrozoa.rulebased.ledger.dapp.tx.genEquityShares
-import hydrozoa.{attachVKeyWitnesses, maxNonPlutusTxFee}
+import hydrozoa.multisig.ledger.block.{BlockEffects, BlockNumber, BlockVersion}
 import java.util.concurrent.TimeUnit
-import monocle.Focus.focus
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.commands.{CommandGen, ModelBasedSuite}
 import org.scalacheck.{Gen, Prop, YetAnotherProperties}
 import org.typelevel.log4cats.Logger
-import scala.concurrent.duration.{DurationInt, FiniteDuration, HOURS}
+import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scalus.cardano.address.Network
 import scalus.cardano.ledger.rules.{Context, UtxoEnv}
-import scalus.cardano.ledger.{CardanoInfo, CertState, Coin, ProtocolParams, SlotConfig, TransactionHash, Utxo, Utxos, Value}
-import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
-import spire.math.UByte
-import test.TestPeer.Alice
-import test.{TestPeer, minPubkeyAda, sumUtxoValues}
+import scalus.cardano.ledger.{CardanoInfo, CertState, Coin, ProtocolParams, SlotConfig, TransactionHash, Utxos}
+import test.TestPeer
+import test.TestPeer.{Alice, mkWallet}
+
+// TODO: copied from cardano liaison test suite
+class BlockWeaverMock extends Actor[IO, BlockWeaver.Request] {
+    override def receive: Receive[IO, BlockWeaver.Request] = _ => IO.pure(())
+}
 
 /** Integration Stage 1 (the simplest).
   *   - Only three real actors are involved: [[JointLedger]], [[ConsensusActor]], and
@@ -61,7 +58,7 @@ object Stage1Properties extends YetAnotherProperties("Integration Stage 1"):
         // .withMaxSize(100) // 500
     }
 
-    private val preprod = StandardCardanoNetwork.Preprod
+    private val preprod = CardanoNetwork.Preprod
 
     /** Block propagation.
       *
@@ -70,19 +67,20 @@ object Stage1Properties extends YetAnotherProperties("Integration Stage 1"):
       * for testing block propagation, which must work on empty blocks, but we additionally decided
       * to check block briefs.
       */
-    // val _ = property("Block propagation works well on L1 mock") = Suite(
-    // suiteCardano = Mock(Left(preprod)),
-    // mkTxTiming = TxTiming.default,
-    // mkGenesisUtxos = yaciTestSauceGenesis(preprod.scalusNetwork),
-    // commandGen = ArbitraryEventsOnly
-    // ).property()
+
+    val _ = property("Block propagation works well on L1 mock") = Suite(
+      suiteCardano = Mock(preprod),
+      txTimingGen = generateDefaultTxTiming,
+      mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
+      commandGen = ArbitraryEventsOnly
+    ).property()
 
     val _ = property("Block propagation works well on Yaci devkit") = Suite(
       suiteCardano = Yaci(
         protocolParams = DevKit.yaciParams
       ),
-      mkTxTiming = TxTiming.yaci,
-      mkGenesisUtxos = yaciTestSauceGenesis(preprod.scalusNetwork),
+      txTimingGen = generateYaciTxTiming,
+      mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
       commandGen = ArbitraryEventsOnly
     ).property()
 
@@ -91,7 +89,7 @@ object Stage1Properties extends YetAnotherProperties("Integration Stage 1"):
 
 enum SuiteCardano:
     case Mock(
-        cardanoNetwork: Either[StandardCardanoNetwork, NetworkInfo]
+        cardanoNetwork: CardanoNetwork
     )
     case Yaci(
         url: CardanoBackendBlockfrost.URL = DevKit.blockfrostApiBaseUri,
@@ -101,7 +99,7 @@ enum SuiteCardano:
 case class Suite(
     suiteCardano: SuiteCardano,
     override val commandGen: CommandGen[ModelState, Stage1Sut],
-    mkTxTiming: SlotConfig => TxTiming,
+    txTimingGen: TxTimingGen,
     mkGenesisUtxos: List[TestPeer] => Map[TestPeer, Utxos],
 ) extends ModelBasedSuite {
 
@@ -109,7 +107,7 @@ case class Suite(
 
     case class Stage1Env(
         zeroTimeSec: java.time.Instant,
-        cardanoInfo: CardanoInfo
+        cardanoNetwork: CardanoNetwork
     )
 
     override type State = ModelState
@@ -120,7 +118,7 @@ case class Suite(
         case Yaci(_, _) => false
     }
 
-    override def commandGenTweaker: [A] => (x$1: Gen[A]) => Gen[A] = suiteCardano match {
+    override def commandGenTweaker: [A] => (g: Gen[A]) => Gen[A] = suiteCardano match {
         case _: SuiteCardano.Mock => [A] => (g: Gen[A]) => g
         // When using Yaci (and devnet) we don't want to generate short sequences
         case _: SuiteCardano.Yaci => [A] => (g: Gen[A]) => Gen.resize(200, g)
@@ -131,7 +129,7 @@ case class Suite(
             val zeroTimeSec = java.time.Instant.now()
             Stage1Env(
               zeroTimeSec = zeroTimeSec,
-              cardanoInfo = network.toCardanoInfo
+              cardanoNetwork = network
             )
 
         case SuiteCardano.Yaci(url, protocolParams) =>
@@ -142,13 +140,15 @@ case class Suite(
             val zeroTimeSec = java.time.Instant.ofEpochSecond(devnetInfo.startTime)
             Stage1Env(
               zeroTimeSec = zeroTimeSec,
-              cardanoInfo = CardanoInfo(
-                protocolParams = protocolParams,
-                network = Network.Testnet,
-                slotConfig = SlotConfig(
-                  zeroTime = zeroTimeSec.toEpochMilli,
-                  zeroSlot = 0,
-                  slotLength = devnetInfo.slotLength * 1_000L
+              cardanoNetwork = CardanoNetwork.Custom(
+                CardanoInfo(
+                  protocolParams = protocolParams,
+                  network = Network.Testnet,
+                  slotConfig = SlotConfig(
+                    zeroTime = zeroTimeSec.toEpochMilli,
+                    zeroSlot = 0,
+                    slotLength = devnetInfo.slotLength * 1_000L
+                  )
                 )
               )
             )
@@ -158,11 +158,57 @@ case class Suite(
     val loggerIO: Logger[IO] = Logging.loggerIO("Stage1.Suite")
 
     // ===================================
+    // Initial state handling
+    // ===================================
+
+    override def genInitialState(env: Env): Gen[State] = {
+
+        // One-peer head
+        val spec = HeadPeersSpec.Exact(1)
+        val ownTestPeer = Alice
+
+        val generateHeadStartTime: HeadStartTimeGen = slotConfig =>
+            Gen.const(env.zeroTimeSec.quantize(slotConfig))
+        val generateCardanoNetwork = Gen.const(env.cardanoNetwork)
+        val generateTxTiming = txTimingGen
+
+        for {
+            testPeers <- spec.generate
+            headConfig <- generateHeadConfig(spec)(
+              generateCardanoNetwork = generateCardanoNetwork,
+              generateHeadStartTime = generateHeadStartTime,
+              generateTxTiming = generateTxTiming,
+              generateGenesisUtxo = testPeersGenesisUtxosL1(testPeers)
+            )
+
+            _ = logger.debug(s"total contingency: ${headConfig.fallbackContingency}")
+            _ = logger.debug(s"l2 utxos: ${headConfig.initialL2Utxos.size}")
+            _ = logger.debug(s"l2 total: ${headConfig.initialL2Value}")
+
+            operationalMultisigConfig <- generateNodeOperationMultisigConfig
+            operationalLiquidationConfig <- generateNodeOperationLiquidationConfig
+        } yield ModelState(
+          ownTestPeer = ownTestPeer,
+          headConfig = headConfig,
+          operationalMultisigConfig = operationalMultisigConfig,
+          operationalLiquidationConfig = operationalLiquidationConfig,
+          currentTime = BeforeHappyPathExpiration(headConfig.headStartTime),
+          blockCycle = BlockCycle.Done(BlockNumber.zero, BlockVersion.Full.zero),
+          competingFallbackStartTime =
+              headConfig.txTiming.newFallbackStartTime(headConfig.headStartTime),
+          activeUtxos = headConfig.initialL2Utxos
+        )
+    }
+
+    // ===================================
     // SUT handling
     // ===================================
 
+    // TODO: do we want to run multiple SUTs when using L1 mock?
+    override def canStartupNewSut(): Boolean = true
+
     override def startupSut(state: ModelState): IO[Sut] = {
-        val cardanoInfo = state.cardanoInfo
+        val headConfig = state.headConfig
 
         for {
             _ <- loggerIO.info("Creating new SUT")
@@ -185,51 +231,16 @@ case class Suite(
                 _ <- loggerIO.info(s"Current time: $now")
             } yield ())
 
-            // Create HeadConfig
-            ownTestPeer = state.ownTestPeer
+            _ <- loggerIO.debug(s"peerKeys: ${headConfig.headPeers.headPeerVKeys}")
 
-            ownPeer = (
-              OwnPeer(PeerId(0, 1), ownTestPeer.wallet),
-              ownTestPeer.address(cardanoInfo.network),
-              state.equityShares.peerShares(UByte(0)).equityShare
-            )
-
-            rawConfig = RawConfig(
-              ownPeer = ownPeer,
-              otherPeers = List.empty,
-              receiveTimeout = 10.seconds,
-              initializationTxBytes = state.initTxSigned.toCbor,
-              initialFallbackTxBytes = state.fallbackTxSigned.toCbor,
-              network = Right(
-                NetworkInfo(
-                  networkId = cardanoInfo.network.networkId,
-                  slotConfig = cardanoInfo.slotConfig,
-                  protocolParams = cardanoInfo.protocolParams
+            nodeConfig: NodeConfig = NodeConfig
+                .apply(
+                  state.headConfig,
+                  mkWallet(state.ownTestPeer),
+                  state.operationalLiquidationConfig,
+                  state.operationalMultisigConfig,
                 )
-              ),
-              tallyFeeAllowance = Coin.ada(2),
-              votingDuration = QuantizedFiniteDuration(
-                finiteDuration = 24.hours,
-                slotConfig = cardanoInfo.slotConfig
-              ),
-              txTiming = state.txTiming,
-              startTime = state.currentTime.instant,
-              resolvedUtxosForInitialization =
-                  ResolvedUtxos(Map.from(state.spentUtxos.toList.map(_.toTuple))),
-              // Can it be the peer's automated wallet though, at least for now?
-              withdrawalFeeWallet = ownTestPeer.wallet,
-              pollingPeriod = 5.seconds
-            )
-
-            // Parse HeadConfig
-            headConfig = HeadConfig.parse(rawConfig) match {
-                case Left(err) =>
-                    throw RuntimeException(s"error parsing raw config: ${err.explain}")
-                case Right(value) => value
-            }
-
-            _ <- loggerIO.debug(s"peerKeys: ${headConfig.headParameters.headPeers.peerKeys}")
-            _ <- loggerIO.debug(s"ownPeer: ${headConfig.privateNodeSettings.ownPeer}")
+                .get
 
             // Actor system
             system <- ActorSystem[IO]("Stage1").allocated.map(_._1)
@@ -242,7 +253,7 @@ case class Suite(
             cardanoBackendConfig = suiteCardano match {
                 case Mock(_) =>
                     CardanoBackendConfig.Mock(
-                      ownTestPeer = ownTestPeer,
+                      ownTestPeer = state.ownTestPeer,
                       network = headConfig.cardanoInfo.network,
                       slotConfig = headConfig.cardanoInfo.slotConfig,
                       protocolParams = headConfig.cardanoInfo.protocolParams
@@ -259,18 +270,8 @@ case class Suite(
             blockWeaver <- system.actorOf(new BlockWeaverMock)
 
             // Cardano liaison
-            liaisonConfig = CardanoLiaison.Config(
-              cardanoBackend = cardanoBackend,
-              initializationTx = headConfig.initialBlock.effects.initializationTx,
-              initializationFallbackTx = headConfig.initialBlock.effects.fallbackTx,
-              receiveTimeout = 100.millis,
-              slotConfig = cardanoInfo.slotConfig
-            )
-
-            liaisonConnections = CardanoLiaison.Connections(blockWeaver)
-
             cardanoLiaison <- system.actorOf(
-              CardanoLiaison.apply(liaisonConfig, liaisonConnections)
+              CardanoLiaison(nodeConfig, cardanoBackend, CardanoLiaison.Connections(blockWeaver))
             )
 
             // Event sequencer stub
@@ -279,13 +280,6 @@ case class Suite(
             })
 
             // Consensus actor
-            consensusConfig = ConsensusActor.Config(
-              peerNumber = headConfig.privateNodeSettings.ownPeer.peerId.peerNum,
-              verificationKeys = headConfig.headParameters.headPeers.peerKeys.map((peerId, key) =>
-                  peerId.peerNum -> key
-              )
-            )
-
             consensusConnections = ConsensusActor.Connections(
               blockWeaver = blockWeaver,
               cardanoLiaison = cardanoLiaison,
@@ -293,41 +287,11 @@ case class Suite(
               peerLiaisons = List.empty
             )
 
-            consensusActor <- system.actorOf(ConsensusActor(consensusConfig, consensusConnections))
+            consensusActor <- system.actorOf(ConsensusActor(nodeConfig, consensusConnections))
 
             // Agent actor
             jointLedgerD <- IO.deferred[JointLedger.Handle]
             agent <- system.actorOf(AgentActor(jointLedgerD, consensusActor, cardanoLiaison))
-
-            // Joint ledger
-            initialBlock1 = Block.MultiSigned.Initial(
-              blockBrief = BlockBrief.Initial(
-                header = BlockHeader.Initial(
-                  startTime = headConfig.initialBlock.startTime,
-                  kzgCommitment = headConfig.initialBlock.initialKzgCommitment
-                )
-              ),
-              effects = headConfig.initialBlock.effects
-            )
-
-            jointLedgerConfig = JointLedger.Config(
-              initialBlock = initialBlock1,
-              peerId = headConfig.privateNodeSettings.ownPeer.peerId,
-              wallet = headConfig.privateNodeSettings.ownPeer.wallet,
-              tallyFeeAllowance = headConfig.headParameters.fallbackSettings.tallyFeeAllowance,
-              tokenNames = headConfig.initialBlock.tokenNames,
-              headMultisigScript = headConfig.headParameters.headPeers.headMultisigScript,
-              cardanoInfo = cardanoInfo,
-              initialBlockTime = headConfig.initialBlock.startTime,
-              initialBlockKzg = headConfig.initialBlock.initialKzgCommitment,
-              equityShares = headConfig.headParameters.equityShares,
-              multisigRegimeUtxo = headConfig.initialBlock.multisigRegimeUtxo,
-              votingDuration = headConfig.headParameters.ruleBasedRegimeSettings.votingDuration,
-              initialTreasury = headConfig.initialBlock.initialTreasury,
-              txTiming = headConfig.headParameters.multisigRegimeSettings.txTiming,
-              initialFallbackValidityStart =
-                  headConfig.initialBlock.effects.fallbackTx.validityStart
-            )
 
             jointLedgerConnections = JointLedger.Connections(
               consensusActor = agent,
@@ -336,7 +300,7 @@ case class Suite(
 
             jointLedger <- system.actorOf(
               JointLedger(
-                jointLedgerConfig,
+                nodeConfig,
                 jointLedgerConnections
               )
             )
@@ -384,7 +348,7 @@ case class Suite(
             case CardanoBackendConfig.Yaci(url, expectedProtocolParams) =>
                 for {
                     cardanoBackend <- CardanoBackendBlockfrost(url = url)
-                    _ <- loggerIO.info("Wait a bit Yaci is ready... (")
+                    _ <- loggerIO.info("Wait a bit for Yaci being ready... (")
                     _ <- IO.sleep(1.second)
                     _ <- loggerIO.info(
                       "Fetching last epoch parameters to check they match ones in the head config..."
@@ -423,8 +387,8 @@ case class Suite(
         effects <- sut.effectsAcc.get
 
         expectedEffects: List[(TxLabel, TransactionHash)] = mkExpectedEffects(
-          lastState.initTxSigned.id,
-          lastState.fallbackTxSigned.id,
+          lastState.headConfig.initialBlock.initializationTx.tx.id,
+          lastState.headConfig.initialBlock.fallbackTx.tx.id,
           effects,
           lastState.currentTime
         )
@@ -435,11 +399,20 @@ case class Suite(
           }.mkString)
         )
 
-        effectsResults <- IO.traverse(expectedEffects) { case (_, hash) =>
-            sut.cardanoBackend.isTxKnown(hash)
+        // In Yaci transactions may appear a bit slowly
+        effectsResults <- {
+            def poll(attempt: Int): IO[List[Either[Throwable, Boolean]]] =
+                IO.traverse(expectedEffects) { case (_, hash) =>
+                    sut.cardanoBackend.isTxKnown(hash)
+                }.flatMap { results =>
+                    val allKnown = results.forall(_.contains(true))
+                    if allKnown || attempt >= 9 then IO.pure(results)
+                    else IO.sleep(1.second) >> poll(attempt + 1)
+                }
+            poll(0)
         }
 
-        // Finally we have to terminate the actor system, otherwise in TestControl
+        // Finally we have to terminate the actor system, otherwise in TestControlownTestPeer
         // this will loop indefinitely.
         _ <- sut.system.terminate()
     } yield {
@@ -477,8 +450,7 @@ case class Suite(
                     e.rolloutTxs.map(tx => (TxLabel.Rollout, tx.tx.id))
             case e: BlockEffects.Unsigned.Final =>
                 (TxLabel.Finalization, e.finalizationTx.tx.id) ::
-                    e.rolloutTxs.map(tx => (TxLabel.Rollout, tx.tx.id)) ++
-                    e.deinitTx.map(tx => (TxLabel.Deinit, tx.tx.id))
+                    e.rolloutTxs.map(tx => (TxLabel.Rollout, tx.tx.id))
             case _: BlockEffects.Unsigned.Minor   => Nil
             case _: BlockEffects.Unsigned.Initial => Nil
         }
@@ -497,108 +469,5 @@ case class Suite(
         }
 
         initHash :: happyPathHashes ++ fallbackHash
-    }
-
-    // TODO: do we want to run multiple SUTs when using L1 mock?
-    override def canStartupNewSut(): Boolean = true
-
-    // ===================================
-    // Initial state handling
-    // ===================================
-
-    override def genInitialState(env: Env): Gen[State] = {
-        val cardanoInfo = env.cardanoInfo
-
-        for {
-            headStartTime <- Gen.const(env.zeroTimeSec.quantize(cardanoInfo.slotConfig))
-            // If we want to use different peers we have to rework test peers' wallets
-            // since now those wallets use ordinal from TestPeer - Bob is always peerNumber = 1
-            // if it's the only peer in the head. But I don't see what it buys us.
-            ownTestPeer = Alice
-            peers = NonEmptyList.one(ownTestPeer) // useful to have since many gens want it
-            ownPeerIndex = 0
-
-            equityShares <- genEquityShares(NonEmptyList.one(ownTestPeer), cardanoInfo.network)
-
-            seedUtxo <- Gen
-                .oneOf(mkGenesisUtxos(List(ownTestPeer))(ownTestPeer))
-                .flatMap((i, o) => Utxo(i, o))
-
-            // NB: I don't think funding utxos make sense for this scenario
-            spentUtxos = NonEmptyList.one(seedUtxo)
-
-            // Initial treasury must be at least enough for the minAda of the treasury, and no more than the
-            // sum of the seed+funding utxos, while leaving enough left for the estimated fee and the minAda of the change
-            // output
-            initialTreasuryCoin <- Gen
-                .choose(
-                  minInitTreasuryAda.value,
-                  sumUtxoValues(spentUtxos.toList).coin.value
-                      - maxNonPlutusTxFee(cardanoInfo.protocolParams).value
-                      - minPubkeyAda().value
-                )
-                .map(Coin(_))
-                .label("initial treasury coin")
-
-            initialTreasury = Value(initialTreasuryCoin)
-
-            txTiming = mkTxTiming(cardanoInfo.slotConfig)
-
-            initTxConfig = InitializationTxSeq.Config(
-              tallyFeeAllowance = Coin.ada(2),
-              votingDuration = FiniteDuration(24, HOURS).quantize(cardanoInfo.slotConfig),
-              cardanoInfo = cardanoInfo,
-              peerKeys = peers.map(_.wallet.exportVerificationKeyBytes),
-              startTime = headStartTime,
-              txTiming = txTiming
-            )
-
-            initTxArgs =
-                InitializationTxSeq.Builder.Args(
-                  spentUtxos = SpentUtxos(seedUtxo, List.empty),
-                  initialTreasury = initialTreasury,
-                  initializationTxChangePP = ownTestPeer.address(cardanoInfo.network).payment,
-                )
-
-            headMultisigScript = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
-
-            initTxSeq <- InitializationTxSeq.Builder
-                .build(initTxArgs, initTxConfig)
-                .fold(
-                  // TODO: this should be unified in the builder
-                  err => {
-                      err match {
-                          case Builder.FallbackPRError(e)       => println(e)
-                          case Builder.InitializationTxError(e) => println(e)
-                          case Builder.FallbackTxError(e)       => println(e)
-                      }
-                      Gen.fail
-                  },
-                  Gen.const
-                )
-
-            initTxSigned = attachVKeyWitnesses(
-              initTxSeq.initializationTx.tx,
-              List(ownTestPeer.wallet.mkVKeyWitness(initTxSeq.initializationTx.tx))
-            )
-            fallbackTxSigned = attachVKeyWitnesses(
-              initTxSeq.fallbackTx.tx,
-              List(ownTestPeer.wallet.mkVKeyWitness(initTxSeq.fallbackTx.tx))
-            )
-
-        } yield ModelState(
-          ownTestPeer = ownTestPeer,
-          spentUtxos = spentUtxos,
-          txTiming = txTiming,
-          equityShares = equityShares,
-          initTxSigned = initTxSigned,
-          fallbackTxSigned = fallbackTxSigned,
-          cardanoInfo = cardanoInfo,
-          // Initial (zero) block is "done"
-          currentTime = BeforeHappyPathExpiration(headStartTime),
-          blockCycle = BlockCycle.Done(BlockNumber.zero, BlockVersion.Full.zero),
-          competingFallbackStartTime = txTiming.newFallbackStartTime(headStartTime),
-          activeUtxos = Map.empty
-        )
     }
 }

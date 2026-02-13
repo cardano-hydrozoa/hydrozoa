@@ -12,7 +12,13 @@ import scalus.prelude.crypto.bls12_381.G1
 import scalus.|>
 import supranational.blst.{P1, Scalar}
 
+export KzgCommitment.asG1Element
+export KzgCommitment.kzgCommitment
+
 object KzgCommitment {
+    trait Produced {
+        def kzgCommitment: KzgCommitment
+    }
 
     // WARNING: you can't just `==` IArray, because it doesn't compare on the value of the elements.
     // Let's stop using tedious IArray in favor of ByteString
@@ -22,7 +28,11 @@ object KzgCommitment {
         // def asByteString: ByteString = ByteString.fromArray(IArray.genericWrapArray(self).toArray)
         def asG1Element: BLS12_381_G1_Element = BLS12_381_G1_Element(self)
 
-    def empty: KzgCommitment = calculateCommitment(hashToScalar(Map.empty))
+    extension (utxos: Utxos)
+        def kzgCommitment: KzgCommitment =
+            KzgCommitment.calculateKzgCommitment(hashToScalar(utxos))
+
+    def empty: KzgCommitment = Map.empty.asInstanceOf[Utxos].kzgCommitment
 
     def hashToScalar(utxo: Utxos): SList[Scalar] =
 
@@ -51,12 +61,12 @@ object KzgCommitment {
 
     /** Calculates the commitment for the pairing-based accumulator.
       *
-      * @param utxo
+      * @param scalars
       *   utxo set (active, though might be any)
       * @return
       *   G1 point that corresponds to the commitment
       */
-    def calculateCommitment(scalars: SList[Scalar]): KzgCommitment = {
+    def calculateKzgCommitment(scalars: SList[Scalar]): KzgCommitment = {
 
         // println(s"elems: ${scalars.length}")
         // println(s"elems: ${scalars.map(e => BigInt.apply(e.to_bendian()))}")
@@ -68,7 +78,7 @@ object KzgCommitment {
         // Check the size of the setup is big enough
         assert(
           size == srs.length,
-          s"There are more UTxOs than supported by the setup: ${size}"
+          s"There are more UTxOs than supported by the setup: $size"
         )
 
         val finalPoly = mkFinalPoly(scalars)

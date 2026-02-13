@@ -14,7 +14,7 @@ object CIP67 {
             4679L // "HMRW" (hydrozoa multisig regime witness) on the phone pad
     }
 
-    case class TokenNames(seedUtxo: TransactionInput) {
+    case class HeadTokenNames(seedUtxo: TransactionInput) {
         private val tokenSuffix: Array[Byte] = {
             // Serialized + hashed utxo ID of seed utxo
             val utxoBytes = ByteString.fromArray(
@@ -26,13 +26,17 @@ object CIP67 {
         private def prefixToken(cip67Tag: Long): AssetName =
             AssetName(ByteString.fromArray(BigInt(cip67Tag).toByteArray ++ tokenSuffix))
 
-        val headTokenName: AssetName = prefixToken(CIP67.Tags.head)
+        val treasuryTokenName: AssetName = prefixToken(CIP67.Tags.head)
 
         val voteTokenName: AssetName = prefixToken(CIP67.Tags.vote)
 
         val rolloutTokenName: AssetName = prefixToken(CIP67.Tags.rollout)
 
         val multisigRegimeTokenName: AssetName = prefixToken(CIP67.Tags.multiSigRegime)
+    }
+
+    trait HasTokenNames {
+        def headTokenNames: HeadTokenNames
     }
 
 }

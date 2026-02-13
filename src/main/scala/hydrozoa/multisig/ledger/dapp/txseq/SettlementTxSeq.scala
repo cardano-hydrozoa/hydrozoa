@@ -1,32 +1,45 @@
 package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.data.NonEmptyVector
-import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
+import hydrozoa.config.head.HeadConfig
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.block.BlockVersion
-import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx
 import hydrozoa.multisig.ledger.dapp.tx.*
-import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo}
+import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.SomeBuildErrorOnly
+import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
+import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
-import scalus.cardano.ledger.{CardanoInfo, Coin}
 import scalus.cardano.txbuilder.SomeBuildError
 
 enum SettlementTxSeq {
     def settlementTx: SettlementTx
+    def fallbackTx: FallbackTx
 
     case NoRollouts(
         override val settlementTx: SettlementTx.NoRollouts,
+        override val fallbackTx: FallbackTx,
     )
 
     case WithRollouts(
         override val settlementTx: SettlementTx.WithRollouts,
+        override val fallbackTx: FallbackTx,
         rolloutTxSeq: RolloutTxSeq,
     )
+
+    def rolloutTxs: List[RolloutTx] = this match {
+        case _: NoRollouts   => List.empty
+        case r: WithRollouts => r.rolloutTxSeq.rolloutTxs
+    }
 }
 
 object SettlementTxSeq {
+    export SettlementTxSeqOps.Build
+}
+
+private object SettlementTxSeqOps {
+    type Config = HeadConfig.Section
 
     private val logger = org.slf4j.LoggerFactory.getLogger("SettlementTxSeq")
 
@@ -38,184 +51,133 @@ object SettlementTxSeq {
         result
     }
 
-    case class Config(
-        headMultisigScript: HeadMultisigScript,
-        multisigRegimeUtxo: MultisigRegimeUtxo,
-        tokenNames: TokenNames,
-        votingDuration: QuantizedFiniteDuration,
-        txTiming: TxTiming,
-        tallyFeeAllowance: Coin,
-        cardanoInfo: CardanoInfo
-    )
+    final case class Result(
+        settlementTxSeq: SettlementTxSeq,
+        override val depositsSpent: Vector[DepositUtxo],
+        override val depositsToSpend: Vector[DepositUtxo]
+    ) extends DepositUtxo.Many.Spent.Partition
 
-    extension (settlementTxSeq: SettlementTxSeq)
+    object Build {
+        enum Error:
+            case SettlementError(e: (SomeBuildError | SettlementTx.Error, String))
+            case RolloutSeqError(e: (SomeBuildErrorOnly, String))
+            case FallbackError(e: SomeBuildError)
+    }
 
-        def mbRollouts: List[RolloutTx] = settlementTxSeq match {
-            case _: NoRollouts   => List.empty
-            case r: WithRollouts => r.rolloutTxSeq.mbRollouts
-        }
+    final case class Build(config: Config)(
+        override val kzgCommitment: KzgCommitment,
+        override val majorVersionProduced: BlockVersion.Major,
+        override val treasuryToSpend: MultisigTreasuryUtxo,
+        override val depositsToSpend: Vector[DepositUtxo],
+        override val payoutObligationsRemaining: Vector[Payout.Obligation],
+        competingFallbackValidityStart: QuantizedInstant,
+        blockCreatedOn: QuantizedInstant,
+    ) extends BlockVersion.Major.Produced,
+          MultisigTreasuryUtxo.ToSpend,
+          DepositUtxo.Many.ToSpend,
+          KzgCommitment.Produced,
+          Payout.Obligation.Many.Remaining {
+        import Build.*
 
-    import Builder.*
+        private val settlementValidityEnd =
+            config.txTiming.newSettlementEndTime(competingFallbackValidityStart)
 
-    final case class Builder(
-        config: SettlementTxSeq.Config
-    ) {
-        def build(args: Args): Either[Builder.Error, Builder.Result] = {
-            lazy val settlementTxConfig: SettlementTx.Config = SettlementTx.Config(
-              cardanoInfo = config.cardanoInfo,
-              headMultisigScript = config.headMultisigScript,
-              multisigRegimeUtxo = config.multisigRegimeUtxo
-            )
-            lazy val ftxConfig = FallbackTx.Config(
-              headMultisigScript = config.headMultisigScript,
-              multisigRegimeUtxo = config.multisigRegimeUtxo,
-              tallyFeeAllowance = config.tallyFeeAllowance,
-              tokenNames = config.tokenNames,
-              votingDuration = config.votingDuration,
-              cardanoInfo = config.cardanoInfo
-            )
-            lazy val rolloutTxSeqConfig = RolloutTxSeq.Config(
-              cardanoInfo = config.cardanoInfo,
-              headMultisigScript = config.headMultisigScript,
-              multisigRegimeUtxo = config.multisigRegimeUtxo
-            )
+        private val newFallbackValidityEnd =
+            config.txTiming.newFallbackStartTime(blockCreatedOn)
 
-            NonEmptyVector.fromVector(args.payoutObligationsRemaining) match {
+        lazy val result: Either[Build.Error, Result] = {
+            NonEmptyVector.fromVector(payoutObligationsRemaining) match {
                 case None =>
 
                     for {
-                        settlementTx <- time("SettlementTx.NoPayouts.build") {
-                            SettlementTx.Builder
-                                .NoPayouts(settlementTxConfig)
-                                .build(args.toArgsNoPayouts(config.txTiming))
+                        settlementTx <- time("SettlementTx.NoPayouts.Build") {
+                            SettlementTx.Build
+                                .NoPayouts(config)(
+                                  kzgCommitment,
+                                  majorVersionProduced,
+                                  treasuryToSpend,
+                                  depositsToSpend,
+                                  settlementValidityEnd
+                                )
+                                .result
                                 .left
-                                .map(Builder.Error.SettlementError(_))
+                                .map(Build.Error.SettlementError(_))
                         }
 
-                        ftxRecipe = FallbackTx.Recipe(
-                          treasuryUtxoSpent = settlementTx.transaction.treasuryProduced,
-                          // TODO: use TxTiming for things like that
-                          validityStart = (args.blockCreatedOn
-                              + config.txTiming.minSettlementDuration
-                              + config.txTiming.inactivityMarginDuration
-                              + config.txTiming.silenceDuration).toSlot
-                        )
-                        fallbackTx <- time("FallbackTx.build") {
+                        fallbackTx <- time("FallbackTx.Build") {
                             FallbackTx
-                                .build(ftxConfig, ftxRecipe)
+                                .Build(config)(
+                                  newFallbackValidityEnd,
+                                  settlementTx.transaction.treasuryProduced,
+                                  config.multisigRegimeUtxo
+                                )
+                                .result
                                 .left
-                                .map(Builder.Error.FallbackError(_))
+                                .map(Build.Error.FallbackError(_))
                         }
-                    } yield Builder.Result(
-                      settlementTxSeq = SettlementTxSeq.NoRollouts(settlementTx.transaction),
-                      fallbackTx = fallbackTx,
+                    } yield Result(
+                      settlementTxSeq =
+                          SettlementTxSeq.NoRollouts(settlementTx.transaction, fallbackTx),
                       depositsSpent = settlementTx.depositsSpent,
                       depositsToSpend = settlementTx.depositsToSpend
                     )
                 case Some(nePayouts) =>
 
                     for {
-                        rolloutTxSeqPartial <- time("RolloutTxSeq.buildPartial") {
+                        rolloutTxSeqPartial <- time("RolloutTxSeq.Build.partialResult") {
                             RolloutTxSeq
-                                .Builder(rolloutTxSeqConfig)
-                                .buildPartial(nePayouts)
+                                .Build(config)(nePayouts)
+                                .partialResult
                                 .left
                                 .map(Error.RolloutSeqError(_))
                         }
 
-                        settlementTxRes <- time("SettlementTx.WithPayouts.build") {
-                            SettlementTx.Builder
-                                .WithPayouts(settlementTxConfig)
-                                .build(args.toArgsWithPayouts(rolloutTxSeqPartial, config.txTiming))
+                        settlementTxRes <- time("SettlementTx.WithPayouts.Build") {
+                            SettlementTx.Build
+                                .WithPayouts(config)(
+                                  kzgCommitment,
+                                  majorVersionProduced,
+                                  treasuryToSpend,
+                                  depositsToSpend,
+                                  settlementValidityEnd,
+                                  rolloutTxSeqPartial
+                                )
+                                .result
                                 .left
                                 .map(Error.SettlementError(_))
                         }
 
-                        settlementTxSeq <- time("finishPostProcess") {
-                            import SettlementTx.Builder.Result
+                        fallbackTx <- time("FallbackTx.Build") {
+                            FallbackTx
+                                .Build(config)(
+                                  newFallbackValidityEnd,
+                                  settlementTxRes.transaction.treasuryProduced,
+                                  config.multisigRegimeUtxo
+                                )
+                                .result
+                                .left
+                                .map(Build.Error.FallbackError(_))
+                        }
+
+                        settlementTxSeq <-
                             settlementTxRes match {
-                                case res: Result.WithOnlyDirectPayouts =>
-                                    Right(SettlementTxSeq.NoRollouts(res.transaction))
-                                case res: Result.WithRollouts =>
+                                case res: SettlementTx.Result.WithOnlyDirectPayouts =>
+                                    Right(SettlementTxSeq.NoRollouts(res.transaction, fallbackTx))
+                                case res: SettlementTx.Result.WithRollouts =>
                                     val tx: SettlementTx.WithRollouts = res.transaction
                                     res.rolloutTxSeqPartial
                                         .finishPostProcess(tx.rolloutProduced)
                                         .left
                                         .map(Error.RolloutSeqError(_))
-                                        .map(SettlementTxSeq.WithRollouts(tx, _))
+                                        .map(SettlementTxSeq.WithRollouts(tx, fallbackTx, _))
                             }
-                        }
 
-                        ftxRecipe = FallbackTx.Recipe(
-                          treasuryUtxoSpent = settlementTxRes.transaction.treasuryProduced,
-                          validityStart = (args.blockCreatedOn
-                              + config.txTiming.minSettlementDuration
-                              + config.txTiming.inactivityMarginDuration
-                              + config.txTiming.silenceDuration).toSlot
-                        )
-                        fallbackTx <- time("FallbackTx.build") {
-                            FallbackTx
-                                .build(config = ftxConfig, recipe = ftxRecipe)
-                                .left
-                                .map(Builder.Error.FallbackError(_))
-                        }
                     } yield Result(
                       settlementTxSeq = settlementTxSeq,
-                      fallbackTx = fallbackTx,
                       depositsSpent = settlementTxRes.depositsSpent,
                       depositsToSpend = settlementTxRes.depositsToSpend
                     )
             }
-        }
-    }
-
-    object Builder {
-        import SettlementTx.Builder.Args as SingleArgs
-
-        enum Error:
-            case SettlementError(e: (SomeBuildError, String))
-            case RolloutSeqError(e: (SomeBuildError, String))
-            case FallbackError(e: SomeBuildError)
-
-        final case class Result(
-            settlementTxSeq: SettlementTxSeq,
-            fallbackTx: FallbackTx,
-            override val depositsSpent: Vector[DepositUtxo],
-            override val depositsToSpend: Vector[DepositUtxo]
-        ) extends DepositUtxo.Many.Spent.Partition
-
-        final case class Args(
-            majorVersionProduced: BlockVersion.Major,
-            treasuryToSpend: MultisigTreasuryUtxo,
-            depositsToSpend: Vector[DepositUtxo],
-            payoutObligationsRemaining: Vector[Payout.Obligation],
-            kzgCommitment: KzgCommitment,
-            competingFallbackValidityStart: QuantizedInstant,
-            blockCreatedOn: QuantizedInstant,
-        )
-        // TODO: confirm: this one is not needed
-        // extends SingleArgs(kzgCommitment),
-            extends Payout.Obligation.Many.Remaining {
-            def toArgsNoPayouts(txTiming: TxTiming): SingleArgs.NoPayouts =
-                SingleArgs.NoPayouts(
-                  majorVersionProduced = majorVersionProduced,
-                  kzgCommitment = kzgCommitment,
-                  treasuryToSpend = treasuryToSpend,
-                  depositsToSpend = depositsToSpend,
-                  validityEnd = competingFallbackValidityStart - txTiming.silenceDuration
-                )
-
-            def toArgsWithPayouts(
-                rolloutTxSeqPartial: RolloutTxSeq.Builder.PartialResult,
-                txTiming: TxTiming
-            ): SingleArgs.WithPayouts = SingleArgs.WithPayouts(
-              majorVersionProduced = majorVersionProduced,
-              treasuryToSpend = treasuryToSpend,
-              kzgCommitment = kzgCommitment,
-              depositsToSpend = depositsToSpend,
-              rolloutTxSeqPartial = rolloutTxSeqPartial,
-              validityEnd = competingFallbackValidityStart - txTiming.silenceDuration
-            )
         }
     }
 }

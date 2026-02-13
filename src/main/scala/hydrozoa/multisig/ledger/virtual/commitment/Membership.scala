@@ -2,7 +2,7 @@ package hydrozoa.multisig.ledger.virtual.commitment
 
 import cats.data.EitherT
 import cats.effect.IO
-import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.{KzgCommitment, asG1Element, asScalusScalar, calculateCommitment, hashToScalar}
+import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.{KzgCommitment, asG1Element, asScalusScalar, hashToScalar, kzgCommitment}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator
 import scalus.builtin.BLS12_381_G2_Element
 import scalus.cardano.ledger.Utxos
@@ -19,7 +19,7 @@ object Membership {
       *   - Verify the proof against the commitment provided.
       *
       * @param kzgCommitment
-      *   the commitment to [utxos]]
+      *   the commitment to [[utxos]]
       * @param set
       *   the set of all utxos
       * @param subset
@@ -51,7 +51,7 @@ object Membership {
             crsG2 = TrustedSetup.takeSrsG2(subset.size + 1).map(BLS12_381_G2_Element.apply)
 
             // 3. Build the proof
-            proof <- IO { calculateCommitment(hashToScalar(rest)) }.lift
+            proof <- IO { rest.kzgCommitment }.lift
 
             // 4. Validate the membership proof
             commitmentG1 = kzgCommitment.asG1Element

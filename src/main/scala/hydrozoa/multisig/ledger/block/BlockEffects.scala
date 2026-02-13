@@ -1,6 +1,6 @@
 package hydrozoa.multisig.ledger.block
 
-import hydrozoa.multisig.ledger.dapp.tx.{DeinitTx, FallbackTx, FinalizationTx, InitializationTx, RefundTx, RolloutTx, SettlementTx}
+import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, FinalizationTx, InitializationTx, RefundTx, RolloutTx, SettlementTx}
 
 sealed trait BlockEffects extends BlockEffects.Section
 
@@ -39,8 +39,7 @@ object BlockEffects {
 
         final case class Final(
             override val finalizationTx: FinalizationTx,
-            override val rolloutTxs: List[RolloutTx],
-            override val deinitTx: Option[DeinitTx]
+            override val rolloutTxs: List[RolloutTx]
         ) extends BlockEffects.Unsigned,
               BlockType.Final,
               BlockEffects.Final.Section {
@@ -86,8 +85,7 @@ object BlockEffects {
 
         final case class Final(
             override val finalizationTx: FinalizationTx,
-            override val rolloutTxs: List[RolloutTx],
-            override val deinitTx: Option[DeinitTx]
+            override val rolloutTxs: List[RolloutTx]
         ) extends BlockEffects.MultiSigned,
               BlockType.Final,
               BlockEffects.MultiSigned.Final.Section {
@@ -151,7 +149,6 @@ object BlockEffects {
         trait Section extends BlockEffects.Section {
             def finalizationTx: FinalizationTx
             def rolloutTxs: List[RolloutTx]
-            def deinitTx: Option[DeinitTx]
 
             override transparent inline def postDatedRefundTxs: List[RefundTx.PostDated] = List()
         }

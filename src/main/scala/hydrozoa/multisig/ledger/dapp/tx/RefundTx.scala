@@ -1,21 +1,19 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
+import hydrozoa.config.head.initialization.InitialBlock
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant, toQuantizedInstant}
-import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
+import hydrozoa.lib.cardano.scalus.txbuilder.DiffHandler.{WrappedCoin, prebalancedLovelaceDiffHandler}
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
-import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explainConst}
-import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
-import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo}
-import hydrozoa.{prebalancedLovelaceDiffHandler, *}
+import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuilderResultSimple, explainConst}
+import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import monocle.{Focus, Lens}
 import scala.annotation.tailrec
-import scala.language.implicitConversions
 import scala.util.{Failure, Success}
 import scalus.builtin.ByteString
-import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.rules.TransactionSizeValidator
 import scalus.cardano.ledger.utils.TxBalance
@@ -34,15 +32,7 @@ sealed trait RefundTx {
 }
 
 object RefundTx {
-    final case class Config(
-        multisigRegimeUtxo: MultisigRegimeUtxo,
-        headMultisigScript: HeadMultisigScript,
-        cardanoInfo: CardanoInfo
-    ) {
-        def evaluator: PlutusScriptEvaluator =
-            PlutusScriptEvaluator(cardanoInfo, EvaluateAndComputeCost)
-        def headAddress: ShelleyAddress = headMultisigScript.mkAddress(cardanoInfo.network)
-    }
+    export RefundTxOps.{Build, Parse, PartialResult}
 
     // TODO: shall we keep it for now?
     final case class Immediate(override val tx: Transaction) extends RefundTx, Tx[Immediate] {
@@ -56,16 +46,21 @@ object RefundTx {
         override val txLens: Lens[PostDated, Transaction] = Focus[PostDated](_.tx)
         override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
     }
+}
 
-    object Builder {
-        final case class Immediate(
-            override val config: RefundTx.Config,
+private object RefundTxOps {
+    type Config = CardanoNetwork.Section & HeadPeers.Section & InitialBlock.Section
+
+    object Build {
+        final case class Immediate(override val config: Config)(
             override val refundInstructions: DepositUtxo.Refund.Instructions,
             override val refundValue: Value
-        ) extends Builder[RefundTx.Immediate] {
+        ) extends Build[RefundTx.Immediate] {
             override val mValidityStart: None.type = None
             override val stepRefundMetadata =
-                ModifyAuxiliaryData(_ => Some(MD(MD.Refund(headAddress = config.headAddress))))
+                ModifyAuxiliaryData(_ =>
+                    Some(MD(MD.Refund(headAddress = config.headMultisigAddress)))
+                )
 
             override def mkPartialResult(
                 ctx: TransactionBuilder.Context,
@@ -74,19 +69,20 @@ object RefundTx {
                 PartialResult.Immediate(ctx, valueNeeded, refundInstructions)
         }
 
-        final case class PostDated(
-            override val config: RefundTx.Config,
+        final case class PostDated(override val config: Config)(
             override val refundInstructions: DepositUtxo.Refund.Instructions,
             override val refundValue: Value,
-        ) extends Builder[RefundTx.PostDated] {
+        ) extends Build[RefundTx.PostDated] {
             override val mValidityStart: Some[QuantizedInstant] =
                 Some(
                   refundInstructions.startTime.toEpochQuantizedInstant(
-                    config.cardanoInfo.slotConfig
+                    config.slotConfig
                   )
                 )
             override val stepRefundMetadata =
-                ModifyAuxiliaryData(_ => Some(MD(MD.Refund(headAddress = config.headAddress))))
+                ModifyAuxiliaryData(_ =>
+                    Some(MD(MD.Refund(headAddress = config.headMultisigAddress)))
+                )
 
             override def mkPartialResult(
                 ctx: TransactionBuilder.Context,
@@ -96,80 +92,13 @@ object RefundTx {
                   ctx,
                   valueNeeded,
                   refundInstructions,
-                  config.cardanoInfo.slotConfig
+                  config.slotConfig
                 )
-        }
-
-        sealed trait PartialResult[T <: RefundTx]
-            extends Tx.Builder.HasCtx,
-              State.Fields.HasInputRequired {
-            def refundInstructions: DepositUtxo.Refund.Instructions
-            def postProcess(ctx: TransactionBuilder.Context): T
-
-            final def complete(
-                depositSpent: DepositUtxo,
-                config: RefundTx.Config
-            ): BuildErrorOr[T] = for {
-                addedDepositSpent <- TransactionBuilder
-                    .modify(
-                      ctx,
-                      List(
-                        Spend(
-                          depositSpent.toUtxo,
-                          NativeScriptWitness(
-                            NativeScriptAttached,
-                            config.headMultisigScript.requiredSigners
-                          )
-                        )
-                      )
-                    )
-                    .explainConst("adding real spend deposit failed.")
-                finalized <- addedDepositSpent
-                    .finalizeContext(
-                      config.cardanoInfo.protocolParams,
-                      prebalancedLovelaceDiffHandler,
-                      config.evaluator,
-                      Tx.Validators.nonSigningNonValidityChecksValidators
-                    )
-                    .explainConst("finalizing partial result completion failed")
-            } yield postProcess(finalized)
-        }
-
-        object PartialResult {
-            final case class Immediate(
-                override val ctx: TransactionBuilder.Context,
-                override val inputValueNeeded: Value,
-                override val refundInstructions: DepositUtxo.Refund.Instructions
-            ) extends PartialResult[RefundTx.Immediate] {
-                override def postProcess(ctx: TransactionBuilder.Context): RefundTx.Immediate =
-                    RefundTx.Immediate(ctx.transaction)
-            }
-
-            final case class PostDated(
-                override val ctx: TransactionBuilder.Context,
-                override val inputValueNeeded: Value,
-                override val refundInstructions: DepositUtxo.Refund.Instructions,
-                slotConfig: SlotConfig,
-            ) extends PartialResult[RefundTx.PostDated] {
-                override def postProcess(ctx: TransactionBuilder.Context): RefundTx.PostDated =
-                    RefundTx.PostDated(
-                      ctx.transaction,
-                      refundInstructions.startTime.toEpochQuantizedInstant(slotConfig)
-                    )
-            }
-        }
-
-        object State {
-            object Fields {
-                sealed trait HasInputRequired {
-                    def inputValueNeeded: Value
-                }
-            }
         }
     }
 
-    trait Builder[T <: RefundTx] {
-        def config: RefundTx.Config
+    trait Build[T <: RefundTx] {
+        def config: Config
         import BuilderOps.*
 
         def refundInstructions: DepositUtxo.Refund.Instructions
@@ -181,13 +110,15 @@ object RefundTx {
         def mkPartialResult(
             ctx: TransactionBuilder.Context,
             valueNeededWithFee: Value
-        ): Builder.PartialResult[T]
+        ): PartialResult[T]
 
-        final def partialResult: BuildErrorOr[Builder.PartialResult[T]] = {
+        final def partialResult: BuilderResultSimple[PartialResult[T]] = {
             val stepReferenceHNS = ReferenceOutput(config.multisigRegimeUtxo.asUtxo)
+            // FIXME: We are not allowed to assumed the existence of the multisigRegimeUtxo here.
+            //   We must attach the multisig script inline to the transaction.
 
             val refundOutput: TransactionOutput = TransactionOutput.Babbage(
-              address = config.headAddress,
+              address = config.headMultisigAddress,
               value = refundValue,
               datumOption = refundInstructions.datum.asScala.map(Inline(_)),
               scriptRef = None
@@ -196,32 +127,31 @@ object RefundTx {
             val sendRefund = Send(refundOutput)
 
             val setValidity = ValidityStartSlot(
-              config.cardanoInfo.slotConfig.timeToSlot(refundInstructions.startTime.toLong)
+              config.slotConfig.timeToSlot(refundInstructions.startTime.toLong)
             )
 
             val steps = List(stepRefundMetadata, stepReferenceHNS, setValidity, sendRefund)
 
             for {
                 ctx <- TransactionBuilder
-                    .build(config.cardanoInfo.network, steps)
+                    .build(config.network, steps)
                     .explainConst("adding base refund steps failed")
 
-                valueNeeded = Placeholder.inputValueNeeded(ctx, config.cardanoInfo.protocolParams)
+                valueNeeded = Placeholder.inputValueNeeded(ctx, config.cardanoProtocolParams)
 
                 valueNeededWithFee <- trialFinishLoop(ctx, valueNeeded)
             } yield mkPartialResult(ctx, valueNeededWithFee)
         }
 
-        // TODO: This is very similar to the trialFinishLoop in RolloutTx. Factor out a common lib function?
         @tailrec
         private def trialFinishLoop(
             ctx: TransactionBuilder.Context,
             trialValue: Value
-        ): BuildErrorOr[Value] = {
+        ): BuilderResultSimple[Value] = {
             val spendDeposit = Utxo(
               BuilderOps.Placeholder.utxoId,
               TransactionOutput.Babbage(
-                address = config.headAddress,
+                address = config.headMultisigAddress,
                 value = trialValue,
                 datumOption =
                     None, // Datum is not really empty, but that doesn't affect balancing here.
@@ -243,9 +173,9 @@ object RefundTx {
                   )
                 )
                 res <- addedSpendDeposit.finalizeContext(
-                  config.cardanoInfo.protocolParams,
+                  config.cardanoProtocolParams,
                   prebalancedLovelaceDiffHandler,
-                  config.evaluator,
+                  config.plutusScriptEvaluatorForTxBuild,
                   List(TransactionSizeValidator)
                 )
             } yield res
@@ -294,38 +224,107 @@ object RefundTx {
         }
     }
 
-    sealed trait ParseError extends Throwable
+    sealed trait PartialResult[T <: RefundTx] extends Tx.Builder.HasCtx {
+        def refundInstructions: DepositUtxo.Refund.Instructions
+        def inputValueNeeded: Value
 
-    case class MetadataParseError(wrapped: MD.ParseError) extends ParseError
-    case class TxCborDeserializationFailed(e: Throwable) extends ParseError
+        def postProcess(ctx: TransactionBuilder.Context): T
 
-    def parse(
+        final def complete(
+            depositSpent: DepositUtxo,
+            config: Config
+        ): BuilderResultSimple[T] = for {
+            addedDepositSpent <- TransactionBuilder
+                .modify(
+                  ctx,
+                  List(
+                    Spend(
+                      depositSpent.toUtxo,
+                      NativeScriptWitness(
+                        NativeScriptAttached,
+                        config.headMultisigScript.requiredSigners
+                      )
+                    )
+                  )
+                )
+                .explainConst("adding real spend deposit failed.")
+            finalized <- addedDepositSpent
+                .finalizeContext(
+                  config.cardanoProtocolParams,
+                  prebalancedLovelaceDiffHandler,
+                  config.plutusScriptEvaluatorForTxBuild,
+                  Tx.Validators.nonSigningNonValidityChecksValidators
+                )
+                .explainConst("finalizing partial result completion failed")
+        } yield postProcess(finalized)
+    }
+
+    object PartialResult {
+        final case class Immediate(
+            override val ctx: TransactionBuilder.Context,
+            override val inputValueNeeded: Value,
+            override val refundInstructions: DepositUtxo.Refund.Instructions
+        ) extends PartialResult[RefundTx.Immediate] {
+            override def postProcess(ctx: TransactionBuilder.Context): RefundTx.Immediate =
+                RefundTx.Immediate(ctx.transaction)
+        }
+
+        final case class PostDated(
+            override val ctx: TransactionBuilder.Context,
+            override val inputValueNeeded: Value,
+            override val refundInstructions: DepositUtxo.Refund.Instructions,
+            slotConfig: SlotConfig,
+        ) extends PartialResult[RefundTx.PostDated] {
+            override def postProcess(ctx: TransactionBuilder.Context): RefundTx.PostDated =
+                RefundTx.PostDated(
+                  ctx.transaction,
+                  refundInstructions.startTime.toEpochQuantizedInstant(slotConfig)
+                )
+        }
+    }
+
+    object Parse {
+        type ParseErrorOr[A] = Either[Error, A]
+
+        enum Error extends Throwable {
+            case MetadataParseError(wrapped: MD.ParseError)
+            case TxCborDeserializationFailed(e: Throwable)
+        }
+    }
+
+    final case class Parse(config: Config)(
         txBytes: Tx.Serialized,
-        env: CardanoInfo
-    ): Either[ParseError, RefundTx] = {
-        given ProtocolVersion = env.protocolParams.protocolVersion
-        given OriginalCborByteArray = OriginalCborByteArray(txBytes)
+    ) {
+        import Parse.*
+        import Parse.Error.*
 
-        io.bullet.borer.Cbor.decode(txBytes).to[Transaction].valueTry match {
-            case Success(tx) =>
-                for {
-                    _ <- MD.parse(tx) match {
-                        case Right(md: Metadata.Refund) => Right(md)
-                        case Right(md) =>
-                            Left(MetadataParseError(MD.UnexpectedTxType(md, "Refund")))
-                        case Left(e) => Left(MetadataParseError(e))
-                    }
+        def result: ParseErrorOr[RefundTx] = {
+            given ProtocolVersion = config.cardanoProtocolVersion
 
-                    refundTx: RefundTx = tx.body.value.validityStartSlot match {
-                        case None => RefundTx.Immediate(tx)
-                        case Some(startSlot) =>
-                            RefundTx.PostDated(
-                              tx,
-                              Slot(startSlot).toQuantizedInstant(env.slotConfig)
-                            )
-                    }
-                } yield refundTx
-            case Failure(e) => Left(TxCborDeserializationFailed(e))
+            given OriginalCborByteArray = OriginalCborByteArray(txBytes)
+
+            io.bullet.borer.Cbor.decode(txBytes).to[Transaction].valueTry match {
+                case Success(tx) =>
+                    for {
+                        _ <- MD.parse(tx) match {
+                            case Right(md: Metadata.Refund) => Right(md)
+                            case Right(md) =>
+                                Left(MetadataParseError(MD.UnexpectedTxType(md, "Refund")))
+                            case Left(e) => Left(MetadataParseError(e))
+                        }
+
+                        refundTx: RefundTx = tx.body.value.validityStartSlot match {
+                            case None => RefundTx.Immediate(tx)
+                            case Some(startSlot) =>
+                                RefundTx.PostDated(
+                                  tx,
+                                  Slot(startSlot).toQuantizedInstant(config.slotConfig)
+                                )
+                        }
+                    } yield refundTx
+                case Failure(e) => Left(TxCborDeserializationFailed(e))
+            }
+
         }
 
     }

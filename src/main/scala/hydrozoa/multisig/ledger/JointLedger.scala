@@ -4,22 +4,19 @@ import cats.effect.{IO, Ref}
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
-import hydrozoa.config.EquityShares
+import hydrozoa.config.head.HeadConfig
+import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.actor.*
-import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, toEpochQuantizedInstant}
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant}
 import hydrozoa.multisig.MultisigRegimeManager
-import hydrozoa.multisig.consensus.peer.{PeerId, PeerWallet}
 import hydrozoa.multisig.consensus.{ConsensusActor, PeerLiaison}
 import hydrozoa.multisig.ledger.DappLedgerM.runDappLedgerM
 import hydrozoa.multisig.ledger.JointLedger.*
 import hydrozoa.multisig.ledger.JointLedger.Requests.*
 import hydrozoa.multisig.ledger.VirtualLedgerM.runVirtualLedgerM
 import hydrozoa.multisig.ledger.block.{Block, BlockBody, BlockBrief, BlockEffects, BlockHeader, BlockNumber}
-import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
-import hydrozoa.multisig.ledger.dapp.tx.TxTiming
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
-import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo}
+import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.event.LedgerEvent.*
 import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag
 import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag.{Invalid, Valid}
@@ -31,7 +28,7 @@ import monocle.Focus.focus
 import scala.collection.immutable.Queue
 import scala.math.Ordered.orderingToOrdered
 import scalus.builtin.{ByteString, platform}
-import scalus.cardano.ledger.{CardanoInfo, Coin, TransactionHash, TransactionInput}
+import scalus.cardano.ledger.{AssetName, TransactionHash, TransactionInput}
 
 // Fields of a work-in-progress block, with an additional field for dealing with withdrawn utxos
 private case class TransientFields(
@@ -53,9 +50,10 @@ final case class JointLedger(
         Ref.unsafe[IO, JointLedger.State](
           Done(
             producedBlock = config.initialBlock,
-            lastFallbackValidityStart = config.initialFallbackValidityStart,
-            dappLedgerState = DappLedgerM.State(config.initialTreasury, Queue.empty),
-            virtualLedgerState = VirtualLedgerM.State.empty
+            lastFallbackValidityStart = config.initialFallbackTx.validityStart,
+            dappLedgerState =
+                DappLedgerM.State(config.initializationTx.treasuryProduced, Queue.empty),
+            virtualLedgerState = VirtualLedgerM.State.apply(config.initialL2Utxos)
           )
         )
 
@@ -242,7 +240,7 @@ final case class JointLedger(
         def doSettlement(
             validDeposits: Queue[(LedgerEventId, DepositUtxo)],
             immatureDeposits: Queue[(LedgerEventId, DepositUtxo)],
-        ): IO[DappLedgerM.SettleLedger.Result] =
+        ): IO[SettlementTxSeq] =
             for {
                 p <- unsafeGetProducing
                 treasuryToSpend = p.dappLedgerState.treasury
@@ -255,13 +253,9 @@ final case class JointLedger(
                         .foldLeft(Queue.empty)((acc, ob) => acc.appendedAll(ob.toList))
                 genesisEvent = L2EventGenesis(
                   genesisObligations,
-                  TransactionHash.fromByteString(
-                    platform.blake2b_256(
-                      tokenNames.headTokenName.bytes ++
-                          ByteString.fromBigIntBigEndian(
-                            BigInt(treasuryToSpend.datum.versionMajor.toInt + 1)
-                          )
-                    )
+                  mkGenesisId(
+                    headTokenNames.treasuryTokenName,
+                    treasuryToSpend.datum.versionMajor.toInt + 1
                   )
                 )
 
@@ -381,13 +375,13 @@ final case class JointLedger(
                     IO.pure(Block.Unsigned.Minor(blockBrief, blockEffects))
                 case header: BlockHeader.Major =>
                     for {
-                        settlementRes <- doSettlement(
+                        settlementTxSeq <- doSettlement(
                           validDeposits = eligibleForAbsorption,
                           immatureDeposits = notYetMature,
                         )
                         depositsAbsorbed = eligibleForAbsorption
                             .filter(deposit =>
-                                settlementRes.settlementTxSeq.settlementTx.depositsSpent
+                                settlementTxSeq.settlementTx.depositsSpent
                                     .contains(deposit._2)
                             )
                             .map(_._1)
@@ -395,9 +389,9 @@ final case class JointLedger(
                         blockBody = BlockBody.Major(events, depositsAbsorbed, depositsRefunded)
                         blockBrief = BlockBrief.Major(header, blockBody)
                         blockEffects = BlockEffects.Unsigned.Major(
-                          settlementTx = settlementRes.settlementTxSeq.settlementTx,
-                          rolloutTxs = settlementRes.settlementTxSeq.mbRollouts,
-                          fallbackTx = settlementRes.fallBack,
+                          settlementTx = settlementTxSeq.settlementTx,
+                          fallbackTx = settlementTxSeq.fallbackTx,
+                          rolloutTxs = settlementTxSeq.rolloutTxs,
                           postDatedRefundTxs = List() // FIXME: Where are they?
                         )
                     } yield Block.Unsigned.Major(blockBrief, blockEffects)
@@ -451,8 +445,7 @@ final case class JointLedger(
 
                 val blockEffects = BlockEffects.Unsigned.Final(
                   finalizationTx = finalizationTxSeq.finalizationTx,
-                  rolloutTxs = finalizationTxSeq.mbRollouts,
-                  deinitTx = finalizationTxSeq.mbDeinit
+                  rolloutTxs = finalizationTxSeq.rolloutTxs
                 )
 
                 Block.Unsigned.Final(blockBrief, blockEffects)
@@ -477,7 +470,7 @@ final case class JointLedger(
     ): IO[Unit] =
         for {
             conn <- getConnections
-            acks = wallet.mkAcks(block, localFinalization)
+            acks = ownHeadWallet.mkAcks(block, localFinalization)
             _ <- (conn.peerLiaisons ! block.blockBriefNext).parallel
             _ <- conn.consensusActor ! block
             _ <- IO.traverse_(acks)(ack => conn.consensusActor ! ack)
@@ -536,27 +529,7 @@ object JointLedger {
 
     type Handle = ActorRef[IO, Requests.Request]
 
-    // TODO: review
-    case class Config(
-        initialBlock: Block.MultiSigned.Initial,
-        peerId: PeerId,
-        wallet: PeerWallet,
-        // TODO: can be obtained from initialBlock?
-        initialBlockTime: QuantizedInstant,
-        cardanoInfo: CardanoInfo,
-        // TODO: can be obtained from initialBlock?
-        initialBlockKzg: KzgCommitment,
-        txTiming: TxTiming,
-        headMultisigScript: HeadMultisigScript,
-        tallyFeeAllowance: Coin,
-        equityShares: EquityShares,
-        multisigRegimeUtxo: MultisigRegimeUtxo,
-        votingDuration: QuantizedFiniteDuration,
-        initialTreasury: MultisigTreasuryUtxo,
-        tokenNames: TokenNames,
-        // TODO: can be obtained from effects in the initialBlock?
-        initialFallbackValidityStart: QuantizedInstant
-    )
+    type Config = HeadConfig.Section & OwnHeadPeerPrivate.Section
 
     final case class Connections(
         consensusActor: ConsensusActor.Handle,
@@ -565,7 +538,6 @@ object JointLedger {
 
     final case class CompleteBlockError() extends Throwable
 
-    // TODO: Can we unify this with other actors?
     object Requests {
         type Request =
             // RegisterDeposit is exactly the DappLedger type, we're simply forwarding it through.
@@ -630,4 +602,14 @@ object JointLedger {
         startTime: QuantizedInstant,
         nextBlockData: TransientFields
     ) extends State
+
+    def mkGenesisId(treasuryTokenName: AssetName, majorVersion: Int) =
+        TransactionHash.fromByteString(
+          platform.blake2b_256(
+            treasuryTokenName.bytes ++
+                ByteString.fromBigIntBigEndian(
+                  BigInt(majorVersion)
+                )
+          )
+        )
 }

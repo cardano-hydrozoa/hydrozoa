@@ -1,13 +1,18 @@
 package hydrozoa.integration.stage1
 
-import cats.data.NonEmptyList
-import hydrozoa.config.EquityShares
+import hydrozoa.config.head.HeadConfig
+import hydrozoa.config.head.multisig.timing.TxTiming
+import hydrozoa.config.node.operation.liquidation.NodeOperationLiquidationConfig
+import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.integration.stage1.Error.UnexpectedState
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.multisig.ledger.VirtualLedgerM
 import hydrozoa.multisig.ledger.block.{BlockNumber, BlockVersion}
-import hydrozoa.multisig.ledger.dapp.tx.TxTiming
 import hydrozoa.multisig.ledger.event.LedgerEvent
-import scalus.cardano.ledger.{CardanoInfo, Transaction, TransactionInput, TransactionOutput, Utxo}
+import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag
+import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.kzgCommitment
+import hydrozoa.multisig.ledger.virtual.{HydrozoaTransactionMutator, L2EventTransaction}
+import scalus.cardano.ledger.{Transaction, Utxos}
 import test.TestPeer
 
 // ===================================
@@ -18,27 +23,24 @@ import test.TestPeer
   */
 case class ModelState(
     // Read-only: minimal configuration needed for model and SUT
-    // We don't want to have the whole Head/Peer config here
+    // TODO: I wanted TestPeer not to leave the config generation part, check whether it's possible
     ownTestPeer: TestPeer,
-    txTiming: TxTiming,
-    equityShares: EquityShares,
-    spentUtxos: NonEmptyList[Utxo],
-    initTxSigned: Transaction,
-    fallbackTxSigned: Transaction,
-    // Needed for command generators
-    cardanoInfo: CardanoInfo,
+    headConfig: HeadConfig,
+    operationalMultisigConfig: NodeOperationMultisigConfig,
+    operationalLiquidationConfig: NodeOperationLiquidationConfig,
 
+    // "Mutable" part
     // Block producing cycle
     currentTime: CurrentTime,
     blockCycle: BlockCycle,
-    currentBlockEvents: List[LedgerEvent] = List.empty,
+    currentBlockEvents: List[(LedgerEvent, ValidityFlag)] = List.empty,
 
     // This is put here to avoid tossing over Done/Ready/InProgress
     // NB: for block zero it's more initializationExpirationTime
     competingFallbackStartTime: QuantizedInstant,
 
     // L2 state
-    activeUtxos: Map[TransactionInput, TransactionOutput],
+    activeUtxos: Utxos,
 ) {
     override def toString: String = "<model state (hidden)>"
 }
@@ -86,8 +88,7 @@ enum BlockCycle:
 // ===================================
 
 import hydrozoa.multisig.ledger.block.BlockBrief.{Final, Major, Minor}
-import hydrozoa.multisig.ledger.block.{BlockBrief, BlockBody, BlockHeader}
-import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag
+import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import org.scalacheck.commands.ModelCommand
 
@@ -144,7 +145,36 @@ implicit object StartBlockCommandModel extends ModelCommand[StartBlockCommand, U
 implicit object LedgerEventCommandModel extends ModelCommand[LedgerEventCommand, Unit, ModelState] {
 
     override def runState(cmd: LedgerEventCommand, state: ModelState): (Unit, ModelState) =
-        () -> state.copy(currentBlockEvents = state.currentBlockEvents :+ cmd.event)
+        cmd.event match {
+            case LedgerEvent.TxL2Event(eventId, tx) =>
+                val l2TransactionEvent = L2EventTransaction(Transaction.fromCbor(tx))
+                val ret = HydrozoaTransactionMutator.transit(
+                  config = state.headConfig,
+                  time = state.currentTime.instant,
+                  state = VirtualLedgerM.State(state.activeUtxos),
+                  l2Event = l2TransactionEvent
+                )
+                ret match {
+                    case Left(err) =>
+                        // TODO
+                        println(
+                          s"-------------------------------- invalid tx event ${eventId}: ${err}"
+                        )
+                        () -> state.copy(
+                          currentBlockEvents =
+                              state.currentBlockEvents :+ (cmd.event -> ValidityFlag.Invalid),
+                        )
+                    case Right(mutatorState) =>
+                        () -> state.copy(
+                          currentBlockEvents =
+                              state.currentBlockEvents :+ (cmd.event -> ValidityFlag.Valid),
+                          activeUtxos = mutatorState.activeUtxos
+                        )
+                }
+
+            case LedgerEvent.RegisterDeposit(_, _, _, _, _, _, _) => ???
+        }
+
 }
 
 implicit object CompleteBlockCommandModel
@@ -163,14 +193,15 @@ implicit object CompleteBlockCommandModel
                   cmd.blockNumber,
                   state.currentBlockEvents,
                   state.competingFallbackStartTime,
-                  state.txTiming,
+                  state.headConfig.txTiming,
                   creationTime,
                   prevVersion,
-                  cmd.isFinal
+                  cmd.isFinal,
+                  state.activeUtxos
                 )
                 val newCompetingFallbackStartTime =
                     if result.isInstanceOf[Major]
-                    then state.txTiming.newFallbackStartTime(creationTime)
+                    then state.headConfig.txTiming.newFallbackStartTime(creationTime)
                     else state.competingFallbackStartTime
                 logger.debug(s"newCompetingFallbackStartTime: $newCompetingFallbackStartTime")
 
@@ -188,12 +219,13 @@ implicit object CompleteBlockCommandModel
 
     private def mkBlockBrief(
         blockNumber: BlockNumber,
-        currentBlockEvents: List[LedgerEvent],
-        competingFallbackStartTime: hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant,
+        currentBlockEvents: List[(LedgerEvent, ValidityFlag)],
+        competingFallbackStartTime: QuantizedInstant,
         txTiming: TxTiming,
-        creationTime: hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant,
+        creationTime: QuantizedInstant,
         prevVersion: BlockVersion.Full,
-        isFinal: Boolean
+        isFinal: Boolean,
+        activeUtxos: Utxos
     ): BlockBrief = {
 
         if isFinal then
@@ -204,7 +236,7 @@ implicit object CompleteBlockCommandModel
                 startTime = creationTime,
               ),
               body = BlockBody.Final(
-                events = currentBlockEvents.map(_.eventId -> ValidityFlag.Invalid),
+                events = currentBlockEvents.map((le, flag) => le.eventId -> flag),
                 depositsRefunded = List.empty
               )
             )
@@ -215,10 +247,10 @@ implicit object CompleteBlockCommandModel
                 blockNum = blockNumber,
                 blockVersion = prevVersion.incrementMinor,
                 startTime = creationTime,
-                kzgCommitment = KzgCommitment.empty
+                kzgCommitment = activeUtxos.kzgCommitment
               ),
               body = BlockBody.Minor(
-                events = currentBlockEvents.map(_.eventId -> ValidityFlag.Invalid),
+                events = currentBlockEvents.map((le, flag) => le.eventId -> flag),
                 depositsRefunded = List.empty
               )
             )
@@ -228,10 +260,10 @@ implicit object CompleteBlockCommandModel
                 blockNum = blockNumber,
                 blockVersion = prevVersion.incrementMajor,
                 startTime = creationTime,
-                kzgCommitment = KzgCommitment.empty
+                kzgCommitment = activeUtxos.kzgCommitment
               ),
               body = BlockBody.Major(
-                events = currentBlockEvents.map(_.eventId -> ValidityFlag.Invalid),
+                events = currentBlockEvents.map((le, flag) => le.eventId -> flag),
                 depositsAbsorbed = List.empty,
                 depositsRefunded = List.empty
               )

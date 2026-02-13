@@ -14,6 +14,7 @@ import sourcecode.*
 trait Tx[Self <: Tx[Self]] extends HasResolvedUtxos { self: Self =>
     def tx: Transaction
 
+    // TODO: Replace this with a more straightforward method to replace unsigned tx with signed tx
     /** Lens for accessing the transaction field. Implementations should use:
       * `override val txLens: Lens[ConcreteType, Transaction] = Focus[ConcreteType](_.tx)`
       * Unfortunately this can't be generalized since Focus requires a concrete type.
@@ -73,7 +74,26 @@ object Tx {
     }
 
     object Builder {
-        type BuildErrorOr[A] = Either[(SomeBuildError, String), A]
+
+        /** Builder-related functions across multiple builders use this type for their returning
+          * value.
+          *
+          * @tparam Result
+          *   the type of result
+          * @tparam TxError
+          *   the type of tx-specific errors
+          */
+        // TODO: swap params
+        type BuilderResult[Result, TxError] = Either[(SomeBuildError | TxError, String), Result]
+        //                                            ^ tx builder     ^ tx-     ^ additional
+        //                                              error            specific  info
+        //                                                               error
+
+        /** If a particular transaction doesn't use custom errors, these type aliases may come in
+          * handy.
+          */
+        type BuilderResultSimple[Result] = BuilderResult[Result, Void]
+        type SomeBuildErrorOnly = SomeBuildError | Void
 
         extension [E, A](either: Either[E, A])
             /** Augment an Either with a string on the Left, including source locations. Defaults to
@@ -122,18 +142,23 @@ object Tx {
 
             /** Replace an [[InvalidTransactionSizeException]] with some other value.
               *
+              * It comes useful in incremental builders when adding payouts/deposit one by one until
+              * it fires - returning the previous state not the error.
+              *
               * @param err
               *   The error to replace.
               * @param replacement
               *   The replacement value, provided as a lazy argument.
               * @tparam A
               *   The type of the replacement value, usually inferred by Scala.
+              * @tparam TxError
+              *   The concrete type of tx-specific error.
               * @return
               */
-            final def replaceInvalidSizeException[A](
-                err: SomeBuildError,
+            final def replaceInvalidSizeException[A, TxError](
+                err: SomeBuildError | TxError,
                 replacement: => A
-            ): Either[SomeBuildError, A] = {
+            ): Either[SomeBuildError | TxError, A] = {
                 err match
                     case SomeBuildError.ValidationError(ve, ctx) =>
                         ve match {

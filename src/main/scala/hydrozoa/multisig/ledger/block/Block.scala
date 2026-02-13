@@ -1,7 +1,7 @@
 package hydrozoa.multisig.ledger.block
 
 import hydrozoa.multisig.ledger.block.BlockHeader.Minor.HeaderSignature
-import hydrozoa.multisig.ledger.dapp.tx.{DeinitTx, FallbackTx, FinalizationTx, InitializationTx, RefundTx, RolloutTx, SettlementTx}
+import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, FinalizationTx, InitializationTx, RefundTx, RolloutTx, SettlementTx}
 
 sealed trait Block extends Block.Section
 
@@ -74,7 +74,6 @@ object Block {
 
             override transparent inline def finalizationTx: FinalizationTx = effects.finalizationTx
             override transparent inline def rolloutTxs: List[RolloutTx] = effects.rolloutTxs
-            override transparent inline def deinitTx: Option[DeinitTx] = effects.deinitTx
         }
 
         type Next = Block.Unsigned & BlockType.Next
@@ -158,7 +157,6 @@ object Block {
 
             override transparent inline def finalizationTx: FinalizationTx = effects.finalizationTx
             override transparent inline def rolloutTxs: List[RolloutTx] = effects.rolloutTxs
-            override transparent inline def deinitTx: Option[DeinitTx] = effects.deinitTx
 
             override transparent inline def finalizationRequested: Boolean = false
         }

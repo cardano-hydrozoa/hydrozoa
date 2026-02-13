@@ -59,8 +59,8 @@ class RuleBasedTreasuryScriptTest extends AnyFunSuite {
         val subsetBlst = subsetScalus.map(ss => Scalar().from_bendian(ss._1.toByteArray))
         println(s"blst utxos active hashes: ${subsetBlst.map(e => BigInt.apply(e.to_bendian()))}")
 
-        val commitmentPoint1 = KzgCommitment.calculateCommitment(subsetBlst)
-        val commitmentPoint2 = KzgCommitment.calculateCommitment(subsetBlst)
+        val commitmentPoint1 = KzgCommitment.calculateKzgCommitment(subsetBlst)
+        val commitmentPoint2 = KzgCommitment.calculateKzgCommitment(subsetBlst)
 
         assert(
           commitmentPoint1 == commitmentPoint2
@@ -83,7 +83,7 @@ class RuleBasedTreasuryScriptTest extends AnyFunSuite {
         val subsetBlst = subsetScalus.map(ss => Scalar().from_bendian(ss._1.toByteArray))
         println(s"blst utxos active hashes: ${subsetBlst.map(e => BigInt.apply(e.to_bendian()))}")
 
-        val commitmentPoint = KzgCommitment.calculateCommitment(subsetBlst)
+        val commitmentPoint = KzgCommitment.calculateKzgCommitment(subsetBlst)
 
         assert(
           commitmentPoint.toHex ==

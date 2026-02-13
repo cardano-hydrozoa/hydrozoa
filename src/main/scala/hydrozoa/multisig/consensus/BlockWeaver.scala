@@ -5,14 +5,15 @@ import cats.effect.{IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
 import hydrozoa.lib.cardano.scalus.QuantizedTime.toEpochQuantizedInstant
 import hydrozoa.multisig.MultisigRegimeManager
-import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockHeader, BlockNumber, BlockStatus}
 import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId}
-import scalus.cardano.ledger.{SlotConfig, TransactionInput}
+import scalus.cardano.ledger.TransactionInput
 
 /** Block weaver actor.
   *   - When the node is leading a block, the weaver packages all known unprocessed (by the time
@@ -32,29 +33,7 @@ object BlockWeaver:
     ): IO[BlockWeaver] =
         IO(new BlockWeaver(config = config, pendingConnections = pendingConnections) {})
 
-    /** Configuration for the block weaver actor.
-      *
-      * @param lastKnownBlock
-      *   Normally this is always the initial block, the only block known to the head upfront. In *
-      *   the case of recovery it may be any block that was fully finished and synced to the *
-      *   persistence.
-      * @param peerId
-      *   this peer's own ID, which is used to determine the block numbers for which it should be
-      *   leader.
-      * @param recoveredMempool
-      *   Recovered mempool, i.e., all ledger events outstanding the indices of the last known *
-      *   block. Upon initialization is always an empty set by definition.
-      *
-      * @param slotConfig
-      *   the slot configuration.
-      */
-    final case class Config(
-        lastKnownBlock: BlockNumber,
-        peerId: PeerId,
-        // TODO: shall we use just Seq[LedgerEvent here] not to expose Mempool?
-        recoveredMempool: Mempool,
-        slotConfig: SlotConfig
-    )
+    type Config = CardanoNetwork.Section & OwnHeadPeerPublic.Section
 
     final case class Connections(
         jointLedger: JointLedger.Handle
@@ -243,14 +222,9 @@ trait BlockWeaver(
     }
 
     override def preStart: IO[Unit] =
-        if config.lastKnownBlock.toInt == 0 then
-            require(
-              config.recoveredMempool.isEmpty,
-              "panic: recovered mempool should be empty before the first block"
-            )
         for {
             _ <- initializeConnections
-            _ <- switchToIdle(config.lastKnownBlock.increment, config.recoveredMempool)
+            _ <- switchToIdle(BlockHeader.Initial.blockNum.increment, Mempool.empty)
         } yield ()
 
     override def receive: Receive[IO, Request] =
@@ -297,7 +271,7 @@ trait BlockWeaver(
                               pollResults.utxos,
                               finalizationLocallyTriggered
                             )
-                            _ <- switchToIdle(blockNumber.increment)
+                            _ <- switchToIdle(blockNumber.increment, Mempool.empty)
                         } yield ())
                     } yield ()
 
@@ -443,7 +417,7 @@ trait BlockWeaver(
                                                finalizationLocallyTriggered
                                              ))
                                     // Switch to Idle
-                                    _ <- switchToIdle(blockNumber.increment)
+                                    _ <- switchToIdle(blockNumber.increment, Mempool.empty)
                                 } yield ()
                             case _ =>
                                 // This may happen, but we should ignore it since that signal is useless for the weaver
@@ -545,9 +519,9 @@ trait BlockWeaver(
       */
     private def switchToIdle(
         nextBlockNum: BlockNumber,
-        mempool: Mempool = Mempool.empty
+        mempool: Mempool
     ): IO[Unit] =
-        if config.peerId.isLeader(nextBlockNum)
+        if config.ownHeadPeerId.isLeader(nextBlockNum)
         then
             for {
                 conn <- getConnections

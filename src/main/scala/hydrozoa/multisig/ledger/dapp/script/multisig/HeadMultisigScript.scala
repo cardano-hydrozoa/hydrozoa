@@ -1,9 +1,8 @@
 package hydrozoa.multisig.ledger.dapp.script.multisig
 
-import cats.*
-import cats.data.*
-import hydrozoa.VerificationKeyBytes
+import hydrozoa.config.head.peers.HeadPeers
 import scala.collection.SortedSet
+import scalus.builtin.Builtins.blake2b_224
 import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
@@ -54,12 +53,12 @@ case class HeadMultisigScript(private val script0: Script.Native) {
 }
 
 object HeadMultisigScript:
-    def apply(vKeys: NonEmptyList[VerificationKeyBytes]): HeadMultisigScript =
+    def apply(headPeers: HeadPeers): HeadMultisigScript =
         HeadMultisigScript(
           Script.Native(
             AllOf(
-              vKeys
-                  .map(key => key.verKeyHash)
+              headPeers.headPeerVKeys
+                  .map(vkey => AddrKeyHash(blake2b_224(vkey)))
                   .toList
                   .toIndexedSeq
                   .sorted(using Ordering[AddrKeyHash])
