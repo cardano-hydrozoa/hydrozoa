@@ -7,6 +7,7 @@ import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.dapp
 import hydrozoa.multisig.ledger.dapp.tx
 import hydrozoa.multisig.ledger.dapp.tx.*
+import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.SomeBuildErrorOnly
 import hydrozoa.multisig.ledger.dapp.utxo.MultisigTreasuryUtxo
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import scalus.cardano.txbuilder.SomeBuildError
@@ -40,10 +41,8 @@ private object FinalizationTxSeqOps {
 
     object Build {
         enum Error:
-            case SettlementError(e: (SomeBuildError, String))
-            case DeinitTxError(e: (SomeBuildError, String))
-            case FinalizationError(e: (SomeBuildError, String))
-            case RolloutSeqError(e: (SomeBuildError, String))
+            case FinalizationError(e: (SomeBuildError | FinalizationTx.Error, String))
+            case RolloutSeqError(e: (SomeBuildErrorOnly, String))
     }
 
     final case class Build(config: Config)(

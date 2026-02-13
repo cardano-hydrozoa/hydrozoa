@@ -6,6 +6,7 @@ import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import scalus.cardano.ledger.Coin
+import spire.math.Rational
 
 export FallbackContingency.totalFallbackContingency
 export FallbackContingency.{mkFallbackContingencyWithDefaults, mkCollectiveContingencyWithDefaults, mkIndividualContingencyWithDefaults}
@@ -102,13 +103,19 @@ object FallbackContingency {
 
         private def fallbackTxFee: Coin = config.maxNonPlutusTxFee
 
-        private def collateralDeposit(tallyTxFee: Coin, voteTxFee: Coin): Coin = Coin(
-          collateralUtxoMinLovelace.value.max(
-            tallyTxFee.value.max(
-              voteTxFee.value
-            ) * config.cardanoProtocolParams.collateralPercentage
-          )
-        )
+        private def collateralDeposit(tallyTxFee: Coin, voteTxFee: Coin): Coin = {
+            import hydrozoa.lib.cardano.value.coin.Coin as HCoin
+            import hydrozoa.lib.cardano.value.coin.Coin.coinMax
+
+            val c1 = HCoin.unsafeApply(collateralUtxoMinLovelace.value)
+            val c2 = HCoin.unsafeApply(tallyTxFee.value)
+            val c3 = HCoin.unsafeApply(voteTxFee.value)
+
+            val max = List(c1, c2, c3).coinMax
+            val ret = max *~ Rational(config.cardanoProtocolParams.collateralPercentage, 100)
+
+            Coin(ret.underlying.ceil.toLong)
+        }
 
         private def collateralUtxoMinLovelace: Coin =
             config.babbageUtxoMinLovelace(Assumptions.adaOnlyBaseAddressUtxoBytes)

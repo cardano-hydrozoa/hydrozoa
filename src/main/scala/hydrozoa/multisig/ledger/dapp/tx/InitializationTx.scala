@@ -12,7 +12,7 @@ import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.token.CIP67.{HasTokenNames, HeadTokenNames}
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.Initialization
-import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explainConst}
+import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuilderResultSimple, explainConst}
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import monocle.{Focus, Lens}
 import scala.util.Try
@@ -61,7 +61,7 @@ private object InitializationTxOps {
     final case class Build(config: Config) {
         import Build.*
 
-        lazy val result: BuildErrorOr[InitializationTx] = for {
+        lazy val result: BuilderResultSimple[InitializationTx] = for {
             _ <- Either
                 .cond(
                   config.isBalancedInitializationFunding,

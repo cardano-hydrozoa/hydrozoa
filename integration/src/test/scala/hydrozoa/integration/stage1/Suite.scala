@@ -10,6 +10,8 @@ import hydrozoa.config.head.multisig.timing.{TxTimingGen, generateDefaultTxTimin
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.{HeadPeersSpec, generateHeadConfig}
 import hydrozoa.config.node.NodeConfig
+import hydrozoa.config.node.operation.liquidation.generateNodeOperationLiquidationConfig
+import hydrozoa.config.node.operation.multisig.generateNodeOperationMultisigConfig
 import hydrozoa.integration.stage1.CurrentTime.{AfterCompetingFallbackStartTime, BeforeHappyPathExpiration}
 import hydrozoa.integration.stage1.SuiteCardano.*
 import hydrozoa.integration.yaci.DevKit
@@ -22,7 +24,6 @@ import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, ConsensusActor,
 import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.block.{BlockEffects, BlockNumber, BlockVersion}
 import java.util.concurrent.TimeUnit
-import monocle.Focus.focus
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.commands.{CommandGen, ModelBasedSuite}
 import org.scalacheck.{Gen, Prop, YetAnotherProperties}
@@ -32,7 +33,7 @@ import scalus.cardano.address.Network
 import scalus.cardano.ledger.rules.{Context, UtxoEnv}
 import scalus.cardano.ledger.{CardanoInfo, CertState, Coin, ProtocolParams, SlotConfig, TransactionHash, Utxos}
 import test.TestPeer
-import test.TestPeer.Alice
+import test.TestPeer.{Alice, mkWallet}
 
 // TODO: copied from cardano liaison test suite
 class BlockWeaverMock extends Actor[IO, BlockWeaver.Request] {
@@ -66,6 +67,7 @@ object Stage1Properties extends YetAnotherProperties("Integration Stage 1"):
       * for testing block propagation, which must work on empty blocks, but we additionally decided
       * to check block briefs.
       */
+
     val _ = property("Block propagation works well on L1 mock") = Suite(
       suiteCardano = Mock(preprod),
       txTimingGen = generateDefaultTxTiming,
@@ -116,7 +118,7 @@ case class Suite(
         case Yaci(_, _) => false
     }
 
-    override def commandGenTweaker: [A] => (x$1: Gen[A]) => Gen[A] = suiteCardano match {
+    override def commandGenTweaker: [A] => (g: Gen[A]) => Gen[A] = suiteCardano match {
         case _: SuiteCardano.Mock => [A] => (g: Gen[A]) => g
         // When using Yaci (and devnet) we don't want to generate short sequences
         case _: SuiteCardano.Yaci => [A] => (g: Gen[A]) => Gen.resize(200, g)
@@ -171,32 +173,7 @@ case class Suite(
         val generateTxTiming = txTimingGen
 
         for {
-
             testPeers <- spec.generate
-            // TODO: this is needed to be ported into new generators
-            //   The idea is to use existing known utxos only
-            // seedUtxo <- Gen
-            //    .oneOf(mkGenesisUtxos(List(ownTestPeer))(ownTestPeer))
-            //    .flatMap((i, o) => Utxo(i, o))
-            //
-            //// I don't think funding utxos make sense for this scenario
-            // spentUtxos = NonEmptyList.one(seedUtxo)
-            //
-            //// Initial treasury must be at least enough for the minAda of the treasury, and no more than the
-            //// sum of the seed+funding utxos, while leaving enough left for the estimated fee and the minAda of the change
-            //// output
-            // initialTreasuryCoin <- Gen
-            //    .choose(
-            //      minInitTreasuryAda.value,
-            //      sumUtxoValues(spentUtxos.toList).coin.value
-            //          - maxNonPlutusTxFee(cardanoInfo.protocolParams).value
-            //          - minPubkeyAda().value
-            //    )
-            //    .map(Coin(_))
-            //    .label("initial treasury coin")
-            //
-            // initialTreasury = Value(initialTreasuryCoin)
-
             headConfig <- generateHeadConfig(spec)(
               generateCardanoNetwork = generateCardanoNetwork,
               generateHeadStartTime = generateHeadStartTime,
@@ -204,9 +181,17 @@ case class Suite(
               generateGenesisUtxo = testPeersGenesisUtxosL1(testPeers)
             )
 
+            _ = logger.debug(s"total contingency: ${headConfig.fallbackContingency}")
+            _ = logger.debug(s"l2 utxos: ${headConfig.initialL2Utxos.size}")
+            _ = logger.debug(s"l2 total: ${headConfig.initialL2Value}")
+
+            operationalMultisigConfig <- generateNodeOperationMultisigConfig
+            operationalLiquidationConfig <- generateNodeOperationLiquidationConfig
         } yield ModelState(
           ownTestPeer = ownTestPeer,
           headConfig = headConfig,
+          operationalMultisigConfig = operationalMultisigConfig,
+          operationalLiquidationConfig = operationalLiquidationConfig,
           currentTime = BeforeHappyPathExpiration(headConfig.headStartTime),
           blockCycle = BlockCycle.Done(BlockNumber.zero, BlockVersion.Full.zero),
           competingFallbackStartTime =
@@ -224,7 +209,6 @@ case class Suite(
 
     override def startupSut(state: ModelState): IO[Sut] = {
         val headConfig = state.headConfig
-        val cardanoInfo = state.headConfig.cardanoInfo
 
         for {
             _ <- loggerIO.info("Creating new SUT")
@@ -247,11 +231,16 @@ case class Suite(
                 _ <- loggerIO.info(s"Current time: $now")
             } yield ())
 
-            // TODO: create node config
             _ <- loggerIO.debug(s"peerKeys: ${headConfig.headPeers.headPeerVKeys}")
-            nodeConfig: NodeConfig = ???
 
-            // _ <- loggerIO.debug(s"ownPeer: ${headConfig.privateNodeSettings.ownPeer}")
+            nodeConfig: NodeConfig = NodeConfig
+                .apply(
+                  state.headConfig,
+                  mkWallet(state.ownTestPeer),
+                  state.operationalLiquidationConfig,
+                  state.operationalMultisigConfig,
+                )
+                .get
 
             // Actor system
             system <- ActorSystem[IO]("Stage1").allocated.map(_._1)
@@ -359,7 +348,7 @@ case class Suite(
             case CardanoBackendConfig.Yaci(url, expectedProtocolParams) =>
                 for {
                     cardanoBackend <- CardanoBackendBlockfrost(url = url)
-                    _ <- loggerIO.info("Wait a bit Yaci is ready... (")
+                    _ <- loggerIO.info("Wait a bit for Yaci being ready... (")
                     _ <- IO.sleep(1.second)
                     _ <- loggerIO.info(
                       "Fetching last epoch parameters to check they match ones in the head config..."
@@ -410,8 +399,17 @@ case class Suite(
           }.mkString)
         )
 
-        effectsResults <- IO.traverse(expectedEffects) { case (_, hash) =>
-            sut.cardanoBackend.isTxKnown(hash)
+        // In Yaci transactions may appear a bit slowly
+        effectsResults <- {
+            def poll(attempt: Int): IO[List[Either[Throwable, Boolean]]] =
+                IO.traverse(expectedEffects) { case (_, hash) =>
+                    sut.cardanoBackend.isTxKnown(hash)
+                }.flatMap { results =>
+                    val allKnown = results.forall(_.contains(true))
+                    if allKnown || attempt >= 9 then IO.pure(results)
+                    else IO.sleep(1.second) >> poll(attempt + 1)
+                }
+            poll(0)
         }
 
         // Finally we have to terminate the actor system, otherwise in TestControlownTestPeer

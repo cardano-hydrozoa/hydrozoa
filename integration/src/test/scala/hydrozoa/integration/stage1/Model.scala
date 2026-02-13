@@ -2,6 +2,8 @@ package hydrozoa.integration.stage1
 
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
+import hydrozoa.config.node.operation.liquidation.NodeOperationLiquidationConfig
+import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.integration.stage1.Error.UnexpectedState
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.block.{BlockNumber, BlockVersion}
@@ -17,9 +19,13 @@ import test.TestPeer
   */
 case class ModelState(
     // Read-only: minimal configuration needed for model and SUT
+    // TODO: I wanted TestPeer not to leave the config generation part, check whether it's possible
     ownTestPeer: TestPeer,
     headConfig: HeadConfig,
+    operationalMultisigConfig: NodeOperationMultisigConfig,
+    operationalLiquidationConfig: NodeOperationLiquidationConfig,
 
+    // "Mutable" part
     // Block producing cycle
     currentTime: CurrentTime,
     blockCycle: BlockCycle,
@@ -78,7 +84,7 @@ enum BlockCycle:
 // ===================================
 
 import hydrozoa.multisig.ledger.block.BlockBrief.{Final, Major, Minor}
-import hydrozoa.multisig.ledger.block.{BlockBrief, BlockBody, BlockHeader}
+import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader}
 import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import org.scalacheck.commands.ModelCommand

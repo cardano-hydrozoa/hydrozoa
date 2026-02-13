@@ -4,6 +4,7 @@ import hydrozoa.config.head.HeadPeersSpec
 import org.scalacheck.{Gen, Prop, Properties}
 import test.GeneratorTests.property
 
+/** TODO: we can always create it, do we generate anything here? */
 def generateOwnHeadPeerPublic(headPeersSpec: HeadPeersSpec): Gen[OwnHeadPeerPublic] =
     for {
         testPeers <- headPeersSpec.generate

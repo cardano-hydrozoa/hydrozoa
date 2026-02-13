@@ -2,6 +2,7 @@ package hydrozoa.multisig.ledger.dapp.txseq
 
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming.*
+import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.SomeBuildErrorOnly
 import hydrozoa.multisig.ledger.dapp.tx.{Metadata as _, *}
 import monocle.Focus.focus
 import scalus.cardano.ledger.*
@@ -29,8 +30,7 @@ private object InitializationTxSeqOps {
 
     object Build {
         enum Error extends Throwable {
-            case FallbackPRError(e: SomeBuildError)
-            case InitializationTxError(e: (SomeBuildError, String))
+            case InitializationTxError(e: (SomeBuildErrorOnly, String))
             case FallbackTxError(e: SomeBuildError)
         }
     }

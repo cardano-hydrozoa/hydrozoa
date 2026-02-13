@@ -6,6 +6,7 @@ import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.QuantizedTime.toEpochQuantizedInstant
+import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.SomeBuildErrorOnly
 import hydrozoa.multisig.ledger.dapp.tx.{DepositTx, RefundTx, Tx}
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.virtual.GenesisObligation
@@ -13,7 +14,6 @@ import io.bullet.borer.Cbor
 import monocle.syntax.all.*
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.{Coin, TransactionOutput, TransactionWitnessSet, Utxo, Value}
-import scalus.cardano.txbuilder.SomeBuildError
 
 final case class DepositRefundTxSeq(
     depositTx: DepositTx,
@@ -32,8 +32,8 @@ private object DepositRefundTxSeqOps {
         sealed trait Error extends Throwable
 
         object Error {
-            final case class Deposit(e: (SomeBuildError, String)) extends Build.Error
-            final case class Refund(e: (SomeBuildError, String)) extends Build.Error
+            final case class Deposit(e: (SomeBuildErrorOnly, String)) extends Build.Error
+            final case class Refund(e: (SomeBuildErrorOnly, String)) extends Build.Error
             case object TimingIncoherence extends Build.Error
 
             final case class DepositValueMismatch(depositValue: Value, expectedDepositValue: Value)
@@ -137,7 +137,7 @@ private object DepositRefundTxSeqOps {
             case Refund(e: RefundTx.Parse.Error)
             case RefundNotPostDated
             case RefundTxMismatch(parsed: RefundTx, expected: RefundTx)
-            case ExpectedRefundBuildError(e: (SomeBuildError, String))
+            case ExpectedRefundBuildError(e: (SomeBuildErrorOnly, String))
             case VirtualOutputs(e: Throwable)
             case NoVirtualOutputs
             case NonBabbageVirtualOutput(output: TransactionOutput)

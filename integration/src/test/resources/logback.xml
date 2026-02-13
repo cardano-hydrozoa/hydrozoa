@@ -10,7 +10,7 @@
     </root>
     <logger name="org.scalacheck.commands.ModelBasedSuite" level="warn"/>
     <logger name="Stage1.Commands" level="warn"/>
-    <logger name="Stage1.Suite" level="warn"/>
-    <logger name="CardanoLiaison" level="trace"/>
+    <logger name="Stage1.Suite" level="debug"/>
+    <logger name="CardanoLiaison" level="warn"/>
     <logger name="scalus" level="warn"/>
 </configuration>

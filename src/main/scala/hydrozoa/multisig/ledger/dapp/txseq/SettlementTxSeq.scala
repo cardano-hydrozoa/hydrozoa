@@ -6,6 +6,7 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.dapp.tx
 import hydrozoa.multisig.ledger.dapp.tx.*
+import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.SomeBuildErrorOnly
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
@@ -58,8 +59,8 @@ private object SettlementTxSeqOps {
 
     object Build {
         enum Error:
-            case SettlementError(e: (SomeBuildError, String))
-            case RolloutSeqError(e: (SomeBuildError, String))
+            case SettlementError(e: (SomeBuildError | SettlementTx.Error, String))
+            case RolloutSeqError(e: (SomeBuildErrorOnly, String))
             case FallbackError(e: SomeBuildError)
     }
 

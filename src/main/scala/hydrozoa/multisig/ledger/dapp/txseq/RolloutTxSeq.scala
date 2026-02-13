@@ -7,7 +7,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.multisig.ledger.dapp.tx.RolloutTx
 import hydrozoa.multisig.ledger.dapp.tx.RolloutTx.{Build as SingleBuilder, PartialResult as SinglePartialResult}
-import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.BuildErrorOr
+import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.BuilderResultSimple
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import scala.annotation.tailrec
@@ -54,7 +54,7 @@ private object RolloutTxSeqOps {
           * working towards the first.
           * @return
           */
-        lazy val partialResult: BuildErrorOr[PartialResult] =
+        lazy val partialResult: BuilderResultSimple[PartialResult] =
             for {
                 lastRolloutTx <- singleBuilderLast(payouts).partialResult
                 partialResult <- lastRolloutTx match {
@@ -76,7 +76,7 @@ private object RolloutTxSeqOps {
         private def loop(
             current: SinglePartialResult[RolloutTx.NotLast],
             acc: State
-        ): BuildErrorOr[PartialResult] =
+        ): BuilderResultSimple[PartialResult] =
             current match {
                 case intermediate: SinglePartialResult.NotFirst[RolloutTx.NotLast] =>
                     val newAcc = acc.copy(notLast = intermediate +: acc.notLast)
@@ -106,7 +106,7 @@ private object RolloutTxSeqOps {
 
         def skipFirst: Option[PartialResult.SkipFirst]
 
-        def finishPostProcess(rolloutSpent: RolloutUtxo): BuildErrorOr[RolloutTxSeq]
+        def finishPostProcess(rolloutSpent: RolloutUtxo): BuilderResultSimple[RolloutTxSeq]
 
     object PartialResult {
 
@@ -126,7 +126,7 @@ private object RolloutTxSeqOps {
             /** Finish the singleton rollout transaction by providing the first rollout utxo. */
             override def finishPostProcess(
                 rolloutSpent: RolloutUtxo
-            ): BuildErrorOr[RolloutTxSeq] =
+            ): BuilderResultSimple[RolloutTxSeq] =
                 for {
                     onlyCompleted <- only.complete(rolloutSpent)
                 } yield RolloutTxSeq(notLast = Vector.empty, last = onlyCompleted)
@@ -155,7 +155,7 @@ private object RolloutTxSeqOps {
               */
             override def finishPostProcess(
                 rolloutSpent: RolloutUtxo
-            ): BuildErrorOr[RolloutTxSeq] =
+            ): BuilderResultSimple[RolloutTxSeq] =
                 import Many.*
                 for {
                     firstPostProcessed <- first.complete(rolloutSpent)
@@ -185,21 +185,21 @@ private object RolloutTxSeqOps {
 
             /** I.E.: RolloutUtxo => Either[SomeBuildError, RolloutTx.NotLast] */
             type IntermediateRolloutKleisli =
-                Kleisli[BuildErrorOr, RolloutUtxo, RolloutTx.NotLast]
+                Kleisli[BuilderResultSimple, RolloutUtxo, RolloutTx.NotLast]
 
             def finishPostProcessIntermediate(
                 current: SinglePartialResult.NotFirst[RolloutTx.NotLast]
             )(
                 rolloutSpent: RolloutUtxo
-            ): BuildErrorOr[RolloutTx.NotLast] =
+            ): BuilderResultSimple[RolloutTx.NotLast] =
                 for {
                     currentPostProcessed <- current.complete(rolloutSpent)
                 } yield currentPostProcessed
 
             def kleisliRunner(
-                eCurrent: BuildErrorOr[RolloutTx.NotLast],
+                eCurrent: BuilderResultSimple[RolloutTx.NotLast],
                 k: IntermediateRolloutKleisli
-            ): (BuildErrorOr[RolloutTx.NotLast], BuildErrorOr[RolloutTx.NotLast]) = {
+            ): (BuilderResultSimple[RolloutTx.NotLast], BuilderResultSimple[RolloutTx.NotLast]) = {
                 val res = for {
                     current <- eCurrent
                     next <- k.run(current.rolloutProduced)
