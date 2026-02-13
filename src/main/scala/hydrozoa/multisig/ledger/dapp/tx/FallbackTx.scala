@@ -131,7 +131,7 @@ private object FallbackTxOps {
                 object Treasury {
                     def apply() = Send(
                       Babbage(
-                        address = config.ruleBasedDisputeResolutionAddress,
+                        address = config.ruleBasedTreasuryAddress,
                         value = treasuryUtxoSpent.value,
                         datumOption = Some(Inline(datum.toData)),
                         scriptRef = None
