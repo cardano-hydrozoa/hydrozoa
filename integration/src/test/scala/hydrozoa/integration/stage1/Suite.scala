@@ -1,7 +1,6 @@
 package hydrozoa.integration.stage1
 
 import cats.effect.IO
-import cats.syntax.applicative.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorSystem
 import com.suprnation.typelevel.actors.syntax.*
@@ -60,28 +59,38 @@ object Stage1Properties extends YetAnotherProperties("Integration Stage 1"):
 
     private val preprod = CardanoNetwork.Preprod
 
-    /** Block propagation.
+    /** Block promotion
       *
       * This property checks that block promotion Minor -> Major * works correctly. It uses
-      * [[ArbitraryEventsOnly]] which gives L2 event that are invalid. They are not strictly needed
-      * for testing block propagation, which must work on empty blocks, but we additionally decided
-      * to check block briefs.
+      * [[NoWithdrawalsCommandGen]] which produces L2 transactions with no withdrawals. L2 events
+      * not strictly needed for testing block promotion, which must work on empty blocks, but we
+      * additionally decided to check block brief at the same time.
       */
-
-    val _ = property("Block propagation works well on L1 mock") = Suite(
+    lazy val _ = property("Block promotion L1 mock") = Suite(
       suiteCardano = Mock(preprod),
       txTimingGen = generateDefaultTxTiming,
       mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
-      commandGen = ArbitraryEventsOnly
+      commandGen = NoWithdrawalsCommandGen
     ).property()
 
-    val _ = property("Block propagation works well on Yaci devkit") = Suite(
+    lazy val _ = property("Block promotion Yaci") = Suite(
       suiteCardano = Yaci(
         protocolParams = DevKit.yaciParams
       ),
       txTimingGen = generateYaciTxTiming,
       mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
-      commandGen = ArbitraryEventsOnly
+      commandGen = NoWithdrawalsCommandGen
+    ).property()
+
+    /** Withdrawals onslaught
+      *
+      * TODO:
+      */
+    val _ = property("Dusty head finalization") = Suite(
+      suiteCardano = Mock(preprod),
+      txTimingGen = generateDefaultTxTiming,
+      mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
+      commandGen = MakeDustCommandGen(minL2Utxos = 500)
     ).property()
 
     // val _ = property("Works well on Yaci DevKit (slower, reproducible)") = ???
@@ -394,7 +403,7 @@ case class Suite(
         )
 
         _ <- IO.whenA(expectedEffects.nonEmpty)(
-          loggerIO.info("Expected effects:" + expectedEffects.map { case (label, hash) =>
+          loggerIO.debug("Expected effects:" + expectedEffects.map { case (label, hash) =>
               s"\n\t- $label: $hash"
           }.mkString)
         )

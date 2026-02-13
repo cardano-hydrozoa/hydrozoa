@@ -123,7 +123,7 @@ end AgentActor
 // SutCommand instances
 // ===================================
 
-val logger = Logging.loggerIO("Stage1.Commands")
+val logger = Logging.loggerIO("Stage1.Sut")
 
 implicit object DelayCommandSut extends SutCommand[DelayCommand, Unit, Stage1Sut] {
     override def run(cmd: DelayCommand, sut: Stage1Sut): IO[Unit] = for {

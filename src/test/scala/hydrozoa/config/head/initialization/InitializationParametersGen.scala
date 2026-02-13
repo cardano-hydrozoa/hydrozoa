@@ -20,6 +20,7 @@ import scala.collection.immutable.SortedMap
 import scala.concurrent.duration.DurationInt
 import scalus.cardano.address.Address
 import scalus.cardano.ledger.*
+import scalus.cardano.ledger.TransactionOutput.Babbage
 import spire.math.{Rational, SafeLong}
 
 type HeadStartTimeGen = SlotConfig => Gen[QuantizedInstant]
@@ -197,8 +198,8 @@ def generatePeerContribution(
     peerEquity: Coin,
     cardanoNetwork: CardanoNetwork
 ): Gen[Contribution] = {
-    val generateCappedValueC = generateCappedValue(cardanoNetwork)
     val peerAddresses = peerUtxos.values.map(_.address).toSet
+
     for {
         // 1. Funding utxos, at least one since individual contingency is mandatory
         fundingUtxos <- Gen.atLeastOne(peerUtxos.asUtxoList)
@@ -210,16 +211,16 @@ def generatePeerContribution(
         maxChange = netFundingValue - Value.lovelace(peerEquity.value)
 
         // 3. Generate change
-        change <- generateCappedValueC(maxChange)
+        change <- generateCappedValue(cardanoNetwork)(capValue = maxChange)
         changeAddress <- Gen.oneOf(peerAddresses)
         rest = maxChange - change
 
         // Generate L2 utxos from the rest (if present)
-        l2TransactionOutputs <- Gen.tailRecM(List.empty[TransactionOutput] -> rest)((acc, rest) =>
+        l2TransactionOutputs <- Gen.tailRecM(List.empty[Babbage] -> rest)((acc, rest) =>
             for {
-                next <- generateCappedValueC(rest)
+                next <- generateCappedValue(cardanoNetwork)(capValue = rest)
                 address <- Gen.oneOf(peerAddresses)
-                acc_ = acc :+ TransactionOutput(address, next)
+                acc_ = acc :+ Babbage(address, next)
             } yield
                 if next == rest
                 then Right(acc_)
@@ -250,14 +251,24 @@ def generatePeerContribution(
   *   - For each selected (policyID, tokenName), choose an amount between 1 and the total amount in
   *     the big MultiAsset.
   *
-  * @param max
-  *   maximum value available
   * @param cardanoNetwork
-  *   used to verify minAda requirement
+  *   Used to enforce minAda requirement
+  * @param capValue
+  *   Value available
+  * @param maxLovelace
+  *   Prevents choosing more lovelaces that specified
+  * @param maxToken
+  *   Prevents choosing more tokens (of every kind) that specified
   * @return
-  *   value in gen or error if minAda condition cannot be satisfied
+  *   Value in gen or error if minAda condition cannot be satisfied
   */
-def generateCappedValue(cardanoNetwork: CardanoNetwork)(maxValue: Value): Gen[Value] =
+def generateCappedValue(
+    cardanoNetwork: CardanoNetwork
+)(
+    capValue: Value,
+    maxLovelace: Option[Long] = None,
+    maxToken: Option[Long] = None
+): Gen[Value] =
 
     def ensureMinAdaLenient(value: Value): Value = {
         val anyBaseShelleyAddressIsGood = Address.fromBech32(
@@ -274,13 +285,13 @@ def generateCappedValue(cardanoNetwork: CardanoNetwork)(maxValue: Value): Gen[Va
 
     // We cannot split up a value which is too small itself
     require(
-      ensureMinAdaLenient(maxValue) == maxValue,
-      "maxValue itself should satisfy minAda condition"
+      ensureMinAdaLenient(capValue) == capValue,
+      s"maxValue itself should satisfy minAda condition: minimal: ${ensureMinAdaLenient(capValue)}, actual value: ${capValue}"
     )
 
     for {
-        lovelace <- Gen.choose(0L, maxValue.coin.value).map(Coin.apply)
-        policySubset <- Gen.someOf(maxValue.assets.assets.toSeq)
+        lovelace <- Gen.choose(0L, maxLovelace.getOrElse(capValue.coin.value)).map(Coin.apply)
+        policySubset <- Gen.someOf(capValue.assets.assets.toSeq)
         assetSubset <- Gen.sequence[Seq[
           (PolicyId, SortedMap[AssetName, Long])
         ], (PolicyId, SortedMap[AssetName, Long])](
@@ -290,7 +301,7 @@ def generateCappedValue(cardanoNetwork: CardanoNetwork)(maxValue: Value): Gen[Va
                   .flatMap(tokens =>
                       Gen.sequence[Seq[(AssetName, Long)], (AssetName, Long)](
                         tokens.map { case (assetName, maxAmount) =>
-                            Gen.choose(1L, maxAmount).map(assetName -> _)
+                            Gen.choose(1L, maxToken.getOrElse(maxAmount)).map(assetName -> _)
                         }
                       )
                   )
@@ -299,8 +310,8 @@ def generateCappedValue(cardanoNetwork: CardanoNetwork)(maxValue: Value): Gen[Va
         )
         assets = MultiAsset.fromAssets(SortedMap.from(assetSubset))
         value = ensureMinAdaLenient(Value(lovelace, assets))
-        rest = maxValue - value
+        rest = capValue - value
     } yield
         if ensureMinAdaLenient(rest) == rest
         then value
-        else maxValue
+        else capValue

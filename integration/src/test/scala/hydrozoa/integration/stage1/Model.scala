@@ -6,6 +6,7 @@ import hydrozoa.config.node.operation.liquidation.NodeOperationLiquidationConfig
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.integration.stage1.Error.UnexpectedState
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.ledger.VirtualLedgerM
 import hydrozoa.multisig.ledger.block.{BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.event.LedgerEvent
@@ -14,6 +15,8 @@ import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.kzgCommitment
 import hydrozoa.multisig.ledger.virtual.{HydrozoaTransactionMutator, L2EventTransaction}
 import scalus.cardano.ledger.{Transaction, Utxos}
 import test.TestPeer
+
+val logger = Logging.logger("Suite1.Model")
 
 // ===================================
 // Model state
@@ -156,10 +159,7 @@ implicit object LedgerEventCommandModel extends ModelCommand[LedgerEventCommand,
                 )
                 ret match {
                     case Left(err) =>
-                        // TODO
-                        println(
-                          s"-------------------------------- invalid tx event ${eventId}: ${err}"
-                        )
+                        logger.debug(s"invalid L2tx ${eventId}: ${err}")
                         () -> state.copy(
                           currentBlockEvents =
                               state.currentBlockEvents :+ (cmd.event -> ValidityFlag.Invalid),
