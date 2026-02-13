@@ -19,7 +19,6 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{Mint as _, *}
 import scalus.cardano.txbuilder.*
-import scalus.cardano.txbuilder.ScriptSource.NativeScriptAttached
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
 import scalus.ledger.api.v1.PubKeyHash
@@ -92,14 +91,16 @@ private object FallbackTxOps {
                 object Treasury {
                     def apply() = Spend(
                       treasuryUtxoSpent.asUtxo,
-                      NativeScriptWitness(NativeScriptAttached, Set.empty)
+                      // TODO: switch back to witnessAttached after resolving https://github.com/scalus3/scalus/issues/207
+                      hns.witnessValue
                     )
 
                     val datum: MultisigTreasuryUtxo.Datum = treasuryUtxoSpent.datum
                 }
 
                 object MultisigRegime {
-                    def apply() = Spend(multisigRegimeUtxo.asUtxo, hns.witnessAttached)
+                    // TODO: switch back to witnessAttached after resolving https://github.com/scalus3/scalus/issues/207
+                    def apply() = Spend(multisigRegimeUtxo.asUtxo, hns.witnessValue)
                 }
             }
 
@@ -111,7 +112,7 @@ private object FallbackTxOps {
                       hns.policyId,
                       assetName = config.headTokenNames.multisigRegimeTokenName,
                       amount = -1,
-                      witness = NativeScriptWitness(NativeScriptAttached, Set.empty)
+                      witness = hns.witnessAttached
                     )
                 }
 
@@ -120,7 +121,7 @@ private object FallbackTxOps {
                       hns.policyId,
                       assetName = config.headTokenNames.voteTokenName,
                       amount = hns.numSigners + 1L,
-                      witness = NativeScriptWitness(NativeScriptAttached, Set.empty)
+                      witness = hns.witnessAttached
                     )
                 }
             }

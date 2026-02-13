@@ -8,7 +8,7 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toQuantizedI
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.Finalization
-import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explainConst}
+import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuilderResult, explainConst}
 import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo, RolloutUtxo}
 import monocle.{Focus, Lens}
@@ -33,6 +33,7 @@ sealed trait FinalizationTx
 object FinalizationTx {
     export FinalizationTxOps.Build
     export FinalizationTxOps.Result
+    export FinalizationTxOps.Error
 
     sealed trait WithPayouts extends FinalizationTx
 
@@ -98,6 +99,12 @@ private object FinalizationTxOps {
         ) extends WithPayouts
     }
 
+    enum Error:
+        case TreasuryIncorrectAddress
+        case ResidualTreasuryContainsTokens
+
+    type TxBuilderResult[Result] = BuilderResult[Result, Error]
+
     type ResultFor[T <: FinalizationTx] <: Result[?] = T match {
         case FinalizationTx.NoPayouts             => Result.NoPayouts
         case FinalizationTx.WithPayouts           => Result.WithPayouts
@@ -116,7 +123,9 @@ private object FinalizationTxOps {
         ) extends Build[FinalizationTx.NoPayouts](
               mbRolloutTxSeqPartial = None
             ) {
-            override def complete(state: State): BuildErrorOr[ResultFor[FinalizationTx.NoPayouts]] =
+            override def complete(
+                state: State
+            ): TxBuilderResult[ResultFor[FinalizationTx.NoPayouts]] =
                 Right(CompleteNoPayouts(state))
         }
 
@@ -130,7 +139,7 @@ private object FinalizationTxOps {
             ) {
             override def complete(
                 state: State
-            ): BuildErrorOr[ResultFor[FinalizationTx.WithPayouts]] =
+            ): TxBuilderResult[ResultFor[FinalizationTx.WithPayouts]] =
                 CompleteWithPayouts(state, rolloutTxSeqPartial)
         }
     }
@@ -141,12 +150,13 @@ private object FinalizationTxOps {
           MultisigTreasuryUtxo.ToSpend,
           HasValidityEnd {
         import Build.*
+        import Error.*
 
         def config: Config
 
-        def complete(state: State): BuildErrorOr[ResultFor[T]]
+        def complete(state: State): TxBuilderResult[ResultFor[T]]
 
-        final def result: BuildErrorOr[ResultFor[T]] = for {
+        final def result: TxBuilderResult[ResultFor[T]] = for {
             pessimistic <- BasePessimistic()
 
             finished <- TxBuilder
@@ -160,12 +170,12 @@ private object FinalizationTxOps {
             extends Tx.Builder.HasCtx
 
         private object BasePessimistic {
-            def apply(): BuildErrorOr[State] = for {
+            def apply(): TxBuilderResult[State] = for {
                 _ <- Either
-                    .cond(checkTreasuryToSpendAddress, (), ???)
+                    .cond(checkTreasuryToSpendAddress, (), TreasuryIncorrectAddress)
                     .explainConst("treasury to spend has incorrect head address")
                 _ <- Either
-                    .cond(checkEquityAdaOnly, (), ???)
+                    .cond(checkEquityContainsAdaOnly, (), ResidualTreasuryContainsTokens)
                     .explainConst("L2 liabilities don't cover all L1 non-ADA assets")
                 ctx <- TransactionBuilder
                     .build(config.network, definiteSteps)
@@ -185,7 +195,7 @@ private object FinalizationTxOps {
             private def checkTreasuryToSpendAddress: Boolean =
                 treasuryToSpend.address == config.headMultisigAddress
 
-            private def checkEquityAdaOnly: Boolean = remainingEquityValue.assets.isEmpty
+            private def checkEquityContainsAdaOnly: Boolean = remainingEquityValue.assets.isEmpty
 
             /////////////////////////////////////////////////////////
             // Base steps
@@ -203,6 +213,7 @@ private object FinalizationTxOps {
               config.headMultisigScript.script.scriptHash,
               config.headTokenNames.treasuryTokenName,
               -1,
+              // TODO: switch back to witnessAttached after resolving https://github.com/scalus3/scalus/issues/207
               config.headMultisigScript.witnessValue
             )
 
@@ -218,7 +229,8 @@ private object FinalizationTxOps {
             /////////////////////////////////////////////////////////
             // Spend steps
             private val spendTreasury =
-                Spend(treasuryToSpend.asUtxo, config.headMultisigScript.witnessAttached)
+                // TODO: switch back to witnessAttached after resolving https://github.com/scalus3/scalus/issues/207
+                Spend(treasuryToSpend.asUtxo, config.headMultisigScript.witnessValue)
 
             private val spendMultisigRegime =
                 Spend(config.multisigRegimeUtxo.asUtxo, config.headMultisigScript.witnessAttached)
@@ -261,8 +273,16 @@ private object FinalizationTxOps {
               )
             )
 
-            private val remainingEquityValue: Value =
-                mbRolloutValue.fold(treasuryToSpend.value)(treasuryToSpend.value - _)
+            private val treasuryTokenValue = Value.asset(
+              config.headMultisigScript.script.scriptHash,
+              config.headTokenNames.treasuryTokenName,
+              1L
+            )
+
+            private val remainingEquityValue: Value = {
+                val treasury = treasuryToSpend.value - treasuryTokenValue
+                mbRolloutValue.fold(treasury)(treasury - _)
+            }
 
             private val remainingEquityLovelace: Coin = remainingEquityValue.coin
 
@@ -320,7 +340,7 @@ private object FinalizationTxOps {
             def apply(
                 state: State,
                 rolloutTxSeqPartial: RolloutTxSeq.PartialResult,
-            ): BuildErrorOr[Result.WithPayouts] = for {
+            ): TxBuilderResult[Result.WithPayouts] = for {
                 mergeTrial <- TryMerge(state, rolloutTxSeqPartial)
             } yield {
                 import TryMerge.Result.*
@@ -416,7 +436,7 @@ private object FinalizationTxOps {
                 def apply(
                     state: State,
                     rolloutTxSeqPartial: RolloutTxSeq.PartialResult
-                ): BuildErrorOr[(State, TryMerge.Result)] =
+                ): TxBuilderResult[(State, TryMerge.Result)] =
                     import TryMerge.Result.*
                     import state.*
 
@@ -429,7 +449,7 @@ private object FinalizationTxOps {
                     val optimisticSteps: List[Send] =
                         rolloutTx.body.value.outputs.map(sendOutput).toList
 
-                    val optimisticTrial: BuildErrorOr[TransactionBuilder.Context] = for {
+                    val optimisticTrial: TxBuilderResult[TransactionBuilder.Context] = for {
                         newCtx <- TransactionBuilder
                             .modify(ctx, optimisticSteps)
                             .explainConst("adding optimistic steps failed")
@@ -438,7 +458,7 @@ private object FinalizationTxOps {
                             .explainConst("finishing optimistic trial failed")
                     } yield finished
 
-                    lazy val pessimisticBackup: BuildErrorOr[TransactionBuilder.Context] =
+                    lazy val pessimisticBackup: TxBuilderResult[TransactionBuilder.Context] =
                         for {
                             newCtx <- BasePessimistic
                                 .mbApplySendRollout(ctx)

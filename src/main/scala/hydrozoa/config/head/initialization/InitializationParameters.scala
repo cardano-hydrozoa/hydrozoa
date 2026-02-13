@@ -16,6 +16,8 @@ export InitializationParameters.isBalancedInitializationFunding
 
 /** Configuration settings for the head's initialization.
   *
+  * @param headStartTime
+  *   TODO:
   * @param initialL2Utxos
   *   the utxos with which the head's L2 ledger should be populated upon initialization.
   * @param initialEquityContributions
@@ -106,6 +108,7 @@ object InitializationParameters {
         config: InitializationParameters.Section & FallbackContingency.Section & HeadPeers.Section
     )
         def isBalancedInitializationFunding: Boolean = {
+            val foo = config
             config.initialFundingValue ==
                 config.initialL2Value +
                 Value(config.initialEquityContributed + config.totalFallbackContingency)

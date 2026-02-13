@@ -6,7 +6,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.txbuilder.DiffHandler.{WrappedCoin, prebalancedLovelaceDiffHandler}
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
-import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explain, explainAppendConst, explainConst}
+import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuilderResultSimple, explain, explainAppendConst, explainConst}
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import monocle.{Focus, Lens}
@@ -131,13 +131,13 @@ private object RolloutTxOps {
           *   a [[PartialResult]] that can become a [[RolloutTx]] when its missing [[RolloutUtxo]]
           *   is provided.
           */
-        final def partialResult: BuildErrorOr[PartialResult[T]] = for {
+        final def partialResult: BuilderResultSimple[PartialResult[T]] = for {
             pessimistic <- BasePessimistic()
             addedPayouts <- AddPayouts(pessimistic)
         } yield PartialResult(Build.this, addedPayouts)
 
         private[tx] object BasePessimistic {
-            def apply(): BuildErrorOr[TransactionBuilder.Context] = for {
+            def apply(): BuilderResultSimple[TransactionBuilder.Context] = for {
                 ctx <- TransactionBuilder
                     .build(config.network, definiteSteps)
                     .explainConst("adding base pessimistic failed")
@@ -159,7 +159,8 @@ private object RolloutTxOps {
             /////////////////////////////////////////////////////////
             // Spend rollout
             def spendRollout(resolvedUtxo: Utxo): Spend =
-                Spend(resolvedUtxo, config.headMultisigScript.witnessAttached)
+                // TODO: switch back to witnessAttached after resolving https://github.com/scalus3/scalus/issues/207
+                Spend(resolvedUtxo, config.headMultisigScript.witnessValue)
 
             /////////////////////////////////////////////////////////
             // Send rollout (maybe)
@@ -181,7 +182,7 @@ private object RolloutTxOps {
         }
 
         private object AddPayouts {
-            def apply(ctx: TransactionBuilder.Context): BuildErrorOr[State[T]] = {
+            def apply(ctx: TransactionBuilder.Context): BuilderResultSimple[State[T]] = {
                 for {
                     withPayout <- tryAddPayout(
                       ctx,
@@ -201,7 +202,7 @@ private object RolloutTxOps {
             @tailrec
             private def addPayoutsLoop(
                 state: State[T]
-            ): BuildErrorOr[State[T]] = {
+            ): BuilderResultSimple[State[T]] = {
                 state.payoutObligationsRemaining match {
                     case obligation +: otherObligations =>
                         tryAddPayout(state.ctx, obligation) match {
@@ -232,7 +233,7 @@ private object RolloutTxOps {
             private def tryAddPayout(
                 ctx: TransactionBuilder.Context,
                 payoutObligation: Payout.Obligation
-            ): BuildErrorOr[(TransactionBuilder.Context, Value)] =
+            ): BuilderResultSimple[(TransactionBuilder.Context, Value)] =
                 val payoutStep = Send(payoutObligation.utxo)
                 for {
                     newCtx <- TransactionBuilder
@@ -319,7 +320,7 @@ private object RolloutTxOps {
             def apply(
                 builder: Build[T],
                 ctx: TransactionBuilder.Context
-            ): BuildErrorOr[Value] = {
+            ): BuilderResultSimple[Value] = {
                 // The deficit in the inputs to the transaction prior to adding the placeholder
                 val valueNeeded =
                     TrialFinish.inputValueNeeded(ctx, config.cardanoProtocolParams)
@@ -342,7 +343,7 @@ private object RolloutTxOps {
                 builder: Build[T],
                 ctx: TransactionBuilder.Context,
                 trialValue: Value
-            ): BuildErrorOr[Value] = {
+            ): BuilderResultSimple[Value] = {
                 val placeholder = List(spendPlaceholderRollout(trialValue))
                 val res = for {
                     // TODO: move out of loop
@@ -423,7 +424,7 @@ private object RolloutTxOps {
           *   the [[RolloutUtxo]] input to be added.
           * @return
           */
-        final def complete(rolloutSpent: RolloutUtxo): BuildErrorOr[T] = for {
+        final def complete(rolloutSpent: RolloutUtxo): BuilderResultSimple[T] = for {
             addedRolloutSpend <- addRolloutSpent(rolloutSpent)
                 .explainAppendConst("could not complete partial result")
         } yield builder.postProcess(addedRolloutSpend)
@@ -438,7 +439,7 @@ private object RolloutTxOps {
           */
         private final def addRolloutSpent(
             rolloutSpent: RolloutUtxo
-        ): BuildErrorOr[TransactionBuilder.Context] = {
+        ): BuilderResultSimple[TransactionBuilder.Context] = {
             val steps = List(builder.BasePessimistic.spendRollout(rolloutSpent.utxo))
             for {
                 addedRolloutInput <- TransactionBuilder

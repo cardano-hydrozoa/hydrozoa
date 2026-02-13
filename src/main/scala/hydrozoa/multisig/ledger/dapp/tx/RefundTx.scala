@@ -6,7 +6,7 @@ import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant, toQuantizedInstant}
 import hydrozoa.lib.cardano.scalus.txbuilder.DiffHandler.{WrappedCoin, prebalancedLovelaceDiffHandler}
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
-import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explainConst}
+import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuilderResultSimple, explainConst}
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import monocle.{Focus, Lens}
 import scala.annotation.tailrec
@@ -112,7 +112,7 @@ private object RefundTxOps {
             valueNeededWithFee: Value
         ): PartialResult[T]
 
-        final def partialResult: BuildErrorOr[PartialResult[T]] = {
+        final def partialResult: BuilderResultSimple[PartialResult[T]] = {
             val stepReferenceHNS = ReferenceOutput(config.multisigRegimeUtxo.asUtxo)
             // FIXME: We are not allowed to assumed the existence of the multisigRegimeUtxo here.
             //   We must attach the multisig script inline to the transaction.
@@ -147,7 +147,7 @@ private object RefundTxOps {
         private def trialFinishLoop(
             ctx: TransactionBuilder.Context,
             trialValue: Value
-        ): BuildErrorOr[Value] = {
+        ): BuilderResultSimple[Value] = {
             val spendDeposit = Utxo(
               BuilderOps.Placeholder.utxoId,
               TransactionOutput.Babbage(
@@ -233,7 +233,7 @@ private object RefundTxOps {
         final def complete(
             depositSpent: DepositUtxo,
             config: Config
-        ): BuildErrorOr[T] = for {
+        ): BuilderResultSimple[T] = for {
             addedDepositSpent <- TransactionBuilder
                 .modify(
                   ctx,

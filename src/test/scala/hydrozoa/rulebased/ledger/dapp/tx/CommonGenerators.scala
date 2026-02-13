@@ -3,7 +3,7 @@ package hydrozoa.rulebased.ledger.dapp.tx
 import cats.data.NonEmptyList
 import hydrozoa.*
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.config.head.peers.HeadPeers
+import hydrozoa.config.head.peers.{HeadPeers, generateTestPeers}
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.virtual.commitment.TrustedSetup
@@ -44,8 +44,8 @@ object CommonGenerators {
             // This is 4 bytes shorter to accommodate CIP-67 prefixes
             // NB: we use the same token name _suffix_ for all head tokens so far, which is not the case in reality
             headTokenSuffix <- genByteStringOfN(28)
-            peers <- genTestPeers()
-            headPeers = HeadPeers(peers.map(_.wallet.exportVerificationKey))
+            headPeers <- generateTestPeers()
+            // headPeers = HeadPeers(peers.map(_.wallet.exportVerificationKey))
             // L2 consensus parameters hash
             params <- genByteStringOfN(32)
             // Major version upon switching to the rule-based regime
@@ -55,7 +55,7 @@ object CommonGenerators {
         } yield (
           headPeers.headMultisigScript,
           headTokenSuffix,
-          peers,
+          headPeers._testPeers.map(_._2),
           headPeers.headPeerVKeys,
           params,
           versionMajor,

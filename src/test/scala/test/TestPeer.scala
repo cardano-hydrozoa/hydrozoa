@@ -6,6 +6,7 @@ import com.bloxbean.cardano.client.common.model.Network as BBNetwork
 import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath
 import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath.createExternalAddressDerivationPathForAccount
 import hydrozoa.*
+import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.cardano.wallet.WalletModule
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, HeadPeerWallet}
@@ -19,6 +20,9 @@ import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, S
 import scalus.cardano.ledger.ArbitraryInstances.*
 import scalus.cardano.ledger.{Hash, Transaction as STransaction}
 
+/** Test peer names are just better indexes - you can have only Alice in one-peer head, Alice and
+  * Bob in two-peer head and so on.
+  */
 enum TestPeer derives CanEqual:
     case Alice
     case Bob
@@ -131,21 +135,16 @@ object TestPeer:
             if peerNumRange.contains(i) then TestPeer.fromOrdinal(i).toString else "Unknown"
         }
 
+    extension (testPeers: NonEmptyList[TestPeer])
+        def asHeadPeers: HeadPeers =
+            HeadPeers(testPeers.map(_.wallet.exportVerificationKey))
+
 // ===================================
 // Generators
 // ===================================
 
-val genTestPeer: Gen[TestPeer] = {
+val generateTestPeer: Gen[TestPeer] = {
     for {
         i <- Gen.choose(TestPeer.peerNumRange.start, TestPeer.peerNumRange.last)
     } yield TestPeer.fromOrdinal(i)
-}
-
-def genTestPeers(minPeers: Int = 2, maxPeers: Int = 5): Gen[NonEmptyList[TestPeer]] = {
-    require(0 < minPeers && minPeers < TestPeer.nNamedPeers)
-    require(minPeers <= maxPeers && maxPeers < TestPeer.nNamedPeers)
-    for {
-        numPeers <- Gen.choose(minPeers, maxPeers)
-        peers = TestPeer.peerNumRange.take(numPeers).map(TestPeer.fromOrdinal)
-    } yield NonEmptyList.fromListUnsafe(peers.toList)
 }

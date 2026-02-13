@@ -62,6 +62,7 @@ object HeadConfig {
     }
 
     object Preinit {
+        // TODO: rename to avoid HeadConfig.Preinit.HeadConfig?
         final case class HeadConfig(
             override val cardanoNetwork: CardanoNetwork,
             override val headParams: HeadParameters,

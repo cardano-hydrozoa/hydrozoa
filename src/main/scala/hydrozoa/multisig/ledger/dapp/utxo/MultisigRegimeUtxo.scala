@@ -18,7 +18,9 @@ final case class MultisigRegimeUtxo(
       address = address,
       value = value,
       datumOption = None,
-      scriptRef = Some(ScriptRef.apply(script.script))
+      // TODO: switch back to witnessAttached after resolving https://github.com/scalus3/scalus/issues/207
+      // scriptRef = Some(ScriptRef.apply(script.script))
+      scriptRef = None
     )
 
     val asUtxo: Utxo =

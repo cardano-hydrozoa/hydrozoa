@@ -34,8 +34,11 @@ object CardanoNetwork {
         def cardanoNetwork: CardanoNetwork
 
         def cardanoInfo: CardanoInfo
+
         def network: Network
+
         def slotConfig: SlotConfig
+
         def cardanoProtocolParams: ProtocolParams
 
         final def babbageUtxoMinLovelace(serializedSize: PositiveInt): Coin = Coin(

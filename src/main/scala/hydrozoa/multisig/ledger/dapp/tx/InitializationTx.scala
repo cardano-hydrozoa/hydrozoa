@@ -12,7 +12,7 @@ import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.token.CIP67.{HasTokenNames, HeadTokenNames}
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.Initialization
-import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explainConst}
+import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuilderResultSimple, explainConst}
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import monocle.{Focus, Lens}
 import scala.util.Try
@@ -61,10 +61,23 @@ private object InitializationTxOps {
     final case class Build(config: Config) {
         import Build.*
 
-        lazy val result: BuildErrorOr[InitializationTx] = for {
+        lazy val result: BuilderResultSimple[InitializationTx] = for {
             _ <- Either
-                .cond(config.isBalancedInitializationFunding, (), ???)
-                .explainConst("Initialization tx funding is unbalanced")
+                .cond(
+                  config.isBalancedInitializationFunding,
+                  (),
+                  SomeBuildError.BalancingError(
+                    TxBalancingError.Failed(new IllegalArgumentException),
+                    TransactionBuilder.Context.empty(networkId = config.network)
+                  )
+                )
+                .explainConst(
+                  "Initialization tx funding is unbalanced. We must have" +
+                      "\n\tconfig.initialFundingValue == config.initialL2Value " +
+                      "+ Value(config.initialEquityContributed " +
+                      "+ config.totalFallbackContingency)" +
+                      ""
+                )
 
             unbalanced <- time("TransactionBuilder.build") {
                 TransactionBuilder
@@ -171,7 +184,9 @@ private object InitializationTxOps {
                       config.headMultisigAddress,
                       multisigRegimeUtxoValue,
                       None,
-                      Some(ScriptRef(config.headMultisigScript.script))
+                      // TODO: switch back to witnessAttached after resolving https://github.com/scalus3/scalus/issues/207
+                      // Some(ScriptRef(config.headMultisigScript.script))
+                      None
                     ).ensureMinAda(config)
                 }
 
@@ -424,19 +439,20 @@ private object InitializationTxOps {
                       InvalidTransactionError("multisig witness utxo has a non-empty datum")
                     )
 
-            // script
-            _ <-
-                if actualMultisigRegimeOutput.scriptRef.contains(
-                      ScriptRef.apply(expectedHNS.script)
-                    )
-                then Right(())
-                else
-                    Left(
-                      InvalidTransactionError(
-                        "Multisig regime witness UTxO does not contain the expected head" +
-                            "native script"
-                      )
-                    )
+            // TODO: switch back to witnessAttached after resolving https://github.com/scalus3/scalus/issues/207
+            //// script
+            // _ <-
+            //    if actualMultisigRegimeOutput.scriptRef.contains(
+            //          ScriptRef.apply(expectedHNS.script)
+            //        )
+            //    then Right(())
+            //    else
+            //        Left(
+            //          InvalidTransactionError(
+            //            "Multisig regime witness UTxO does not contain the expected head" +
+            //                "native script"
+            //          )
+            //        )
 
             // ttl should be present
             validityEndSlot <- mbTtl.toRight(TtlIsMissing)
