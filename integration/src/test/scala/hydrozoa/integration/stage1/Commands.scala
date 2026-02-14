@@ -5,7 +5,7 @@ import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.LedgerEvent
 import org.scalacheck.Prop
 import org.scalacheck.Prop.propBoolean
-import org.scalacheck.commands.CommandProp
+import org.scalacheck.commands.{CommandLabel, CommandProp}
 
 // ===================================
 // Command case classes and CommandProp instances
@@ -66,3 +66,23 @@ implicit object CompleteBlockCommandProp
             s"\n\texpected: $expectedResult" +
             s"\n\tgot: $result"
 }
+
+// ===================================
+// CommandLabel instances
+// ===================================
+
+implicit object DelayCommandLabel extends CommandLabel[DelayCommand]:
+    def label(cmd: DelayCommand): String = cmd.delaySpec match
+        case _: Delay.EndsBeforeHappyPathExpires => "Delay(happy)"
+        case _: Delay.EndsInTheSilencePeriod     => "Delay(silence)"
+        case _: Delay.EndsAfterHappyPathExpires  => "Delay(expired)"
+
+implicit object StartBlockCommandLabel extends CommandLabel[StartBlockCommand]:
+    def label(cmd: StartBlockCommand): String = "StartBlock"
+
+implicit object LedgerEventCommandLabel extends CommandLabel[LedgerEventCommand]:
+    def label(cmd: LedgerEventCommand): String = "LedgerEvent"
+
+implicit object CompleteBlockCommandLabel extends CommandLabel[CompleteBlockCommand]:
+    def label(cmd: CompleteBlockCommand): String =
+        if cmd.isFinal then "CompleteBlock(final)" else "CompleteBlock(regular)"

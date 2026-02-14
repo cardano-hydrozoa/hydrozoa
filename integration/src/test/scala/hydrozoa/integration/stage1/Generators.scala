@@ -246,7 +246,7 @@ object Generators:
     def genCompleteBlock(blockNumber: BlockNumber): Gen[CompleteBlockCommand] =
         Gen.frequency(
           1 -> genCompleteBlockFinal(blockNumber),
-          40 -> genCompleteBlockRegular(blockNumber)
+          20 -> genCompleteBlockRegular(blockNumber)
         )
 
 end Generators
