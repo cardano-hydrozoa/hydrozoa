@@ -27,7 +27,14 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
       * not strictly needed for testing block promotion, which must work on empty blocks, but we
       * additionally decided to check block brief at the same time.
       */
-    val _ = property("Block promotion L1 mock") = Suite(
+    val _ = property("Block promotion with arbitrary events L1 mock") = Suite(
+      suiteCardano = Mock(preprod),
+      txTimingGen = generateDefaultTxTiming,
+      mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
+      commandGen = ArbitraryL2EventsCommandGen
+    ).property()
+
+    lazy val _ = property("Block promotion L1 mock") = Suite(
       suiteCardano = Mock(preprod),
       txTimingGen = generateDefaultTxTiming,
       mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
@@ -38,7 +45,7 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
       *
       * TODO:
       */
-    val _ = property("Dusty head finalization L1 mock") = Suite(
+    lazy val _ = property("Dusty head finalization L1 mock") = Suite(
       suiteCardano = Mock(preprod),
       txTimingGen = generateDefaultTxTiming,
       mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
@@ -51,7 +58,7 @@ object Stage1PropertiesYaci extends YetAnotherProperties("Integration Stage 1 wi
         p: org.scalacheck.Test.Parameters
     ): org.scalacheck.Test.Parameters = {
         p.withWorkers(1)
-            .withMinSuccessfulTests(1)
+            .withMinSuccessfulTests(3)
     }
 
     private val preprod = CardanoNetwork.Preprod

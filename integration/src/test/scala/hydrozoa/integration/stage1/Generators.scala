@@ -4,6 +4,7 @@ import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.config.head.initialization.generateCappedValue
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.integration.stage1.BlockCycle.HeadFinalized
+import hydrozoa.integration.stage1.Generators.GenLedgerEvent
 import hydrozoa.integration.stage1.Generators.TxStrategy.Dust
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
 import hydrozoa.lib.cardano.scalus.given_Choose_QuantizedInstant
@@ -14,8 +15,8 @@ import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.event.LedgerEvent.TxL2Event
-import org.scalacheck.Gen
 import org.scalacheck.commands.{AnyCommand, CommandGen, noOp}
+import org.scalacheck.{Arbitrary, Gen}
 import scalus.builtin.Builtins.blake2b_224
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.AuxiliaryData.Metadata
@@ -23,6 +24,7 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{Coin, Metadatum, SlotConfig, TransactionInput, TransactionOutput, Utxo, Utxos, Value, Word64}
 import scalus.cardano.txbuilder.TransactionBuilder
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Fee, ModifyAuxiliaryData, Send, Spend}
+import test.Generators.Hydrozoa.ArbitraryInstances.given_Arbitrary_LedgerEvent
 import test.Generators.Hydrozoa.genEventId
 
 val logger1: org.slf4j.Logger = Logging.logger("Stage1.Generators")
@@ -154,6 +156,16 @@ object Generators:
         }
     } yield values
 
+    type GenLedgerEvent =
+        (state: ModelState, txStrategy: TxStrategy) => Gen[LedgerEventCommand]
+
+    def genArbitraryLedgerEvent(
+        _state: ModelState,
+        _txStrategy: TxStrategy = Random
+    ): Gen[LedgerEventCommand] = for {
+        event <- Arbitrary.arbitrary[hydrozoa.multisig.ledger.event.LedgerEvent]
+    } yield LedgerEventCommand(event)
+
     def genValidNonPlutusL2Tx(
         state: ModelState,
         txStrategy: TxStrategy = Random
@@ -243,13 +255,19 @@ end Generators
 // Suite command generators
 // ===================================
 
+/** Fast, less interesting. */
+object ArbitraryL2EventsCommandGen extends SimpleCommandGen(Generators.genArbitraryLedgerEvent)
+
 /** Produces L2 transactions (valid and non-valid) with no withdrawals.
   *
   * There is a customizable delay before starting every new block. If the delay happens to be long
   * enough so the latest fallback becomes active, all next commands are NoOp and the fallback is
   * expected to be submitted. Otherwise, only happy path effects are expected to be submitted.
   */
-object NoWithdrawalsCommandGen extends CommandGen[ModelState, Stage1Sut]:
+object NoWithdrawalsCommandGen extends SimpleCommandGen(Generators.genValidNonPlutusL2Tx)
+
+case class SimpleCommandGen(generateLedgerEvent: GenLedgerEvent)
+    extends CommandGen[ModelState, Stage1Sut]:
 
     override def genNextCommand(
         state: ModelState
