@@ -4,8 +4,10 @@ import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.config.head.initialization.generateCappedValue
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.integration.stage1.BlockCycle.HeadFinalized
-import hydrozoa.integration.stage1.Generators.GenLedgerEvent
-import hydrozoa.integration.stage1.Generators.TxStrategy.Dust
+import hydrozoa.integration.stage1.Generators.L2txGen
+import hydrozoa.integration.stage1.Generators.TxMutator.Identity
+import hydrozoa.integration.stage1.Generators.TxStrategy.{Dust, RandomWithdrawals, Regular}
+import hydrozoa.integration.stage1.SutCommands.given
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
 import hydrozoa.lib.cardano.scalus.given_Choose_QuantizedInstant
 import hydrozoa.lib.cardano.scalus.ledger.withZeroFees
@@ -15,16 +17,15 @@ import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.event.LedgerEvent.TxL2Event
+import org.scalacheck.Gen
 import org.scalacheck.commands.{AnyCommand, CommandGen, noOp}
-import org.scalacheck.{Arbitrary, Gen}
 import scalus.builtin.Builtins.blake2b_224
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{Coin, Metadatum, SlotConfig, TransactionInput, TransactionOutput, Utxo, Utxos, Value, Word64}
+import scalus.cardano.ledger.{AuxiliaryData, Coin, Metadatum, SlotConfig, TransactionInput, TransactionOutput, Utxo, Utxos, Value, Word64}
 import scalus.cardano.txbuilder.TransactionBuilder
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Fee, ModifyAuxiliaryData, Send, Spend}
-import test.Generators.Hydrozoa.ArbitraryInstances.given_Arbitrary_LedgerEvent
 import test.Generators.Hydrozoa.genEventId
 
 val logger1: org.slf4j.Logger = Logging.logger("Stage1.Generators")
@@ -97,28 +98,41 @@ object Generators:
         )
 
     enum TxStrategy:
-        case Random
+        /** Completely arbitrary transaction, always invalid (unless you are very lucky). */
+        case Arbitrary
 
-        /** @param maxOutputs
+        /** Just valid L2 txs, no withdrawals. */
+        case Regular
+
+        /** Valid L2 txs that withdraw some arbitrary outputs. */
+        case RandomWithdrawals
+
+        /** Selects the biggest utxo available and split it into small chunks, but no more than
+          * [[maxOutputs]]
+          * @param maxOutputs
           *   Number of small outputs (there likely will be the additional bigger one with the rest)
           */
         case Dust(maxOutputs: Int = 50)
 
-    import TxStrategy.*
+    // TODO: implement
+    enum TxMutator:
+        case Identity
+        case DropWitnesses
 
     def genInputs(
         utxos: Utxos,
         txStrategy: TxStrategy,
     ): Gen[Seq[TransactionInput]] = txStrategy match {
 
-        case Random =>
+        case TxStrategy.Dust(_) =>
+            Gen.const(List(utxos.maxBy((_, o) => o.value.coin.value)._1))
+
+        case _ =>
             for {
                 numberOfInputs <- Gen.choose(1, 10.min(utxos.size))
                 inputs <- Gen.pick(numberOfInputs, utxos.keySet)
             } yield inputs.toSeq
 
-        case Dust(_) =>
-            Gen.const(List(utxos.maxBy((_, o) => o.value.coin.value)._1))
     }
 
     def genOutputValues(
@@ -128,18 +142,7 @@ object Generators:
     ): Gen[List[Value]] = for {
         values <- txStrategy match {
 
-            case Random =>
-                Gen.tailRecM(List.empty[Value] -> capValue)((acc, rest) =>
-                    for {
-                        next <- step(rest, None, None)
-                        acc_ = acc :+ next
-                    } yield
-                        if next == rest
-                        then Right(acc_)
-                        else Left(acc_ -> (rest - next))
-                )
-
-            case Dust(maxOutputs) =>
+            case TxStrategy.Dust(maxOutputs) =>
                 Gen.tailRecM((List.empty[Value], capValue, maxOutputs))((acc, rest, stepsLeft) =>
                     for {
                         next <- step(rest, Some(3_000_000L), Some(1L))
@@ -153,23 +156,41 @@ object Generators:
                         else Left(acc_, rest - next, stepsLeft - 1)
                     }
                 )
+
+            case _ =>
+                Gen.tailRecM(List.empty[Value] -> capValue)((acc, rest) =>
+                    for {
+                        next <- step(rest, None, None)
+                        acc_ = acc :+ next
+                    } yield
+                        if next == rest
+                        then Right(acc_)
+                        else Left(acc_ -> (rest - next))
+                )
         }
     } yield values
 
-    type GenLedgerEvent =
-        (state: ModelState, txStrategy: TxStrategy) => Gen[LedgerEventCommand]
+    type L2txGen = (state: ModelState) => Gen[L2TxCommand]
 
-    def genArbitraryLedgerEvent(
-        _state: ModelState,
-        _txStrategy: TxStrategy = Random
-    ): Gen[LedgerEventCommand] = for {
-        event <- Arbitrary.arbitrary[hydrozoa.multisig.ledger.event.LedgerEvent]
-    } yield LedgerEventCommand(event)
+    def genAuxiliaryData(
+        outputs: List[TransactionOutput],
+        txStrategy: TxStrategy
+    ): Gen[AuxiliaryData] = for {
+        flags <- txStrategy match {
+            case TxStrategy.RandomWithdrawals => Gen.listOfN(outputs.size, Gen.choose(1, 2))
+            case _                            => Gen.const(outputs.map(_ => 2))
+        }
+    } yield Metadata(
+      Map(
+        Word64(CIP67.Tags.head)
+            -> Metadatum.List(flags.map(Metadatum.Int(_)).toIndexedSeq)
+      )
+    )
 
     def genValidNonPlutusL2Tx(
-        state: ModelState,
-        txStrategy: TxStrategy = Random
-    ): Gen[LedgerEventCommand] =
+        txStrategy: TxStrategy,
+        txMutator: TxMutator
+    )(state: ModelState): Gen[L2TxCommand] =
 
         val cardanoNetwork: CardanoNetwork = state.headConfig.cardanoNetwork
         val generateCappedValueC = generateCappedValue(cardanoNetwork)
@@ -194,14 +215,7 @@ object Generators:
                   .map(v => Gen.oneOf(l2AddressesInUse).map(a => Babbage(a, v)))
             )
 
-            auxiliaryData = Some(
-              Metadata(
-                Map(
-                  Word64(CIP67.Tags.head)
-                      -> Metadatum.List(outputs.map(_ => Metadatum.Int(2)).toIndexedSeq)
-                )
-              )
-            )
+            auxiliaryData <- genAuxiliaryData(outputs, txStrategy).map(Some.apply)
 
             txUnsigned = TransactionBuilder
                 .build(
@@ -230,11 +244,13 @@ object Generators:
 
             _ = logger1.trace(s"l2Tx: ${HexUtil.encodeHexString(txSigned.toCbor)}")
 
-        } yield LedgerEventCommand(
+        } yield L2TxCommand(
           event = TxL2Event(
             eventId = eventId,
             tx = txSigned.toCbor
-          )
+          ),
+          txStrategy = txStrategy,
+          txMutator = txMutator
         )
 
     def genCompleteBlockRegular(blockNumber: BlockNumber): Gen[CompleteBlockCommand] =
@@ -255,19 +271,29 @@ end Generators
 // Suite command generators
 // ===================================
 
-/** Fast, less interesting. */
-object ArbitraryL2EventsCommandGen extends SimpleCommandGen(Generators.genArbitraryLedgerEvent)
-
 /** Produces L2 transactions (valid and non-valid) with no withdrawals.
   *
   * There is a customizable delay before starting every new block. If the delay happens to be long
   * enough so the latest fallback becomes active, all next commands are NoOp and the fallback is
   * expected to be submitted. Otherwise, only happy path effects are expected to be submitted.
   */
-object NoWithdrawalsCommandGen extends SimpleCommandGen(Generators.genValidNonPlutusL2Tx)
+object NoWithdrawalsCommandGen
+    extends SimpleCommandGen(
+      Generators.genValidNonPlutusL2Tx(
+        txStrategy = Regular,
+        txMutator = Identity
+      )
+    )
 
-case class SimpleCommandGen(generateLedgerEvent: GenLedgerEvent)
-    extends CommandGen[ModelState, Stage1Sut]:
+object OngoingWithdrawalsCommandGen
+    extends SimpleCommandGen(
+      Generators.genValidNonPlutusL2Tx(
+        txStrategy = RandomWithdrawals,
+        txMutator = Identity
+      )
+    )
+
+case class SimpleCommandGen(generateL2Tx: L2txGen) extends CommandGen[ModelState, Stage1Sut]:
 
     override def genNextCommand(
         state: ModelState
@@ -303,8 +329,7 @@ case class SimpleCommandGen(generateLedgerEvent: GenLedgerEvent)
                           1 -> Generators
                               .genCompleteBlock(blockNumber)
                               .map(AnyCommand.apply),
-                          10 -> Generators
-                              .genValidNonPlutusL2Tx(state)
+                          10 -> generateL2Tx(state)
                               .map(AnyCommand.apply)
                         )
 
@@ -355,7 +380,12 @@ case class MakeDustCommandGen(minL2Utxos: Int) extends CommandGen[ModelState, St
                                         .genCompleteBlockRegular(blockNumber)
                                         .map(AnyCommand.apply)),
                           10 -> Generators
-                              .genValidNonPlutusL2Tx(state = state, txStrategy = Dust())
+                              .genValidNonPlutusL2Tx(
+                                txStrategy = Dust(),
+                                txMutator = Identity
+                              )(
+                                state = state
+                              )
                               .map(AnyCommand.apply)
                         )
 

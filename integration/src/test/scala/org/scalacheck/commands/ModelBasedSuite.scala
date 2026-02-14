@@ -722,7 +722,7 @@ object ModelBasedSuite {
                     .groupBy(identity)
                     .map { case (label, occurrences) => label -> occurrences.length }
                     .toList
-                    .sortBy(-_._2)
+                    .sortBy(_._1)
 
                 val totalCommands = labelCounts.map(_._2).sum
 

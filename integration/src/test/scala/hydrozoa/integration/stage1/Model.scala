@@ -13,7 +13,7 @@ import hydrozoa.multisig.ledger.event.LedgerEvent
 import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.kzgCommitment
 import hydrozoa.multisig.ledger.virtual.{HydrozoaTransactionMutator, L2EventTransaction}
-import scalus.cardano.ledger.{Transaction, Utxos}
+import scalus.cardano.ledger.Utxos
 import test.TestPeer
 
 val logger = Logging.logger("Suite1.Model")
@@ -36,7 +36,7 @@ case class ModelState(
     // Block producing cycle
     currentTime: CurrentTime,
     blockCycle: BlockCycle,
-    currentBlockEvents: List[(LedgerEvent, ValidityFlag)] = List.empty,
+    currentBlockEvents: List[(LedgerEvent.TxL2Event, ValidityFlag)] = List.empty,
 
     // This is put here to avoid tossing over Done/Ready/InProgress
     // NB: for block zero it's more initializationExpirationTime
@@ -145,36 +145,31 @@ implicit object StartBlockCommandModel extends ModelCommand[StartBlockCommand, U
     }
 }
 
-implicit object LedgerEventCommandModel extends ModelCommand[LedgerEventCommand, Unit, ModelState] {
+implicit object LedgerEventCommandModel extends ModelCommand[L2TxCommand, Unit, ModelState] {
 
-    override def runState(cmd: LedgerEventCommand, state: ModelState): (Unit, ModelState) =
-        cmd.event match {
-            case LedgerEvent.TxL2Event(eventId, tx) =>
-                val l2TransactionEvent = L2EventTransaction(Transaction.fromCbor(tx))
-                val ret = HydrozoaTransactionMutator.transit(
-                  config = state.headConfig,
-                  time = state.currentTime.instant,
-                  state = VirtualLedgerM.State(state.activeUtxos),
-                  l2Event = l2TransactionEvent
+    override def runState(cmd: L2TxCommand, state: ModelState): (Unit, ModelState) =
+
+        val l2TransactionEvent = L2EventTransaction.apply(cmd.event.tx)
+        val ret = HydrozoaTransactionMutator.transit(
+          config = state.headConfig,
+          time = state.currentTime.instant,
+          state = VirtualLedgerM.State(state.activeUtxos),
+          l2Event = l2TransactionEvent
+        )
+        ret match {
+            case Left(err) =>
+                logger.debug(s"invalid L2 tx ${cmd.event.eventId}: ${err}")
+                () -> state.copy(
+                  currentBlockEvents =
+                      state.currentBlockEvents :+ (cmd.event -> ValidityFlag.Invalid),
                 )
-                ret match {
-                    case Left(err) =>
-                        logger.debug(s"invalid L2tx ${eventId}: ${err}")
-                        () -> state.copy(
-                          currentBlockEvents =
-                              state.currentBlockEvents :+ (cmd.event -> ValidityFlag.Invalid),
-                        )
-                    case Right(mutatorState) =>
-                        () -> state.copy(
-                          currentBlockEvents =
-                              state.currentBlockEvents :+ (cmd.event -> ValidityFlag.Valid),
-                          activeUtxos = mutatorState.activeUtxos
-                        )
-                }
-
-            case LedgerEvent.RegisterDeposit(_, _, _, _, _, _, _) => ???
+            case Right(mutatorState) =>
+                () -> state.copy(
+                  currentBlockEvents =
+                      state.currentBlockEvents :+ (cmd.event -> ValidityFlag.Valid),
+                  activeUtxos = mutatorState.activeUtxos
+                )
         }
-
 }
 
 implicit object CompleteBlockCommandModel
@@ -219,7 +214,7 @@ implicit object CompleteBlockCommandModel
 
     private def mkBlockBrief(
         blockNumber: BlockNumber,
-        currentBlockEvents: List[(LedgerEvent, ValidityFlag)],
+        currentBlockEvents: List[(LedgerEvent.TxL2Event, ValidityFlag)],
         competingFallbackStartTime: QuantizedInstant,
         txTiming: TxTiming,
         creationTime: QuantizedInstant,
@@ -228,46 +223,54 @@ implicit object CompleteBlockCommandModel
         activeUtxos: Utxos
     ): BlockBrief = {
 
-        if isFinal then
-            Final(
-              header = BlockHeader.Final(
-                blockNum = blockNumber,
-                blockVersion = prevVersion.incrementMajor,
-                startTime = creationTime,
-              ),
-              body = BlockBody.Final(
-                events = currentBlockEvents.map((le, flag) => le.eventId -> flag),
-                depositsRefunded = List.empty
-              )
-            )
+        import hydrozoa.multisig.ledger.event.LedgerEvent.outputPartition
+
+        lazy val majorBlock = Major(
+          header = BlockHeader.Major(
+            blockNum = blockNumber,
+            blockVersion = prevVersion.incrementMajor,
+            startTime = creationTime,
+            kzgCommitment = activeUtxos.kzgCommitment
+          ),
+          body = BlockBody.Major(
+            events = currentBlockEvents.map((le, flag) => le.eventId -> flag),
+            depositsAbsorbed = List.empty,
+            depositsRefunded = List.empty
+          )
+        )
+
+        lazy val minorBlock = Minor(
+          header = BlockHeader.Minor(
+            blockNum = blockNumber,
+            blockVersion = prevVersion.incrementMinor,
+            startTime = creationTime,
+            kzgCommitment = activeUtxos.kzgCommitment
+          ),
+          body = BlockBody.Minor(
+            events = currentBlockEvents.map((le, flag) => le.eventId -> flag),
+            depositsRefunded = List.empty
+          )
+        )
+
+        lazy val finalBlock = Final(
+          header = BlockHeader.Final(
+            blockNum = blockNumber,
+            blockVersion = prevVersion.incrementMajor,
+            startTime = creationTime,
+          ),
+          body = BlockBody.Final(
+            events = currentBlockEvents.map((le, flag) => le.eventId -> flag),
+            depositsRefunded = List.empty
+          )
+        )
+
+        if isFinal then finalBlock
         else if txTiming.blockCanStayMinor(creationTime, competingFallbackStartTime)
         then
-            Minor(
-              header = BlockHeader.Minor(
-                blockNum = blockNumber,
-                blockVersion = prevVersion.incrementMinor,
-                startTime = creationTime,
-                kzgCommitment = activeUtxos.kzgCommitment
-              ),
-              body = BlockBody.Minor(
-                events = currentBlockEvents.map((le, flag) => le.eventId -> flag),
-                depositsRefunded = List.empty
-              )
-            )
-        else
-            Major(
-              header = BlockHeader.Major(
-                blockNum = blockNumber,
-                blockVersion = prevVersion.incrementMajor,
-                startTime = creationTime,
-                kzgCommitment = activeUtxos.kzgCommitment
-              ),
-              body = BlockBody.Major(
-                events = currentBlockEvents.map((le, flag) => le.eventId -> flag),
-                depositsAbsorbed = List.empty,
-                depositsRefunded = List.empty
-              )
-            )
+            if currentBlockEvents.exists(_._1.outputPartition.l1Utxos.nonEmpty)
+            then majorBlock
+            else minorBlock
+        else majorBlock
     }
 
     override def preCondition(cmd: CompleteBlockCommand, state: ModelState): Boolean =

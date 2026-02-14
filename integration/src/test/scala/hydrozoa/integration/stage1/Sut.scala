@@ -19,6 +19,7 @@ import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockNum
 import hydrozoa.multisig.ledger.event.LedgerEvent
 import org.scalacheck.commands.SutCommand
 import scala.concurrent.duration.DurationInt
+import org.typelevel.log4cats.Logger
 
 // ===================================
 // Stage 1 SUT
@@ -123,46 +124,48 @@ end AgentActor
 // SutCommand instances
 // ===================================
 
-val logger = Logging.loggerIO("Stage1.Sut")
+object SutCommands:
 
-implicit object DelayCommandSut extends SutCommand[DelayCommand, Unit, Stage1Sut] {
-    override def run(cmd: DelayCommand, sut: Stage1Sut): IO[Unit] = for {
-        _ <- logger.debug(s">> DelayCommand(delay=${cmd.delaySpec})")
-        now <- IO.realTimeInstant
-        _ <- logger.debug(s"Current time: $now")
-        _ <- sut.agent ! Timeout
-    } yield ()
-}
+    val logger: Logger[IO] = Logging.loggerIO("Stage1.SutCommands")
 
-implicit object StartBlockCommandSut extends SutCommand[StartBlockCommand, Unit, Stage1Sut] {
-    override def run(cmd: StartBlockCommand, sut: Stage1Sut): IO[Unit] =
-        logger.debug(s">> StartBlockCommand(blockNumber=${cmd.blockNumber})") >>
-            (sut.agent ! StartBlock(
-              blockNum = cmd.blockNumber,
-              blockCreationTime = cmd.creationTime
-            ))
-}
+    implicit object DelayCommandSut extends SutCommand[DelayCommand, Unit, Stage1Sut] {
+        override def run(cmd: DelayCommand, sut: Stage1Sut): IO[Unit] = for {
+            _ <- logger.debug(s">> DelayCommand(delay=${cmd.delaySpec})")
+            now <- IO.realTimeInstant
+            _ <- logger.debug(s"Current time: $now")
+            _ <- sut.agent ! Timeout
+        } yield ()
+    }
 
-implicit object LedgerEventCommandSut extends SutCommand[LedgerEventCommand, Unit, Stage1Sut] {
-    override def run(cmd: LedgerEventCommand, sut: Stage1Sut): IO[Unit] =
-        logger.debug(">> LedgerEventCommand") >>
-            (sut.agent ! cmd.event)
-}
+    implicit object StartBlockCommandSut extends SutCommand[StartBlockCommand, Unit, Stage1Sut] {
+        override def run(cmd: StartBlockCommand, sut: Stage1Sut): IO[Unit] =
+            logger.debug(s">> StartBlockCommand(blockNumber=${cmd.blockNumber})") >>
+                (sut.agent ! StartBlock(
+                  blockNum = cmd.blockNumber,
+                  blockCreationTime = cmd.creationTime
+                ))
+    }
 
-implicit object CompleteBlockCommandSut
-    extends SutCommand[CompleteBlockCommand, BlockBrief, Stage1Sut] {
-    override def run(cmd: CompleteBlockCommand, sut: Stage1Sut): IO[BlockBrief] = for {
-        _ <- logger.debug(
-          s">> CompleteBlockCommand(blockNumber=${cmd.blockNumber}, isFinal=${cmd.isFinal})"
-        )
-        block <- IO.pure(
-          if cmd.isFinal
-          then CompleteBlockFinal(None)
-          else CompleteBlockRegular(None, Set.empty, false)
-        )
-        // All sync commands should be timed out since the system may terminate
-        d <- (sut.agent ?: AgentActor.CompleteBlock(block, cmd.blockNumber)).timeout(10.seconds)
-        // Save unsigned block effects
-        _ <- sut.effectsAcc.update(_ :+ d.effects.asInstanceOf[BlockEffects.Unsigned])
-    } yield d.blockBrief
-}
+    implicit object LedgerEventCommandSut extends SutCommand[L2TxCommand, Unit, Stage1Sut] {
+        override def run(cmd: L2TxCommand, sut: Stage1Sut): IO[Unit] =
+            logger.debug(">> LedgerEventCommand") >>
+                (sut.agent ! cmd.event)
+    }
+
+    implicit object CompleteBlockCommandSut
+        extends SutCommand[CompleteBlockCommand, BlockBrief, Stage1Sut] {
+        override def run(cmd: CompleteBlockCommand, sut: Stage1Sut): IO[BlockBrief] = for {
+            _ <- logger.debug(
+              s">> CompleteBlockCommand(blockNumber=${cmd.blockNumber}, isFinal=${cmd.isFinal})"
+            )
+            block <- IO.pure(
+              if cmd.isFinal
+              then CompleteBlockFinal(None)
+              else CompleteBlockRegular(None, Set.empty, false)
+            )
+            // All sync commands should be timed out since the system may terminate
+            d <- (sut.agent ?: AgentActor.CompleteBlock(block, cmd.blockNumber)).timeout(10.seconds)
+            // Save unsigned block effects
+            _ <- sut.effectsAcc.update(_ :+ d.effects.asInstanceOf[BlockEffects.Unsigned])
+        } yield d.blockBrief
+    }

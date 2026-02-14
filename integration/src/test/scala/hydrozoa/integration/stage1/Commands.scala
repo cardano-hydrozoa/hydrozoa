@@ -1,5 +1,6 @@
 package hydrozoa.integration.stage1
 
+import hydrozoa.integration.stage1.Generators.{TxMutator, TxStrategy}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.LedgerEvent
@@ -8,7 +9,7 @@ import org.scalacheck.Prop.propBoolean
 import org.scalacheck.commands.{CommandLabel, CommandProp}
 
 // ===================================
-// Command case classes and CommandProp instances
+// Delay
 // ===================================
 
 /** Advance time with three possible outcomes, transitioning the model's [[CurrentTime]].
@@ -29,6 +30,16 @@ enum Delay(d: QuantizedFiniteDuration):
 
 implicit object DelayCommandProp extends CommandProp[DelayCommand, Unit, ModelState]
 
+implicit object DelayCommandLabel extends CommandLabel[DelayCommand]:
+    override def label(cmd: DelayCommand): String = cmd.delaySpec match
+        case _: Delay.EndsBeforeHappyPathExpires => "Delay(happy)"
+        case _: Delay.EndsInTheSilencePeriod     => "Delay(silence)"
+        case _: Delay.EndsAfterHappyPathExpires  => "Delay(expired)"
+
+// ===================================
+// Start Block
+// ===================================
+
 /** Start a new block in the joint ledger. */
 final case class StartBlockCommand(
     blockNumber: BlockNumber,
@@ -37,12 +48,50 @@ final case class StartBlockCommand(
 
 implicit object StartBlockCommandProp extends CommandProp[StartBlockCommand, Unit, ModelState]
 
-/** Feed a single ledger event into the current block. */
-final case class LedgerEventCommand(
-    event: LedgerEvent
+implicit object StartBlockCommandLabel extends CommandLabel[StartBlockCommand]:
+    override def label(cmd: StartBlockCommand): String = "StartBlock"
+
+// ===================================
+// L2 Transaction
+// ===================================
+
+/** Feed a single L2 transaction into the current block. */
+final case class L2TxCommand(
+    event: LedgerEvent.TxL2Event,
+    txStrategy: TxStrategy,
+    txMutator: TxMutator
 )
 
-implicit object LedgerEventCommandProp extends CommandProp[LedgerEventCommand, Unit, ModelState]
+implicit object L2TxCommandProp extends CommandProp[L2TxCommand, Unit, ModelState]
+
+implicit object L2TxCommandLabel extends CommandLabel[L2TxCommand]:
+    override def label(cmd: L2TxCommand): String = cmd.txStrategy match {
+        case TxStrategy.Arbitrary =>
+            cmd.txMutator match {
+                case TxMutator.Identity      => "L2Tx(arbitrary, identity)"
+                case TxMutator.DropWitnesses => "L2Tx(arbitrary, drop witnesses)"
+            }
+        case TxStrategy.Regular =>
+            cmd.txMutator match {
+                case TxMutator.Identity      => "L2Tx(regular, identity)"
+                case TxMutator.DropWitnesses => "L2Tx(regular, drop witnesses)"
+            }
+        case TxStrategy.RandomWithdrawals =>
+            cmd.txMutator match {
+                case TxMutator.Identity      => "L2Tx(random withdrawals, identity)"
+                case TxMutator.DropWitnesses => "L2Tx(random withdrawals, drop witnesses)"
+            }
+        case TxStrategy.Dust(maxOutputs) =>
+            cmd.txMutator match {
+                case TxMutator.Identity      => s"L2Tx(dust=$maxOutputs, identity)"
+                case TxMutator.DropWitnesses => s"L2Tx(dust=$maxOutputs, drop witnesses)"
+            }
+
+    }
+
+// ===================================
+// Complete Block
+// ===================================
 
 /** Complete the current block (regular or final).  Result is the [[BlockBrief]] produced. */
 final case class CompleteBlockCommand(
@@ -67,22 +116,6 @@ implicit object CompleteBlockCommandProp
             s"\n\tgot: $result"
 }
 
-// ===================================
-// CommandLabel instances
-// ===================================
-
-implicit object DelayCommandLabel extends CommandLabel[DelayCommand]:
-    def label(cmd: DelayCommand): String = cmd.delaySpec match
-        case _: Delay.EndsBeforeHappyPathExpires => "Delay(happy)"
-        case _: Delay.EndsInTheSilencePeriod     => "Delay(silence)"
-        case _: Delay.EndsAfterHappyPathExpires  => "Delay(expired)"
-
-implicit object StartBlockCommandLabel extends CommandLabel[StartBlockCommand]:
-    def label(cmd: StartBlockCommand): String = "StartBlock"
-
-implicit object LedgerEventCommandLabel extends CommandLabel[LedgerEventCommand]:
-    def label(cmd: LedgerEventCommand): String = "LedgerEvent"
-
 implicit object CompleteBlockCommandLabel extends CommandLabel[CompleteBlockCommand]:
-    def label(cmd: CompleteBlockCommand): String =
+    override def label(cmd: CompleteBlockCommand): String =
         if cmd.isFinal then "CompleteBlock(final)" else "CompleteBlock(regular)"
