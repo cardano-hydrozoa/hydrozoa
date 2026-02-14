@@ -111,6 +111,7 @@ final class AnyCommand[State, Sut](
       * ran.
       */
     val runPC: Sut => IO[State => Prop],
+    val cmd: Any,
     private val repr: String
 ) {
     override def toString: String = repr
@@ -136,6 +137,7 @@ object AnyCommand {
                   mc.preCondition(cmd, s) ==> cp.postCondition(cmd, s, r)
               }
           },
+          cmd = cmd,
           repr = cmd.toString
         )
 }
@@ -151,6 +153,7 @@ def noOp[State, Sut]: AnyCommand[State, Sut] =
       advanceState = s => s,
       delay = Duration.Zero,
       runPC = _ => IO.pure(_ => Prop.passed),
+      cmd = (),
       repr = "NoOp"
     )
 
@@ -165,6 +168,9 @@ def noOp[State, Sut]: AnyCommand[State, Sut] =
 trait CommandGen[State, Sut]:
     /** Generates the next command based on the current model state. */
     def genNextCommand(state: State): Gen[AnyCommand[State, Sut]]
+
+    /** Predicate for the target state. */
+    def targetStatePrecondition(targetState: State): Boolean = true
 
 // ===================================
 // ModelBasedSuite
@@ -205,17 +211,19 @@ trait ModelBasedSuite {
     // Environment, model, and commands
     // ===================================
 
-    /** TODO:
+    /** Initialize the environment and return information needed for the test suite.
       */
     def initEnv: Env
 
     /** A generator that should produce an initial [[State]] instance that is usable by
       * [[startupSut]] to create a new system under test.
+      *
+      * TODO: I guess we may want to have multiple initial state generator/preonditions
       */
     def genInitialState(env: Env): Gen[State]
 
     /** The precondition for the initial state, when no commands yet have run. */
-    def initialPreCondition(state: State): Boolean = true
+    def initialStatePreCondition(state: State): Boolean = true
 
     /** A generator that, given the current model state, should produce a suitable command. The
       * command should always be well-formed, but MUST NOT necessarily be correct, i.e. it may be
@@ -371,9 +379,10 @@ trait ModelBasedSuite {
             }
         }
 
-        def precondition(as: TestCase): Boolean =
-            initialPreCondition(as.initialState)
-                && cmdsPrecond(as.initialState, as.commands)._2
+        def precondition(targetState: State, tc: TestCase): Boolean =
+            initialStatePreCondition(tc.initialState)
+                && cmdsPrecond(tc.initialState, tc.commands)._2
+                && this.commandGen.targetStatePrecondition(targetState)
 
         /** Checks all preconditions and evaluates the final state.
           *
@@ -393,9 +402,9 @@ trait ModelBasedSuite {
               logger.debug("Initializing the environment and generate the test case...")
             )
             s0: State <- genInitialState(initEnv)
-            (_, seqCmds) <- commandGenTweaker(sized(sizedCmds(s0)))
+            (s, seqCmds) <- commandGenTweaker(sized(sizedCmds(s0)))
             tc = TestCase(s0, seqCmds)
-            if precondition(tc)
+            if precondition(s, tc)
         } yield tc
     }
 

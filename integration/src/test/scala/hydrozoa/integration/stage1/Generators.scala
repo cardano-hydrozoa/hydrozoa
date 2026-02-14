@@ -3,6 +3,7 @@ package hydrozoa.integration.stage1
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.config.head.initialization.generateCappedValue
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.integration.stage1.BlockCycle.HeadFinalized
 import hydrozoa.integration.stage1.Generators.TxStrategy.Dust
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
 import hydrozoa.lib.cardano.scalus.given_Choose_QuantizedInstant
@@ -24,7 +25,7 @@ import scalus.cardano.txbuilder.TransactionBuilder
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Fee, ModifyAuxiliaryData, Send, Spend}
 import test.Generators.Hydrozoa.genEventId
 
-val logger: org.slf4j.Logger = Logging.logger("Stage1.Generators")
+val logger1: org.slf4j.Logger = Logging.logger("Stage1.Generators")
 
 // ===================================
 // Per-command generators
@@ -171,11 +172,11 @@ object Generators:
             // Inputs
             inputs <- genInputs(ownedUtxos, txStrategy)
             totalValue = inputs.map(ownedUtxos(_).value).fold(Value.zero)(_ + _)
-            _ = logger.trace(s"totalValue: $totalValue")
+            _ = logger1.trace(s"totalValue: $totalValue")
 
             // Outputs
             outputValues <- genOutputValues(totalValue, txStrategy, generateCappedValueC)
-            _ = logger.trace(s"output values: $outputValues")
+            _ = logger1.trace(s"output values: $outputValues")
             outputs <- Gen.sequence[List[TransactionOutput], TransactionOutput](
               outputValues
                   .map(v => Gen.oneOf(l2AddressesInUse).map(a => Babbage(a, v)))
@@ -215,7 +216,7 @@ object Generators:
             txSigned = txUnsigned.attachVKeyWitnesses(List(witness))
             eventId <- genEventId
 
-            _ = logger.trace(s"l2Tx: ${HexUtil.encodeHexString(txSigned.toCbor)}")
+            _ = logger1.trace(s"l2Tx: ${HexUtil.encodeHexString(txSigned.toCbor)}")
 
         } yield LedgerEventCommand(
           event = TxL2Event(
@@ -345,3 +346,8 @@ case class MakeDustCommandGen(minL2Utxos: Int) extends CommandGen[ModelState, St
             case _ => Gen.const(noOp)
         }
     }
+
+    override def targetStatePrecondition(
+        targetState: ModelState
+    ): Boolean =
+        targetState.blockCycle == HeadFinalized

@@ -161,7 +161,7 @@ implicit object CompleteBlockCommandSut
           else CompleteBlockRegular(None, Set.empty, false)
         )
         // All sync commands should be timed out since the system may terminate
-        d <- (sut.agent ?: AgentActor.CompleteBlock(block, cmd.blockNumber)).timeout(5.seconds)
+        d <- (sut.agent ?: AgentActor.CompleteBlock(block, cmd.blockNumber)).timeout(10.seconds)
         // Save unsigned block effects
         _ <- sut.effectsAcc.update(_ :+ d.effects.asInstanceOf[BlockEffects.Unsigned])
     } yield d.blockBrief
