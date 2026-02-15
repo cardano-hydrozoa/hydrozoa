@@ -10,11 +10,11 @@ object Payout {
       */
     final case class Obligation(l2UtxoId: TransactionInput, utxo: TransactionOutput.Babbage) {
 
-        /** Record that the payout obligation has been discharged by an L1 transaction that produced
-          * a corresponding payout utxo.
-          */
-        def discharge(l1UtxoId: TransactionInput): Obligation.Discharged =
-            Obligation.Discharged(l1UtxoId, l2UtxoId)
+        /// ** Record that the payout obligation has been discharged by an L1 transaction that produced
+        //  * a corresponding payout utxo.
+        //  */
+        // def discharge(l1UtxoId: TransactionInput): Obligation.Discharged =
+        //    Obligation.Discharged(l1UtxoId, l2UtxoId)
     }
 
     object Obligation {
@@ -34,10 +34,10 @@ object Payout {
             }
         }
 
-        /** A payout obligation discharged by an L1 transaction output. */
-        final case class Discharged(
-            l1UtxoId: TransactionInput, // (BlockEffectId, OutputIndex)
-            l2UtxoId: TransactionInput, // (LedgerEventId, OutputIndex)
-        )
+        /// ** A payout obligation discharged by an L1 transaction output. */
+        // final case class Discharged(
+        //    l1UtxoId: TransactionInput, // (BlockEffectId, OutputIndex)
+        //    l2UtxoId: TransactionInput, // (LedgerEventId, OutputIndex)
+        // )
     }
 }

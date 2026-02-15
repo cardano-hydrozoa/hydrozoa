@@ -9,9 +9,6 @@ import scala.annotation.tailrec
 import scala.concurrent.duration.{Duration, DurationInt, FiniteDuration}
 
 /** TODO:
-  *   - Add statistics:
-  *     - number of commands in cases
-  *     - types of commands
   *   - Reproducibility (now seeding is broken)
   *   - Shrinking?
   */
@@ -92,6 +89,21 @@ trait CommandProp[Cmd, Result, State] {
 }
 
 // ===================================
+// CommandLabel — classification typeclass
+// ===================================
+
+/** Maps a command value to a short string label used for statistics.
+  *
+  * Unlike [[AnyCommand.toString]] (which may include per-instance data like block numbers), the
+  * label should identify only the semantically relevant category of a command.
+  *
+  * @tparam Cmd
+  *   the command type
+  */
+trait CommandLabel[Cmd]:
+    def label(cmd: Cmd): String
+
+// ===================================
 // AnyCommand — type-erased command wrapper
 // ===================================
 
@@ -111,7 +123,8 @@ final class AnyCommand[State, Sut](
       * ran.
       */
     val runPC: Sut => IO[State => Prop],
-    private val repr: String
+    private val repr: String,
+    val label: String
 ) {
     override def toString: String = repr
 }
@@ -124,7 +137,8 @@ object AnyCommand {
     def apply[Cmd, Result, State, Sut](cmd: Cmd)(implicit
         mc: ModelCommand[Cmd, Result, State],
         sc: SutCommand[Cmd, Result, Sut],
-        cp: CommandProp[Cmd, Result, State]
+        cp: CommandProp[Cmd, Result, State],
+        cl: CommandLabel[Cmd]
     ): AnyCommand[State, Sut] =
         new AnyCommand(
           preCondition = state => mc.preCondition(cmd, state),
@@ -136,7 +150,8 @@ object AnyCommand {
                   mc.preCondition(cmd, s) ==> cp.postCondition(cmd, s, r)
               }
           },
-          repr = cmd.toString
+          repr = cmd.toString,
+          label = cl.label(cmd)
         )
 }
 
@@ -151,7 +166,8 @@ def noOp[State, Sut]: AnyCommand[State, Sut] =
       advanceState = s => s,
       delay = Duration.Zero,
       runPC = _ => IO.pure(_ => Prop.passed),
-      repr = "NoOp"
+      repr = "NoOp",
+      label = "NoOp"
     )
 
 // ===================================
@@ -165,6 +181,9 @@ def noOp[State, Sut]: AnyCommand[State, Sut] =
 trait CommandGen[State, Sut]:
     /** Generates the next command based on the current model state. */
     def genNextCommand(state: State): Gen[AnyCommand[State, Sut]]
+
+    /** Predicate for the target state. */
+    def targetStatePrecondition(targetState: State): Boolean = true
 
 // ===================================
 // ModelBasedSuite
@@ -205,17 +224,19 @@ trait ModelBasedSuite {
     // Environment, model, and commands
     // ===================================
 
-    /** TODO:
+    /** Initialize the environment and return information needed for the test suite.
       */
     def initEnv: Env
 
     /** A generator that should produce an initial [[State]] instance that is usable by
       * [[startupSut]] to create a new system under test.
+      *
+      * TODO: I guess we may want to have multiple initial state generator/preonditions
       */
     def genInitialState(env: Env): Gen[State]
 
     /** The precondition for the initial state, when no commands yet have run. */
-    def initialPreCondition(state: State): Boolean = true
+    def initialStatePreCondition(state: State): Boolean = true
 
     /** A generator that, given the current model state, should produce a suitable command. The
       * command should always be well-formed, but MUST NOT necessarily be correct, i.e. it may be
@@ -371,9 +392,10 @@ trait ModelBasedSuite {
             }
         }
 
-        def precondition(as: TestCase): Boolean =
-            initialPreCondition(as.initialState)
-                && cmdsPrecond(as.initialState, as.commands)._2
+        def precondition(targetState: State, tc: TestCase): Boolean =
+            initialStatePreCondition(tc.initialState)
+                && cmdsPrecond(tc.initialState, tc.commands)._2
+                && this.commandGen.targetStatePrecondition(targetState)
 
         /** Checks all preconditions and evaluates the final state.
           *
@@ -393,9 +415,9 @@ trait ModelBasedSuite {
               logger.debug("Initializing the environment and generate the test case...")
             )
             s0: State <- genInitialState(initEnv)
-            (_, seqCmds) <- commandGenTweaker(sized(sizedCmds(s0)))
+            (s, seqCmds) <- commandGenTweaker(sized(sizedCmds(s0)))
             tc = TestCase(s0, seqCmds)
-            if precondition(tc)
+            if precondition(s, tc)
         } yield tc
     }
 
@@ -424,6 +446,7 @@ trait ModelBasedSuite {
                       s"Sequential Commands:\n${prettyCmdsRes(testCase.commands, lastCmd)}\n" +
                       s"Last executed command: $lastCmd"
                 )
+            else ModelBasedSuite.recordTestCase(testCase.commands.map(_.label))
             Prop(_ => r)
         } :| "Property failed, see the log above for details"
     }
@@ -662,6 +685,13 @@ object ModelBasedSuite {
     private val totalSimulatedNanos = new java.util.concurrent.atomic.AtomicLong(0L)
     private val startNanoTime = System.nanoTime()
 
+    // Accumulated stats from passed test cases: list of (sequenceLength, labelCounts)
+    private val passedTestCases =
+        new java.util.concurrent.CopyOnWriteArrayList[List[String]]()
+
+    private[commands] def recordTestCase(labels: List[String]): Unit =
+        passedTestCases.add(labels): Unit
+
     // TODO: make optional
     Runtime.getRuntime.addShutdownHook(new Thread {
         override def run(): Unit = {
@@ -681,6 +711,32 @@ object ModelBasedSuite {
               s"---- TestControl ---- GRAND TOTAL real time:      ${realMins}m ${realRemSec}s"
             )
 
+            val cases = passedTestCases.toArray(Array.empty[List[String]])
+            if cases.nonEmpty then {
+                val lengths = cases.map(_.count(_ != "NoOp"))
+                val totalCases = cases.length
+                val avgLen = lengths.sum.toDouble / totalCases
+                val maxLen = lengths.max
+
+                val labelCounts = cases.flatten
+                    .groupBy(identity)
+                    .map { case (label, occurrences) => label -> occurrences.length }
+                    .toList
+                    .sortBy(_._1)
+
+                val totalCommands = labelCounts.map(_._2).sum
+
+                println
+                println(s"---- Command stats ---- passed test cases: $totalCases")
+                println(f"---- Command stats ---- sequence length: avg=${avgLen}%.1f  max=$maxLen")
+                println(s"---- Command stats ---- command distribution (total $totalCommands):")
+                val labelWidth = labelCounts.map(_._1.length).maxOption.getOrElse(0)
+                labelCounts.foreach { case (label, count) =>
+                    val pct = count.toDouble / totalCommands * 100
+                    val paddedLabel = label.padTo(labelWidth, ' ')
+                    println(f"  $paddedLabel  $count%6d  ($pct%5.1f%%)")
+                }
+            }
         }
     })
 

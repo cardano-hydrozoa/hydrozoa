@@ -20,6 +20,12 @@ final case class L2EventTransaction(transaction: Transaction) extends L2Event {
     def volume: Long = transaction.body.value.outputs.map(sto => sto.value.value.coin.value).sum
 }
 
+object L2EventTransaction:
+    def apply(bs: Array[Byte]): L2EventTransaction = {
+        // TODO: Try?
+        L2EventTransaction(Transaction.fromCbor(bs))
+    }
+
 // TODO: Rename to L2Genesis
 // TODO: Fix to work with the new way that virtual utxos are created in deposit transactions.
 object L2EventGenesis:

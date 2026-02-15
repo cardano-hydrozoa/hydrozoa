@@ -44,7 +44,6 @@ object DevKit {
                     resp.body match {
                         case Right(body) =>
                             val jobj = ujson.read(body, trace = false).obj
-                            println(jobj)
                             DevnetInfo(
                               slotLength = jobj.get("slotLength").get.num.longValue,
                               startTime = jobj.get("startTime").get.num.longValue,

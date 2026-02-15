@@ -1,12 +1,11 @@
 package hydrozoa.integration.stage1
 
 import cats.effect.IO
-import cats.syntax.applicative.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorSystem
 import com.suprnation.typelevel.actors.syntax.*
 import hydrozoa.config.head.initialization.{HeadStartTimeGen, testPeersGenesisUtxosL1}
-import hydrozoa.config.head.multisig.timing.{TxTimingGen, generateDefaultTxTiming, generateYaciTxTiming}
+import hydrozoa.config.head.multisig.timing.TxTimingGen
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.{HeadPeersSpec, generateHeadConfig}
 import hydrozoa.config.node.NodeConfig
@@ -19,14 +18,14 @@ import hydrozoa.integration.yaci.DevKit.DevnetInfo
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, quantize}
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost.URL
-import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendMock, MockState, yaciTestSauceGenesis}
+import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendMock, MockState}
 import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, ConsensusActor, EventSequencer}
 import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.block.{BlockEffects, BlockNumber, BlockVersion}
 import java.util.concurrent.TimeUnit
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.commands.{CommandGen, ModelBasedSuite}
-import org.scalacheck.{Gen, Prop, YetAnotherProperties}
+import org.scalacheck.{Gen, Prop}
 import org.typelevel.log4cats.Logger
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scalus.cardano.address.Network
@@ -34,11 +33,6 @@ import scalus.cardano.ledger.rules.{Context, UtxoEnv}
 import scalus.cardano.ledger.{CardanoInfo, CertState, Coin, ProtocolParams, SlotConfig, TransactionHash, Utxos}
 import test.TestPeer
 import test.TestPeer.{Alice, mkWallet}
-
-// TODO: copied from cardano liaison test suite
-class BlockWeaverMock extends Actor[IO, BlockWeaver.Request] {
-    override def receive: Receive[IO, BlockWeaver.Request] = _ => IO.pure(())
-}
 
 /** Integration Stage 1 (the simplest).
   *   - Only three real actors are involved: [[JointLedger]], [[ConsensusActor]], and
@@ -48,44 +42,11 @@ class BlockWeaverMock extends Actor[IO, BlockWeaver.Request] {
   *   - The absence of the weaver prevents automatic block creation, including timed-out major
   *     blocks.
   */
-object Stage1Properties extends YetAnotherProperties("Integration Stage 1"):
 
-    override def overrideParameters(
-        p: org.scalacheck.Test.Parameters
-    ): org.scalacheck.Test.Parameters = {
-        p.withWorkers(1)
-            .withMinSuccessfulTests(100) // 10000
-        // .withMaxSize(100) // 500
-    }
-
-    private val preprod = CardanoNetwork.Preprod
-
-    /** Block propagation.
-      *
-      * This property checks that block promotion Minor -> Major * works correctly. It uses
-      * [[ArbitraryEventsOnly]] which gives L2 event that are invalid. They are not strictly needed
-      * for testing block propagation, which must work on empty blocks, but we additionally decided
-      * to check block briefs.
-      */
-
-    val _ = property("Block propagation works well on L1 mock") = Suite(
-      suiteCardano = Mock(preprod),
-      txTimingGen = generateDefaultTxTiming,
-      mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
-      commandGen = ArbitraryEventsOnly
-    ).property()
-
-    val _ = property("Block propagation works well on Yaci devkit") = Suite(
-      suiteCardano = Yaci(
-        protocolParams = DevKit.yaciParams
-      ),
-      txTimingGen = generateYaciTxTiming,
-      mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
-      commandGen = ArbitraryEventsOnly
-    ).property()
-
-    // val _ = property("Works well on Yaci DevKit (slower, reproducible)") = ???
-    // val _ = property("Works well on Preview (even slower, non-reproducible)") = ???
+// TODO: copied from cardano liaison test suite
+class BlockWeaverMock extends Actor[IO, BlockWeaver.Request] {
+    override def receive: Receive[IO, BlockWeaver.Request] = _ => IO.pure(())
+}
 
 enum SuiteCardano:
     case Mock(
@@ -348,7 +309,7 @@ case class Suite(
             case CardanoBackendConfig.Yaci(url, expectedProtocolParams) =>
                 for {
                     cardanoBackend <- CardanoBackendBlockfrost(url = url)
-                    _ <- loggerIO.info("Wait a bit for Yaci being ready... (")
+                    _ <- loggerIO.info("Wait a bit for Yaci being ready...")
                     _ <- IO.sleep(1.second)
                     _ <- loggerIO.info(
                       "Fetching last epoch parameters to check they match ones in the head config..."
@@ -394,7 +355,7 @@ case class Suite(
         )
 
         _ <- IO.whenA(expectedEffects.nonEmpty)(
-          loggerIO.info("Expected effects:" + expectedEffects.map { case (label, hash) =>
+          loggerIO.debug("Expected effects:" + expectedEffects.map { case (label, hash) =>
               s"\n\t- $label: $hash"
           }.mkString)
         )

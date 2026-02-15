@@ -117,7 +117,7 @@ object VirtualLedgerM {
             _ <- set(newState)
 
             payoutObligations <- lift(
-              AddOutputsToUtxoL2Mutator
+              EvacuatingMutator
                   .utxoPartition(l2EventTx)
                   .bimap(
                     TransactionInvalidError.apply,

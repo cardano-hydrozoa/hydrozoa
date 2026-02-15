@@ -117,6 +117,8 @@ object HeadConfig {
 
             override def headStartTime: QuantizedTime.QuantizedInstant =
                 initializationParams.headStartTime
+
+            // TODO: this type allows non-babbage outputs
             override transparent inline def initialL2Utxos: Utxos =
                 initializationParams.initialL2Utxos
             override transparent inline def initialEquityContributions
