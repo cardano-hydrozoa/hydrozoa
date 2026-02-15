@@ -27,7 +27,7 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
       * not strictly needed for testing block promotion, which must work on empty blocks, but we
       * additionally decided to check block brief at the same time.
       */
-    lazy val _ = property("Block promotion with real L2 txs") = Suite(
+    val _ = property("Block promotion with real L2 txs") = Suite(
       suiteCardano = Mock(preprod),
       txTimingGen = generateDefaultTxTiming,
       mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
@@ -41,7 +41,7 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
       * and once the target is hit finalizes the head immediately. Only command sequences that
       * satisfy the condition "head is finalized" are run.
       */
-    lazy val _ = property("Dusty head finalization") = Suite(
+    val _ = property("Dusty head finalization") = Suite(
       suiteCardano = Mock(preprod),
       txTimingGen = generateDefaultTxTiming,
       mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),

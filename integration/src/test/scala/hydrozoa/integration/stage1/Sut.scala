@@ -18,8 +18,8 @@ import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, Comple
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockNumber}
 import hydrozoa.multisig.ledger.event.LedgerEvent
 import org.scalacheck.commands.SutCommand
-import scala.concurrent.duration.DurationInt
 import org.typelevel.log4cats.Logger
+import scala.concurrent.duration.DurationInt
 
 // ===================================
 // Stage 1 SUT

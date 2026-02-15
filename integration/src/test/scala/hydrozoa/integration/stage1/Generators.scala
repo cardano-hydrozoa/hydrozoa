@@ -329,8 +329,9 @@ case class SimpleCommandGen(generateL2Tx: L2txGen) extends CommandGen[ModelState
                           1 -> Generators
                               .genCompleteBlock(blockNumber)
                               .map(AnyCommand.apply),
-                          10 -> generateL2Tx(state)
-                              .map(AnyCommand.apply)
+                          10 -> (if state.activeUtxos.isEmpty
+                                 then Gen.const(noOp)
+                                 else generateL2Tx(state).map(AnyCommand.apply))
                         )
 
                     case HeadFinalized => Gen.const(noOp)

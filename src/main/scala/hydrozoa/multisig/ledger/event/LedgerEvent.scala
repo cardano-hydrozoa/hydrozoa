@@ -4,8 +4,8 @@ import cats.syntax.all.*
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.virtual.AddOutputsToUtxoL2Mutator.UtxoPartition
-import hydrozoa.multisig.ledger.virtual.{AddOutputsToUtxoL2Mutator, L2EventTransaction}
+import hydrozoa.multisig.ledger.virtual.EvacuatingMutator.UtxoPartition
+import hydrozoa.multisig.ledger.virtual.{EvacuatingMutator, L2EventTransaction}
 import scalus.cardano.ledger.Coin
 
 sealed trait LedgerEvent {
@@ -25,7 +25,7 @@ object LedgerEvent {
     extension (self: TxL2Event)
         def outputPartition: UtxoPartition = {
             val foo = L2EventTransaction(self.tx)
-            AddOutputsToUtxoL2Mutator
+            EvacuatingMutator
                 .utxoPartition(foo)
                 .getOrElse(throw RuntimeException("can't parse L2 tx"))
         }
