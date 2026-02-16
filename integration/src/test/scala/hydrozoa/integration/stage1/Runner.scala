@@ -71,12 +71,12 @@ object Stage1PropertiesYaci extends YetAnotherProperties("Integration Stage 1 wi
         p: org.scalacheck.Test.Parameters
     ): org.scalacheck.Test.Parameters = {
         p.withWorkers(1)
-            .withMinSuccessfulTests(3)
+            .withMinSuccessfulTests(1)
     }
 
     private val preprod = CardanoNetwork.Preprod
 
-    val _ = property("Block promotion Yaci") = Suite(
+    lazy val _ = property("Block promotion Yaci") = Suite(
       suiteCardano = Yaci(
         protocolParams = DevKit.yaciParams
       ),

@@ -24,6 +24,7 @@ import scalus.cardano.txbuilder.{SomeBuildError, TransactionBuilder, Transaction
 sealed trait RolloutTx extends Tx[RolloutTx], RolloutUtxo.Spent, RolloutUtxo.MbProduced {
     def tx: Transaction
     def txLens: Lens[RolloutTx, Transaction]
+    def payoutCount: Int
 }
 
 object RolloutTx {
@@ -38,6 +39,7 @@ object RolloutTx {
         override val rolloutSpent: RolloutUtxo,
         override val txLens: Lens[RolloutTx, Transaction] =
             Focus[Last](_.tx).asInstanceOf[Lens[RolloutTx, Transaction]],
+        override val payoutCount: Int,
         override val resolvedUtxos: ResolvedUtxos
     ) extends RolloutTx
 
@@ -52,6 +54,7 @@ object RolloutTx {
         override val rolloutProduced: RolloutUtxo,
         override val txLens: Lens[RolloutTx, Transaction] =
             Focus[NotLast](_.tx).asInstanceOf[Lens[RolloutTx, Transaction]],
+        override val payoutCount: Int,
         override val resolvedUtxos: ResolvedUtxos
     ) extends RolloutTx,
           RolloutUtxo.Produced
@@ -122,6 +125,9 @@ private object RolloutTxOps {
           * The result is specific to [[Build.Last]] and [[Build.NotLast]].
           */
         def postProcess(ctx: TransactionBuilder.Context): T
+
+        final def payoutCount(ctx: TransactionBuilder.Context): Int =
+            ctx.transaction.body.value.outputs.length - mbRolloutOutputValue.size
 
         /** Given a non-empty vector of payout obligations, partially build a new rollout
           * transaction that discharges as many of them as possible, leaving the rest of the payout
@@ -251,6 +257,7 @@ private object RolloutTxOps {
                 RolloutTx.Last(
                   rolloutSpent = PostProcess.unsafeGetRolloutSpent(ctx),
                   tx = ctx.transaction,
+                  payoutCount = payoutCount(ctx),
                   resolvedUtxos = ctx.resolvedUtxos
                 )
             }
@@ -277,6 +284,7 @@ private object RolloutTxOps {
                   rolloutSpent = PostProcess.unsafeGetRolloutSpent(ctx),
                   rolloutProduced = RolloutUtxo(rolloutProduced),
                   tx = tx,
+                  payoutCount = payoutCount(ctx),
                   resolvedUtxos = ctx.resolvedUtxos
                 )
             }
@@ -465,7 +473,8 @@ private object RolloutTxOps {
         ): PartialResult[T] = {
             import state.*
             NonEmptyVector.fromVector(payoutObligationsRemaining) match
-                case None      => PartialResult.First(builder, ctx, inputValueNeeded)
+                case None =>
+                    PartialResult.First(builder, ctx, inputValueNeeded, builder.payoutCount(ctx))
                 case Some(nev) => PartialResult.NotFirst(builder, ctx, inputValueNeeded, nev)
         }
 
@@ -485,7 +494,8 @@ private object RolloutTxOps {
         final case class First[TT <: RolloutTx] private[PartialResult] (
             override val builder: Build[TT],
             override val ctx: TransactionBuilder.Context,
-            override val inputValueNeeded: Value
+            override val inputValueNeeded: Value,
+            payoutCount: Int
         ) extends PartialResult[TT](Vector.empty)
 
         /** A non-first [[RolloutTx]] in the sequence. As such, it has at least one [[RolloutTx]]
@@ -513,7 +523,8 @@ private object RolloutTxOps {
             def asFirst: PartialResult.First[TT] = First(
               builder = builder,
               ctx = ctx,
-              inputValueNeeded = inputValueNeeded
+              inputValueNeeded = inputValueNeeded,
+              payoutCount = builder.payoutCount(ctx)
             )
         }
     }

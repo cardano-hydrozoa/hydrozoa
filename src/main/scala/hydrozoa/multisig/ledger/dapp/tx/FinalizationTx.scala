@@ -35,7 +35,9 @@ object FinalizationTx {
     export FinalizationTxOps.Result
     export FinalizationTxOps.Error
 
-    sealed trait WithPayouts extends FinalizationTx
+    sealed trait WithPayouts extends FinalizationTx {
+        def payoutCount: Int
+    }
 
     sealed trait NoRollouts extends FinalizationTx
 
@@ -56,6 +58,7 @@ object FinalizationTx {
         override val majorVersionProduced: BlockVersion.Major,
         override val treasurySpent: MultisigTreasuryUtxo,
         override val multisigRegimeUtxoSpent: MultisigRegimeUtxo,
+        override val payoutCount: Int,
         override val resolvedUtxos: ResolvedUtxos,
         override val txLens: Lens[FinalizationTx, Transaction] =
             Focus[WithOnlyDirectPayouts](_.tx).asInstanceOf[Lens[FinalizationTx, Transaction]]
@@ -69,6 +72,7 @@ object FinalizationTx {
         override val treasurySpent: MultisigTreasuryUtxo,
         override val multisigRegimeUtxoSpent: MultisigRegimeUtxo,
         override val rolloutProduced: RolloutUtxo,
+        override val payoutCount: Int,
         override val resolvedUtxos: ResolvedUtxos,
         override val txLens: Lens[FinalizationTx, Transaction] =
             Focus[WithRollouts](_.tx).asInstanceOf[Lens[FinalizationTx, Transaction]]
@@ -349,7 +353,7 @@ private object FinalizationTxOps {
 
                 val tx = finished.ctx.transaction
 
-                def withOnlyDirectPayouts: Result.WithOnlyDirectPayouts =
+                def withOnlyDirectPayouts(payoutCount: Int): Result.WithOnlyDirectPayouts =
                     Result.WithOnlyDirectPayouts(
                       transaction = FinalizationTx.WithOnlyDirectPayouts(
                         majorVersionProduced = majorVersionProduced,
@@ -359,12 +363,14 @@ private object FinalizationTxOps {
                         // this is safe since we always set ttl
                         validityEnd = Slot(tx.body.value.ttl.get)
                             .toQuantizedInstant(config.cardanoInfo.slotConfig),
+                        payoutCount = payoutCount,
                         resolvedUtxos = finished.ctx.resolvedUtxos
                       )
                     )
 
                 def withRollouts(
-                    rollouts: RolloutTxSeq.PartialResult,
+                    payoutCount: Int,
+                    rollouts: RolloutTxSeq.PartialResult
                 ): Result.WithRollouts =
                     Result.WithRollouts(
                       transaction = FinalizationTx.WithRollouts(
@@ -376,18 +382,19 @@ private object FinalizationTxOps {
                         // this is safe since we always set ttl
                         validityEnd = Slot(tx.body.value.ttl.get)
                             .toQuantizedInstant(config.cardanoInfo.slotConfig),
+                        payoutCount = payoutCount,
                         resolvedUtxos = finished.ctx.resolvedUtxos
                       ),
                       rolloutTxSeqPartial = rollouts,
                     )
 
                 mergeResult match {
-                    case NotMerged => withRollouts(rolloutTxSeqPartial)
-                    case Merged(mbFirstSkipped) =>
+                    case NotMerged => withRollouts(0, rolloutTxSeqPartial)
+                    case Merged(mbFirstSkipped, payoutCount) =>
                         mbFirstSkipped match {
-                            case None => withOnlyDirectPayouts
+                            case None => withOnlyDirectPayouts(payoutCount)
                             case Some(firstSkipped) =>
-                                withRollouts(firstSkipped.partialResult)
+                                withRollouts(payoutCount, firstSkipped.partialResult)
                         }
                 }
             }
@@ -429,7 +436,8 @@ private object FinalizationTxOps {
                     case Merged(
                         mbRolloutTxSeqPartialSkipped: Option[
                           RolloutTxSeq.PartialResult.SkipFirst
-                        ]
+                        ],
+                        payoutCount: Int
                     )
                 }
 
@@ -479,7 +487,11 @@ private object FinalizationTxOps {
 
                         mergeResult =
                             if optimisticTrial.isLeft then NotMerged
-                            else Merged(rolloutTxSeqPartial.skipFirst)
+                            else
+                                Merged(
+                                  mbRolloutTxSeqPartialSkipped = rolloutTxSeqPartial.skipFirst,
+                                  payoutCount = firstRolloutTxPartial.payoutCount
+                                )
 
                     } yield (finishedState, mergeResult)
             }
