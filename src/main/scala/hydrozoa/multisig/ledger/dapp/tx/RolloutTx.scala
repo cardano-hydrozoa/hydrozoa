@@ -18,7 +18,7 @@ import scalus.cardano.ledger.rules.TransactionSizeValidator
 import scalus.cardano.ledger.utils.TxBalance
 import scalus.cardano.ledger.{Coin, ProtocolParams, Transaction, TransactionHash, TransactionInput, TransactionOutput as TxOutput, Utxo, Value}
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
-import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, ReferenceOutput, Send, Spend}
+import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend}
 import scalus.cardano.txbuilder.{SomeBuildError, TransactionBuilder, TransactionBuilderStep, TxBalancingError}
 
 sealed trait RolloutTx extends Tx[RolloutTx], RolloutUtxo.Spent, RolloutUtxo.MbProduced {
@@ -150,16 +150,12 @@ private object RolloutTxOps {
                     Some(MD(MD.Rollout(headAddress = config.headMultisigAddress)))
                 )
 
-            private val referenceMultisigRegime =
-                ReferenceOutput(config.multisigRegimeUtxo.asUtxo)
-
             private val commonSteps: List[TransactionBuilderStep] =
-                List(modifyAuxiliaryData, referenceMultisigRegime)
+                List(modifyAuxiliaryData)
 
             /////////////////////////////////////////////////////////
             // Spend rollout
             def spendRollout(resolvedUtxo: Utxo): Spend =
-                // TODO: switch back to witnessAttached after resolving https://github.com/scalus3/scalus/issues/207
                 Spend(resolvedUtxo, config.headMultisigScript.witnessValue)
 
             /////////////////////////////////////////////////////////
