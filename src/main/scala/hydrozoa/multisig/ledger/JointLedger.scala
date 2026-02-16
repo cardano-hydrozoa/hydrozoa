@@ -28,6 +28,7 @@ import monocle.Focus.focus
 import scala.collection.immutable.Queue
 import scala.math.Ordered.orderingToOrdered
 import scalus.builtin.{ByteString, platform}
+import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{AssetName, TransactionHash, TransactionInput}
 
 // Fields of a work-in-progress block, with an additional field for dealing with withdrawn utxos
@@ -415,12 +416,17 @@ final case class JointLedger(
     def completeBlockFinal(args: CompleteBlockFinal): IO[Unit] = {
         import args.*
         import config.txTiming
+
         for {
             p <- unsafeGetProducing
 
             finalizationTxSeq <- this.runDappLedgerM(
               DappLedgerM.finalizeLedger(
-                payoutObligationsRemaining = p.nextBlockData.blockWithdrawnUtxos,
+                payoutObligationsRemaining = Vector.from(
+                  p.virtualLedgerState.activeUtxos.map((i, o) =>
+                      Payout.Obligation(i, o.asInstanceOf[Babbage])
+                  )
+                ),
                 blockCreatedOn = p.startTime,
                 competingFallbackValidityStart = p.startTime
                     + txTiming.minSettlementDuration

@@ -75,22 +75,22 @@ object HydrozoaTransactionMutator {
             _ <- helper(ProtocolParamsViewHashesMatchValidator)
             _ <- helper(WrongNetworkValidator)
             _ <- helper(WrongNetworkInTxBodyValidator)
-            // Native mutators
-            state <- AddOutputsToUtxoL2Mutator.transit(config, state, l2Event)
-            // Upstream mutators
-            state <-
+            // Upstream mutators: removes inputs, adds all outputs (L1 and L2)
+            scalusState <-
                 PlutusScriptsTransactionMutator.transit(
                   CardanoLedgerContext.fromCardanoNetwork(config, time),
                   state.toScalusState,
                   event
                 )
-        yield State.fromScalusState(state)
+            // Native mutators: removes the L1-marked outputs, leaving only L2 outputs
+            state <- EvacuatingMutator.transit(config, State.fromScalusState(scalusState), l2Event)
+        yield state
     }
 }
 
 /** Outputs to the transaction can be marked as "L2 bound" in the transaction metadata.
   */
-object AddOutputsToUtxoL2Mutator:
+object EvacuatingMutator:
     final case class UtxoPartition(
         l1Utxos: IndexedSeq[(TransactionInput, Babbage)],
         l2Utxos: IndexedSeq[(TransactionInput, Babbage)]
@@ -171,6 +171,5 @@ object AddOutputsToUtxoL2Mutator:
     ): Either[String | TransactionException, State] =
         for {
             p <- utxoPartition(event)
-
-            l2UtxosToAdd = p._2
-        } yield state.copy(state.activeUtxos ++ l2UtxosToAdd)
+            l1UtxosToRemove = p.l1Utxos.map(_._1).toSet
+        } yield state.copy(state.activeUtxos -- l1UtxosToRemove)
