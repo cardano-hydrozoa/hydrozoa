@@ -24,6 +24,20 @@ import scalus.cardano.txbuilder.TransactionBuilderStep.*
 import scalus.ledger.api.v1.PubKeyHash
 import scalus.prelude.List as SList
 
+/** Output order:
+  *   - Treasury Utxo (1)
+  *   - Collateral Utxos (n)
+  *   - Peer Vote Utxos (n)
+  *   - Default Vote Utxo
+  * @param validityStart
+  * @param treasurySpent
+  * @param treasuryProduced
+  * @param multisigRegimeUtxoSpent
+  * @param tx
+  * @param txLens
+  * @param resolvedUtxos
+  * @param peerVoteUtxosProduced
+  */
 final case class FallbackTx(
     override val validityStart: QuantizedInstant,
     override val treasurySpent: MultisigTreasuryUtxo,
@@ -31,7 +45,9 @@ final case class FallbackTx(
     override val multisigRegimeUtxoSpent: MultisigRegimeUtxo,
     override val tx: Transaction,
     override val txLens: Lens[FallbackTx, Transaction] = Focus[FallbackTx](_.tx),
-    override val resolvedUtxos: ResolvedUtxos
+    override val resolvedUtxos: ResolvedUtxos,
+    // TODO type better
+    val peerVoteUtxosProduced: NonEmptyList[Utxo]
 ) extends HasValidityStart,
       MultisigTreasuryUtxo.Spent,
       MultisigRegimeUtxo.Spent,
@@ -131,7 +147,7 @@ private object FallbackTxOps {
                 object Treasury {
                     def apply() = Send(
                       Babbage(
-                        address = config.ruleBasedDisputeResolutionAddress,
+                        address = config.ruleBasedTreasuryAddress,
                         value = treasuryUtxoSpent.value,
                         datumOption = Some(Inline(datum.toData)),
                         scriptRef = None
@@ -229,7 +245,7 @@ private object FallbackTxOps {
                 val treasuryProduced = RuleBasedTreasuryUtxo(
                   treasuryTokenName = config.headTokenNames.treasuryTokenName,
                   utxoId = TransactionInput(txId, 0),
-                  address = config.ruleBasedDisputeResolutionAddress,
+                  address = config.ruleBasedTreasuryAddress,
                   datum = RuleBasedTreasuryDatum.Unresolved(Steps.Sends.Treasury.datum),
                   value = treasuryUtxoSpent.value
                 )
@@ -240,7 +256,20 @@ private object FallbackTxOps {
                   treasuryProduced = treasuryProduced,
                   multisigRegimeUtxoSpent = multisigRegimeUtxo,
                   tx = finalized.transaction,
-                  resolvedUtxos = finalized.resolvedUtxos
+                  resolvedUtxos = finalized.resolvedUtxos,
+                  // Ordering:
+                  // - Treasury (1)
+                  // - Collateral  (n)
+                  // - Peer votes (n)
+                  // - Default vote (1)
+                  peerVoteUtxosProduced = {
+                      val inputs = List
+                          .range(1 + config.headPeerIds.length, 1 + config.headPeerIds.length * 2)
+                          .map(idx => TransactionInput(txId, idx))
+                      val outputs = Steps.Sends.Votes.Peers.apply().map(_.output).toList
+                      val list = inputs.zip(outputs).map(Utxo(_, _))
+                      NonEmptyList.fromListUnsafe(list)
+                  }
                 )
             }
         }

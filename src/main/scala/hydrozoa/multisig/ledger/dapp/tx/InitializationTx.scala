@@ -377,8 +377,7 @@ private object InitializationTxOps {
             ).toEither.left
                 .map(_ => InvalidTransactionError("data decoding of treasury datum failed"))
             _ <-
-                if decodedTreasuryDatum == MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum then
-                    Right(())
+                if decodedTreasuryDatum == expectedTreasuryDatum then Right(())
                 else
                     Left(
                       InvalidTransactionError(

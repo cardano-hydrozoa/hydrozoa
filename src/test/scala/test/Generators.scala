@@ -158,21 +158,21 @@ object Generators {
           script = script
         )
 
-        def genPayoutObligation(network: Network): Gen[Payout.Obligation] =
+        def genPayoutObligation(network: CardanoNetwork.Section): Gen[Payout.Obligation] =
             for {
                 coin <- arbitrary[Coin]
                 res <- genKnownCoinPayoutObligation(network, coin)
             } yield res
 
         def genKnownCoinPayoutObligation(
-            network: Network,
+            network: CardanoNetwork.Section,
             coin: Coin
         ): Gen[Payout.Obligation] =
             for {
                 l2Input <- arbitrary[TransactionInput]
 
                 address0 <- arbitrary[ShelleyAddress]
-                address = address0.copy(network = network)
+                address = address0.copy(network = network.network)
                 datum <- arbitrary[ByteString]
                 output = Babbage(
                   address = address,
@@ -204,10 +204,6 @@ object Generators {
 
         /** @param peer
           *   The test peer who's PKH this output will be at
-          * @param network
-          *   The network of the address, defaults to Testnet
-          * @param params
-          *   The protocol params, defaults to testProtocolParams
           * @param minimumCoin
           *   an optional minimum coin. Should be positive, defaults to 0
           * @param datumGenerator
@@ -384,7 +380,7 @@ object Generators {
         def genL2EventTransactionAttack: Gen[
           (VirtualLedgerM.Config, State, L2EventTransaction) => (
               L2EventTransaction,
-              (String | TransactionException)
+              String | TransactionException
           )
         ] = {
 
@@ -512,7 +508,7 @@ object Generators {
             require(
               n > 0,
               "`normalizedWeights(n : Int) : Gen[NormalizedWeights]` requires a positive `n`, but it " +
-                  s"received ${n}"
+                  s"received $n"
             )
             // One entry gets everything, other entries get none
             val singletonDistributions: Gen[NormalizedWeights] =
@@ -560,7 +556,7 @@ object Generators {
             require(
               n > 0,
               "`distribution(amount: SafeLong, n : Int) : Gen[NonEmptyList[SafeLong]]` requires a positive `n`, but it " +
-                  s"received ${n}"
+                  s"received $n"
             )
             for {
                 weights <- normalizedWeights(n)
@@ -568,9 +564,6 @@ object Generators {
         }
 
         /** Generate a coin distribution among `n` bags. Note: Some bags may be empty
-          * @param coin
-          * @param n
-          * @return
           */
         def genCoinDistribution(coin: Coin, n: Int): Gen[NonEmptyList[Coin]] = {
             require(
@@ -586,7 +579,6 @@ object Generators {
           * output and will throw an exception if there is not enough ada to cover min ada.
           * @param additionalCoin
           *   additional coin to add to the existing value in [[transactionOutputs]]
-          * @param transactionOutputs
           */
         def genAdditionalCoinDistributionWithMinAda(
             additionalCoin: Coin,
