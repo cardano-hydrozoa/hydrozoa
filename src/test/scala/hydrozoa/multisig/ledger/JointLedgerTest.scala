@@ -9,7 +9,6 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.actor.{ActorSystem, test as _}
 import hydrozoa.config.head.HeadPeersSpec.Exact
-import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.peers.{TestPeers, generateTestPeers}
 import hydrozoa.config.node.{NodeConfig, generateNodeConfig}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.*
@@ -27,8 +26,8 @@ import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.event.LedgerEvent.RegisterDeposit
 import hydrozoa.multisig.ledger.event.LedgerEventId
 import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag.{Invalid, Valid}
-import hydrozoa.multisig.ledger.virtual.L2EventGenesis
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
+import hydrozoa.multisig.ledger.virtual.tx.L2Genesis
 import io.bullet.borer.Cbor
 import java.util.concurrent.TimeUnit
 import org.scalacheck.*
@@ -428,7 +427,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                     majorBlock.body.depositsRefunded == List.empty
               )
 
-              expectedUtxos = L2EventGenesis(
+              expectedUtxos = L2Genesis(
                 Queue.from(depositRefundTxSeq.depositTx.depositProduced.virtualOutputs.toList),
                 TransactionHash.fromByteString(
                   scalus.builtin.platform.blake2b_256(

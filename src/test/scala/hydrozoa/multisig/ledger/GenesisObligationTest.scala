@@ -1,7 +1,7 @@
 package hydrozoa.multisig.ledger
 
 //import cats.data.NonEmptyList
-//import hydrozoa.multisig.ledger.virtual.GenesisObligation
+//import hydrozoa.multisig.ledger.virtual.tx.GenesisObligation
 //import io.bullet.borer.Cbor
 //import org.scalacheck.*
 //import scalus.cardano.ledger.{Coin, OriginalCborByteArray, TransactionOutput}

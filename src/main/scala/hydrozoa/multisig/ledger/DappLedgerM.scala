@@ -80,7 +80,10 @@ object DappLedgerM {
       * NOTE: This checks SOME time bounds. Specifically, it checks whether the deposit's absorption
       * validity period ended prior to the start of the current block.
       */
-    def registerDeposit(req: RegisterDeposit, blockStartTime: QuantizedInstant): DappLedgerM[Unit] = {
+    def registerDeposit(
+        req: RegisterDeposit,
+        blockStartTime: QuantizedInstant
+    ): DappLedgerM[Unit] = {
         import req.*
         for {
             config <- ask

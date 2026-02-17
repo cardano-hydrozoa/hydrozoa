@@ -6,13 +6,13 @@ import cats.effect.IO
 import cats.syntax.bifunctor.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
-import hydrozoa.multisig.ledger.VirtualLedgerM.Error.{CborParseError, TransactionInvalidError}
+import hydrozoa.multisig.ledger.VirtualLedgerM.Error.{TransactionInvalidError, TxParseError}
 import hydrozoa.multisig.ledger.dapp.tx.Tx
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.*
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.{KzgCommitment, kzgCommitment}
-import io.bullet.borer.Cbor
+import hydrozoa.multisig.ledger.virtual.tx.{L2Genesis, L2Tx}
 import monocle.syntax.all.*
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.rules.State as ScalusState
@@ -52,7 +52,7 @@ object VirtualLedgerM {
 
     /** Applies a genesis event, fully updating the VirtualLedger's state */
     // TODO: Assertion to make sure none of these utxos already exist
-    def applyGenesisEvent(genesisEvent: L2EventGenesis): VirtualLedgerM[Unit] =
+    def applyGenesisEvent(genesisEvent: L2Genesis): VirtualLedgerM[Unit] =
         for {
             s <- get
             newState = s.copy(s.activeUtxos ++ genesisEvent.asUtxos)
@@ -73,7 +73,7 @@ object VirtualLedgerM {
     // control flow we need. But I think this is the clearest way to go, and since its cheaper to just compute a hash
     // twice, compared to building a "mock tx" and then adding the real Kzg commit, and more clear than using CPS,
     // I think this is the way to go for now.
-    def mockApplyGenesis(genesisEvent: L2EventGenesis): VirtualLedgerM[KzgCommitment] =
+    def mockApplyGenesis(genesisEvent: L2Genesis): VirtualLedgerM[KzgCommitment] =
         for {
             s <- get
             newState = s.copy(s.activeUtxos ++ genesisEvent.asUtxos)
@@ -89,16 +89,8 @@ object VirtualLedgerM {
         // is currently run as a ledger validation rule, but could also be run during parsing.
         for {
             config <- ask
-            l2EventTx <- {
-                given ProtocolVersion = config.cardanoProtocolVersion
-                lift(
-                  Cbor.decode(tx)
-                      .to[Transaction]
-                      .valueTry
-                      .toEither
-                      .bimap(CborParseError.apply, L2EventTransaction.apply)
-                )
-            }
+
+            l2Tx <- lift(L2Tx.parse(tx).left.map(TxParseError.apply))
 
             s <- get
 
@@ -108,7 +100,7 @@ object VirtualLedgerM {
                     time = time,
                     config = config,
                     state = s,
-                    l2Event = l2EventTx
+                    l2Tx = l2Tx
                   )
                   .left
                   .map(TransactionInvalidError.apply)
@@ -116,14 +108,7 @@ object VirtualLedgerM {
 
             _ <- set(newState)
 
-            payoutObligations <- lift(
-              EvacuatingMutator
-                  .utxoPartition(l2EventTx)
-                  .bimap(
-                    TransactionInvalidError.apply,
-                    _.payoutObligations
-                  )
-            )
+            payoutObligations = l2Tx.payoutObligations
         } yield payoutObligations
 
     private def lift[A](e: Either[VirtualLedgerM.Error, A]): VirtualLedgerM[A] =
@@ -154,7 +139,7 @@ object VirtualLedgerM {
 
         sealed trait ErrorApplyGenesisTx extends Error
 
-        final case class CborParseError(e: Throwable) extends Error
+        final case class TxParseError(msg: String) extends Error
 
         final case class TransactionInvalidError(e: String | TransactionException) extends Error
     }

@@ -11,8 +11,8 @@ import hydrozoa.multisig.ledger.VirtualLedgerM
 import hydrozoa.multisig.ledger.block.{BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.event.LedgerEvent
 import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag
+import hydrozoa.multisig.ledger.virtual.HydrozoaTransactionMutator
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.kzgCommitment
-import hydrozoa.multisig.ledger.virtual.{HydrozoaTransactionMutator, L2EventTransaction}
 import scalus.cardano.ledger.Utxos
 import test.TestPeer
 
@@ -149,12 +149,12 @@ implicit object LedgerEventCommandModel extends ModelCommand[L2TxCommand, Unit, 
 
     override def runState(cmd: L2TxCommand, state: ModelState): (Unit, ModelState) =
 
-        val l2TransactionEvent = L2EventTransaction.apply(cmd.event.tx)
+        val l2TransactionEvent = ??? // L2Tx.apply(cmd.event.tx)
         val ret = HydrozoaTransactionMutator.transit(
           config = state.headConfig,
           time = state.currentTime.instant,
           state = VirtualLedgerM.State(state.activeUtxos),
-          l2Event = l2TransactionEvent
+          l2Tx = l2TransactionEvent
         )
         ret match {
             case Left(err) =>
@@ -223,8 +223,6 @@ implicit object CompleteBlockCommandModel
         activeUtxos: Utxos
     ): BlockBrief = {
 
-        import hydrozoa.multisig.ledger.event.LedgerEvent.outputPartition
-
         lazy val majorBlock = Major(
           header = BlockHeader.Major(
             blockNum = blockNumber,
@@ -268,7 +266,7 @@ implicit object CompleteBlockCommandModel
         else if txTiming.blockCanStayMinor(creationTime, competingFallbackStartTime)
         then {
             val hasWithdrawals = currentBlockEvents.exists(_._1 match {
-                case e: LedgerEvent.TxL2Event => e.outputPartition.l1Utxos.nonEmpty
+                case e: LedgerEvent.TxL2Event => ??? // e.outputPartition.l1Utxos.nonEmpty
                 case _                        => false
             })
             val hasDepositsAbsorbed: Boolean = ???

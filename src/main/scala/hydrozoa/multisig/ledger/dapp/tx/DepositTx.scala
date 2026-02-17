@@ -10,7 +10,7 @@ import hydrozoa.lib.cardano.scalus.ledger.api.TransactionOutputEncoders.given
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.explainConst
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
-import hydrozoa.multisig.ledger.virtual.GenesisObligation
+import hydrozoa.multisig.ledger.virtual.tx.GenesisObligation
 import io.bullet.borer.{Cbor, Encoder}
 import monocle.{Focus, Lens}
 import scala.util.{Failure, Success, Try}
