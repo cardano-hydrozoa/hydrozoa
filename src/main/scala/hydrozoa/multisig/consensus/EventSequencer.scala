@@ -13,7 +13,6 @@ import hydrozoa.multisig.ledger.block.{BlockBody, BlockEffects, BlockStatus}
 import hydrozoa.multisig.ledger.dapp.tx.RefundTx
 import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag
 import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId, LedgerEventNumber}
-import scalus.cardano.ledger.Coin
 
 // TODO: move around
 final case class L2TxRequest(
@@ -74,7 +73,7 @@ trait EventSequencer(
                     newNum <- state.nextLedgerEventNum()
                     newId = LedgerEventId(config.ownHeadPeerId.peerNum, newNum)
                     newEvent: LedgerEvent = x match {
-                        case y: LedgerEvent.L2TxEvent       => y.copy(eventId = newId)
+                        case y: LedgerEvent.L2TxEvent    => y.copy(eventId = newId)
                         case y: LedgerEvent.DepositEvent => y.copy(eventId = newId)
                     }
                     _ <- conn.blockWeaver ! newEvent

@@ -1,7 +1,7 @@
 package hydrozoa.integration.stage1
 
 import com.bloxbean.cardano.client.util.HexUtil
-import hydrozoa.config.head.initialization.generateCappedValue
+import hydrozoa.config.head.initialization.CappedValueGen.generateCappedValue
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.integration.stage1.BlockCycle.HeadFinalized
 import hydrozoa.integration.stage1.Generators.L2txGen
@@ -26,7 +26,6 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{AuxiliaryData, Coin, Metadatum, SlotConfig, TransactionInput, TransactionOutput, Utxo, Utxos, Value, Word64}
 import scalus.cardano.txbuilder.TransactionBuilder
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Fee, ModifyAuxiliaryData, Send, Spend}
-import test.Generators.Hydrozoa.genEventId
 
 val logger1: org.slf4j.Logger = Logging.logger("Stage1.Generators")
 
@@ -240,13 +239,12 @@ object Generators:
 
             witness = state.ownTestPeer.wallet.mkVKeyWitness(txUnsigned)
             txSigned = txUnsigned.attachVKeyWitnesses(List(witness))
-            eventId <- genEventId
 
             _ = logger1.trace(s"l2Tx: ${HexUtil.encodeHexString(txSigned.toCbor)}")
 
         } yield L2TxCommand(
           event = L2TxEvent(
-            eventId = eventId,
+            eventId = state.nextLedgerEventId,
             tx = txSigned.toCbor
           ),
           txStrategy = txStrategy,

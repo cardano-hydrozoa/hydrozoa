@@ -137,7 +137,7 @@ final case class JointLedger(
     private def registerLedgerEvent(e: LedgerEvent): IO[Unit] = {
         e match {
             case req: DepositEvent => registerDeposit(req)
-            case tx: L2TxEvent        => applyInternalTxL2(tx)
+            case tx: L2TxEvent     => applyInternalTxL2(tx)
         }
     }
 

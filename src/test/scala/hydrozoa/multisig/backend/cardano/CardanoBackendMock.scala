@@ -6,6 +6,7 @@ import cats.effect.{IO, Ref}
 import cats.syntax.all.catsSyntaxFlatMapOps
 import cats.~>
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.backend.cardano.CardanoBackend.Error
 import monocle.Focus.focus
 import scalus.cardano.address.ShelleyAddress
@@ -13,6 +14,8 @@ import scalus.cardano.ledger.rules.STS.Mutator
 import scalus.cardano.ledger.rules.{CardanoMutator, Context, State as LedgerState}
 import scalus.cardano.ledger.{AssetName, PolicyId, ProtocolParams, RedeemerTag, Slot, Transaction, TransactionHash, Utxos, Value}
 import scalus.uplc.builtin.Data
+
+val logger = Logging.logger("test.CardanoBackendMock")
 
 final case class MockState(
     ledgerState: LedgerState,
@@ -183,7 +186,10 @@ object CardanoBackendMock {
         initialState: MockState,
         mutator: Mutator = CardanoMutator,
         mkContext: Long => Context = Context.testMainnet
-    ): IO[CardanoBackend[IO]] =
+    ): IO[CardanoBackend[IO]] = {
+        logger.info("Running Cardano backend mock in IO...")
+        logger.debug(s"initial utxo ids: ${initialState.ledgerState.utxos.map(_._1)}")
+
         Ref.of[IO, MockState](initialState).map { stateRef =>
             val mock = new CardanoBackendMock(mutator, mkContext)
             // TODO: this is awkward, but this requires the mending of Scalus
@@ -233,4 +239,5 @@ object CardanoBackendMock {
                     transformer(mock.fetchLatestParams)
             }
         }
+    }
 }

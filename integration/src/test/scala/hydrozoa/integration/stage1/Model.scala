@@ -9,12 +9,16 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.ledger.VirtualLedgerM
 import hydrozoa.multisig.ledger.block.{BlockNumber, BlockVersion}
-import hydrozoa.multisig.ledger.event.LedgerEvent
 import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag
+import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId, LedgerEventNumber}
 import hydrozoa.multisig.ledger.virtual.HydrozoaTransactionMutator
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.kzgCommitment
+import hydrozoa.multisig.ledger.virtual.tx.L2Tx
+import monocle.syntax.all.focus
 import scalus.cardano.ledger.Utxos
 import test.TestPeer
+
+import LedgerEventNumber.increment
 
 val logger = Logging.logger("Suite1.Model")
 
@@ -33,6 +37,7 @@ case class ModelState(
     operationalLiquidationConfig: NodeOperationLiquidationConfig,
 
     // "Mutable" part
+    nextLedgerEventNumber: LedgerEventNumber,
     // Block producing cycle
     currentTime: CurrentTime,
     blockCycle: BlockCycle,
@@ -46,6 +51,9 @@ case class ModelState(
     activeUtxos: Utxos,
 ) {
     override def toString: String = "<model state (hidden)>"
+
+    def nextLedgerEventId: LedgerEventId =
+        LedgerEventId(peerNum = ownTestPeer.peerNum, eventNum = nextLedgerEventNumber)
 }
 
 enum CurrentTime(qi: QuantizedInstant):
@@ -95,7 +103,7 @@ import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import org.scalacheck.commands.ModelCommand
 
-implicit object DelayCommandModel extends ModelCommand[DelayCommand, Unit, ModelState] {
+given ModelCommand[DelayCommand, Unit, ModelState] with {
 
     override def runState(cmd: DelayCommand, state: ModelState): (Unit, ModelState) = {
         val newBlock = state.blockCycle match {
@@ -121,7 +129,7 @@ implicit object DelayCommandModel extends ModelCommand[DelayCommand, Unit, Model
 
 }
 
-implicit object StartBlockCommandModel extends ModelCommand[StartBlockCommand, Unit, ModelState] {
+given ModelCommand[StartBlockCommand, Unit, ModelState] with {
 
     override def runState(cmd: StartBlockCommand, state: ModelState): (Unit, ModelState) = {
         state.currentTime match {
@@ -145,38 +153,44 @@ implicit object StartBlockCommandModel extends ModelCommand[StartBlockCommand, U
     }
 }
 
-implicit object LedgerEventCommandModel extends ModelCommand[L2TxCommand, Unit, ModelState] {
+given ModelCommand[L2TxCommand, Unit, ModelState] with {
 
     override def runState(cmd: L2TxCommand, state: ModelState): (Unit, ModelState) =
 
-        val l2TransactionEvent = ??? // L2Tx.apply(cmd.event.tx)
+        val l2Tx: L2Tx = L2Tx
+            .parse(cmd.event.tx)
+            .fold(err => throw RuntimeException(s"Failed to parse L2Tx: $err"), identity)
+
         val ret = HydrozoaTransactionMutator.transit(
           config = state.headConfig,
           time = state.currentTime.instant,
           state = VirtualLedgerM.State(state.activeUtxos),
-          l2Tx = l2TransactionEvent
+          l2Tx = l2Tx
         )
-        ret match {
+
+        val newState = ret match {
             case Left(err) =>
                 logger.debug(s"invalid L2 tx ${cmd.event.eventId}: ${err}")
-                () -> state.copy(
-                  currentBlockEvents =
-                      state.currentBlockEvents :+ (cmd.event -> ValidityFlag.Invalid),
-                )
+                state
+                    .focus(_.currentBlockEvents)
+                    .modify(_ :+ (cmd.event -> ValidityFlag.Invalid))
             case Right(mutatorState) =>
-                () -> state.copy(
-                  currentBlockEvents =
-                      state.currentBlockEvents :+ (cmd.event -> ValidityFlag.Valid),
-                  activeUtxos = mutatorState.activeUtxos
-                )
+                state
+                    .focus(_.currentBlockEvents)
+                    .modify(_ :+ (cmd.event -> ValidityFlag.Valid))
+                    .focus(_.activeUtxos)
+                    .replace(mutatorState.activeUtxos)
         }
+
+        () -> newState
+            .focus(_.nextLedgerEventNumber)
+            .modify(_.increment)
 }
 
-implicit object CompleteBlockCommandModel
-    extends ModelCommand[CompleteBlockCommand, BlockBrief, ModelState] {
+given ModelCommand[CompleteBlockCommand, BlockBrief, ModelState] with {
 
     private val logger: org.slf4j.Logger =
-        org.slf4j.LoggerFactory.getLogger(CompleteBlockCommandModel.getClass)
+        org.slf4j.LoggerFactory.getLogger(getClass)
 
     override def runState(
         cmd: CompleteBlockCommand,

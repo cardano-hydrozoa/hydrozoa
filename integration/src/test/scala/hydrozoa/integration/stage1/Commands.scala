@@ -124,6 +124,8 @@ implicit object CompleteBlockCommandLabel extends CommandLabel[CompleteBlockComm
 // Deposit Request Command
 // ===================================
 
+/** The command corresponds to the register deposit action with the event id known upfront.
+  */
 final case class RegisterDepositCommand(
     registerDeposit: LedgerEvent.DepositEvent
 )
@@ -132,6 +134,8 @@ final case class RegisterDepositCommand(
 // Submit Deposit Command
 // ===================================
 
+/** The command submits the deposit transaction from the corresponding register deposit event.
+  */
 final case class SubmitDepositCommand(
     depositEventId: LedgerEventId
 )

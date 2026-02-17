@@ -4,7 +4,8 @@ import cats.effect.IO
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorSystem
 import com.suprnation.typelevel.actors.syntax.*
-import hydrozoa.config.head.initialization.{HeadStartTimeGen, testPeersGenesisUtxosL1}
+import hydrozoa.config.head.initialization.HeadStartTimeGen.HeadStartTimeGen
+import hydrozoa.config.head.initialization.InitializationParametersGenTopDown
 import hydrozoa.config.head.multisig.timing.TxTimingGen
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.config.head.{HeadPeersSpec, generateHeadConfig}
@@ -23,6 +24,7 @@ import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, ConsensusActor,
 import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.block.{BlockEffects, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.dapp.tx.{FinalizationTx, SettlementTx}
+import hydrozoa.multisig.ledger.event.LedgerEventNumber
 import java.util.concurrent.TimeUnit
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.commands.{CommandGen, ModelBasedSuite}
@@ -140,7 +142,10 @@ case class Suite(
               generateCardanoNetwork = generateCardanoNetwork,
               generateHeadStartTime = generateHeadStartTime,
               generateTxTiming = generateTxTiming,
-              generateGenesisUtxo = testPeersGenesisUtxosL1(testPeers)
+              generateInitializationParameters = InitializationParametersGenTopDown.GenWithDeps(
+                generateGenesisUtxosL1 =
+                    InitializationParametersGenTopDown.testPeersGenesisUtxosL1(testPeers)
+              )
             )
 
             _ = logger.debug(s"total contingency: ${headConfig.fallbackContingency}")
@@ -154,6 +159,7 @@ case class Suite(
           headConfig = headConfig,
           operationalMultisigConfig = operationalMultisigConfig,
           operationalLiquidationConfig = operationalLiquidationConfig,
+          nextLedgerEventNumber = LedgerEventNumber(0),
           currentTime = BeforeHappyPathExpiration(headConfig.headStartTime),
           blockCycle = BlockCycle.Done(BlockNumber.zero, BlockVersion.Full.zero),
           competingFallbackStartTime =
