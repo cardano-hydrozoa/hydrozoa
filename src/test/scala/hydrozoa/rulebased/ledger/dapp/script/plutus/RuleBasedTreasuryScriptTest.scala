@@ -8,8 +8,8 @@ import scala.io.Source
 import scalus.builtin.{BLS12_381_G1_Element, BLS12_381_G2_Element, ByteString, Data}
 import scalus.cardano.ledger.ScriptHash
 import scalus.ledger.api.v3.ScriptContext
-import scalus.prelude.List
-import scalus.prelude.crypto.bls12_381.G1
+import scalus.cardano.onchain.plutus.prelude.List
+import scalus.cardano.onchain.plutus.prelude.crypto.bls12_381.G1
 import scalus.|>
 import supranational.blst.Scalar
 

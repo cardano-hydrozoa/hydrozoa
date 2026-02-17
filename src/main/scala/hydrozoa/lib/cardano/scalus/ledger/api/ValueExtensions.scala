@@ -3,8 +3,8 @@ package hydrozoa.lib.cardano.scalus.ledger.api
 import scalus.Compile
 import scalus.ledger.api.v1.Value.{-, zero}
 import scalus.ledger.api.v3.{PolicyId, TokenName, Value}
-import scalus.prelude.List.Cons
-import scalus.prelude.{List, fail, require}
+import scalus.cardano.onchain.plutus.prelude.List.Cons
+import scalus.cardano.onchain.plutus.prelude.{List, fail, require}
 
 @Compile
 object ValueExtension:

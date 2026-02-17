@@ -41,7 +41,7 @@ package hydrozoa.rulebased.ledger.dapp.tx
 //    val g1Generator =
 //        hex"97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb"
 //    val dummyParams = ByteString.empty
-//    val dummySetup = scalus.prelude.List.empty
+//    val dummySetup = scalus.cardano.onchain.plutus.prelude.List.empty
 //
 //    val emptyResolvedDatum = ResolvedDatum(
 //      headMp = headMp,

@@ -13,7 +13,7 @@ import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.ledger.api.v3.{Address, PosixTime}
-import scalus.prelude.Option as ScalusOption
+import scalus.cardano.onchain.plutus.prelude.Option as ScalusOption
 
 /** NOTE: absorptionEnd must be absorptionStart + absorptionDuration for some [[TxTiming]] and
   * [[SlotConfig]] Perhaps we want to make this more opaque and carry around those configuration

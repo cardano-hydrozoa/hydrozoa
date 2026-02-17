@@ -245,7 +245,7 @@ object DisputeResolutionValidator extends Validator {
                 )
 
                 // Temporary workaround
-                import scalus.prelude.List.{Cons, Nil}
+                import scalus.cardano.onchain.plutus.prelude.List.{Cons, Nil}
                 @tailrec
                 def verifySignatures(a: List[ByteString], b: List[ByteString]): Unit =
                     a match

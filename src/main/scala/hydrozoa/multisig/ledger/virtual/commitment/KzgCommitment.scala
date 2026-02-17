@@ -7,8 +7,8 @@ import scalus.builtin.Data.toData
 import scalus.builtin.{BLS12_381_G1_Element, ByteString}
 import scalus.cardano.ledger.*
 import scalus.ledger.api.v3.TxInInfo
-import scalus.prelude.List as SList
-import scalus.prelude.crypto.bls12_381.G1
+import scalus.cardano.onchain.plutus.prelude.List as SList
+import scalus.cardano.onchain.plutus.prelude.crypto.bls12_381.G1
 import scalus.|>
 import supranational.blst.{P1, Scalar}
 

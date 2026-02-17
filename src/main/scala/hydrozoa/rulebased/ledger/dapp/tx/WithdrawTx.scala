@@ -18,7 +18,7 @@ import scalus.cardano.txbuilder.Datum.DatumInlined
 import scalus.cardano.txbuilder.ScriptSource.PlutusScriptValue
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Send, Spend, ValidityEndSlot}
 import scalus.ledger.api.v3.{TxId, TxOutRef}
-import scalus.prelude.List as SList
+import scalus.cardano.onchain.plutus.prelude.List as SList
 
 final case class WithdrawTx(
     treasuryUtxoSpent: RuleBasedTreasuryUtxo,

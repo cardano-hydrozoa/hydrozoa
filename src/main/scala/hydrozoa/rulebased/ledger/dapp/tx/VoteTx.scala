@@ -20,7 +20,7 @@ import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.Datum.DatumInlined
 import scalus.cardano.txbuilder.ScriptSource.PlutusScriptValue
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
-import scalus.prelude.List as SList
+import scalus.cardano.onchain.plutus.prelude.List as SList
 
 final case class VoteTx(
     // TODO: what we want to keep here if anything?

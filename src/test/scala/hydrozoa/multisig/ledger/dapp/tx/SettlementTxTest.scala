@@ -23,8 +23,8 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
 import scalus.ledger.api.v1
 import scalus.ledger.api.v1.Value.valueOrd
-import scalus.prelude.Ord.<=
-import scalus.prelude.{Option as SOption, Ord}
+import scalus.cardano.onchain.plutus.prelude.Ord.<=
+import scalus.cardano.onchain.plutus.prelude.{Option as SOption, Ord}
 import test.*
 import test.Generators.Hydrozoa.*
 import test.Generators.Other

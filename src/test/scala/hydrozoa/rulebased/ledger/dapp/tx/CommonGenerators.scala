@@ -21,7 +21,7 @@ import scalus.cardano.ledger.{BlockHeader as _, Utxo, *}
 import scalus.crypto.ed25519.VerificationKey
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
 import scalus.ledger.api.v3.TokenName
-import scalus.prelude.List as SList
+import scalus.cardano.onchain.plutus.prelude.List as SList
 import test.*
 import test.Generators.Hydrozoa.genPubkeyAddress
 

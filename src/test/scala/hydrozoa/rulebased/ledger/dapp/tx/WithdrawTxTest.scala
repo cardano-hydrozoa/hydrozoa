@@ -23,7 +23,7 @@ package hydrozoa.rulebased.ledger.dapp.tx
 //import scalus.cardano.ledger.rules.FeesOkValidator
 //import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
 //import scalus.ledger.api.v3.TokenName
-//import scalus.prelude as scalus
+//import scalus.cardano.onchain.plutus.prelude as scalus
 //import supranational.blst.Scalar
 //import test.*
 //

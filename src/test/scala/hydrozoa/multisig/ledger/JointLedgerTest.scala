@@ -38,7 +38,7 @@ import scala.collection.immutable.Queue
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scalus.builtin.ByteString
 import scalus.cardano.ledger.{Block as _, BlockHeader as _, Coin, *}
-import scalus.prelude.Option as SOption
+import scalus.cardano.onchain.plutus.prelude.Option as SOption
 import test.*
 import test.Generators.Hydrozoa.*
 import test.Generators.Other.genCoinDistributionWithMinAdaUtxo

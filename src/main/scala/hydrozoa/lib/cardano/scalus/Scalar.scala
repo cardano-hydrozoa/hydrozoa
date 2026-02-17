@@ -4,8 +4,8 @@ import scala.annotation.tailrec
 import scalus.Compile
 import scalus.builtin.Builtins.{byteStringToInteger, integerToByteString}
 import scalus.builtin.ByteString
-import scalus.prelude.Option.{None, Some}
-import scalus.prelude.{Option, require}
+import scalus.cardano.onchain.plutus.prelude.Option.{None, Some}
+import scalus.cardano.onchain.plutus.prelude.{Option, require}
 
 case class Scalar(private val unScalar: BigInt)
 

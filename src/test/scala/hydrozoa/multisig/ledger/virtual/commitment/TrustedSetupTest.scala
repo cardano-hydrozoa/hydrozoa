@@ -4,7 +4,7 @@ import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers.*
 import scala.annotation.nowarn
 import scalus.builtin.{BLS12_381_G1_Element, BLS12_381_G2_Element}
-import scalus.prelude.crypto.bls12_381.{G1, G2}
+import scalus.cardano.onchain.plutus.prelude.crypto.bls12_381.{G1, G2}
 import scalus.|>
 import supranational.blst.{P1, P2}
 

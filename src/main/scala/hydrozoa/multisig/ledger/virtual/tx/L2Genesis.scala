@@ -10,7 +10,7 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.Script.Native
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{Coin, Hash as _, Script, ScriptRef, TransactionHash, TransactionInput, TransactionOutput, Utxos, Value}
-import scalus.prelude.Option as SOption
+import scalus.cardano.onchain.plutus.prelude.Option as SOption
 
 final case class L2Genesis(
     // We allow  this to be empty so that we can do the "push the fallback forward" tx

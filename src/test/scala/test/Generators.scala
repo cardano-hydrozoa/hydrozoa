@@ -30,7 +30,7 @@ import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.{Babbage, valueLens}
 import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
-import scalus.prelude.Option as SOption
+import scalus.cardano.onchain.plutus.prelude.Option as SOption
 import scalus.|>
 import spire.math.{Rational, SafeLong}
 import test.Generators.Hydrozoa.genAdaOnlyPubKeyUtxo

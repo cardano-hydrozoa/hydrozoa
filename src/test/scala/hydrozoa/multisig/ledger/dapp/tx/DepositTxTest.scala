@@ -21,7 +21,7 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{Hash, *}
 import scalus.cardano.txbuilder.TransactionBuilder
-import scalus.prelude.Option as SOption
+import scalus.cardano.onchain.plutus.prelude.Option as SOption
 import scalus.testing.kit.TestUtil.genByteStringOfN
 import test.*
 import test.Generators.Hydrozoa.*

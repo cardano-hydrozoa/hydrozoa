@@ -7,7 +7,7 @@ import scalus.*
 import scalus.builtin.Data.{FromData, ToData}
 import scalus.builtin.{ByteString, Data, FromData, ToData}
 import scalus.ledger.api.v3.PubKeyHash
-import scalus.prelude.{===, Eq}
+import scalus.cardano.onchain.plutus.prelude.{===, Eq}
 
 object VoteDatum {
     def default(commitment: KzgCommitment): VoteDatum = VoteState.VoteDatum(
