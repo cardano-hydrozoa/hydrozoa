@@ -57,7 +57,7 @@ implicit object StartBlockCommandLabel extends CommandLabel[StartBlockCommand]:
 
 /** Feed a single L2 transaction into the current block. */
 final case class L2TxCommand(
-    event: LedgerEvent.TxL2Event,
+    event: LedgerEvent.L2TxEvent,
     txStrategy: TxStrategy,
     txMutator: TxMutator
 )
@@ -125,7 +125,7 @@ implicit object CompleteBlockCommandLabel extends CommandLabel[CompleteBlockComm
 // ===================================
 
 final case class RegisterDepositCommand(
-    registerDeposit: LedgerEvent.RegisterDeposit
+    registerDeposit: LedgerEvent.DepositEvent
 )
 
 // ===================================

@@ -266,7 +266,7 @@ implicit object CompleteBlockCommandModel
         else if txTiming.blockCanStayMinor(creationTime, competingFallbackStartTime)
         then {
             val hasWithdrawals = currentBlockEvents.exists(_._1 match {
-                case e: LedgerEvent.TxL2Event => ??? // e.outputPartition.l1Utxos.nonEmpty
+                case e: LedgerEvent.L2TxEvent => ??? // e.outputPartition.l1Utxos.nonEmpty
                 case _                        => false
             })
             val hasDepositsAbsorbed: Boolean = ???

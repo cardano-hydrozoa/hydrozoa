@@ -11,7 +11,7 @@ import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.dapp.txseq
 import hydrozoa.multisig.ledger.dapp.txseq.{DepositRefundTxSeq, FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigTreasuryUtxo}
-import hydrozoa.multisig.ledger.event.LedgerEvent.RegisterDeposit
+import hydrozoa.multisig.ledger.event.LedgerEvent.DepositEvent
 import hydrozoa.multisig.ledger.event.LedgerEventId
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
@@ -81,7 +81,7 @@ object DappLedgerM {
       * validity period ended prior to the start of the current block.
       */
     def registerDeposit(
-        req: RegisterDeposit,
+        req: DepositEvent,
         blockStartTime: QuantizedInstant
     ): DappLedgerM[Unit] = {
         import req.*

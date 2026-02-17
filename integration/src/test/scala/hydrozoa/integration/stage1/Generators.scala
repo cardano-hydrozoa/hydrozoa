@@ -16,7 +16,7 @@ import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.dapp.token.CIP67
-import hydrozoa.multisig.ledger.event.LedgerEvent.TxL2Event
+import hydrozoa.multisig.ledger.event.LedgerEvent.L2TxEvent
 import org.scalacheck.Gen
 import org.scalacheck.commands.{AnyCommand, CommandGen, noOp}
 import scalus.builtin.Builtins.blake2b_224
@@ -245,7 +245,7 @@ object Generators:
             _ = logger1.trace(s"l2Tx: ${HexUtil.encodeHexString(txSigned.toCbor)}")
 
         } yield L2TxCommand(
-          event = TxL2Event(
+          event = L2TxEvent(
             eventId = eventId,
             tx = txSigned.toCbor
           ),

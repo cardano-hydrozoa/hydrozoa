@@ -23,7 +23,7 @@ import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Scenarios.*
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.dapp.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
-import hydrozoa.multisig.ledger.event.LedgerEvent.RegisterDeposit
+import hydrozoa.multisig.ledger.event.LedgerEvent.DepositEvent
 import hydrozoa.multisig.ledger.event.LedgerEventId
 import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag.{Invalid, Valid}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
@@ -135,7 +135,7 @@ object JointLedgerTestHelpers {
                 state <- lift(env.jointLedger ?: JointLedger.Requests.GetState)
             } yield state
 
-        def registerDeposit(req: RegisterDeposit): JLTest[Unit] = {
+        def registerDeposit(req: DepositEvent): JLTest[Unit] = {
             for {
                 jl <- asks[TestR, ActorRef[IO, JointLedger.Requests.Request]](_.jointLedger)
                 _ <- lift(jl ? req)
@@ -242,7 +242,7 @@ object JointLedgerTestHelpers {
             validityEnd: QuantizedInstant,
             eventId: LedgerEventId,
             blockStartTime: QuantizedInstant
-        ): JLTest[(DepositRefundTxSeq, RegisterDeposit)] = {
+        ): JLTest[(DepositRefundTxSeq, DepositEvent)] = {
             import Requests.*
             for {
                 env <- ask[TestR]
@@ -321,7 +321,7 @@ object JointLedgerTestHelpers {
                 )
 
                 req =
-                    RegisterDeposit(
+                    DepositEvent(
                       depositTxBytes = peer.signTx(depositRefundTxSeq.depositTx.tx).toCbor,
                       refundTxBytes = peer.signTx(depositRefundTxSeq.refundTx.tx).toCbor,
                       depositFee = Coin.zero,
