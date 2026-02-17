@@ -8,6 +8,9 @@ import scalus.cardano.txbuilder.TransactionBuilder
 
 export CardanoNetwork.ensureMinAda
 
+type StandardCardanoNetwork =
+    CardanoNetwork.Mainnet.type | CardanoNetwork.Preprod.type | CardanoNetwork.Preview.type
+
 enum CardanoNetwork(_cardanoInfo: CardanoInfo) extends CardanoNetwork.Section {
     case Mainnet extends CardanoNetwork(CardanoInfo.mainnet)
     case Preprod extends CardanoNetwork(CardanoInfo.preprod)

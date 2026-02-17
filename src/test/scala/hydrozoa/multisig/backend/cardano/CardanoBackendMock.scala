@@ -162,7 +162,7 @@ class CardanoBackendMock private (
         } yield ret
     }
 
-    def latestParams: MockStateF[Either[Error, ProtocolParams]] = {
+    def fetchLatestParams: MockStateF[Either[Error, ProtocolParams]] = {
         // As long as paramters don't depend on the slot number it's fine
         State.pure(Right(mkContext(0).env.params))
     }
@@ -229,8 +229,8 @@ object CardanoBackendMock {
                 override def submitTx(tx: Transaction): IO[Either[CardanoBackend.Error, Unit]] =
                     transformer(mock.submitTx(tx))
 
-                def latestParams: IO[Either[Error, ProtocolParams]] =
-                    transformer(mock.latestParams)
+                def fetchLatestParams: IO[Either[Error, ProtocolParams]] =
+                    transformer(mock.fetchLatestParams)
             }
         }
 }

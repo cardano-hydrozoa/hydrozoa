@@ -6,7 +6,7 @@ import com.suprnation.actor.ActorSystem
 import com.suprnation.typelevel.actors.syntax.*
 import hydrozoa.config.head.initialization.{HeadStartTimeGen, testPeersGenesisUtxosL1}
 import hydrozoa.config.head.multisig.timing.TxTimingGen
-import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.config.head.{HeadPeersSpec, generateHeadConfig}
 import hydrozoa.config.node.NodeConfig
 import hydrozoa.config.node.operation.liquidation.generateNodeOperationLiquidationConfig
@@ -222,8 +222,7 @@ case class Suite(
                     )
                 case Yaci(url, _) =>
                     CardanoBackendConfig.Yaci(
-                      url = Right(url),
-                      expectedProtocolParams = headConfig.cardanoInfo.protocolParams
+                      network = Right((CardanoNetwork.Custom(headConfig.cardanoInfo), url)),
                     )
             }
             cardanoBackend <- mkCardanoBackend(cardanoBackendConfig)
@@ -280,8 +279,7 @@ case class Suite(
             protocolParams: ProtocolParams
         )
         case Yaci(
-            url: Either[CardanoBackendBlockfrost.Network, CardanoBackendBlockfrost.URL],
-            expectedProtocolParams: ProtocolParams
+            network: Either[StandardCardanoNetwork, (CardanoNetwork.Custom, URL)],
         )
 
     private def mkCardanoBackend(config: CardanoBackendConfig): IO[CardanoBackend[IO]] =
@@ -307,15 +305,20 @@ case class Suite(
                     )
                 } yield cardanoBackend
 
-            case CardanoBackendConfig.Yaci(url, expectedProtocolParams) =>
+            case CardanoBackendConfig.Yaci(network) =>
+                val expectedProtocolParams = network.fold(
+                  _.asInstanceOf[CardanoNetwork].cardanoProtocolParams,
+                  _._1.cardanoProtocolParams
+                )
                 for {
-                    cardanoBackend <- CardanoBackendBlockfrost(url = url)
                     _ <- loggerIO.info("Wait a bit for Yaci being ready...")
                     _ <- IO.sleep(1.second)
                     _ <- loggerIO.info(
-                      "Fetching last epoch parameters to check they match ones in the head config..."
+                      "Creating Cardano backend and fetching the last epoch parameters to check they match ones in the head config..."
                     )
-                    response <- cardanoBackend.latestParams
+                    cardanoBackend <- CardanoBackendBlockfrost(network)
+                    // Here we use start-up parameters
+                    response <- cardanoBackend.getStartupParams
                     check = response
                         .fold(
                           err => throw RuntimeException(s"Cannot obtain protocol parameters: $err"),

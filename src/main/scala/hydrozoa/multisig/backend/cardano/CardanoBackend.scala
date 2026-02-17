@@ -66,7 +66,7 @@ trait CardanoBackend[F[_]]:
 
     /** Retrieve the latest protocol parameters.
       */
-    def latestParams: F[Either[Error, ProtocolParams]]
+    def fetchLatestParams: F[Either[Error, ProtocolParams]]
 
 object CardanoBackend:
 
