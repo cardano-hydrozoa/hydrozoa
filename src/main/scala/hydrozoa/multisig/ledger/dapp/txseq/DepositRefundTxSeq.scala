@@ -13,7 +13,7 @@ import hydrozoa.multisig.ledger.virtual.tx.GenesisObligation
 import io.bullet.borer.Cbor
 import monocle.syntax.all.*
 import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.{Coin, TransactionOutput, TransactionWitnessSet, Utxo, Value}
+import scalus.cardano.ledger.{Coin, TaggedSortedSet, TransactionOutput, TransactionWitnessSet, Utxo, Value}
 
 final case class DepositRefundTxSeq(
     depositTx: DepositTx,
@@ -228,9 +228,15 @@ private object DepositRefundTxSeqOps {
                 )
 
                 _ <- Either.cond(
-                  refundTx
-                      .focus(_.tx.witnessSet)
-                      .replace(TransactionWitnessSet.empty) == expectedRefundTx,
+                  {
+                      // The transaction we build to check against will not have signatures, but it will have
+                      // the native script witness. Thus, we need to ONLY nullify signatures and not the entire
+                      // witness set.
+                      val actualRefundTxWithNullifiedVKeyWitnesses = refundTx
+                          .focus(_.tx.witnessSet.vkeyWitnesses)
+                          .replace(TaggedSortedSet.empty)
+                      actualRefundTxWithNullifiedVKeyWitnesses == expectedRefundTx
+                  },
                   (),
                   Parse.Error.RefundTxMismatch(refundTx, expectedRefundTx)
                 )

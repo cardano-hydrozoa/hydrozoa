@@ -27,21 +27,40 @@ import hydrozoa.multisig.ledger.event.LedgerEvent.RegisterDeposit
 import hydrozoa.multisig.ledger.event.LedgerEventId
 import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag.{Invalid, Valid}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
-import hydrozoa.multisig.ledger.virtual.tx.L2Genesis
+import hydrozoa.multisig.ledger.virtual.tx.{GenesisObligation, L2Genesis}
 import io.bullet.borer.Cbor
+
 import java.util.concurrent.TimeUnit
 import org.scalacheck.*
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.PropertyM.monadForPropM
+import org.scalacheck.rng.Seed
+import org.scalacheck.util.Pretty
+
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scalus.builtin.ByteString
-import scalus.cardano.ledger.{Block as _, BlockHeader as _, Coin, *}
+import scalus.cardano.ledger.{Coin, Block as _, BlockHeader as _, *}
 import scalus.prelude.Option as SOption
 import test.*
 import test.Generators.Hydrozoa.*
 import test.Generators.Other.genCoinDistributionWithMinAdaUtxo
 import test.TestM.*
+
+// Pretty Printers for more managable scalacheck logs
+given ppNodeConfig: (NodeConfig => Pretty) = nodeConfig =>
+    Pretty(_ => "NodeConfig (too long to print)")
+
+given ppTestPeers: (TestPeers => Pretty) = testPeers =>
+    Pretty(_ =>
+        "TestPeers:"
+            + s"\n\t Num Peers: ${testPeers._testPeers.length}"
+            + (testPeers._testPeers.map(testPeer =>
+                f"\n\t${testPeer._1.peerNum.toInt}%2d"
+                    + s" | ${testPeer._2.wallet.exportVerificationKey.take(2)}(...)"
+                    + s" | ${testPeer._2.name} "
+            ))
+    )
 
 /** This object contains component-specific helpers to utilize the TestM type.
   *
@@ -169,12 +188,12 @@ object JointLedgerTestHelpers {
                 beforeState <- lift(jl ?: JointLedger.Requests.GetState)
                 _ <- lift(jl ! req)
                 afterState <- lift(jl ?: JointLedger.Requests.GetState)
-                _ <- assertWith(
+                _ <- assertWith[TestR](
                   condition = beforeState.isInstanceOf[JointLedger.Producing],
                   msg = "A CompleteBlockRegular request was sent to the JointLedger and it succeeded, but" +
                       " the JointLedger wasn't in the Producing state before the request was sent"
                 )
-                _ <- assertWith(
+                _ <- assertWith[TestR](
                   condition = afterState.isInstanceOf[JointLedger.Done],
                   msg = "A CompleteBlockRegular request was sent to the JointLedger and it succeeded, but" +
                       " the JointLedger didn't transition to the Done state after the request was processed"
@@ -206,7 +225,7 @@ object JointLedgerTestHelpers {
                 state <- getState
                 p <- state match {
                     case _: Done => throw RuntimeException("Expected a Producing State, got Done")
-                    case p: Producing => TestM.pure(p)
+                    case p: Producing => TestM.pure[TestR, Producing](p)
                 }
             } yield p
 
@@ -214,7 +233,7 @@ object JointLedgerTestHelpers {
             for {
                 state <- getState
                 d <- state match {
-                    case d: Done => TestM.pure(d)
+                    case d: Done => TestM.pure[TestR, Done](d)
                     case _: Producing =>
                         throw RuntimeException("Expected a Done State, got Producing")
                 }
@@ -233,7 +252,7 @@ object JointLedgerTestHelpers {
                 peer = env.testPeers._testPeers.head._2
 
                 virtualOutputs <-
-                    pick(
+                    pick[TestR, NonEmptyList[GenesisObligation]](
                       Gen.nonEmptyListOf(
                         genGenesisObligation(env.config, peer, minimumCoin = Coin.ada(5))
                       ).map(NonEmptyList.fromListUnsafe)
@@ -251,7 +270,7 @@ object JointLedgerTestHelpers {
                   virtualOutputs.map(vo => Value(vo.l2OutputValue)).toList
                 )
 
-                utxosFunding <- pick((for {
+                utxosFunding <- pick[TestR, NonEmptyList[Utxo]]((for {
                     utxosWith0Coin <- Gen
                         .nonEmptyListOf(
                           genAdaOnlyPubKeyUtxo(env.config, peer, minimumCoin = Coin.ada(3))
@@ -285,7 +304,7 @@ object JointLedgerTestHelpers {
 
                 // refund(i).validity_start = deposit(i).absorption_end + silence_period
                 // refund(i).validity_end = ∅
-                _ <- assertWith(
+                _ <- assertWith[TestR](
                   msg = "refund start validity is incorrect",
                   condition = {
                       depositRefundTxSeq.refundTx.tx.body.value.validityStartSlot.isDefined
@@ -299,7 +318,7 @@ object JointLedgerTestHelpers {
                   }
                 )
 
-                _ <- assertWith(
+                _ <- assertWith[TestR](
                   msg = "refund end validity is incorrect",
                   condition = depositRefundTxSeq.refundTx.tx.body.value.ttl.isEmpty
                 )
@@ -349,15 +368,15 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               jlState <- getState
               dlState = jlState.dappLedgerState
 
-              _ <- assertWith(
+              _ <- assertWith[TestR](
                 msg = s"We should have 1 deposit in the state. We have ${dlState.deposits.length}",
                 condition = dlState.deposits.length == 1
               )
-              _ <- assertWith(
+              _ <- assertWith[TestR](
                 msg = "Correct deposit(s) in state",
                 condition = dlState.deposits.head._2 == depositRefundTxSeq.depositTx.depositProduced
               )
-              _ <- assertWith(
+              _ <- assertWith[TestR](
                 msg = "Correct treasury in state",
                 condition = dlState.treasury == env.config.initializationTx.treasuryProduced
               )
@@ -368,7 +387,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
           _ <-
               for {
                   jointLedgerState <- getState
-                  _ <- assertWith(
+                  _ <- assertWith[TestR](
                     msg = "Block with no deposits/withdrawal should be Minor",
                     condition = jointLedgerState match {
                         case JointLedger.Done(block: Block.Unsigned.Minor, _, _, _) => true
@@ -380,7 +399,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                           .asInstanceOf[JointLedger.Done]
                           .producedBlock
                           .asInstanceOf[Block.Unsigned.Minor]
-                  _ <- assertWith(
+                  _ <- assertWith[TestR](
                     msg = "Block's deposit absorbed and deposits refunded should both be empty",
                     condition = minorBlock.body.depositsRefunded.isEmpty
                         && minorBlock.body.depositsAbsorbed.isEmpty
@@ -395,7 +414,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
           )
           _ <- for {
               jointLedgerState <- getState
-              _ <- assertWith(
+              _ <- assertWith[TestR](
                 msg = "Finished block should be minor because no deposits were absorbed",
                 condition = jointLedgerState match {
                     case JointLedger.Done(block: Block.Unsigned.Minor, _, _, _) => true
@@ -417,16 +436,19 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
           _ <- for {
               jlState <- getState
               majorBlock <- jlState match {
-                  case JointLedger.Done(block: Block.Unsigned.Major, _, _, _) => pure(block)
-                  case _ => fail("FAIL: finished block should be major")
+                  case JointLedger.Done(block: Block.Unsigned.Major, _, _, _) =>
+                      pure[TestR, Block.Unsigned.Major](block)
+                  case _ =>
+                      fail[TestR, Block.Unsigned.Major]("FAIL: finished block should be major")
               }
 
-              _ <- assertWith(
+              _ <- assertWith[TestR](
                 msg = "Deposits should be correct with absorbed deposit",
                 condition = majorBlock.body.depositsAbsorbed == List(depositReq.eventId) &&
                     majorBlock.body.depositsRefunded == List.empty
               )
 
+              // Expected UTxOs: The genesis utxos from the deposit + the initial l2 sete
               expectedUtxos = L2Genesis(
                 Queue.from(depositRefundTxSeq.depositTx.depositProduced.virtualOutputs.toList),
                 TransactionHash.fromByteString(
@@ -437,9 +459,9 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                         )
                   )
                 )
-              ).asUtxos
+              ).asUtxos ++ env.config.initialL2Utxos
 
-              _ <- assertWith(
+              _ <- assertWith[TestR](
                 msg = "Virtual Ledger should contain expected active utxo",
                 condition = jlState.virtualLedgerState.activeUtxos == expectedUtxos
               )
@@ -450,7 +472,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                 KzgCommitment.hashToScalar(expectedUtxos)
               )
 
-              _ <- assertWith(
+              _ <- assertWith[TestR](
                 msg =
                     s"KZG Commitment is correct.\n\tObtained: ${kzgCommit}\n\tExpected: ${expectedKzg}",
                 condition = kzgCommit == expectedKzg
@@ -493,12 +515,12 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               (depositRefundTxSeq, depositReq) = seqAndReq
               jlState <- unsafeGetProducing
 
-              _ <- assertWith(
+              _ <- assertWith[TestR](
                 msg = "Deposit should not be in dapp ledger state",
                 condition = jlState.dappLedgerState.deposits == Queue.empty
               )
 
-              _ <- assertWith(
+              _ <- assertWith[TestR](
                 msg = "Deposit should be in transient fields as invalid",
                 condition = jlState.nextBlockData.events == List((depositReq.eventId, Invalid))
               )
@@ -516,14 +538,14 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               (depositRefundTxSeq, depositReq) = seqAndReq
               jlState <- unsafeGetProducing
 
-              _ <- assertWith(
+              _ <- assertWith[TestR](
                 msg = "Deposit should be in dapp ledger state",
                 condition = jlState.dappLedgerState.deposits == Queue(
                   (depositReq.eventId, depositRefundTxSeq.depositTx.depositProduced)
                 )
               )
 
-              _ <- assertWith(
+              _ <- assertWith[TestR](
                 msg = "Deposit should be in transient fields as valid",
                 condition = jlState.nextBlockData.events.last == (depositReq.eventId, Valid)
               )
@@ -557,14 +579,14 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               (depositRefundTxSeq, depositReq) = seqAndReq
               jlState <- unsafeGetProducing
 
-              _ <- assertWith(
+              _ <- assertWith[TestR](
                 msg = "Deposit should be in dapp ledger state",
                 condition = jlState.dappLedgerState.deposits == Queue(
                   (depositReq.eventId, depositRefundTxSeq.depositTx.depositProduced)
                 )
               )
 
-              _ <- assertWith(
+              _ <- assertWith[TestR](
                 msg = "Deposit should be in transient fields as valid",
                 condition = jlState.nextBlockData.events == List((depositReq.eventId, Valid))
               )
@@ -576,14 +598,14 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               )
               jlState <- unsafeGetDone
 
-              _ <- assertWith(
+              _ <- assertWith[TestR](
                 msg = "Produced block should be Major",
                 condition = jlState.producedBlock.isInstanceOf[Block.Unsigned.Major]
               )
 
               majorBlock = jlState.producedBlock.asInstanceOf[Block.Unsigned.Major]
 
-              _ <- assertWith(
+              _ <- assertWith[TestR](
                 msg = "Block should contain absorbed deposit",
                 condition = majorBlock.body.depositsAbsorbed == List(depositReq.eventId)
               )
@@ -616,14 +638,14 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               (depositRefundTxSeq, depositReq) = seqAndReq
               jlState <- unsafeGetProducing
 
-              _ <- assertWith(
+              _ <- assertWith[TestR](
                 msg = "Deposit should be in dapp ledger state",
                 condition = jlState.dappLedgerState.deposits == Queue(
                   (depositReq.eventId, depositRefundTxSeq.depositTx.depositProduced)
                 )
               )
 
-              _ <- assertWith(
+              _ <- assertWith[TestR](
                 msg = "Deposit should be in transient fields as valid",
                 condition = jlState.nextBlockData.events == List((depositReq.eventId, Valid))
               )
@@ -635,7 +657,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               )
               jlState <- unsafeGetDone
 
-              _ <- assertWith(
+              _ <- assertWith[TestR](
                 msg = "Produced block should be Minor",
                 condition = jlState.producedBlock.isInstanceOf[Block.Unsigned.Minor]
               )
@@ -643,7 +665,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               minorBlock = jlState.producedBlock.asInstanceOf[Block.Unsigned.Minor]
 
               // This is trivial statement which may be removed
-              _ <- assertWith(
+              _ <- assertWith[TestR](
                 msg = "Block should not contain absorbed deposit",
                 condition = minorBlock.body.depositsAbsorbed == List.empty
               )

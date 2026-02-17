@@ -9,7 +9,6 @@ import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuilderResultSimple, explainConst}
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import monocle.{Focus, Lens}
-
 import scala.annotation.tailrec
 import scala.util.{Failure, Success}
 import scalus.builtin.ByteString
@@ -19,7 +18,7 @@ import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeExceptio
 import scalus.cardano.ledger.rules.TransactionSizeValidator
 import scalus.cardano.ledger.utils.TxBalance
 import scalus.cardano.txbuilder.*
-import scalus.cardano.txbuilder.ScriptSource.{NativeScriptAttached, NativeScriptValue}
+import scalus.cardano.txbuilder.ScriptSource.NativeScriptValue
 import scalus.cardano.txbuilder.SomeBuildError.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, ReferenceOutput, Send, Spend, ValidityStartSlot}

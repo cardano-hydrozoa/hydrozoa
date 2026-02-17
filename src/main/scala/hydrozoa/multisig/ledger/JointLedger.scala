@@ -152,7 +152,7 @@ final case class JointLedger(
               action = DappLedgerM.registerDeposit(req, blockStartTime),
               // Left == deposit rejected
               // FIXME: This should probably be returned as sum type in the Right
-              onFailure = _ =>
+              onFailure = _e =>
                   for {
                       oldState <- unsafeGetProducing
                       newState = oldState
@@ -160,7 +160,7 @@ final case class JointLedger(
                           .modify(_.appended((eventId, Invalid)))
                       _ <- state.set(newState)
                   } yield (),
-              onSuccess = _ =>
+              onSuccess = _s =>
                   for {
                       oldState <- unsafeGetProducing
                       newState = oldState
