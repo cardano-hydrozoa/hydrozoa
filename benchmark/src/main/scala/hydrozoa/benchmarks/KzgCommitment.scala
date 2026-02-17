@@ -6,14 +6,14 @@ import org.openjdk.jmh.annotations.*
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Gen.frequency
 import org.scalacheck.{Arbitrary, Gen}
-import scalus.builtin.Builtins.{blake2b_224, serialiseData}
-import scalus.builtin.Data.toData
-import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.*
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.{genMapOfSizeFromArbitrary, given}
-import scalus.ledger.api.v3.TxInInfo
-import scalus.prelude.List as SList
+import scalus.cardano.onchain.plutus.prelude.List as SList
+import scalus.cardano.onchain.plutus.v3.TxInInfo
+import scalus.uplc.builtin.Builtins.{blake2b_224, serialiseData}
+import scalus.uplc.builtin.Data.toData
+import scalus.uplc.builtin.{ByteString, Data}
 import scalus.|>
 import supranational.blst.{P1, Scalar}
 
