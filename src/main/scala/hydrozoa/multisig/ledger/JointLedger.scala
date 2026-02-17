@@ -147,9 +147,9 @@ final case class JointLedger(
     private def registerDeposit(req: RegisterDeposit): IO[Unit] = {
         import req.*
         for {
-
+            blockStartTime <- unsafeGetProducing.map(_.startTime)
             _ <- this.runDappLedgerM(
-              action = DappLedgerM.registerDeposit(req),
+              action = DappLedgerM.registerDeposit(req, blockStartTime),
               // Left == deposit rejected
               // FIXME: This should probably be returned as sum type in the Right
               onFailure = _ =>

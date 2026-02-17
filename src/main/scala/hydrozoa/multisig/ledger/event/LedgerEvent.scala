@@ -35,12 +35,7 @@ object LedgerEvent {
         refundTxBytes: Array[Byte],
         override val eventId: LedgerEventId,
         virtualOutputsBytes: Array[Byte],
-        donationToTreasury: Coin, // depositFee
-        txTiming: TxTiming,
-        // TODO: likely we have to remove this field.
-        // As I can see, it's used for passing block start time from the join ledger
-        // to the dapp ledger and we have to fins a better way to do it.
-        blockStartTime: QuantizedInstant
+        depositFee: Coin,
     ) extends LedgerEvent
 
 }
