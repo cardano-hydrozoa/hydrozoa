@@ -12,7 +12,7 @@ import hydrozoa.multisig.ledger.joint.obligation.Payout
 import monocle.{Focus, Lens}
 import scala.Function.const
 import scala.annotation.tailrec
-import scalus.builtin.ByteString
+import scalus.uplc.builtin.ByteString
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.rules.TransactionSizeValidator
 import scalus.cardano.ledger.utils.TxBalance

@@ -5,7 +5,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import scalus.builtin.Builtins.blake2b_224
+import scalus.uplc.builtin.Builtins.blake2b_224
 import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.AddrKeyHash
 import scalus.crypto.ed25519.VerificationKey

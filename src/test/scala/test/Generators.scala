@@ -20,8 +20,8 @@ import monocle.syntax.all.*
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen, Prop, Properties}
 import scala.collection.immutable.SortedMap
-import scalus.builtin.Data.toData
-import scalus.builtin.{ByteString, Data}
+import scalus.uplc.builtin.Data.toData
+import scalus.uplc.builtin.{ByteString, Data}
 import scalus.cardano.address.*
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.ledger.*

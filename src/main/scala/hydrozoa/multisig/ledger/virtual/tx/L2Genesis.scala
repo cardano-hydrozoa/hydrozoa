@@ -4,7 +4,7 @@ import cats.syntax.all.*
 import hydrozoa.*
 import hydrozoa.multisig.ledger.dapp.txseq.DepositRefundTxSeq
 import scala.collection.immutable.Queue
-import scalus.builtin.Data
+import scalus.uplc.builtin.Data
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.Script.Native

@@ -21,7 +21,7 @@ import scala.concurrent.Await
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration.DurationInt
 import scala.jdk.CollectionConverters.*
-import scalus.builtin.{ByteString, Data}
+import scalus.uplc.builtin.{ByteString, Data}
 import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger.{AssetName, PolicyId, ProtocolParams, Transaction, TransactionHash, TransactionInput, TransactionOutput, Utxos}
 import scalus.cardano.node.BlockfrostProvider
@@ -99,7 +99,7 @@ class CardanoBackendBlockfrost private (
         )
 
     private def convert(utxo: Utxo): (TransactionInput, TransactionOutput) = {
-        import scalus.builtin.ByteString
+        import scalus.uplc.builtin.ByteString
         import scalus.cardano.ledger.{Blake2b_256, Coin, DatumOption, Hash, HashPurpose, MultiAsset, TransactionInput, TransactionOutput, Value}
 
         import scala.collection.immutable.SortedMap
@@ -149,7 +149,7 @@ class CardanoBackendBlockfrost private (
                 if inlineDatumHex.isEmpty then None
                 else {
                     import io.bullet.borer.Cbor
-                    import scalus.builtin.Data
+                    import scalus.uplc.builtin.Data
                     scala.util.Try {
                         val datumBytes = ByteString.fromHex(inlineDatumHex)
                         val data = Cbor.decode(datumBytes.bytes).to[Data].value

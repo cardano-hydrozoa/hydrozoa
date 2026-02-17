@@ -6,8 +6,8 @@ import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo.DepositUtxoConversionError
 import hydrozoa.multisig.ledger.virtual.tx.GenesisObligation
 import scala.util.{Failure, Success, Try}
 import scalus.*
-import scalus.builtin.Data.{FromData, ToData, fromData, toData}
-import scalus.builtin.{Data, FromData, ToData}
+import scalus.uplc.builtin.Data.{FromData, ToData, fromData, toData}
+import scalus.uplc.builtin.{Data, FromData, ToData}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline

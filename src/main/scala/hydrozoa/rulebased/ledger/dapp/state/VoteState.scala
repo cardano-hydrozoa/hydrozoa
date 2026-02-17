@@ -4,8 +4,8 @@ import cats.data.NonEmptyList
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.{AwaitingVote, Voted}
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{KzgCommitment, VoteDatum, VoteStatus}
 import scalus.*
-import scalus.builtin.Data.{FromData, ToData}
-import scalus.builtin.{ByteString, Data, FromData, ToData}
+import scalus.uplc.builtin.Data.{FromData, ToData}
+import scalus.uplc.builtin.{ByteString, Data, FromData, ToData}
 import scalus.ledger.api.v3.PubKeyHash
 import scalus.cardano.onchain.plutus.prelude.{===, Eq}
 

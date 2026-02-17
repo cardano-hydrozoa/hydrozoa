@@ -16,8 +16,8 @@ import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuilderResultSimple, explain
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import monocle.{Focus, Lens}
 import scala.util.Try
-import scalus.builtin.Data
-import scalus.builtin.Data.toData
+import scalus.uplc.builtin.Data
+import scalus.uplc.builtin.Data.toData
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage

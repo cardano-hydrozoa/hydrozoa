@@ -9,8 +9,8 @@ import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.*
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.dapp.utxo.{OwnVoteUtxo, RuleBasedTreasuryUtxo, VoteUtxoCast}
 import scala.util.{Failure, Success, Try}
-import scalus.builtin.Data.{fromData, toData}
-import scalus.builtin.{ByteString, Data}
+import scalus.uplc.builtin.Data.{fromData, toData}
+import scalus.uplc.builtin.{ByteString, Data}
 import scalus.cardano.address.Network
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage

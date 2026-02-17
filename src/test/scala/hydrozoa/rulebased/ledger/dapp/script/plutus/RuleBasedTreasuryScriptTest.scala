@@ -5,7 +5,7 @@ import hydrozoa.multisig.ledger.virtual.commitment.{KzgCommitment, TrustedSetup}
 import org.scalatest.funsuite.AnyFunSuite
 import scala.annotation.nowarn
 import scala.io.Source
-import scalus.builtin.{BLS12_381_G1_Element, BLS12_381_G2_Element, ByteString, Data}
+import scalus.uplc.builtin.{BLS12_381_G1_Element, BLS12_381_G2_Element, ByteString, Data}
 import scalus.cardano.ledger.ScriptHash
 import scalus.ledger.api.v3.ScriptContext
 import scalus.cardano.onchain.plutus.prelude.List

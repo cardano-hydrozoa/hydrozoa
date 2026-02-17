@@ -14,8 +14,8 @@ import hydrozoa.multisig.ledger.virtual.tx.GenesisObligation
 import io.bullet.borer.{Cbor, Encoder}
 import monocle.{Focus, Lens}
 import scala.util.{Failure, Success, Try}
-import scalus.builtin.Data.toData
-import scalus.builtin.{ByteString, platform}
+import scalus.uplc.builtin.Data.toData
+import scalus.uplc.builtin.{ByteString, platform}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.txbuilder.*

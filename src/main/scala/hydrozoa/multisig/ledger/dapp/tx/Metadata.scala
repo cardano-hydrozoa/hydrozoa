@@ -5,7 +5,7 @@ import io.bullet.borer
 import io.bullet.borer.derivation.ArrayBasedCodecs.derived
 import io.bullet.borer.{Cbor, Decoder, Encoder}
 import scala.util.Try
-import scalus.builtin.ByteString
+import scalus.uplc.builtin.ByteString
 import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger.AuxiliaryData.Metadata as MD
 import scalus.cardano.ledger.{AuxiliaryData, Hash32, KeepRaw, Metadatum, OriginalCborByteArray, ProtocolVersion, Transaction, TransactionInput, Word64}

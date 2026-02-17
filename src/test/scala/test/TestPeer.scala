@@ -12,8 +12,8 @@ import hydrozoa.lib.cardano.wallet.WalletModule
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, HeadPeerWallet}
 import org.scalacheck.Gen
 import scala.collection.mutable
-import scalus.builtin.Builtins.blake2b_224
-import scalus.builtin.ByteString
+import scalus.uplc.builtin.Builtins.blake2b_224
+import scalus.uplc.builtin.ByteString
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}

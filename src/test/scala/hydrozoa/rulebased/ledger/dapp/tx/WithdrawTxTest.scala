@@ -17,7 +17,7 @@ package hydrozoa.rulebased.ledger.dapp.tx
 //import org.scalatest.funsuite.AnyFunSuite
 //import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 //import scala.annotation.nowarn
-//import scalus.builtin.{BLS12_381_G1_Element, BLS12_381_G2_Element, ByteString}
+//import scalus.uplc.builtin.{BLS12_381_G1_Element, BLS12_381_G2_Element, ByteString}
 //import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 //import scalus.cardano.ledger.*
 //import scalus.cardano.ledger.rules.FeesOkValidator

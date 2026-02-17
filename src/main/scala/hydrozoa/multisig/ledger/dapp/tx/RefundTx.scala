@@ -11,7 +11,7 @@ import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import monocle.{Focus, Lens}
 import scala.annotation.tailrec
 import scala.util.{Failure, Success}
-import scalus.builtin.ByteString
+import scalus.uplc.builtin.ByteString
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException

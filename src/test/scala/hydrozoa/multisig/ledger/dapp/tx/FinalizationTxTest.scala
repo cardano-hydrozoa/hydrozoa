@@ -14,7 +14,7 @@ package hydrozoa.multisig.ledger.dapp.tx
 //import org.scalacheck.Arbitrary.arbitrary
 //import org.scalacheck.{Arbitrary, Gen}
 //import scala.jdk.CollectionConverters.*
-//import scalus.builtin.ByteString
+//import scalus.uplc.builtin.ByteString
 //import scalus.cardano.address.ShelleyDelegationPart.Null
 //import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
 //import scalus.cardano.ledger.*

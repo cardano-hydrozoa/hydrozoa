@@ -16,7 +16,7 @@ import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHea
 import hydrozoa.multisig.ledger.dapp.tx.{RefundTx, RolloutTx, Tx, TxSignature}
 import scala.Function.tupled
 import scala.util.control.NonFatal
-import scalus.builtin.{ByteString, platform}
+import scalus.uplc.builtin.{ByteString, platform}
 import scalus.cardano.ledger.{TransactionHash, VKeyWitness}
 import scalus.crypto.ed25519.VerificationKey
 

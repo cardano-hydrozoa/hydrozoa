@@ -8,7 +8,7 @@ import cats.~>
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.backend.cardano.CardanoBackend.Error
 import monocle.Focus.focus
-import scalus.builtin.Data
+import scalus.uplc.builtin.Data
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.rules.STS.Mutator
 import scalus.cardano.ledger.rules.{CardanoMutator, Context, State as LedgerState}

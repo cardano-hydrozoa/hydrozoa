@@ -16,7 +16,7 @@ import org.scalacheck.rng.Seed
 import org.scalacheck.{Prop, Properties, Test}
 import scala.collection.immutable.SortedMap
 import scala.collection.mutable
-import scalus.builtin.Data.toData
+import scalus.uplc.builtin.Data.toData
 import scalus.cardano.address.*
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.ledger.*

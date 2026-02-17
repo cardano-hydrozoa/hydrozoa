@@ -2,7 +2,7 @@ package hydrozoa.lib.cardano.scalus.ledger.api
 
 import io.bullet.borer.Encoder
 import scalus.*
-import scalus.builtin.{Data, FromData}
+import scalus.uplc.builtin.{Data, FromData}
 import scalus.cardano.ledger.TransactionOutput
 import scalus.ledger.api.v2.OutputDatum.OutputDatum
 import scalus.ledger.api.v3.TxOut

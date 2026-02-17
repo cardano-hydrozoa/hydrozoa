@@ -5,8 +5,8 @@ import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.{KzgCommitment, kzgCommitment}
 import scala.util.Try
 import scalus.*
-import scalus.builtin.Data.{FromData, ToData, fromData, toData}
-import scalus.builtin.{ByteString, Data, FromData, ToData}
+import scalus.uplc.builtin.Data.{FromData, ToData, fromData, toData}
+import scalus.uplc.builtin.{ByteString, Data, FromData, ToData}
 import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.{AssetName, TransactionInput, TransactionOutput, Utxo, Utxos, Value}

@@ -4,7 +4,7 @@ import cats.data.EitherT
 import cats.effect.IO
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.{KzgCommitment, asG1Element, asScalusScalar, hashToScalar, kzgCommitment}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator
-import scalus.builtin.BLS12_381_G2_Element
+import scalus.uplc.builtin.BLS12_381_G2_Element
 import scalus.cardano.ledger.Utxos
 import supranational.blst.P2
 

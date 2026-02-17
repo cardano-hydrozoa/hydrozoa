@@ -8,8 +8,8 @@ import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.T
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.{Resolved, Unresolved}
 import hydrozoa.rulebased.ledger.dapp.utxo.RuleBasedTreasuryUtxo
 import scala.collection.immutable.SortedMap
-import scalus.builtin.ByteString.hex
-import scalus.builtin.Data.toData
+import scalus.uplc.builtin.ByteString.hex
+import scalus.uplc.builtin.Data.toData
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.txbuilder.*

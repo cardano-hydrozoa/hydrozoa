@@ -36,7 +36,7 @@ import org.scalacheck.PropertyM.monadForPropM
 import org.scalacheck.util.Pretty
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
-import scalus.builtin.ByteString
+import scalus.uplc.builtin.ByteString
 import scalus.cardano.ledger.{Block as _, BlockHeader as _, Coin, *}
 import scalus.cardano.onchain.plutus.prelude.Option as SOption
 import test.*
@@ -449,7 +449,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               expectedUtxos = L2Genesis(
                 Queue.from(depositRefundTxSeq.depositTx.depositProduced.virtualOutputs.toList),
                 TransactionHash.fromByteString(
-                  scalus.builtin.platform.blake2b_256(
+                  scalus.uplc.builtin.platform.blake2b_256(
                     env.config.headTokenNames.treasuryTokenName.bytes ++
                         ByteString.fromBigIntBigEndian(
                           BigInt(BlockVersion.Full.unapply(majorBlock.header.blockVersion)._1)

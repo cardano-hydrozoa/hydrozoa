@@ -19,8 +19,8 @@ package hydrozoa.rulebased.ledger.dapp.tx
 //import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 //
 //import scala.annotation.nowarn
-//import scalus.builtin.ByteString
-//import scalus.builtin.ByteString.hex
+//import scalus.uplc.builtin.ByteString
+//import scalus.uplc.builtin.ByteString.hex
 //import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 //import scalus.cardano.ledger.{Utxo as _, *}
 //import scalus.cardano.txbuilder.SomeBuildError

@@ -1,6 +1,6 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
-import scalus.builtin.ByteString
+import scalus.uplc.builtin.ByteString
 import scalus.cardano.ledger.VKeyWitness
 
 type TxSignature = TxSignature.TxSignature

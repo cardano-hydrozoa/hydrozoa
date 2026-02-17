@@ -2,7 +2,7 @@ package hydrozoa.multisig.ledger.dapp.script.multisig
 
 import hydrozoa.config.head.peers.HeadPeers
 import scala.collection.SortedSet
-import scalus.builtin.Builtins.blake2b_224
+import scalus.uplc.builtin.Builtins.blake2b_224
 import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
