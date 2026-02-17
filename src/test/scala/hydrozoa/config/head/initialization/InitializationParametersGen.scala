@@ -22,8 +22,7 @@ import scala.collection.immutable.SortedMap
 import scala.concurrent.duration.DurationInt
 import scalus.cardano.address.Address
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.TransactionOutput.valueLens
-import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger.TransactionOutput.{Babbage, valueLens}
 import spire.math.{Rational, SafeLong}
 import test.Generators.Hydrozoa.*
 import test.Generators.Other.genCoinDistributionWithMinAdaUtxo
