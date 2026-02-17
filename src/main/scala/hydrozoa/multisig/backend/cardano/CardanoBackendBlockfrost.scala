@@ -1,7 +1,8 @@
 package hydrozoa.multisig.backend.cardano
 
 import cats.data.EitherT
-import cats.effect.IO
+import cats.effect.*
+import cats.effect.syntax.all.*
 import cats.syntax.traverse.*
 import com.bloxbean.cardano.client.api.common.OrderEnum
 import com.bloxbean.cardano.client.api.model.{Result, Utxo}
@@ -10,9 +11,11 @@ import com.bloxbean.cardano.client.backend.blockfrost.common.Constants
 import com.bloxbean.cardano.client.backend.blockfrost.service.BFBackendService
 import com.bloxbean.cardano.client.backend.model.{AssetTransactionContent, ScriptDatumCbor, TxContentRedeemers, TxContentUtxo}
 import com.bloxbean.cardano.client.plutus.spec.RedeemerTag
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.backend.cardano.CardanoBackend.Error
 import hydrozoa.multisig.backend.cardano.CardanoBackend.Error.*
 import io.bullet.borer.Cbor
+
 import scala.collection.mutable
 import scala.concurrent.Await
 import scala.concurrent.ExecutionContext.Implicits.global
@@ -377,18 +380,30 @@ object CardanoBackendBlockfrost:
     def apply(
         url: Either[Network, URL],
         apiKey: ApiKey = "",
-        pageSize: Int = 100
-    ): IO[CardanoBackendBlockfrost] =
-        IO {
-            val baseUrl = url.fold(_.url, x => x)
-            // NB: Bloxbean requires the trailing slash
-            val backendService = BFBackendService(baseUrl + "/", apiKey)
-            // Scalus Blockfrost provider
-            given sttp.client4.Backend[scala.concurrent.Future] = DefaultFutureBackend()
-            val blockfrostProvider = BlockfrostProvider(apiKey, baseUrl)
+        pageSize: Int = 100,
+        cardanoNetwork : CardanoNetwork.Section
+    ): IO[CardanoBackendBlockfrost] = {
+        val baseUrl = url.fold(_.url, x => x)
+        // NB: Bloxbean requires the trailing slash
+        val backendService = BFBackendService(baseUrl + "/", apiKey)
+
+        // Scalus Blockfrost provider
+        given sttp.client4.Backend[scala.concurrent.Future] = DefaultFutureBackend()
+
+        for {
+            blockfrostProvider <- IO.fromFuture(IO(
+                cardanoNetwork match {
+                    case CardanoNetwork.Mainnet => BlockfrostProvider.mainnet(
+                        apiKey
+                    )
+                    case CardanoNetwork.Preprod => BlockfrostProvider.preprod(apiKey)
+                    case CardanoNetwork.Preview => BlockfrostProvider.preview(apiKey)
+                    case _ => ??? // @Ilia: What would you like to do here?
+                }))
             //
-            new CardanoBackendBlockfrost(backendService, pageSize, blockfrostProvider)
-        }
+        } yield (new CardanoBackendBlockfrost(backendService, pageSize, blockfrostProvider))
+
+    }
 
     enum Network(val url: String):
         case MAINNET extends Network(Constants.BLOCKFROST_MAINNET_URL)

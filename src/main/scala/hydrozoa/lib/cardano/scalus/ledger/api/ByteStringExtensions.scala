@@ -1,8 +1,8 @@
 package hydrozoa.lib.cardano.scalus.ledger.api
 
 import scalus.*
-import scalus.builtin.Builtins.*
-import scalus.builtin.{Builtins, ByteString}
+import scalus.uplc.builtin.Builtins.*
+import scalus.uplc.builtin.{Builtins, ByteString}
 
 @Compile
 object ByteStringExtension:

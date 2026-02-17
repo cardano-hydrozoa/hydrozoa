@@ -9,19 +9,19 @@ import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{MembershipProof, Rule
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.*
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
 import scalus.*
-import scalus.builtin.*
-import scalus.builtin.Builtins.*
-import scalus.builtin.ByteString.hex
-import scalus.builtin.Data.toData
+import scalus.uplc.builtin.*
+import scalus.uplc.builtin.Builtins.*
+import scalus.uplc.builtin.ByteString.hex
+import scalus.uplc.builtin.Data.toData
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.{Language, Script}
-import scalus.ledger.api.v1.Value.+
+import scalus.cardano.onchain.plutus.v1.Value.+
 import scalus.ledger.api.v3.*
 import scalus.prelude.*
-import scalus.prelude.Option.{None, Some}
-import scalus.prelude.crypto.bls12_381.G2
-import scalus.prelude.crypto.bls12_381.G2.scale
+import scalus.cardano.onchain.plutus.prelude.Option.{None, Some}
+import scalus.cardano.onchain.plutus.prelude.crypto.bls12_381.G2
+import scalus.cardano.onchain.plutus.prelude.crypto.bls12_381.G2.scale
 import scalus.uplc.DeBruijnedProgram
 
 @Compile

@@ -1,7 +1,11 @@
 package hydrozoa.lib.cardano.scalus.txbuilder
 
+import io.bullet.borer.Encoder
+import monocle.Focus
 import monocle.Focus.focus
-import scalus.cardano.ledger.{TaggedSortedSet, VKeyWitness}
+import scalus.cardano.ledger.{TaggedSortedSet, TransactionWitnessSet, VKeyWitness}
+import scalus.cardano.ledger.TransactionWitnessSet.given_Encoder_TransactionWitnessSet
+import scalus.cardano.txbuilder.keepRawL
 
 object Transaction {
     import scalus.cardano.ledger.Transaction
@@ -19,10 +23,11 @@ object Transaction {
           * @return
           *   A new Transaction with all witnesses added
           */
-        // TODO: Replace with Scalus' [[Transaction.withWitness]] (recently added, so Scalus version bump required).
+        // TODO: Replace with Scalus' [[Transaction.withWitness]]
         // TODO: Use NonEmptyList[VKeyWitness]
         def attachVKeyWitnesses(witnesses: Iterable[VKeyWitness]): Transaction = {
-            tx.focus(_.witnessSet.vkeyWitnesses)
+            tx
+                .focus(_.witnessSetRaw).andThen(keepRawL()).andThen(Focus[TransactionWitnessSet](_.vkeyWitnesses))
                 .modify(w => TaggedSortedSet(w.toSet ++ witnesses))
         }
 }

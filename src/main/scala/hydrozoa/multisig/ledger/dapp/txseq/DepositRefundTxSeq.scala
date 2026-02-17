@@ -10,8 +10,11 @@ import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.SomeBuildErrorOnly
 import hydrozoa.multisig.ledger.dapp.tx.{DepositTx, RefundTx, Tx}
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.virtual.tx.GenesisObligation
+import scalus.cardano.ledger.TransactionWitnessSet.given 
 import io.bullet.borer.Cbor
 import monocle.syntax.all.*
+import monocle.*
+import scalus.cardano.txbuilder.keepRawL
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.{Coin, TaggedSortedSet, TransactionOutput, TransactionWitnessSet, Utxo, Value}
 
@@ -233,7 +236,9 @@ private object DepositRefundTxSeqOps {
                       // the native script witness. Thus, we need to ONLY nullify signatures and not the entire
                       // witness set.
                       val actualRefundTxWithNullifiedVKeyWitnesses = refundTx
-                          .focus(_.tx.witnessSet.vkeyWitnesses)
+                          .focus(_.tx.witnessSetRaw)
+                          .andThen(keepRawL())
+                          .andThen(Focus[TransactionWitnessSet](_.vkeyWitnesses))
                           .replace(TaggedSortedSet.empty)
                       actualRefundTxWithNullifiedVKeyWitnesses == expectedRefundTx
                   },

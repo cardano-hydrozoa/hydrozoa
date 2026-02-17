@@ -14,17 +14,18 @@ import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.AwaitingVote
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
 import scala.annotation.tailrec
 import scalus.*
-import scalus.builtin.Builtins.{serialiseData, verifyEd25519Signature}
-import scalus.builtin.ByteString.hex
-import scalus.builtin.Data.toData
-import scalus.builtin.{ByteString, Data, FromData, ToData}
+import scalus.uplc.builtin.Builtins.{serialiseData, verifyEd25519Signature}
+import scalus.uplc.builtin.ByteString.hex
+import scalus.uplc.builtin.Data.toData
+import scalus.uplc.builtin.{ByteString, Data, FromData, ToData}
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.{Language, Script}
-import scalus.ledger.api.v1.IntervalBoundType.Finite
-import scalus.ledger.api.v1.Value.+
+import scalus.cardano.onchain.plutus.v1.IntervalBoundType.Finite
+import scalus.cardano.onchain.plutus.v1.Value.+
 import scalus.ledger.api.v3.*
-import scalus.prelude.Option.{None, Some}
-import scalus.prelude.{!==, ===, List, Option, SortedMap, Validator, fail, log, require}
+import scalus.cardano.onchain.plutus.prelude.Option.{None, Some}
+import scalus.cardano.onchain.plutus.prelude.{!==, ===, List, Option, SortedMap, fail, log, require}
+import scalus.cardano.onchain.plutus.v3.Validator
 import scalus.uplc.DeBruijnedProgram
 
 @Compile
