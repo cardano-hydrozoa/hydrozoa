@@ -29,18 +29,15 @@ import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag.{Invalid, Valid
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.tx.{GenesisObligation, L2Genesis}
 import io.bullet.borer.Cbor
-
-import java.util.concurrent.TimeUnit
+aimport java.util.concurrent.TimeUnit
 import org.scalacheck.*
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.PropertyM.monadForPropM
-import org.scalacheck.rng.Seed
 import org.scalacheck.util.Pretty
-
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scalus.builtin.ByteString
-import scalus.cardano.ledger.{Coin, Block as _, BlockHeader as _, *}
+import scalus.cardano.ledger.{Block as _, BlockHeader as _, Coin, *}
 import scalus.prelude.Option as SOption
 import test.*
 import test.Generators.Hydrozoa.*
