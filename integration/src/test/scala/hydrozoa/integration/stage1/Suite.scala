@@ -22,6 +22,7 @@ import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfro
 import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, ConsensusActor, EventSequencer}
 import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.block.{BlockEffects, BlockNumber, BlockVersion}
+import hydrozoa.multisig.ledger.dapp.tx.{FinalizationTx, SettlementTx}
 import java.util.concurrent.TimeUnit
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.commands.{CommandGen, ModelBasedSuite}
@@ -347,7 +348,7 @@ case class Suite(
         // Next part of the property is to check that expected effects were submitted and are known to the Cardano backend.
         effects <- sut.effectsAcc.get
 
-        expectedEffects: List[(TxLabel, TransactionHash)] = mkExpectedEffects(
+        expectedEffects: List[(String, TransactionHash)] = mkExpectedEffects(
           lastState.headConfig.initialBlock.initializationTx.tx.id,
           lastState.headConfig.initialBlock.fallbackTx.tx.id,
           effects,
@@ -355,9 +356,10 @@ case class Suite(
         )
 
         _ <- IO.whenA(expectedEffects.nonEmpty)(
-          loggerIO.debug("Expected effects:" + expectedEffects.map { case (label, hash) =>
-              s"\n\t- $label: $hash"
-          }.mkString)
+          loggerIO.info(s"Utxo set size: ${lastState.activeUtxos.size}") >>
+              loggerIO.info("Expected effects:" + expectedEffects.map { case (label, hash) =>
+                  s"\n\t- $label: $hash"
+              }.mkString)
         )
 
         // In Yaci transactions may appear a bit slowly
@@ -402,21 +404,33 @@ case class Suite(
         fallbackTxHash: TransactionHash,
         effects: List[BlockEffects.Unsigned],
         currentTime: CurrentTime
-    ): List[(TxLabel, TransactionHash)] = {
-        val initHash = (TxLabel.Init, initTxHash)
+    ): List[(String, TransactionHash)] = {
+        val initHash = (TxLabel.Init.toString, initTxHash)
 
-        val happyPathHashes: List[(TxLabel, TransactionHash)] = effects.flatMap {
+        def payoutSuffix(n: Option[Int]): String = n.fold("")(c => s"($c payouts)")
+
+        val happyPathHashes: List[(String, TransactionHash)] = effects.flatMap {
             case e: BlockEffects.Unsigned.Major =>
-                (TxLabel.Settlement, e.settlementTx.tx.id) ::
-                    e.rolloutTxs.map(tx => (TxLabel.Rollout, tx.tx.id))
+                (
+                  s"${TxLabel.Settlement}${payoutSuffix(e.settlementTx.payoutCount)}",
+                  e.settlementTx.tx.id
+                ) ::
+                    e.rolloutTxs.map(tx =>
+                        (s"${TxLabel.Rollout}(${tx.payoutCount} payouts)", tx.tx.id)
+                    )
             case e: BlockEffects.Unsigned.Final =>
-                (TxLabel.Finalization, e.finalizationTx.tx.id) ::
-                    e.rolloutTxs.map(tx => (TxLabel.Rollout, tx.tx.id))
+                (
+                  s"${TxLabel.Finalization}${payoutSuffix(e.finalizationTx.payoutCount)}",
+                  e.finalizationTx.tx.id
+                ) ::
+                    e.rolloutTxs.map(tx =>
+                        (s"${TxLabel.Rollout}(${tx.payoutCount} payouts)", tx.tx.id)
+                    )
             case _: BlockEffects.Unsigned.Minor   => Nil
             case _: BlockEffects.Unsigned.Initial => Nil
         }
 
-        val fallbackHash: List[(TxLabel, TransactionHash)] = currentTime match {
+        val fallbackHash: List[(String, TransactionHash)] = currentTime match {
             case AfterCompetingFallbackStartTime(_)
                 if !effects.lastOption.exists(_.isInstanceOf[BlockEffects.Unsigned.Final]) =>
                 // Last Major's fallback, or the init fallback if no Major block completed yet
@@ -424,7 +438,7 @@ case class Suite(
                     .collect { case e: BlockEffects.Unsigned.Major => e.fallbackTx.tx.id }
                     .lastOption
                     .orElse(Some(fallbackTxHash))
-                    .map((TxLabel.Fallback, _))
+                    .map((TxLabel.Fallback.toString, _))
                     .toList
             case _ => Nil
         }
@@ -432,3 +446,13 @@ case class Suite(
         initHash :: happyPathHashes ++ fallbackHash
     }
 }
+
+extension (tx: SettlementTx)
+    def payoutCount: Option[Int] = tx match
+        case t: SettlementTx.WithPayouts => Some(t.payoutCount)
+        case _: SettlementTx.NoPayouts   => None
+
+extension (tx: FinalizationTx)
+    def payoutCount: Option[Int] = tx match
+        case t: FinalizationTx.WithPayouts => Some(t.payoutCount)
+        case _: FinalizationTx.NoPayouts   => None

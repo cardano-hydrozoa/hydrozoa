@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.virtual
 
 import hydrozoa.multisig.ledger.VirtualLedgerM.{Config, State}
+import hydrozoa.multisig.ledger.virtual.tx.{L2Genesis, L2Tx}
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger.*
@@ -10,6 +11,7 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.UtxoEnv
 
 //////////////////////////
+// TODO: update the comment
 // L2 Conformance: ensuring that L2 transactions and withdrawals (represented by L1 `Transaction`s) and genesis events
 // conform to Hydrozoa's L2 restrictions (no collateral, no certs, etc.)
 
@@ -35,10 +37,11 @@ trait L2ConformanceValidator[L1]:
     def l2Validate(l1: L1): Either[String, Unit]
 
 object L2ConformanceValidator {
-    def validate(context: Config, state: State, event: L2Event): Either[String, Unit] =
+
+    def validate(context: Config, state: State, event: L2Tx | L2Genesis): Either[String, Unit] =
         event match {
-            case L2EventTransaction(tx) => given_L2ConformanceValidator_Transaction.l2Validate(tx)
-            case L2EventGenesis(_, _)   => Right(()) // Correct by construction
+            case L2Tx(tx, _, _, _) => given_L2ConformanceValidator_Transaction.l2Validate(tx)
+            case L2Genesis(_, _)   => Right(()) // Correct by construction
         }
 }
 

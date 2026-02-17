@@ -1,4 +1,4 @@
-package hydrozoa.multisig.ledger.virtual
+package hydrozoa.multisig.ledger.virtual.tx
 
 import cats.syntax.all.*
 import hydrozoa.*
@@ -9,37 +9,17 @@ import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, S
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.Script.Native
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{Hash as _, *}
+import scalus.cardano.ledger.{Coin, Hash as _, Script, ScriptRef, TransactionHash, TransactionInput, TransactionOutput, Utxos, Value}
 import scalus.prelude.Option as SOption
 
-// A sum type for ledger events
-sealed trait L2Event
-
-// TODO: Run L2 conformance during parsing?
-final case class L2EventTransaction(transaction: Transaction) extends L2Event {
-    def volume: Long = transaction.body.value.outputs.map(sto => sto.value.value.coin.value).sum
-}
-
-object L2EventTransaction:
-    def apply(bs: Array[Byte]): L2EventTransaction = {
-        // TODO: Try?
-        L2EventTransaction(Transaction.fromCbor(bs))
-    }
-
-// TODO: Rename to L2Genesis
-// TODO: Fix to work with the new way that virtual utxos are created in deposit transactions.
-object L2EventGenesis:
-    enum L2EventGenesisError:
-        case EmptyInputs
-
-final case class L2EventGenesis(
+final case class L2Genesis(
     // We allow  this to be empty so that we can do the "push the fallback forward" tx
     genesisObligations: Queue[GenesisObligation],
     // blake2b_256(treasuryTokenName.bytestring ++ nextBlockVersion)
     // TODO: Type this better? It shouldn't really be a TransactionHash, because it's
     // preimage is not a [[Transaction]]
     genesisId: TransactionHash
-) extends L2Event {
+) {
     val asUtxos: Utxos = {
         Map.from(
           genesisObligations.toList.zipWithIndex.map(x =>
@@ -48,6 +28,11 @@ final case class L2EventGenesis(
         )
     }
 }
+
+// TODO: Fix to work with the new way that virtual utxos are created in deposit transactions.
+object L2Genesis:
+    enum L2GenesisError:
+        case EmptyInputs
 
 /** A genesis obligation is the boundary between the L1 and L2 ledgers. It contains the well-formed
   * fields of L2-conformant UTxOs.
@@ -76,8 +61,10 @@ case class GenesisObligation(
 }
 
 object GenesisObligation {
-    import DepositRefundTxSeq.Parse.ParseErrorOr
+
+    // TODO: Shall we use dedicated types instead?
     import DepositRefundTxSeq.Parse.Error.*
+    import DepositRefundTxSeq.Parse.ParseErrorOr
 
     def fromTransactionOutput(to: TransactionOutput): ParseErrorOr[GenesisObligation] =
         to match {

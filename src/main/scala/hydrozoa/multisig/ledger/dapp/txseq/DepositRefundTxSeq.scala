@@ -9,7 +9,7 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.toEpochQuantizedInstant
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.SomeBuildErrorOnly
 import hydrozoa.multisig.ledger.dapp.tx.{DepositTx, RefundTx, Tx}
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
-import hydrozoa.multisig.ledger.virtual.GenesisObligation
+import hydrozoa.multisig.ledger.virtual.tx.GenesisObligation
 import io.bullet.borer.Cbor
 import monocle.syntax.all.*
 import scalus.cardano.address.ShelleyAddress
@@ -46,7 +46,7 @@ private object DepositRefundTxSeqOps {
         refundValue: Value,
         utxosFunding: NonEmptyList[Utxo],
         virtualOutputs: NonEmptyList[GenesisObligation],
-        donationToTreasury: Coin,
+        depositFee: Coin,
         changeAddress: ShelleyAddress,
     ) {
         def result: Either[Build.Error, DepositRefundTxSeq] = {
@@ -62,7 +62,7 @@ private object DepositRefundTxSeqOps {
                       partialRefundTx,
                       utxosFunding,
                       virtualOutputs,
-                      donationToTreasury,
+                      depositFee,
                       changeAddress,
                     )
                     .result
@@ -82,7 +82,7 @@ private object DepositRefundTxSeqOps {
 
                 depositValue = depositTx.depositProduced.l1OutputValue
 
-                expectedDepositValue = virtualValue + Value(donationToTreasury + refundFee)
+                expectedDepositValue = virtualValue + Value(depositFee + refundFee)
 
                 _ <- Either
                     .cond(

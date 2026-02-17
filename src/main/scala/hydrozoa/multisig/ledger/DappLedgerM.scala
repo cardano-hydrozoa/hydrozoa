@@ -80,7 +80,10 @@ object DappLedgerM {
       * NOTE: This checks SOME time bounds. Specifically, it checks whether the deposit's absorption
       * validity period ended prior to the start of the current block.
       */
-    def registerDeposit(req: RegisterDeposit): DappLedgerM[Unit] = {
+    def registerDeposit(
+        req: RegisterDeposit,
+        blockStartTime: QuantizedInstant
+    ): DappLedgerM[Unit] = {
         import req.*
         for {
             config <- ask
@@ -90,20 +93,20 @@ object DappLedgerM {
                       depositTxBytes = depositTxBytes,
                       refundTxBytes = refundTxBytes,
                       virtualOutputsBytes = virtualOutputsBytes,
-                      donationToTreasury = donationToTreasury,
+                      donationToTreasury = depositFee,
                     )
                     .result
                     .left
                     .map(ParseError(_))
             depositRefundTxSeq <- lift(parseRes)
+            s <- get
             depositProduced <- lift(
               if depositRefundTxSeq.depositTx.validityEnd
-                      + txTiming.depositMaturityDuration
-                      + txTiming.depositAbsorptionDuration < blockStartTime
+                      + config.depositMaturityDuration
+                      + config.depositAbsorptionDuration < blockStartTime
               then Left(AbsorptionPeriodExpired(depositRefundTxSeq))
               else Right(depositRefundTxSeq.depositTx.depositProduced)
             )
-            s <- get
             newState = s.appendToQueue((eventId, depositProduced))
             _ <- set(newState)
         } yield ()

@@ -13,7 +13,7 @@ import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryU
 import hydrozoa.multisig.ledger.event.LedgerEvent.TxL2Event
 import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import hydrozoa.multisig.ledger.virtual.{GenesisObligation, L2EventTransaction}
+import hydrozoa.multisig.ledger.virtual.tx.{GenesisObligation, L2Tx}
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.genShelleyAddress
 import monocle.*
 import monocle.syntax.all.*
@@ -330,7 +330,7 @@ object Generators {
             config: CardanoNetwork.Section,
             inputUtxos: Utxos,
             peer: TestPeer
-        ): Gen[L2EventTransaction] =
+        ): Gen[L2Tx] =
             for {
                 addr <- genShelleyAddress(config)
 
@@ -363,7 +363,7 @@ object Generators {
                       )
                     )
 
-            } yield L2EventTransaction(peer.signTx(txUnsigned))
+            } yield ??? // L2Tx(peer.signTx(txUnsigned))
 
         /** Generate an "attack" that, given a context, state, and L2EventTransaction, returns a
           * tuple containing:
@@ -378,15 +378,15 @@ object Generators {
           * actual context of the errors raised.
           */
         def genL2EventTransactionAttack: Gen[
-          (VirtualLedgerM.Config, State, L2EventTransaction) => (
-              L2EventTransaction,
+          (VirtualLedgerM.Config, State, L2Tx) => (
+              L2Tx,
               String | TransactionException
           )
         ] = {
 
             // Violates "AllInputsMustBeInUtxoValidator" ledger rule
-            def inputsNotInUtxoAttack: (VirtualLedgerM.Config, State, L2EventTransaction) => (
-                L2EventTransaction,
+            def inputsNotInUtxoAttack: (VirtualLedgerM.Config, State, L2Tx) => (
+                L2Tx,
                 (String | TransactionException)
             ) =
                 (context, state, transaction) => {
@@ -404,8 +404,8 @@ object Generators {
 
                     val bogusTxIn = TransactionInput(transactionId = bogusInputId, index = 0)
 
-                    val newTx: L2EventTransaction = {
-                        val underlyingOriginal = transaction.transaction
+                    val newTx: L2Tx = {
+                        val underlyingOriginal = transaction.tx
                         val underlyingModified = underlyingOriginal
                             |>
                                 // First focus on the inputs of the transaction
@@ -426,11 +426,11 @@ object Generators {
                                         )
                                     )
 
-                        L2EventTransaction(underlyingModified)
+                        ??? // L2Tx(underlyingModified)
                     }
 
                     val expectedException = new TransactionException.BadAllInputsUTxOException(
-                      transactionId = newTx.transaction.id,
+                      transactionId = newTx.tx.id,
                       missingInputs = Set(bogusTxIn),
                       missingCollateralInputs = Set.empty,
                       missingReferenceInputs = Set.empty

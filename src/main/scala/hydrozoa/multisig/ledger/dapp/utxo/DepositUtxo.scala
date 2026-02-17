@@ -3,7 +3,7 @@ package hydrozoa.multisig.ledger.dapp.utxo
 import cats.data.NonEmptyList
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo.DepositUtxoConversionError.*
-import hydrozoa.multisig.ledger.virtual.GenesisObligation
+import hydrozoa.multisig.ledger.virtual.tx.GenesisObligation
 import scala.util.{Failure, Success, Try}
 import scalus.*
 import scalus.builtin.Data.{FromData, ToData, fromData, toData}

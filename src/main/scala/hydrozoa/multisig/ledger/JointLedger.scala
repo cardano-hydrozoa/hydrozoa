@@ -23,7 +23,7 @@ import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag.{Invalid, Valid
 import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
-import hydrozoa.multisig.ledger.virtual.{GenesisObligation, L2EventGenesis}
+import hydrozoa.multisig.ledger.virtual.tx.{GenesisObligation, L2Genesis}
 import monocle.Focus.focus
 import scala.collection.immutable.Queue
 import scala.math.Ordered.orderingToOrdered
@@ -147,9 +147,9 @@ final case class JointLedger(
     private def registerDeposit(req: RegisterDeposit): IO[Unit] = {
         import req.*
         for {
-
+            blockStartTime <- unsafeGetProducing.map(_.startTime)
             _ <- this.runDappLedgerM(
-              action = DappLedgerM.registerDeposit(req),
+              action = DappLedgerM.registerDeposit(req, blockStartTime),
               // Left == deposit rejected
               // FIXME: This should probably be returned as sum type in the Right
               onFailure = _ =>
@@ -252,7 +252,7 @@ final case class JointLedger(
                     validDeposits
                         .map(_._2.virtualOutputs)
                         .foldLeft(Queue.empty)((acc, ob) => acc.appendedAll(ob.toList))
-                genesisEvent = L2EventGenesis(
+                genesisEvent = L2Genesis(
                   genesisObligations,
                   mkGenesisId(
                     headTokenNames.treasuryTokenName,

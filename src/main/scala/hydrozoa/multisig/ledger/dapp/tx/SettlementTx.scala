@@ -42,7 +42,9 @@ object SettlementTx {
     export SettlementTxOps.Result
     export SettlementTxOps.Error
 
-    sealed trait WithPayouts extends SettlementTx
+    sealed trait WithPayouts extends SettlementTx {
+        def payoutCount: Int
+    }
 
     sealed trait NoRollouts extends SettlementTx
 
@@ -67,6 +69,7 @@ object SettlementTx {
         override val treasurySpent: MultisigTreasuryUtxo,
         override val treasuryProduced: MultisigTreasuryUtxo,
         override val depositsSpent: Vector[DepositUtxo],
+        override val payoutCount: Int,
         override val resolvedUtxos: ResolvedUtxos,
         override val txLens: Lens[SettlementTx, Transaction] =
             Focus[WithOnlyDirectPayouts](_.tx).asInstanceOf[Lens[SettlementTx, Transaction]]
@@ -82,6 +85,7 @@ object SettlementTx {
         override val treasuryProduced: MultisigTreasuryUtxo,
         override val depositsSpent: Vector[DepositUtxo],
         override val rolloutProduced: RolloutUtxo,
+        override val payoutCount: Int,
         override val resolvedUtxos: ResolvedUtxos,
         override val txLens: Lens[SettlementTx, Transaction] =
             Focus[WithRollouts](_.tx).asInstanceOf[Lens[SettlementTx, Transaction]]
@@ -413,7 +417,7 @@ private object SettlementTxOps {
                   finished
                 )
 
-                def withOnlyDirectPayouts: Result.WithOnlyDirectPayouts =
+                def withOnlyDirectPayouts(payoutCount: Int): Result.WithOnlyDirectPayouts =
                     Result.WithOnlyDirectPayouts(
                       transaction = SettlementTx.WithOnlyDirectPayouts(
                         majorVersionProduced = majorVersionProduced,
@@ -425,6 +429,7 @@ private object SettlementTxOps {
                         // this is safe since we always set ttl
                         validityEnd = Slot(tx.body.value.ttl.get)
                             .toQuantizedInstant(config.cardanoInfo.slotConfig),
+                        payoutCount = payoutCount,
                         resolvedUtxos = finished.ctx.resolvedUtxos
                       ),
                       depositsSpent = finished.depositsSpent,
@@ -432,7 +437,8 @@ private object SettlementTxOps {
                     )
 
                 def withRollouts(
-                    rollouts: RolloutTxSeq.PartialResult,
+                    payoutCount: Int,
+                    rollouts: RolloutTxSeq.PartialResult
                 ): Result.WithRollouts =
                     Result.WithRollouts(
                       transaction = SettlementTx.WithRollouts(
@@ -446,6 +452,7 @@ private object SettlementTxOps {
                         // this is safe since we always set ttl
                         validityEnd = Slot(tx.body.value.ttl.get)
                             .toQuantizedInstant(config.cardanoInfo.slotConfig),
+                        payoutCount = payoutCount,
                         resolvedUtxos = finished.ctx.resolvedUtxos
                       ),
                       depositsSpent = finished.depositsSpent,
@@ -454,12 +461,12 @@ private object SettlementTxOps {
                     )
 
                 mergeResult match {
-                    case NotMerged => withRollouts(rolloutTxSeqPartial)
-                    case Merged(mbFirstSkipped) =>
+                    case NotMerged => withRollouts(0, rolloutTxSeqPartial)
+                    case Merged(mbFirstSkipped, payoutCount) =>
                         mbFirstSkipped match {
-                            case None => withOnlyDirectPayouts
+                            case None => withOnlyDirectPayouts(payoutCount)
                             case Some(firstSkipped) =>
-                                withRollouts(firstSkipped.partialResult)
+                                withRollouts(payoutCount, firstSkipped.partialResult)
                         }
                 }
             }
@@ -501,7 +508,8 @@ private object SettlementTxOps {
                     case Merged(
                         mbRolloutTxSeqPartialSkipped: Option[
                           RolloutTxSeq.PartialResult.SkipFirst
-                        ]
+                        ],
+                        payoutCount: Int
                     )
                 }
 
@@ -555,7 +563,11 @@ private object SettlementTxOps {
 
                         mergeResult =
                             if optimisticTrial.isLeft then NotMerged
-                            else Merged(rolloutTxSeqPartial.skipFirst)
+                            else
+                                Merged(
+                                  mbRolloutTxSeqPartialSkipped = rolloutTxSeqPartial.skipFirst,
+                                  payoutCount = firstRolloutTxPartial.payoutCount
+                                )
 
                     } yield (finishedState, mergeResult)
             }
