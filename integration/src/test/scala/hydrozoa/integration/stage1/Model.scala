@@ -36,7 +36,7 @@ case class ModelState(
     // Block producing cycle
     currentTime: CurrentTime,
     blockCycle: BlockCycle,
-    currentBlockEvents: List[(LedgerEvent.TxL2Event, ValidityFlag)] = List.empty,
+    currentBlockEvents: List[(LedgerEvent, ValidityFlag)] = List.empty,
 
     // This is put here to avoid tossing over Done/Ready/InProgress
     // NB: for block zero it's more initializationExpirationTime
@@ -214,7 +214,7 @@ implicit object CompleteBlockCommandModel
 
     private def mkBlockBrief(
         blockNumber: BlockNumber,
-        currentBlockEvents: List[(LedgerEvent.TxL2Event, ValidityFlag)],
+        currentBlockEvents: List[(LedgerEvent, ValidityFlag)],
         competingFallbackStartTime: QuantizedInstant,
         txTiming: TxTiming,
         creationTime: QuantizedInstant,
@@ -266,11 +266,17 @@ implicit object CompleteBlockCommandModel
 
         if isFinal then finalBlock
         else if txTiming.blockCanStayMinor(creationTime, competingFallbackStartTime)
-        then
-            if currentBlockEvents.exists(_._1.outputPartition.l1Utxos.nonEmpty)
+        then {
+            val hasWithdrawals = currentBlockEvents.exists(_._1 match {
+                case e: LedgerEvent.TxL2Event => e.outputPartition.l1Utxos.nonEmpty
+                case _                        => false
+            })
+            val hasDepositsAbsorbed: Boolean = ???
+
+            if hasWithdrawals || hasDepositsAbsorbed
             then majorBlock
             else minorBlock
-        else majorBlock
+        } else majorBlock
     }
 
     override def preCondition(cmd: CompleteBlockCommand, state: ModelState): Boolean =

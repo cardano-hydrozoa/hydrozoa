@@ -3,7 +3,7 @@ package hydrozoa.integration.stage1
 import hydrozoa.integration.stage1.Generators.{TxMutator, TxStrategy}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
-import hydrozoa.multisig.ledger.event.LedgerEvent
+import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId}
 import org.scalacheck.Prop
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.commands.{CommandLabel, CommandProp}
@@ -119,3 +119,19 @@ implicit object CompleteBlockCommandProp
 implicit object CompleteBlockCommandLabel extends CommandLabel[CompleteBlockCommand]:
     override def label(cmd: CompleteBlockCommand): String =
         if cmd.isFinal then "CompleteBlock(final)" else "CompleteBlock(regular)"
+
+// ===================================
+// Deposit Request Command
+// ===================================
+
+final case class RegisterDepositCommand(
+    registerDeposit: LedgerEvent.RegisterDeposit
+)
+
+// ===================================
+// Submit Deposit Command
+// ===================================
+
+final case class SubmitDepositCommand(
+    depositEventId: LedgerEventId
+)
