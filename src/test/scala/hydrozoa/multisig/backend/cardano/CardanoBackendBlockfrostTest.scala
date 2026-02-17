@@ -7,9 +7,9 @@ import io.github.cdimascio.dotenv.Dotenv
 import org.scalatest.Tag
 import org.scalatest.funsuite.AnyFunSuite
 import scala.util.Try
-import scalus.uplc.builtin.ByteString
 import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger.{AssetName, Hash, Transaction, TransactionHash}
+import scalus.uplc.builtin.ByteString
 
 object RequiresBlockfrostApiKey extends Tag("requires-blockfrost-api-key")
 

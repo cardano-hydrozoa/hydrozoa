@@ -16,14 +16,14 @@ import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuilderResultSimple, explain
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import monocle.{Focus, Lens}
 import scala.util.Try
-import scalus.uplc.builtin.Data
-import scalus.uplc.builtin.Data.toData
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, ModifyAuxiliaryData, Send, Spend, ValidityEndSlot}
+import scalus.uplc.builtin.Data
+import scalus.uplc.builtin.Data.toData
 
 final case class InitializationTx(
     override val validityEnd: QuantizedInstant,

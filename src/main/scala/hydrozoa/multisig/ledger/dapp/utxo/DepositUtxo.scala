@@ -6,14 +6,14 @@ import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo.DepositUtxoConversionError
 import hydrozoa.multisig.ledger.virtual.tx.GenesisObligation
 import scala.util.{Failure, Success, Try}
 import scalus.*
-import scalus.uplc.builtin.Data.{FromData, ToData, fromData, toData}
-import scalus.uplc.builtin.{Data, FromData, ToData}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.onchain.plutus.v3.{Address, PosixTime}
 import scalus.cardano.onchain.plutus.prelude.Option as ScalusOption
+import scalus.cardano.onchain.plutus.v3.{Address, PosixTime}
+import scalus.uplc.builtin.Data.{FromData, ToData, fromData, toData}
+import scalus.uplc.builtin.{Data, FromData, ToData}
 
 /** NOTE: absorptionEnd must be absorptionStart + absorptionDuration for some [[TxTiming]] and
   * [[SlotConfig]] Perhaps we want to make this more opaque and carry around those configuration

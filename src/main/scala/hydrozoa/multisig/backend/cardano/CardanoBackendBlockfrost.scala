@@ -11,20 +11,18 @@ import com.bloxbean.cardano.client.backend.blockfrost.common.Constants
 import com.bloxbean.cardano.client.backend.blockfrost.service.BFBackendService
 import com.bloxbean.cardano.client.backend.model.{AssetTransactionContent, ScriptDatumCbor, TxContentRedeemers, TxContentUtxo}
 import com.bloxbean.cardano.client.plutus.spec.RedeemerTag
-import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.backend.cardano.CardanoBackend.Error
 import hydrozoa.multisig.backend.cardano.CardanoBackend.Error.*
 import io.bullet.borer.Cbor
-
 import scala.collection.mutable
 import scala.concurrent.Await
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration.DurationInt
 import scala.jdk.CollectionConverters.*
-import scalus.uplc.builtin.{ByteString, Data}
 import scalus.cardano.address.{Address, ShelleyAddress}
-import scalus.cardano.ledger.{AssetName, PolicyId, ProtocolParams, Transaction, TransactionHash, TransactionInput, TransactionOutput, Utxos}
+import scalus.cardano.ledger.*
 import scalus.cardano.node.BlockfrostProvider
+import scalus.uplc.builtin.{ByteString, Data}
 import sttp.client4.DefaultFutureBackend
 
 /** Cardano backend to use with Blockfrost-compatible API. Currently uses both BloxBeans's
@@ -99,8 +97,8 @@ class CardanoBackendBlockfrost private (
         )
 
     private def convert(utxo: Utxo): (TransactionInput, TransactionOutput) = {
-        import scalus.uplc.builtin.ByteString
         import scalus.cardano.ledger.{Blake2b_256, Coin, DatumOption, Hash, HashPurpose, MultiAsset, TransactionInput, TransactionOutput, Value}
+        import scalus.uplc.builtin.ByteString
 
         import scala.collection.immutable.SortedMap
 
@@ -390,9 +388,11 @@ object CardanoBackendBlockfrost:
         given sttp.client4.Backend[scala.concurrent.Future] = DefaultFutureBackend()
 
         for {
-            blockfrostProvider <- IO.fromFuture(IO(???
+            blockfrostProvider <- IO.fromFuture(
+              IO(
+                ???
 // @Ilia: the BlockfrostProvider helper methods now return a Future.
-//  I'm not sure what the semantic should be for the url.              
+//  I'm not sure what the semantic should be for the url.
 //                cardanoNetwork match {
 //                    case CardanoNetwork.Mainnet => BlockfrostProvider.mainnet(
 //                        apiKey
@@ -401,9 +401,10 @@ object CardanoBackendBlockfrost:
 //                    case CardanoNetwork.Preview => BlockfrostProvider.preview(apiKey)
 //                    case _ => ??? // @Ilia: What would you like to do here?
 //                }
-            ))
+              )
+            )
             //
-        } yield (new CardanoBackendBlockfrost(backendService, pageSize, blockfrostProvider))
+        } yield new CardanoBackendBlockfrost(backendService, pageSize, blockfrostProvider)
 
     }
 

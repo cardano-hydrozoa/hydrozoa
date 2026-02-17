@@ -15,14 +15,14 @@ import java.util.concurrent.atomic.AtomicLong
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.{Gen, Prop, Properties}
-import scalus.uplc.builtin.Data.toData
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{Hash, *}
-import scalus.cardano.txbuilder.TransactionBuilder
 import scalus.cardano.onchain.plutus.prelude.Option as SOption
-import scalus.testing.kit.TestUtil.genByteStringOfN
+import scalus.cardano.onchain.plutus.v3.ArbitraryInstances.*
+import scalus.cardano.txbuilder.TransactionBuilder
+import scalus.uplc.builtin.Data.toData
 import test.*
 import test.Generators.Hydrozoa.*
 import test.TestPeer.Alice

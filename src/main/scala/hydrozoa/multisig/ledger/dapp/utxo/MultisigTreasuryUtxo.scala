@@ -5,11 +5,11 @@ import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.{KzgCommitment, kzgCommitment}
 import scala.util.Try
 import scalus.*
-import scalus.uplc.builtin.Data.{FromData, ToData, fromData, toData}
-import scalus.uplc.builtin.{ByteString, Data, FromData, ToData}
 import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.{AssetName, TransactionInput, TransactionOutput, Utxo, Utxos, Value}
+import scalus.uplc.builtin.Data.{FromData, ToData, fromData, toData}
+import scalus.uplc.builtin.{ByteString, Data, FromData, ToData}
 
 // TODO: Make opaque
 final case class MultisigTreasuryUtxo(
@@ -25,7 +25,7 @@ final case class MultisigTreasuryUtxo(
           TransactionOutput.apply(
             address = address,
             value = value,
-            datumOption = Some(Inline(datum.toData))
+            inlineDatum = datum.toData
           )
         )
 

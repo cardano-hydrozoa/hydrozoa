@@ -1,10 +1,9 @@
 package hydrozoa.lib.cardano.scalus.txbuilder
 
-import io.bullet.borer.Encoder
 import monocle.Focus
 import monocle.Focus.focus
-import scalus.cardano.ledger.{TaggedSortedSet, TransactionWitnessSet, VKeyWitness}
 import scalus.cardano.ledger.TransactionWitnessSet.given_Encoder_TransactionWitnessSet
+import scalus.cardano.ledger.{TaggedSortedSet, TransactionWitnessSet, VKeyWitness}
 import scalus.cardano.txbuilder.keepRawL
 
 object Transaction {
@@ -27,7 +26,9 @@ object Transaction {
         // TODO: Use NonEmptyList[VKeyWitness]
         def attachVKeyWitnesses(witnesses: Iterable[VKeyWitness]): Transaction = {
             tx
-                .focus(_.witnessSetRaw).andThen(keepRawL()).andThen(Focus[TransactionWitnessSet](_.vkeyWitnesses))
+                .focus(_.witnessSetRaw)
+                .andThen(keepRawL())
+                .andThen(Focus[TransactionWitnessSet](_.vkeyWitnesses))
                 .modify(w => TaggedSortedSet(w.toSet ++ witnesses))
         }
 }

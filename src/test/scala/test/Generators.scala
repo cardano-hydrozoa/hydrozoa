@@ -20,8 +20,6 @@ import monocle.syntax.all.*
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen, Prop, Properties}
 import scala.collection.immutable.SortedMap
-import scalus.uplc.builtin.Data.toData
-import scalus.uplc.builtin.{ByteString, Data}
 import scalus.cardano.address.*
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.ledger.*
@@ -29,8 +27,10 @@ import scalus.cardano.ledger.ArbitraryInstances.{*, given}
 import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.{Babbage, valueLens}
-import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
 import scalus.cardano.onchain.plutus.prelude.Option as SOption
+import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
+import scalus.uplc.builtin.Data.toData
+import scalus.uplc.builtin.{ByteString, Data}
 import scalus.|>
 import spire.math.{Rational, SafeLong}
 import test.Generators.Hydrozoa.genAdaOnlyPubKeyUtxo
@@ -349,7 +349,7 @@ object Generators {
                 txUnsigned: Transaction =
                     Transaction(
                       body = KeepRaw(txBody),
-                      witnessSet = TransactionWitnessSet.empty,
+                      witnessSetRaw = KeepRaw(TransactionWitnessSet.empty),
                       isValid = true,
                       auxiliaryData = Some(
                         KeepRaw(

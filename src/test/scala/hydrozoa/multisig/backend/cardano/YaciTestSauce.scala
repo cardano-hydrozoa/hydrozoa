@@ -1,8 +1,8 @@
 package hydrozoa.multisig.backend.cardano
 
-import scalus.uplc.builtin.ByteString
 import scalus.cardano.address.Network
 import scalus.cardano.ledger.{Blake2b_256, Hash, HashPurpose, TransactionInput, TransactionOutput, Utxos, Value}
+import scalus.uplc.builtin.ByteString
 import test.TestPeer
 import test.TestPeer.*
 

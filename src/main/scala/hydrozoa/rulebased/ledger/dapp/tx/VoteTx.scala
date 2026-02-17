@@ -9,18 +9,18 @@ import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.*
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.dapp.utxo.{OwnVoteUtxo, RuleBasedTreasuryUtxo, VoteUtxoCast}
 import scala.util.{Failure, Success, Try}
-import scalus.uplc.builtin.Data.{fromData, toData}
-import scalus.uplc.builtin.{ByteString, Data}
 import scalus.cardano.address.Network
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.{BlockHeader as _, *}
+import scalus.cardano.onchain.plutus.prelude.List as SList
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.Datum.DatumInlined
 import scalus.cardano.txbuilder.ScriptSource.PlutusScriptValue
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
-import scalus.cardano.onchain.plutus.prelude.List as SList
+import scalus.uplc.builtin.Data.{fromData, toData}
+import scalus.uplc.builtin.{ByteString, Data}
 
 final case class VoteTx(
     // TODO: what we want to keep here if anything?

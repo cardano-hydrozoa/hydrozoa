@@ -36,9 +36,9 @@ import org.scalacheck.PropertyM.monadForPropM
 import org.scalacheck.util.Pretty
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
-import scalus.uplc.builtin.ByteString
 import scalus.cardano.ledger.{Block as _, BlockHeader as _, Coin, *}
 import scalus.cardano.onchain.plutus.prelude.Option as SOption
+import scalus.uplc.builtin.ByteString
 import test.*
 import test.Generators.Hydrozoa.*
 import test.Generators.Other.genCoinDistributionWithMinAdaUtxo

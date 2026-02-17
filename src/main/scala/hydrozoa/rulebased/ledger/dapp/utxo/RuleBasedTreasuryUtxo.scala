@@ -2,12 +2,12 @@ package hydrozoa.rulebased.ledger.dapp.utxo
 
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum
 import scalus.*
-import scalus.uplc.builtin.Data
-import scalus.uplc.builtin.Data.toData
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{AssetName, TransactionInput, TransactionOutput, Utxo, Value}
+import scalus.uplc.builtin.Data
+import scalus.uplc.builtin.Data.toData
 
 // TODO: Make opaque
 final case class RuleBasedTreasuryUtxo(

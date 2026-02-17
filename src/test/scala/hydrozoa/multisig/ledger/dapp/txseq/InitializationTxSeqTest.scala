@@ -16,7 +16,6 @@ import org.scalacheck.rng.Seed
 import org.scalacheck.{Prop, Properties, Test}
 import scala.collection.immutable.SortedMap
 import scala.collection.mutable
-import scalus.uplc.builtin.Data.toData
 import scalus.cardano.address.*
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.ledger.*
@@ -25,6 +24,7 @@ import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
 import scalus.cardano.onchain.plutus.v1.PubKeyHash
+import scalus.uplc.builtin.Data.toData
 import test.*
 import test.TransactionChain.observeTxChain
 

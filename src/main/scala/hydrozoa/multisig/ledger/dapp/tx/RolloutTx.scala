@@ -12,7 +12,6 @@ import hydrozoa.multisig.ledger.joint.obligation.Payout
 import monocle.{Focus, Lens}
 import scala.Function.const
 import scala.annotation.tailrec
-import scalus.uplc.builtin.ByteString
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.rules.TransactionSizeValidator
 import scalus.cardano.ledger.utils.TxBalance
@@ -20,6 +19,7 @@ import scalus.cardano.ledger.{Coin, ProtocolParams, Transaction, TransactionHash
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend}
 import scalus.cardano.txbuilder.{SomeBuildError, TransactionBuilder, TransactionBuilderStep, TxBalancingError}
+import scalus.uplc.builtin.ByteString
 
 sealed trait RolloutTx extends Tx[RolloutTx], RolloutUtxo.Spent, RolloutUtxo.MbProduced {
     def tx: Transaction

@@ -9,7 +9,6 @@ import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{ResolvedDatum, RuleBa
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{KzgCommitment, VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.dapp.utxo.{RuleBasedTreasuryUtxo, TallyVoteUtxo}
 import scala.util.{Failure, Success, Try}
-import scalus.uplc.builtin.Data.{fromData, toData}
 import scalus.cardano.address.Network
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
@@ -19,6 +18,7 @@ import scalus.cardano.txbuilder.Datum.DatumInlined
 import scalus.cardano.txbuilder.ScriptSource.PlutusScriptValue
 import scalus.cardano.txbuilder.TransactionBuilderStep.{AddCollateral, Send, Spend, ValidityEndSlot}
 import scalus.cardano.txbuilder.{Change, SomeBuildError, ThreeArgumentPlutusScriptWitness, TransactionBuilder}
+import scalus.uplc.builtin.Data.{fromData, toData}
 
 final case class ResolutionTx(
     talliedVoteUtxo: TallyVoteUtxo,

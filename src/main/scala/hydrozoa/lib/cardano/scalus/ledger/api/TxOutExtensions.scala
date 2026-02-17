@@ -2,10 +2,10 @@ package hydrozoa.lib.cardano.scalus.cardano.onchain.plutus
 
 import io.bullet.borer.Encoder
 import scalus.*
-import scalus.uplc.builtin.{Data, FromData}
 import scalus.cardano.ledger.TransactionOutput
 import scalus.cardano.onchain.plutus.v2.OutputDatum.OutputDatum
 import scalus.cardano.onchain.plutus.v3.TxOut
+import scalus.uplc.builtin.{Data, FromData}
 
 @Compile
 object TxOutExtension {

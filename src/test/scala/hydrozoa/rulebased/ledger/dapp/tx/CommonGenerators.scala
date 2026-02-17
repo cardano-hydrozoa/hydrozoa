@@ -13,15 +13,15 @@ import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.UnresolvedDatum
 import hydrozoa.rulebased.ledger.dapp.utxo.RuleBasedTreasuryUtxo
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
-import scalus.uplc.builtin.{BLS12_381_G2_Element, ByteString}
 import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{BlockHeader as _, Utxo, *}
-import scalus.crypto.ed25519.VerificationKey
+import scalus.cardano.onchain.plutus.prelude.List as SList
 import scalus.cardano.onchain.plutus.v1.ArbitraryInstances.genByteStringOfN
 import scalus.cardano.onchain.plutus.v3.TokenName
-import scalus.cardano.onchain.plutus.prelude.List as SList
+import scalus.crypto.ed25519.VerificationKey
+import scalus.uplc.builtin.{BLS12_381_G2_Element, ByteString}
 import test.*
 import test.Generators.Hydrozoa.genPubkeyAddress
 

@@ -4,10 +4,10 @@ import cats.data.NonEmptyList
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.{AwaitingVote, Voted}
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{KzgCommitment, VoteDatum, VoteStatus}
 import scalus.*
+import scalus.cardano.onchain.plutus.prelude.{===, Eq}
+import scalus.cardano.onchain.plutus.v3.PubKeyHash
 import scalus.uplc.builtin.Data.{FromData, ToData}
 import scalus.uplc.builtin.{ByteString, Data, FromData, ToData}
-import scalus.cardano.onchain.plutus.v3.PubKeyHash
-import scalus.cardano.onchain.plutus.prelude.{===, Eq}
 
 object VoteDatum {
     def default(commitment: KzgCommitment): VoteDatum = VoteState.VoteDatum(

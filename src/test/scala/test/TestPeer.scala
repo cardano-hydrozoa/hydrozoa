@@ -12,13 +12,13 @@ import hydrozoa.lib.cardano.wallet.WalletModule
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, HeadPeerWallet}
 import org.scalacheck.Gen
 import scala.collection.mutable
-import scalus.uplc.builtin.Builtins.blake2b_224
-import scalus.uplc.builtin.ByteString
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.ArbitraryInstances.*
 import scalus.cardano.ledger.{Hash, Transaction as STransaction}
+import scalus.uplc.builtin.Builtins.blake2b_224
+import scalus.uplc.builtin.ByteString
 
 /** Test peer names are just better indexes - you can have only Alice in one-peer head, Alice and
   * Bob in two-peer head and so on.

@@ -4,8 +4,8 @@ import cats.data.EitherT
 import cats.effect.IO
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.{KzgCommitment, asG1Element, asScalusScalar, hashToScalar, kzgCommitment}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator
-import scalus.uplc.builtin.BLS12_381_G2_Element
 import scalus.cardano.ledger.Utxos
+import scalus.uplc.builtin.bls12_381.G2Element
 import supranational.blst.P2
 
 /** Membership check is required when withdrawing.
@@ -48,7 +48,7 @@ object Membership {
             // 2. Check that the setup is big enough
             monomialG2 <- IO.delay(TrustedSetup.setup.g2Monomial).lift
             _ <- EitherT.cond[IO](monomialG2.sizeIs >= subset.size + 1, (), SubsetIsTooLarge)
-            crsG2 = TrustedSetup.takeSrsG2(subset.size + 1).map(BLS12_381_G2_Element.apply)
+            crsG2 = TrustedSetup.takeSrsG2(subset.size + 1).map(G2Element.apply)
 
             // 3. Build the proof
             proof <- IO { rest.kzgCommitment }.lift

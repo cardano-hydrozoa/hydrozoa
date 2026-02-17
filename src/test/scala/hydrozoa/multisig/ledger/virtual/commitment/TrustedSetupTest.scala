@@ -3,8 +3,8 @@ package hydrozoa.multisig.ledger.virtual.commitment
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers.*
 import scala.annotation.nowarn
-import scalus.uplc.builtin.{BLS12_381_G1_Element, BLS12_381_G2_Element}
 import scalus.cardano.onchain.plutus.prelude.crypto.bls12_381.{G1, G2}
+import scalus.uplc.builtin.bls12_381.*
 import scalus.|>
 import supranational.blst.{P1, P2}
 
@@ -33,10 +33,10 @@ class TrustedSetupTest extends AnyFunSuite:
 
     test("load trusted setup as G1/G2") {
         assertResult(G1.generator) {
-            TrustedSetup.takeSrsG1(1).head |> BLS12_381_G1_Element.apply
+            TrustedSetup.takeSrsG1(1).head |> G1Element.apply
         }
 
         assertResult(G2.generator) {
-            TrustedSetup.takeSrsG2(1).head |> BLS12_381_G2_Element.apply
+            TrustedSetup.takeSrsG2(1).head |> G2Element.apply
         }
     }

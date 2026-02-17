@@ -14,13 +14,13 @@ import hydrozoa.multisig.ledger.virtual.tx.GenesisObligation
 import io.bullet.borer.{Cbor, Encoder}
 import monocle.{Focus, Lens}
 import scala.util.{Failure, Success, Try}
-import scalus.uplc.builtin.Data.toData
-import scalus.uplc.builtin.{ByteString, platform}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend, ValidityEndSlot}
+import scalus.uplc.builtin.Data.toData
+import scalus.uplc.builtin.{ByteString, platform}
 
 final case class DepositTx(
     depositProduced: DepositUtxo,
