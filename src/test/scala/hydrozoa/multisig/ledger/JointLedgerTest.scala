@@ -29,7 +29,7 @@ import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag.{Invalid, Valid
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.tx.{GenesisObligation, L2Genesis}
 import io.bullet.borer.Cbor
-aimport java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeUnit
 import org.scalacheck.*
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.PropertyM.monadForPropM

@@ -7,7 +7,7 @@ import scala.annotation.nowarn
 import scala.io.Source
 import scalus.uplc.builtin.{BLS12_381_G1_Element, BLS12_381_G2_Element, ByteString, Data}
 import scalus.cardano.ledger.ScriptHash
-import scalus.ledger.api.v3.ScriptContext
+import scalus.cardano.onchain.plutus.v3.ScriptContext
 import scalus.cardano.onchain.plutus.prelude.List
 import scalus.cardano.onchain.plutus.prelude.crypto.bls12_381.G1
 import scalus.|>

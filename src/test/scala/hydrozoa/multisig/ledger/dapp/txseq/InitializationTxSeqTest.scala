@@ -24,7 +24,7 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
-import scalus.ledger.api.v1.PubKeyHash
+import scalus.cardano.onchain.plutus.v1.PubKeyHash
 import test.*
 import test.TransactionChain.observeTxChain
 

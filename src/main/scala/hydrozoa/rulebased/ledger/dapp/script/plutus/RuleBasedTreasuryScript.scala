@@ -1,8 +1,8 @@
 package hydrozoa.rulebased.ledger.dapp.script.plutus
 import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
-import hydrozoa.lib.cardano.scalus.ledger.api.ByteStringExtension.take
-import hydrozoa.lib.cardano.scalus.ledger.api.TxOutExtension.inlineDatumOfType
-import hydrozoa.lib.cardano.scalus.ledger.api.ValueExtension.*
+import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.ByteStringExtension.take
+import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.TxOutExtension.inlineDatumOfType
+import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.ValueExtension.*
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer.{Deinit, Resolve, Withdraw}
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.{Resolved, Unresolved}
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{MembershipProof, RuleBasedTreasuryDatum}
@@ -17,7 +17,7 @@ import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.{Language, Script}
 import scalus.cardano.onchain.plutus.v1.Value.+
-import scalus.ledger.api.v3.*
+import scalus.cardano.onchain.plutus.v3.*
 import scalus.cardano.onchain.plutus.prelude.*
 import scalus.cardano.onchain.plutus.prelude.Option.{None, Some}
 import scalus.cardano.onchain.plutus.prelude.crypto.bls12_381.G2

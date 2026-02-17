@@ -1,8 +1,8 @@
-package hydrozoa.lib.cardano.scalus.ledger.api
+package hydrozoa.lib.cardano.scalus.cardano.onchain.plutus
 
 import scalus.Compile
-import scalus.ledger.api.v1.Value.{-, zero}
-import scalus.ledger.api.v3.{PolicyId, TokenName, Value}
+import scalus.cardano.onchain.plutus.v1.Value.{-, zero}
+import scalus.cardano.onchain.plutus.v3.{PolicyId, TokenName, Value}
 import scalus.cardano.onchain.plutus.prelude.List.Cons
 import scalus.cardano.onchain.plutus.prelude.{List, fail, require}
 

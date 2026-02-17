@@ -12,7 +12,7 @@ import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.ledger.api.v3.{Address, PosixTime}
+import scalus.cardano.onchain.plutus.v3.{Address, PosixTime}
 import scalus.cardano.onchain.plutus.prelude.Option as ScalusOption
 
 /** NOTE: absorptionEnd must be absorptionStart + absorptionDuration for some [[TxTiming]] and

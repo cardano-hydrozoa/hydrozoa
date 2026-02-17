@@ -21,8 +21,8 @@ package hydrozoa.rulebased.ledger.dapp.tx
 //import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 //import scalus.cardano.ledger.*
 //import scalus.cardano.ledger.rules.FeesOkValidator
-//import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
-//import scalus.ledger.api.v3.TokenName
+//import scalus.cardano.onchain.plutus.v1.ArbitraryInstances.genByteStringOfN
+//import scalus.cardano.onchain.plutus.v3.TokenName
 //import scalus.cardano.onchain.plutus.prelude as scalus
 //import supranational.blst.Scalar
 //import test.*

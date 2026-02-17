@@ -21,7 +21,7 @@ import scalus.cardano.ledger.{Mint as _, *}
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
-import scalus.ledger.api.v1.PubKeyHash
+import scalus.cardano.onchain.plutus.v1.PubKeyHash
 import scalus.cardano.onchain.plutus.prelude.List as SList
 
 /** Output order:

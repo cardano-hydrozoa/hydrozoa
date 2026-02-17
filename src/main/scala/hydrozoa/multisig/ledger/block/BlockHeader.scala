@@ -130,7 +130,7 @@ object BlockHeader {
     object Minor {
         import hydrozoa.rulebased.ledger.dapp.state.VoteState
         import scalus.uplc.builtin.{FromData, ToData}
-        import scalus.ledger.api.v3.PosixTime
+        import scalus.cardano.onchain.plutus.v3.PosixTime
         import scalus.uplc.builtin.ByteString
 
         final case class Onchain(

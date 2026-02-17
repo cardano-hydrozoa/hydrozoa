@@ -1,4 +1,4 @@
-package hydrozoa.lib.cardano.scalus.ledger.api
+package hydrozoa.lib.cardano.scalus.cardano.onchain.plutus
 
 import scalus.*
 import scalus.uplc.builtin.Builtins.*

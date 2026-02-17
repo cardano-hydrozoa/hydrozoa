@@ -21,8 +21,8 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.LedgerToPlutusTranslation.getValue
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
-import scalus.ledger.api.v1
-import scalus.ledger.api.v1.Value.valueOrd
+import scalus.cardano.onchain.plutus.v1
+import scalus.cardano.onchain.plutus.v1.Value.valueOrd
 import scalus.cardano.onchain.plutus.prelude.Ord.<=
 import scalus.cardano.onchain.plutus.prelude.{Option as SOption, Ord}
 import test.*

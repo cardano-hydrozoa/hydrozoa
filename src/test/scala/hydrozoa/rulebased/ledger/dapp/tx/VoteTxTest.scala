@@ -23,9 +23,9 @@ import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.crypto.ed25519.VerificationKey
-import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
-import scalus.ledger.api.v1.PubKeyHash
-import scalus.ledger.api.v3.TokenName
+import scalus.cardano.onchain.plutus.v1.ArbitraryInstances.genByteStringOfN
+import scalus.cardano.onchain.plutus.v1.PubKeyHash
+import scalus.cardano.onchain.plutus.v3.TokenName
 
 /** key != 0
   *

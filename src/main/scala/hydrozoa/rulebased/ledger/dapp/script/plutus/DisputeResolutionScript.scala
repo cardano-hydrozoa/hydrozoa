@@ -1,9 +1,9 @@
 package hydrozoa.rulebased.ledger.dapp.script.plutus
 
 import hydrozoa.*
-import hydrozoa.lib.cardano.scalus.ledger.api.ByteStringExtension.take
-import hydrozoa.lib.cardano.scalus.ledger.api.TxOutExtension.inlineDatumOfType
-import hydrozoa.lib.cardano.scalus.ledger.api.ValueExtension.*
+import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.ByteStringExtension.take
+import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.TxOutExtension.inlineDatumOfType
+import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.ValueExtension.*
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.TallyRedeemer.{Continuing, Removed}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
@@ -22,7 +22,7 @@ import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, S
 import scalus.cardano.ledger.{Language, Script}
 import scalus.cardano.onchain.plutus.v1.IntervalBoundType.Finite
 import scalus.cardano.onchain.plutus.v1.Value.+
-import scalus.ledger.api.v3.*
+import scalus.cardano.onchain.plutus.v3.*
 import scalus.cardano.onchain.plutus.prelude.Option.{None, Some}
 import scalus.cardano.onchain.plutus.prelude.{!==, ===, List, Option, SortedMap, fail, log, require}
 import scalus.cardano.onchain.plutus.v3.Validator

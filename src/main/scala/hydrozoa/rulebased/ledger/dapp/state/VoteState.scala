@@ -6,7 +6,7 @@ import hydrozoa.rulebased.ledger.dapp.state.VoteState.{KzgCommitment, VoteDatum,
 import scalus.*
 import scalus.uplc.builtin.Data.{FromData, ToData}
 import scalus.uplc.builtin.{ByteString, Data, FromData, ToData}
-import scalus.ledger.api.v3.PubKeyHash
+import scalus.cardano.onchain.plutus.v3.PubKeyHash
 import scalus.cardano.onchain.plutus.prelude.{===, Eq}
 
 object VoteDatum {

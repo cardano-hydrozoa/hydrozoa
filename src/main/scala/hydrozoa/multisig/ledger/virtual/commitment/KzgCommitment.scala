@@ -6,7 +6,7 @@ import scalus.uplc.builtin.Builtins.{blake2b_224, serialiseData}
 import scalus.uplc.builtin.Data.toData
 import scalus.uplc.builtin.{BLS12_381_G1_Element, ByteString}
 import scalus.cardano.ledger.*
-import scalus.ledger.api.v3.TxInInfo
+import scalus.cardano.onchain.plutus.v3.TxInInfo
 import scalus.cardano.onchain.plutus.prelude.List as SList
 import scalus.cardano.onchain.plutus.prelude.crypto.bls12_381.G1
 import scalus.|>

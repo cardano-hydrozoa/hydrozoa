@@ -381,7 +381,6 @@ object CardanoBackendBlockfrost:
         url: Either[Network, URL],
         apiKey: ApiKey = "",
         pageSize: Int = 100,
-        cardanoNetwork : CardanoNetwork.Section
     ): IO[CardanoBackendBlockfrost] = {
         val baseUrl = url.fold(_.url, x => x)
         // NB: Bloxbean requires the trailing slash
@@ -391,15 +390,18 @@ object CardanoBackendBlockfrost:
         given sttp.client4.Backend[scala.concurrent.Future] = DefaultFutureBackend()
 
         for {
-            blockfrostProvider <- IO.fromFuture(IO(
-                cardanoNetwork match {
-                    case CardanoNetwork.Mainnet => BlockfrostProvider.mainnet(
-                        apiKey
-                    )
-                    case CardanoNetwork.Preprod => BlockfrostProvider.preprod(apiKey)
-                    case CardanoNetwork.Preview => BlockfrostProvider.preview(apiKey)
-                    case _ => ??? // @Ilia: What would you like to do here?
-                }))
+            blockfrostProvider <- IO.fromFuture(IO(???
+// @Ilia: the BlockfrostProvider helper methods now return a Future.
+//  I'm not sure what the semantic should be for the url.              
+//                cardanoNetwork match {
+//                    case CardanoNetwork.Mainnet => BlockfrostProvider.mainnet(
+//                        apiKey
+//                    )
+//                    case CardanoNetwork.Preprod => BlockfrostProvider.preprod(apiKey)
+//                    case CardanoNetwork.Preview => BlockfrostProvider.preview(apiKey)
+//                    case _ => ??? // @Ilia: What would you like to do here?
+//                }
+            ))
             //
         } yield (new CardanoBackendBlockfrost(backendService, pageSize, blockfrostProvider))
 

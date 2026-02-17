@@ -6,7 +6,7 @@ import hydrozoa.config.head.multisig.timing.TxTiming.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, quantizeLosslessUnsafe, toEpochQuantizedInstant}
-import hydrozoa.lib.cardano.scalus.ledger.api.TransactionOutputEncoders.given
+import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.TransactionOutputEncoders.given
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.explainConst
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
