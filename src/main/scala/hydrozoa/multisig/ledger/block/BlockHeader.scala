@@ -129,9 +129,9 @@ object BlockHeader {
 
     object Minor {
         import hydrozoa.rulebased.ledger.dapp.state.VoteState
-        import scalus.builtin.{FromData, ToData}
-        import scalus.ledger.api.v3.PosixTime
-        import scalus.builtin.ByteString
+        import scalus.uplc.builtin.{FromData, ToData}
+        import scalus.cardano.onchain.plutus.v3.PosixTime
+        import scalus.uplc.builtin.ByteString
 
         final case class Onchain(
             blockNum: BigInt,
@@ -143,8 +143,8 @@ object BlockHeader {
               ToData
 
         object Onchain {
-            import scalus.builtin.Data.toData
-            import scalus.builtin.Builtins.serialiseData
+            import scalus.uplc.builtin.Data.toData
+            import scalus.uplc.builtin.Builtins.serialiseData
 
             def apply(offchainHeader: BlockHeader.Intermediate): Onchain =
                 import offchainHeader.*

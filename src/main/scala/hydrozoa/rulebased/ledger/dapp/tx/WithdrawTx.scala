@@ -7,18 +7,18 @@ import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryScript
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.{TreasuryRedeemer, WithdrawRedeemer}
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{ResolvedDatum, RuleBasedTreasuryDatum}
 import hydrozoa.rulebased.ledger.dapp.utxo.RuleBasedTreasuryUtxo
-import scalus.builtin.Data.toData
 import scalus.cardano.address.Network
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
+import scalus.cardano.onchain.plutus.prelude.List as SList
+import scalus.cardano.onchain.plutus.v3.{TxId, TxOutRef}
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.Datum.DatumInlined
 import scalus.cardano.txbuilder.ScriptSource.PlutusScriptValue
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Send, Spend, ValidityEndSlot}
-import scalus.ledger.api.v3.{TxId, TxOutRef}
-import scalus.prelude.List as SList
+import scalus.uplc.builtin.Data.toData
 
 final case class WithdrawTx(
     treasuryUtxoSpent: RuleBasedTreasuryUtxo,

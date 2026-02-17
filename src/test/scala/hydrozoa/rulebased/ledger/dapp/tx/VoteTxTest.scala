@@ -15,17 +15,17 @@ import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 import scala.annotation.nowarn
-import scalus.builtin.Builtins.blake2b_224
-import scalus.builtin.ByteString
-import scalus.builtin.Data.toData
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.onchain.plutus.v1.ArbitraryInstances.genByteStringOfN
+import scalus.cardano.onchain.plutus.v1.PubKeyHash
+import scalus.cardano.onchain.plutus.v3.TokenName
 import scalus.crypto.ed25519.VerificationKey
-import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
-import scalus.ledger.api.v1.PubKeyHash
-import scalus.ledger.api.v3.TokenName
+import scalus.uplc.builtin.Builtins.blake2b_224
+import scalus.uplc.builtin.ByteString
+import scalus.uplc.builtin.Data.toData
 
 /** key != 0
   *

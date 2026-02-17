@@ -6,7 +6,7 @@ import java.time.Instant
 import scala.concurrent.duration.{FiniteDuration, MILLISECONDS}
 import scala.math.Ordered.orderingToOrdered
 import scalus.cardano.ledger.{Slot, SlotConfig}
-import scalus.ledger.api.v3.PosixTime
+import scalus.cardano.onchain.plutus.v3.PosixTime
 
 /** In Cardano, our notion of time is constrained by:
   *

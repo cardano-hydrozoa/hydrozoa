@@ -1,7 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.token
-import scalus.builtin.Builtins.blake2b_224
-import scalus.builtin.ByteString
 import scalus.cardano.ledger.{AssetName, TransactionInput}
+import scalus.uplc.builtin.Builtins.blake2b_224
+import scalus.uplc.builtin.ByteString
 
 // FIXME: This is not actually CIP-67 compliant as is. See:
 // https://github.com/cardano-hydrozoa/hydrozoa/issues/260

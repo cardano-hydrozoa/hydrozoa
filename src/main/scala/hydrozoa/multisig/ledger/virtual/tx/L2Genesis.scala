@@ -4,13 +4,13 @@ import cats.syntax.all.*
 import hydrozoa.*
 import hydrozoa.multisig.ledger.dapp.txseq.DepositRefundTxSeq
 import scala.collection.immutable.Queue
-import scalus.builtin.Data
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.Script.Native
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{Coin, Hash as _, Script, ScriptRef, TransactionHash, TransactionInput, TransactionOutput, Utxos, Value}
-import scalus.prelude.Option as SOption
+import scalus.cardano.onchain.plutus.prelude.Option as SOption
+import scalus.uplc.builtin.Data
 
 final case class L2Genesis(
     // We allow  this to be empty so that we can do the "push the fallback forward" tx

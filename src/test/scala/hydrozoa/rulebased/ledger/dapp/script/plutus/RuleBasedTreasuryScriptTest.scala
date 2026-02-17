@@ -5,11 +5,12 @@ import hydrozoa.multisig.ledger.virtual.commitment.{KzgCommitment, TrustedSetup}
 import org.scalatest.funsuite.AnyFunSuite
 import scala.annotation.nowarn
 import scala.io.Source
-import scalus.builtin.{BLS12_381_G1_Element, BLS12_381_G2_Element, ByteString, Data}
 import scalus.cardano.ledger.ScriptHash
-import scalus.ledger.api.v3.ScriptContext
-import scalus.prelude.List
-import scalus.prelude.crypto.bls12_381.G1
+import scalus.cardano.onchain.plutus.prelude.List
+import scalus.cardano.onchain.plutus.prelude.crypto.bls12_381.G1
+import scalus.cardano.onchain.plutus.v3.ScriptContext
+import scalus.uplc.builtin.bls12_381.*
+import scalus.uplc.builtin.{ByteString, Data}
 import scalus.|>
 import supranational.blst.Scalar
 
@@ -41,8 +42,8 @@ class RuleBasedTreasuryScriptTest extends AnyFunSuite {
 
     test("Membership check: empty accumulator / subset") {
 
-        val crs_g2 = TrustedSetup.takeSrsG2(1).map(BLS12_381_G2_Element.apply)
-        val accumulator = TrustedSetup.takeSrsG1(1).head |> BLS12_381_G1_Element.apply
+        val crs_g2 = TrustedSetup.takeSrsG2(1).map(G2Element.apply)
+        val accumulator = TrustedSetup.takeSrsG1(1).head |> G1Element.apply
         val subset: List[ScalusScalar] = List()
         val proof = accumulator
 
@@ -94,7 +95,7 @@ class RuleBasedTreasuryScriptTest extends AnyFunSuite {
     test("Membership check smoke-test") {
 
         // Accumulator:
-        val accumulator = BLS12_381_G1_Element(
+        val accumulator = G1Element(
           ByteString.fromHex(
             "8ec51973adde24a8b6a05f62843f1c2949d01bdc642091f85a9d1803abc074616b545fd6fa25fbc467af2ef112cda832"
           )
@@ -110,7 +111,7 @@ class RuleBasedTreasuryScriptTest extends AnyFunSuite {
         val proof = G1.generator
 
         // Pre-calculated powers of tau
-        val crsG2 = TrustedSetup.takeSrsG2(subset.length.toInt + 1).map(BLS12_381_G2_Element.apply)
+        val crsG2 = TrustedSetup.takeSrsG2(subset.length.toInt + 1).map(G2Element.apply)
 
         assert(
           RuleBasedTreasuryValidator.checkMembership(crsG2, accumulator, subset, proof)

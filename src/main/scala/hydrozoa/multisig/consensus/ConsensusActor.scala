@@ -16,9 +16,9 @@ import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHea
 import hydrozoa.multisig.ledger.dapp.tx.{RefundTx, RolloutTx, Tx, TxSignature}
 import scala.Function.tupled
 import scala.util.control.NonFatal
-import scalus.builtin.{ByteString, platform}
 import scalus.cardano.ledger.{TransactionHash, VKeyWitness}
 import scalus.crypto.ed25519.VerificationKey
+import scalus.uplc.builtin.{ByteString, platform}
 
 /** Round one own acks, which must be scheduled immediately upon receiving. There is no way to
   * separate own acks from others' acks at the type level, but this alias is those alias is used

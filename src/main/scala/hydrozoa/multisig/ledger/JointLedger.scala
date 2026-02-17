@@ -27,9 +27,9 @@ import hydrozoa.multisig.ledger.virtual.tx.{GenesisObligation, L2Genesis}
 import monocle.Focus.focus
 import scala.collection.immutable.Queue
 import scala.math.Ordered.orderingToOrdered
-import scalus.builtin.{ByteString, platform}
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{AssetName, TransactionHash, TransactionInput}
+import scalus.uplc.builtin.{ByteString, platform}
 
 // Fields of a work-in-progress block, with an additional field for dealing with withdrawn utxos
 private case class TransientFields(

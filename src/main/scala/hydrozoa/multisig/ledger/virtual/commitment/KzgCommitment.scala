@@ -2,13 +2,14 @@ package hydrozoa.multisig.ledger.virtual.commitment
 
 import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
 import java.math.BigInteger
-import scalus.builtin.Builtins.{blake2b_224, serialiseData}
-import scalus.builtin.Data.toData
-import scalus.builtin.{BLS12_381_G1_Element, ByteString}
 import scalus.cardano.ledger.*
-import scalus.ledger.api.v3.TxInInfo
-import scalus.prelude.List as SList
-import scalus.prelude.crypto.bls12_381.G1
+import scalus.cardano.onchain.plutus.prelude.List as SList
+import scalus.cardano.onchain.plutus.prelude.crypto.bls12_381.G1
+import scalus.cardano.onchain.plutus.v3.TxInInfo
+import scalus.uplc.builtin.Builtins.{blake2b_224, serialiseData}
+import scalus.uplc.builtin.ByteString
+import scalus.uplc.builtin.Data.toData
+import scalus.uplc.builtin.bls12_381.G1Element
 import scalus.|>
 import supranational.blst.{P1, Scalar}
 
@@ -26,7 +27,7 @@ object KzgCommitment {
 
     extension (self: KzgCommitment)
         // def asByteString: ByteString = ByteString.fromArray(IArray.genericWrapArray(self).toArray)
-        def asG1Element: BLS12_381_G1_Element = BLS12_381_G1_Element(self)
+        def asG1Element: G1Element = G1Element(self)
 
     extension (utxos: Utxos)
         def kzgCommitment: KzgCommitment =

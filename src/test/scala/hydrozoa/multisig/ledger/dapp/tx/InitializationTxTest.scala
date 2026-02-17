@@ -9,8 +9,8 @@ package hydrozoa.multisig.ledger.dapp.tx
 //import hydrozoa.multisig.ledger.dapp.utxo.MultisigTreasuryUtxo
 //import org.scalacheck.{Arbitrary, Gen}
 //import scala.collection.immutable.SortedMap
-//import scalus.builtin.ByteString
-//import scalus.builtin.Data.toData
+//import scalus.uplc.builtin.ByteString
+//import scalus.uplc.builtin.Data.toData
 //import scalus.cardano.address.*
 //import scalus.cardano.address.ShelleyPaymentPart.Key
 //import scalus.cardano.ledger.*

@@ -6,7 +6,7 @@ import hydrozoa.config.head.multisig.timing.TxTiming.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, quantizeLosslessUnsafe, toEpochQuantizedInstant}
-import hydrozoa.lib.cardano.scalus.ledger.api.TransactionOutputEncoders.given
+import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.TransactionOutputEncoders.given
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.explainConst
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
@@ -14,13 +14,13 @@ import hydrozoa.multisig.ledger.virtual.tx.GenesisObligation
 import io.bullet.borer.{Cbor, Encoder}
 import monocle.{Focus, Lens}
 import scala.util.{Failure, Success, Try}
-import scalus.builtin.Data.toData
-import scalus.builtin.{ByteString, platform}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend, ValidityEndSlot}
+import scalus.uplc.builtin.Data.toData
+import scalus.uplc.builtin.{ByteString, platform}
 
 final case class DepositTx(
     depositProduced: DepositUtxo,

@@ -12,19 +12,19 @@ import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import java.time.Instant
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
-import scalus.builtin.ByteString
-import scalus.builtin.Data.toData
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.LedgerToPlutusTranslation.getValue
 import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.onchain.plutus.prelude.Ord.<=
+import scalus.cardano.onchain.plutus.prelude.{Option as SOption, Ord}
+import scalus.cardano.onchain.plutus.v1
+import scalus.cardano.onchain.plutus.v1.Value.valueOrd
 import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
-import scalus.ledger.api.v1
-import scalus.ledger.api.v1.Value.valueOrd
-import scalus.prelude.Ord.<=
-import scalus.prelude.{Option as SOption, Ord}
+import scalus.uplc.builtin.ByteString
+import scalus.uplc.builtin.Data.toData
 import test.*
 import test.Generators.Hydrozoa.*
 import test.Generators.Other

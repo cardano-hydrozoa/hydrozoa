@@ -1,9 +1,9 @@
 package hydrozoa.rulebased.ledger.dapp.state
 
 import scalus.Compile
-import scalus.builtin.{ByteString, Data, FromData, ToData}
-import scalus.ledger.api.v3.*
-import scalus.prelude.List
+import scalus.cardano.onchain.plutus.prelude.List
+import scalus.cardano.onchain.plutus.v3.*
+import scalus.uplc.builtin.{ByteString, Data, FromData, ToData}
 
 @Compile
 // TODO: shall we move it to object RuleBasedTreasuryUtxo?

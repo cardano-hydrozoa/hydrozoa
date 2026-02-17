@@ -13,14 +13,14 @@ package hydrozoa.rulebased.ledger.dapp.tx
 //import org.scalatest.funsuite.AnyFunSuite
 //import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 //import scala.annotation.nowarn
-//import scalus.builtin.ByteString
-//import scalus.builtin.Data.toData
+//import scalus.uplc.builtin.ByteString
+//import scalus.uplc.builtin.Data.toData
 //import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 //import scalus.cardano.ledger.DatumOption.Inline
 //import scalus.cardano.ledger.TransactionOutput.Babbage
 //import scalus.cardano.ledger.{Utxo, *}
-//import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
-//import scalus.ledger.api.v3.TokenName
+//import scalus.cardano.onchain.plutus.v1.ArbitraryInstances.genByteStringOfN
+//import scalus.cardano.onchain.plutus.v3.TokenName
 //import test.*
 //
 ///** Generate a vote datum with a cast vote for tally testing

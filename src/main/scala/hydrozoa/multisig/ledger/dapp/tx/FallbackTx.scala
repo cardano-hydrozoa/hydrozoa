@@ -12,17 +12,17 @@ import hydrozoa.rulebased.ledger.dapp.state.VoteDatum as VD
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteDatum
 import hydrozoa.rulebased.ledger.dapp.utxo.RuleBasedTreasuryUtxo
 import monocle.{Focus, Lens}
-import scalus.builtin.Data
-import scalus.builtin.Data.toData
 import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{Mint as _, *}
+import scalus.cardano.onchain.plutus.prelude.List as SList
+import scalus.cardano.onchain.plutus.v1.PubKeyHash
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
-import scalus.ledger.api.v1.PubKeyHash
-import scalus.prelude.List as SList
+import scalus.uplc.builtin.Data
+import scalus.uplc.builtin.Data.toData
 
 /** Output order:
   *   - Treasury Utxo (1)

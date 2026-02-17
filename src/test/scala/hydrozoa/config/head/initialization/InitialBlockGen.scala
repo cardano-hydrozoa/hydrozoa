@@ -37,12 +37,10 @@ def generateInitialBlock(testPeers: TestPeers)(
           generateDisputeResolutionConfig
         )
 
-        initializationParameters <- generateInitializationParameters(
+        initializationParameters <- InitializationParametersGenBottomUp.generateInitializationParameters(testPeers)(
           generateCardanoNetwork = Gen.const(cardanoNetwork),
           generateHeadStartTime = generateHeadStartTime,
-          generateFallbackContingency = _ => Gen.const(headParams.fallbackContingency),
-          generateGenesisUtxosL1 = generateGenesisUtxo,
-          equityRange = equityRange,
+          generateFallbackContingency = _ => Gen.const(headParams.fallbackContingency)
         )
 
         config = HeadConfig.Preinit.HeadConfig(

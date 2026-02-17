@@ -8,8 +8,8 @@ import hydrozoa.lib.number.Distribution
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.dapp.token.CIP67.{HasTokenNames, HeadTokenNames}
 import scala.collection.immutable.TreeMap
-import scalus.builtin.{ByteString, platform}
 import scalus.cardano.ledger.{Blake2b_256, Coin, Hash, Hash32, TransactionOutput, Utxo, Utxos, Value}
+import scalus.uplc.builtin.{ByteString, platform}
 import spire.math.Rational
 
 export InitializationParameters.isBalancedInitializationFunding

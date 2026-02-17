@@ -1,9 +1,9 @@
 package hydrozoa.rulebased.ledger.dapp.script.plutus
 
 import hydrozoa.*
-import hydrozoa.lib.cardano.scalus.ledger.api.ByteStringExtension.take
-import hydrozoa.lib.cardano.scalus.ledger.api.TxOutExtension.inlineDatumOfType
-import hydrozoa.lib.cardano.scalus.ledger.api.ValueExtension.*
+import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.ByteStringExtension.take
+import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.TxOutExtension.inlineDatumOfType
+import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.ValueExtension.*
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.TallyRedeemer.{Continuing, Removed}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
@@ -14,18 +14,18 @@ import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.AwaitingVote
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
 import scala.annotation.tailrec
 import scalus.*
-import scalus.builtin.Builtins.{serialiseData, verifyEd25519Signature}
-import scalus.builtin.ByteString.hex
-import scalus.builtin.Data.toData
-import scalus.builtin.{ByteString, Data, FromData, ToData}
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.{Language, Script}
-import scalus.ledger.api.v1.IntervalBoundType.Finite
-import scalus.ledger.api.v1.Value.+
-import scalus.ledger.api.v3.*
-import scalus.prelude.Option.{None, Some}
-import scalus.prelude.{!==, ===, List, Option, SortedMap, Validator, fail, log, require}
+import scalus.cardano.onchain.plutus.prelude.Option.{None, Some}
+import scalus.cardano.onchain.plutus.prelude.{!==, ===, List, Option, SortedMap, fail, log, require}
+import scalus.cardano.onchain.plutus.v1.IntervalBoundType.Finite
+import scalus.cardano.onchain.plutus.v1.Value.+
+import scalus.cardano.onchain.plutus.v3.*
 import scalus.uplc.DeBruijnedProgram
+import scalus.uplc.builtin.Builtins.{serialiseData, verifyEd25519Signature}
+import scalus.uplc.builtin.ByteString.hex
+import scalus.uplc.builtin.Data.toData
+import scalus.uplc.builtin.{ByteString, Data, FromData, ToData}
 
 @Compile
 object DisputeResolutionValidator extends Validator {
@@ -244,7 +244,7 @@ object DisputeResolutionValidator extends Validator {
                 )
 
                 // Temporary workaround
-                import scalus.prelude.List.{Cons, Nil}
+                import scalus.cardano.onchain.plutus.prelude.List.{Cons, Nil}
                 @tailrec
                 def verifySignatures(a: List[ByteString], b: List[ByteString]): Unit =
                     a match

@@ -11,7 +11,6 @@ import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import monocle.{Focus, Lens}
 import scala.annotation.tailrec
 import scala.util.{Failure, Success}
-import scalus.builtin.ByteString
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
@@ -22,6 +21,7 @@ import scalus.cardano.txbuilder.ScriptSource.NativeScriptValue
 import scalus.cardano.txbuilder.SomeBuildError.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, ReferenceOutput, Send, Spend, ValidityStartSlot}
+import scalus.uplc.builtin.ByteString
 
 sealed trait RefundTx {
     def tx: Transaction

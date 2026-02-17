@@ -1,7 +1,8 @@
 package hydrozoa.multisig.backend.cardano
 
 import cats.data.EitherT
-import cats.effect.IO
+import cats.effect.*
+import cats.effect.syntax.all.*
 import cats.syntax.traverse.*
 import com.bloxbean.cardano.client.api.common.OrderEnum
 import com.bloxbean.cardano.client.api.model.{Result, Utxo}
@@ -18,10 +19,10 @@ import scala.concurrent.Await
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration.DurationInt
 import scala.jdk.CollectionConverters.*
-import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.{Address, ShelleyAddress}
-import scalus.cardano.ledger.{AssetName, PolicyId, ProtocolParams, Transaction, TransactionHash, TransactionInput, TransactionOutput, Utxos}
+import scalus.cardano.ledger.*
 import scalus.cardano.node.BlockfrostProvider
+import scalus.uplc.builtin.{ByteString, Data}
 import sttp.client4.DefaultFutureBackend
 
 /** Cardano backend to use with Blockfrost-compatible API. Currently uses both BloxBeans's
@@ -96,8 +97,8 @@ class CardanoBackendBlockfrost private (
         )
 
     private def convert(utxo: Utxo): (TransactionInput, TransactionOutput) = {
-        import scalus.builtin.ByteString
         import scalus.cardano.ledger.{Blake2b_256, Coin, DatumOption, Hash, HashPurpose, MultiAsset, TransactionInput, TransactionOutput, Value}
+        import scalus.uplc.builtin.ByteString
 
         import scala.collection.immutable.SortedMap
 
@@ -146,7 +147,7 @@ class CardanoBackendBlockfrost private (
                 if inlineDatumHex.isEmpty then None
                 else {
                     import io.bullet.borer.Cbor
-                    import scalus.builtin.Data
+                    import scalus.uplc.builtin.Data
                     scala.util.Try {
                         val datumBytes = ByteString.fromHex(inlineDatumHex)
                         val data = Cbor.decode(datumBytes.bytes).to[Data].value
@@ -377,18 +378,35 @@ object CardanoBackendBlockfrost:
     def apply(
         url: Either[Network, URL],
         apiKey: ApiKey = "",
-        pageSize: Int = 100
-    ): IO[CardanoBackendBlockfrost] =
-        IO {
-            val baseUrl = url.fold(_.url, x => x)
-            // NB: Bloxbean requires the trailing slash
-            val backendService = BFBackendService(baseUrl + "/", apiKey)
-            // Scalus Blockfrost provider
-            given sttp.client4.Backend[scala.concurrent.Future] = DefaultFutureBackend()
-            val blockfrostProvider = BlockfrostProvider(apiKey, baseUrl)
+        pageSize: Int = 100,
+    ): IO[CardanoBackendBlockfrost] = {
+        val baseUrl = url.fold(_.url, x => x)
+        // NB: Bloxbean requires the trailing slash
+        val backendService = BFBackendService(baseUrl + "/", apiKey)
+
+        // Scalus Blockfrost provider
+        given sttp.client4.Backend[scala.concurrent.Future] = DefaultFutureBackend()
+
+        for {
+            blockfrostProvider <- IO.fromFuture(
+              IO(
+                ???
+// @Ilia: the BlockfrostProvider helper methods now return a Future.
+//  I'm not sure what the semantic should be for the url.
+//                cardanoNetwork match {
+//                    case CardanoNetwork.Mainnet => BlockfrostProvider.mainnet(
+//                        apiKey
+//                    )
+//                    case CardanoNetwork.Preprod => BlockfrostProvider.preprod(apiKey)
+//                    case CardanoNetwork.Preview => BlockfrostProvider.preview(apiKey)
+//                    case _ => ??? // @Ilia: What would you like to do here?
+//                }
+              )
+            )
             //
-            new CardanoBackendBlockfrost(backendService, pageSize, blockfrostProvider)
-        }
+        } yield new CardanoBackendBlockfrost(backendService, pageSize, blockfrostProvider)
+
+    }
 
     enum Network(val url: String):
         case MAINNET extends Network(Constants.BLOCKFROST_MAINNET_URL)

@@ -1,28 +1,29 @@
 package hydrozoa.rulebased.ledger.dapp.script.plutus
 import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
-import hydrozoa.lib.cardano.scalus.ledger.api.ByteStringExtension.take
-import hydrozoa.lib.cardano.scalus.ledger.api.TxOutExtension.inlineDatumOfType
-import hydrozoa.lib.cardano.scalus.ledger.api.ValueExtension.*
+import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.ByteStringExtension.take
+import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.TxOutExtension.inlineDatumOfType
+import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.ValueExtension.*
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer.{Deinit, Resolve, Withdraw}
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.{Resolved, Unresolved}
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{MembershipProof, RuleBasedTreasuryDatum}
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.*
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
 import scalus.*
-import scalus.builtin.*
-import scalus.builtin.Builtins.*
-import scalus.builtin.ByteString.hex
-import scalus.builtin.Data.toData
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.{Language, Script}
-import scalus.ledger.api.v1.Value.+
-import scalus.ledger.api.v3.*
-import scalus.prelude.*
-import scalus.prelude.Option.{None, Some}
-import scalus.prelude.crypto.bls12_381.G2
-import scalus.prelude.crypto.bls12_381.G2.scale
+import scalus.cardano.onchain.plutus.prelude.*
+import scalus.cardano.onchain.plutus.prelude.Option.{None, Some}
+import scalus.cardano.onchain.plutus.prelude.crypto.bls12_381.G2
+import scalus.cardano.onchain.plutus.prelude.crypto.bls12_381.G2.scale
+import scalus.cardano.onchain.plutus.v1.Value.+
+import scalus.cardano.onchain.plutus.v3.*
 import scalus.uplc.DeBruijnedProgram
+import scalus.uplc.builtin.*
+import scalus.uplc.builtin.Builtins.*
+import scalus.uplc.builtin.ByteString.hex
+import scalus.uplc.builtin.Data.toData
+import scalus.uplc.builtin.bls12_381.*
 
 @Compile
 object RuleBasedTreasuryValidator extends Validator {
@@ -373,9 +374,9 @@ object RuleBasedTreasuryValidator extends Validator {
     }
 
     def getG2Commitment(
-        setup: List[BLS12_381_G2_Element],
+        setup: List[G2Element],
         subset: List[ScalusScalar]
-    ): BLS12_381_G2_Element = {
+    ): G2Element = {
         val subsetInGroup =
             List.map2(getFinalPolyScalus(subset), setup): (sb, st) =>
                 st.scale(sb.toInt)
@@ -397,10 +398,10 @@ object RuleBasedTreasuryValidator extends Validator {
       *   True if the accumulator is valid, false otherwise.
       */
     def checkMembership(
-        setup: List[BLS12_381_G2_Element],
-        acc: BLS12_381_G1_Element,
+        setup: List[G2Element],
+        acc: G1Element,
         subset: List[ScalusScalar],
-        proof: BLS12_381_G1_Element
+        proof: G1Element
     ): Boolean = {
         val g2 = setup !! 0
         val lhs = bls12_381_millerLoop(acc, g2)

@@ -29,16 +29,16 @@ import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag.{Invalid, Valid
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.tx.{GenesisObligation, L2Genesis}
 import io.bullet.borer.Cbor
-aimport java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeUnit
 import org.scalacheck.*
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.PropertyM.monadForPropM
 import org.scalacheck.util.Pretty
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
-import scalus.builtin.ByteString
 import scalus.cardano.ledger.{Block as _, BlockHeader as _, Coin, *}
-import scalus.prelude.Option as SOption
+import scalus.cardano.onchain.plutus.prelude.Option as SOption
+import scalus.uplc.builtin.ByteString
 import test.*
 import test.Generators.Hydrozoa.*
 import test.Generators.Other.genCoinDistributionWithMinAdaUtxo
@@ -449,7 +449,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               expectedUtxos = L2Genesis(
                 Queue.from(depositRefundTxSeq.depositTx.depositProduced.virtualOutputs.toList),
                 TransactionHash.fromByteString(
-                  scalus.builtin.platform.blake2b_256(
+                  scalus.uplc.builtin.platform.blake2b_256(
                     env.config.headTokenNames.treasuryTokenName.bytes ++
                         ByteString.fromBigIntBigEndian(
                           BigInt(BlockVersion.Full.unapply(majorBlock.header.blockVersion)._1)
