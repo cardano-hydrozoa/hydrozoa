@@ -89,7 +89,7 @@ object CommonGenerators {
         config: CardanoNetwork.Section,
         fallbackTxId: TransactionHash,
         headMp: PolicyId,
-        beaconTokenName: TokenName,
+        treasuryTokenName: TokenName,
         unresolvedDatum: UnresolvedDatum
     ): Gen[RuleBasedTreasuryUtxo] =
         for {
@@ -102,7 +102,7 @@ object CommonGenerators {
             spp = ShelleyPaymentPart.Script(RuleBasedTreasuryScript.compiledScriptHash)
             scriptAddr = ShelleyAddress(config.network, spp, ShelleyDelegationPart.Null)
 
-            beaconTokenAssetName = AssetName(beaconTokenName)
+            beaconTokenAssetName = AssetName(treasuryTokenName)
             beaconToken = Value.asset(headMp, beaconTokenAssetName, 1)
         } yield RuleBasedTreasuryUtxo(
           treasuryTokenName = beaconTokenAssetName,
