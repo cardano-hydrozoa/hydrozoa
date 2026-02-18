@@ -1,8 +1,10 @@
 package hydrozoa.multisig.ledger.virtual.tx
 
+import cats.data.NonEmptyList
 import cats.syntax.all.*
 import hydrozoa.*
 import hydrozoa.multisig.ledger.dapp.txseq.DepositRefundTxSeq
+import io.bullet.borer.Cbor
 import scala.collection.immutable.Queue
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.DatumOption.Inline
@@ -99,4 +101,11 @@ object GenesisObligation {
                 )
             case o: TransactionOutput.Shelley => Left(NonBabbageVirtualOutput(o))
         }
+
+    def serialize(obligations: NonEmptyList[GenesisObligation]): Array[Byte] =
+        Cbor
+            .encode(
+              obligations.toList.map(_.toBabbage.asInstanceOf[TransactionOutput])
+            )
+            .toByteArray
 }

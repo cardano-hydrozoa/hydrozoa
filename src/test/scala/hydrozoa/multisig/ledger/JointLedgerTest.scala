@@ -28,7 +28,6 @@ import hydrozoa.multisig.ledger.event.LedgerEventId
 import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag.{Invalid, Valid}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.tx.{GenesisObligation, L2Genesis}
-import io.bullet.borer.Cbor
 import java.util.concurrent.TimeUnit
 import org.scalacheck.*
 import org.scalacheck.Prop.propBoolean
@@ -256,12 +255,7 @@ object JointLedgerTestHelpers {
                           .label(s"Virtual Outputs for deposit $eventId")
                     )
 
-                virtualOutputsBytes =
-                    Cbor
-                        .encode(
-                          virtualOutputs.toList.map(_.toBabbage.asInstanceOf[TransactionOutput])
-                        )
-                        .toByteArray
+                virtualOutputsBytes = GenesisObligation.serialize(virtualOutputs)
 
                 virtualOutputsValue = Value.combine(
                   virtualOutputs.map(vo => Value(vo.l2OutputValue)).toList
