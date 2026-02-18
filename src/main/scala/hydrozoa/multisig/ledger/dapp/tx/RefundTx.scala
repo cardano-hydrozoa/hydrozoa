@@ -17,10 +17,9 @@ import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeExceptio
 import scalus.cardano.ledger.rules.TransactionSizeValidator
 import scalus.cardano.ledger.utils.TxBalance
 import scalus.cardano.txbuilder.*
-import scalus.cardano.txbuilder.ScriptSource.NativeScriptValue
 import scalus.cardano.txbuilder.SomeBuildError.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
-import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, ReferenceOutput, Send, Spend, ValidityStartSlot}
+import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend, ValidityStartSlot}
 import scalus.uplc.builtin.ByteString
 
 sealed trait RefundTx {
@@ -113,10 +112,6 @@ private object RefundTxOps {
         ): PartialResult[T]
 
         final def partialResult: BuilderResultSimple[PartialResult[T]] = {
-            val stepReferenceHNS = ReferenceOutput(config.multisigRegimeUtxo.asUtxo)
-            // FIXME: We are not allowed to assumed the existence of the multisigRegimeUtxo here.
-            //   We must attach the multisig script inline to the transaction.
-
             val refundOutput: TransactionOutput = TransactionOutput.Babbage(
               address = config.headMultisigAddress,
               value = refundValue,
@@ -130,7 +125,7 @@ private object RefundTxOps {
               config.slotConfig.timeToSlot(refundInstructions.startTime.toLong)
             )
 
-            val steps = List(stepRefundMetadata, stepReferenceHNS, setValidity, sendRefund)
+            val steps = List(stepRefundMetadata, setValidity, sendRefund)
 
             for {
                 ctx <- TransactionBuilder
@@ -165,10 +160,7 @@ private object RefundTxOps {
                   List(
                     Spend(
                       spendDeposit,
-                      NativeScriptWitness(
-                        NativeScriptValue(config.headMultisigScript.script),
-                        config.headMultisigScript.requiredSigners
-                      )
+                      config.headMultisigScript.witnessValue
                     )
                   )
                 )
@@ -240,10 +232,7 @@ private object RefundTxOps {
                   List(
                     Spend(
                       depositSpent.toUtxo,
-                      NativeScriptWitness(
-                        NativeScriptValue(config.headMultisigScript.script),
-                        config.headMultisigScript.requiredSigners
-                      )
+                      config.headMultisigScript.witnessValue
                     )
                   )
                 )
