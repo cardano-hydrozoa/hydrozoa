@@ -1,7 +1,8 @@
 package hydrozoa.integration.stage1
 
+import cats.data.NonEmptyList
 import com.bloxbean.cardano.client.util.HexUtil
-import hydrozoa.config.head.initialization.generateCappedValue
+import hydrozoa.config.head.initialization.CappedValueGen.generateCappedValue
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.integration.stage1.BlockCycle.HeadFinalized
 import hydrozoa.integration.stage1.Generators.L2txGen
@@ -10,24 +11,30 @@ import hydrozoa.integration.stage1.Generators.TxStrategy.{Dust, RandomWithdrawal
 import hydrozoa.integration.stage1.SutCommands.given
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
 import hydrozoa.lib.cardano.scalus.given_Choose_QuantizedInstant
-import hydrozoa.lib.cardano.scalus.ledger.withZeroFees
+import hydrozoa.lib.cardano.scalus.ledger.{asUtxoList, withZeroFees}
 import hydrozoa.lib.cardano.scalus.txbuilder.DiffHandler.prebalancedLovelaceDiffHandler
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.dapp.token.CIP67
-import hydrozoa.multisig.ledger.event.LedgerEvent.TxL2Event
+import hydrozoa.multisig.ledger.dapp.tx.{DepositTx, RefundTx}
+import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
+import hydrozoa.multisig.ledger.event.LedgerEvent
+import hydrozoa.multisig.ledger.event.LedgerEvent.L2TxEvent
+import hydrozoa.multisig.ledger.virtual.tx.GenesisObligation
 import org.scalacheck.Gen
 import org.scalacheck.commands.{AnyCommand, CommandGen, noOp}
-import scalus.builtin.Builtins.blake2b_224
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{AuxiliaryData, Coin, Metadatum, SlotConfig, TransactionInput, TransactionOutput, Utxo, Utxos, Value, Word64}
+import scalus.cardano.ledger.{AuxiliaryData, Coin, LedgerToPlutusTranslation, Metadatum, SlotConfig, TransactionInput, TransactionOutput, Utxo, Utxos, Value, Word64}
+import scalus.cardano.onchain.plutus.prelude.Option as SOption
 import scalus.cardano.txbuilder.TransactionBuilder
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Fee, ModifyAuxiliaryData, Send, Spend}
-import test.Generators.Hydrozoa.genEventId
+import scalus.uplc.builtin.Builtins.blake2b_224
 
+// TODO: separate namespaces
 val logger1: org.slf4j.Logger = Logging.logger("Stage1.Generators")
 
 // ===================================
@@ -38,6 +45,10 @@ val logger1: org.slf4j.Logger = Logging.logger("Stage1.Generators")
   * [[AnyCommand]] where the [[org.scalacheck.commands.SutCommand]] implicit is in scope.
   */
 object Generators:
+
+    // ===================================
+    // Delay
+    // ===================================
 
     def genStayOnHappyPathDelay(
         currentTime: QuantizedInstant,
@@ -86,6 +97,10 @@ object Generators:
                         )
         } yield delay
 
+    // ===================================
+    // Start block
+    // ===================================
+
     def genStartBlock(
         prevBlockNumber: BlockNumber,
         currentTime: QuantizedInstant
@@ -96,6 +111,10 @@ object Generators:
             currentTime
           )
         )
+
+    // ===================================
+    //
+    // ===================================
 
     enum TxStrategy:
         /** Completely arbitrary transaction, always invalid (unless you are very lucky). */
@@ -204,7 +223,7 @@ object Generators:
         for {
             // Inputs
             inputs <- genInputs(ownedUtxos, txStrategy)
-            totalValue = inputs.map(ownedUtxos(_).value).fold(Value.zero)(_ + _)
+            totalValue = Value.combine(inputs.map(ownedUtxos(_).value))
             _ = logger1.trace(s"totalValue: $totalValue")
 
             // Outputs
@@ -240,18 +259,21 @@ object Generators:
 
             witness = state.ownTestPeer.wallet.mkVKeyWitness(txUnsigned)
             txSigned = txUnsigned.attachVKeyWitnesses(List(witness))
-            eventId <- genEventId
 
             _ = logger1.trace(s"l2Tx: ${HexUtil.encodeHexString(txSigned.toCbor)}")
 
         } yield L2TxCommand(
-          event = TxL2Event(
-            eventId = eventId,
+          event = L2TxEvent(
+            eventId = state.nextLedgerEventId,
             tx = txSigned.toCbor
           ),
           txStrategy = txStrategy,
           txMutator = txMutator
         )
+
+    // ===================================
+    //
+    // ===================================
 
     def genCompleteBlockRegular(blockNumber: BlockNumber): Gen[CompleteBlockCommand] =
         Gen.const(CompleteBlockCommand(blockNumber, false))
@@ -264,6 +286,102 @@ object Generators:
           1 -> genCompleteBlockFinal(blockNumber),
           20 -> genCompleteBlockRegular(blockNumber)
         )
+
+    // ===================================
+    // RegisterDepositCommand
+    // ===================================
+
+    def genRegisterDepositCommand(state: ModelState): Gen[RegisterDepositCommand] = {
+        import state.headConfig
+
+        val peerAddress = state.ownTestPeer.address(state.headConfig.network)
+        val generateCappedValueC = generateCappedValue(headConfig.cardanoNetwork)
+
+        for {
+            fundingUtxos <- Gen.atLeastOne(state.peerL1Utxos).map(_.toMap)
+            totalValue = Value.combine(fundingUtxos.map(_._2.value))
+
+            _ = logger1.trace(s"fundingUtxos: $fundingUtxos")
+            _ = logger1.trace(s"totalValue: $totalValue")
+
+            change <- generateCappedValueC(totalValue, None, None)
+
+            _ = logger1.trace(s"change: $change")
+
+            extra = Value.lovelace(
+              headConfig.babbageUtxoMinLovelace(PositiveInt.unsafeApply(200)).value
+            )
+                + Value.lovelace(5_000_000)
+
+            _ = logger1.trace(s"extra: $extra")
+
+            outputValues <- genOutputValues(
+              totalValue - (change + extra),
+              TxStrategy.Regular,
+              generateCappedValueC
+            )
+
+            _ = logger1.trace(s"outputValues: $outputValues")
+
+            outputs <- Gen.sequence[List[TransactionOutput], TransactionOutput](
+              outputValues
+                  .map(v => Gen.const(peerAddress).map(a => Babbage(a, v)))
+            )
+            virtualOutputs = NonEmptyList.fromListUnsafe(
+              outputs.map(
+                GenesisObligation
+                    .fromTransactionOutput(_)
+                    .fold(err => throw RuntimeException(err), identity)
+              )
+            )
+
+            depositAmount = Value.combine(virtualOutputs.toList.map(vo => Value(vo.l2OutputValue)))
+            _ = logger1.trace(s"depositAmount: $depositAmount")
+
+            partialRefundTx = RefundTx.PartialResult.PostDated(
+              ctx = TransactionBuilder.Context.empty(headConfig.network),
+              // TODO: + extra?
+              inputValueNeeded = depositAmount + extra,
+              refundInstructions = DepositUtxo.Refund.Instructions(
+                address = LedgerToPlutusTranslation.getAddress(peerAddress),
+                datum = SOption.None,
+                startTime = state.currentTime.instant
+              ),
+              slotConfig = headConfig.slotConfig
+            )
+
+            depositBuilder = DepositTx.Build(headConfig)(
+              partialRefundTx = partialRefundTx,
+              utxosFunding = NonEmptyList.fromListUnsafe(fundingUtxos.asUtxoList),
+              virtualOutputs = virtualOutputs,
+              donationToTreasury = Coin.zero,
+              changeAddress = peerAddress
+            )
+
+            depositTx = depositBuilder.result.fold(
+              err => throw RuntimeException(err.toString()),
+              identity
+            )
+            _ = logger1.trace(s"deposit tx: ${HexUtil.encodeHexString(depositTx.tx.toCbor)}")
+
+            refundTx = partialRefundTx
+                .complete(
+                  depositSpent = depositTx.depositProduced,
+                  config = headConfig
+                )
+                .fold(err => throw RuntimeException(err.toString()), identity)
+            _ = logger1.trace(s"refund tx: ${HexUtil.encodeHexString(refundTx.tx.toCbor)}")
+
+        } yield RegisterDepositCommand(
+          registerDeposit = LedgerEvent.DepositEvent(
+            eventId = state.nextLedgerEventId,
+            depositTxBytes = depositTx.tx.toCbor,
+            refundTxBytes = refundTx.tx.toCbor,
+            virtualOutputsBytes = GenesisObligation.serialize(virtualOutputs),
+            depositFee = Coin.zero
+          )
+        )
+    }
 
 end Generators
 
@@ -400,3 +518,59 @@ case class MakeDustCommandGen(minL2Utxos: Int) extends CommandGen[ModelState, St
         targetState: ModelState
     ): Boolean =
         targetState.blockCycle == HeadFinalized
+
+case object DepositsCommandGen extends CommandGen[ModelState, Stage1Sut]:
+
+    override def genNextCommand(
+        state: ModelState
+    ): Gen[AnyCommand[ModelState, Stage1Sut]] = {
+        import hydrozoa.integration.stage1.BlockCycle.*
+        import hydrozoa.integration.stage1.CurrentTime.BeforeHappyPathExpiration
+
+        state.currentTime match {
+            case BeforeHappyPathExpiration(_) =>
+                state.blockCycle match {
+                    case Done(blockNumber, _) =>
+                        val settlementExpirationTime =
+                            state.headConfig.txTiming.newSettlementEndTime(
+                              state.competingFallbackStartTime
+                            )
+                        Generators
+                            .genRandomDelay(
+                              currentTime = state.currentTime.instant,
+                              settlementExpirationTime = settlementExpirationTime,
+                              competingFallbackStartTime = state.competingFallbackStartTime,
+                              slotConfig = state.headConfig.slotConfig,
+                              blockNumber = blockNumber
+                            )
+                            .map(AnyCommand.apply)
+
+                    case Ready(blockNumber, _) =>
+                        Generators
+                            .genStartBlock(blockNumber, state.currentTime.instant)
+                            .map(AnyCommand.apply)
+
+                    case InProgress(blockNumber, _, _) =>
+                        Gen.frequency(
+                          3 -> Generators
+                              .genRegisterDepositCommand(state)
+                              .map(AnyCommand.apply),
+                          1 -> Generators
+                              .genCompleteBlock(blockNumber)
+                              .map(AnyCommand.apply),
+                          10 -> (if state.activeUtxos.isEmpty
+                                 then Gen.const(noOp)
+                                 else
+                                     Generators
+                                         .genValidNonPlutusL2Tx(
+                                           txStrategy = RandomWithdrawals,
+                                           txMutator = Identity
+                                         )(state)
+                                         .map(AnyCommand.apply))
+                        )
+
+                    case HeadFinalized => Gen.const(noOp)
+                }
+            case _ => Gen.const(noOp)
+        }
+    }

@@ -10,7 +10,7 @@ import hydrozoa.multisig.ledger.VirtualLedgerM.{Config, State}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
-import hydrozoa.multisig.ledger.event.LedgerEvent.TxL2Event
+import hydrozoa.multisig.ledger.event.LedgerEvent.L2TxEvent
 import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.tx.{GenesisObligation, L2Tx}
@@ -480,7 +480,7 @@ object Generators {
                     // genesisObligation <-genGenesisObligation()
                     event <- Gen.frequency(
                       // TODO: improve
-                      2 -> Gen.const(TxL2Event(eventId, Array.empty))
+                      2 -> Gen.const(L2TxEvent(eventId, Array.empty))
                       // 8 -> Gen.const(RegisterDeposit(eventId, Array.empty))
                     )
                 } yield event

@@ -1,7 +1,8 @@
 package hydrozoa.config.head
 
 import hydrozoa.config.head.HeadPeersSpec.{Exact, Random}
-import hydrozoa.config.head.initialization.{GenesisUtxosGen, InitializationParametersGenBottomUp, currentTimeHeadStartTime, generateInitialBlock, generateRandomPeersUtxosL1}
+import hydrozoa.config.head.initialization.HeadStartTimeGen.currentTimeHeadStartTime
+import hydrozoa.config.head.initialization.{InitializationParametersGenBottomUp, InitializationParametersGenTopDown, generateInitialBlock}
 import hydrozoa.config.head.multisig.fallback.{FallbackContingencyGen, generateFallbackContingency}
 import hydrozoa.config.head.multisig.timing.{TxTimingGen, generateDefaultTxTiming}
 import hydrozoa.config.head.network.{CardanoNetwork, generateStandardCardanoNetwork}
@@ -10,7 +11,7 @@ import hydrozoa.config.head.peers.{TestPeers, generateTestPeers}
 import hydrozoa.config.head.rulebased.{DisputeResolutionConfigGen, generateDisputeResolutionConfig}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import org.scalacheck.{Gen, Prop, Properties, Test}
-import scalus.cardano.ledger.{Coin, SlotConfig}
+import scalus.cardano.ledger.SlotConfig
 
 enum HeadPeersSpec:
     case Random
@@ -32,10 +33,9 @@ def generateHeadConfigPreInit(headPeers: HeadPeersSpec)(
     generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
     generateDisputeResolutionConfig: DisputeResolutionConfigGen = generateDisputeResolutionConfig,
     generateHeadParameters: GenHeadParams = generateHeadParameters,
-    generateGenesisUtxo: GenesisUtxosGen = generateRandomPeersUtxosL1,
-    generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters =
-        InitializationParametersGenBottomUp.generateInitializationParameters,
-    equityRange: (Coin, Coin) = Coin(5_000_000) -> Coin(500_000_000),
+    generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
+        InitializationParametersGenTopDown.GenWithDeps =
+        InitializationParametersGenBottomUp.generateInitializationParameters
 ): Gen[HeadConfig.Preinit.HeadConfig] = for {
     testPeers <- headPeers.generate
     cardanoNetwork <- generateCardanoNetwork
@@ -44,11 +44,26 @@ def generateHeadConfigPreInit(headPeers: HeadPeersSpec)(
       generateFallbackContingency,
       generateDisputeResolutionConfig
     )
-    initializationParams <- generateInitializationParameters(testPeers)(
-      Gen.const(cardanoNetwork),
-      generateHeadStartTime,
-      generateFallbackContingency,
-    )
+    initializationParams <- generateInitializationParameters match {
+        case g: InitializationParametersGenBottomUp.GenInitializationParameters =>
+            g(testPeers)(
+              Gen.const(cardanoNetwork),
+              generateHeadStartTime,
+              generateFallbackContingency,
+            )
+        case InitializationParametersGenTopDown.GenWithDeps(
+              generator,
+              generateGenesisUtxosL1,
+              equityRange
+            ) =>
+            generator(testPeers)(
+              Gen.const(cardanoNetwork),
+              generateHeadStartTime,
+              generateFallbackContingency,
+              generateGenesisUtxosL1,
+              equityRange
+            )
+    }
 
 } yield HeadConfig.Preinit.HeadConfig(
   cardanoNetwork = cardanoNetwork,
@@ -64,10 +79,9 @@ def generateHeadConfig(headPeers: HeadPeersSpec)(
     generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
     generateDisputeResolutionConfig: DisputeResolutionConfigGen = generateDisputeResolutionConfig,
     generateHeadParameters: GenHeadParams = generateHeadParameters,
-    generateGenesisUtxo: GenesisUtxosGen = generateRandomPeersUtxosL1,
-    generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters =
-        InitializationParametersGenBottomUp.generateInitializationParameters,
-    equityRange: (Coin, Coin) = Coin(5_000_000) -> Coin(500_000_000),
+    generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
+        InitializationParametersGenTopDown.GenWithDeps =
+        InitializationParametersGenBottomUp.generateInitializationParameters
 ): Gen[HeadConfig] =
     for {
         peers <- headPeers.generate
@@ -80,17 +94,14 @@ def generateHeadConfig(headPeers: HeadPeersSpec)(
           generateFallbackContingency = generateFallbackContingency,
           generateDisputeResolutionConfig = generateDisputeResolutionConfig,
           generateHeadParameters = generateHeadParameters,
-          generateGenesisUtxo = generateGenesisUtxo,
-          generateInitializationParameters = generateInitializationParameters,
-          equityRange = equityRange
+          generateInitializationParameters = generateInitializationParameters
         )
         initialBlock <- generateInitialBlock(TestPeers(peers._testPeers.map(_._2).toList))(
           generateCardanoNetwork = Gen.const(preinit.cardanoNetwork),
           generateTxTiming = _ => Gen.const(preinit.headParams.txTiming),
           generateHeadParameters = _ => (_, _, _) => Gen.const(preinit.headParams),
           generateHeadStartTime = _ => Gen.const(preinit.initializationParams.headStartTime),
-          generateInitializationParameters =
-              (_, _, _, _, _) => Gen.const(preinit.initializationParams)
+          generateInitializationParameters = preinit.initializationParams
         )
     } yield HeadConfig(
       cardanoNetwork = preinit.cardanoNetwork,

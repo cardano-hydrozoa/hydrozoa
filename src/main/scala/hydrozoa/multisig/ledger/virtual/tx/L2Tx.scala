@@ -44,7 +44,8 @@ private object L2TxOps:
       tx = tx,
       l1utxos = up.l1Utxos,
       l2utxos = up.l2Utxos,
-      resolvedUtxos = ???
+      // TODO:
+      resolvedUtxos = ResolvedUtxos.empty
     )
 
     final case class UtxoPartition(

@@ -4,7 +4,8 @@ import cats.effect.IO
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorSystem
 import com.suprnation.typelevel.actors.syntax.*
-import hydrozoa.config.head.initialization.{HeadStartTimeGen, testPeersGenesisUtxosL1}
+import hydrozoa.config.head.initialization.HeadStartTimeGen.HeadStartTimeGen
+import hydrozoa.config.head.initialization.InitializationParametersGenTopDown
 import hydrozoa.config.head.multisig.timing.TxTimingGen
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.config.head.{HeadPeersSpec, generateHeadConfig}
@@ -19,10 +20,12 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, quantize}
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost.URL
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendMock, MockState}
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, ConsensusActor, EventSequencer}
 import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.block.{BlockEffects, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.dapp.tx.{FinalizationTx, SettlementTx}
+import hydrozoa.multisig.ledger.event.LedgerEventNumber
 import java.util.concurrent.TimeUnit
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.commands.{CommandGen, ModelBasedSuite}
@@ -140,7 +143,14 @@ case class Suite(
               generateCardanoNetwork = generateCardanoNetwork,
               generateHeadStartTime = generateHeadStartTime,
               generateTxTiming = generateTxTiming,
-              generateGenesisUtxo = testPeersGenesisUtxosL1(testPeers)
+              generateInitializationParameters = InitializationParametersGenTopDown.GenWithDeps(
+                generateGenesisUtxosL1 =
+                    InitializationParametersGenTopDown.testPeersGenesisUtxosL1(testPeers)
+              )
+            )
+
+            peerL1GenesisUtxos = testPeers.genesisUtxos(env.cardanoNetwork.network)(
+              HeadPeerNumber.zero
             )
 
             _ = logger.debug(s"total contingency: ${headConfig.fallbackContingency}")
@@ -154,12 +164,14 @@ case class Suite(
           headConfig = headConfig,
           operationalMultisigConfig = operationalMultisigConfig,
           operationalLiquidationConfig = operationalLiquidationConfig,
+          nextLedgerEventNumber = LedgerEventNumber(0),
           currentTime = BeforeHappyPathExpiration(headConfig.headStartTime),
           blockCycle = BlockCycle.Done(BlockNumber.zero, BlockVersion.Full.zero),
           competingFallbackStartTime =
               headConfig.txTiming.newFallbackStartTime(headConfig.headStartTime),
-          activeUtxos = headConfig.initialL2Utxos
-        )
+          activeUtxos = headConfig.initialL2Utxos,
+          peerL1Utxos = peerL1GenesisUtxos
+        ).applyContinuingL1Tx(headConfig.initializationTx.tx)
     }
 
     // ===================================
@@ -188,12 +200,12 @@ case class Suite(
                     TimeUnit.MILLISECONDS
                   )
                 )
-
                 now <- IO.realTimeInstant
                 _ <- loggerIO.info(s"Current time: $now")
             } yield ())
 
             _ <- loggerIO.debug(s"peerKeys: ${headConfig.headPeers.headPeerVKeys}")
+            _ <- loggerIO.debug(s"peer L1 utxos: ${state.peerL1Utxos.map(_._1)}")
 
             nodeConfig: NodeConfig = NodeConfig
                 .apply(

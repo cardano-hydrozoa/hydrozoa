@@ -136,15 +136,15 @@ final case class JointLedger(
 
     private def registerLedgerEvent(e: LedgerEvent): IO[Unit] = {
         e match {
-            case req: RegisterDeposit => registerDeposit(req)
-            case tx: TxL2Event        => applyInternalTxL2(tx)
+            case req: DepositEvent => registerDeposit(req)
+            case tx: L2TxEvent     => applyInternalTxL2(tx)
         }
     }
 
     /** Update the JointLedger's state -- the work-in-progress block -- to accept or reject deposits
       * depending on whether the [[dappLedger]] Actor can successfully register the deposit,
       */
-    private def registerDeposit(req: RegisterDeposit): IO[Unit] = {
+    private def registerDeposit(req: DepositEvent): IO[Unit] = {
         import req.*
         for {
             blockStartTime <- unsafeGetProducing.map(_.startTime)
@@ -176,7 +176,7 @@ final case class JointLedger(
       * updating ledgerEventsRequired
       */
     private def applyInternalTxL2(
-        txEvent: TxL2Event
+        txEvent: L2TxEvent
     ): IO[Unit] = {
         import txEvent.*
 
