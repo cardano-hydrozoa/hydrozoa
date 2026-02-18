@@ -20,6 +20,7 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, quantize}
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost.URL
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendMock, MockState}
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, ConsensusActor, EventSequencer}
 import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.block.{BlockEffects, BlockNumber, BlockVersion}
@@ -148,6 +149,10 @@ case class Suite(
               )
             )
 
+            peerL1GenesisUtxos = testPeers.genesisUtxos(env.cardanoNetwork.network)(
+              HeadPeerNumber.zero
+            )
+
             _ = logger.debug(s"total contingency: ${headConfig.fallbackContingency}")
             _ = logger.debug(s"l2 utxos: ${headConfig.initialL2Utxos.size}")
             _ = logger.debug(s"l2 total: ${headConfig.initialL2Value}")
@@ -164,8 +169,9 @@ case class Suite(
           blockCycle = BlockCycle.Done(BlockNumber.zero, BlockVersion.Full.zero),
           competingFallbackStartTime =
               headConfig.txTiming.newFallbackStartTime(headConfig.headStartTime),
-          activeUtxos = headConfig.initialL2Utxos
-        )
+          activeUtxos = headConfig.initialL2Utxos,
+          peerL1Utxos = peerL1GenesisUtxos
+        ).applyContinuingL1Tx(headConfig.initializationTx.tx)
     }
 
     // ===================================
@@ -194,12 +200,12 @@ case class Suite(
                     TimeUnit.MILLISECONDS
                   )
                 )
-
                 now <- IO.realTimeInstant
                 _ <- loggerIO.info(s"Current time: $now")
             } yield ())
 
             _ <- loggerIO.debug(s"peerKeys: ${headConfig.headPeers.headPeerVKeys}")
+            _ <- loggerIO.debug(s"peer L1 utxos: ${state.peerL1Utxos.map(_._1)}")
 
             nodeConfig: NodeConfig = NodeConfig
                 .apply(

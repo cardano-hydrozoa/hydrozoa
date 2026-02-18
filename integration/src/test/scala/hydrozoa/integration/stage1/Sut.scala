@@ -128,7 +128,7 @@ object SutCommands:
 
     val logger: Logger[IO] = Logging.loggerIO("Stage1.SutCommands")
 
-    implicit object DelayCommandSut extends SutCommand[DelayCommand, Unit, Stage1Sut] {
+    implicit given SutCommand[DelayCommand, Unit, Stage1Sut] with {
         override def run(cmd: DelayCommand, sut: Stage1Sut): IO[Unit] = for {
             _ <- logger.debug(s">> DelayCommand(delay=${cmd.delaySpec})")
             now <- IO.realTimeInstant
@@ -137,7 +137,7 @@ object SutCommands:
         } yield ()
     }
 
-    implicit object StartBlockCommandSut extends SutCommand[StartBlockCommand, Unit, Stage1Sut] {
+    implicit given SutCommand[StartBlockCommand, Unit, Stage1Sut] with {
         override def run(cmd: StartBlockCommand, sut: Stage1Sut): IO[Unit] =
             logger.debug(s">> StartBlockCommand(blockNumber=${cmd.blockNumber})") >>
                 (sut.agent ! StartBlock(
@@ -146,14 +146,13 @@ object SutCommands:
                 ))
     }
 
-    implicit object LedgerEventCommandSut extends SutCommand[L2TxCommand, Unit, Stage1Sut] {
+    implicit given SutCommand[L2TxCommand, Unit, Stage1Sut] with {
         override def run(cmd: L2TxCommand, sut: Stage1Sut): IO[Unit] =
             logger.debug(">> LedgerEventCommand") >>
                 (sut.agent ! cmd.event)
     }
 
-    implicit object CompleteBlockCommandSut
-        extends SutCommand[CompleteBlockCommand, BlockBrief, Stage1Sut] {
+    implicit given SutCommand[CompleteBlockCommand, BlockBrief, Stage1Sut] with {
         override def run(cmd: CompleteBlockCommand, sut: Stage1Sut): IO[BlockBrief] = for {
             _ <- logger.debug(
               s">> CompleteBlockCommand(blockNumber=${cmd.blockNumber}, isFinal=${cmd.isFinal})"
@@ -168,4 +167,8 @@ object SutCommands:
             // Save unsigned block effects
             _ <- sut.effectsAcc.update(_ :+ d.effects.asInstanceOf[BlockEffects.Unsigned])
         } yield d.blockBrief
+    }
+
+    implicit given SutCommand[RegisterDepositCommand, Unit, Stage1Sut] with {
+        override def run(cmd: RegisterDepositCommand, sut: Stage1Sut): IO[Unit] = ???
     }

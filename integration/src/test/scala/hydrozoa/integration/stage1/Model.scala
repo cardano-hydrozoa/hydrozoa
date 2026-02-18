@@ -7,18 +7,18 @@ import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.integration.stage1.Error.UnexpectedState
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.logging.Logging
+import hydrozoa.multisig.consensus.DepositRequest
 import hydrozoa.multisig.ledger.VirtualLedgerM
 import hydrozoa.multisig.ledger.block.{BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag
+import hydrozoa.multisig.ledger.event.LedgerEventNumber.increment
 import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId, LedgerEventNumber}
 import hydrozoa.multisig.ledger.virtual.HydrozoaTransactionMutator
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.kzgCommitment
 import hydrozoa.multisig.ledger.virtual.tx.L2Tx
 import monocle.syntax.all.focus
-import scalus.cardano.ledger.Utxos
+import scalus.cardano.ledger.{Transaction, TransactionInput, Utxos}
 import test.TestPeer
-
-import LedgerEventNumber.increment
 
 val logger = Logging.logger("Suite1.Model")
 
@@ -41,7 +41,7 @@ case class ModelState(
     // Block producing cycle
     currentTime: CurrentTime,
     blockCycle: BlockCycle,
-    currentBlockEvents: List[(LedgerEvent, ValidityFlag)] = List.empty,
+    currentBlockEvents: List[(LedgerEvent, L2Tx | DepositRequest, ValidityFlag)] = List.empty,
 
     // This is put here to avoid tossing over Done/Ready/InProgress
     // NB: for block zero it's more initializationExpirationTime
@@ -49,11 +49,30 @@ case class ModelState(
 
     // L2 state
     activeUtxos: Utxos,
+
+    // L1 state - the only peer's utxos
+    peerL1Utxos: Utxos
 ) {
     override def toString: String = "<model state (hidden)>"
 
     def nextLedgerEventId: LedgerEventId =
         LedgerEventId(peerNum = ownTestPeer.peerNum, eventNum = nextLedgerEventNumber)
+
+    /** To save time and keep things simple we exploit the fact that all txs that may mutate the L1
+      * state of the peer's utxo are continuing - they spend and pays back at least one utxo that
+      * belongs to the peer. So we can always calculate peer's addresses using the preexisting
+      * state.
+      */
+    def applyContinuingL1Tx(l1Tx: Transaction): ModelState = {
+        val peerAddresses = this.peerL1Utxos.map(_._2.address).toSet
+        val survivedUtxo = this.peerL1Utxos -- l1Tx.body.value.inputs.toSet
+        val newUtxos = survivedUtxo ++ l1Tx.body.value.outputs.toList
+            .map(_.value)
+            .zipWithIndex
+            .filter((output, _) => peerAddresses.contains(output.address))
+            .map((output, ix) => TransactionInput(l1Tx.id, ix) -> output)
+        this.copy(peerL1Utxos = newUtxos)
+    }
 }
 
 enum CurrentTime(qi: QuantizedInstant):
@@ -173,11 +192,11 @@ given ModelCommand[L2TxCommand, Unit, ModelState] with {
                 logger.debug(s"invalid L2 tx ${cmd.event.eventId}: ${err}")
                 state
                     .focus(_.currentBlockEvents)
-                    .modify(_ :+ (cmd.event -> ValidityFlag.Invalid))
+                    .modify(_ :+ (cmd.event, l2Tx, ValidityFlag.Invalid))
             case Right(mutatorState) =>
                 state
                     .focus(_.currentBlockEvents)
-                    .modify(_ :+ (cmd.event -> ValidityFlag.Valid))
+                    .modify(_ :+ (cmd.event, l2Tx, ValidityFlag.Valid))
                     .focus(_.activeUtxos)
                     .replace(mutatorState.activeUtxos)
         }
@@ -228,7 +247,7 @@ given ModelCommand[CompleteBlockCommand, BlockBrief, ModelState] with {
 
     private def mkBlockBrief(
         blockNumber: BlockNumber,
-        currentBlockEvents: List[(LedgerEvent, ValidityFlag)],
+        currentBlockEvents: List[(LedgerEvent, L2Tx | DepositRequest, ValidityFlag)],
         competingFallbackStartTime: QuantizedInstant,
         txTiming: TxTiming,
         creationTime: QuantizedInstant,
@@ -245,7 +264,7 @@ given ModelCommand[CompleteBlockCommand, BlockBrief, ModelState] with {
             kzgCommitment = activeUtxos.kzgCommitment
           ),
           body = BlockBody.Major(
-            events = currentBlockEvents.map((le, flag) => le.eventId -> flag),
+            events = currentBlockEvents.map((le, _, flag) => le.eventId -> flag),
             depositsAbsorbed = List.empty,
             depositsRefunded = List.empty
           )
@@ -259,7 +278,7 @@ given ModelCommand[CompleteBlockCommand, BlockBrief, ModelState] with {
             kzgCommitment = activeUtxos.kzgCommitment
           ),
           body = BlockBody.Minor(
-            events = currentBlockEvents.map((le, flag) => le.eventId -> flag),
+            events = currentBlockEvents.map((le, _, flag) => le.eventId -> flag),
             depositsRefunded = List.empty
           )
         )
@@ -271,7 +290,7 @@ given ModelCommand[CompleteBlockCommand, BlockBrief, ModelState] with {
             startTime = creationTime,
           ),
           body = BlockBody.Final(
-            events = currentBlockEvents.map((le, flag) => le.eventId -> flag),
+            events = currentBlockEvents.map((le, _, flag) => le.eventId -> flag),
             depositsRefunded = List.empty
           )
         )
@@ -279,11 +298,11 @@ given ModelCommand[CompleteBlockCommand, BlockBrief, ModelState] with {
         if isFinal then finalBlock
         else if txTiming.blockCanStayMinor(creationTime, competingFallbackStartTime)
         then {
-            val hasWithdrawals = currentBlockEvents.exists(_._1 match {
-                case e: LedgerEvent.L2TxEvent => ??? // e.outputPartition.l1Utxos.nonEmpty
-                case _                        => false
+            val hasWithdrawals = currentBlockEvents.exists(_._2 match {
+                case e: L2Tx => e.l1utxos.nonEmpty
+                case _       => false
             })
-            val hasDepositsAbsorbed: Boolean = ???
+            val hasDepositsAbsorbed: Boolean = false
 
             if hasWithdrawals || hasDepositsAbsorbed
             then majorBlock
@@ -297,6 +316,13 @@ given ModelCommand[CompleteBlockCommand, BlockBrief, ModelState] with {
                 cmd.blockNumber == currentBlockNumber
             case _ => false
         }
+}
+
+given ModelCommand[RegisterDepositCommand, Unit, ModelState] with {
+    override def runState(
+        cmd: RegisterDepositCommand,
+        state: ModelState
+    ): (Unit, ModelState) = () -> state
 }
 
 enum Error extends Throwable:
