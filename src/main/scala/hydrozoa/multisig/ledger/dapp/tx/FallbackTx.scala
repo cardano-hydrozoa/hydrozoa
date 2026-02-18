@@ -102,21 +102,20 @@ private object FallbackTxOps {
             }
 
             object Spends {
-                def apply(): List[Spend] = List(Treasury(), MultisigRegime())
+                def apply(): List[Spend] = List(MultisigRegime(), Treasury())
 
                 object Treasury {
                     def apply() = Spend(
                       treasuryUtxoSpent.asUtxo,
-                      // TODO: switch back to witnessAttached after resolving https://github.com/scalus3/scalus/issues/207
-                      hns.witnessValue
+                      config.headMultisigScript.witnessAttached
                     )
 
                     val datum: MultisigTreasuryUtxo.Datum = treasuryUtxoSpent.datum
                 }
 
                 object MultisigRegime {
-                    // TODO: switch back to witnessAttached after resolving https://github.com/scalus3/scalus/issues/207
-                    def apply() = Spend(multisigRegimeUtxo.asUtxo, hns.witnessValue)
+                    def apply() =
+                        Spend(multisigRegimeUtxo.asUtxo, config.headMultisigScript.witnessAttached)
                 }
             }
 
