@@ -144,7 +144,7 @@ def genSettlementTxSeqBuilder(config: TestNodeConfig)(
           network = config.nodeConfig.cardanoNetwork,
           headAddress = Some(config.nodeConfig.headMultisigAddress)
         )
-        deposits <- genHelper(genDeposit)
+        deposits <- genHelper(genDeposit).map(_.take(config.nodeConfig.maxDepositsPerSettlementTx))
 
         payouts <- genHelper(genPayoutObligation(config.nodeConfig.cardanoNetwork))
         payoutAda = payouts

@@ -3,6 +3,7 @@ package hydrozoa.config.head
 import cats.data.{NonEmptyList, NonEmptyMap}
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
+import hydrozoa.config.head.multisig.settlement.SettlementConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.HeadParameters
@@ -79,6 +80,8 @@ object HeadConfig {
               InitializationParameters.Section {
             def headConfigPreInit: Preinit.HeadConfig
 
+            override transparent inline def settlementConfig: SettlementConfig =
+                headParams.settlementConfig
             override transparent inline def cardanoInfo: CardanoInfo = cardanoNetwork.cardanoInfo
             override transparent inline def network: Network = cardanoNetwork.network
             override transparent inline def slotConfig: SlotConfig = cardanoNetwork.slotConfig

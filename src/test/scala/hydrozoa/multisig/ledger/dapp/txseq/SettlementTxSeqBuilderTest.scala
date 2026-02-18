@@ -5,8 +5,7 @@ import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq.{NoRollouts, WithRollouts}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
 import org.scalacheck.Prop.propBoolean
-import org.scalacheck.rng.Seed
-import org.scalacheck.{Prop, Properties, Test}
+import org.scalacheck.{Prop, Properties}
 import scala.collection.mutable
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
@@ -17,9 +16,6 @@ import test.TestPeer.signTx
 import test.TransactionChain.*
 
 object SettlementTxSeqBuilderTest extends Properties("SettlementTxSeq") {
-
-    override def overrideParameters(p: Test.Parameters): Test.Parameters =
-        p.withInitialSeed(Seed.fromBase64("cEiwAwMLbG6XwuJ1pFNvK11QIqJ4EctZpxh_0PKDncL=").get)
 
     val _ = property(
       "Observe settlement tx seq"
@@ -36,7 +32,7 @@ object SettlementTxSeqBuilderTest extends Properties("SettlementTxSeq") {
                         case Right(txSeq) => {
                             val unsignedTxsAndUtxos
                                 : (Vector[Transaction], TransactionBuilder.ResolvedUtxos) =
-                                txSeq.settlementTxSeq match {
+                                txSeq match {
                                     case NoRollouts(settlementTx, fallbackTx) => {
                                         (
                                           Vector(settlementTx.tx, fallbackTx.tx),

@@ -4,6 +4,7 @@ import cats.data.*
 import cats.effect.IO
 import cats.syntax.all.*
 import hydrozoa.config.head.HeadConfig
+import hydrozoa.config.head.multisig.settlement.SettlementConfig
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger
 import hydrozoa.multisig.ledger.DappLedgerM.Error.{AbsorptionPeriodExpired, ParseError, SettlementTxSeqBuilderError}
@@ -52,7 +53,7 @@ case class DappLedgerM[A] private (private val unDappLedger: RT[A]) {
 }
 
 object DappLedgerM {
-    type Config = HeadConfig.Section
+    type Config = HeadConfig.Section & SettlementConfig.Section
 
     /** Extract the transaction builder configuration from a [[DappLedgerM]]
       */
@@ -132,6 +133,9 @@ object DappLedgerM {
             config <- ask
             state <- get
 
+            (depositsToSpend, validDepositsAboveMax) = validDeposits.splitAt(
+              config.maxDepositsPerSettlementTx
+            )
             settlementTxSeqRes <- lift(
               SettlementTxSeq
                   .Build(config)(
@@ -139,7 +143,7 @@ object DappLedgerM {
                     majorVersionProduced =
                         BlockVersion.Major(state.treasury.datum.versionMajor.toInt + 1),
                     treasuryToSpend = state.treasury,
-                    depositsToSpend = Vector.from(validDeposits.map(_._2).toList),
+                    depositsToSpend = Vector.from(depositsToSpend.map(_._2)),
                     payoutObligationsRemaining = payoutObligations,
                     competingFallbackValidityStart = competingFallbackValidityStart,
                     blockCreatedOn = blockCreatedOn
@@ -154,19 +158,11 @@ object DappLedgerM {
             // - The deposits that were _not_ successfully processed by the settlement transaction (due to not fitting)
             //   and the remaining immature deposits
             newState = State(
-              treasury = settlementTxSeqRes.settlementTxSeq.settlementTx.treasuryProduced,
-              deposits = {
-                  // The remaining "depositsToSpend" reattached to their associated refunds.
-                  // (The settlement tx builder loses this information)
-                  val correlatedDeposits =
-                      Queue.from(
-                        validDeposits.filter(x => settlementTxSeqRes.depositsToSpend.contains(x._1))
-                      )
-                  correlatedDeposits ++ immatureDeposits
-              }
+              treasury = settlementTxSeqRes.settlementTx.treasuryProduced,
+              deposits = validDepositsAboveMax ++ immatureDeposits
             )
             _ <- set(newState)
-        } yield settlementTxSeqRes.settlementTxSeq
+        } yield settlementTxSeqRes
 
     }
 
