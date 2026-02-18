@@ -338,17 +338,19 @@ object Generators:
             depositAmount = Value.combine(virtualOutputs.toList.map(vo => Value(vo.l2OutputValue)))
             _ = logger1.trace(s"depositAmount: $depositAmount")
 
-            partialRefundTx = RefundTx.PartialResult.PostDated(
-              ctx = TransactionBuilder.Context.empty(headConfig.network),
-              // TODO: + extra?
-              inputValueNeeded = depositAmount + extra,
-              refundInstructions = DepositUtxo.Refund.Instructions(
-                address = LedgerToPlutusTranslation.getAddress(peerAddress),
-                datum = SOption.None,
-                startTime = state.currentTime.instant
-              ),
-              slotConfig = headConfig.slotConfig
+            refundInstructions = DepositUtxo.Refund.Instructions(
+              address = LedgerToPlutusTranslation.getAddress(peerAddress),
+              datum = SOption.None,
+              startTime = state.currentTime.instant
             )
+
+            partialRefundTx = RefundTx.Build
+                .PostDated(config = headConfig)(
+                  refundInstructions = refundInstructions,
+                  refundValue = depositAmount
+                )
+                .partialResult
+                .fold(err => throw RuntimeException(err.toString), identity)
 
             depositBuilder = DepositTx.Build(headConfig)(
               partialRefundTx = partialRefundTx,
@@ -370,6 +372,7 @@ object Generators:
                   config = headConfig
                 )
                 .fold(err => throw RuntimeException(err.toString()), identity)
+
             _ = logger1.trace(s"refund tx: ${HexUtil.encodeHexString(refundTx.tx.toCbor)}")
 
         } yield RegisterDepositCommand(
