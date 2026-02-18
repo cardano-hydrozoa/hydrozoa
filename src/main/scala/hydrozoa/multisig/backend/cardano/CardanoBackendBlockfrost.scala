@@ -7,38 +7,38 @@ import cats.syntax.traverse.*
 import com.bloxbean.cardano.client.api.common.OrderEnum
 import com.bloxbean.cardano.client.api.model.{Result, Utxo}
 import com.bloxbean.cardano.client.backend.api.BackendService
-import com.bloxbean.cardano.client.backend.blockfrost.common.Constants
 import com.bloxbean.cardano.client.backend.blockfrost.service.BFBackendService
 import com.bloxbean.cardano.client.backend.model.{AssetTransactionContent, ScriptDatumCbor, TxContentRedeemers, TxContentUtxo}
 import com.bloxbean.cardano.client.plutus.spec.RedeemerTag
+import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.multisig.backend.cardano.CardanoBackend.Error
 import hydrozoa.multisig.backend.cardano.CardanoBackend.Error.*
 import io.bullet.borer.Cbor
 import scala.collection.mutable
-import scala.concurrent.Await
 import scala.concurrent.ExecutionContext.Implicits.global
-import scala.concurrent.duration.DurationInt
+import scala.concurrent.Future
 import scala.jdk.CollectionConverters.*
 import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger.*
 import scalus.cardano.node.BlockfrostProvider
 import scalus.uplc.builtin.{ByteString, Data}
-import sttp.client4.DefaultFutureBackend
 
-/** Cardano backend to use with Blockfrost-compatible API. Currently uses both BloxBeans's
+/** Cardano backend to use with Blockfrost-compatible API. Currently, uses both BloxBeans's
   * [[BackendServive]] and Scalus' [[BlockfrostProvider]] for protocol parameters handle.
   *
   * @param backendService
   *   BloxBean backend service
   * @param pageSize
   *   Used when paginating over methods of [[backendService]]
-  * @param blockfrostProvider
-  *   Used to fulfill get protocol parameters method
+  * @param blockfrostProviderFuture
+  *   Used to fulfill get protocol parameters method. We keep it as Future till the time we use it
+  *   to maintain semantic we had before Scalus refactored [[BlockfrostProvider]], we want to deffer
+  *   all errors till the time we actualy use the provider.
   */
 class CardanoBackendBlockfrost private (
     private val backendService: BackendService,
     private val pageSize: Int,
-    private val blockfrostProvider: BlockfrostProvider,
+    private val blockfrostProviderFuture: Future[BlockfrostProvider],
 ) extends CardanoBackend[IO] {
 
     override def utxosAt(address: ShelleyAddress): IO[Either[CardanoBackend.Error, Utxos]] =
@@ -360,8 +360,20 @@ class CardanoBackendBlockfrost private (
                 }"))
         )
 
-    def latestParams: IO[Either[Error, ProtocolParams]] =
-        IO { Right(Await.result(blockfrostProvider.fetchLatestParams, 10.seconds)) }
+    override def fetchLatestParams: IO[Either[Error, ProtocolParams]] =
+        (for
+            provider <- IO.fromFuture(IO.pure(blockfrostProviderFuture))
+            result <- IO.fromFuture(IO.pure(provider.fetchLatestParams))
+        yield Right(result))
+            .handleError(e =>
+                Left(Unexpected(s"${e.getMessage}, caused by: ${
+                        if e.getCause != null then e.getCause.getMessage else "N/A"
+                    }"))
+            )
+
+    def getStartupParams: IO[Either[Error, ProtocolParams]] =
+        (for provider <- IO.fromFuture(IO.pure(blockfrostProviderFuture))
+        yield Right(provider.cardanoInfo.protocolParams))
             .handleError(e =>
                 Left(Unexpected(s"${e.getMessage}, caused by: ${
                         if e.getCause != null then e.getCause.getMessage else "N/A"
@@ -376,41 +388,50 @@ object CardanoBackendBlockfrost:
     type ApiKey = String
 
     def apply(
-        url: Either[Network, URL],
+        network: Either[StandardCardanoNetwork, (CardanoNetwork.Custom, URL)],
         apiKey: ApiKey = "",
         pageSize: Int = 100,
     ): IO[CardanoBackendBlockfrost] = {
-        val baseUrl = url.fold(_.url, x => x)
+        // 1. BloxBean service
+        val baseUrl = network.fold(_.baseUrl, _._2)
         // NB: Bloxbean requires the trailing slash
-        val backendService = BFBackendService(baseUrl + "/", apiKey)
+        val backendService = BFBackendService(s"$baseUrl/", apiKey)
 
-        // Scalus Blockfrost provider
-        given sttp.client4.Backend[scala.concurrent.Future] = DefaultFutureBackend()
+        // 2. Scalus blockfrost provider
+        val blockfrostProviderFuture =
+            network match {
+                case Left(std) =>
+                    std match {
+                        case CardanoNetwork.Mainnet =>
+                            BlockfrostProvider.mainnet(apiKey)
+                        case CardanoNetwork.Preprod =>
+                            BlockfrostProvider.preprod(apiKey)
+                        case CardanoNetwork.Preview =>
+                            BlockfrostProvider.preview(apiKey)
 
-        for {
-            blockfrostProvider <- IO.fromFuture(
-              IO(
-                ???
-// @Ilia: the BlockfrostProvider helper methods now return a Future.
-//  I'm not sure what the semantic should be for the url.
-//                cardanoNetwork match {
-//                    case CardanoNetwork.Mainnet => BlockfrostProvider.mainnet(
-//                        apiKey
-//                    )
-//                    case CardanoNetwork.Preprod => BlockfrostProvider.preprod(apiKey)
-//                    case CardanoNetwork.Preview => BlockfrostProvider.preview(apiKey)
-//                    case _ => ??? // @Ilia: What would you like to do here?
-//                }
-              )
-            )
-            //
-        } yield new CardanoBackendBlockfrost(backendService, pageSize, blockfrostProvider)
+                    }
+                case Right(custom, customBaseUrl) =>
+                    BlockfrostProvider.create(
+                      apiKey = apiKey,
+                      baseUrl = customBaseUrl,
+                      network = custom.network,
+                      slotConfig = custom.cardanoInfo.slotConfig
+                    )
+            }
 
+        // TODO: we may remove IO here
+        IO.delay(
+          new CardanoBackendBlockfrost(
+            backendService,
+            pageSize,
+            blockfrostProviderFuture
+          )
+        )
     }
 
-    enum Network(val url: String):
-        case MAINNET extends Network(Constants.BLOCKFROST_MAINNET_URL)
-        case TESTNET extends Network(Constants.BLOCKFROST_TESTNET_URL)
-        case PREPROD extends Network(Constants.BLOCKFROST_PREPROD_URL)
-        case PREVIEW extends Network(Constants.BLOCKFROST_PREVIEW_URL)
-        case SANCHONET extends Network(Constants.BLOCKFROST_SANCHONET_URL)
+    extension (self: StandardCardanoNetwork)
+        def baseUrl: URL = self match {
+            case _: CardanoNetwork.Mainnet.type => BlockfrostProvider.mainnetUrl
+            case _: CardanoNetwork.Preprod.type => BlockfrostProvider.preprodUrl
+            case _: CardanoNetwork.Preview.type => BlockfrostProvider.previewUrl
+        }

@@ -14,6 +14,19 @@ import hydrozoa.multisig.ledger.dapp.tx.RefundTx
 import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag
 import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId, LedgerEventNumber}
 
+// TODO: move around
+final case class L2TxRequest(
+    tx: Array[Byte]
+)
+
+final case class DepositRequest(
+    depositTxBytes: Array[Byte],
+    refundTxBytes: Array[Byte],
+    virtualOutputsBytes: Array[Byte],
+    depositFee: Long,
+)
+
+// TODO: update
 trait EventSequencer(
     config: Config,
     pendingConnections: MultisigRegimeManager.PendingConnections | EventSequencer.Connections
@@ -60,8 +73,8 @@ trait EventSequencer(
                     newNum <- state.nextLedgerEventNum()
                     newId = LedgerEventId(config.ownHeadPeerId.peerNum, newNum)
                     newEvent: LedgerEvent = x match {
-                        case y: LedgerEvent.TxL2Event       => y.copy(eventId = newId)
-                        case y: LedgerEvent.RegisterDeposit => y.copy(eventId = newId)
+                        case y: LedgerEvent.L2TxEvent    => y.copy(eventId = newId)
+                        case y: LedgerEvent.DepositEvent => y.copy(eventId = newId)
                     }
                     _ <- conn.blockWeaver ! newEvent
                     _ <- (conn.peerLiaisons ! newEvent).parallel

@@ -2,13 +2,13 @@ package hydrozoa.multisig.backend.cardano
 
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
-import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost.Network
+import hydrozoa.config.head.network.CardanoNetwork
 import io.github.cdimascio.dotenv.Dotenv
 import org.scalatest.Tag
 import org.scalatest.funsuite.AnyFunSuite
 import scala.util.Try
 import scalus.cardano.address.{Address, ShelleyAddress}
-import scalus.cardano.ledger.{AssetName, Hash, Transaction, TransactionHash}
+import scalus.cardano.ledger.{AssetName, CardanoInfo, Hash, Transaction, TransactionHash}
 import scalus.uplc.builtin.ByteString
 
 object RequiresBlockfrostApiKey extends Tag("requires-blockfrost-api-key")
@@ -43,7 +43,7 @@ class CardanoBackendBlockfrostTest extends AnyFunSuite {
     test("Error gracefully when key and network mismatch", RequiresBlockfrostApiKey) {
         val ret = runWithKey(key =>
             for {
-                backend <- CardanoBackendBlockfrost(Left(Network.MAINNET), key)
+                backend <- CardanoBackendBlockfrost(Left(CardanoNetwork.Mainnet), key)
                 ret <- backend.utxosAt(testAddress)
             } yield ret
         )
@@ -54,7 +54,7 @@ class CardanoBackendBlockfrostTest extends AnyFunSuite {
     test("Fetch some utxos", RequiresBlockfrostApiKey) {
         val ret = runWithKey(key =>
             for {
-                backend <- CardanoBackendBlockfrost(Left(Network.PREVIEW), key)
+                backend <- CardanoBackendBlockfrost(Left(CardanoNetwork.Preview), key)
                 utxoSet <- backend.utxosAt(testAddress)
             } yield utxoSet
         )
@@ -65,7 +65,7 @@ class CardanoBackendBlockfrostTest extends AnyFunSuite {
     test("Fetch some utxos, multi-page", RequiresBlockfrostApiKey) {
         val ret = runWithKey(key =>
             for {
-                backend <- CardanoBackendBlockfrost(Left(Network.PREVIEW), key, 1)
+                backend <- CardanoBackendBlockfrost(Left(CardanoNetwork.Preview), key, 1)
                 utxoSet <- backend.utxosAt(testAddress)
             } yield utxoSet
         )
@@ -76,7 +76,7 @@ class CardanoBackendBlockfrostTest extends AnyFunSuite {
     test("Fetch utxos with specific asset 1", RequiresBlockfrostApiKey) {
         val ret = runWithKey(key =>
             for {
-                backend <- CardanoBackendBlockfrost(Left(Network.PREVIEW), key)
+                backend <- CardanoBackendBlockfrost(Left(CardanoNetwork.Preview), key)
                 policyId = Hash.scriptHash(
                   ByteString.fromHex("a217f9484e3b7854ff68242bd37600da6b734c1b467a6d4e902aac07")
                 )
@@ -91,7 +91,7 @@ class CardanoBackendBlockfrostTest extends AnyFunSuite {
     test("Fetch utxos with specific asset 2", RequiresBlockfrostApiKey) {
         val ret = runWithKey(key =>
             for {
-                backend <- CardanoBackendBlockfrost(Left(Network.PREVIEW), key)
+                backend <- CardanoBackendBlockfrost(Left(CardanoNetwork.Preview), key)
                 policyId = Hash.scriptHash(
                   ByteString.fromHex("919d4c2c9455016289341b1a14dedf697687af31751170d56a31466e")
                 )
@@ -106,7 +106,7 @@ class CardanoBackendBlockfrostTest extends AnyFunSuite {
     test("Known tx is reported correctly", RequiresBlockfrostApiKey) {
         val ret = runWithKey(key =>
             for {
-                backend <- CardanoBackendBlockfrost(Left(Network.PREVIEW), key)
+                backend <- CardanoBackendBlockfrost(Left(CardanoNetwork.Preview), key)
                 txInfo <- backend.isTxKnown(
                   TransactionHash.fromHex(
                     "9844228688a4d0e54ec416bf7aa31fc10888d5845bfb16cbd68fb625ff86bb5f"
@@ -120,7 +120,7 @@ class CardanoBackendBlockfrostTest extends AnyFunSuite {
     test("Fake tx is reported correctly", RequiresBlockfrostApiKey) {
         val ret = runWithKey(key =>
             for {
-                backend <- CardanoBackendBlockfrost(Left(Network.PREVIEW), key)
+                backend <- CardanoBackendBlockfrost(Left(CardanoNetwork.Preview), key)
                 txInfo <- backend.isTxKnown(
                   TransactionHash.fromHex(
                     "8844228688a4d0e54ec416bf7aa31fc10888d5845bfb16cbd68fb625ff86bb5f"
@@ -135,7 +135,10 @@ class CardanoBackendBlockfrostTest extends AnyFunSuite {
     test("Wrong URI is indicated as error", RequiresBlockfrostApiKey) {
         val ret = runWithKey(key =>
             for {
-                backend <- CardanoBackendBlockfrost(Right("https://not-blockforst.net"), key)
+                backend <- CardanoBackendBlockfrost(
+                  Right((CardanoNetwork.Custom(CardanoInfo.mainnet), "https://not-blockforst.net")),
+                  key
+                )
                 txInfo <- backend.isTxKnown(
                   TransactionHash.fromHex(
                     "8844228688a4d0e54ec416bf7aa31fc10888d5845bfb16cbd68fb625ff86bb5f"
@@ -150,7 +153,7 @@ class CardanoBackendBlockfrostTest extends AnyFunSuite {
     test("Submit endpoint works and gives sensible error for empty tx", RequiresBlockfrostApiKey) {
         val ret = runWithKey(key =>
             for {
-                backend <- CardanoBackendBlockfrost(Left(Network.PREVIEW), key)
+                backend <- CardanoBackendBlockfrost(Left(CardanoNetwork.Preview), key)
                 ret <- backend.submitTx(Transaction.empty)
             } yield ret
         )
@@ -164,7 +167,7 @@ class CardanoBackendBlockfrostTest extends AnyFunSuite {
     ignore("Fetch txs with specific asset 1", RequiresBlockfrostApiKey) {
         val ret = runWithKey(key =>
             for {
-                backend <- CardanoBackendBlockfrost(Left(Network.PREVIEW), key)
+                backend <- CardanoBackendBlockfrost(Left(CardanoNetwork.Preview), key)
                 policyId = Hash.scriptHash(
                   ByteString.fromHex("ee492ffb3dd3fb15231920d1db1f66671add1dc48b165f5006a565bd")
                 )
@@ -186,7 +189,7 @@ class CardanoBackendBlockfrostTest extends AnyFunSuite {
     ignore("Fetch txs - empty results", RequiresBlockfrostApiKey) {
         val ret = runWithKey(key =>
             for {
-                backend <- CardanoBackendBlockfrost(Left(Network.PREVIEW), key)
+                backend <- CardanoBackendBlockfrost(Left(CardanoNetwork.Preview), key)
                 policyId = Hash.scriptHash(
                   ByteString.fromHex("ee492ffb3dd3fb15231920d1db1f66671add1dc48b165f5006a565bd")
                 )

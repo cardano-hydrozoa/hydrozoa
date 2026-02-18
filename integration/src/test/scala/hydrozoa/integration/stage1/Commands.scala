@@ -28,9 +28,9 @@ enum Delay(d: QuantizedFiniteDuration):
 
     def duration: QuantizedFiniteDuration = d
 
-implicit object DelayCommandProp extends CommandProp[DelayCommand, Unit, ModelState]
+implicit given CommandProp[DelayCommand, Unit, ModelState] with {}
 
-implicit object DelayCommandLabel extends CommandLabel[DelayCommand]:
+implicit given CommandLabel[DelayCommand] with
     override def label(cmd: DelayCommand): String = cmd.delaySpec match
         case _: Delay.EndsBeforeHappyPathExpires => "Delay(happy)"
         case _: Delay.EndsInTheSilencePeriod     => "Delay(silence)"
@@ -46,9 +46,9 @@ final case class StartBlockCommand(
     creationTime: QuantizedInstant
 )
 
-implicit object StartBlockCommandProp extends CommandProp[StartBlockCommand, Unit, ModelState]
+implicit given CommandProp[StartBlockCommand, Unit, ModelState] with {}
 
-implicit object StartBlockCommandLabel extends CommandLabel[StartBlockCommand]:
+implicit given CommandLabel[StartBlockCommand] with
     override def label(cmd: StartBlockCommand): String = "StartBlock"
 
 // ===================================
@@ -57,14 +57,14 @@ implicit object StartBlockCommandLabel extends CommandLabel[StartBlockCommand]:
 
 /** Feed a single L2 transaction into the current block. */
 final case class L2TxCommand(
-    event: LedgerEvent.TxL2Event,
+    event: LedgerEvent.L2TxEvent,
     txStrategy: TxStrategy,
     txMutator: TxMutator
 )
 
-implicit object L2TxCommandProp extends CommandProp[L2TxCommand, Unit, ModelState]
+implicit given CommandProp[L2TxCommand, Unit, ModelState] with {}
 
-implicit object L2TxCommandLabel extends CommandLabel[L2TxCommand]:
+implicit given CommandLabel[L2TxCommand] with
     override def label(cmd: L2TxCommand): String = cmd.txStrategy match {
         case TxStrategy.Arbitrary =>
             cmd.txMutator match {
@@ -100,8 +100,7 @@ final case class CompleteBlockCommand(
 )
 
 /** Postcondition for [[CompleteBlockCommand]]: verifies model and SUT agree on the block brief. */
-implicit object CompleteBlockCommandProp
-    extends CommandProp[CompleteBlockCommand, BlockBrief, ModelState] {
+implicit given CommandProp[CompleteBlockCommand, BlockBrief, ModelState] with
 
     override def onSuccessCheck(
         cmd: CompleteBlockCommand,
@@ -114,9 +113,8 @@ implicit object CompleteBlockCommandProp
             "block briefs should be identical: " +
             s"\n\texpected: $expectedResult" +
             s"\n\tgot: $result"
-}
 
-implicit object CompleteBlockCommandLabel extends CommandLabel[CompleteBlockCommand]:
+implicit given CommandLabel[CompleteBlockCommand] with
     override def label(cmd: CompleteBlockCommand): String =
         if cmd.isFinal then "CompleteBlock(final)" else "CompleteBlock(regular)"
 
@@ -124,14 +122,28 @@ implicit object CompleteBlockCommandLabel extends CommandLabel[CompleteBlockComm
 // Deposit Request Command
 // ===================================
 
+/** The command corresponds to the register deposit action with the event id known upfront.
+  */
 final case class RegisterDepositCommand(
-    registerDeposit: LedgerEvent.RegisterDeposit
+    registerDeposit: LedgerEvent.DepositEvent
 )
+
+implicit given CommandProp[RegisterDepositCommand, Unit, ModelState] with {}
+
+implicit given CommandLabel[RegisterDepositCommand] with
+    override def label(cmd: RegisterDepositCommand): String = "Register deposit"
 
 // ===================================
 // Submit Deposit Command
 // ===================================
 
+/** The command submits the deposit transaction from the corresponding register deposit event.
+  */
 final case class SubmitDepositCommand(
     depositEventId: LedgerEventId
 )
+
+implicit given CommandProp[SubmitDepositCommand, Unit, ModelState] with {}
+
+implicit given CommandLabel[SubmitDepositCommand] with
+    override def label(cmd: SubmitDepositCommand): String = "Submit deposit"
