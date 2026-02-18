@@ -7,6 +7,7 @@ import hydrozoa.config.head.peers.generateTestPeers
 import hydrozoa.config.node.generateNodeConfig
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Validators.nonSigningValidators
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
+import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.AwaitingVote
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.*
@@ -92,11 +93,15 @@ def genVoteTxRecipe(
         )
         fallbackTxId <- genByteStringOfN(32).map(TransactionHash.fromByteString)
 
+        // This is 4 bytes shorter to accommodate CIP-67 prefixes
+        // NB: we use the same token name _suffix_ for all head tokens so far, which is not the case in reality
+        headTokenSuffix <- genByteStringOfN(28)
+
         treasuryUtxo <- genRuleBasedTreasuryUtxo(
           config = nodeConfig,
           fallbackTxId = fallbackTxId,
           headMp = nodeConfig.headMultisigScript.policyId,
-          treasuryTokenName = nodeConfig.headConfig.headTokenNames.treasuryTokenName.bytes,
+          treasuryTokenName = cip67BeaconTokenPrefix.concat(headTokenSuffix),
           treasuryDatum
         )
 
