@@ -7,7 +7,7 @@ import com.suprnation.typelevel.actors.syntax.BroadcastOps
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.actor.*
-import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant}
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.{ConsensusActor, PeerLiaison}
 import hydrozoa.multisig.ledger.DappLedgerM.runDappLedgerM
@@ -305,18 +305,10 @@ final case class JointLedger(
                     Queue.empty[(LedgerEventId, DepositUtxo)]
                   )
                 )((acc, deposit) =>
-                    val depositValidityEnd =
-                        deposit._2.datum.refundInstructions.startTime
-                            .toEpochQuantizedInstant(cardanoInfo.slotConfig)
-                            - txTiming.depositMaturityDuration
-                            - txTiming.depositAbsorptionDuration
-                            - txTiming.silenceDuration
-
-                    val depositAbsorptionStart: QuantizedInstant =
-                        depositValidityEnd + txTiming.depositMaturityDuration
-
-                    val depositAbsorptionEnd: QuantizedInstant =
-                        depositAbsorptionStart + txTiming.depositAbsorptionDuration
+                    val depositValidityEnd = deposit._2.submissionDeadline
+                    val depositAbsorptionStart =
+                        txTiming.depositAbsorptionStartTime(depositValidityEnd)
+                    val depositAbsorptionEnd = txTiming.depositAbsorptionEndTime(depositValidityEnd)
 
                     val settlementValidityEnd: QuantizedInstant =
                         producing.competingFallbackValidityStart - txTiming.silenceDuration

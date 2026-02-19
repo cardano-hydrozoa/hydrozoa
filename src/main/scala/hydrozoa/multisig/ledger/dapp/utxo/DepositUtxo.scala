@@ -10,38 +10,41 @@ import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.onchain.plutus.prelude.Option as ScalusOption
-import scalus.cardano.onchain.plutus.v3.{Address, PosixTime}
+import scalus.cardano.onchain.plutus.prelude.{Option as ScalusOption, asScalus}
+import scalus.cardano.onchain.plutus.v3.{Address as PlutusAddress, PosixTime}
 import scalus.uplc.builtin.Data.{FromData, ToData, fromData, toData}
 import scalus.uplc.builtin.{Data, FromData, ToData}
 
-/** NOTE: absorptionEnd must be absorptionStart + absorptionDuration for some [[TxTiming]] and
-  * [[SlotConfig]] Perhaps we want to make this more opaque and carry around those configuration
+/** TODO: ? NOTE: absorptionEnd must be absorptionStart + absorptionDuration for some [[TxTiming]]
+  * and [[SlotConfig]] Perhaps we want to make this more opaque and carry around those configuration
   * values?
   */
 final case class DepositUtxo(
-    l1Input: TransactionInput,
-    l1OutputAddress: ShelleyAddress,
-    l1OutputDatum: DepositUtxo.Datum,
-    l1OutputValue: Value,
-    virtualOutputs: NonEmptyList[GenesisObligation]
+    utxoId: TransactionInput,
+    address: ShelleyAddress,
+    datum: DepositUtxo.Datum,
+    value: Value,
+    virtualOutputs: NonEmptyList[GenesisObligation],
+    // This field comes from DepositTx, but it's convenient to duplicate it here
+    submissionDeadline: QuantizedInstant,
 ) {
     def toUtxo: Utxo =
         Utxo(
-          l1Input,
+          utxoId,
           TransactionOutput.apply(
-            address = l1OutputAddress,
-            value = l1OutputValue,
-            datumOption = Some(Inline(toData(l1OutputDatum))),
+            address = address,
+            value = value,
+            datumOption = Some(Inline(toData(datum))),
             scriptRef = None
           )
         )
+
     // NOTE: I need this in the dapp ledger, but can't access it because the field is private and
     // this is a separate package.
     // we could make the _constructor_ private with
     //   final case class DepositUtxo private ( ... )
     // but then we need to make sure that the DepositTx build can still access it...
-    val datum: DepositUtxo.Datum = l1OutputDatum
+    // val datum: DepositUtxo.Datum = datum
 }
 
 object DepositUtxo {
@@ -51,38 +54,62 @@ object DepositUtxo {
       *   instructions for when and how the deposit should be refunded if it is not absorbed into
       *   the head's treasury.
       */
-    final case class Datum(refundInstructions: Refund.Instructions) derives FromData, ToData
+    final case class Datum(
+        refundInstructions: Refund.Instructions.Onchain
+    ) derives FromData,
+          ToData
 
     object Refund {
 
+        // TODO: move around?
         /** A deposit's refund instructions specify:
           *
           * @param address
           *   the address to which the deposit's funds should be refunded.
-          * @param datum
+          * @param mbDatum
           *   the datum that should be attached to the refund utxo.
-          * @param startTime
-          *   starting at this time, the head must refund the deposit's funds and must not attempt
-          *   to absorb them into the head's treasury. -
+          * @param validityStart
+          *   currently just matches the post-dated refund tx validity start time. when observer
+          *   scripts are here, this will be used to allow users to recover their deposits if they
+          *   are not absorbed without a post-dated presigned transaction.
           */
         final case class Instructions private (
-            address: Address,
-            datum: ScalusOption[Data],
-            startTime: PosixTime,
-        ) derives FromData,
-              ToData
+            address: ShelleyAddress,
+            mbDatum: Option[Data],
+            validityStart: QuantizedInstant
+        )
 
         object Instructions {
-            def apply(
-                address: Address,
-                datum: ScalusOption[Data],
-                startTime: QuantizedInstant
-            ): Instructions =
-                new Instructions(address, datum, startTime.instant.toEpochMilli)
-        }
 
+            def apply(
+                address: ShelleyAddress,
+                datum: Option[Data],
+                validityStart: QuantizedInstant
+            ): Instructions =
+                new Instructions(address, datum, validityStart)
+
+            final case class Onchain(
+                address: PlutusAddress,
+                datum: ScalusOption[Data],
+                validityStart: PosixTime
+            ) derives FromData,
+                  ToData
+
+            object Onchain {
+                def apply(offchainInstructions: Instructions): Onchain = {
+                    import offchainInstructions.*
+
+                    Onchain(
+                      address = LedgerToPlutusTranslation.getAddress(address),
+                      datum = mbDatum.asScalus,
+                      validityStart = validityStart.instant.toEpochMilli
+                    )
+                }
+            }
+        }
     }
 
+    // TODO: review
     trait Spent {
         def depositSpent: DepositUtxo
     }
@@ -101,6 +128,7 @@ object DepositUtxo {
         }
 
         object Spent {
+            DepositUtxoConversionError
             trait Partition extends Spent, ToSpend
         }
 
@@ -128,8 +156,10 @@ object DepositUtxo {
         utxo: Utxo,
         headNativeScriptAddress: ShelleyAddress,
         virtualOutputs: NonEmptyList[GenesisObligation],
-        absorptionStart: QuantizedInstant,
-        absorptionEnd: QuantizedInstant
+        // TODO: George?
+        submissionDeadline: QuantizedInstant
+        // absorptionStart: QuantizedInstant,
+        // absorptionEnd: QuantizedInstant
     ): Either[DepositUtxoConversionError, DepositUtxo] =
         for {
             babbage <- utxo._2 match {
@@ -155,10 +185,11 @@ object DepositUtxo {
             }
 
         } yield DepositUtxo(
-          l1Input = utxo._1,
-          l1OutputAddress = addr,
-          l1OutputDatum = datum,
-          l1OutputValue = babbage.value,
-          virtualOutputs = virtualOutputs
+          utxoId = utxo._1,
+          address = addr,
+          datum = datum,
+          value = babbage.value,
+          virtualOutputs = virtualOutputs,
+          submissionDeadline = submissionDeadline
         )
 }

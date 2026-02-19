@@ -101,9 +101,8 @@ object DappLedgerM {
             depositRefundTxSeq <- lift(parseRes)
             s <- get
             depositProduced <- lift(
-              if depositRefundTxSeq.depositTx.validityEnd
-                      + config.depositMaturityDuration
-                      + config.depositAbsorptionDuration < blockStartTime
+              if config.txTiming.depositAbsorptionEndTime(depositRefundTxSeq.depositTx.validityEnd)
+                      < blockStartTime
               then Left(AbsorptionPeriodExpired(depositRefundTxSeq))
               else Right(depositRefundTxSeq.depositTx.depositProduced)
             )
