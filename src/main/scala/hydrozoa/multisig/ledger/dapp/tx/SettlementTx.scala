@@ -232,15 +232,12 @@ private object SettlementTxOps {
             private val validityEndSlot = ValidityEndSlot(validityEnd.toSlot.slot)
 
             private val baseSteps =
-                // TODO: switch back to witnessAttached after resolving https://github.com/scalus3/scalus/issues/207
-                // List(modifyAuxiliaryData, referenceMultisigRegime, validityEndSlot)
-                List(modifyAuxiliaryData, validityEndSlot)
+                List(modifyAuxiliaryData, referenceMultisigRegime, validityEndSlot)
 
             /////////////////////////////////////////////////////////
             // Spend treasury
             private val spendTreasury =
-                // TODO: switch back to witnessAttached after resolving https://github.com/scalus3/scalus/issues/207
-                Spend(treasuryToSpend.asUtxo, config.headMultisigScript.witnessValue)
+                Spend(treasuryToSpend.asUtxo, config.headMultisigScript.witnessAttached)
 
             /////////////////////////////////////////////////////////
             // Send rollout (maybe)

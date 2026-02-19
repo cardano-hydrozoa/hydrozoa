@@ -14,7 +14,8 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
         p: org.scalacheck.Test.Parameters
     ): org.scalacheck.Test.Parameters = {
         p.withWorkers(1)
-            .withMinSuccessfulTests(100) // 10000
+        // NB: careful, this will override -s from the command line
+        // .withMinSuccessfulTests(100) // 10000
         // .withMaxSize(100) // 500
     }
 
@@ -27,7 +28,7 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
       * not strictly needed for testing block promotion, which must work on empty blocks, but we
       * additionally decided to check block brief at the same time.
       */
-    lazy val _ = property("Block promotion with real L2 txs") = Suite(
+    val _ = property("Block promotion with real L2 txs") = Suite(
       suiteCardano = Mock(preprod),
       txTimingGen = generateDefaultTxTiming,
       mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
@@ -41,7 +42,7 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
       * and once the target is hit finalizes the head immediately. Only command sequences that
       * satisfy the condition "head is finalized" are run.
       */
-    lazy val _ = property("Dusty head finalization") = Suite(
+    val _ = property("Dusty head finalization") = Suite(
       suiteCardano = Mock(preprod),
       txTimingGen = generateDefaultTxTiming,
       mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
@@ -54,7 +55,7 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
       *
       * TODO: do we want to test the rollout sequence with in the settlement tx seq specifically?
       */
-    lazy val _ = property("Ongoing withdrawals") = Suite(
+    val _ = property("Ongoing withdrawals") = Suite(
       suiteCardano = Mock(preprod),
       txTimingGen = generateDefaultTxTiming,
       mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
@@ -65,7 +66,7 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
       *
       * TODO:
       */
-    val _ = property("Deposits") = Suite(
+    lazy val _ = property("Deposits") = Suite(
       suiteCardano = Mock(preprod),
       txTimingGen = generateDefaultTxTiming,
       mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
@@ -87,7 +88,7 @@ object Stage1PropertiesYaci extends YetAnotherProperties("Integration Stage 1 wi
 
     private val preprod = CardanoNetwork.Preprod
 
-    lazy val _ = property("Block promotion Yaci") = Suite(
+    val _ = property("Block promotion Yaci") = Suite(
       suiteCardano = Yaci(
         protocolParams = DevKit.yaciParams
       ),

@@ -81,6 +81,12 @@ lazy val integration: Project = (project in file("integration"))
     .settings(
       // Compile / mainClass := Some("hydrozoa.demo.Workload"),
       publish / skip := true,
+      // Yaci suite requires a running Yaci DevKit instance; exclude from default test run.
+      // Run explicitly with: integration/testOnly hydrozoa.integration.stage1.Stage1PropertiesYaci
+      // NB: using * with testOnly still respects the excluded tests
+      Test / testOptions += Tests.Exclude(
+        Seq("hydrozoa.integration.stage1.Stage1PropertiesYaci")
+      ),
       // test dependencies
       libraryDependencies ++= Seq(
         "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
