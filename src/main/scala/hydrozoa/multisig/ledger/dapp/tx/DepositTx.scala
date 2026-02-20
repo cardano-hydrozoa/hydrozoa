@@ -18,7 +18,7 @@ import scalus.cardano.ledger.*
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, ReferenceOutput, Send, Spend, ValidityEndSlot}
-import scalus.uplc.builtin.Data.toData
+import scalus.uplc.builtin.Data.{fromData, toData}
 
 final case class DepositTx(
     depositProduced: DepositUtxo,
@@ -40,6 +40,7 @@ private object DepositTxOps {
         utxosFunding: NonEmptyList[Utxo],
         virtualOutputs: NonEmptyList[GenesisObligation],
         depositValue: Value,
+        depositFee: Coin,
         changeAddress: ShelleyAddress,
         submissionDeadline: QuantizedInstant,
         refundInstructions: DepositUtxo.Refund.Instructions
@@ -119,7 +120,9 @@ private object DepositTxOps {
                   datum = depositDatum,
                   value = depositValue,
                   virtualOutputs = virtualOutputs,
-                  submissionDeadline = submissionDeadline
+                  depositFee = depositFee,
+                  submissionDeadline = submissionDeadline,
+                  refundInstructions = refundInstructions
                 )
             } yield DepositTx(
               depositProduced,
@@ -144,6 +147,8 @@ private object DepositTxOps {
             case TxCborDeserializationFailed(e: Throwable)
             case ValidityEndParseError(e: Throwable)
             case MultisigRegimeWitnessUtxoNotReferenced
+            case InvalidDatumContent(e: Throwable)
+            case InvalidDatumType
         }
     }
 
@@ -195,6 +200,23 @@ private object DepositTxOps {
                             .lift(depositUtxoIx)
                             .toRight(MissingDepositOutputAtIndex(depositUtxoIx))
 
+                        virtualValue = Value.combine(
+                          virtualOutputs.toList.map(vo => Value(vo.l2OutputValue))
+                        )
+
+                        // TODO: check contains ada only
+                        depositFee = (depositOutput.value.value - virtualValue).coin
+
+                        // Parse the deposit datum
+                        depositDatum <- depositOutput.value.datumOption match {
+                            case Some(DatumOption.Inline(d)) =>
+                                Try(fromData[DepositUtxo.Datum](d)) match {
+                                    case Failure(e)  => Left(InvalidDatumContent(e))
+                                    case Success(dd) => Right(dd)
+                                }
+                            case _ => Left(InvalidDatumType)
+                        }
+
                         // Check that ttl was properly quantized
                         validityEnd <- Try {
                             val ttlSlot = tx.body.value.ttl.get
@@ -220,7 +242,13 @@ private object DepositTxOps {
                                   Utxo(TransactionInput(tx.id, depositUtxoIx), depositOutput.value),
                               headNativeScriptAddress = config.headMultisigAddress,
                               virtualOutputs = virtualOutputs,
-                              submissionDeadline = validityEnd
+                              depositFee = depositFee,
+                              submissionDeadline = validityEnd,
+                              refundInstructions = DepositUtxo.Refund.Instructions(
+                                depositDatum.refundInstructions,
+                                config.network,
+                                config.slotConfig
+                              )
                             )
                             .left
                             .map(DepositUtxoError(_))

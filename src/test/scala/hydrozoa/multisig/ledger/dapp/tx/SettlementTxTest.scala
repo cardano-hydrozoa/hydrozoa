@@ -9,9 +9,10 @@ import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
-import java.time.Instant
+import java.util.concurrent.TimeUnit
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
+import scala.concurrent.duration.FiniteDuration
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
@@ -47,13 +48,13 @@ def genDepositDatum(network: CardanoNetwork.Section): Gen[DepositUtxo.Datum] = {
         refundDatum <- genData
 
     } yield DepositUtxo.Datum(
-      DepositUtxo.Refund.Instructions(
+      DepositUtxo.Refund.Instructions.Onchain(
         address = refundAddress,
         datum = refundDatum,
-        startTime = QuantizedInstant(
+        validityStart = QuantizedInstant(
           network.slotConfig,
           java.time.Instant.ofEpochMilli(deadline.toLong)
-        )
+        ).instant.toEpochMilli
       )
     )
 }
@@ -64,13 +65,13 @@ def genDepositDatum(network: CardanoNetwork.Section): Gen[DepositUtxo.Datum] = {
 // set deterministically from the sum of the virtual utxos + fees necessary for refund, this
 // generator DOES NOT produce actual semantically valid deposit utxos
 def genDepositUtxo(
-    network: CardanoNetwork.Section,
+    config: CardanoNetwork.Section & TxTiming.Section,
     headAddress: Option[ShelleyAddress] = None,
 ): Gen[DepositUtxo] =
     for {
-        txId <- arbitrary[TransactionInput]
-        headAddress_ = headAddress.getOrElse(genScriptAddress(network).sample.get)
-        dd <- genDepositDatum(network)
+        utxoId <- arbitrary[TransactionInput]
+        headAddress_ = headAddress.getOrElse(genScriptAddress(config).sample.get)
+        dd <- genDepositDatum(config)
 
         // Mock utxo to calculate minAda
         mockUtxo = Babbage(
@@ -80,37 +81,37 @@ def genDepositUtxo(
           scriptRef = None
         )
 
-        depositMinAda = ensureMinAda(mockUtxo, network.cardanoProtocolParams).value.coin
+        depositMinAda = ensureMinAda(mockUtxo, config.cardanoProtocolParams).value.coin
 
         depositAmount <- arbitrary[Coin].map(_ + depositMinAda).map(Value(_))
 
         // NOTE: these genesis obligations are completely arbitrary and WILL NOT be coherent with the
         // deposit amount
         vos <- Gen
-            .nonEmptyListOf(genGenesisObligation(network, Alice))
+            .nonEmptyListOf(genGenesisObligation(config, Alice))
             .map(NonEmptyList.fromListUnsafe)
 
-        absorptionStart <- Gen
-            .posNum[Long]
-            .map(offsetFromZero =>
-                // Generate some offset to the "zero slot" time.
-                // This is necessary because scalus can't currently support negative numbers as slots
-                Instant.ofEpochMilli(
-                  network.slotConfig
-                      .slotToTime(network.slotConfig.zeroSlot)
-                      + offsetFromZero
-                )
-            )
-        // The end is SPECIFIED as the start, plus the deposit absorption duration. If you need to pass in
-        // a non-default tx timing in the future, feel free.
-        absorptionEnd = absorptionStart.quantize(network.slotConfig)
-            + TxTiming.default(network.slotConfig).depositAbsorptionDuration
+        // Generate some offset to the "zero slot" time.
+        offsetFromZero <- Gen.posNum[Long]
+
+        submissionDeadline = QuantizedInstant(
+          config.slotConfig,
+          config.slotConfig.slotToInstant(config.slotConfig.zeroSlot)
+        ) + FiniteDuration(offsetFromZero, TimeUnit.SECONDS)
+
     } yield DepositUtxo(
-      l1Input = txId,
-      l1OutputAddress = headAddress_,
-      l1OutputDatum = dd,
-      l1OutputValue = depositAmount,
-      virtualOutputs = vos
+      utxoId = utxoId,
+      address = headAddress_,
+      datum = dd,
+      value = depositAmount,
+      virtualOutputs = vos,
+      depositFee = Coin.zero,
+      submissionDeadline = submissionDeadline,
+      refundInstructions = DepositUtxo.Refund.Instructions(
+        address = headAddress_,
+        datum = None,
+        validityStart = config.txTiming.refundValidityStart(submissionDeadline)
+      )
     )
 
 /** Generate a "standalone" settlement tx. */
@@ -141,7 +142,7 @@ def genSettlementTxSeqBuilder(config: TestNodeConfig)(
         majorVersion <- Gen.posNum[Int]
 
         genDeposit = genDepositUtxo(
-          network = config.nodeConfig.cardanoNetwork,
+          config = config.nodeConfig,
           headAddress = Some(config.nodeConfig.headMultisigAddress)
         )
         deposits <- genHelper(genDeposit)
@@ -201,7 +202,7 @@ def genNextSettlementTxSeqBuilder(config: TestNodeConfig)(
     )
 
     val genDeposit = genDepositUtxo(
-      config.nodeConfig.cardanoNetwork,
+      config.nodeConfig,
       headAddress = Some(config.nodeConfig.headMultisigAddress)
     )
 

@@ -92,8 +92,7 @@ object DappLedgerM {
                     .Parse(config)(
                       depositTxBytes = depositTxBytes,
                       refundTxBytes = refundTxBytes,
-                      virtualOutputsBytes = virtualOutputsBytes,
-                      donationToTreasury = depositFee,
+                      virtualOutputsBytes = virtualOutputsBytes
                     )
                     .result
                     .left

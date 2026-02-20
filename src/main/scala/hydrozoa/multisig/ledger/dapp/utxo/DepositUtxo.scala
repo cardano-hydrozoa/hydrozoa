@@ -1,12 +1,13 @@
 package hydrozoa.multisig.ledger.dapp.utxo
 
 import cats.data.NonEmptyList
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant}
+import hydrozoa.lib.cardano.scalus.ledger.plutusAddressToShelley
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo.DepositUtxoConversionError.*
 import hydrozoa.multisig.ledger.virtual.tx.GenesisObligation
 import scala.util.{Failure, Success, Try}
 import scalus.*
-import scalus.cardano.address.ShelleyAddress
+import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
@@ -25,8 +26,12 @@ final case class DepositUtxo(
     datum: DepositUtxo.Datum,
     value: Value,
     virtualOutputs: NonEmptyList[GenesisObligation],
+    depositFee: Coin,
     // This field comes from DepositTx, but it's convenient to duplicate it here
     submissionDeadline: QuantizedInstant,
+    // TODO: remove
+    // This is needed to avoid plutus -> ledger conversion
+    refundInstructions: DepositUtxo.Refund.Instructions
 ) {
     def toUtxo: Utxo =
         Utxo(
@@ -87,6 +92,14 @@ object DepositUtxo {
                 validityStart: QuantizedInstant
             ): Instructions =
                 new Instructions(address, datum, validityStart)
+
+            def apply(onchain: Onchain, network: Network, slotConfig: SlotConfig): Instructions = {
+                Instructions(
+                  address = plutusAddressToShelley(onchain.address, network),
+                  datum = onchain.datum.asScala,
+                  validityStart = onchain.validityStart.toEpochQuantizedInstant(slotConfig),
+                )
+            }
 
             final case class Onchain(
                 address: PlutusAddress,
@@ -156,10 +169,9 @@ object DepositUtxo {
         utxo: Utxo,
         headNativeScriptAddress: ShelleyAddress,
         virtualOutputs: NonEmptyList[GenesisObligation],
-        // TODO: George?
-        submissionDeadline: QuantizedInstant
-        // absorptionStart: QuantizedInstant,
-        // absorptionEnd: QuantizedInstant
+        depositFee: Coin,
+        submissionDeadline: QuantizedInstant,
+        refundInstructions: DepositUtxo.Refund.Instructions
     ): Either[DepositUtxoConversionError, DepositUtxo] =
         for {
             babbage <- utxo._2 match {
@@ -190,6 +202,8 @@ object DepositUtxo {
           datum = datum,
           value = babbage.value,
           virtualOutputs = virtualOutputs,
-          submissionDeadline = submissionDeadline
+          depositFee = depositFee,
+          submissionDeadline = submissionDeadline,
+          refundInstructions = refundInstructions
         )
 }

@@ -15,7 +15,7 @@ import monocle.*
 import monocle.syntax.all.*
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.TransactionWitnessSet.given_Encoder_TransactionWitnessSet
-import scalus.cardano.ledger.{Coin, TaggedSortedSet, TransactionOutput, TransactionWitnessSet, Utxo, Value}
+import scalus.cardano.ledger.{Coin, TaggedSortedSet, Transaction, TransactionOutput, TransactionWitnessSet, Utxo, Value}
 import scalus.cardano.txbuilder.keepRawL
 import scalus.uplc.builtin.Data
 
@@ -84,7 +84,15 @@ private object DepositRefundTxSeqOps {
         TxTiming.Section
 
     object Build {
-        sealed trait Error extends Throwable
+        sealed trait Error extends Throwable {
+            override def toString: String = this match {
+                case Error.Deposit((err, s)) => s"Deposit tx builder failed: $s, error: $err"
+                case Error.Refund((err, s))  => s"Refund tx builder failed: $s, error: $err"
+                case Error.TimingIncoherence => "Timing incoherence detected"
+                case Error.DepositValueMismatch(depositValue, expectedDepositValue) =>
+                    s"Deposit value mismatch, actual: $depositValue, expected: $expectedDepositValue"
+            }
+        }
 
         object Error {
             final case class Deposit(e: (SomeBuildErrorOnly, String)) extends Build.Error
@@ -143,22 +151,26 @@ private object DepositRefundTxSeqOps {
                       utxosFunding,
                       virtualOutputs,
                       expectedDepositValue,
+                      depositFee,
                       changeAddress,
                       submissionDeadline,
                       refundInstructions
                     )
                     .result
                     .left
-                    .map(Build.Error.Deposit(_))
+                    .map(f => {
+                        // println(f)
+                        Build.Error.Deposit(f)
+                    })
 
                 refundTx <- RefundTx.Build
-                    .PostDated(config)(
-                      depositValue = virtualValue + Value(depositFee),
-                      refundInstructions = refundInstructions
-                    )
+                    .PostDated(config)(depositTx.depositProduced)
                     .result
                     .left
-                    .map(Build.Error.Refund(_))
+                    .map(f => {
+                        // println(f)
+                        Build.Error.Refund(f)
+                    })
 
                 // Run some sanity-checks
                 depositUtxoValue = depositTx.depositProduced.value
@@ -209,7 +221,6 @@ private object DepositRefundTxSeqOps {
 
         enum Error extends Throwable {
             case Deposit(e: DepositTx.Parse.Error)
-            case DepositValueMismatch(parsed: Value, expected: Value)
             case Refund(e: RefundTx.Parse.Error)
             case RefundNotPostDated
             case RefundTxMismatch(parsed: RefundTx, expected: RefundTx)
@@ -222,6 +233,30 @@ private object DepositRefundTxSeqOps {
             case VirtualOutputMultiAssetNotEmpty(output: TransactionOutput)
             case VirtualOutputRefScriptInvalid(output: TransactionOutput)
             case TimingIncoherence
+
+            override def toString: String = this match {
+                case Deposit(e)         => s"Deposit parse error: $e"
+                case Refund(e)          => s"Refund parse error: $e"
+                case RefundNotPostDated => "Refund transaction is not post-dated"
+                case RefundTxMismatch(parsed, expected) =>
+                    s"Refund transaction mismatch: parsed=$parsed, expected=$expected"
+                case ExpectedRefundBuildError(e) =>
+                    s"Expected refund build error: ${e._2}"
+                case VirtualOutputs(e) => s"Virtual outputs parsing error: $e"
+                case NoVirtualOutputs  => "No virtual outputs found"
+                case NonBabbageVirtualOutput(output) =>
+                    s"Virtual output is not Babbage format: $output"
+                case VirtualOutputNotShelleyAddress(output) =>
+                    s"Virtual output address is not Shelley: $output"
+                case VirtualOutputDatumNotInline(output) =>
+                    s"Virtual output datum is not inline: $output"
+                case VirtualOutputMultiAssetNotEmpty(output) =>
+                    s"Virtual output contains multi-assets: $output"
+                case VirtualOutputRefScriptInvalid(output) =>
+                    s"Virtual output reference script is invalid: $output"
+                case TimingIncoherence =>
+                    "Timing incoherence between deposit and refund transactions"
+            }
         }
     }
 
@@ -238,8 +273,7 @@ private object DepositRefundTxSeqOps {
     final case class Parse(config: Config)(
         depositTxBytes: Tx.Serialized,
         refundTxBytes: Tx.Serialized,
-        virtualOutputsBytes: Array[Byte],
-        donationToTreasury: Coin,
+        virtualOutputsBytes: Array[Byte]
     ) {
         import Parse.*
 
@@ -285,28 +319,20 @@ private object DepositRefundTxSeqOps {
                 depositValue = depositUtxo.value
 
                 refundInstructions = depositUtxo.datum.refundInstructions
-                refundFee = refundTx.tx.body.value.fee
-                refundValue = depositValue - Value(refundFee)
 
-                expectedDepositValue = virtualValue + Value(donationToTreasury + refundFee)
+                depositFee = depositValue - virtualValue
 
                 expectedRefundTx <- RefundTx.Build
-                    .PostDated(config)(refundValue, ???)
+                    .PostDated(config)(depositTx.depositProduced)
                     .result
                     .left
                     .map(Parse.Error.ExpectedRefundBuildError(_))
 
                 _ <- Either.cond(
-                  depositValue == expectedDepositValue,
-                  (),
-                  Parse.Error.DepositValueMismatch(depositValue, expectedDepositValue)
-                )
-
-                _ <- Either.cond(
                   {
                       // The transaction we build to check against will not have signatures, but it will have
                       // the native script witness. Thus, we need to ONLY nullify signatures and not the entire
-                      // witness set.
+                      // witness set.refundInstructions
                       val actualRefundTxWithNullifiedVKeyWitnesses = refundTx
                           .focus(_.tx.witnessSetRaw)
                           .andThen(keepRawL())

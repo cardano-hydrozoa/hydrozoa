@@ -14,9 +14,9 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.SomeBuildError.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
-import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Send, ValidityStartSlot}
+import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend, ValidityStartSlot}
 
-// TODO: I would prefer to have explicit referenc which deposit utxo that refund tx relates to.
+// TODO: I would prefer to have explicit reference - for which deposit utxo that refund tx relates to.
 
 sealed trait RefundTx {
     def tx: Transaction
@@ -43,8 +43,7 @@ private object RefundTxOps {
     object Build {
 
         final case class PostDated(override val config: Config)(
-            override val depositValue: Value,
-            override val refundInstructions: DepositUtxo.Refund.Instructions,
+            override val depositUtxo: DepositUtxo
         ) extends Build[RefundTx.PostDated] {
 
             override val stepRefundMetadata =
@@ -53,10 +52,14 @@ private object RefundTxOps {
                 )
 
             override def result: Either[(SomeBuildError, String), RefundTx.PostDated] =
+                import depositUtxo.refundInstructions
+
+                val stepSpendDeposit =
+                    Spend(depositUtxo.toUtxo, config.headMultisigScript.witnessValue)
 
                 val refundOutput: TransactionOutput = TransactionOutput.Babbage(
                   address = refundInstructions.address,
-                  value = depositValue,
+                  value = depositUtxo.value,
                   datumOption = refundInstructions.mbDatum.map(Inline(_)),
                   scriptRef = None
                 )
@@ -65,12 +68,15 @@ private object RefundTxOps {
                   refundInstructions.validityStart.toSlot.slot
                 )
 
-                val steps = List(stepRefundMetadata, stepSendRefund, stepSetValidity)
+                val steps =
+                    List(stepSpendDeposit, stepSendRefund, stepRefundMetadata, stepSetValidity)
 
                 for {
                     ctx <- TransactionBuilder
                         .build(config.network, steps)
                         .explainConst("adding base refund steps failed")
+
+                    // _ = println(HexUtil.encodeHexString(ctx.transaction.toCbor))
 
                     finalized <- ctx
                         .finalizeContext(
@@ -92,8 +98,8 @@ private object RefundTxOps {
 
     trait Build[T <: RefundTx] {
         def config: Config
-        def depositValue: Value
-        def refundInstructions: DepositUtxo.Refund.Instructions
+        def depositUtxo: DepositUtxo
+        //
         def stepRefundMetadata: ModifyAuxiliaryData
         def result: Either[(SomeBuildError, String), T]
     }
