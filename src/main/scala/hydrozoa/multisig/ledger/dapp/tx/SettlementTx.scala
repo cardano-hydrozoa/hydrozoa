@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa.config.head.initialization.InitialBlock
+import hydrozoa.config.head.multisig.settlement.SettlementConfig
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toQuantizedInstant}
@@ -14,10 +15,11 @@ import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigTreasuryUtxo, Ro
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import monocle.{Focus, Lens}
+
 import scala.annotation.tailrec
 import scala.collection.immutable.Vector
 import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.{Sized, Slot, Transaction, TransactionInput, TransactionOutput as TxOutput, Utxo, Value}
+import scalus.cardano.ledger.{Coin, Sized, Slot, Transaction, TransactionInput, Utxo, Value, TransactionOutput as TxOutput}
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
@@ -95,9 +97,7 @@ object SettlementTx {
 }
 
 private object SettlementTxOps {
-    sealed trait Result[T <: SettlementTx]
-        extends Tx.AugmentedResult[T],
-          DepositUtxo.Many.Spent.Partition
+    sealed trait Result[T <: SettlementTx] extends Tx.AugmentedResult[T]
 
     object Result {
         type NoRollouts = Result[SettlementTx.NoRollouts]
@@ -106,38 +106,27 @@ private object SettlementTxOps {
 
         case class NoPayouts(
             override val transaction: SettlementTx.NoPayouts,
-            override val depositsSpent: Vector[DepositUtxo],
-            override val depositsToSpend: Vector[DepositUtxo],
         ) extends Result[SettlementTx.NoPayouts]
 
         case class WithOnlyDirectPayouts(
             override val transaction: SettlementTx.WithOnlyDirectPayouts,
-            override val depositsSpent: Vector[DepositUtxo],
-            override val depositsToSpend: Vector[DepositUtxo],
         ) extends WithPayouts
 
         case class WithRollouts(
             override val transaction: SettlementTx.WithRollouts,
-            override val depositsSpent: Vector[DepositUtxo],
-            override val depositsToSpend: Vector[DepositUtxo],
             rolloutTxSeqPartial: RolloutTxSeq.PartialResult,
         ) extends WithPayouts
     }
 
-    type ResultFor[T <: SettlementTx] <: Result[?] = T match {
-        case SettlementTx.NoPayouts             => Result.NoPayouts
-        case SettlementTx.WithPayouts           => Result.WithPayouts
-        case SettlementTx.WithOnlyDirectPayouts => Result.WithOnlyDirectPayouts
-        case SettlementTx.WithRollouts          => Result.WithRollouts
-    }
-
     enum Error:
         case TreasuryIncorrectAddress
+        case TooManyDeposits
 
     type TxBuilderResult[Result] = BuilderResult[Result, Error]
 
     object Build {
-        type Config = CardanoNetwork.Section & HeadPeers.Section & InitialBlock.Section
+        type Config = CardanoNetwork.Section & HeadPeers.Section & InitialBlock.Section &
+            SettlementConfig.Section
 
         case class NoPayouts(override val config: Config)(
             override val kzgCommitment: KzgCommitment,
@@ -149,9 +138,9 @@ private object SettlementTxOps {
               mbRolloutTxSeqPartial = None
             ) {
             override def complete(
-                state: State
-            ): TxBuilderResult[ResultFor[SettlementTx.NoPayouts]] =
-                Right(CompleteNoPayouts(state))
+                ctx: TransactionBuilder.Context
+            ): TxBuilderResult[Result[SettlementTx.NoPayouts]] =
+                Right(SettlementTx.Result.NoPayouts(CompleteNoPayouts(ctx)))
         }
 
         case class WithPayouts(override val config: Config)(
@@ -165,9 +154,9 @@ private object SettlementTxOps {
               mbRolloutTxSeqPartial = Some(rolloutTxSeqPartial)
             ) {
             override def complete(
-                state: State
-            ): TxBuilderResult[ResultFor[SettlementTx.WithPayouts]] =
-                CompleteWithPayouts(state, rolloutTxSeqPartial)
+                ctx: TransactionBuilder.Context
+            ): TxBuilderResult[Result[SettlementTx.WithPayouts]] =
+                CompleteWithPayouts(ctx, rolloutTxSeqPartial)
         }
     }
 
@@ -183,32 +172,28 @@ private object SettlementTxOps {
 
         def config: Config
 
-        def complete(state: State): TxBuilderResult[ResultFor[T]]
+        def complete(ctx: TransactionBuilder.Context): TxBuilderResult[Result[T]]
 
-        final def result: TxBuilderResult[ResultFor[T]] = for {
+        final def result: TxBuilderResult[Result[T]] = for {
             pessimistic <- BasePessimistic()
-
-            addedDeposits <- AddDeposits(pessimistic)
-
             finished <- TxBuilder
-                .finalizeContext(addedDeposits.ctx)
+                .finalizeContext(pessimistic)
                 .explainConst("finishing settlement tx failed")
 
-            completed <- complete(addedDeposits.copy(ctx = finished))
+            completed <- complete(finished)
         } yield completed
 
-        final case class State(
-            override val ctx: TransactionBuilder.Context,
-            override val depositsSpent: Vector[DepositUtxo],
-            override val depositsToSpend: Vector[DepositUtxo]
-        ) extends Tx.Builder.HasCtx,
-              DepositUtxo.Many.Spent.Partition
-
         private object BasePessimistic {
-            def apply(): TxBuilderResult[State] = for {
+            def apply(): TxBuilderResult[TransactionBuilder.Context] = for {
                 _ <- Either
                     .cond(checkTreasuryToSpend, (), TreasuryIncorrectAddress)
                     .explainConst("treasury to spend has incorrect head address")
+                _ <- Either
+                    .cond(checkDepositsToSpend, (), TooManyDeposits)
+                    .explainConst(
+                      s"Too many deposits were included. You passed ${depositsToSpend.length}, but we can have " +
+                          s"at most ${config.maxDepositsPerSettlementTx}."
+                    )
                 ctx <- TransactionBuilder
                     .build(config.network, definiteSteps)
                     .explainConst("definite steps failed")
@@ -218,11 +203,7 @@ private object SettlementTxOps {
                 _ <- TxBuilder
                     .finalizeContext(addedPessimisticRollout)
                     .explainConst("finishing base pessimistic failed")
-            } yield State(
-              ctx = ctx,
-              depositsSpent = Vector.empty,
-              depositsToSpend = depositsToSpend
-            )
+            } yield ctx
 
             /////////////////////////////////////////////////////////
             // Checks
@@ -230,6 +211,9 @@ private object SettlementTxOps {
             // TODO: Ensure this holds by construction
             private def checkTreasuryToSpend: Boolean =
                 treasuryToSpend.address == config.headMultisigAddress
+
+            private def checkDepositsToSpend: Boolean =
+                depositsToSpend.length <= config.maxDepositsPerSettlementTx
 
             /////////////////////////////////////////////////////////
             // Base steps
@@ -303,82 +287,30 @@ private object SettlementTxOps {
             /////////////////////////////////////////////////////////
             // Definite steps
             private val definiteSteps: List[TransactionBuilderStep] =
-                baseSteps ++ List(spendTreasury, sendTreasury)
+                baseSteps ++ List(spendTreasury, sendTreasury) ++ AddDeposits()
         }
 
         private object AddDeposits {
-            def apply(initialState: State): TxBuilderResult[State] = loop(initialState)
-
-            @tailrec
-            private def loop(state: State): TxBuilderResult[State] = {
-                import state.*
-                state.depositsToSpend match {
-                    case deposit +: otherDeposits =>
-                        tryAddDeposit(ctx, deposit) match {
-                            case Right(x) =>
-                                val newState: State = state.copy(
-                                  ctx = x,
-                                  depositsSpent = depositsSpent :+ deposit,
-                                  depositsToSpend = otherDeposits
-                                )
-                                loop(newState)
-                            case Left(err) =>
-                                Tx.Builder.Incremental
-                                    .replaceInvalidSizeException(err._1, state)
-                                    .explainConst(err._2)
-                        }
-                    case _Empty => Right(state)
-                }
-            }
-
-            private def tryAddDeposit(
-                ctx: TransactionBuilder.Context,
-                deposit: DepositUtxo
-            ): TxBuilderResult[TransactionBuilder.Context] = {
-                for {
-                    newCtx <- TransactionBuilder
-                        .modify(ctx, List(mkDepositStep(deposit)))
-                        .explainConst(s"adding deposit utxo failed. Deposit utxo: $deposit")
-                    // TODO: update the non-ADA assets in the treasury output, based on the absorbed deposits
-                    //
-                    // Ensure that at least the pessimistic rollout output fits into the transaction.
-                    addedPessimisticRollout <- BasePessimistic
-                        .mbApplySendRollout(newCtx)
-                        .explainConst("sending the rollout tx failed after trying to add a deposit")
-
-                    _ <- TxBuilder
-                        .finalizeContext(addedPessimisticRollout)
-                        .explainConst("finishing for tryAddDeposit failed.")
-                } yield newCtx
-            }
+            def apply(): List[Spend] = depositsToSpend.toList.map(mkDepositStep)
 
             private def mkDepositStep(deposit: DepositUtxo): Spend =
                 Spend(deposit.toUtxo, config.headMultisigScript.witnessAttached)
         }
 
         private[tx] object CompleteNoPayouts {
-            def apply(state: State): Result.NoPayouts = {
-                val treasuryProduced = PostProcess.getTreasuryProduced(
-                  majorVersionProduced,
-                  treasuryToSpend,
-                  state
-                )
+            def apply(ctx: TransactionBuilder.Context): SettlementTx.NoPayouts = {
+                val treasuryProduced = ???
 
-                val settlementTx: SettlementTx.NoPayouts = SettlementTx.NoPayouts(
-                  validityEnd = Slot(state.ctx.transaction.body.value.ttl.get)
+                SettlementTx.NoPayouts(
+                  validityEnd = Slot(ctx.transaction.body.value.ttl.get)
                       .toQuantizedInstant(config.cardanoInfo.slotConfig),
-                  tx = state.ctx.transaction,
+                  tx = ctx.transaction,
                   majorVersionProduced = majorVersionProduced,
                   kzgCommitment = kzgCommitment,
                   treasurySpent = treasuryToSpend,
                   treasuryProduced = treasuryProduced,
-                  depositsSpent = state.depositsSpent,
-                  resolvedUtxos = state.ctx.resolvedUtxos
-                )
-                Result.NoPayouts(
-                  transaction = settlementTx,
-                  depositsSpent = state.depositsSpent,
-                  depositsToSpend = state.depositsToSpend,
+                  depositsSpent = depositsToSpend,
+                  resolvedUtxos = ctx.resolvedUtxos
                 )
             }
         }
@@ -397,75 +329,97 @@ private object SettlementTxOps {
               */
             @throws[AssertionError]
             def apply(
-                state: State,
+                ctx: TransactionBuilder.Context,
                 rolloutTxSeqPartial: RolloutTxSeq.PartialResult,
             ): TxBuilderResult[Result.WithPayouts] = for {
-                mergeTrial <- TryMerge(state, rolloutTxSeqPartial)
+                mergeTrial <- TryMerge(ctx, rolloutTxSeqPartial)
             } yield {
                 import TryMerge.Result.*
 
                 val (finished, mergeResult) = mergeTrial
 
-                val tx = finished.ctx.transaction
+                val tx = finished.transaction
 
-                val treasuryProduced = PostProcess.getTreasuryProduced(
-                  majorVersionProduced,
-                  treasuryToSpend,
-                  finished
-                )
-
-                def withOnlyDirectPayouts(payoutCount: Int): Result.WithOnlyDirectPayouts =
+                def treasuryProduced(rolloutFees : Coin) = 
+                  MultisigTreasuryUtxo.fromUtxo(
+                    utxo = Utxo(TransactionInput(finished.transaction.id, 0), finished.transaction.body.value.outputs.head.value),
+                    equity = treasuryToSpend.equity
+                      + Coin(depositsToSpend.map(_.depositFee.value).sum)
+                      - finished.transaction.body.value.fee
+                      + rolloutFees
+                  ).get // FIXME: partial
+                  
+              
+                def withOnlyDirectPayouts(payoutCount: Int):
+                 Result.WithOnlyDirectPayouts =
                     Result.WithOnlyDirectPayouts(
                       transaction = SettlementTx.WithOnlyDirectPayouts(
                         majorVersionProduced = majorVersionProduced,
                         kzgCommitment = kzgCommitment,
                         treasurySpent = treasuryToSpend,
-                        treasuryProduced = treasuryProduced,
-                        depositsSpent = finished.depositsSpent,
+                        treasuryProduced = treasuryProduced(Coin.zero),
                         tx = tx,
                         // this is safe since we always set ttl
                         validityEnd = Slot(tx.body.value.ttl.get)
                             .toQuantizedInstant(config.cardanoInfo.slotConfig),
+                        depositsSpent = depositsToSpend,
                         payoutCount = payoutCount,
-                        resolvedUtxos = finished.ctx.resolvedUtxos
-                      ),
-                      depositsSpent = finished.depositsSpent,
-                      depositsToSpend = finished.depositsToSpend
+                        resolvedUtxos = finished.resolvedUtxos
+                      )
                     )
-
+                        
                 def withRollouts(
                     payoutCount: Int,
-                    rollouts: RolloutTxSeq.PartialResult
-                ): Result.WithRollouts =
-                    Result.WithRollouts(
+                    rollouts: RolloutTxSeq.PartialResult,
+                ): Result.WithRollouts = {
+                  val rolloutFees = {
+
+                    // Question (to George): did you want to do the finishing here? Or should we push this up to 
+                    // the settlement tx seq builder?
+                    val rolloutTxSeq = rolloutTxSeqPartial.finishPostProcess(
+                      RolloutUtxo(
+                        utxo = Utxo(TransactionInput(finished.transaction.id, 1),
+                          finished.transaction.body.value.outputs(1).value))
+                    ).getOrElse(???) // The left is `Void`, not sure why?
+
+
+                    Coin(rolloutTxSeq.notLast.map(_.tx.body.value.fee.value).sum + rolloutTxSeq.last.tx.body.value.fee.value)
+                  }
+                  
+                  Result.WithRollouts(
                       transaction = SettlementTx.WithRollouts(
                         majorVersionProduced = majorVersionProduced,
                         kzgCommitment = kzgCommitment,
                         treasurySpent = treasuryToSpend,
-                        treasuryProduced = treasuryProduced,
-                        depositsSpent = finished.depositsSpent,
-                        rolloutProduced = unsafeGetRolloutProduced(finished.ctx),
+                        treasuryProduced = treasuryProduced(rolloutFees),
+                        depositsSpent = depositsToSpend,
+                        rolloutProduced = unsafeGetRolloutProduced(finished),
                         tx = tx,
                         // this is safe since we always set ttl
                         validityEnd = Slot(tx.body.value.ttl.get)
                             .toQuantizedInstant(config.cardanoInfo.slotConfig),
                         payoutCount = payoutCount,
-                        resolvedUtxos = finished.ctx.resolvedUtxos
+                        resolvedUtxos = finished.resolvedUtxos
                       ),
-                      depositsSpent = finished.depositsSpent,
-                      depositsToSpend = finished.depositsToSpend,
                       rolloutTxSeqPartial = rollouts,
                     )
+                }
+
 
                 mergeResult match {
-                    case NotMerged => withRollouts(0, rolloutTxSeqPartial)
-                    case Merged(mbFirstSkipped, payoutCount) =>
-                        mbFirstSkipped match {
-                            case None => withOnlyDirectPayouts(payoutCount)
-                            case Some(firstSkipped) =>
-                                withRollouts(payoutCount, firstSkipped.partialResult)
-                        }
-                }
+                      case NotMerged => {
+                        withRollouts(0, rolloutTxSeqPartial)
+                      }
+                      
+                      case Merged(mbFirstSkipped, payoutCount) =>
+                          mbFirstSkipped match {
+                              case None => {
+                                withOnlyDirectPayouts(payoutCount)
+                              }
+                              case Some(firstSkipped) =>
+                                  withRollouts(payoutCount, firstSkipped.partialResult)
+                          }
+                  }
             }
 
             /** Given the transaction context of a [[Builder.WithPayouts]] that has finished
@@ -511,11 +465,10 @@ private object SettlementTxOps {
                 }
 
                 def apply(
-                    state: State,
+                    ctx: TransactionBuilder.Context,
                     rolloutTxSeqPartial: RolloutTxSeq.PartialResult
-                ): TxBuilderResult[(State, TryMerge.Result)] =
+                ): TxBuilderResult[(TransactionBuilder.Context, TryMerge.Result)] =
                     import TryMerge.Result.*
-                    import state.*
 
                     val firstRolloutTxPartial = rolloutTxSeqPartial.firstOrOnly
 
@@ -552,12 +505,6 @@ private object SettlementTxOps {
                     for {
                         newCtx <- optimisticTrial.orElse(pessimisticBackup)
 
-                        finishedState = State(
-                          ctx = newCtx,
-                          depositsSpent = depositsSpent,
-                          depositsToSpend = state.depositsToSpend
-                        )
-
                         mergeResult =
                             if optimisticTrial.isLeft then NotMerged
                             else
@@ -566,40 +513,10 @@ private object SettlementTxOps {
                                   payoutCount = firstRolloutTxPartial.payoutCount
                                 )
 
-                    } yield (finishedState, mergeResult)
+                    } yield (newCtx, mergeResult)
             }
         }
-
-        private object PostProcess {
-
-            /** Given the transaction context of a [[Builder]] that has finished building, apply
-              * post-processing to get the [[MultisigTreasuryUtxo]] produced by the
-              * [[SettlementTx]]. Assumes that the treasury output is present in the transaction and
-              * is the first output.
-              *
-              * @param ctx
-              *   The transaction context of a finished builder state.
-              * @throws AssertionError
-              *   when the assumption is broken.
-              * @return
-              */
-            @throws[AssertionError]
-            def getTreasuryProduced(
-                majorVersion: BlockVersion.Major,
-                treasurySpent: MultisigTreasuryUtxo,
-                ctx: State
-            ): MultisigTreasuryUtxo = {
-                val tx = ctx.ctx.transaction
-                val outputs = tx.body.value.outputs
-
-                assert(outputs.nonEmpty)
-                // TODO: Throw other assertion errors in `.fromUtxo` and instead of `.get`?
-                MultisigTreasuryUtxo
-                    .fromUtxo(Utxo(TransactionInput(tx.id, 0), outputs.head.value))
-                    .get
-            }
-        }
-
+      
         private object TxBuilder {
             private val diffHandler = Change.changeOutputDiffHandler(
               _,
