@@ -251,6 +251,7 @@ object ConsensusActor:
         cardanoLiaison: CardanoLiaison.Handle,
         eventSequencer: EventSequencer.Handle,
         peerLiaisons: List[PeerLiaison.Handle],
+        tracer: hydrozoa.lib.tracing.ProtocolTracer = hydrozoa.lib.tracing.ProtocolTracer.noop,
     )
 
     // ===================================
@@ -322,7 +323,8 @@ class ConsensusActor(
                       blockWeaver = _connections.blockWeaver,
                       cardanoLiaison = _connections.cardanoLiaison,
                       eventSequencer = _connections.eventSequencer,
-                      peerLiaisons = _connections.peerLiaisons
+                      peerLiaisons = _connections.peerLiaisons,
+                      tracer = _connections.tracer,
                     )
                   )
                 )
@@ -366,7 +368,15 @@ class ConsensusActor(
       *   an arbitrary ack, whether own one or someone else's one
       */
     def handleAck(ack: AckBlock): IO[Unit] = for {
-        // _ <- IO.println(s"---- CA ----: handleAck: $ack")
+        conn <- getConnections
+        ackTypeName = ack match {
+            case _: AckBlock.Minor  => "minor"
+            case _: AckBlock.Major1 => "major1"
+            case _: AckBlock.Major2 => "major2"
+            case _: AckBlock.Final1 => "final1"
+            case _: AckBlock.Final2 => "final2"
+        }
+        _ <- conn.tracer.ack(ack.blockNum: Int, ack.peerNum: Int, ackTypeName)
         state <- stateRef.get
         // This is a bit annoying but Scala cannot infer types unless we PM explicitly
         _ <- ack match {
@@ -414,6 +424,7 @@ class ConsensusActor(
             f: ConsensusFor[msg.type] => IO[ConsensusFor[msg.type]]
         ): IO[Unit] = {
             for {
+                conn <- getConnections
                 blockNum <- IO.pure(msgBlockNum(msg))
                 cell <-
                     state.cells.get(blockNum) match {
@@ -432,8 +443,17 @@ class ConsensusActor(
                             _ <- ret match {
                                 // Switch the cell to the next round
                                 case Left(nextRoundCell, ownAck) =>
+                                    val roundBlockType = ownAck match {
+                                        case _: AckBlock.Major2 => "major"
+                                        case _: AckBlock.Final2 => "final"
+                                        case _                  => "unknown"
+                                    }
                                     for {
-                                        // _ <- IO.println("---- CA ----: complete updated cell: Left")
+                                        _ <- conn.tracer.roundComplete(
+                                          blockNum: Int,
+                                          roundBlockType,
+                                          1
+                                        )
 
                                         // These casts are sound since the only alternative is Void
                                         // Ack2 can be safely sent when round 1 is finished (i.e. all first-round acks of
@@ -620,8 +640,33 @@ class ConsensusActor(
             mbAck: Option[AckBlock]
         ): IO[Unit] = {
             for {
-                // _ <- IO.println(s"---- CA ----: completeCell: blockConfirmed: ${blockConfirmed.blockNum}")
                 conn <- getConnections
+                (confirmedBlockType, vMajor, vMinor) = blockConfirmed match {
+                    case b: Block.MultiSigned.Minor =>
+                        (
+                          "minor",
+                          b.header.blockVersion.major: Int,
+                          b.header.blockVersion.minor: Int
+                        )
+                    case b: Block.MultiSigned.Major =>
+                        (
+                          "major",
+                          b.header.blockVersion.major: Int,
+                          b.header.blockVersion.minor: Int
+                        )
+                    case b: Block.MultiSigned.Final =>
+                        (
+                          "final",
+                          b.header.blockVersion.major: Int,
+                          b.header.blockVersion.minor: Int
+                        )
+                }
+                _ <- conn.tracer.blockConfirmed(
+                  blockConfirmed.blockNum: Int,
+                  confirmedBlockType,
+                  vMajor,
+                  vMinor
+                )
                 // Handle the confirmed block
                 _ <- conn.blockWeaver ! blockConfirmed
                 _ <- blockConfirmed match {
