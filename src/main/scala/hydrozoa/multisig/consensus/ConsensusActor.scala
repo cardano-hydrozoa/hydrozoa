@@ -809,7 +809,7 @@ class ConsensusActor(
                 } yield newRound
 
             override def isSaturated: Boolean =
-                block.isDefined && acks.keys == config.headPeerVKeys
+                block.isDefined && acks.keySet == config.headPeerVKeys.iterator.toSet
 
             override def complete
                 : IO[Either[(Void, Void), (Block.MultiSigned.Minor, Option[RoundOneOwnAck])]] = {
