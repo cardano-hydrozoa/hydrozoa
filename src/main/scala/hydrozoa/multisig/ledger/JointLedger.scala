@@ -77,7 +77,8 @@ final case class JointLedger(
                   Some(
                     Connections(
                       consensusActor = _connections.consensusActor,
-                      peerLiaisons = _connections.peerLiaisons
+                      peerLiaisons = _connections.peerLiaisons,
+                      tracer = _connections.tracer,
                     )
                   )
                 )
@@ -147,7 +148,10 @@ final case class JointLedger(
     private def registerDeposit(req: DepositEvent): IO[Unit] = {
         import req.*
         for {
-            blockStartTime <- unsafeGetProducing.map(_.startTime)
+            conn <- getConnections
+            p <- unsafeGetProducing
+            blockStartTime = p.startTime
+            currentBlockNum = p.previousBlock.blockNum.increment
             _ <- this.runDappLedgerM(
               action = DappLedgerM.registerDeposit(req, blockStartTime),
               // Left == deposit rejected
@@ -159,7 +163,11 @@ final case class JointLedger(
                           .focus(_.nextBlockData.events)
                           .modify(_.appended((eventId, Invalid)))
                       _ <- state.set(newState)
-                      // _ = println(s"registerDeposit failure: $e")
+                      _ <- conn.tracer.eventProcessed(
+                        s"${eventId.peerNum: Int}:${eventId.eventNum: Int}",
+                        currentBlockNum: Int,
+                        false
+                      )
                   } yield (),
               onSuccess = _s =>
                   for {
@@ -168,6 +176,11 @@ final case class JointLedger(
                           .focus(_.nextBlockData.events)
                           .modify(_.appended((eventId, Valid)))
                       _ <- state.set(newState)
+                      _ <- conn.tracer.eventProcessed(
+                        s"${eventId.peerNum: Int}:${eventId.eventNum: Int}",
+                        currentBlockNum: Int,
+                        true
+                      )
                   } yield ()
             )
         } yield ()
@@ -182,7 +195,9 @@ final case class JointLedger(
         import txEvent.*
 
         for {
+            conn <- getConnections
             p <- unsafeGetProducing
+            currentBlockNum = p.previousBlock.blockNum.increment
             _ <- this.runVirtualLedgerM(
               action = VirtualLedgerM.applyInternalTx(tx, p.startTime),
               // Invalid transaction continuation
@@ -193,6 +208,11 @@ final case class JointLedger(
                           .focus(_.nextBlockData.events)
                           .modify(_.appended((eventId, Invalid)))
                       _ <- state.set(newState)
+                      _ <- conn.tracer.eventProcessed(
+                        s"${eventId.peerNum: Int}:${eventId.eventNum: Int}",
+                        currentBlockNum: Int,
+                        false
+                      )
                   } yield (),
               // Valid transaction continuation
               onSuccess = payoutObligations =>
@@ -204,6 +224,11 @@ final case class JointLedger(
                           .focus(_.nextBlockData.blockWithdrawnUtxos)
                           .modify(v => v ++ payoutObligations)
                       _ <- state.set(newState)
+                      _ <- conn.tracer.eventProcessed(
+                        s"${eventId.peerNum: Int}:${eventId.eventNum: Int}",
+                        currentBlockNum: Int,
+                        true
+                      )
                   } yield ()
             )
         } yield ()
@@ -469,6 +494,37 @@ final case class JointLedger(
     ): IO[Unit] =
         for {
             conn <- getConnections
+            (bt, vMaj, vMin, evtCnt) = block match {
+                case b: Block.Unsigned.Minor =>
+                    (
+                      "minor",
+                      b.header.blockVersion.major: Int,
+                      b.header.blockVersion.minor: Int,
+                      b.body.events.size
+                    )
+                case b: Block.Unsigned.Major =>
+                    (
+                      "major",
+                      b.header.blockVersion.major: Int,
+                      b.header.blockVersion.minor: Int,
+                      b.body.events.size
+                    )
+                case b: Block.Unsigned.Final =>
+                    (
+                      "final",
+                      b.header.blockVersion.major: Int,
+                      b.header.blockVersion.minor: Int,
+                      b.body.events.size
+                    )
+            }
+            _ <- conn.tracer.briefProduced(
+              block.blockNum: Int,
+              config.ownHeadPeerNum: Int,
+              bt,
+              vMaj,
+              vMin,
+              evtCnt
+            )
             acks = ownHeadWallet.mkAcks(block, localFinalization)
             _ <- (conn.peerLiaisons ! block.blockBriefNext).parallel
             _ <- conn.consensusActor ! block
@@ -532,7 +588,8 @@ object JointLedger {
 
     final case class Connections(
         consensusActor: ConsensusActor.Handle,
-        peerLiaisons: List[PeerLiaison.Handle]
+        peerLiaisons: List[PeerLiaison.Handle],
+        tracer: hydrozoa.lib.tracing.ProtocolTracer = hydrozoa.lib.tracing.ProtocolTracer.noop,
     )
 
     final case class CompleteBlockError() extends Throwable

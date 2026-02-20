@@ -32,7 +32,8 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
       suiteCardano = Mock(preprod),
       txTimingGen = generateDefaultTxTiming,
       mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
-      commandGen = NoWithdrawalsCommandGen
+      commandGen = NoWithdrawalsCommandGen,
+      label = "block-promotion"
     ).property()
 
     /** Dusty head finalization
@@ -46,7 +47,8 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
       suiteCardano = Mock(preprod),
       txTimingGen = generateDefaultTxTiming,
       mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
-      commandGen = MakeDustCommandGen(minL2Utxos = 500)
+      commandGen = MakeDustCommandGen(minL2Utxos = 500),
+      label = "dusty-finalization"
     ).property()
 
     /** Ongoing withdrawals
@@ -59,7 +61,8 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
       suiteCardano = Mock(preprod),
       txTimingGen = generateDefaultTxTiming,
       mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
-      commandGen = OngoingWithdrawalsCommandGen
+      commandGen = OngoingWithdrawalsCommandGen,
+      label = "ongoing-withdrawals"
     ).property()
 
     /** Deposits
@@ -70,7 +73,8 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
       suiteCardano = Mock(preprod),
       txTimingGen = generateDefaultTxTiming,
       mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
-      commandGen = DepositsCommandGen
+      commandGen = DepositsCommandGen,
+      label = "deposits"
     ).property()
 
 /** The Yaci runner has only some of the properties which are worth running on Yaci, see property
@@ -94,7 +98,8 @@ object Stage1PropertiesYaci extends YetAnotherProperties("Integration Stage 1 wi
       ),
       txTimingGen = generateYaciTxTiming,
       mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
-      commandGen = NoWithdrawalsCommandGen
+      commandGen = NoWithdrawalsCommandGen,
+      label = "block-promotion-yaci"
     ).property()
 
     val _ = property("Dusty head finalization Yaci") = Suite(
@@ -103,5 +108,6 @@ object Stage1PropertiesYaci extends YetAnotherProperties("Integration Stage 1 wi
       ),
       txTimingGen = generateYaciTxTiming,
       mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
-      commandGen = MakeDustCommandGen(minL2Utxos = 500)
+      commandGen = MakeDustCommandGen(minL2Utxos = 500),
+      label = "dusty-finalization-yaci"
     ).property()

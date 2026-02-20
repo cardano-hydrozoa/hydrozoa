@@ -36,7 +36,8 @@ object BlockWeaver:
     type Config = CardanoNetwork.Section & OwnHeadPeerPublic.Section
 
     final case class Connections(
-        jointLedger: JointLedger.Handle
+        jointLedger: JointLedger.Handle,
+        tracer: hydrozoa.lib.tracing.ProtocolTracer = hydrozoa.lib.tracing.ProtocolTracer.noop,
     )
 
     // ===================================
@@ -215,7 +216,12 @@ trait BlockWeaver(
             for {
                 _connections <- x.get
                 _ <- this.connections.set(
-                  Some(BlockWeaver.Connections(jointLedger = _connections.jointLedger))
+                  Some(
+                    BlockWeaver.Connections(
+                      jointLedger = _connections.jointLedger,
+                      tracer = _connections.tracer,
+                    )
+                  )
                 )
             } yield ()
         case x: BlockWeaver.Connections => connections.set(Some(x))
@@ -525,7 +531,7 @@ trait BlockWeaver(
         then
             for {
                 conn <- getConnections
-                // _ <- IO.println(s"becoming leader for block: $nextBlockNum")
+                _ <- conn.tracer.leaderStarted(nextBlockNum: Int, config.ownHeadPeerId.peerNum: Int)
                 now <- IO.realTime.map(_.toEpochQuantizedInstant(config.slotConfig))
                 _ <- conn.jointLedger ! StartBlock(nextBlockNum, now)
                 _ <- IO.traverse_(mempool.receivingOrder)(event =>
