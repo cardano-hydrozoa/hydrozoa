@@ -10,9 +10,9 @@ import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, S
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.Script.Native
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{Coin, Hash as _, Script, ScriptRef, TransactionHash, TransactionInput, TransactionOutput, Utxos, Value}
+import scalus.cardano.ledger.{Blake2b_256, Coin, Hash, Hash32, Script, ScriptRef, TransactionHash, TransactionInput, TransactionOutput, Utxos, Value}
 import scalus.cardano.onchain.plutus.prelude.Option as SOption
-import scalus.uplc.builtin.Data
+import scalus.uplc.builtin.{ByteString, Data, platform}
 
 final case class L2Genesis(
     // We allow  this to be empty so that we can do the "push the fallback forward" tx
@@ -108,4 +108,9 @@ object GenesisObligation {
               obligations.toList.map(_.toBabbage.asInstanceOf[TransactionOutput])
             )
             .toByteArray
+
+    def hash(obligations: NonEmptyList[GenesisObligation]): Hash32 =
+        Hash[Blake2b_256, Any](
+          platform.blake2b_256(ByteString.unsafeFromArray(serialize(obligations)))
+        )
 }

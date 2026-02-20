@@ -9,11 +9,11 @@
         <appender-ref ref="STDOUT"/>
     </root>
     <logger name="org.scalacheck.commands.ModelBasedSuite" level="warn"/>
-    <logger name="Stage1.Generators" level="trace"/>
-    <logger name="Stage1.Model" level="debug"/>
-    <logger name="Stage1.Suite" level="debug"/>
-    <logger name="Stage1.SutCommands" level="debug"/>
-    <logger name="CardanoLiaison" level="trace"/>
-    <logger name="test.CardanoBackendMock" level="debug"/>
+    <logger name="Stage1.Generators" level="error"/>
+    <logger name="Stage1.Model" level="error"/>
+    <logger name="Stage1.Suite" level="error"/>
+    <logger name="Stage1.SutCommands" level="error"/>
+    <logger name="CardanoLiaison" level="error"/>
+    <logger name="test.CardanoBackendMock" level="error"/>
     <logger name="scalus" level="warn"/>
 </configuration>
