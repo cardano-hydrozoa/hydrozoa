@@ -1,123 +1,89 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
-import cats.effect.unsafe.implicits.global
-import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
 import hydrozoa.config.node.TestNodeConfig.generateTestNodeConfig
 import hydrozoa.config.node.{NodeConfig, TestNodeConfig}
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
-import hydrozoa.lib.number.PositiveInt
+import hydrozoa.lib.cardano.scalus.given_Choose_Coin
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
-import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.TimeUnit
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.{Gen, Prop, Properties}
+import scala.concurrent.duration.FiniteDuration
 import scalus.cardano.ledger.ArbitraryInstances.given
-import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{Hash, *}
-import scalus.cardano.onchain.plutus.prelude.Option as SOption
 import scalus.cardano.onchain.plutus.v3.ArbitraryInstances.*
-import scalus.cardano.txbuilder.TransactionBuilder
-import scalus.uplc.builtin.Data.toData
 import test.*
 import test.Generators.Hydrozoa.*
 import test.TestPeer.Alice
 
-var counter = AtomicLong(0L)
-
-def genDepositRecipe(testNodeConfig: TestNodeConfig)(
-    estimatedFee: Coin = Coin(5_000_000L),
-): Gen[DepositTx.Build] = {
+def genDepositBuilder(testNodeConfig: TestNodeConfig): Gen[DepositTx.Build] = {
     val testPeers = testNodeConfig.testPeers
     val config = testNodeConfig.nodeConfig
     for {
         depositor <- Gen.oneOf(testPeers._testPeers.toList.map(_._2))
-
         headAddress = config.headMultisigAddress
         genData = Gen.frequency(
-          (99, genByteStringData.map(data => SOption.Some(data))),
-          (1, SOption.None)
+          (99, genByteStringData.map(data => Some(data))),
+          (1, None)
         )
         depositData <- genData
         refundData <- genData
-        deadline: BigInt <- Gen.posNum[BigInt]
+
+        submissionDeadline <- Gen
+            .posNum[Long]
+            .map(sec => config.headStartTime + FiniteDuration(sec, TimeUnit.SECONDS))
 
         l2Addr <- genPubkeyAddress(config)
         refundAddr <- genPubkeyAddress(config)
 
-        depositDatum = DepositUtxo.Datum(
-          DepositUtxo.Refund.Instructions(
-            address = LedgerToPlutusTranslation.getAddress(refundAddr),
-            datum = refundData,
-            startTime = QuantizedInstant(
-              instant = java.time.Instant.ofEpochMilli(deadline.toLong),
-              slotConfig = config.slotConfig
+        instructions =
+            DepositUtxo.Refund.Instructions(
+              address = refundAddr,
+              datum = refundData,
+              validityStart = config.txTiming.refundValidityStart(submissionDeadline)
             )
-          )
-        )
 
         txId <- arbitrary[TransactionInput]
-
-        depositMinAda = {
-            val candidate = Babbage(
-              address = headAddress,
-              value = Value.zero,
-              datumOption = Some(Inline(depositDatum.toData)),
-              scriptRef = None
-            ).ensureMinAda(config)
-            candidate.value.coin
-        }
 
         virtualOutputs <- Gen
             .nonEmptyListOf(genGenesisObligation(config, Alice, minimumCoin = Coin.ada(2)))
             .map(NonEmptyList.fromListUnsafe)
 
-        depositAmount = Value.combine(virtualOutputs.map(vo => Value(vo.l2OutputValue)).toList)
+        depositFee <- Gen.frequency(
+          5 -> Gen.const(Coin.zero),
+          5 -> Gen.choose(Coin(500_000), Coin(5_000_000))
+        )
 
-        minAda = config.babbageUtxoMinLovelace(PositiveInt.unsafeApply(200))
+        virtualValue = Value.combine(virtualOutputs.map(vo => Value(vo.l2OutputValue)).toList)
+        depositValue = virtualValue + Value(depositFee)
 
         // TODO: use arbitrary values, not just ADA only
         fundingUtxos <- Gen
             .nonEmptyListOf(genAdaOnlyPubKeyUtxo(config, depositor))
             .map(NonEmptyList.fromListUnsafe)
             // FIXME: suchThat wastes a lot of generation time
+            // TODO: Use Hydrozoa's Value once tokens are added
             .suchThat(utxos =>
-                utxos.iterator
-                    .map(_.output.value)
-                    .foldLeft(Value.zero)(_ + _)
-                    .coin > minAda + depositAmount.coin + estimatedFee
+                Value.combine(utxos.toList.map(_.output.value)).coin > depositValue.coin
             )
 
         refundAddr <- genPubkeyAddress(config)
 
-        partialRefundTx = RefundTx.PartialResult.PostDated(
-          ctx = TransactionBuilder.Context.empty(config.network),
-          inputValueNeeded = depositAmount,
-          refundInstructions = DepositUtxo.Refund.Instructions(
-            address = LedgerToPlutusTranslation.getAddress(refundAddr),
-            datum = SOption.None,
-            // TODO: move to propertyM
-            startTime = realTimeQuantizedInstant(config.slotConfig).unsafeRunSync()
-          ),
-          slotConfig = config.slotConfig
-        )
-
     } yield DepositTx.Build(config)(
-      partialRefundTx = partialRefundTx,
       utxosFunding = fundingUtxos,
       virtualOutputs = virtualOutputs,
-      donationToTreasury = Coin(0), // TODO: generate non-zero
+      depositFee = depositFee,
       changeAddress = depositor.address(config.network),
+      submissionDeadline = submissionDeadline,
+      refundInstructions = instructions
     )
 }
 
 object DepositTxTest extends Properties("Deposit Tx Test") {
 
-    val _ = property("deposit tests meta data parses") = Prop.forAll(generateTestNodeConfig) {
+    val _ = property("Metadata can be parsed") = Prop.forAll(generateTestNodeConfig) {
         testNodeConfig =>
             val config = testNodeConfig.nodeConfig
             val gen = for {
@@ -141,9 +107,9 @@ object DepositTxTest extends Properties("Deposit Tx Test") {
 
     val _ = property("Build deposit tx") = Prop.forAll(generateTestNodeConfig) { testNodeConfig =>
         val config = testNodeConfig.nodeConfig
-        Prop.forAll(genDepositRecipe(testNodeConfig)())(depositTxBuilder =>
-            depositTxBuilder.result match {
-                case Left(e) => "Build succeeds" |: Prop(false)
+        Prop.forAll(genDepositBuilder(testNodeConfig))(depositBuilder =>
+            depositBuilder.result match {
+                case Left(e) => "Build failed" |: Prop(false)
                 case Right(depositTx) =>
                     DepositTx
                         .Parse(config)(

@@ -1,26 +1,24 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
+import hydrozoa.config.head.initialization.InitialBlock
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
-import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, quantizeLosslessUnsafe, toEpochQuantizedInstant}
-import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.TransactionOutputEncoders.given
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, quantizeLosslessUnsafe}
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.explainConst
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.virtual.tx.GenesisObligation
-import io.bullet.borer.{Cbor, Encoder}
 import monocle.{Focus, Lens}
 import scala.util.{Failure, Success, Try}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
-import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend, ValidityEndSlot}
-import scalus.uplc.builtin.Data.toData
-import scalus.uplc.builtin.{ByteString, platform}
+import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, ReferenceOutput, Send, Spend, ValidityEndSlot}
+import scalus.uplc.builtin.Data.{fromData, toData}
 
 final case class DepositTx(
     depositProduced: DepositUtxo,
@@ -35,57 +33,42 @@ object DepositTx {
 }
 
 private object DepositTxOps {
-    type Config = CardanoNetwork.Section & HeadPeers.Section & TxTiming.Section
-    // FIXME: We need InitialBlock.Section in the config, so that we can add
-    //  multisigRegimeUtxo as a reference input (not for its script).
-    //  This is how the deposit tx gets rolled back if the init tx is rolled back.
+    type Config = CardanoNetwork.Section & HeadPeers.Section & InitialBlock.Section &
+        TxTiming.Section
 
     final case class Build(config: Config)(
-        partialRefundTx: RefundTx.PartialResult[RefundTx.PostDated],
         utxosFunding: NonEmptyList[Utxo],
+        // TODO: instead passing virtual outputs we can pass the total value and the hash
         virtualOutputs: NonEmptyList[GenesisObligation],
-        donationToTreasury: Coin,
+        depositFee: Coin,
         changeAddress: ShelleyAddress,
+        submissionDeadline: QuantizedInstant,
+        refundInstructions: DepositUtxo.Refund.Instructions
     ) {
         def result: Either[(SomeBuildError, String), DepositTx] = {
-            import partialRefundTx.refundInstructions
 
-            val virtualOutputsRaw: List[TransactionOutput.Babbage] =
-                virtualOutputs.toList.map(_.toBabbage)
-
-            val virtualOutputsCbor: Array[Byte] = Cbor.encode(virtualOutputsRaw).toByteArray
-
-            val virtualOutputsHash: Hash32 = Hash[Blake2b_256, Any](
-              platform.blake2b_256(ByteString.unsafeFromArray(virtualOutputsCbor))
-            )
-
-            val stepRefundMetadata =
-                ModifyAuxiliaryData(_ =>
-                    Some(
-                      MD(
-                        MD.Deposit(
-                          headAddress = config.headMultisigAddress,
-                          depositUtxoIx = 0, // This builder produces the deposit utxo at index 0
-                          virtualOutputsHash = virtualOutputsHash
-                        )
-                      )
-                    )
-                )
+            val referenceMultisigRegime =
+                ReferenceOutput(config.multisigRegimeUtxo.asUtxo)
 
             val spendUtxosFunding = utxosFunding.toList.map(Spend(_, PubKeyWitness))
 
-            val depositValue = partialRefundTx.inputValueNeeded
+            val depositDatum: DepositUtxo.Datum =
+                DepositUtxo.Datum(DepositUtxo.Refund.Instructions.Onchain.apply(refundInstructions))
 
-            val depositDatum: DepositUtxo.Datum = DepositUtxo.Datum(refundInstructions)
-
-            val rawDepositProduced = TransactionOutput.Babbage(
-              address = config.headMultisigAddress,
-              value = depositValue,
-              datumOption = Some(DatumOption.Inline(toData(depositDatum))),
-              scriptRef = None
+            val virtualValue = Value.combine(
+              virtualOutputs.toList.map(vo => Value(vo.l2OutputValue))
             )
 
-            val sendDeposit = Send(rawDepositProduced)
+            val depositValue = virtualValue + Value(depositFee)
+
+            val sendDeposit = Send(
+              TransactionOutput.Babbage(
+                address = config.headMultisigAddress,
+                value = depositValue,
+                datumOption = Some(DatumOption.Inline(toData(depositDatum))),
+                scriptRef = None
+              )
+            )
 
             val sendChange = Send(
               TransactionOutput.Babbage(
@@ -96,20 +79,32 @@ private object DepositTxOps {
               )
             )
 
-            val validityEndQuantizedInstant =
-                partialRefundTx.refundInstructions.startTime.toEpochQuantizedInstant(
-                  config.slotConfig
+            val ttl = ValidityEndSlot(submissionDeadline.toSlot.slot)
+
+            val addRefundMetadata =
+                ModifyAuxiliaryData(_ =>
+                    Some(
+                      MD(
+                        MD.Deposit(
+                          headAddress = config.headMultisigAddress,
+                          depositUtxoIx = 0, // This builder produces the deposit utxo at index 0
+                          virtualOutputsHash = GenesisObligation.hash(virtualOutputs)
+                        )
+                      )
+                    )
                 )
-                    - config.txTiming.depositAbsorptionDuration
-                    - config.txTiming.depositMaturityDuration
-                    - config.txTiming.silenceDuration
-            val ttl = ValidityEndSlot(validityEndQuantizedInstant.toSlot.slot)
 
             for {
                 ctx <- TransactionBuilder
                     .build(
                       config.network,
-                      spendUtxosFunding ++ List(stepRefundMetadata, sendDeposit, sendChange, ttl)
+                      spendUtxosFunding ++ List(
+                        referenceMultisigRegime,
+                        addRefundMetadata,
+                        sendDeposit,
+                        sendChange,
+                        ttl
+                      )
                     )
                     .explainConst("building unbalanced deposit tx failed")
 
@@ -126,15 +121,17 @@ private object DepositTxOps {
                 tx = finalized.transaction
 
                 depositProduced = DepositUtxo(
-                  TransactionInput(tx.id, 0),
-                  config.headMultisigAddress,
-                  depositDatum,
-                  rawDepositProduced.value,
-                  virtualOutputs
+                  utxoId = TransactionInput(tx.id, 0),
+                  address = config.headMultisigAddress,
+                  datum = depositDatum,
+                  value = depositValue,
+                  virtualOutputs = virtualOutputs,
+                  depositFee = depositFee,
+                  submissionDeadline = submissionDeadline
                 )
             } yield DepositTx(
               depositProduced,
-              validityEndQuantizedInstant,
+              submissionDeadline,
               tx
             )
         }
@@ -145,6 +142,7 @@ private object DepositTxOps {
 
         enum Error extends Throwable {
             case MetadataParseError(e: MD.ParseError)
+            case AlienDeposit(headAddress: ShelleyAddress)
             case HashMismatchVirtualOutputs(
                 virtualOutputs: NonEmptyList[GenesisObligation],
                 hash: Hash32
@@ -153,6 +151,9 @@ private object DepositTxOps {
             case DepositUtxoError(e: DepositUtxo.DepositUtxoConversionError)
             case TxCborDeserializationFailed(e: Throwable)
             case ValidityEndParseError(e: Throwable)
+            case MultisigRegimeWitnessUtxoNotReferenced
+            case InvalidDatumContent(e: Throwable)
+            case InvalidDatumType
         }
     }
 
@@ -166,17 +167,15 @@ private object DepositTxOps {
         import Parse.*
         import Parse.Error.*
 
-        given ProtocolVersion = config.cardanoProtocolVersion
-
         def result: ParseErrorOr[DepositTx] = {
-            given OriginalCborByteArray = OriginalCborByteArray(txBytes)
 
-            val virtualOutputsList = virtualOutputs.toList
+            given OriginalCborByteArray = OriginalCborByteArray(txBytes)
+            given ProtocolVersion = config.cardanoProtocolVersion
 
             io.bullet.borer.Cbor.decode(txBytes).to[Transaction].valueTry match {
                 case Success(tx) =>
                     for {
-                        // Pull head address from metadata
+                        // Pull metadata
                         d <- MD
                             .parse(tx) match {
                             case Right(d: Metadata.Deposit) => Right(d)
@@ -186,14 +185,15 @@ private object DepositTxOps {
                         }
                         Metadata.Deposit(headAddress, depositUtxoIx, virtualOutputsHash) = d
 
-                        // Compare hash with virtual outputs
-                        virtualOutputsRaw: List[TransactionOutput.Babbage] =
-                            virtualOutputsList.map(_.toBabbage)
-
-                        virtualOutputsCbor: Array[Byte] = Cbor.encode(virtualOutputsRaw).toByteArray
-                        calculatedVirtualOutputsHash: Hash32 = Hash[Blake2b_256, Any](
-                          platform.blake2b_256(ByteString.unsafeFromArray(virtualOutputsCbor))
+                        // Check head address
+                        _ <- Either.cond(
+                          headAddress == config.headMultisigAddress,
+                          (),
+                          AlienDeposit(headAddress)
                         )
+
+                        // Compare hash with virtual outputs
+                        calculatedVirtualOutputsHash = GenesisObligation.hash(virtualOutputs)
                         _ <- Either.cond(
                           virtualOutputsHash == calculatedVirtualOutputsHash,
                           (),
@@ -205,6 +205,24 @@ private object DepositTxOps {
                             .lift(depositUtxoIx)
                             .toRight(MissingDepositOutputAtIndex(depositUtxoIx))
 
+                        virtualValue = Value.combine(
+                          virtualOutputs.toList.map(vo => Value(vo.l2OutputValue))
+                        )
+
+                        // TODO: check: contains ada only
+                        depositFee = (depositOutput.value.value - virtualValue).coin
+
+                        // Parse the deposit datum
+                        depositDatum <- depositOutput.value.datumOption match {
+                            case Some(DatumOption.Inline(d)) =>
+                                Try(fromData[DepositUtxo.Datum](d)) match {
+                                    case Failure(e)  => Left(InvalidDatumContent(e))
+                                    case Success(dd) => Right(dd)
+                                }
+                            case _ => Left(InvalidDatumType)
+                        }
+
+                        // Check that ttl was properly quantized
                         validityEnd <- Try {
                             val ttlSlot = tx.body.value.ttl.get
                             val ttlPosixMillis = config.slotConfig.slotToTime(ttlSlot)
@@ -215,15 +233,22 @@ private object DepositTxOps {
                             case Success(v)         => Right(v)
                         }
 
+                        // Check the multisig regime witness utxo was referenced
+                        _ <- Either.cond(
+                          tx.body.value.referenceInputs.toSet
+                              .contains(config.multisigRegimeUtxo.utxoId),
+                          (),
+                          MultisigRegimeWitnessUtxoNotReferenced
+                        )
+
                         depositUtxo <- DepositUtxo
                             .fromUtxo(
-                              Utxo(TransactionInput(tx.id, depositUtxoIx), depositOutput.value),
-                              config.headMultisigAddress,
-                              virtualOutputs,
-                              absorptionStart =
-                                  validityEnd + config.txTiming.depositMaturityDuration,
-                              absorptionEnd =
-                                  validityEnd + config.txTiming.depositMaturityDuration + config.txTiming.depositAbsorptionDuration
+                              utxo =
+                                  Utxo(TransactionInput(tx.id, depositUtxoIx), depositOutput.value),
+                              headNativeScriptAddress = config.headMultisigAddress,
+                              virtualOutputs = virtualOutputs,
+                              depositFee = depositFee,
+                              submissionDeadline = validityEnd
                             )
                             .left
                             .map(DepositUtxoError(_))
@@ -231,7 +256,6 @@ private object DepositTxOps {
                     } yield DepositTx(depositUtxo, validityEnd, tx)
                 case Failure(e) => Left(TxCborDeserializationFailed(e))
             }
-
         }
     }
 }

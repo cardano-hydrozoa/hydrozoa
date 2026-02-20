@@ -76,6 +76,15 @@ final case class TxTiming(
 
     def initializationEndTime(headStartTime: QuantizedInstant): QuantizedInstant =
         headStartTime + minSettlementDuration + inactivityMarginDuration
+
+    def refundValidityStart(submissionDeadline: QuantizedInstant): QuantizedInstant =
+        submissionDeadline + depositMaturityDuration + depositAbsorptionDuration + silenceDuration
+
+    def depositAbsorptionStartTime(submissionDeadline: QuantizedInstant): QuantizedInstant =
+        submissionDeadline + depositMaturityDuration
+
+    def depositAbsorptionEndTime(submissionDeadline: QuantizedInstant): QuantizedInstant =
+        depositAbsorptionStartTime(submissionDeadline) + depositAbsorptionDuration
 }
 
 // TODO: Update/fix comment

@@ -36,7 +36,6 @@ import org.scalacheck.util.Pretty
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scalus.cardano.ledger.{Block as _, BlockHeader as _, Coin, *}
-import scalus.cardano.onchain.plutus.prelude.Option as SOption
 import scalus.uplc.builtin.ByteString
 import test.*
 import test.Generators.Hydrozoa.*
@@ -238,7 +237,7 @@ object JointLedgerTestHelpers {
         /** Generate a random (sensible) deposit from the first peer and send it to the joint ledger
           */
         def deposit(
-            validityEnd: QuantizedInstant,
+            submissionDeadline: QuantizedInstant,
             eventId: LedgerEventId,
             blockStartTime: QuantizedInstant
         ): JLTest[(DepositRefundTxSeq, DepositEvent)] = {
@@ -276,19 +275,13 @@ object JointLedgerTestHelpers {
                 utxosFundingValue = Value.combine(utxosFunding.toList.map(_._2.value))
 
                 depositRefundSeqBuilder = DepositRefundTxSeq.Build(env.config)(
-                  refundInstructions = DepositUtxo.Refund.Instructions(
-                    LedgerToPlutusTranslation.getAddress(peer.address(env.config.network)),
-                    SOption.None,
-                    validityEnd
-                        + env.config.txTiming.depositMaturityDuration
-                        + env.config.txTiming.depositAbsorptionDuration
-                        + env.config.txTiming.silenceDuration
-                  ),
-                  depositFee = Coin.zero,
-                  refundValue = virtualOutputsValue,
                   virtualOutputs = virtualOutputs,
-                  changeAddress = peer.address(env.config.network),
+                  depositFee = Coin.zero,
                   utxosFunding = utxosFunding,
+                  changeAddress = peer.address(env.config.network),
+                  submissionDeadline = submissionDeadline,
+                  refundAddress = peer.address(env.config.network),
+                  refundDatum = None
                 )
 
                 depositRefundTxSeq <- lift(depositRefundSeqBuilder.result.liftTo[IO])
@@ -296,7 +289,7 @@ object JointLedgerTestHelpers {
                 // refund(i).validity_start = deposit(i).absorption_end + silence_period
                 // refund(i).validity_end = ∅
                 _ <- assertWith[TestR](
-                  msg = "refund start validity is incorrect",
+                  msg = "refund start validity is correct",
                   condition = {
                       depositRefundTxSeq.refundTx.tx.body.value.validityStartSlot.isDefined
                       && Slot(depositRefundTxSeq.refundTx.tx.body.value.validityStartSlot.get)
@@ -310,7 +303,7 @@ object JointLedgerTestHelpers {
                 )
 
                 _ <- assertWith[TestR](
-                  msg = "refund end validity is incorrect",
+                  msg = "refund end validity is correct",
                   condition = depositRefundTxSeq.refundTx.tx.body.value.ttl.isEmpty
                 )
 
@@ -349,7 +342,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
           // Generate a deposit and observe that it appears in the dapp ledger correctly
           firstDepositValidityEnd = startTime + 10.minutes
           seqAndReq <- deposit(
-            validityEnd = firstDepositValidityEnd,
+            submissionDeadline = firstDepositValidityEnd,
             eventId = LedgerEventId(0, 1),
             blockStartTime = startTime
           )
@@ -494,7 +487,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               // thus
               // depositValidity_end = blockStartTime - 1 slot - deposit_maturity_duration - deposit_absorption_duration
               seqAndReq <- deposit(
-                validityEnd = blockStartTime - env.config.txTiming.depositMaturityDuration
+                submissionDeadline = blockStartTime - env.config.txTiming.depositMaturityDuration
                     - env.config.txTiming.depositAbsorptionDuration
                     - FiniteDuration(
                       env.config.slotConfig.slotLength,
@@ -545,7 +538,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
     )
 
     val _ = property(
-      "Deposit absorption start timing test: absorption starts at block start time, deposit gets absorbed"
+      "absorption starts at block start time, deposit gets absorbed"
     ) = run(
       initializer = defaultInitializer,
       testM = for {
@@ -563,7 +556,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               //
               //    depositValidityEnd = blockStartTime - deposit_maturity_duration
               seqAndReq <- deposit(
-                validityEnd = blockStartTime - env.config.txTiming.depositMaturityDuration,
+                submissionDeadline = blockStartTime - env.config.txTiming.depositMaturityDuration,
                 LedgerEventId(0, 1),
                 blockStartTime = blockStartTime
               )
@@ -605,7 +598,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
     )
 
     val _ = property(
-      "Deposit absorption start timing test: absorption starts 1 second after block start time"
+      "absorption starts 1 second after block start time"
     ) = run(
       initializer = defaultInitializer,
       testM = for {

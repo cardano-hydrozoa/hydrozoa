@@ -18,18 +18,17 @@ import hydrozoa.lib.logging.Logging
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.dapp.token.CIP67
-import hydrozoa.multisig.ledger.dapp.tx.{DepositTx, RefundTx}
-import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
+import hydrozoa.multisig.ledger.dapp.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.event.LedgerEvent
 import hydrozoa.multisig.ledger.event.LedgerEvent.L2TxEvent
 import hydrozoa.multisig.ledger.virtual.tx.GenesisObligation
 import org.scalacheck.Gen
 import org.scalacheck.commands.{AnyCommand, CommandGen, noOp}
+import scala.concurrent.duration.DurationInt
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{AuxiliaryData, Coin, LedgerToPlutusTranslation, Metadatum, SlotConfig, TransactionInput, TransactionOutput, Utxo, Utxos, Value, Word64}
-import scalus.cardano.onchain.plutus.prelude.Option as SOption
+import scalus.cardano.ledger.{AuxiliaryData, Coin, Metadatum, SlotConfig, TransactionInput, TransactionOutput, Utxo, Utxos, Value, Word64}
 import scalus.cardano.txbuilder.TransactionBuilder
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Fee, ModifyAuxiliaryData, Send, Spend}
 import scalus.uplc.builtin.Builtins.blake2b_224
@@ -338,45 +337,31 @@ object Generators:
             depositAmount = Value.combine(virtualOutputs.toList.map(vo => Value(vo.l2OutputValue)))
             _ = logger1.trace(s"depositAmount: $depositAmount")
 
-            partialRefundTx = RefundTx.PartialResult.PostDated(
-              ctx = TransactionBuilder.Context.empty(headConfig.network),
-              // TODO: + extra?
-              inputValueNeeded = depositAmount + extra,
-              refundInstructions = DepositUtxo.Refund.Instructions(
-                address = LedgerToPlutusTranslation.getAddress(peerAddress),
-                datum = SOption.None,
-                startTime = state.currentTime.instant
-              ),
-              slotConfig = headConfig.slotConfig
-            )
-
-            depositBuilder = DepositTx.Build(headConfig)(
-              partialRefundTx = partialRefundTx,
-              utxosFunding = NonEmptyList.fromListUnsafe(fundingUtxos.asUtxoList),
-              virtualOutputs = virtualOutputs,
-              donationToTreasury = Coin.zero,
-              changeAddress = peerAddress
-            )
-
-            depositTx = depositBuilder.result.fold(
-              err => throw RuntimeException(err.toString()),
-              identity
-            )
-            _ = logger1.trace(s"deposit tx: ${HexUtil.encodeHexString(depositTx.tx.toCbor)}")
-
-            refundTx = partialRefundTx
-                .complete(
-                  depositSpent = depositTx.depositProduced,
-                  config = headConfig
+            depositRefundSeq = DepositRefundTxSeq
+                .Build(headConfig)(
+                  virtualOutputs = virtualOutputs,
+                  depositFee = Coin.zero,
+                  utxosFunding = NonEmptyList.fromListUnsafe(fundingUtxos.asUtxoList),
+                  changeAddress = peerAddress,
+                  submissionDeadline = state.currentTime.instant + 1.minute,
+                  refundAddress = peerAddress,
+                  refundDatum = None
                 )
-                .fold(err => throw RuntimeException(err.toString()), identity)
-            _ = logger1.trace(s"refund tx: ${HexUtil.encodeHexString(refundTx.tx.toCbor)}")
+                .result
+                .fold(err => throw RuntimeException(err.toString), identity)
+
+            _ = logger1.trace(
+              s"deposit tx: ${HexUtil.encodeHexString(depositRefundSeq.depositTx.tx.toCbor)}"
+            )
+            _ = logger1.trace(
+              s"refund tx: ${HexUtil.encodeHexString(depositRefundSeq.refundTx.tx.toCbor)}"
+            )
 
         } yield RegisterDepositCommand(
           registerDeposit = LedgerEvent.DepositEvent(
             eventId = state.nextLedgerEventId,
-            depositTxBytes = depositTx.tx.toCbor,
-            refundTxBytes = refundTx.tx.toCbor,
+            depositTxBytes = depositRefundSeq.depositTx.tx.toCbor,
+            refundTxBytes = depositRefundSeq.refundTx.tx.toCbor,
             virtualOutputsBytes = GenesisObligation.serialize(virtualOutputs),
             depositFee = Coin.zero
           )
