@@ -16,10 +16,6 @@ import scalus.cardano.onchain.plutus.v3.{Address as PlutusAddress, PosixTime}
 import scalus.uplc.builtin.Data.{FromData, ToData, fromData, toData}
 import scalus.uplc.builtin.{Data, FromData, ToData}
 
-/** TODO: ? NOTE: absorptionEnd must be absorptionStart + absorptionDuration for some [[TxTiming]]
-  * and [[SlotConfig]] Perhaps we want to make this more opaque and carry around those configuration
-  * values?
-  */
 final case class DepositUtxo(
     utxoId: TransactionInput,
     address: ShelleyAddress,
@@ -29,9 +25,6 @@ final case class DepositUtxo(
     depositFee: Coin,
     // This field comes from DepositTx, but it's convenient to duplicate it here
     submissionDeadline: QuantizedInstant,
-    // TODO: remove
-    // This is needed to avoid plutus -> ledger conversion
-    refundInstructions: DepositUtxo.Refund.Instructions
 ) {
     def toUtxo: Utxo =
         Utxo(
@@ -170,8 +163,7 @@ object DepositUtxo {
         headNativeScriptAddress: ShelleyAddress,
         virtualOutputs: NonEmptyList[GenesisObligation],
         depositFee: Coin,
-        submissionDeadline: QuantizedInstant,
-        refundInstructions: DepositUtxo.Refund.Instructions
+        submissionDeadline: QuantizedInstant
     ): Either[DepositUtxoConversionError, DepositUtxo] =
         for {
             babbage <- utxo._2 match {
@@ -203,7 +195,6 @@ object DepositUtxo {
           value = babbage.value,
           virtualOutputs = virtualOutputs,
           depositFee = depositFee,
-          submissionDeadline = submissionDeadline,
-          refundInstructions = refundInstructions
+          submissionDeadline = submissionDeadline
         )
 }

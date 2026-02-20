@@ -38,8 +38,8 @@ private object DepositTxOps {
 
     final case class Build(config: Config)(
         utxosFunding: NonEmptyList[Utxo],
+        // TODO: instead passing virtual outputs we can pass the total value and the hash
         virtualOutputs: NonEmptyList[GenesisObligation],
-        depositValue: Value,
         depositFee: Coin,
         changeAddress: ShelleyAddress,
         submissionDeadline: QuantizedInstant,
@@ -54,6 +54,12 @@ private object DepositTxOps {
 
             val depositDatum: DepositUtxo.Datum =
                 DepositUtxo.Datum(DepositUtxo.Refund.Instructions.Onchain.apply(refundInstructions))
+
+            val virtualValue = Value.combine(
+              virtualOutputs.toList.map(vo => Value(vo.l2OutputValue))
+            )
+
+            val depositValue = virtualValue + Value(depositFee)
 
             val sendDeposit = Send(
               TransactionOutput.Babbage(
@@ -121,8 +127,7 @@ private object DepositTxOps {
                   value = depositValue,
                   virtualOutputs = virtualOutputs,
                   depositFee = depositFee,
-                  submissionDeadline = submissionDeadline,
-                  refundInstructions = refundInstructions
+                  submissionDeadline = submissionDeadline
                 )
             } yield DepositTx(
               depositProduced,
@@ -204,7 +209,7 @@ private object DepositTxOps {
                           virtualOutputs.toList.map(vo => Value(vo.l2OutputValue))
                         )
 
-                        // TODO: check contains ada only
+                        // TODO: check: contains ada only
                         depositFee = (depositOutput.value.value - virtualValue).coin
 
                         // Parse the deposit datum
@@ -243,12 +248,7 @@ private object DepositTxOps {
                               headNativeScriptAddress = config.headMultisigAddress,
                               virtualOutputs = virtualOutputs,
                               depositFee = depositFee,
-                              submissionDeadline = validityEnd,
-                              refundInstructions = DepositUtxo.Refund.Instructions(
-                                depositDatum.refundInstructions,
-                                config.network,
-                                config.slotConfig
-                              )
+                              submissionDeadline = validityEnd
                             )
                             .left
                             .map(DepositUtxoError(_))

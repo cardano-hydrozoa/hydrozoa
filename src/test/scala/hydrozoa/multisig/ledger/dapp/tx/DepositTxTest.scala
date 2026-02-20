@@ -74,7 +74,6 @@ def genDepositBuilder(testNodeConfig: TestNodeConfig): Gen[DepositTx.Build] = {
     } yield DepositTx.Build(config)(
       utxosFunding = fundingUtxos,
       virtualOutputs = virtualOutputs,
-      depositValue = depositValue,
       depositFee = depositFee,
       changeAddress = depositor.address(config.network),
       submissionDeadline = submissionDeadline,

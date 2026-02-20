@@ -125,7 +125,7 @@ object InitializationParametersGenTopDown {
         generateCardanoNetwork: Gen[CardanoNetwork] = generateStandardCardanoNetwork,
         generateHeadStartTime: HeadStartTimeGen = currentTimeHeadStartTime,
         generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
-        generateGenesisUtxosL1: GenesisUtxosGen = generateRandomPeersUtxosL1,
+        generateGenesisUtxosL1: GenesisUtxosGen = testPeersGenesisUtxosL1(testPeers),
         equityRange: (Coin, Coin) = Coin(5_000_000) -> Coin(500_000_000)
     ): Gen[InitializationParameters] =
         for {
@@ -246,7 +246,7 @@ object InitializationParametersGenTopDown {
     }
 }
 
-object SanityCheck extends Properties("Initialization Parameters Sanity Check") {
+object SanityCheck extends Properties("Initialization Parameters Top Down Sanity Check") {
     val _ = property("sanity check") = Prop.forAll(generateTestPeers())(testPeers =>
         Prop.forAll(
           InitializationParametersGenTopDown.generateInitializationParameters(testPeers)()
@@ -452,7 +452,7 @@ object InitializationParametersGenBottomUp {
         )
 }
 
-object SanityCheckBottomUp extends Properties("Initialization Parameters Sanity Check") {
+object SanityCheckBottomUp extends Properties("Initialization Parameters Bottom Up Sanity Check") {
     val _ = property("sanity check") = Prop.forAll(generateTestPeers())(testPeers =>
         Prop.forAll(generateInitializationParameters(testPeers)())(_ => true)
     )

@@ -150,7 +150,6 @@ private object DepositRefundTxSeqOps {
                     .Build(config)(
                       utxosFunding,
                       virtualOutputs,
-                      expectedDepositValue,
                       depositFee,
                       changeAddress,
                       submissionDeadline,
@@ -164,7 +163,7 @@ private object DepositRefundTxSeqOps {
                     })
 
                 refundTx <- RefundTx.Build
-                    .PostDated(config)(depositTx.depositProduced)
+                    .PostDated(config)(depositTx.depositProduced, refundInstructions)
                     .result
                     .left
                     .map(f => {
@@ -318,12 +317,16 @@ private object DepositRefundTxSeqOps {
                 depositUtxo = depositTx.depositProduced
                 depositValue = depositUtxo.value
 
-                refundInstructions = depositUtxo.datum.refundInstructions
+                refundInstructions = DepositUtxo.Refund.Instructions(
+                  depositUtxo.datum.refundInstructions,
+                  config.network,
+                  config.slotConfig
+                )
 
                 depositFee = depositValue - virtualValue
 
                 expectedRefundTx <- RefundTx.Build
-                    .PostDated(config)(depositTx.depositProduced)
+                    .PostDated(config)(depositTx.depositProduced, refundInstructions)
                     .result
                     .left
                     .map(Parse.Error.ExpectedRefundBuildError(_))

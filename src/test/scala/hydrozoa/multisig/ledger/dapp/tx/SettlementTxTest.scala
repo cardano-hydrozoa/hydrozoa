@@ -106,12 +106,7 @@ def genDepositUtxo(
       value = depositAmount,
       virtualOutputs = vos,
       depositFee = Coin.zero,
-      submissionDeadline = submissionDeadline,
-      refundInstructions = DepositUtxo.Refund.Instructions(
-        address = headAddress_,
-        datum = None,
-        validityStart = config.txTiming.refundValidityStart(submissionDeadline)
-      )
+      submissionDeadline = submissionDeadline
     )
 
 /** Generate a "standalone" settlement tx. */

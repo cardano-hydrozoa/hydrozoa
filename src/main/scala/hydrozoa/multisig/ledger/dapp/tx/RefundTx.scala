@@ -43,7 +43,8 @@ private object RefundTxOps {
     object Build {
 
         final case class PostDated(override val config: Config)(
-            override val depositUtxo: DepositUtxo
+            override val depositUtxo: DepositUtxo,
+            override val refundInstructions: DepositUtxo.Refund.Instructions
         ) extends Build[RefundTx.PostDated] {
 
             override val stepRefundMetadata =
@@ -52,7 +53,6 @@ private object RefundTxOps {
                 )
 
             override def result: Either[(SomeBuildError, String), RefundTx.PostDated] =
-                import depositUtxo.refundInstructions
 
                 val stepSpendDeposit =
                     Spend(depositUtxo.toUtxo, config.headMultisigScript.witnessValue)
@@ -99,6 +99,7 @@ private object RefundTxOps {
     trait Build[T <: RefundTx] {
         def config: Config
         def depositUtxo: DepositUtxo
+        def refundInstructions: DepositUtxo.Refund.Instructions
         //
         def stepRefundMetadata: ModifyAuxiliaryData
         def result: Either[(SomeBuildError, String), T]
