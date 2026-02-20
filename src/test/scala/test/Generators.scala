@@ -301,7 +301,8 @@ object Generators {
                     utxoId = txId,
                     address = scriptAddress,
                     datum = datum,
-                    value = Value(Coin(0L)) + treasuryToken
+                    value = Value(Coin(0L)) + treasuryToken,
+                    equity = ???
                   ).asUtxo._2,
                   config.cardanoProtocolParams
                 ).value.coin
@@ -313,7 +314,8 @@ object Generators {
               utxoId = txId,
               datum = datum,
               address = scriptAddress,
-              value = Value(coin.getOrElse(treasuryAda)) + treasuryToken
+              value = Value(coin.getOrElse(treasuryAda)) + treasuryToken,
+              equity = ???
             )
 
         /** Generate a treasury utxo according to a builder config */

@@ -3,11 +3,12 @@ package hydrozoa.multisig.ledger.dapp.utxo
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.{KzgCommitment, kzgCommitment}
+
 import scala.util.Try
 import scalus.*
 import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.{AssetName, TransactionInput, TransactionOutput, Utxo, Utxos, Value}
+import scalus.cardano.ledger.{AssetName, Coin, TransactionInput, TransactionOutput, Utxo, Utxos, Value}
 import scalus.uplc.builtin.Data.{FromData, ToData, fromData, toData}
 import scalus.uplc.builtin.{ByteString, Data, FromData, ToData}
 
@@ -17,7 +18,8 @@ final case class MultisigTreasuryUtxo(
     utxoId: TransactionInput,
     address: ShelleyAddress,
     datum: MultisigTreasuryUtxo.Datum,
-    value: Value
+    value: Value,
+    equity : Coin
 ) {
     def asUtxo: Utxo =
         Utxo(
@@ -69,7 +71,7 @@ object MultisigTreasuryUtxo {
         )
 
     // TODO: Make into Either?
-    def fromUtxo(utxo: Utxo): Option[MultisigTreasuryUtxo] = {
+    def fromUtxo(utxo: Utxo, equity : Coin): Option[MultisigTreasuryUtxo] = {
         val t = for {
             // Utxo has to be at a shelley address
             shelleyAddress <- Try(utxo.output.address.asInstanceOf[ShelleyAddress])
@@ -87,7 +89,8 @@ object MultisigTreasuryUtxo {
           utxoId = utxo.input,
           address = shelleyAddress,
           datum = datum,
-          value = utxo.output.value
+          value = utxo.output.value,
+          equity = equity
         )
         t.toOption
     }

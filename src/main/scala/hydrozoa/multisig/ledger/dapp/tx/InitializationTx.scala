@@ -208,7 +208,8 @@ private object InitializationTxOps {
                   utxoId = TransactionInput(finalized.transaction.id, treasuryIndex),
                   address = config.headMultisigAddress,
                   datum = Steps.Sends.Treasury.treasuryDatum,
-                  value = treasuryValue
+                  value = treasuryValue,
+                  equity = config.initialEquityContributed
                 )
 
                 val multisigRegimeProduced = MultisigRegimeUtxo(
@@ -482,7 +483,8 @@ private object InitializationTxOps {
               utxoId = TransactionInput(tx.id, imd.treasuryOutputIndex),
               address = expectedHeadAddress,
               datum = expectedTreasuryDatum,
-              value = actualTreasuryOutput.value
+              value = actualTreasuryOutput.value,
+              equity = ???
             )
 
             multisigRegimeWitness = Utxo(
