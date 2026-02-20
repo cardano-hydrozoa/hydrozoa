@@ -116,13 +116,6 @@ private object SettlementTxOps {
         ) extends WithPayouts
     }
 
-    type ResultFor[T <: SettlementTx] <: Result[?] = T match {
-        case SettlementTx.NoPayouts             => Result.NoPayouts
-        case SettlementTx.WithPayouts           => Result.WithPayouts
-        case SettlementTx.WithOnlyDirectPayouts => Result.WithOnlyDirectPayouts
-        case SettlementTx.WithRollouts          => Result.WithRollouts
-    }
-
     enum Error:
         case TreasuryIncorrectAddress
         case TooManyDeposits
@@ -144,7 +137,7 @@ private object SettlementTxOps {
             ) {
             override def complete(
                 ctx: TransactionBuilder.Context
-            ): TxBuilderResult[ResultFor[SettlementTx.NoPayouts]] =
+            ): TxBuilderResult[Result[SettlementTx.NoPayouts]] =
                 Right(SettlementTx.Result.NoPayouts(CompleteNoPayouts(ctx)))
         }
 
@@ -160,7 +153,7 @@ private object SettlementTxOps {
             ) {
             override def complete(
                 ctx: TransactionBuilder.Context
-            ): TxBuilderResult[ResultFor[SettlementTx.WithPayouts]] =
+            ): TxBuilderResult[Result[SettlementTx.WithPayouts]] =
                 CompleteWithPayouts(ctx, rolloutTxSeqPartial)
         }
     }
@@ -177,9 +170,9 @@ private object SettlementTxOps {
 
         def config: Config
 
-        def complete(ctx: TransactionBuilder.Context): TxBuilderResult[ResultFor[T]]
+        def complete(ctx: TransactionBuilder.Context): TxBuilderResult[Result[T]]
 
-        final def result: TxBuilderResult[ResultFor[T]] = for {
+        final def result: TxBuilderResult[Result[T]] = for {
             pessimistic <- BasePessimistic()
             finished <- TxBuilder
                 .finalizeContext(pessimistic)
