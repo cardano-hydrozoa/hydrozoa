@@ -125,6 +125,46 @@ object CardanoLiaison:
             )
         }
 
+        extension (state: State)
+            def prettyDump: String = {
+                val targetStateStr = state.targetState match {
+                    case TargetState.Active(treasuryUtxoId) =>
+                        s"Active(treasuryUtxoId=${treasuryUtxoId})"
+                    case TargetState.Finalized(finalizationTxHash) =>
+                        s"Finalized(txHash=${finalizationTxHash})"
+                }
+
+                val effectInputsStr = state.effectInputs
+                    .map { case (txIn, effectId) =>
+                        s"  ${txIn} -> ${effectId}"
+                    }
+                    .mkString("\n")
+
+                val happyPathEffectsStr = state.happyPathEffects
+                    .map { case (effectId, effect) =>
+                        val txHash = effect.tx.id
+                        s"  ${effectId} -> txHash=${txHash}"
+                    }
+                    .mkString("\n")
+
+                val fallbackEffectsStr = state.fallbackEffects
+                    .map { case (version, fallbackTx) =>
+                        val txHash = fallbackTx.tx.id
+                        s"  ${version} -> txHash=${txHash}"
+                    }
+                    .mkString("\n")
+
+                s"""State(
+                   |  targetState: ${targetStateStr}
+                   |  effectInputs (${state.effectInputs.size} entries):
+                   |${effectInputsStr}
+                   |  happyPathEffects (${state.happyPathEffects.size} entries):
+                   |${happyPathEffectsStr}
+                   |  fallbackEffects (${state.fallbackEffects.size} entries):
+                   |${fallbackEffectsStr}
+                   |)""".stripMargin
+            }
+
     // ===================================
     // Request + ActorRef + apply
     // ===================================
@@ -180,7 +220,8 @@ trait CardanoLiaison(
 ) extends Actor[IO, CardanoLiaison.Request]:
     import CardanoLiaison.*
 
-    private val logger = Logging.loggerIO("CardanoLiaison")
+    private val logger = Logging.logger("CardanoLiaison")
+    private val loggerIO = Logging.loggerIO("CardanoLiaison")
 
     private val connections = Ref.unsafe[IO, Option[CardanoLiaison.Connections]](None)
 
@@ -220,15 +261,11 @@ trait CardanoLiaison(
 
     override def receive: Receive[IO, Request] = {
         case block: BlockConfirmed.Major =>
-            logger.info("Handling major block effects...") >> handleMajorBlockL1Effects(
-              block
-            ) >> runEffects
+            handleMajorBlockL1Effects(block) >> runEffects
         case block: BlockConfirmed.Final =>
-            logger.info("Handling final block effects...") >> handleFinalBlockL1Effects(
-              block
-            ) >> runEffects
+            handleFinalBlockL1Effects(block) >> runEffects
         case CardanoLiaison.Timeout =>
-            logger.info("Timeout received, run effects...") >>
+            loggerIO.info("Timeout received, run effects...") >>
                 runEffects
     }
 
@@ -240,12 +277,45 @@ trait CardanoLiaison(
       *   - saves the effects in the internal actor's state
       */
     protected[consensus] def handleMajorBlockL1Effects(block: BlockConfirmed.Major): IO[Unit] =
+
+        // TODO: George: this is an important invariant we may went to enforce
+        require(
+          block.blockVersion.major == block.settlementTx.majorVersionProduced,
+          "Settlement tx doesn't match block"
+        )
+
         for {
-            _ <- logger.debug(s"fallback tx validity start: ${block.fallbackTx.validityStart}")
+
+            _ <- loggerIO.info(s"handleMajorBlockL1Effects for block ${block.blockVersion}")
+
+            _ <- loggerIO.trace(s"settlementTx hash: ${block.settlementTx.tx.id}")
+            _ <- loggerIO.trace(
+              "settlementTx treasuryProduced: " +
+                  s"${block.settlementTx.treasuryProduced.utxoId}"
+            )
+            _ <- loggerIO.trace(
+              "settlementTx majorVersionProduced: " +
+                  s"${block.settlementTx.majorVersionProduced}"
+            )
+            _ <- loggerIO.trace(s"fallback tx validity start: ${block.fallbackTx.validityStart}")
+
             _ <- stateRef.update(s => {
+                logger.trace(s"state before update: ${s.prettyDump}")
+
                 val (blockEffectInputs, blockEffects) =
                     mkHappyPathEffectInputsAndEffects(block.settlementTx, block.rolloutTxs)
-                State(
+
+                logger
+                    .trace(
+                      s"  blockEffectInputs: ${blockEffectInputs.map { case (txIn, effectId) => s"${txIn} -> ${effectId}" }.mkString(", ")}"
+                    )
+
+                logger
+                    .trace(
+                      s"  blockEffects: ${blockEffects.map { case (effectId, effect) => s"${effectId} -> ${effect.tx.id}" }.mkString(", ")}"
+                    )
+
+                val newState = State(
                   targetState = TargetState.Active(
                     block.settlementTx.treasuryProduced.utxoId
                   ),
@@ -254,6 +324,10 @@ trait CardanoLiaison(
                   fallbackEffects =
                       s.fallbackEffects + (block.blockVersion.major -> block.fallbackTx)
                 )
+
+                logger.trace(s"state after update: ${newState.prettyDump}")
+
+                newState
             })
         } yield ()
 
@@ -262,18 +336,40 @@ trait CardanoLiaison(
       */
     protected[consensus] def handleFinalBlockL1Effects(block: BlockConfirmed.Final): IO[Unit] =
         for {
-            _ <- logger.info(s"handleFinalBlockL1Effects for block ${block.blockVersion}")
+            _ <- loggerIO.info(s"handleFinalBlockL1Effects for block ${block.blockVersion}")
+
+            _ <- loggerIO.trace(s"finalizationTx hash: ${block.finalizationTx.tx.id}")
+            _ <- loggerIO.trace(s"rolloutTxs count: ${block.rolloutTxs.size}")
+
             _ <- stateRef.update(s => {
+
+                logger.trace(s"  state before update: ${s.prettyDump}")
+
                 val (blockEffectInputs, blockEffects) =
                     mkHappyPathEffectInputsAndEffects(
                       block.finalizationTx,
                       block.rolloutTxs
                     )
-                s.copy(
+
+                logger
+                    .trace(
+                      s"  blockEffectInputs: ${blockEffectInputs.map { case (txIn, effectId) => s"${txIn} -> ${effectId}" }.mkString(", ")}"
+                    )
+
+                logger
+                    .trace(
+                      s"  blockEffects: ${blockEffects.map { case (effectId, effect) => s"${effectId} -> ${effect.tx.id}" }.mkString(", ")}"
+                    )
+
+                val newState = s.copy(
                   targetState = TargetState.Finalized(block.finalizationTx.tx.id),
                   effectInputs = s.effectInputs ++ blockEffectInputs,
                   happyPathEffects = s.happyPathEffects ++ blockEffects
                 )
+
+                logger.trace(s"  state after update: ${newState.prettyDump}")
+
+                newState
             })
         } yield ()
 
@@ -322,7 +418,7 @@ trait CardanoLiaison(
                 // This may happen if L1 API is temporarily unavailable or misconfigured
                 // TODO: we need to address time when we work on autonomous mode
                 //   but for now we can just ignore it and skip till the next event/timeout
-                logger.error(s"error when getting Cardano L1 state: $err")
+                loggerIO.error(s"error when getting Cardano L1 state: $err")
 
             case Right(l1State) =>
                 for {
@@ -338,7 +434,9 @@ trait CardanoLiaison(
 
                     currentTime <- IO.realTime.map(_.toEpochQuantizedInstant(config.slotConfig))
 
-                    _ <- logger.debug(s"current time is $currentTime")
+                    _ <- loggerIO.trace(s"current time is $currentTime")
+                    _ <- loggerIO.trace(s"utxoIds are $utxoIds")
+                    _ <- loggerIO.trace(s"state is ${state.prettyDump}")
 
                     // (i.e. those that are directly caused by effect inputs in L1 response).
                     dueActions: Seq[DirectAction] = mkDirectActions(
@@ -351,6 +449,8 @@ trait CardanoLiaison(
                         if dueActions.nonEmpty
                         then IO.pure(dueActions)
                         else {
+
+                            logger.trace("due actions is empty")
 
                             // Empty direct actions indicate another actions should be considered:
                             //  - the last fallback tx might have become valid
@@ -385,30 +485,44 @@ trait CardanoLiaison(
                                     // TODO: check the rule-based treasury, and if it exists, don't try to initialize the head.
                                     state.targetState match {
                                         case TargetState.Active(targetTreasuryUtxoId) =>
-                                            IO.pure(
-                                              if utxoIds.contains(targetTreasuryUtxoId)
-                                              then List.empty // everything is up-to-date on L1
-                                              else initAction
-                                            )
+                                            if utxoIds.contains(targetTreasuryUtxoId)
+                                            then {
+                                                // everything is up-to-date on L1
+                                                loggerIO.trace(
+                                                  s"target ${targetTreasuryUtxoId} found, do nothing"
+                                                ) >>
+                                                    IO.pure(List.empty)
+                                            } else
+                                                loggerIO.trace(
+                                                  s"no target ${targetTreasuryUtxoId} found, submitting initAction: ${initAction.headOption.map(_.txs.map(_.id))}"
+                                                ) >>
+                                                    IO.pure(initAction)
+
                                         case TargetState.Finalized(finalizationTxHash) =>
                                             for {
                                                 txResp <- cardanoBackend.isTxKnown(
                                                   finalizationTxHash
                                                 )
-                                                _ <- logger.debug(
+                                                _ <- loggerIO.debug(
                                                   s"finalizationTx: hash: $finalizationTxHash txResp: $txResp"
                                                 )
                                                 mbInitAction <- txResp match {
                                                     case Left(err) =>
                                                         for {
-                                                            _ <- logger.error(
+                                                            _ <- loggerIO.error(
                                                               s"error when getting finalization tx info: ${err}"
                                                             )
                                                         } yield Seq.empty
                                                     case Right(isKnown) =>
-                                                        IO.pure(
-                                                          if isKnown then Seq.empty else initAction
-                                                        )
+                                                        if isKnown
+                                                        then
+                                                            loggerIO.trace(
+                                                              "finalization tx is known, do nothing"
+                                                            ) >> IO.pure(Seq.empty)
+                                                        else
+                                                            loggerIO.trace(
+                                                              s"finalization tx is NOT known, submitting initAction: ${initAction.headOption.map(_.txs.map(_.id))}"
+                                                            ) >> IO.pure(initAction)
                                                 }
                                             } yield mbInitAction
                                     }
@@ -418,7 +532,7 @@ trait CardanoLiaison(
 
                     // 4. Submit flattened txs for actions it there are some
                     _ <- IO.whenA(actionsToSubmit.nonEmpty)(
-                      logger.info(
+                      loggerIO.info(
                         "Liaison's actions:" + actionsToSubmit.map(a => s"\n\t- ${a.msg}").mkString
                       )
                     )
@@ -427,7 +541,7 @@ trait CardanoLiaison(
                         if actionsToSubmit.nonEmpty then
                             IO.traverse(actionsToSubmit.flatMap(actionTxs).toList)(tx =>
                                 for {
-                                    _ <- logger.trace(
+                                    _ <- loggerIO.trace(
                                       s"Submitting tx hash: ${tx.id} cbor: ${HexUtil.encodeHexString(tx.toCbor)}"
                                     )
                                     ret <- cardanoBackend.submitTx(tx)
@@ -438,7 +552,7 @@ trait CardanoLiaison(
                     // Submission errors are ignored, but dumped here
                     submissionErrors = submitRet.filter(_.isLeft)
                     _ <- IO.whenA(submissionErrors.nonEmpty)(
-                      logger.warn(
+                      loggerIO.warn(
                         "Submission errors:" + submissionErrors
                             .map(a => s"\n\t- ${a.left}")
                             .mkString

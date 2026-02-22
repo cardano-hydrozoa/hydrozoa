@@ -2,9 +2,10 @@ package hydrozoa.integration.stage1
 
 import cats.data.NonEmptyList
 import com.bloxbean.cardano.client.util.HexUtil
-import hydrozoa.config.head.initialization.CappedValueGen.generateCappedValue
+import hydrozoa.config.head.initialization.CappedValueGen.{ensureMinAdaLenient, generateCappedValue}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.integration.stage1.BlockCycle.HeadFinalized
+import hydrozoa.integration.stage1.Commands.*
 import hydrozoa.integration.stage1.Generators.L2txGen
 import hydrozoa.integration.stage1.Generators.TxMutator.Identity
 import hydrozoa.integration.stage1.Generators.TxStrategy.{Dust, RandomWithdrawals, Regular}
@@ -15,7 +16,6 @@ import hydrozoa.lib.cardano.scalus.ledger.{asUtxoList, withZeroFees}
 import hydrozoa.lib.cardano.scalus.txbuilder.DiffHandler.prebalancedLovelaceDiffHandler
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.logging.Logging
-import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.txseq.DepositRefundTxSeq
@@ -112,7 +112,7 @@ object Generators:
         )
 
     // ===================================
-    //
+    // L2 tx command
     // ===================================
 
     enum TxStrategy:
@@ -271,7 +271,7 @@ object Generators:
         )
 
     // ===================================
-    //
+    // Complete block
     // ===================================
 
     def genCompleteBlockRegular(blockNumber: BlockNumber): Gen[CompleteBlockCommand] =
@@ -287,7 +287,7 @@ object Generators:
         )
 
     // ===================================
-    // RegisterDepositCommand
+    // Register deposit command
     // ===================================
 
     def genRegisterDepositCommand(state: ModelState): Gen[RegisterDepositCommand] = {
@@ -297,25 +297,23 @@ object Generators:
         val generateCappedValueC = generateCappedValue(headConfig.cardanoNetwork)
 
         for {
-            fundingUtxos <- Gen.atLeastOne(state.peerL1Utxos).map(_.toMap)
+            fundingUtxos <- Gen.atLeastOne(state.utxoL1).map(_.toMap)
             totalValue = Value.combine(fundingUtxos.map(_._2.value))
 
             _ = logger1.trace(s"fundingUtxos: $fundingUtxos")
             _ = logger1.trace(s"totalValue: $totalValue")
 
-            change <- generateCappedValueC(totalValue, None, None)
+            // Change should such that it leaves enough room to continue
+            minAdaLenient = ensureMinAdaLenient(headConfig.cardanoNetwork)(Value.zero)
+            feeContingency = Value.ada(1)
+            // Reserving 1 ada for balancing
+            reserved = minAdaLenient + feeContingency
+            change <- generateCappedValueC(totalValue - reserved, None, None)
 
             _ = logger1.trace(s"change: $change")
 
-            extra = Value.lovelace(
-              headConfig.babbageUtxoMinLovelace(PositiveInt.unsafeApply(200)).value
-            )
-                + Value.lovelace(5_000_000)
-
-            _ = logger1.trace(s"extra: $extra")
-
             outputValues <- genOutputValues(
-              totalValue - (change + extra),
+              totalValue - change,
               TxStrategy.Regular,
               generateCappedValueC
             )
@@ -326,6 +324,7 @@ object Generators:
               outputValues
                   .map(v => Gen.const(peerAddress).map(a => Babbage(a, v)))
             )
+
             virtualOutputs = NonEmptyList.fromListUnsafe(
               outputs.map(
                 GenesisObligation
@@ -350,11 +349,10 @@ object Generators:
                 .result
                 .fold(err => throw RuntimeException(err.toString), identity)
 
+            depositTxSigned = state.ownTestPeer.signTx(depositRefundSeq.depositTx.tx)
+
             _ = logger1.trace(
-              s"deposit tx: ${HexUtil.encodeHexString(depositRefundSeq.depositTx.tx.toCbor)}"
-            )
-            _ = logger1.trace(
-              s"refund tx: ${HexUtil.encodeHexString(depositRefundSeq.refundTx.tx.toCbor)}"
+              s"deposit tx signed: ${HexUtil.encodeHexString(depositTxSigned.toCbor)}"
             )
 
         } yield RegisterDepositCommand(
@@ -364,7 +362,9 @@ object Generators:
             refundTxBytes = depositRefundSeq.refundTx.tx.toCbor,
             virtualOutputsBytes = GenesisObligation.serialize(virtualOutputs),
             depositFee = Coin.zero
-          )
+          ),
+          depositRefundTxSeq = depositRefundSeq,
+          depositTxBytesSigned = depositTxSigned
         )
     }
 
@@ -427,7 +427,7 @@ case class SimpleCommandGen(generateL2Tx: L2txGen) extends CommandGen[ModelState
                             .genStartBlock(blockNumber, state.currentTime.instant)
                             .map(AnyCommand.apply)
 
-                    case InProgress(blockNumber, _, _) =>
+                    case InProgress(blockNumber, _, _, _) =>
                         Gen.frequency(
                           1 -> Generators
                               .genCompleteBlock(blockNumber)
@@ -472,7 +472,7 @@ case class MakeDustCommandGen(minL2Utxos: Int) extends CommandGen[ModelState, St
                             .genStartBlock(blockNumber, state.currentTime.instant)
                             .map(AnyCommand.apply)
 
-                    case InProgress(blockNumber, _, _) =>
+                    case InProgress(blockNumber, _, _, _) =>
                         Gen.frequency(
                           1 -> (if state.activeUtxos.size >= minL2Utxos
                                 then
@@ -535,7 +535,7 @@ case object DepositsCommandGen extends CommandGen[ModelState, Stage1Sut]:
                             .genStartBlock(blockNumber, state.currentTime.instant)
                             .map(AnyCommand.apply)
 
-                    case InProgress(blockNumber, _, _) =>
+                    case InProgress(blockNumber, _, _, _) =>
                         Gen.frequency(
                           3 -> Generators
                               .genRegisterDepositCommand(state)

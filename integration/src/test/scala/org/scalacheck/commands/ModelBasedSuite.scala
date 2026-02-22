@@ -312,7 +312,10 @@ trait ModelBasedSuite {
         val suts = collection.mutable.Map.empty[AnyRef, Option[State => IO[Sut]]]
 
         Prop.forAll(genTestCase) { testCase =>
-            logger.info("Executing the next test case...")
+            logger.info(
+              "\n\n\n\n\n\n\n\n ---------------------------------------------- " +
+                  "Executing the next test case..."
+            )
 
             try {
                 val sutId = suts.synchronized {
