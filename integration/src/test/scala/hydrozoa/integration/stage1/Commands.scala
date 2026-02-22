@@ -2,148 +2,165 @@ package hydrozoa.integration.stage1
 
 import hydrozoa.integration.stage1.Generators.{TxMutator, TxStrategy}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
+import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
+import hydrozoa.multisig.ledger.dapp.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId}
 import org.scalacheck.Prop
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.commands.{CommandLabel, CommandProp}
+import scalus.cardano.ledger.Transaction
 
-// ===================================
-// Delay
-// ===================================
+object Commands:
 
-/** Advance time with three possible outcomes, transitioning the model's [[CurrentTime]].
-  */
-final case class DelayCommand(
-    delaySpec: Delay
-)
+    private val logger = Logging.logger("Stage1.Commands")
 
-/** Which timing region the delay lands in, used to drive the [[CurrentTime]] transition in the
-  * model.
-  */
-enum Delay(d: QuantizedFiniteDuration):
-    case EndsBeforeHappyPathExpires(d: QuantizedFiniteDuration) extends Delay(d)
-    case EndsInTheSilencePeriod(d: QuantizedFiniteDuration) extends Delay(d)
-    case EndsAfterHappyPathExpires(d: QuantizedFiniteDuration) extends Delay(d)
+    // ===================================
+    // Delay
+    // ===================================
 
-    def duration: QuantizedFiniteDuration = d
+    /** Advance time with three possible outcomes, transitioning the model's [[CurrentTime]].
+      */
+    final case class DelayCommand(
+        delaySpec: Delay
+    )
 
-implicit given CommandProp[DelayCommand, Unit, ModelState] with {}
+    /** Which timing region the delay lands in, used to drive the [[CurrentTime]] transition in the
+      * model.
+      */
+    enum Delay(d: QuantizedFiniteDuration):
+        case EndsBeforeHappyPathExpires(d: QuantizedFiniteDuration) extends Delay(d)
+        case EndsInTheSilencePeriod(d: QuantizedFiniteDuration) extends Delay(d)
+        case EndsAfterHappyPathExpires(d: QuantizedFiniteDuration) extends Delay(d)
 
-implicit given CommandLabel[DelayCommand] with
-    override def label(cmd: DelayCommand): String = cmd.delaySpec match
-        case _: Delay.EndsBeforeHappyPathExpires => "Delay(happy)"
-        case _: Delay.EndsInTheSilencePeriod     => "Delay(silence)"
-        case _: Delay.EndsAfterHappyPathExpires  => "Delay(expired)"
+        def duration: QuantizedFiniteDuration = d
 
-// ===================================
-// Start Block
-// ===================================
+    implicit given CommandProp[DelayCommand, Unit, ModelState] with {}
 
-/** Start a new block in the joint ledger. */
-final case class StartBlockCommand(
-    blockNumber: BlockNumber,
-    creationTime: QuantizedInstant
-)
+    implicit given CommandLabel[DelayCommand] with
+        override def label(cmd: DelayCommand): String = cmd.delaySpec match
+            case _: Delay.EndsBeforeHappyPathExpires => "Delay(happy)"
+            case _: Delay.EndsInTheSilencePeriod     => "Delay(silence)"
+            case _: Delay.EndsAfterHappyPathExpires  => "Delay(expired)"
 
-implicit given CommandProp[StartBlockCommand, Unit, ModelState] with {}
+    // ===================================
+    // Start Block
+    // ===================================
 
-implicit given CommandLabel[StartBlockCommand] with
-    override def label(cmd: StartBlockCommand): String = "StartBlock"
+    /** Start a new block in the joint ledger. */
+    final case class StartBlockCommand(
+        blockNumber: BlockNumber,
+        creationTime: QuantizedInstant
+    )
 
-// ===================================
-// L2 Transaction
-// ===================================
+    implicit given CommandProp[StartBlockCommand, Unit, ModelState] with {}
 
-/** Feed a single L2 transaction into the current block. */
-final case class L2TxCommand(
-    event: LedgerEvent.L2TxEvent,
-    txStrategy: TxStrategy,
-    txMutator: TxMutator
-)
+    implicit given CommandLabel[StartBlockCommand] with
+        override def label(cmd: StartBlockCommand): String = "StartBlock"
 
-implicit given CommandProp[L2TxCommand, Unit, ModelState] with {}
+    // ===================================
+    // L2 Transaction
+    // ===================================
 
-implicit given CommandLabel[L2TxCommand] with
-    override def label(cmd: L2TxCommand): String = cmd.txStrategy match {
-        case TxStrategy.Arbitrary =>
-            cmd.txMutator match {
-                case TxMutator.Identity      => "L2Tx(arbitrary, identity)"
-                case TxMutator.DropWitnesses => "L2Tx(arbitrary, drop witnesses)"
-            }
-        case TxStrategy.Regular =>
-            cmd.txMutator match {
-                case TxMutator.Identity      => "L2Tx(regular, identity)"
-                case TxMutator.DropWitnesses => "L2Tx(regular, drop witnesses)"
-            }
-        case TxStrategy.RandomWithdrawals =>
-            cmd.txMutator match {
-                case TxMutator.Identity      => "L2Tx(random withdrawals, identity)"
-                case TxMutator.DropWitnesses => "L2Tx(random withdrawals, drop witnesses)"
-            }
-        case TxStrategy.Dust(maxOutputs) =>
-            cmd.txMutator match {
-                case TxMutator.Identity      => s"L2Tx(dust=$maxOutputs, identity)"
-                case TxMutator.DropWitnesses => s"L2Tx(dust=$maxOutputs, drop witnesses)"
-            }
+    /** Feed a single L2 transaction into the current block. */
+    final case class L2TxCommand(
+        event: LedgerEvent.L2TxEvent,
+        txStrategy: TxStrategy,
+        txMutator: TxMutator
+    )
 
+    implicit given CommandProp[L2TxCommand, Unit, ModelState] with {}
+
+    implicit given CommandLabel[L2TxCommand] with
+        override def label(cmd: L2TxCommand): String = cmd.txStrategy match {
+            case TxStrategy.Arbitrary =>
+                cmd.txMutator match {
+                    case TxMutator.Identity      => "L2Tx(arbitrary, identity)"
+                    case TxMutator.DropWitnesses => "L2Tx(arbitrary, drop witnesses)"
+                }
+            case TxStrategy.Regular =>
+                cmd.txMutator match {
+                    case TxMutator.Identity      => "L2Tx(regular, identity)"
+                    case TxMutator.DropWitnesses => "L2Tx(regular, drop witnesses)"
+                }
+            case TxStrategy.RandomWithdrawals =>
+                cmd.txMutator match {
+                    case TxMutator.Identity      => "L2Tx(random withdrawals, identity)"
+                    case TxMutator.DropWitnesses => "L2Tx(random withdrawals, drop witnesses)"
+                }
+            case TxStrategy.Dust(maxOutputs) =>
+                cmd.txMutator match {
+                    case TxMutator.Identity      => s"L2Tx(dust=$maxOutputs, identity)"
+                    case TxMutator.DropWitnesses => s"L2Tx(dust=$maxOutputs, drop witnesses)"
+                }
+
+        }
+
+    // ===================================
+    // Complete Block
+    // ===================================
+
+    /** Complete the current block (regular or final).  Result is the [[BlockBrief]] produced. */
+    final case class CompleteBlockCommand(
+        blockNumber: BlockNumber,
+        isFinal: Boolean
+    )
+
+    /** Postcondition for [[CompleteBlockCommand]]: verifies model and SUT agree on the block brief.
+      */
+    implicit given CommandProp[CompleteBlockCommand, BlockBrief, ModelState] with
+
+        override def onSuccessCheck(
+            cmd: CompleteBlockCommand,
+            expectedResult: BlockBrief,
+            stateBefore: ModelState,
+            stateAfter: ModelState,
+            result: BlockBrief
+        ): Prop =
+            logger.trace(s"expected result: $expectedResult")
+            logger.trace(s"actual result: $result")
+
+            (expectedResult == result) :|
+                "block briefs should be identical: " +
+                s"\n\texpected: $expectedResult" +
+                s"\n\tgot: $result"
+
+    implicit given CommandLabel[CompleteBlockCommand] with
+        override def label(cmd: CompleteBlockCommand): String =
+            if cmd.isFinal then "CompleteBlock(final)" else "CompleteBlock(regular)"
+
+    // ===================================
+    // Deposit Request Command
+    // ===================================
+
+    /** The command corresponds to the register deposit action with the event id known upfront.
+      */
+    final case class RegisterDepositCommand(
+        registerDeposit: LedgerEvent.DepositEvent,
+        depositRefundTxSeq: DepositRefundTxSeq,
+        depositTxBytesSigned: Transaction
+    ) {
+        override def toString: String = s"RegisterDepositCommand: ${registerDeposit.eventId}"
     }
 
-// ===================================
-// Complete Block
-// ===================================
+    implicit given CommandProp[RegisterDepositCommand, Unit, ModelState] with {}
 
-/** Complete the current block (regular or final).  Result is the [[BlockBrief]] produced. */
-final case class CompleteBlockCommand(
-    blockNumber: BlockNumber,
-    isFinal: Boolean
-)
+    implicit given CommandLabel[RegisterDepositCommand] with
+        override def label(cmd: RegisterDepositCommand): String = "Register deposit"
 
-/** Postcondition for [[CompleteBlockCommand]]: verifies model and SUT agree on the block brief. */
-implicit given CommandProp[CompleteBlockCommand, BlockBrief, ModelState] with
+    // ===================================
+    // Submit Deposit Command
+    // ===================================
 
-    override def onSuccessCheck(
-        cmd: CompleteBlockCommand,
-        expectedResult: BlockBrief,
-        stateBefore: ModelState,
-        stateAfter: ModelState,
-        result: BlockBrief
-    ): Prop =
-        (expectedResult == result) :|
-            "block briefs should be identical: " +
-            s"\n\texpected: $expectedResult" +
-            s"\n\tgot: $result"
+    /** The command submits the deposit transaction from the corresponding register deposit event.
+      */
+    final case class SubmitDepositCommand(
+        depositEventId: LedgerEventId
+    )
 
-implicit given CommandLabel[CompleteBlockCommand] with
-    override def label(cmd: CompleteBlockCommand): String =
-        if cmd.isFinal then "CompleteBlock(final)" else "CompleteBlock(regular)"
+    implicit given CommandProp[SubmitDepositCommand, Unit, ModelState] with {}
 
-// ===================================
-// Deposit Request Command
-// ===================================
+    implicit given CommandLabel[SubmitDepositCommand] with
+        override def label(cmd: SubmitDepositCommand): String = "Submit deposit"
 
-/** The command corresponds to the register deposit action with the event id known upfront.
-  */
-final case class RegisterDepositCommand(
-    registerDeposit: LedgerEvent.DepositEvent
-)
-
-implicit given CommandProp[RegisterDepositCommand, Unit, ModelState] with {}
-
-implicit given CommandLabel[RegisterDepositCommand] with
-    override def label(cmd: RegisterDepositCommand): String = "Register deposit"
-
-// ===================================
-// Submit Deposit Command
-// ===================================
-
-/** The command submits the deposit transaction from the corresponding register deposit event.
-  */
-final case class SubmitDepositCommand(
-    depositEventId: LedgerEventId
-)
-
-implicit given CommandProp[SubmitDepositCommand, Unit, ModelState] with {}
-
-implicit given CommandLabel[SubmitDepositCommand] with
-    override def label(cmd: SubmitDepositCommand): String = "Submit deposit"
+end Commands

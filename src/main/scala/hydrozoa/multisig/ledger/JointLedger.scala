@@ -8,6 +8,7 @@ import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.actor.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.{ConsensusActor, PeerLiaison}
 import hydrozoa.multisig.ledger.DappLedgerM.runDappLedgerM
@@ -44,6 +45,8 @@ final case class JointLedger(
     pendingConnections: MultisigRegimeManager.PendingConnections | JointLedger.Connections,
 ) extends Actor[IO, Requests.Request] {
     import config.*
+
+    private val logger = Logging.logger("JointLedger")
 
     private val connections = Ref.unsafe[IO, Option[Connections]](None)
 
@@ -159,7 +162,7 @@ final case class JointLedger(
                           .focus(_.nextBlockData.events)
                           .modify(_.appended((eventId, Invalid)))
                       _ <- state.set(newState)
-                      // _ = println(s"registerDeposit failure: $e")
+                      _ = logger.debug(s"registerDeposit failure: $e")
                   } yield (),
               onSuccess = _s =>
                   for {
@@ -297,10 +300,20 @@ final case class JointLedger(
             // maturity time, so I'll go with this for now. If it is sorted, there's almost certainly
             // a more efficient function.
             // TODO: Factor out
+
+            startTime = producing.startTime
+            settlementValidityEnd =
+                txTiming.newSettlementEndTime(producing.competingFallbackValidityStart)
+
+            _ = logger.trace(
+              s"deposits before parititioning: ${producing.dappLedgerState.deposits.map(_._1)}"
+            )
+
             depositsPartition = producing.dappLedgerState.deposits
                 // Queue order: not yet mature, eligible for absorption, not eligible for absorption
                 .foldLeft(
                   (
+                    Queue.empty[(LedgerEventId, DepositUtxo)],
                     Queue.empty[(LedgerEventId, DepositUtxo)],
                     Queue.empty[(LedgerEventId, DepositUtxo)],
                     Queue.empty[(LedgerEventId, DepositUtxo)]
@@ -309,33 +322,60 @@ final case class JointLedger(
                     val depositValidityEnd = deposit._2.submissionDeadline
                     val depositAbsorptionStart =
                         txTiming.depositAbsorptionStartTime(depositValidityEnd)
-                    val depositAbsorptionEnd = txTiming.depositAbsorptionEndTime(depositValidityEnd)
+                    val depositAbsorptionEnd =
+                        txTiming.depositAbsorptionEndTime(depositValidityEnd)
 
-                    val settlementValidityEnd: QuantizedInstant =
-                        producing.competingFallbackValidityStart - txTiming.silenceDuration
-                    {
-                        if depositAbsorptionStart > producing.startTime
-                        // Not yet mature
-                        then acc.focus(_._1).modify(_.appended(deposit))
-                        else if pollResults.contains(deposit._2.toUtxo.input) &&
-                        (depositAbsorptionStart <= producing.startTime) &&
+                    val isNotYetMature = depositAbsorptionStart > startTime
+
+                    val isEligibleForAbsorption = pollResults.contains(deposit._2.toUtxo.input) &&
+                        (depositAbsorptionStart <= startTime) &&
                         (settlementValidityEnd <= depositAbsorptionEnd)
-                        // Eligible for absorption
-                        then acc.focus(_._2).modify(_.appended(deposit))
-                        else if ((depositAbsorptionStart <= producing.startTime)
-                            && !pollResults.contains(deposit._2.toUtxo.input)) ||
-                        (settlementValidityEnd > depositAbsorptionEnd)
-                        // Never eligible for absorption
-                        then acc.focus(_._3).modify(_.appended(deposit))
-                        // TODO: Is this total?
-                        else throw RuntimeException("Don't know what to do with this deposit")
+
+                    logger.trace(
+                      s"JL deposit: ${deposit._1}, depositAbsorptionEnd=$depositAbsorptionEnd, settlementValidityEnd=$settlementValidityEnd"
+                    )
+
+                    // NB: Here, we can't use submission deadline (currently the same thing as deposit tx
+                    // ttl to decide whether we should reject a deposit - even if the submission time is over,
+                    // the state we observe may fall behind for any reason (network congestion, fork).
+                    // So we can only use absorption end time to decide it's time to reject a deposit.
+                    val isExpired = {
+                        // TODO: George: This what we had before all my changes
+                        // ((depositAbsorptionStart <= startTime)
+                        //   && !pollResults.contains(deposit._2.toUtxo.input)) ||
+                        //   (settlementValidityEnd > depositAbsorptionEnd)
+                        // TODO: George: this is my current understanding (see the comment above)
+                        // The reason Peter added more conditions was to make it total.
+                        // But I think that we are not interested in non-mature
+                        // (well, we pass them to the settlement tx seq builder for some reason) and awaiting deposits.
+                        // We only need to have what you descibed in the spec - the conditions to absorb
+                        // AND alsp the conditions to reject, which should be that
+                        !pollResults.contains(deposit._2.toUtxo.input)
+                        && settlementValidityEnd > depositAbsorptionEnd
+                    }
+
+                    {
+                        if isNotYetMature then acc.focus(_._1).modify(_.appended(deposit))
+                        else if isEligibleForAbsorption then
+                            acc.focus(_._2).modify(_.appended(deposit))
+                        else if isExpired then acc.focus(_._3).modify(_.appended(deposit))
+                        else acc.focus(_._4).modify(_.appended(deposit))
                     }
                 )
+
             notYetMature = depositsPartition._1
             eligibleForAbsorption = depositsPartition._2
             neverEligibleForAbsorption = depositsPartition._3
+            depositsAwaiting = depositsPartition._4
 
             depositsRefunded = neverEligibleForAbsorption.toList.map(_._1)
+
+            _ = logger.trace(
+              s"joint ledger: notYetMature=${notYetMature.map(_._1)}" + "\n" +
+                  s"joint ledger: eligibleForAbsorption=${eligibleForAbsorption.map(_._1)}" + "\n" +
+                  s"joint ledger: depositsRefunded=${depositsRefunded}" + "\n" +
+                  s"joint ledger: depositsAwaiting=${depositsAwaiting.map(_._1)}"
+            )
 
             kzgCommitment = producing.virtualLedgerState.kzgCommitment
 
@@ -343,19 +383,33 @@ final case class JointLedger(
 
             events = producing.nextBlockData.events
 
+            _ = logger.trace(
+              s"completeBlockRegular: previousHeader.blockVersion=${previousHeader.blockVersion}\n" +
+                  s"completeBlockRegular: treasury.datum.versionMajor=${producing.dappLedgerState.treasury.datum.versionMajor}\n" +
+                  s"completeBlockRegular: eligibleForAbsorption.isEmpty=${eligibleForAbsorption.isEmpty}\n" +
+                  s"completeBlockRegular: blockWithdrawnUtxos.isEmpty=${producing.nextBlockData.blockWithdrawnUtxos.isEmpty}"
+            )
+
             headerIntermediate: BlockHeader.Intermediate =
                 if eligibleForAbsorption.isEmpty && producing.nextBlockData.blockWithdrawnUtxos.isEmpty
                 then {
-                    // println(s"JL: producing.startTime=${producing.startTime}")
-                    // println(s"JL: producing.competingFallbackValidityStart=${producing.competingFallbackValidityStart}")
-                    // println(s"JL: txTiming=${txTiming}")
-                    previousHeader.nextHeaderIntermediate(
+                    logger.trace(
+                      s"JL: producing.startTime=${producing.startTime}\n" +
+                          s"JL: producing.competingFallbackValidityStart=${producing.competingFallbackValidityStart}\n" +
+                          s"JL: txTiming=${txTiming}"
+                    )
+
+                    val header = previousHeader.nextHeaderIntermediate(
                       txTiming,
-                      producing.startTime, // TODO: shall we use something like production.completeTime instead?
+                      startTime, // TODO: shall we use something like production.completeTime instead?
                       producing.competingFallbackValidityStart,
                       kzgCommitment
                     )
-                } else previousHeader.nextHeaderMajor(producing.startTime, kzgCommitment)
+                    header
+                } else {
+                    val header = previousHeader.nextHeaderMajor(startTime, kzgCommitment)
+                    header
+                }
 
             block <- headerIntermediate match {
                 case header: BlockHeader.Minor =>
@@ -371,8 +425,10 @@ final case class JointLedger(
                     for {
                         settlementTxSeq <- doSettlement(
                           validDeposits = eligibleForAbsorption,
+                          // TODO: why do we need it?
                           immatureDeposits = notYetMature,
                         )
+
                         depositsAbsorbed = eligibleForAbsorption
                             .filter(deposit =>
                                 settlementTxSeq.settlementTx.depositsSpent
@@ -389,7 +445,32 @@ final case class JointLedger(
                           postDatedRefundTxs = List() // FIXME: Where are they?
                         )
                     } yield Block.Unsigned.Major(blockBrief, blockEffects)
-            }
+            }: IO[Block.Unsigned.Next]
+
+            // TODO: I don't understand where/when exactly the state should get updated
+            // Arrghhh, get the updated producing state (which has the new treasury after running doSettlement)
+            producingUpdated <- unsafeGetProducing
+
+            _ = logger.trace(
+              s"deposits before updating: ${producingUpdated.dappLedgerState.deposits.map(_._1)}"
+            )
+
+            // We have to remove refunded deposits from the state
+            // TODO: This is correct only if all eligibleForAbsorption is really get absorbed
+            newState = producingUpdated.copy(
+              dappLedgerState = producingUpdated.dappLedgerState.copy(
+                deposits = producingUpdated.dappLedgerState.deposits.filterNot(e =>
+                    depositsRefunded.contains(e._1)
+                        || eligibleForAbsorption.map(_._1).contains(e._1)
+                )
+              )
+            )
+
+            _ = logger.trace(
+              s"deposits in new state: ${newState.dappLedgerState.deposits.map(_._1)}"
+            )
+
+            _ <- state.set(newState)
 
             _ <- checkReferenceBlock(referenceBlockBrief, block)
             _ <- handleBlock(block, finalizationLocallyTriggered)
@@ -435,9 +516,7 @@ final case class JointLedger(
 
                 val blockBody = BlockBody.Final(
                   events = events,
-                  // TODO: see comment in registerDeposit
-                  // depositsRejected = depositsRejected ++ depositsRegistered,
-                  depositsRefunded = List.empty // FIXME: currently not handling refunds
+                  depositsRefunded = p.dappLedgerState.deposits.map(_._1).toList
                 )
 
                 val blockBrief = BlockBrief.Final(blockHeader, blockBody)

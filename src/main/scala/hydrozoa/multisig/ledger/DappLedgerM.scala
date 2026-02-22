@@ -6,7 +6,7 @@ import cats.syntax.all.*
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger
-import hydrozoa.multisig.ledger.DappLedgerM.Error.{AbsorptionPeriodExpired, ParseError, SettlementTxSeqBuilderError}
+import hydrozoa.multisig.ledger.DappLedgerM.Error.{ParseError, SettlementTxSeqBuilderError, SubmissionPeriodIsOver}
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.dapp.txseq
 import hydrozoa.multisig.ledger.dapp.txseq.{DepositRefundTxSeq, FinalizationTxSeq, SettlementTxSeq}
@@ -99,10 +99,20 @@ object DappLedgerM {
                     .map(ParseError(_))
             depositRefundTxSeq <- lift(parseRes)
             s <- get
+
             depositProduced <- lift(
-              if config.txTiming.depositAbsorptionEndTime(depositRefundTxSeq.depositTx.validityEnd)
-                      < blockStartTime
-              then Left(AbsorptionPeriodExpired(depositRefundTxSeq))
+              // TODO: add explicit vals to cope boolean blindness
+              // Check that submission is still possible and if not - reject
+              if depositRefundTxSeq.depositTx.validityEnd < blockStartTime
+              then Left(SubmissionPeriodIsOver)
+
+              // TODO: I believe we should remove it
+              // Check absorption is still possible
+              // The previous check is stronger I think
+              // else if config.txTiming.depositAbsorptionEndTime(
+              //      depositRefundTxSeq.depositTx.validityEnd
+              //    ) < blockStartTime
+              // then Left(AbsorptionPeriodExpired(depositRefundTxSeq))
               else Right(depositRefundTxSeq.depositTx.depositProduced)
             )
             newState = s.appendToQueue((eventId, depositProduced))
@@ -130,12 +140,19 @@ object DappLedgerM {
             config <- ask
             state <- get
 
+            majorVersionProduced = BlockVersion.Major(state.treasury.datum.versionMajor.toInt + 1)
+
+            _ = println(
+              s"DappLedgerM.settleLedger: state.treasury.datum.versionMajor=${state.treasury.datum.versionMajor}"
+            )
+
+            _ = println(s"DappLedgerM.settleLedger: majorVersionProduced=${majorVersionProduced}")
+
             settlementTxSeqRes <- lift(
               SettlementTxSeq
                   .Build(config)(
                     kzgCommitment = nextKzg,
-                    majorVersionProduced =
-                        BlockVersion.Major(state.treasury.datum.versionMajor.toInt + 1),
+                    majorVersionProduced = majorVersionProduced,
                     treasuryToSpend = state.treasury,
                     depositsToSpend = Vector.from(validDeposits.map(_._2).toList),
                     payoutObligationsRemaining = payoutObligations,
@@ -219,6 +236,8 @@ object DappLedgerM {
 
         final case class ParseError(wrapped: txseq.DepositRefundTxSeq.Parse.Error)
             extends RegisterDepositError
+
+        case object SubmissionPeriodIsOver extends RegisterDepositError
 
         /** This is raised during a call to `RegisterDeposit` if the deposit parses successfully,
           * but reveals an absorption window that is already prior to the block's start time. In

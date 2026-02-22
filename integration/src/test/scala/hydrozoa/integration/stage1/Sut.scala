@@ -7,6 +7,7 @@ import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.actor.ActorSystem
 import hydrozoa.integration.stage1
 import hydrozoa.integration.stage1.AgentActor.CompleteBlock
+import hydrozoa.integration.stage1.Commands.*
 import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.backend.cardano.CardanoBackend
@@ -126,7 +127,7 @@ end AgentActor
 
 object SutCommands:
 
-    val logger: Logger[IO] = Logging.loggerIO("Stage1.SutCommands")
+    val logger: Logger[IO] = Logging.loggerIO("Stage1.Sut")
 
     implicit given SutCommand[DelayCommand, Unit, Stage1Sut] with {
         override def run(cmd: DelayCommand, sut: Stage1Sut): IO[Unit] = for {
@@ -170,5 +171,7 @@ object SutCommands:
     }
 
     implicit given SutCommand[RegisterDepositCommand, Unit, Stage1Sut] with {
-        override def run(cmd: RegisterDepositCommand, sut: Stage1Sut): IO[Unit] = ???
+        override def run(cmd: RegisterDepositCommand, sut: Stage1Sut): IO[Unit] =
+            logger.debug(">> RegisterDepositCommand") >>
+                (sut.agent ! cmd.registerDeposit)
     }

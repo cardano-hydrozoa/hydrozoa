@@ -16,7 +16,7 @@ import hydrozoa.integration.stage1.CurrentTime.{AfterCompetingFallbackStartTime,
 import hydrozoa.integration.stage1.SuiteCardano.*
 import hydrozoa.integration.yaci.DevKit
 import hydrozoa.integration.yaci.DevKit.DevnetInfo
-import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, quantize}
+import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost.URL
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendMock, MockState}
@@ -170,7 +170,11 @@ case class Suite(
           competingFallbackStartTime =
               headConfig.txTiming.newFallbackStartTime(headConfig.headStartTime),
           activeUtxos = headConfig.initialL2Utxos,
-          peerL1Utxos = peerL1GenesisUtxos
+          utxoL1 = peerL1GenesisUtxos,
+          depositEnqueued = List.empty,
+          utxoLocked = List.empty,
+          depositSigned = Map.empty,
+          depositSubmitted = List.empty
         ).applyContinuingL1Tx(headConfig.initializationTx.tx)
     }
 
@@ -205,7 +209,7 @@ case class Suite(
             } yield ())
 
             _ <- loggerIO.debug(s"peerKeys: ${headConfig.headPeers.headPeerVKeys}")
-            _ <- loggerIO.debug(s"peer L1 utxos: ${state.peerL1Utxos.map(_._1)}")
+            _ <- loggerIO.debug(s"peer L1 utxos: ${state.utxoL1.map(_._1)}")
 
             nodeConfig: NodeConfig = NodeConfig
                 .apply(
