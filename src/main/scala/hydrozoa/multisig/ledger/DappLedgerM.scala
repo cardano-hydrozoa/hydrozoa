@@ -120,18 +120,14 @@ object DappLedgerM {
         } yield ()
     }
 
-    /** Construct a settlement transaction, a fallback transaction, a list of rollout transactions,
-      * and a list of immediate refund transactions based on the arguments. Remove the
-      * absorbed/refunded deposits and update the treasury in the ledger state. Called when the
-      * block weaver sends the single to close the block in leader mode.
+    /** Construct settlement tx seq and set the new treasury to the state.
       *
       * The collective value of the [[payouts]] must '''not''' exceed the [[treasury]] value.
       */
-    def settleLedger(
+    def mkSettlementTxSeq(
         nextKzg: KzgCommitment,
-        validDeposits: Queue[(LedgerEventId, DepositUtxo)],
+        absorbedDeposits: Queue[(LedgerEventId, DepositUtxo)],
         payoutObligations: Vector[Payout.Obligation],
-        immatureDeposits: Queue[(LedgerEventId, DepositUtxo)],
         blockCreatedOn: QuantizedInstant,
         competingFallbackValidityStart: QuantizedInstant,
     ): DappLedgerM[SettlementTxSeq] = {
@@ -142,11 +138,11 @@ object DappLedgerM {
 
             majorVersionProduced = BlockVersion.Major(state.treasury.datum.versionMajor.toInt + 1)
 
-            _ = println(
-              s"DappLedgerM.settleLedger: state.treasury.datum.versionMajor=${state.treasury.datum.versionMajor}"
-            )
-
-            _ = println(s"DappLedgerM.settleLedger: majorVersionProduced=${majorVersionProduced}")
+            // TODO: add logger
+            // _ = println(
+            //  s"DappLedgerM.settleLedger: state.treasury.datum.versionMajor=${state.treasury.datum.versionMajor}"
+            // )
+            // _ = println(s"DappLedgerM.settleLedger: majorVersionProduced=${majorVersionProduced}")
 
             settlementTxSeqRes <- lift(
               SettlementTxSeq
@@ -154,7 +150,7 @@ object DappLedgerM {
                     kzgCommitment = nextKzg,
                     majorVersionProduced = majorVersionProduced,
                     treasuryToSpend = state.treasury,
-                    depositsToSpend = Vector.from(validDeposits.map(_._2).toList),
+                    depositsToSpend = Vector.from(absorbedDeposits.map(_._2).toList),
                     payoutObligationsRemaining = payoutObligations,
                     competingFallbackValidityStart = competingFallbackValidityStart,
                     blockCreatedOn = blockCreatedOn
@@ -164,26 +160,31 @@ object DappLedgerM {
                   .map(SettlementTxSeqBuilderError.apply)
             )
 
-            // We update the state with:
-            // - the treasury produced by the settlement tx
-            // - The deposits that were _not_ successfully processed by the settlement transaction (due to not fitting)
-            //   and the remaining immature deposits
-            newState = State(
-              treasury = settlementTxSeqRes.settlementTxSeq.settlementTx.treasuryProduced,
-              deposits = {
-                  // The remaining "depositsToSpend" reattached to their associated refunds.
-                  // (The settlement tx builder loses this information)
-                  val correlatedDeposits =
-                      Queue.from(
-                        validDeposits.filter(x => settlementTxSeqRes.depositsToSpend.contains(x._1))
-                      )
-                  correlatedDeposits ++ immatureDeposits
-              }
+            newState = state.copy(
+              treasury = settlementTxSeqRes.settlementTxSeq.settlementTx.treasuryProduced
             )
             _ <- set(newState)
+
         } yield settlementTxSeqRes.settlementTxSeq
 
     }
+
+    /** Remove the absorbed/refunded deposits and update the treasury in the ledger state. Called
+      * when the block weaver sends the single to close the block in leader mode.
+      *
+      * @param ineligibleDeposits
+      * @return
+      */
+    def handleBlockBrief(
+        ineligibleDeposits: Queue[(LedgerEventId, DepositUtxo)],
+    ): DappLedgerM[Unit] = for {
+        state <- get
+
+        newState = state.copy(
+          deposits = ineligibleDeposits
+        )
+        _ <- set(newState)
+    } yield ()
 
     /** Construct a finalization transaction, a list of rollout transactions, and a list of
       * immediate refund transactions based on the arguments. The [[DappLedgerM]] must be discarded
@@ -280,17 +281,24 @@ object DappLedgerM {
         ): IO[B] = {
             for {
                 oldState <- jl.state.get
+                _ <- IO.println(
+                  s"[runDappLedgerM] Before action: oldState.dappLedgerState.treasury.datum.versionMajor=${oldState.dappLedgerState.treasury.datum.versionMajor}"
+                )
                 res = action.run(jl.config, oldState.dappLedgerState)
                 b <- res match {
                     case Left(error) => onFailure(error)
                     case Right(newState, a) =>
                         for {
+                            _ <- IO.println(
+                              s"[runDappLedgerM] After action: newState.treasury.datum.versionMajor=${newState.treasury.datum.versionMajor}"
+                            )
                             _ <- jl.state.set(oldState match {
                                 case d: JointLedger.Done =>
                                     d.focus(_.dappLedgerState).replace(newState)
                                 case p: JointLedger.Producing =>
                                     p.focus(_.dappLedgerState).replace(newState)
                             })
+                            _ <- IO.println("[runDappLedgerM] State updated in JointLedger")
                             b <- onSuccess(a)
                         } yield b
                 }
