@@ -103,7 +103,7 @@ object DappLedgerM {
             depositProduced <- lift(
               // TODO: add explicit vals to cope boolean blindness
               // Check that submission is still possible and if not - reject
-              if depositRefundTxSeq.depositTx.validityEnd < blockStartTime
+              if depositRefundTxSeq.depositTx.validityEnd <= blockStartTime
               then Left(SubmissionPeriodIsOver)
 
               // TODO: I believe we should remove it
@@ -281,24 +281,24 @@ object DappLedgerM {
         ): IO[B] = {
             for {
                 oldState <- jl.state.get
-                _ <- IO.println(
-                  s"[runDappLedgerM] Before action: oldState.dappLedgerState.treasury.datum.versionMajor=${oldState.dappLedgerState.treasury.datum.versionMajor}"
-                )
+                // _ <- IO.println(
+                //  s"[runDappLedgerM] Before action: oldState.dappLedgerState.treasury.datum.versionMajor=${oldState.dappLedgerState.treasury.datum.versionMajor}"
+                // )
                 res = action.run(jl.config, oldState.dappLedgerState)
                 b <- res match {
                     case Left(error) => onFailure(error)
                     case Right(newState, a) =>
                         for {
-                            _ <- IO.println(
-                              s"[runDappLedgerM] After action: newState.treasury.datum.versionMajor=${newState.treasury.datum.versionMajor}"
-                            )
+                            // _ <- IO.println(
+                            //  s"[runDappLedgerM] After action: newState.treasury.datum.versionMajor=${newState.treasury.datum.versionMajor}"
+                            // )
                             _ <- jl.state.set(oldState match {
                                 case d: JointLedger.Done =>
                                     d.focus(_.dappLedgerState).replace(newState)
                                 case p: JointLedger.Producing =>
                                     p.focus(_.dappLedgerState).replace(newState)
                             })
-                            _ <- IO.println("[runDappLedgerM] State updated in JointLedger")
+                            // _ <- IO.println("[runDappLedgerM] State updated in JointLedger")
                             b <- onSuccess(a)
                         } yield b
                 }

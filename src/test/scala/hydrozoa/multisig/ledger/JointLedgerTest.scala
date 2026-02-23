@@ -432,7 +432,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                     majorBlock.body.depositsRefunded == List.empty
               )
 
-              // Expected UTxOs: The genesis utxos from the deposit + the initial l2 sete
+              // Expected UTxOs: The genesis utxos from the deposit + the initial l2 set
               expectedUtxos = L2Genesis(
                 Queue.from(depositRefundTxSeq.depositTx.depositProduced.virtualOutputs.toList),
                 TransactionHash.fromByteString(
@@ -470,32 +470,62 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
       } yield true
     )
 
-    // TODO: This could probably just be unit tests. We're not generating much of interest. Perhaps we set the
-    // number of tests to 1? Also, these should be adapted into a model test
-    val _ = property("Deposit absorption end Timing Test") = run(
+    val _ = property("Accepts deposit registration with sensible submission deadline") = run(
       initializer = defaultInitializer,
       testM = for {
           env <- ask[TestR]
           blockStartTime <- startBlockNow(BlockNumber.zero.increment)
 
-          // Test: Deposit absorption window ends 1 second before block start time
           _ <- for {
-              // We need the absorption end to be prior to the start of the block
-              //
-              //    depositAbsorptionEnd = depositValidity_end + deposit_maturity_duration + deposit_absorption_duration
-              //                         = blockStartTime - 1 slot
-              // thus
-              // depositValidity_end = blockStartTime - 1 slot - deposit_maturity_duration - deposit_absorption_duration
+
+              // Sensible stands for the opposite for SubmissionPeriodIsOver error
+              submissionDeadline <- pick(
+                Gen.choose(1, 10).map(s => blockStartTime + FiniteDuration(s, TimeUnit.SECONDS))
+              )
+
               seqAndReq <- deposit(
-                submissionDeadline = blockStartTime - env.config.txTiming.depositMaturityDuration
-                    - env.config.txTiming.depositAbsorptionDuration
-                    - FiniteDuration(
-                      env.config.slotConfig.slotLength,
-                      TimeUnit.MILLISECONDS
-                    ),
+                submissionDeadline = submissionDeadline,
                 LedgerEventId(0, 1),
                 blockStartTime
               )
+
+              (depositRefundTxSeq, depositReq) = seqAndReq
+              jlState <- unsafeGetProducing
+
+              _ <- assertWith[TestR](
+                msg = "Deposit should be in dapp ledger state",
+                condition = jlState.dappLedgerState.deposits == Queue(
+                  (depositReq.eventId, depositRefundTxSeq.depositTx.depositProduced)
+                )
+              )
+
+              _ <- assertWith[TestR](
+                msg = "Deposit should be in transient fields as valid",
+                condition = jlState.nextBlockData.events == List((depositReq.eventId, Valid))
+              )
+          } yield ()
+      } yield true
+    )
+
+    val _ = property("Rejects deposit registration with expired submission deadline") = run(
+      initializer = defaultInitializer,
+      testM = for {
+          env <- ask[TestR]
+          blockStartTime <- startBlockNow(BlockNumber.zero.increment)
+
+          _ <- for {
+
+              // Sensible stands for the opposite for SubmissionPeriodIsOver error
+              submissionDeadline <- pick(
+                Gen.choose(0, 10).map(s => blockStartTime - FiniteDuration(s, TimeUnit.SECONDS))
+              )
+
+              seqAndReq <- deposit(
+                submissionDeadline = submissionDeadline,
+                LedgerEventId(0, 1),
+                blockStartTime
+              )
+
               (depositRefundTxSeq, depositReq) = seqAndReq
               jlState <- unsafeGetProducing
 
@@ -509,36 +539,13 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                 condition = jlState.nextBlockData.events == List((depositReq.eventId, Invalid))
               )
           } yield ()
-
-          // Test: Deposit absorption window ends exactly at block start time
-          _ <- for {
-              seqAndReq <- deposit(
-                blockStartTime -
-                    env.config.txTiming.depositMaturityDuration -
-                    env.config.txTiming.depositAbsorptionDuration,
-                LedgerEventId(0, 2),
-                blockStartTime
-              )
-              (depositRefundTxSeq, depositReq) = seqAndReq
-              jlState <- unsafeGetProducing
-
-              _ <- assertWith[TestR](
-                msg = "Deposit should be in dapp ledger state",
-                condition = jlState.dappLedgerState.deposits == Queue(
-                  (depositReq.eventId, depositRefundTxSeq.depositTx.depositProduced)
-                )
-              )
-
-              _ <- assertWith[TestR](
-                msg = "Deposit should be in transient fields as valid",
-                condition = jlState.nextBlockData.events.last == (depositReq.eventId, Valid)
-              )
-          } yield ()
       } yield true
     )
 
-    val _ = property(
-      "absorption starts at block start time, deposit gets absorbed"
+    // TODO: This property is disabled by lazy, since a deposit cannot be registered and absorbed in
+    //  in the same block; requires updating.
+    lazy val _ = property(
+      "Absorbs deposit: absoprtion starts at block start time"
     ) = run(
       initializer = defaultInitializer,
       testM = for {
@@ -597,8 +604,10 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
       } yield true
     )
 
-    val _ = property(
-      "absorption starts 1 second after block start time"
+    // TODO: This property is disabled by lazy, since a deposit cannot be registered and absorbed in
+    //  in the same block; requires updating.
+    lazy val _ = property(
+      "Absorbs deposit: absorprtion starts 1s after block start time"
     ) = run(
       initializer = defaultInitializer,
       testM = for {
