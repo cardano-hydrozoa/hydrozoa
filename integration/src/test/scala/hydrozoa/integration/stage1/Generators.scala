@@ -2,7 +2,7 @@ package hydrozoa.integration.stage1
 
 import cats.data.NonEmptyList
 import com.bloxbean.cardano.client.util.HexUtil
-import hydrozoa.config.head.initialization.CappedValueGen.{ensureMinAdaLenient, generateCappedValue}
+import hydrozoa.config.head.initialization.CappedValueGen.generateCappedValue
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.integration.stage1.BlockCycle.HeadFinalized
 import hydrozoa.integration.stage1.Commands.*
@@ -156,14 +156,14 @@ object Generators:
     def genOutputValues(
         capValue: Value,
         txStrategy: TxStrategy,
-        step: (Value, Option[Long], Option[Long]) => Gen[Value]
+        step: (Value, Option[Long], Option[Long], Option[Long]) => Gen[Value]
     ): Gen[List[Value]] = for {
         values <- txStrategy match {
 
             case TxStrategy.Dust(maxOutputs) =>
                 Gen.tailRecM((List.empty[Value], capValue, maxOutputs))((acc, rest, stepsLeft) =>
                     for {
-                        next <- step(rest, Some(3_000_000L), Some(1L))
+                        next <- step(rest, None, Some(3_000_000L), Some(1L))
                         acc_ = acc :+ next
                     } yield {
                         if stepsLeft == 1 || next == rest
@@ -178,7 +178,7 @@ object Generators:
             case _ =>
                 Gen.tailRecM(List.empty[Value] -> capValue)((acc, rest) =>
                     for {
-                        next <- step(rest, None, None)
+                        next <- step(rest, None, None, None)
                         acc_ = acc :+ next
                     } yield
                         if next == rest
@@ -303,12 +303,8 @@ object Generators:
             _ = logger1.trace(s"fundingUtxos: $fundingUtxos")
             _ = logger1.trace(s"totalValue: $totalValue")
 
-            // Change should such that it leaves enough room to continue
-            minAdaLenient = ensureMinAdaLenient(headConfig.cardanoNetwork)(Value.zero)
-            feeContingency = Value.ada(1)
-            // Reserving 1 ada for balancing
-            reserved = minAdaLenient + feeContingency
-            change <- generateCappedValueC(totalValue - reserved, None, None)
+            // Change should be big enough to make balancing always possible
+            change <- generateCappedValueC(totalValue, Some(1_000_000L), None, None)
 
             _ = logger1.trace(s"change: $change")
 

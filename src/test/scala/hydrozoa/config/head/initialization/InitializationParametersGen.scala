@@ -271,7 +271,9 @@ object CappedValueGen:
       *   - The rest Value either does it alike, or it is empty
       *
       * To generate a small Coin (lovelace) out of a big Coin, chooses an amount between minLovelace
-      * and the total amount in the big Coin.
+      * and the total amount in the big Coin. Optionally, the minimum ada amount can be specified -
+      * this comes in very handy when you need to generate a change from which you are going to pay
+      * tx fee - you likely want to be sure it's big enough.
       *
       * To generate a small MultiAsset out of a big MultiAsset:
       *   - Select a non-empty subset of the policy IDs.
@@ -283,6 +285,8 @@ object CappedValueGen:
       *   Used to enforce minAda requirement
       * @param capValue
       *   Value available
+      * @param minLovelace
+      *   Prevents choosing less lovelaces that specified
       * @param maxLovelace
       *   Prevents choosing more lovelaces that specified
       * @param maxToken
@@ -294,6 +298,7 @@ object CappedValueGen:
         cardanoNetwork: CardanoNetwork
     )(
         capValue: Value,
+        minLovelace: Option[Long] = None,
         maxLovelace: Option[Long] = None,
         maxToken: Option[Long] = None
     ): Gen[Value] =
@@ -307,7 +312,9 @@ object CappedValueGen:
         )
 
         for {
-            lovelace <- Gen.choose(0L, maxLovelace.getOrElse(capValue.coin.value)).map(Coin.apply)
+            lovelace <- Gen
+                .choose(minLovelace.getOrElse(0L), maxLovelace.getOrElse(capValue.coin.value))
+                .map(Coin.apply)
             policySubset <- Gen.someOf(capValue.assets.assets.toSeq)
             assetSubset <- Gen.sequence[Seq[
               (PolicyId, SortedMap[AssetName, Long])
