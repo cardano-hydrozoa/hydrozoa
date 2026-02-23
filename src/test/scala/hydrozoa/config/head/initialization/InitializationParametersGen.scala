@@ -28,7 +28,7 @@ import test.Generators.Hydrozoa.*
 import test.Generators.Other.genCoinDistributionWithMinAdaUtxo
 import test.TestPeer
 
-// TODO: what do you think of expanding our shortening citizenship?
+// TODO: George: what do you think of expanding our shortening citizenship?
 //   - generate -> gen
 //   - initialization -> init or i12n ? (and the same for types)
 //   - parameters -> params (and the same for types)
@@ -65,8 +65,8 @@ object HeadStartTimeGen {
 }
 
 object InitializationParametersGenTopDown {
-    import HeadStartTimeGen.*
     import CappedValueGen.*
+    import HeadStartTimeGen.*
 
     type GenInitializationParameters =
         (testPeers: TestPeers) => (
@@ -226,17 +226,23 @@ object InitializationParametersGenTopDown {
             changeAddress <- Gen.oneOf(peerAddresses)
             rest = maxChange - change
 
-            // Generate L2 utxos from the rest (if present)
-            l2TransactionOutputs <- Gen.tailRecM(List.empty[Babbage] -> rest)((acc, rest) =>
-                for {
-                    next <- generateCappedValue(cardanoNetwork)(capValue = rest)
-                    address <- Gen.oneOf(peerAddresses)
-                    acc_ = acc :+ Babbage(address, next)
-                } yield
-                    if next == rest
-                    then Right(acc_)
-                    else Left(acc_ -> (rest - next))
-            )
+            // If the rest is too small, don't even try to generate any l2 outputs
+            // Allows us to get some heads with initially empty L2
+            l2TransactionOutputs <-
+                if rest == ensureMinAdaLenient(cardanoNetwork)(rest)
+                then
+                    // Generate L2 utxos from the rest (if present)
+                    Gen.tailRecM(List.empty[Babbage] -> rest)((acc, rest) =>
+                        for {
+                            next <- generateCappedValue(cardanoNetwork)(capValue = rest)
+                            address <- Gen.oneOf(peerAddresses)
+                            acc_ = acc :+ Babbage(address, next)
+                        } yield
+                            if next == rest
+                            then Right(acc_)
+                            else Left(acc_ -> (rest - next))
+                    )
+                else Gen.const(List.empty)
 
         } yield Contribution(
           fundingUtxos = fundingUtxos.toList,
@@ -292,23 +298,12 @@ object CappedValueGen:
         maxToken: Option[Long] = None
     ): Gen[Value] =
 
-        def ensureMinAdaLenient(value: Value): Value = {
-            val anyBaseShelleyAddressIsGood = Address.fromBech32(
-              "addr1q8mcs4umxqvl7hevfr4ssmmek553yf6lz0efc5w0qqca7wf2t3k3pkagdu2ynj629x5sx4wdflrw2g3vzn4967msd6fs45mp5a"
-            )
-            TransactionOutput
-                .apply(
-                  anyBaseShelleyAddressIsGood,
-                  value
-                )
-                .ensureMinAda(cardanoNetwork)
-                .value
-        }
+        val ensureMinAdaLenientA = ensureMinAdaLenient(cardanoNetwork)
 
         // We cannot split up a value which is too small itself
         require(
-          ensureMinAdaLenient(capValue) == capValue,
-          s"maxValue itself should satisfy minAda condition: minimal: ${ensureMinAdaLenient(capValue)}, actual value: ${capValue}"
+          ensureMinAdaLenientA(capValue) == capValue,
+          s"maxValue itself should satisfy minAda condition: minimal: ${ensureMinAdaLenientA(capValue)}, actual value: ${capValue}"
         )
 
         for {
@@ -331,12 +326,26 @@ object CappedValueGen:
               }
             )
             assets = MultiAsset.fromAssets(SortedMap.from(assetSubset))
-            value = ensureMinAdaLenient(Value(lovelace, assets))
+            value = ensureMinAdaLenientA(Value(lovelace, assets))
             rest = capValue - value
         } yield
-            if ensureMinAdaLenient(rest) == rest
+            if ensureMinAdaLenientA(rest) == rest
             then value
             else capValue
+
+    def ensureMinAdaLenient(cardanoNetwork: CardanoNetwork)(value: Value): Value = {
+        val anyBaseShelleyAddressIsGood = Address.fromBech32(
+          "addr1q8mcs4umxqvl7hevfr4ssmmek553yf6lz0efc5w0qqca7wf2t3k3pkagdu2ynj629x5sx4wdflrw2g3vzn4967msd6fs45mp5a"
+        )
+        TransactionOutput
+            .apply(
+              anyBaseShelleyAddressIsGood,
+              value
+            )
+            .ensureMinAda(cardanoNetwork)
+            .value
+    }
+
 end CappedValueGen
 
 object InitializationParametersGenBottomUp {

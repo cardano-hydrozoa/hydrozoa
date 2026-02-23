@@ -20,6 +20,7 @@ import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, ReferenceOutput, Send, Spend, ValidityEndSlot}
 import scalus.uplc.builtin.Data.{fromData, toData}
 
+// TODO: George: add funding utxos?
 final case class DepositTx(
     depositProduced: DepositUtxo,
     validityEnd: QuantizedInstant,

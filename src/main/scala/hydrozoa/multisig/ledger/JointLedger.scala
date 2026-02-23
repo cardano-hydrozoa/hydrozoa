@@ -8,6 +8,7 @@ import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.actor.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.{ConsensusActor, PeerLiaison}
 import hydrozoa.multisig.ledger.DappLedgerM.runDappLedgerM
@@ -44,6 +45,8 @@ final case class JointLedger(
     pendingConnections: MultisigRegimeManager.PendingConnections | JointLedger.Connections,
 ) extends Actor[IO, Requests.Request] {
     import config.*
+
+    private val logger = Logging.logger("JointLedger")
 
     private val connections = Ref.unsafe[IO, Option[Connections]](None)
 
@@ -159,7 +162,7 @@ final case class JointLedger(
                           .focus(_.nextBlockData.events)
                           .modify(_.appended((eventId, Invalid)))
                       _ <- state.set(newState)
-                      // _ = println(s"registerDeposit failure: $e")
+                      _ = logger.debug(s"registerDeposit failure: $e")
                   } yield (),
               onSuccess = _s =>
                   for {
@@ -239,149 +242,230 @@ final case class JointLedger(
     private def completeBlockRegular(args: CompleteBlockRegular): IO[Unit] = {
         import args.*
 
-        def doSettlement(
-            validDeposits: Queue[(LedgerEventId, DepositUtxo)],
-            immatureDeposits: Queue[(LedgerEventId, DepositUtxo)],
-        ): IO[SettlementTxSeq] =
-            for {
-                p <- unsafeGetProducing
-                treasuryToSpend = p.dappLedgerState.treasury
-                payoutObligations = p.nextBlockData.blockWithdrawnUtxos
-                blockCreatedOn = p.startTime
+        /** TODO: partitioning probably isn't the fastest way, because it will inspect each element
+          * of the queue. But I don't recall if we assume the queue is sorted according to maturity
+          * time, so I'll go with this for now. If it is sorted, there's almost certainly a more
+          * efficient function. TODO: on the other hand: we cannot avoid handling them element-wise
+          * since we also need to check whether a deposit utxo is present
+          *
+          * @return
+          *   Queue order:
+          *   - eligible for absorption
+          *   - ineligible for absorption - (inmature + mature but non-existent)
+          *   - rejected
+          */
 
-                genesisObligations: Queue[GenesisObligation] =
-                    validDeposits
-                        .map(_._2.virtualOutputs)
-                        .foldLeft(Queue.empty)((acc, ob) => acc.appendedAll(ob.toList))
-                genesisEvent = L2Genesis(
-                  genesisObligations,
-                  mkGenesisId(
-                    headTokenNames.treasuryTokenName,
-                    treasuryToSpend.datum.versionMajor.toInt + 1
-                  )
+        def partitionDeposits(
+            deposits: Queue[(LedgerEventId, DepositUtxo)],
+            blockStartTime: QuantizedInstant,
+            settlementValidityEnd: QuantizedInstant
+        ): IO[
+          (
+              Queue[(LedgerEventId, DepositUtxo)],
+              Queue[(LedgerEventId, DepositUtxo)],
+              Queue[(LedgerEventId, DepositUtxo)]
+          )
+        ] = for {
+            _ <- IO.pure(())
+
+            _ = logger.trace(
+              s"partitionDeposits: deposits: ${deposits.map(_._1)}, " +
+                  s"blockStartTime=$blockStartTime, " +
+                  s"settlementValidityEnd=$settlementValidityEnd"
+            )
+
+            ret = deposits.foldLeft(
+              (
+                Queue.empty[(LedgerEventId, DepositUtxo)],
+                Queue.empty[(LedgerEventId, DepositUtxo)],
+                Queue.empty[(LedgerEventId, DepositUtxo)]
+              )
+            )((acc, deposit) =>
+
+                val depositValidityEnd = deposit._2.submissionDeadline
+                val depositAbsorptionStart =
+                    txTiming.depositAbsorptionStartTime(depositValidityEnd)
+                val depositAbsorptionEnd =
+                    txTiming.depositAbsorptionEndTime(depositValidityEnd)
+
+                // Maturity. The deposit is mature if its absorption start time is no later
+                // than the block brief’s creation end time.
+                // TODO: use end time, not start time
+                val isMature = depositAbsorptionStart <= blockStartTime
+
+                // Non-expiry. The deposit is non-expired if its absorption end time is
+                // no earlier than the competing fallback’s validity start time.
+
+                // NB: Here, we can't use submission deadline, which is currently the same thing as deposit tx
+                // ttl to decide whether we should reject a deposit - even if the submission time is over,
+                // the state we observe may fall behind for any reason (network congestion, fork).
+                // So we can only use absorption end time to decide it's time to reject a deposit.
+                val isExpired = settlementValidityEnd > depositAbsorptionEnd
+
+                // TODO: The fast-consensus leader sees the deposit on the L1 blockchain when he ends his leadership term.
+                // If a follower is reproducing the block brief, replace this condition with:
+                // the follower sees the deposit on the L1 blockchain when he finishes verifying
+                // the block brief’s events.
+                val isExistent = pollResults.contains(deposit._2.toUtxo.input)
+
+                val isEligible = !isExpired && isMature && isExistent
+
+                // A deposit is ineligible and must be rejected if
+                // - the deposit is expired, or
+                // - if it’s mature and non-expired but doesn’t exist on L1.
+                val isRejected = isExpired || (isMature && !isExistent)
+
+                val isIneligible = !isExpired && (!isMature || !isExistent)
+
+                logger.trace(
+                  s"deposit: ${deposit._1}, " +
+                      s"depositValidityEnd=$depositValidityEnd, " +
+                      s"depositAbsorptionStart=$depositAbsorptionStart, " +
+                      s"depositAbsorptionEnd=$depositAbsorptionEnd, " +
+                      s"isMature=$isMature, " +
+                      s"isExpired=$isExpired, " +
+                      s"isExistent=$isExistent, " +
+                      s"isEligible=$isEligible, " +
+                      s"isRejected=$isRejected, " +
+                      s"isIneligible=$isIneligible"
                 )
 
-                nextKzg: KzgCommitment <- this.runVirtualLedgerM(
-                  VirtualLedgerM.mockApplyGenesis(genesisEvent)
-                )
+                if isEligible
+                then acc.focus(_._1).modify(_.appended(deposit))
+                else if isIneligible
+                then acc.focus(_._2).modify(_.appended(deposit))
+                else if isExpired
+                then acc.focus(_._3).modify(_.appended(deposit))
+                else throw RuntimeException("Deposit decision function is not total")
+            )
+        } yield (ret._1, ret._2, ret._3)
 
-                settleLedgerRes <- this.runDappLedgerM(
-                  DappLedgerM.settleLedger(
-                    nextKzg = nextKzg,
-                    validDeposits = validDeposits,
-                    payoutObligations = payoutObligations,
-                    immatureDeposits = immatureDeposits,
-                    blockCreatedOn = blockCreatedOn,
-                    competingFallbackValidityStart = blockCreatedOn
-                        + config.txTiming.minSettlementDuration
-                        + config.txTiming.inactivityMarginDuration
-                        + config.txTiming.silenceDuration,
-                  ),
-                  onSuccess = IO.pure
-                )
+        /** KZG commitment + block brief (which is a bit strange)
+          */
+        def mkBlockBrief(
+            absorbedDeposits: Queue[(LedgerEventId, DepositUtxo)],
+            rejectedDeposits: Queue[(LedgerEventId, DepositUtxo)],
+        ): IO[(BlockBrief.Intermediate, Option[L2Genesis])] = for {
 
-                // Is it safe to apply this now?
-                _ <- this.runVirtualLedgerM(VirtualLedgerM.applyGenesisEvent(genesisEvent))
-            } yield settleLedgerRes
+            p <- unsafeGetProducing
 
-        import config.txTiming
-        for {
-            producing <- unsafeGetProducing
+            previousHeader = p.previousBlock.header
+            blockWithdrawnUtxos = p.nextBlockData.blockWithdrawnUtxos
+            blockStartTime = p.startTime
+            competingFallbackValidityStart = p.competingFallbackValidityStart
+            events = p.nextBlockData.events
 
-            // ===================================
-            // Step 1: Figure out which deposits are valid and turn them into genesis obligations
-            // ===================================
+            _ = logger.trace(
+              s"mkBlockBrief: previousHeader=${previousHeader}\n" +
+                  s"mkBlockBrief: blockWithdrawnUtxos=${blockWithdrawnUtxos}\n" +
+                  s"mkBlockBrief: blockStartTime=${blockStartTime}\n" +
+                  s"mkBlockBrief: competingFallbackValidityStart=${competingFallbackValidityStart}\n" +
+                  s"mkBlockBrief: events=${events}"
+            )
 
-            // TODO: partitioning probably isn't the fastest way, because it will inspect each
-            // element of the queue. But I don't recall if we assume the queue is sorted according to
-            // maturity time, so I'll go with this for now. If it is sorted, there's almost certainly
-            // a more efficient function.
-            // TODO: Factor out
-            depositsPartition = producing.dappLedgerState.deposits
-                // Queue order: not yet mature, eligible for absorption, not eligible for absorption
-                .foldLeft(
-                  (
-                    Queue.empty[(LedgerEventId, DepositUtxo)],
-                    Queue.empty[(LedgerEventId, DepositUtxo)],
-                    Queue.empty[(LedgerEventId, DepositUtxo)]
-                  )
-                )((acc, deposit) =>
-                    val depositValidityEnd = deposit._2.submissionDeadline
-                    val depositAbsorptionStart =
-                        txTiming.depositAbsorptionStartTime(depositValidityEnd)
-                    val depositAbsorptionEnd = txTiming.depositAbsorptionEndTime(depositValidityEnd)
+            // Block header
+            ret <-
 
-                    val settlementValidityEnd: QuantizedInstant =
-                        producing.competingFallbackValidityStart - txTiming.silenceDuration
-                    {
-                        if depositAbsorptionStart > producing.startTime
-                        // Not yet mature
-                        then acc.focus(_._1).modify(_.appended(deposit))
-                        else if pollResults.contains(deposit._2.toUtxo.input) &&
-                        (depositAbsorptionStart <= producing.startTime) &&
-                        (settlementValidityEnd <= depositAbsorptionEnd)
-                        // Eligible for absorption
-                        then acc.focus(_._2).modify(_.appended(deposit))
-                        else if ((depositAbsorptionStart <= producing.startTime)
-                            && !pollResults.contains(deposit._2.toUtxo.input)) ||
-                        (settlementValidityEnd > depositAbsorptionEnd)
-                        // Never eligible for absorption
-                        then acc.focus(_._3).modify(_.appended(deposit))
-                        // TODO: Is this total?
-                        else throw RuntimeException("Don't know what to do with this deposit")
-                    }
-                )
-            notYetMature = depositsPartition._1
-            eligibleForAbsorption = depositsPartition._2
-            neverEligibleForAbsorption = depositsPartition._3
-
-            depositsRefunded = neverEligibleForAbsorption.toList.map(_._1)
-
-            kzgCommitment = producing.virtualLedgerState.kzgCommitment
-
-            previousHeader = producing.previousBlock.header
-
-            events = producing.nextBlockData.events
-
-            headerIntermediate: BlockHeader.Intermediate =
-                if eligibleForAbsorption.isEmpty && producing.nextBlockData.blockWithdrawnUtxos.isEmpty
-                then {
-                    // println(s"JL: producing.startTime=${producing.startTime}")
-                    // println(s"JL: producing.competingFallbackValidityStart=${producing.competingFallbackValidityStart}")
-                    // println(s"JL: txTiming=${txTiming}")
-                    previousHeader.nextHeaderIntermediate(
-                      txTiming,
-                      producing.startTime, // TODO: shall we use something like production.completeTime instead?
-                      producing.competingFallbackValidityStart,
-                      kzgCommitment
+                if absorbedDeposits.isEmpty && blockWithdrawnUtxos.isEmpty
+                then
+                    IO.pure(
+                      (
+                        previousHeader.nextHeaderIntermediate(
+                          txTiming,
+                          blockStartTime,
+                          competingFallbackValidityStart,
+                          // this doesn't include genesis
+                          p.virtualLedgerState.kzgCommitment
+                        ),
+                        None
+                      )
                     )
-                } else previousHeader.nextHeaderMajor(producing.startTime, kzgCommitment)
-
-            block <- headerIntermediate match {
-                case header: BlockHeader.Minor =>
-                    val blockBody = BlockBody.Minor(events, depositsRefunded)
-                    val blockBrief = BlockBrief.Minor(header, blockBody)
-                    val blockEffects =
-                        BlockEffects.Unsigned.Minor(
-                          headerSerialized = header.onchainMsg,
-                          postDatedRefundTxs = List() // FIXME: Where are they?
-                        )
-                    IO.pure(Block.Unsigned.Minor(blockBrief, blockEffects))
-                case header: BlockHeader.Major =>
+                else
                     for {
-                        settlementTxSeq <- doSettlement(
-                          validDeposits = eligibleForAbsorption,
-                          immatureDeposits = notYetMature,
+                        ret <-
+                            if absorbedDeposits.isEmpty
+                            then
+                                IO.pure(
+                                  (
+                                    p.virtualLedgerState.kzgCommitment,
+                                    None
+                                  )
+                                )
+                            else {
+                                val treasuryToSpend = p.dappLedgerState.treasury
+                                val genesisObligations: Queue[GenesisObligation] =
+                                    absorbedDeposits
+                                        .map(_._2.virtualOutputs)
+                                        .foldLeft(Queue.empty)((acc, ob) =>
+                                            acc.appendedAll(ob.toList)
+                                        )
+                                val genesisEvent = L2Genesis(
+                                  genesisObligations,
+                                  mkGenesisId(
+                                    headTokenNames.treasuryTokenName,
+                                    treasuryToSpend.datum.versionMajor.toInt + 1
+                                  )
+                                )
+
+                                for {
+                                    kzgCommitment <- this.runVirtualLedgerM(
+                                      VirtualLedgerM.mockApplyGenesis(genesisEvent)
+                                    )
+                                } yield (kzgCommitment, Some(genesisEvent))
+                            }
+                        (kzgCommitment, mbGenesisEvent) = ret
+                        headerIntermediate = previousHeader.nextHeaderMajor(
+                          blockStartTime,
+                          kzgCommitment
                         )
-                        depositsAbsorbed = eligibleForAbsorption
-                            .filter(deposit =>
-                                settlementTxSeq.settlementTx.depositsSpent
-                                    .contains(deposit._2)
-                            )
-                            .map(_._1)
-                            .toList
-                        blockBody = BlockBody.Major(events, depositsAbsorbed, depositsRefunded)
-                        blockBrief = BlockBrief.Major(header, blockBody)
+                    } yield (headerIntermediate, mbGenesisEvent)
+
+            (headerIntermediate, mbGenesisEvent) = ret
+
+            // Block brief
+            blockBrief: BlockBrief.Intermediate = headerIntermediate match {
+                case header: BlockHeader.Minor =>
+                    val blockBody = BlockBody.Minor(events, rejectedDeposits.map(_._1).toList)
+                    BlockBrief.Minor(header, blockBody)
+                case header: BlockHeader.Major =>
+                    val blockBody = BlockBody.Major(
+                      events,
+                      absorbedDeposits.map(_._1).toList,
+                      rejectedDeposits.map(_._1).toList
+                    )
+                    BlockBrief.Major(header, blockBody)
+            }
+        } yield (blockBrief, mbGenesisEvent)
+
+        def mkBlockEffects(
+            next: BlockBrief.Intermediate,
+            absorbedDeposits: Queue[(LedgerEventId, DepositUtxo)]
+        ): IO[Block.Unsigned.Next] = for {
+            ret <- next match {
+                case blockBrief @ BlockBrief.Minor(header, _) =>
+                    val blockEffects = BlockEffects.Unsigned.Minor(
+                      headerSerialized = header.onchainMsg,
+                      postDatedRefundTxs = List() // FIXME: Where are they?
+                    )
+                    IO.pure(Block.Unsigned.Minor(blockBrief, blockEffects))
+                case blockBrief @ BlockBrief.Major(header, _) =>
+                    for {
+                        p <- unsafeGetProducing
+
+                        payoutObligations = p.nextBlockData.blockWithdrawnUtxos
+
+                        settlementTxSeq <- this.runDappLedgerM(
+                          DappLedgerM.mkSettlementTxSeq(
+                            nextKzg = header.kzgCommitment,
+                            absorbedDeposits = absorbedDeposits,
+                            payoutObligations = payoutObligations,
+                            blockCreatedOn = header.startTime,
+                            competingFallbackValidityStart =
+                                txTiming.newFallbackStartTime(header.startTime)
+                          ),
+                          onSuccess = IO.pure
+                        )
+
                         blockEffects = BlockEffects.Unsigned.Major(
                           settlementTx = settlementTxSeq.settlementTx,
                           fallbackTx = settlementTxSeq.fallbackTx,
@@ -390,8 +474,55 @@ final case class JointLedger(
                         )
                     } yield Block.Unsigned.Major(blockBrief, blockEffects)
             }
+        } yield ret
+
+        // ===================================
+        // Finally, the body of completeBlockRegular
+        // ===================================
+
+        import config.txTiming
+
+        for {
+            producing <- unsafeGetProducing
+
+            ret <- partitionDeposits(
+              deposits = producing.dappLedgerState.deposits,
+              blockStartTime = producing.startTime,
+              settlementValidityEnd =
+                  txTiming.newSettlementEndTime(producing.competingFallbackValidityStart)
+            )
+
+            (eligible, ineligible, rejected) = ret
+
+            _ = logger.trace(
+              s"joint ledger: eligible=${eligible}" + "\n" +
+                  s"joint ledger: ineligible=${ineligible}" + "\n" +
+                  s"joint ledger: rejected=${rejected}" + "\n"
+            )
+
+            // TODO: wiring point for Peter
+            absorbedDeposits = eligible // first N of eligible
+
+            ret <- mkBlockBrief(
+              absorbedDeposits = absorbedDeposits,
+              rejectedDeposits = rejected
+            )
+            (blockBrief, mbGenesisEvent) = ret
+
+            block <- mkBlockEffects(blockBrief, absorbedDeposits)
 
             _ <- checkReferenceBlock(referenceBlockBrief, block)
+
+            // Block is done
+
+            // This is also sort of "handling", but internal  to ledgers
+            _ <- this.runDappLedgerM(DappLedgerM.handleBlockBrief(ineligible), onSuccess = IO.pure)
+
+            _ <- mbGenesisEvent.fold(IO.pure(())) { l2Genesis =>
+                this.runVirtualLedgerM(VirtualLedgerM.applyGenesisEvent(l2Genesis))
+            }
+
+            // Tell others about the block
             _ <- handleBlock(block, finalizationLocallyTriggered)
         } yield ()
     }
@@ -435,9 +566,8 @@ final case class JointLedger(
 
                 val blockBody = BlockBody.Final(
                   events = events,
-                  // TODO: see comment in registerDeposit
-                  // depositsRejected = depositsRejected ++ depositsRegistered,
-                  depositsRefunded = List.empty // FIXME: currently not handling refunds
+                  // Final block should reject all the deposits known.
+                  depositsRefunded = p.dappLedgerState.deposits.map(_._1).toList
                 )
 
                 val blockBrief = BlockBrief.Final(blockHeader, blockBody)

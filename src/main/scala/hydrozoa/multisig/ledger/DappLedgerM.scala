@@ -7,7 +7,7 @@ import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.settlement.SettlementConfig
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger
-import hydrozoa.multisig.ledger.DappLedgerM.Error.{AbsorptionPeriodExpired, ParseError, SettlementTxSeqBuilderError}
+import hydrozoa.multisig.ledger.DappLedgerM.Error.{ParseError, SettlementTxSeqBuilderError, SubmissionPeriodIsOver}
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.dapp.txseq
 import hydrozoa.multisig.ledger.dapp.txseq.{DepositRefundTxSeq, FinalizationTxSeq, SettlementTxSeq}
@@ -100,10 +100,20 @@ object DappLedgerM {
                     .map(ParseError(_))
             depositRefundTxSeq <- lift(parseRes)
             s <- get
+
             depositProduced <- lift(
-              if config.txTiming.depositAbsorptionEndTime(depositRefundTxSeq.depositTx.validityEnd)
-                      < blockStartTime
-              then Left(AbsorptionPeriodExpired(depositRefundTxSeq))
+              // TODO: add explicit vals to cope boolean blindness
+              // Check that submission is still possible and if not - reject
+              if depositRefundTxSeq.depositTx.validityEnd < blockStartTime
+              then Left(SubmissionPeriodIsOver)
+
+              // TODO: I believe we should remove it
+              // Check absorption is still possible
+              // The previous check is stronger I think
+              // else if config.txTiming.depositAbsorptionEndTime(
+              //      depositRefundTxSeq.depositTx.validityEnd
+              //    ) < blockStartTime
+              // then Left(AbsorptionPeriodExpired(depositRefundTxSeq))
               else Right(depositRefundTxSeq.depositTx.depositProduced)
             )
             newState = s.appendToQueue((eventId, depositProduced))
@@ -111,18 +121,14 @@ object DappLedgerM {
         } yield ()
     }
 
-    /** Construct a settlement transaction, a fallback transaction, a list of rollout transactions,
-      * and a list of immediate refund transactions based on the arguments. Remove the
-      * absorbed/refunded deposits and update the treasury in the ledger state. Called when the
-      * block weaver sends the single to close the block in leader mode.
+    /** Construct settlement tx seq and set the new treasury to the state.
       *
       * The collective value of the [[payouts]] must '''not''' exceed the [[treasury]] value.
       */
-    def settleLedger(
+    def mkSettlementTxSeq(
         nextKzg: KzgCommitment,
-        validDeposits: Queue[(LedgerEventId, DepositUtxo)],
+        absorbedDeposits: Queue[(LedgerEventId, DepositUtxo)],
         payoutObligations: Vector[Payout.Obligation],
-        immatureDeposits: Queue[(LedgerEventId, DepositUtxo)],
         blockCreatedOn: QuantizedInstant,
         competingFallbackValidityStart: QuantizedInstant,
     ): DappLedgerM[SettlementTxSeq] = {
@@ -131,17 +137,21 @@ object DappLedgerM {
             config <- ask
             state <- get
 
-            (depositsToSpend, validDepositsAboveMax) = validDeposits.splitAt(
-              config.maxDepositsPerSettlementTx
-            )
+            majorVersionProduced = BlockVersion.Major(state.treasury.datum.versionMajor.toInt + 1)
+
+            // TODO: add logger
+            // _ = println(
+            //  s"DappLedgerM.settleLedger: state.treasury.datum.versionMajor=${state.treasury.datum.versionMajor}"
+            // )
+            // _ = println(s"DappLedgerM.settleLedger: majorVersionProduced=${majorVersionProduced}")
+
             settlementTxSeqRes <- lift(
               SettlementTxSeq
                   .Build(config)(
                     kzgCommitment = nextKzg,
-                    majorVersionProduced =
-                        BlockVersion.Major(state.treasury.datum.versionMajor.toInt + 1),
+                    majorVersionProduced = majorVersionProduced,
                     treasuryToSpend = state.treasury,
-                    depositsToSpend = Vector.from(depositsToSpend.map(_._2)),
+                    depositsToSpend = Vector.from(absorbedDeposits.map(_._2).toList),
                     payoutObligationsRemaining = payoutObligations,
                     competingFallbackValidityStart = competingFallbackValidityStart,
                     blockCreatedOn = blockCreatedOn
@@ -151,18 +161,31 @@ object DappLedgerM {
                   .map(SettlementTxSeqBuilderError.apply)
             )
 
-            // We update the state with:
-            // - the treasury produced by the settlement tx
-            // - The deposits that were _not_ successfully processed by the settlement transaction (due to not fitting)
-            //   and the remaining immature deposits
-            newState = State(
-              treasury = settlementTxSeqRes.settlementTx.treasuryProduced,
-              deposits = validDepositsAboveMax ++ immatureDeposits
+            newState = state.copy(
+              treasury = settlementTxSeqRes.settlementTx.treasuryProduced
             )
             _ <- set(newState)
+
         } yield settlementTxSeqRes
 
     }
+
+    /** Remove the absorbed/refunded deposits and update the treasury in the ledger state. Called
+      * when the block weaver sends the single to close the block in leader mode.
+      *
+      * @param ineligibleDeposits
+      * @return
+      */
+    def handleBlockBrief(
+        ineligibleDeposits: Queue[(LedgerEventId, DepositUtxo)],
+    ): DappLedgerM[Unit] = for {
+        state <- get
+
+        newState = state.copy(
+          deposits = ineligibleDeposits
+        )
+        _ <- set(newState)
+    } yield ()
 
     /** Construct a finalization transaction, a list of rollout transactions, and a list of
       * immediate refund transactions based on the arguments. The [[DappLedgerM]] must be discarded
@@ -216,6 +239,8 @@ object DappLedgerM {
         final case class ParseError(wrapped: txseq.DepositRefundTxSeq.Parse.Error)
             extends RegisterDepositError
 
+        case object SubmissionPeriodIsOver extends RegisterDepositError
+
         /** This is raised during a call to `RegisterDeposit` if the deposit parses successfully,
           * but reveals an absorption window that is already prior to the block's start time. In
           * this case, the deposit will NOT be added to the dapp ledger's state.
@@ -257,17 +282,24 @@ object DappLedgerM {
         ): IO[B] = {
             for {
                 oldState <- jl.state.get
+                _ <- IO.println(
+                  s"[runDappLedgerM] Before action: oldState.dappLedgerState.treasury.datum.versionMajor=${oldState.dappLedgerState.treasury.datum.versionMajor}"
+                )
                 res = action.run(jl.config, oldState.dappLedgerState)
                 b <- res match {
                     case Left(error) => onFailure(error)
                     case Right(newState, a) =>
                         for {
+                            _ <- IO.println(
+                              s"[runDappLedgerM] After action: newState.treasury.datum.versionMajor=${newState.treasury.datum.versionMajor}"
+                            )
                             _ <- jl.state.set(oldState match {
                                 case d: JointLedger.Done =>
                                     d.focus(_.dappLedgerState).replace(newState)
                                 case p: JointLedger.Producing =>
                                     p.focus(_.dappLedgerState).replace(newState)
                             })
+                            _ <- IO.println("[runDappLedgerM] State updated in JointLedger")
                             b <- onSuccess(a)
                         } yield b
                 }
