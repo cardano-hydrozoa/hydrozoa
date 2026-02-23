@@ -66,7 +66,7 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
       *
       * TODO:
       */
-    lazy val _ = property("Deposits") = Suite(
+    val _ = property("Deposits") = Suite(
       suiteCardano = Mock(preprod),
       txTimingGen = generateDefaultTxTiming,
       mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
