@@ -193,7 +193,7 @@ private object SettlementTxOps {
                     .cond(checkDepositsToSpend, (), TooManyDeposits)
                     .explainConst(
                       s"Too many deposits were included. You passed ${depositsToSpend.length}, but we can have " +
-                          s"at most ${config.maxDepositsPerSettlementTx}."
+                          s"at most ${config.maxDepositsAbsorbedPerBlock}."
                     )
                 ctx <- TransactionBuilder
                     .build(config.network, definiteSteps)
@@ -214,7 +214,7 @@ private object SettlementTxOps {
                 treasuryToSpend.address == config.headMultisigAddress
 
             private def checkDepositsToSpend: Boolean =
-                depositsToSpend.length <= config.maxDepositsPerSettlementTx
+                depositsToSpend.length <= config.maxDepositsAbsorbedPerBlock
 
             /////////////////////////////////////////////////////////
             // Base steps
@@ -234,6 +234,13 @@ private object SettlementTxOps {
             // Spend treasury
             private val spendTreasury =
                 Spend(treasuryToSpend.asUtxo, config.headMultisigScript.witnessAttached)
+
+            /////////////////////////////////////////////////////////
+            // Spend deposits
+            private def mkDepositStep(deposit: DepositUtxo): Spend =
+                Spend(deposit.toUtxo, config.headMultisigScript.witnessAttached)
+
+            private val spendDeposits: List[Spend] = depositsToSpend.toList.map(mkDepositStep)
 
             /////////////////////////////////////////////////////////
             // Send rollout (maybe)
@@ -288,14 +295,7 @@ private object SettlementTxOps {
             /////////////////////////////////////////////////////////
             // Definite steps
             private val definiteSteps: List[TransactionBuilderStep] =
-                baseSteps ++ List(spendTreasury, sendTreasury) ++ AddDeposits()
-        }
-
-        private object AddDeposits {
-            def apply(): List[Spend] = depositsToSpend.toList.map(mkDepositStep)
-
-            private def mkDepositStep(deposit: DepositUtxo): Spend =
-                Spend(deposit.toUtxo, config.headMultisigScript.witnessAttached)
+                baseSteps ++ List(spendTreasury, sendTreasury) ++ spendDeposits
         }
 
         // NOTE: I'm reusing the InsufficientFunds from the tx builder error, because its identical to what we need.

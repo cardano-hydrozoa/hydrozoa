@@ -104,18 +104,9 @@ def genTallyTxRecipe(
     estimatedFee: Coin = Coin(5_000_000L)
 ): Gen[TallyTx.Recipe] =
     for {
-        // Common head parameters
-//        (
-//          hns,
-//          headTokensSuffix,
-//          peers,
-//          peersVKs,
-//          paramsHash,
-//          versionMajor,
-//          fallbackTxId
-//        ) <-
-//            genHeadParams
-        testPeers <- generateTestPeers()
+
+        // Test currently uses two peers
+        testPeers <- generateTestPeers(minPeers = 2)
         config <- generateNodeConfig(Exact(testPeers.nHeadPeers.toInt))()
 
         // This is 4 bytes shorter to accommodate CIP-67 prefixes

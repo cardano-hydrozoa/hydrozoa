@@ -34,8 +34,8 @@ object HeadParameters {
 
         def headParamsHash: Hash32
 
-        override transparent inline def maxDepositsPerSettlementTx: PositiveInt =
-            settlementConfig.maxDepositsPerSettlementTx
+        override transparent inline def maxDepositsAbsorbedPerBlock: PositiveInt =
+            settlementConfig.maxDepositsAbsorbedPerBlock
 
         override transparent inline def minSettlementDuration: QuantizedFiniteDuration =
             txTiming.minSettlementDuration

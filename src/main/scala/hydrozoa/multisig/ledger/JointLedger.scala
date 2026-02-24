@@ -495,7 +495,7 @@ final case class JointLedger(
             (eligible, ineligible, rejected) = ret
 
             // TODO: wiring point for Peter
-            (absorbedDeposits, unabsorbedDeposits) = eligible.splitAt(maxDepositsPerSettlementTx)
+            (absorbedDeposits, unabsorbedDeposits) = eligible.splitAt(maxDepositsAbsorbedPerBlock)
 
             _ = logger.trace(
               s"joint ledger: absorbed=${absorbedDeposits}" + "\n" +
