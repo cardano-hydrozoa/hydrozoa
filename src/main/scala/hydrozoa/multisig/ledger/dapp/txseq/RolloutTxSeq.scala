@@ -11,6 +11,7 @@ import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.BuilderResultSimple
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import scala.annotation.tailrec
+import scalus.cardano.ledger.Coin
 import scalus.cardano.txbuilder.SomeBuildError
 
 /** A non-empty chain of rollout transactions in order of chaining.
@@ -108,6 +109,7 @@ private object RolloutTxSeqOps {
 
         def finishPostProcess(rolloutSpent: RolloutUtxo): BuilderResultSimple[RolloutTxSeq]
 
+        def totalFee: Coin
     object PartialResult {
 
         /** A case class indicating when only single rollout transaction is required to fulfill all
@@ -130,6 +132,8 @@ private object RolloutTxSeqOps {
                 for {
                     onlyCompleted <- only.complete(rolloutSpent)
                 } yield RolloutTxSeq(notLast = Vector.empty, last = onlyCompleted)
+
+            override def totalFee: Coin = only.fee
         }
 
         /** A partial result for a rollout transaction _chain_, where the [[first]] transaction
@@ -179,6 +183,9 @@ private object RolloutTxSeqOps {
                   notLast = firstPostProcessed +: intermediatesPostProcessed,
                   last = lastPostProcessed
                 )
+
+            override def totalFee: Coin =
+                first.fee + Coin(intermediates.map(_.fee.value).sum) + last.fee
         }
 
         object Many {

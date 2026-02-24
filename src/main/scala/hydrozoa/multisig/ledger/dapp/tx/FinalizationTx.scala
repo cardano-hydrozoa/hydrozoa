@@ -495,36 +495,6 @@ private object FinalizationTxOps {
             }
         }
 
-        private object PostProcess {
-
-            /** Given the transaction context of a [[Builder]] that has finished building, apply
-              * post-processing to get the [[MultisigTreasuryUtxo]] produced by the
-              * [[FinalizationTx]]. Assumes that the treasury output is present in the transaction
-              * and is the first output.
-              *
-              * @param ctx
-              *   The transaction context of a finished builder state.
-              * @throws AssertionError
-              *   when the assumption is broken.
-              * @return
-              */
-            @throws[AssertionError]
-            def getTreasuryProduced(
-                majorVersion: BlockVersion.Major,
-                treasurySpent: MultisigTreasuryUtxo,
-                ctx: State
-            ): MultisigTreasuryUtxo = {
-                val tx = ctx.ctx.transaction
-                val outputs = tx.body.value.outputs
-
-                assert(outputs.nonEmpty)
-                // TODO: Throw other assertion errors in `.fromUtxo` and instead of `.get`?
-                MultisigTreasuryUtxo
-                    .fromUtxo(Utxo(TransactionInput(tx.id, 0), outputs.head.value))
-                    .get
-            }
-        }
-
         private object TxBuilder {
             private val diffHandler = Change.changeOutputDiffHandler(
               _,

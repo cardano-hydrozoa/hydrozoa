@@ -13,7 +13,7 @@ import hydrozoa.multisig.ledger.dapp.token.CIP67.{HasTokenNames, HeadTokenNames}
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.Initialization
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuilderResultSimple, explainConst}
-import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
+import hydrozoa.multisig.ledger.dapp.utxo.{Equity, MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import monocle.{Focus, Lens}
 import scala.util.Try
 import scalus.cardano.ledger.*
@@ -22,6 +22,7 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, ModifyAuxiliaryData, Send, Spend, ValidityEndSlot}
+import scalus.cardano.txbuilder.TxBalancingError.InsufficientFunds
 import scalus.uplc.builtin.Data
 import scalus.uplc.builtin.Data.toData
 
@@ -91,7 +92,7 @@ private object InitializationTxOps {
                     .explainConst("Initialization tx failed to finalize")
             }
 
-            completed = Complete(finalized)
+            completed <- Complete(finalized)
         } yield completed
 
         object Steps {
@@ -196,20 +197,14 @@ private object InitializationTxOps {
         }
 
         private object Complete {
-            def apply(finalized: TransactionBuilder.Context): InitializationTx =
+            def apply(
+                finalized: TransactionBuilder.Context
+            ): BuilderResultSimple[InitializationTx] =
                 val treasuryIndex = 0
                 val multisigRegimeIndex = 1
 
                 val treasuryValue =
                     finalized.transaction.body.value.outputs(treasuryIndex).value.value
-
-                val treasuryProduced = MultisigTreasuryUtxo(
-                  treasuryTokenName = config.headTokenNames.treasuryTokenName,
-                  utxoId = TransactionInput(finalized.transaction.id, treasuryIndex),
-                  address = config.headMultisigAddress,
-                  datum = Steps.Sends.Treasury.treasuryDatum,
-                  value = treasuryValue
-                )
 
                 val multisigRegimeProduced = MultisigRegimeUtxo(
                   config.headTokenNames.multisigRegimeTokenName,
@@ -218,7 +213,33 @@ private object InitializationTxOps {
                   script = config.headMultisigScript
                 )
 
-                InitializationTx(
+                val equityCoin =
+                    config.initialEquityContributed - finalized.transaction.body.value.fee
+
+                for {
+                    equity <- Equity(equityCoin)
+                        .toRight(
+                          SomeBuildError.BalancingError(
+                            InsufficientFunds(
+                              Value(equityCoin),
+                              finalized.transaction.body.value.fee.value
+                            ),
+                            finalized
+                          )
+                        )
+                        .explainConst(
+                          s"There is not enough equity (${config.initialEquityContributed}) to pay for the" +
+                              s" initialization tx fee of ${finalized.transaction.body.value.fee}"
+                        )
+                    treasuryProduced = MultisigTreasuryUtxo(
+                      treasuryTokenName = config.headTokenNames.treasuryTokenName,
+                      utxoId = TransactionInput(finalized.transaction.id, treasuryIndex),
+                      address = config.headMultisigAddress,
+                      datum = Steps.Sends.Treasury.treasuryDatum,
+                      value = treasuryValue,
+                      equity = equity
+                    )
+                } yield InitializationTx(
                   validityEnd = Steps.Base.validityEndTime,
                   treasuryProduced = treasuryProduced,
                   tx = finalized.transaction,
@@ -226,7 +247,6 @@ private object InitializationTxOps {
                   headTokenNames = config.headTokenNames,
                   resolvedUtxos = finalized.resolvedUtxos
                 )
-
         }
 
         private object TxBuilder {
@@ -257,6 +277,7 @@ private object InitializationTxOps {
             case InvalidTransactionError(msg: String)
             case TtlIsMissing
             case InvalidInitializationTtl
+            case EquityToLow(equity: Coin, fee: Coin)
         }
 
     }
@@ -477,12 +498,16 @@ private object InitializationTxOps {
                 case Some(wrongNumber) => Left(InvalidTransactionError("multiple MR tokens minted"))
             }
 
+            equity <- Equity(config.initialEquityContributed - tx.body.value.fee)
+                .toRight(EquityToLow(config.initialEquityContributed, tx.body.value.fee))
+
             treasury = MultisigTreasuryUtxo(
               treasuryTokenName = config.headTokenNames.treasuryTokenName,
               utxoId = TransactionInput(tx.id, imd.treasuryOutputIndex),
               address = expectedHeadAddress,
               datum = expectedTreasuryDatum,
-              value = actualTreasuryOutput.value
+              value = actualTreasuryOutput.value,
+              equity = equity
             )
 
             multisigRegimeWitness = Utxo(

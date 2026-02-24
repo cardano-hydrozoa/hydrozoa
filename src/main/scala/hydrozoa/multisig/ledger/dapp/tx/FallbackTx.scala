@@ -147,7 +147,7 @@ private object FallbackTxOps {
                     def apply() = Send(
                       Babbage(
                         address = config.ruleBasedTreasuryAddress,
-                        value = treasuryUtxoSpent.value,
+                        value = treasuryUtxoSpent.value - Value(treasuryUtxoSpent.equity.coin),
                         datumOption = Some(Inline(datum.toData)),
                         scriptRef = None
                       )
@@ -214,21 +214,27 @@ private object FallbackTxOps {
                 object Collaterals {
                     def apply(): NonEmptyList[Send] = utxos.map(Send(_))
 
+                    val equityPayouts: Iterable[Coin] =
+                        config.distributeEquity(treasuryUtxoSpent.equity.coin).toSortedMap.values
+
                     val utxos: NonEmptyList[TransactionOutput] = time("collateralUtxos") {
                         NonEmptyList.fromListUnsafe(
                           hns.requiredSigners
-                              .map(es =>
+                              .zip(equityPayouts)
+                              .map { case (es, equity) =>
                                   Babbage(
                                     address = ShelleyAddress(
                                       network = config.network,
                                       payment = ShelleyPaymentPart.Key(es.hash),
                                       delegation = ShelleyDelegationPart.Null
                                     ),
-                                    value = Value(config.individualContingency.collateralDeposit),
+                                    value = Value(
+                                      config.individualContingency.collateralDeposit + equity
+                                    ),
                                     datumOption = None,
                                     scriptRef = None
                                   ).ensureMinAda(config)
-                              )
+                              }
                               .toList
                         )
                     }
@@ -246,7 +252,7 @@ private object FallbackTxOps {
                   utxoId = TransactionInput(txId, 0),
                   address = config.ruleBasedTreasuryAddress,
                   datum = RuleBasedTreasuryDatum.Unresolved(Steps.Sends.Treasury.datum),
-                  value = treasuryUtxoSpent.value
+                  value = treasuryUtxoSpent.value - Value(treasuryUtxoSpent.equity.coin)
                 )
 
                 FallbackTx(
