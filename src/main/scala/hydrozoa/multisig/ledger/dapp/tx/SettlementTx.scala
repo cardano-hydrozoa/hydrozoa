@@ -138,7 +138,7 @@ private object SettlementTxOps {
             override def complete(
                 ctx: TransactionBuilder.Context
             ): TxBuilderResult[Result[SettlementTx.NoPayouts]] =
-                Right(SettlementTx.Result.NoPayouts(CompleteNoPayouts(ctx)))
+                Right(CompleteNoPayouts(ctx))
         }
 
         case class WithPayouts(override val config: Config)(
@@ -296,14 +296,14 @@ private object SettlementTxOps {
         }
 
         private[tx] object CompleteNoPayouts {
-            def apply(ctx: TransactionBuilder.Context): SettlementTx.NoPayouts = {
+            def apply(ctx: TransactionBuilder.Context): SettlementTx.Result.NoPayouts = {
                 val treasuryProduced = PostProcess.getTreasuryProduced(
                   majorVersionProduced,
                   treasuryToSpend,
                   ctx
                 )
 
-                SettlementTx.NoPayouts(
+                SettlementTx.Result.NoPayouts(SettlementTx.NoPayouts(
                   validityEnd = Slot(ctx.transaction.body.value.ttl.get)
                       .toQuantizedInstant(config.cardanoInfo.slotConfig),
                   tx = ctx.transaction,
@@ -313,7 +313,7 @@ private object SettlementTxOps {
                   treasuryProduced = treasuryProduced,
                   depositsSpent = depositsToSpend,
                   resolvedUtxos = ctx.resolvedUtxos
-                )
+                ))
             }
         }
 
