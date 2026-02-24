@@ -109,6 +109,8 @@ private object DepositTxOps {
                     )
                     .explainConst("building unbalanced deposit tx failed")
 
+                // _ = println(s"!!!!! ---- ${HexUtil.encodeHexString(ctx.transaction.toCbor)}")
+
                 finalized <- ctx
                     .finalizeContext(
                       config.cardanoProtocolParams,

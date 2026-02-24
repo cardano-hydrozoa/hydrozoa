@@ -10,17 +10,20 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant.mkOrderingOps
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.ledger.VirtualLedgerM
-import hydrozoa.multisig.ledger.block.{BlockNumber, BlockVersion}
+import hydrozoa.multisig.ledger.block.BlockBrief.{Final, Major, Minor}
+import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.dapp.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag
 import hydrozoa.multisig.ledger.event.LedgerEventNumber.increment
 import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId, LedgerEventNumber}
 import hydrozoa.multisig.ledger.virtual.HydrozoaTransactionMutator
+import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.kzgCommitment
 import hydrozoa.multisig.ledger.virtual.tx.L2Tx
 import monocle.Lens
 import monocle.syntax.all.focus
+import org.scalacheck.commands.ModelCommand
 import scala.util.chaining.*
 import scalus.cardano.ledger.{Transaction, TransactionHash, TransactionInput, Utxos}
 import test.TestPeer
@@ -59,7 +62,7 @@ object Model:
         activeUtxos: Utxos,
 
         // L1 state - the only peer's utxos
-        utxoL1: Utxos,
+        peerUtxosL1: Utxos,
 
         // Deposits
         // The queue of deposits that may be submitted if timing is lucky, or discarded as expired
@@ -71,7 +74,9 @@ object Model:
         depositSigned: Map[TransactionHash, Transaction],
         // Deposits, that have been submitted, so they are expected to appear in the
         // very first block after their maturity point.
-        depositSubmitted: List[(LedgerEventId, QuantizedInstant)]
+        depositSubmitted: List[(LedgerEventId, QuantizedInstant)],
+        // Deposit UTXO IDs (output 0 of deposit txs) that have been submitted
+        depositUtxoIds: Set[TransactionInput]
     ) {
         override def toString: String = "<model state (hidden)>"
 
@@ -84,15 +89,20 @@ object Model:
           * preexisting state.
           */
         def applyContinuingL1Tx(l1Tx: Transaction): State = {
-            val peerAddresses = this.utxoL1.map(_._2.address).toSet
-            val survivedUtxo = this.utxoL1 -- l1Tx.body.value.inputs.toSet
+            val peerAddresses = this.peerUtxosL1.map(_._2.address).toSet
+            val survivedUtxo = this.peerUtxosL1 -- l1Tx.body.value.inputs.toSet
             val newUtxos = survivedUtxo ++ l1Tx.body.value.outputs.toList
                 .map(_.value)
                 .zipWithIndex
                 .filter((output, _) => peerAddresses.contains(output.address))
                 .map((output, ix) => TransactionInput(l1Tx.id, ix) -> output)
-            this.copy(utxoL1 = newUtxos)
+            this.copy(peerUtxosL1 = newUtxos)
         }
+
+        def depositForSubmission: Set[LedgerEventId] =
+            this.depositEnqueued.map(_.registerDeposit.eventId).toSet -- depositSubmitted
+                .map(_._1)
+                .toSet
     }
 
     enum CurrentTime(qi: QuantizedInstant):
@@ -162,11 +172,6 @@ object Model:
     // ===================================
     // ModelCommand instances
     // ===================================
-
-    import hydrozoa.multisig.ledger.block.BlockBrief.{Final, Major, Minor}
-    import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader}
-    import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
-    import org.scalacheck.commands.ModelCommand
 
     given ModelCommand[DelayCommand, Unit, State] with {
 
@@ -492,6 +497,55 @@ object Model:
             )
 
             () -> finalState
+    }
+
+    given ModelCommand[SubmitDepositCommand, Unit, State] with {
+        override def runState(
+            cmd: SubmitDepositCommand,
+            state: State
+        ): (Unit, State) = {
+            logger.debug(
+              s"MODEL>> SubmitDepositCommand for ${cmd.deposits.size} deposits"
+            )
+
+            // Apply each deposit transaction to peerUtxosL1, checking TTL
+            // Also collect deposit UTXO IDs (output 0 of deposit txs)
+            val (stateAfterL1Txs, newDepositUtxoIds) =
+                cmd.deposits.foldLeft((state, Set.empty[TransactionInput])) {
+                    case ((acc, utxoIds), (eventId, signedTx)) =>
+                        // Find the deposit to check its validity end time
+                        val depositCmd = acc.depositEnqueued
+                            .find(_.registerDeposit.eventId == eventId)
+                            .getOrElse(
+                              throw RuntimeException(
+                                s"Deposit with event ID $eventId not found in enqueued"
+                              )
+                            )
+
+                        val validityEnd = depositCmd.depositRefundTxSeq.depositTx.validityEnd
+                        val depositTxId = depositCmd.depositRefundTxSeq.depositTx.tx.id
+                        val isExpired = acc.currentTime.instant > validityEnd
+                        val depositUtxoId = TransactionInput(signedTx.id, 0)
+
+                        if isExpired then
+                            logger.warn(
+                              s"Deposit $eventId, tx hash $depositTxId, is expired: (validityEnd=$validityEnd, currentTime=${acc.currentTime.instant}), not applying L1 tx"
+                            )
+                            (acc, utxoIds) // Don't mutate state for expired deposits
+                        else
+                            logger.trace(s"Applying deposit L1 tx for event ID: $eventId")
+                            (acc.applyContinuingL1Tx(signedTx), utxoIds + depositUtxoId)
+                }
+
+            val newState = stateAfterL1Txs.copy(
+              depositSubmitted =
+                  stateAfterL1Txs.depositSubmitted ++ cmd.deposits.map { case (eventId, _) =>
+                      eventId -> stateAfterL1Txs.currentTime.instant
+                  },
+              depositUtxoIds = stateAfterL1Txs.depositUtxoIds ++ newDepositUtxoIds
+            )
+            () -> newState
+        }
     }
 
     enum Error extends Throwable:

@@ -172,11 +172,12 @@ case class Suite(
               competingFallbackStartTime =
                   headConfig.txTiming.newFallbackStartTime(headConfig.headStartTime),
               activeUtxos = headConfig.initialL2Utxos,
-              utxoL1 = peerL1GenesisUtxos,
+              peerUtxosL1 = peerL1GenesisUtxos,
               depositEnqueued = List.empty,
               utxoLocked = List.empty,
               depositSigned = Map.empty,
-              depositSubmitted = List.empty
+              depositSubmitted = List.empty,
+              depositUtxoIds = Set.empty
             )
             .applyContinuingL1Tx(headConfig.initializationTx.tx)
     }
@@ -212,7 +213,7 @@ case class Suite(
             } yield ())
 
             _ <- loggerIO.debug(s"peerKeys: ${headConfig.headPeers.headPeerVKeys}")
-            _ <- loggerIO.debug(s"peer L1 utxos: ${state.utxoL1.map(_._1)}")
+            _ <- loggerIO.debug(s"peer L1 utxos: ${state.peerUtxosL1.map(_._1)}")
 
             nodeConfig: NodeConfig = NodeConfig
                 .apply(

@@ -161,7 +161,7 @@ object SutCommands:
             block <- IO.pure(
               if cmd.isFinal
               then CompleteBlockFinal(None)
-              else CompleteBlockRegular(None, Set.empty, false)
+              else CompleteBlockRegular(None, cmd.pollResults, false)
             )
             // All sync commands should be timed out since the system may terminate
             d <- (sut.agent ?: AgentActor.CompleteBlock(block, cmd.blockNumber)).timeout(10.seconds)
@@ -170,8 +170,23 @@ object SutCommands:
         } yield d.blockBrief
     }
 
-    implicit given SutCommand[RegisterDepositCommand, Unit, Stage1Sut] with {
+    given SutCommand[RegisterDepositCommand, Unit, Stage1Sut] with {
         override def run(cmd: RegisterDepositCommand, sut: Stage1Sut): IO[Unit] =
             logger.debug(">> RegisterDepositCommand") >>
                 (sut.agent ! cmd.registerDeposit)
+    }
+
+    given SutCommand[SubmitDepositCommand, Unit, Stage1Sut] with {
+        override def run(cmd: SubmitDepositCommand, sut: Stage1Sut): IO[Unit] = for {
+            ret <- IO.traverse(cmd.deposits.map(_._2))(sut.cardanoBackend.submitTx)
+            // Submission errors are ignored, but dumped here
+            submissionErrors = ret.filter(_.isLeft)
+            _ <- IO.whenA(submissionErrors.nonEmpty)(
+              logger.warn(
+                "Submit deposit errors:" + submissionErrors
+                    .map(a => s"\n\t- ${a.left}")
+                    .mkString
+              )
+            )
+        } yield ()
     }

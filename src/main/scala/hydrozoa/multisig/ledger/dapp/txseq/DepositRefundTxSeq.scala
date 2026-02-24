@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.data.NonEmptyList
+import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.config.head.initialization.InitialBlock
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.network.CardanoNetwork
@@ -238,7 +239,9 @@ private object DepositRefundTxSeqOps {
                 case Refund(e)          => s"Refund parse error: $e"
                 case RefundNotPostDated => "Refund transaction is not post-dated"
                 case RefundTxMismatch(parsed, expected) =>
-                    s"Refund transaction mismatch: parsed=$parsed, expected=$expected"
+                    s"Refund transaction mismatch: parsed=$parsed, expected=$expected, " +
+                        s"parsed bytes: ${HexUtil.encodeHexString(parsed.tx.toCbor)}, " +
+                        s"expected bytes: ${expected.tx.toCbor}"
                 case ExpectedRefundBuildError(e) =>
                     s"Expected refund build error: ${e._2}"
                 case VirtualOutputs(e) => s"Virtual outputs parsing error: $e"

@@ -9,7 +9,7 @@ import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId}
 import org.scalacheck.Prop
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.commands.{CommandLabel, CommandProp}
-import scalus.cardano.ledger.Transaction
+import scalus.cardano.ledger.{Transaction, TransactionInput}
 
 object Commands:
 
@@ -103,7 +103,8 @@ object Commands:
     /** Complete the current block (regular or final).  Result is the [[BlockBrief]] produced. */
     final case class CompleteBlockCommand(
         blockNumber: BlockNumber,
-        isFinal: Boolean
+        isFinal: Boolean,
+        pollResults: Set[TransactionInput]
     )
 
     /** Postcondition for [[CompleteBlockCommand]]: verifies model and SUT agree on the block brief.
@@ -155,13 +156,13 @@ object Commands:
     /** The command submits the deposit transaction from the corresponding register deposit event.
       */
     final case class SubmitDepositCommand(
-        depositEventIds: List[LedgerEventId]
+        deposits: List[(LedgerEventId, Transaction)]
     )
 
     implicit given CommandProp[SubmitDepositCommand, Unit, Model.State] with {}
 
     implicit given CommandLabel[SubmitDepositCommand] with
         override def label(cmd: SubmitDepositCommand): String =
-            s"Submit deposits (n=${cmd.depositEventIds.size})"
+            s"Submit deposits (n=${cmd.deposits.size})"
 
 end Commands
