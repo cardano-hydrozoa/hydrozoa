@@ -4,7 +4,6 @@ import cats.data.*
 import cats.effect.IO
 import cats.syntax.all.*
 import hydrozoa.config.head.HeadConfig
-import hydrozoa.config.head.multisig.settlement.SettlementConfig
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger
 import hydrozoa.multisig.ledger.DappLedgerM.Error.{ParseError, SettlementTxSeqBuilderError, SubmissionPeriodIsOver}
@@ -53,7 +52,7 @@ case class DappLedgerM[A] private (private val unDappLedger: RT[A]) {
 }
 
 object DappLedgerM {
-    type Config = HeadConfig.Section & SettlementConfig.Section
+    type Config = HeadConfig.Section
 
     /** Extract the transaction builder configuration from a [[DappLedgerM]]
       */
@@ -145,7 +144,7 @@ object DappLedgerM {
             // )
             // _ = println(s"DappLedgerM.settleLedger: majorVersionProduced=${majorVersionProduced}")
 
-            settlementTxSeqRes <- lift(
+            settlementTxSeq <- lift(
               SettlementTxSeq
                   .Build(config)(
                     kzgCommitment = nextKzg,
@@ -162,11 +161,11 @@ object DappLedgerM {
             )
 
             newState = state.copy(
-              treasury = settlementTxSeqRes.settlementTx.treasuryProduced
+              treasury = settlementTxSeq.settlementTx.treasuryProduced
             )
             _ <- set(newState)
 
-        } yield settlementTxSeqRes
+        } yield settlementTxSeq
 
     }
 

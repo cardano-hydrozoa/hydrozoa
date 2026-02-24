@@ -303,17 +303,19 @@ private object SettlementTxOps {
                   ctx
                 )
 
-                SettlementTx.Result.NoPayouts(SettlementTx.NoPayouts(
-                  validityEnd = Slot(ctx.transaction.body.value.ttl.get)
-                      .toQuantizedInstant(config.cardanoInfo.slotConfig),
-                  tx = ctx.transaction,
-                  majorVersionProduced = majorVersionProduced,
-                  kzgCommitment = kzgCommitment,
-                  treasurySpent = treasuryToSpend,
-                  treasuryProduced = treasuryProduced,
-                  depositsSpent = depositsToSpend,
-                  resolvedUtxos = ctx.resolvedUtxos
-                ))
+                SettlementTx.Result.NoPayouts(
+                  SettlementTx.NoPayouts(
+                    validityEnd = Slot(ctx.transaction.body.value.ttl.get)
+                        .toQuantizedInstant(config.cardanoInfo.slotConfig),
+                    tx = ctx.transaction,
+                    majorVersionProduced = majorVersionProduced,
+                    kzgCommitment = kzgCommitment,
+                    treasurySpent = treasuryToSpend,
+                    treasuryProduced = treasuryProduced,
+                    depositsSpent = depositsToSpend,
+                    resolvedUtxos = ctx.resolvedUtxos
+                  )
+                )
             }
         }
 
