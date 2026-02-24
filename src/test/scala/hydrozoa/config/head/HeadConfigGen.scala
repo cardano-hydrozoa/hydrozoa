@@ -4,6 +4,7 @@ import hydrozoa.config.head.HeadPeersSpec.{Exact, Random}
 import hydrozoa.config.head.initialization.HeadStartTimeGen.currentTimeHeadStartTime
 import hydrozoa.config.head.initialization.{InitializationParametersGenBottomUp, InitializationParametersGenTopDown, generateInitialBlock}
 import hydrozoa.config.head.multisig.fallback.{FallbackContingencyGen, generateFallbackContingency}
+import hydrozoa.config.head.multisig.settlement.{SettlementConfigGen, generateSettlementConfig}
 import hydrozoa.config.head.multisig.timing.{TxTimingGen, generateDefaultTxTiming}
 import hydrozoa.config.head.network.{CardanoNetwork, generateStandardCardanoNetwork}
 import hydrozoa.config.head.parameters.{GenHeadParams, HeadParameters, generateHeadParameters}
@@ -35,14 +36,16 @@ def generateHeadConfigPreInit(headPeers: HeadPeersSpec)(
     generateHeadParameters: GenHeadParams = generateHeadParameters,
     generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
         InitializationParametersGenTopDown.GenWithDeps =
-        InitializationParametersGenBottomUp.generateInitializationParameters
+        InitializationParametersGenBottomUp.generateInitializationParameters,
+    generateSettlementConfig: SettlementConfigGen = generateSettlementConfig
 ): Gen[HeadConfig.Preinit.HeadConfig] = for {
     testPeers <- headPeers.generate
     cardanoNetwork <- generateCardanoNetwork
     headParams <- generateHeadParameters(cardanoNetwork)(
       generateTxTiming,
       generateFallbackContingency,
-      generateDisputeResolutionConfig
+      generateDisputeResolutionConfig,
+      generateSettlementConfig
     )
     initializationParams <- generateInitializationParameters match {
         case g: InitializationParametersGenBottomUp.GenInitializationParameters =>
@@ -99,7 +102,7 @@ def generateHeadConfig(headPeers: HeadPeersSpec)(
         initialBlock <- generateInitialBlock(TestPeers(peers._testPeers.map(_._2).toList))(
           generateCardanoNetwork = Gen.const(preinit.cardanoNetwork),
           generateTxTiming = _ => Gen.const(preinit.headParams.txTiming),
-          generateHeadParameters = _ => (_, _, _) => Gen.const(preinit.headParams),
+          generateHeadParameters = _ => (_, _, _, _) => Gen.const(preinit.headParams),
           generateHeadStartTime = _ => Gen.const(preinit.initializationParams.headStartTime),
           generateInitializationParameters = preinit.initializationParams
         )

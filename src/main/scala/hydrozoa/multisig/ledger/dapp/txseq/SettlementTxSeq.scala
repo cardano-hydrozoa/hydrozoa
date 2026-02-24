@@ -51,12 +51,6 @@ private object SettlementTxSeqOps {
         result
     }
 
-    final case class Result(
-        settlementTxSeq: SettlementTxSeq,
-        override val depositsSpent: Vector[DepositUtxo],
-        override val depositsToSpend: Vector[DepositUtxo]
-    ) extends DepositUtxo.Many.Spent.Partition
-
     object Build {
         enum Error:
             case SettlementError(e: (SomeBuildError | SettlementTx.Error, String))
@@ -85,7 +79,7 @@ private object SettlementTxSeqOps {
         private val newFallbackValidityEnd =
             config.txTiming.newFallbackStartTime(blockCreatedOn)
 
-        lazy val result: Either[Build.Error, Result] = {
+        lazy val result: Either[Build.Error, SettlementTxSeq] = {
             NonEmptyVector.fromVector(payoutObligationsRemaining) match {
                 case None =>
 
@@ -115,12 +109,8 @@ private object SettlementTxSeqOps {
                                 .left
                                 .map(Build.Error.FallbackError(_))
                         }
-                    } yield Result(
-                      settlementTxSeq =
-                          SettlementTxSeq.NoRollouts(settlementTx.transaction, fallbackTx),
-                      depositsSpent = settlementTx.depositsSpent,
-                      depositsToSpend = settlementTx.depositsToSpend
-                    )
+                    } yield SettlementTxSeq.NoRollouts(settlementTx.transaction, fallbackTx)
+
                 case Some(nePayouts) =>
 
                     for {
@@ -172,11 +162,7 @@ private object SettlementTxSeqOps {
                                         .map(SettlementTxSeq.WithRollouts(tx, fallbackTx, _))
                             }
 
-                    } yield Result(
-                      settlementTxSeq = settlementTxSeq,
-                      depositsSpent = settlementTxRes.depositsSpent,
-                      depositsToSpend = settlementTxRes.depositsToSpend
-                    )
+                    } yield settlementTxSeq
             }
         }
     }

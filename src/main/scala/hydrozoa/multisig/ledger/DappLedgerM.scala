@@ -144,7 +144,7 @@ object DappLedgerM {
             // )
             // _ = println(s"DappLedgerM.settleLedger: majorVersionProduced=${majorVersionProduced}")
 
-            settlementTxSeqRes <- lift(
+            settlementTxSeq <- lift(
               SettlementTxSeq
                   .Build(config)(
                     kzgCommitment = nextKzg,
@@ -161,11 +161,11 @@ object DappLedgerM {
             )
 
             newState = state.copy(
-              treasury = settlementTxSeqRes.settlementTxSeq.settlementTx.treasuryProduced
+              treasury = settlementTxSeq.settlementTx.treasuryProduced
             )
             _ <- set(newState)
 
-        } yield settlementTxSeqRes.settlementTxSeq
+        } yield settlementTxSeq
 
     }
 
