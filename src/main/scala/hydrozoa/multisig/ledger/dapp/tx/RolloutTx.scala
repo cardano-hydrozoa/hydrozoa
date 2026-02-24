@@ -99,6 +99,7 @@ private object RolloutTxOps {
         final case class State[T <: RolloutTx](
             override val ctx: TransactionBuilder.Context,
             override val inputValueNeeded: Value,
+            override val fee: Coin,
             override val payoutObligationsRemaining: Vector[Payout.Obligation]
         ) extends State.Section[T] {
             override transparent inline def state: State[T] = this
@@ -109,6 +110,7 @@ private object RolloutTxOps {
                 extends Tx.Builder.HasCtx,
                   Payout.Obligation.Many.Remaining {
                 def state: State[T]
+                def fee: Coin
                 def inputValueNeeded: Value
             }
         }
@@ -139,8 +141,8 @@ private object RolloutTxOps {
           */
         final def partialResult: BuilderResultSimple[PartialResult[T]] = for {
             pessimistic <- BasePessimistic()
-            addedPayoutsAndFee <- AddPayouts(pessimistic)
-        } yield PartialResult(Build.this, addedPayoutsAndFee._1, addedPayoutsAndFee._2)
+            addedPayouts <- AddPayouts(pessimistic)
+        } yield PartialResult(Build.this, addedPayouts)
 
         private[tx] object BasePessimistic {
             def apply(): BuilderResultSimple[TransactionBuilder.Context] = for {
@@ -184,7 +186,7 @@ private object RolloutTxOps {
         }
 
         private object AddPayouts {
-            def apply(ctx: TransactionBuilder.Context): BuilderResultSimple[(State[T], Coin)] = {
+            def apply(ctx: TransactionBuilder.Context): BuilderResultSimple[State[T]] = {
                 for {
                     withPayout <- tryAddPayout(
                       ctx,
@@ -194,18 +196,18 @@ private object RolloutTxOps {
                     basePessimistic = State[T](
                       ctx = withPayout._1,
                       inputValueNeeded = withPayout._2,
+                      fee = Coin.zero,
                       payoutObligationsRemaining = nePayoutObligationsRemaining.tail
                     )
 
-                    res <- addPayoutsLoop(basePessimistic, Coin.zero)
+                    res <- addPayoutsLoop(basePessimistic)
                 } yield res
             }
 
             @tailrec
             private def addPayoutsLoop(
-                state: State[T],
-                fee: Coin
-            ): BuilderResultSimple[(State[T], Coin)] = {
+                state: State[T]
+            ): BuilderResultSimple[State[T]] = {
                 state.payoutObligationsRemaining match {
                     case obligation +: otherObligations =>
                         tryAddPayout(state.ctx, obligation) match {
@@ -213,15 +215,16 @@ private object RolloutTxOps {
                                 val newState: State[T] = state.copy(
                                   ctx = newCtx,
                                   inputValueNeeded = valueNeeded,
+                                  fee = fee,
                                   payoutObligationsRemaining = otherObligations
                                 )
-                                addPayoutsLoop(newState, fee)
+                                addPayoutsLoop(newState)
                             case Left(err) =>
                                 Tx.Builder.Incremental
-                                    .replaceInvalidSizeException(err._1, (state, fee))
+                                    .replaceInvalidSizeException(err._1, state)
                                     .explainConst(err._2)
                         }
-                    case _Empty => Right(state, fee)
+                    case _Empty => Right(state)
                 }
             }
 
@@ -420,7 +423,7 @@ private object RolloutTxOps {
         def fee: Coin
 
         override transparent inline def state: State[T] =
-            State(ctx, inputValueNeeded, payoutObligationsRemaining)
+            State(ctx, inputValueNeeded, fee, payoutObligationsRemaining)
         override transparent inline def payoutObligationsRemaining: Vector[Payout.Obligation] =
             _payoutObligationsRemaining
 
@@ -472,8 +475,7 @@ private object RolloutTxOps {
           */
         def apply[T <: RolloutTx](
             builder: Build[T],
-            state: State[T],
-            fee: Coin
+            state: State[T]
         ): PartialResult[T] = {
             import state.*
             NonEmptyVector.fromVector(payoutObligationsRemaining) match

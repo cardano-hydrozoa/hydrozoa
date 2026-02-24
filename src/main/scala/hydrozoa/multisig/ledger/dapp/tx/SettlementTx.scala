@@ -311,24 +311,24 @@ private object SettlementTxOps {
                 for {
                     equity <- Equity(netEquityCoin)
                         .toRight(
-                            SomeBuildError.BalancingError(
-                                InsufficientFunds(Value(netEquityCoin), totalFees.value),
-                                ctx
-                            )
+                          SomeBuildError.BalancingError(
+                            InsufficientFunds(Value(netEquityCoin), totalFees.value),
+                            ctx
+                          )
                         )
                         .explainConst(
-                            s"The treasury produced does not have enough equity (${grossEquityCoin}) to pay the" +
-                                s" total fee (${totalFees})"
+                          s"The treasury produced does not have enough equity (${grossEquityCoin}) to pay the" +
+                              s" total fee (${totalFees})"
                         )
                     output = ctx.transaction.body.value.outputs.head.value
 
                 } yield MultisigTreasuryUtxo(
-                    treasuryTokenName = config.headTokenNames.treasuryTokenName,
-                    utxoId = TransactionInput(ctx.transaction.id, 0),
-                    address = config.headMultisigAddress,
-                    datum = MultisigTreasuryUtxo.Datum(kzgCommitment, majorVersionProduced),
-                    value = output.value,
-                    equity = equity
+                  treasuryTokenName = config.headTokenNames.treasuryTokenName,
+                  utxoId = TransactionInput(ctx.transaction.id, 0),
+                  address = config.headMultisigAddress,
+                  datum = MultisigTreasuryUtxo.Datum(kzgCommitment, majorVersionProduced),
+                  value = output.value,
+                  equity = equity
                 )
             }
         }
@@ -417,17 +417,20 @@ private object SettlementTxOps {
 
                 res <- mergeResult match {
                     case TryMerge.Result.NotMerged =>
-                        Complete.treasuryProduced(finished, rolloutTxSeqPartial.totalFee)
+                        Complete
+                            .treasuryProduced(finished, rolloutTxSeqPartial.totalFee)
                             .flatMap(utxo => Right(withRollouts(0, rolloutTxSeqPartial, utxo)))
                     case TryMerge.Result.Merged(mbFirstSkipped, payoutCount) =>
                         mbFirstSkipped match {
                             case None =>
-                                Complete.treasuryProduced(finished, Coin.zero)
+                                Complete
+                                    .treasuryProduced(finished, Coin.zero)
                                     .flatMap(utxo =>
                                         Right(withOnlyDirectPayouts(payoutCount, utxo))
                                     )
                             case Some(firstSkipped) =>
-                                Complete.treasuryProduced(finished, firstSkipped.partialResult.totalFee)
+                                Complete
+                                    .treasuryProduced(finished, firstSkipped.partialResult.totalFee)
                                     .flatMap(utxo =>
                                         Right(
                                           withRollouts(
