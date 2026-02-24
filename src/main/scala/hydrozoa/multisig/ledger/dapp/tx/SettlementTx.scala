@@ -298,44 +298,45 @@ private object SettlementTxOps {
                 baseSteps ++ List(spendTreasury, sendTreasury) ++ spendDeposits
         }
 
-        // NOTE: I'm reusing the InsufficientFunds from the tx builder error, because its identical to what we need.
-        // Perhaps we could wrap it.
-        private def treasuryProduced(
-            ctx: TransactionBuilder.Context,
-            rolloutFees: Coin
-        ): TxBuilderResult[MultisigTreasuryUtxo] = {
-            val grossEquityCoin: Coin = treasuryToSpend.equity.coin
-                + Coin(depositsToSpend.map(_.depositFee.value).sum)
-            val totalFees: Coin = ctx.transaction.body.value.fee + rolloutFees
-            val netEquityCoin: Coin = grossEquityCoin - totalFees
-            for {
-                equity <- Equity(netEquityCoin)
-                    .toRight(
-                      SomeBuildError.BalancingError(
-                        InsufficientFunds(Value(netEquityCoin), totalFees.value),
-                        ctx
-                      )
-                    )
-                    .explainConst(
-                      s"The treasury produced does not have enough equity (${grossEquityCoin}) to pay the" +
-                          s" total fee (${totalFees})"
-                    )
-                output = ctx.transaction.body.value.outputs.head.value
+        private object Complete { // NOTE: I'm reusing the InsufficientFunds from the tx builder error, because its identical to what we need.
+            // Perhaps we could wrap it.
+            def treasuryProduced(
+                ctx: TransactionBuilder.Context,
+                rolloutFees: Coin
+            ): TxBuilderResult[MultisigTreasuryUtxo] = {
+                val grossEquityCoin: Coin = treasuryToSpend.equity.coin
+                    + Coin(depositsToSpend.map(_.depositFee.value).sum)
+                val totalFees: Coin = ctx.transaction.body.value.fee + rolloutFees
+                val netEquityCoin: Coin = grossEquityCoin - totalFees
+                for {
+                    equity <- Equity(netEquityCoin)
+                        .toRight(
+                            SomeBuildError.BalancingError(
+                                InsufficientFunds(Value(netEquityCoin), totalFees.value),
+                                ctx
+                            )
+                        )
+                        .explainConst(
+                            s"The treasury produced does not have enough equity (${grossEquityCoin}) to pay the" +
+                                s" total fee (${totalFees})"
+                        )
+                    output = ctx.transaction.body.value.outputs.head.value
 
-            } yield MultisigTreasuryUtxo(
-              treasuryTokenName = config.headTokenNames.treasuryTokenName,
-              utxoId = TransactionInput(ctx.transaction.id, 0),
-              address = config.headMultisigAddress,
-              datum = MultisigTreasuryUtxo.Datum(kzgCommitment, majorVersionProduced),
-              value = output.value,
-              equity = equity
-            )
+                } yield MultisigTreasuryUtxo(
+                    treasuryTokenName = config.headTokenNames.treasuryTokenName,
+                    utxoId = TransactionInput(ctx.transaction.id, 0),
+                    address = config.headMultisigAddress,
+                    datum = MultisigTreasuryUtxo.Datum(kzgCommitment, majorVersionProduced),
+                    value = output.value,
+                    equity = equity
+                )
+            }
         }
 
         private[tx] object CompleteNoPayouts {
             def apply(ctx: TransactionBuilder.Context): TxBuilderResult[SettlementTx.NoPayouts] =
                 for {
-                    treasuryProduced <- treasuryProduced(ctx, Coin.zero)
+                    treasuryProduced <- Complete.treasuryProduced(ctx, Coin.zero)
                 } yield SettlementTx.NoPayouts(
                   validityEnd = Slot(ctx.transaction.body.value.ttl.get)
                       .toQuantizedInstant(config.cardanoInfo.slotConfig),
@@ -416,17 +417,17 @@ private object SettlementTxOps {
 
                 res <- mergeResult match {
                     case TryMerge.Result.NotMerged =>
-                        treasuryProduced(finished, rolloutTxSeqPartial.totalFee)
+                        Complete.treasuryProduced(finished, rolloutTxSeqPartial.totalFee)
                             .flatMap(utxo => Right(withRollouts(0, rolloutTxSeqPartial, utxo)))
                     case TryMerge.Result.Merged(mbFirstSkipped, payoutCount) =>
                         mbFirstSkipped match {
                             case None =>
-                                treasuryProduced(finished, Coin.zero)
+                                Complete.treasuryProduced(finished, Coin.zero)
                                     .flatMap(utxo =>
                                         Right(withOnlyDirectPayouts(payoutCount, utxo))
                                     )
                             case Some(firstSkipped) =>
-                                treasuryProduced(finished, firstSkipped.partialResult.totalFee)
+                                Complete.treasuryProduced(finished, firstSkipped.partialResult.totalFee)
                                     .flatMap(utxo =>
                                         Right(
                                           withRollouts(
