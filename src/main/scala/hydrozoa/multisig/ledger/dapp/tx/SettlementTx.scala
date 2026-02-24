@@ -190,7 +190,7 @@ private object SettlementTxOps {
                     .cond(checkDepositsToSpend, (), TooManyDeposits)
                     .explainConst(
                       s"Too many deposits were included. You passed ${depositsToSpend.length}, but we can have " +
-                          s"at most ${config.maxDepositsPerSettlementTx}."
+                          s"at most ${config.maxDepositsAbsorbedPerBlock}."
                     )
                 ctx <- TransactionBuilder
                     .build(config.network, definiteSteps)
@@ -211,7 +211,7 @@ private object SettlementTxOps {
                 treasuryToSpend.address == config.headMultisigAddress
 
             private def checkDepositsToSpend: Boolean =
-                depositsToSpend.length <= config.maxDepositsPerSettlementTx
+                depositsToSpend.length <= config.maxDepositsAbsorbedPerBlock
 
             /////////////////////////////////////////////////////////
             // Base steps
