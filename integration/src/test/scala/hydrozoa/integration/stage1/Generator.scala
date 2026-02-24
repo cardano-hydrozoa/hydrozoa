@@ -4,11 +4,11 @@ import cats.data.NonEmptyList
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.config.head.initialization.CappedValueGen.generateCappedValue
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.integration.stage1.BlockCycle.HeadFinalized
+import hydrozoa.integration.stage1.CommandGen.L2txGen
+import hydrozoa.integration.stage1.CommandGen.TxMutator.Identity
+import hydrozoa.integration.stage1.CommandGen.TxStrategy.{Dust, RandomWithdrawals, Regular}
 import hydrozoa.integration.stage1.Commands.*
-import hydrozoa.integration.stage1.Generators.L2txGen
-import hydrozoa.integration.stage1.Generators.TxMutator.Identity
-import hydrozoa.integration.stage1.Generators.TxStrategy.{Dust, RandomWithdrawals, Regular}
+import hydrozoa.integration.stage1.Model.BlockCycle.HeadFinalized
 import hydrozoa.integration.stage1.SutCommands.given
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
 import hydrozoa.lib.cardano.scalus.given_Choose_QuantizedInstant
@@ -23,7 +23,7 @@ import hydrozoa.multisig.ledger.event.LedgerEvent
 import hydrozoa.multisig.ledger.event.LedgerEvent.L2TxEvent
 import hydrozoa.multisig.ledger.virtual.tx.GenesisObligation
 import org.scalacheck.Gen
-import org.scalacheck.commands.{AnyCommand, CommandGen, noOp}
+import org.scalacheck.commands.{AnyCommand, ScenarioGen, noOp}
 import scala.concurrent.duration.DurationInt
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.AuxiliaryData.Metadata
@@ -33,9 +33,6 @@ import scalus.cardano.txbuilder.TransactionBuilder
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Fee, ModifyAuxiliaryData, Send, Spend}
 import scalus.uplc.builtin.Builtins.blake2b_224
 
-// TODO: separate namespaces
-val logger1: org.slf4j.Logger = Logging.logger("Stage1.Generators")
-
 // ===================================
 // Per-command generators
 // ===================================
@@ -43,7 +40,9 @@ val logger1: org.slf4j.Logger = Logging.logger("Stage1.Generators")
 /** Per-command generators. These produce concrete command values; the caller wraps each into
   * [[AnyCommand]] where the [[org.scalacheck.commands.SutCommand]] implicit is in scope.
   */
-object Generators:
+object CommandGen:
+
+    private val logger: org.slf4j.Logger = Logging.logger("Stage1.CommandGennerators")
 
     // ===================================
     // Delay
@@ -188,7 +187,7 @@ object Generators:
         }
     } yield values
 
-    type L2txGen = (state: ModelState) => Gen[L2TxCommand]
+    type L2txGen = (state: Model.State) => Gen[L2TxCommand]
 
     def genAuxiliaryData(
         outputs: List[TransactionOutput],
@@ -208,7 +207,7 @@ object Generators:
     def genValidNonPlutusL2Tx(
         txStrategy: TxStrategy,
         txMutator: TxMutator
-    )(state: ModelState): Gen[L2TxCommand] =
+    )(state: Model.State): Gen[L2TxCommand] =
 
         val cardanoNetwork: CardanoNetwork = state.headConfig.cardanoNetwork
         val generateCappedValueC = generateCappedValue(cardanoNetwork)
@@ -223,11 +222,11 @@ object Generators:
             // Inputs
             inputs <- genInputs(ownedUtxos, txStrategy)
             totalValue = Value.combine(inputs.map(ownedUtxos(_).value))
-            _ = logger1.trace(s"totalValue: $totalValue")
+            _ = logger.trace(s"totalValue: $totalValue")
 
             // Outputs
             outputValues <- genOutputValues(totalValue, txStrategy, generateCappedValueC)
-            _ = logger1.trace(s"output values: $outputValues")
+            _ = logger.trace(s"output values: $outputValues")
             outputs <- Gen.sequence[List[TransactionOutput], TransactionOutput](
               outputValues
                   .map(v => Gen.oneOf(l2AddressesInUse).map(a => Babbage(a, v)))
@@ -259,7 +258,7 @@ object Generators:
             witness = state.ownTestPeer.wallet.mkVKeyWitness(txUnsigned)
             txSigned = txUnsigned.attachVKeyWitnesses(List(witness))
 
-            _ = logger1.trace(s"l2Tx: ${HexUtil.encodeHexString(txSigned.toCbor)}")
+            _ = logger.trace(s"l2Tx: ${HexUtil.encodeHexString(txSigned.toCbor)}")
 
         } yield L2TxCommand(
           event = L2TxEvent(
@@ -290,7 +289,7 @@ object Generators:
     // Register deposit command
     // ===================================
 
-    def genRegisterDepositCommand(state: ModelState): Gen[RegisterDepositCommand] = {
+    def genRegisterDepositCommand(state: Model.State): Gen[RegisterDepositCommand] = {
         import state.headConfig
 
         val peerAddress = state.ownTestPeer.address(state.headConfig.network)
@@ -300,13 +299,13 @@ object Generators:
             fundingUtxos <- Gen.atLeastOne(state.utxoL1).map(_.toMap)
             totalValue = Value.combine(fundingUtxos.map(_._2.value))
 
-            _ = logger1.trace(s"fundingUtxos: $fundingUtxos")
-            _ = logger1.trace(s"totalValue: $totalValue")
+            _ = logger.trace(s"fundingUtxos: $fundingUtxos")
+            _ = logger.trace(s"totalValue: $totalValue")
 
             // Change should be big enough to make balancing always possible
             change <- generateCappedValueC(totalValue, Some(1_000_000L), None, None)
 
-            _ = logger1.trace(s"change: $change")
+            _ = logger.trace(s"change: $change")
 
             outputValues <- genOutputValues(
               totalValue - change,
@@ -314,7 +313,7 @@ object Generators:
               generateCappedValueC
             )
 
-            _ = logger1.trace(s"outputValues: $outputValues")
+            _ = logger.trace(s"outputValues: $outputValues")
 
             outputs <- Gen.sequence[List[TransactionOutput], TransactionOutput](
               outputValues
@@ -330,7 +329,7 @@ object Generators:
             )
 
             depositAmount = Value.combine(virtualOutputs.toList.map(vo => Value(vo.l2OutputValue)))
-            _ = logger1.trace(s"depositAmount: $depositAmount")
+            _ = logger.trace(s"depositAmount: $depositAmount")
 
             depositRefundSeq = DepositRefundTxSeq
                 .Build(headConfig)(
@@ -347,7 +346,7 @@ object Generators:
 
             depositTxSigned = state.ownTestPeer.signTx(depositRefundSeq.depositTx.tx)
 
-            _ = logger1.trace(
+            _ = logger.trace(
               s"deposit tx signed: ${HexUtil.encodeHexString(depositTxSigned.toCbor)}"
             )
 
@@ -364,194 +363,201 @@ object Generators:
         )
     }
 
-end Generators
+end CommandGen
 
 // ===================================
-// Suite command generators
+// Suite scenario generators
 // ===================================
 
-/** Produces L2 transactions (valid and non-valid) with no withdrawals.
-  *
-  * There is a customizable delay before starting every new block. If the delay happens to be long
-  * enough so the latest fallback becomes active, all next commands are NoOp and the fallback is
-  * expected to be submitted. Otherwise, only happy path effects are expected to be submitted.
-  */
-object NoWithdrawalsCommandGen
-    extends SimpleCommandGen(
-      Generators.genValidNonPlutusL2Tx(
-        txStrategy = Regular,
-        txMutator = Identity
-      )
-    )
+object ScenarioGenerators:
 
-object OngoingWithdrawalsCommandGen
-    extends SimpleCommandGen(
-      Generators.genValidNonPlutusL2Tx(
-        txStrategy = RandomWithdrawals,
-        txMutator = Identity
-      )
-    )
+    private val logger: org.slf4j.Logger = Logging.logger("Stage1.ScenarioGenerators")
 
-case class SimpleCommandGen(generateL2Tx: L2txGen) extends CommandGen[ModelState, Stage1Sut]:
+    /** Produces L2 transactions (valid and non-valid) with no withdrawals.
+      *
+      * There is a customizable delay before starting every new block. If the delay happens to be
+      * long enough so the latest fallback becomes active, all next commands are NoOp and the
+      * fallback is expected to be submitted. Otherwise, only happy path effects are expected to be
+      * submitted.
+      */
+    object NoWithdrawalsScenarioGen
+        extends SimpleScenarioGen(
+          CommandGen.genValidNonPlutusL2Tx(
+            txStrategy = Regular,
+            txMutator = Identity
+          )
+        )
 
-    override def genNextCommand(
-        state: ModelState
-    ): Gen[AnyCommand[ModelState, Stage1Sut]] = {
-        import hydrozoa.integration.stage1.BlockCycle.*
-        import hydrozoa.integration.stage1.CurrentTime.BeforeHappyPathExpiration
+    object OngoingWithdrawalsScenarioGen
+        extends SimpleScenarioGen(
+          CommandGen.genValidNonPlutusL2Tx(
+            txStrategy = RandomWithdrawals,
+            txMutator = Identity
+          )
+        )
 
-        state.currentTime match {
-            case BeforeHappyPathExpiration(_) =>
-                state.blockCycle match {
-                    case Done(blockNumber, _) =>
-                        val settlementExpirationTime =
-                            state.headConfig.txTiming.newSettlementEndTime(
-                              state.competingFallbackStartTime
+    case class SimpleScenarioGen(generateL2Tx: L2txGen) extends ScenarioGen[Model.State, Stage1Sut]:
+
+        override def genNextCommand(
+            state: Model.State
+        ): Gen[AnyCommand[Model.State, Stage1Sut]] = {
+            import hydrozoa.integration.stage1.Model.BlockCycle.*
+            import hydrozoa.integration.stage1.Model.CurrentTime.BeforeHappyPathExpiration
+
+            state.currentTime match {
+                case BeforeHappyPathExpiration(_) =>
+                    state.blockCycle match {
+                        case Done(blockNumber, _) =>
+                            val settlementExpirationTime =
+                                state.headConfig.txTiming.newSettlementEndTime(
+                                  state.competingFallbackStartTime
+                                )
+                            CommandGen
+                                .genRandomDelay(
+                                  currentTime = state.currentTime.instant,
+                                  settlementExpirationTime = settlementExpirationTime,
+                                  competingFallbackStartTime = state.competingFallbackStartTime,
+                                  slotConfig = state.headConfig.slotConfig,
+                                  blockNumber = blockNumber
+                                )
+                                .map(AnyCommand.apply)
+
+                        case Ready(blockNumber, _) =>
+                            CommandGen
+                                .genStartBlock(blockNumber, state.currentTime.instant)
+                                .map(AnyCommand.apply)
+
+                        case InProgress(blockNumber, _, _, _) =>
+                            Gen.frequency(
+                              1 -> CommandGen
+                                  .genCompleteBlock(blockNumber)
+                                  .map(AnyCommand.apply),
+                              10 -> (if state.activeUtxos.isEmpty
+                                     then Gen.const(noOp)
+                                     else generateL2Tx(state).map(AnyCommand.apply))
                             )
-                        Generators
-                            .genRandomDelay(
-                              currentTime = state.currentTime.instant,
-                              settlementExpirationTime = settlementExpirationTime,
-                              competingFallbackStartTime = state.competingFallbackStartTime,
-                              slotConfig = state.headConfig.slotConfig,
-                              blockNumber = blockNumber
-                            )
-                            .map(AnyCommand.apply)
 
-                    case Ready(blockNumber, _) =>
-                        Generators
-                            .genStartBlock(blockNumber, state.currentTime.instant)
-                            .map(AnyCommand.apply)
-
-                    case InProgress(blockNumber, _, _, _) =>
-                        Gen.frequency(
-                          1 -> Generators
-                              .genCompleteBlock(blockNumber)
-                              .map(AnyCommand.apply),
-                          10 -> (if state.activeUtxos.isEmpty
-                                 then Gen.const(noOp)
-                                 else generateL2Tx(state).map(AnyCommand.apply))
-                        )
-
-                    case HeadFinalized => Gen.const(noOp)
-                }
-            case _ => Gen.const(noOp)
+                        case HeadFinalized => Gen.const(noOp)
+                    }
+                case _ => Gen.const(noOp)
+            }
         }
-    }
 
-case class MakeDustCommandGen(minL2Utxos: Int) extends CommandGen[ModelState, Stage1Sut]:
+    case class MakeDustScenarioGen(minL2Utxos: Int) extends ScenarioGen[Model.State, Stage1Sut]:
 
-    override def genNextCommand(
-        state: ModelState
-    ): Gen[AnyCommand[ModelState, Stage1Sut]] = {
-        import hydrozoa.integration.stage1.BlockCycle.*
-        import hydrozoa.integration.stage1.CurrentTime.BeforeHappyPathExpiration
+        override def genNextCommand(
+            state: Model.State
+        ): Gen[AnyCommand[Model.State, Stage1Sut]] = {
+            import hydrozoa.integration.stage1.Model.BlockCycle.*
+            import hydrozoa.integration.stage1.Model.CurrentTime.BeforeHappyPathExpiration
 
-        state.currentTime match {
-            case BeforeHappyPathExpiration(_) =>
-                state.blockCycle match {
-                    case Done(blockNumber, _) =>
-                        val settlementExpirationTime =
-                            state.headConfig.txTiming.newSettlementEndTime(
-                              state.competingFallbackStartTime
+            state.currentTime match {
+                case BeforeHappyPathExpiration(_) =>
+                    state.blockCycle match {
+                        case Done(blockNumber, _) =>
+                            val settlementExpirationTime =
+                                state.headConfig.txTiming.newSettlementEndTime(
+                                  state.competingFallbackStartTime
+                                )
+                            // We need to avoid fallbacks to finalize the head
+                            CommandGen
+                                .genStayOnHappyPathDelay(
+                                  currentTime = state.currentTime.instant,
+                                  settlementExpirationTime = settlementExpirationTime
+                                )
+                                .map(AnyCommand.apply)
+
+                        case Ready(blockNumber, _) =>
+                            CommandGen
+                                .genStartBlock(blockNumber, state.currentTime.instant)
+                                .map(AnyCommand.apply)
+
+                        case InProgress(blockNumber, _, _, _) =>
+                            Gen.frequency(
+                              1 -> (if state.activeUtxos.size >= minL2Utxos
+                                    then
+                                        CommandGen
+                                            .genCompleteBlockFinal(blockNumber)
+                                            .map(AnyCommand.apply)
+                                    else
+                                        CommandGen
+                                            .genCompleteBlockRegular(blockNumber)
+                                            .map(AnyCommand.apply)),
+                              10 -> CommandGen
+                                  .genValidNonPlutusL2Tx(
+                                    txStrategy = Dust(),
+                                    txMutator = Identity
+                                  )(
+                                    state = state
+                                  )
+                                  .map(AnyCommand.apply)
                             )
-                        // We need to avoid fallbacks to finalize the head
-                        Generators
-                            .genStayOnHappyPathDelay(
-                              currentTime = state.currentTime.instant,
-                              settlementExpirationTime = settlementExpirationTime
-                            )
-                            .map(AnyCommand.apply)
 
-                    case Ready(blockNumber, _) =>
-                        Generators
-                            .genStartBlock(blockNumber, state.currentTime.instant)
-                            .map(AnyCommand.apply)
-
-                    case InProgress(blockNumber, _, _, _) =>
-                        Gen.frequency(
-                          1 -> (if state.activeUtxos.size >= minL2Utxos
-                                then
-                                    Generators
-                                        .genCompleteBlockFinal(blockNumber)
-                                        .map(AnyCommand.apply)
-                                else
-                                    Generators
-                                        .genCompleteBlockRegular(blockNumber)
-                                        .map(AnyCommand.apply)),
-                          10 -> Generators
-                              .genValidNonPlutusL2Tx(
-                                txStrategy = Dust(),
-                                txMutator = Identity
-                              )(
-                                state = state
-                              )
-                              .map(AnyCommand.apply)
-                        )
-
-                    case HeadFinalized => Gen.const(noOp)
-                }
-            case _ => Gen.const(noOp)
+                        case HeadFinalized => Gen.const(noOp)
+                    }
+                case _ => Gen.const(noOp)
+            }
         }
-    }
 
-    override def targetStatePrecondition(
-        targetState: ModelState
-    ): Boolean =
-        targetState.blockCycle == HeadFinalized
+        override def targetStatePrecondition(
+            targetState: Model.State
+        ): Boolean =
+            targetState.blockCycle == HeadFinalized
 
-case object DepositsCommandGen extends CommandGen[ModelState, Stage1Sut]:
+    case object DepositsScenarioGen extends ScenarioGen[Model.State, Stage1Sut]:
 
-    override def genNextCommand(
-        state: ModelState
-    ): Gen[AnyCommand[ModelState, Stage1Sut]] = {
-        import hydrozoa.integration.stage1.BlockCycle.*
-        import hydrozoa.integration.stage1.CurrentTime.BeforeHappyPathExpiration
+        override def genNextCommand(
+            state: Model.State
+        ): Gen[AnyCommand[Model.State, Stage1Sut]] = {
+            import hydrozoa.integration.stage1.Model.BlockCycle.*
+            import hydrozoa.integration.stage1.Model.CurrentTime.BeforeHappyPathExpiration
 
-        state.currentTime match {
-            case BeforeHappyPathExpiration(_) =>
-                state.blockCycle match {
-                    case Done(blockNumber, _) =>
-                        val settlementExpirationTime =
-                            state.headConfig.txTiming.newSettlementEndTime(
-                              state.competingFallbackStartTime
+            state.currentTime match {
+                case BeforeHappyPathExpiration(_) =>
+                    state.blockCycle match {
+                        case Done(blockNumber, _) =>
+                            val settlementExpirationTime =
+                                state.headConfig.txTiming.newSettlementEndTime(
+                                  state.competingFallbackStartTime
+                                )
+                            CommandGen
+                                .genRandomDelay(
+                                  currentTime = state.currentTime.instant,
+                                  settlementExpirationTime = settlementExpirationTime,
+                                  competingFallbackStartTime = state.competingFallbackStartTime,
+                                  slotConfig = state.headConfig.slotConfig,
+                                  blockNumber = blockNumber
+                                )
+                                .map(AnyCommand.apply)
+
+                        case Ready(blockNumber, _) =>
+                            CommandGen
+                                .genStartBlock(blockNumber, state.currentTime.instant)
+                                .map(AnyCommand.apply)
+
+                        case InProgress(blockNumber, _, _, _) =>
+                            Gen.frequency(
+                              3 -> CommandGen
+                                  .genRegisterDepositCommand(state)
+                                  .map(AnyCommand.apply),
+                              1 -> CommandGen
+                                  .genCompleteBlock(blockNumber)
+                                  .map(AnyCommand.apply),
+                              10 -> (if state.activeUtxos.isEmpty
+                                     then Gen.const(noOp)
+                                     else
+                                         CommandGen
+                                             .genValidNonPlutusL2Tx(
+                                               txStrategy = RandomWithdrawals,
+                                               txMutator = Identity
+                                             )(state)
+                                             .map(AnyCommand.apply))
                             )
-                        Generators
-                            .genRandomDelay(
-                              currentTime = state.currentTime.instant,
-                              settlementExpirationTime = settlementExpirationTime,
-                              competingFallbackStartTime = state.competingFallbackStartTime,
-                              slotConfig = state.headConfig.slotConfig,
-                              blockNumber = blockNumber
-                            )
-                            .map(AnyCommand.apply)
 
-                    case Ready(blockNumber, _) =>
-                        Generators
-                            .genStartBlock(blockNumber, state.currentTime.instant)
-                            .map(AnyCommand.apply)
-
-                    case InProgress(blockNumber, _, _, _) =>
-                        Gen.frequency(
-                          3 -> Generators
-                              .genRegisterDepositCommand(state)
-                              .map(AnyCommand.apply),
-                          1 -> Generators
-                              .genCompleteBlock(blockNumber)
-                              .map(AnyCommand.apply),
-                          10 -> (if state.activeUtxos.isEmpty
-                                 then Gen.const(noOp)
-                                 else
-                                     Generators
-                                         .genValidNonPlutusL2Tx(
-                                           txStrategy = RandomWithdrawals,
-                                           txMutator = Identity
-                                         )(state)
-                                         .map(AnyCommand.apply))
-                        )
-
-                    case HeadFinalized => Gen.const(noOp)
-                }
-            case _ => Gen.const(noOp)
+                        case HeadFinalized => Gen.const(noOp)
+                    }
+                case _ => Gen.const(noOp)
+            }
         }
-    }
+
+end ScenarioGenerators

@@ -2,6 +2,7 @@ package hydrozoa.integration.stage1
 
 import hydrozoa.config.head.multisig.timing.{generateDefaultTxTiming, generateYaciTxTiming}
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.integration.stage1.ScenarioGenerators.*
 import hydrozoa.integration.stage1.Stage1PropertiesL1Mock.property
 import hydrozoa.integration.stage1.SuiteCardano.{Mock, Yaci}
 import hydrozoa.integration.yaci.DevKit
@@ -24,7 +25,7 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
     /** Block promotion
       *
       * This property checks that block promotion Minor -> Major * works correctly. It uses
-      * [[NoWithdrawalsCommandGen]] which produces L2 transactions with no withdrawals. L2 events
+      * [[NoWithdrawalsScenarioGen]] which produces L2 transactions with no withdrawals. L2 events
       * not strictly needed for testing block promotion, which must work on empty blocks, but we
       * additionally decided to check block brief at the same time.
       */
@@ -32,7 +33,7 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
       suiteCardano = Mock(preprod),
       txTimingGen = generateDefaultTxTiming,
       mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
-      commandGen = NoWithdrawalsCommandGen
+      scenarioGen = NoWithdrawalsScenarioGen
     ).property()
 
     /** Dusty head finalization
@@ -46,7 +47,7 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
       suiteCardano = Mock(preprod),
       txTimingGen = generateDefaultTxTiming,
       mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
-      commandGen = MakeDustCommandGen(minL2Utxos = 500)
+      scenarioGen = MakeDustScenarioGen(minL2Utxos = 500)
     ).property()
 
     /** Ongoing withdrawals
@@ -59,7 +60,7 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
       suiteCardano = Mock(preprod),
       txTimingGen = generateDefaultTxTiming,
       mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
-      commandGen = OngoingWithdrawalsCommandGen
+      scenarioGen = OngoingWithdrawalsScenarioGen
     ).property()
 
     /** Deposits
@@ -70,7 +71,7 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
       suiteCardano = Mock(preprod),
       txTimingGen = generateDefaultTxTiming,
       mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
-      commandGen = DepositsCommandGen
+      scenarioGen = DepositsScenarioGen
     ).property()
 
 /** The Yaci runner has only some of the properties which are worth running on Yaci, see property
@@ -94,7 +95,7 @@ object Stage1PropertiesYaci extends YetAnotherProperties("Integration Stage 1 wi
       ),
       txTimingGen = generateYaciTxTiming,
       mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
-      commandGen = NoWithdrawalsCommandGen
+      scenarioGen = NoWithdrawalsScenarioGen
     ).property()
 
     val _ = property("Dusty head finalization Yaci") = Suite(
@@ -103,5 +104,5 @@ object Stage1PropertiesYaci extends YetAnotherProperties("Integration Stage 1 wi
       ),
       txTimingGen = generateYaciTxTiming,
       mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
-      commandGen = MakeDustCommandGen(minL2Utxos = 500)
+      scenarioGen = MakeDustScenarioGen(minL2Utxos = 500)
     ).property()
