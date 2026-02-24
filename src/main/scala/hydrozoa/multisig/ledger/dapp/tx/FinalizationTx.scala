@@ -13,7 +13,7 @@ import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo, RolloutUtxo}
 import monocle.{Focus, Lens}
 import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.{Coin, Sized, Slot, Transaction, TransactionInput, TransactionOutput as TxOutput, Utxo, Value}
+import scalus.cardano.ledger.{Coin, Sized, Slot, Transaction, TransactionInput, TransactionOutput, Utxo, Value}
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
@@ -243,17 +243,18 @@ private object FinalizationTxOps {
 
             /////////////////////////////////////////////////////////
             // Send rollout (maybe)
-            private def mkRolloutOutput(value: Value): TxOutput.Babbage = TxOutput.Babbage(
-              address = config.headMultisigAddress,
-              value = value,
-              datumOption = None,
-              scriptRef = None
-            )
+            private def mkRolloutOutput(value: Value): TransactionOutput.Babbage =
+                TransactionOutput.Babbage(
+                  address = config.headMultisigAddress,
+                  value = value,
+                  datumOption = None,
+                  scriptRef = None
+                )
 
             private val mbRolloutValue: Option[Value] =
                 mbRolloutTxSeqPartial.map(_.firstOrOnly.inputValueNeeded)
 
-            private val mbRolloutOutput: Option[TxOutput.Babbage] =
+            private val mbRolloutOutput: Option[TransactionOutput.Babbage] =
                 mbRolloutValue.map(mkRolloutOutput)
 
             /** We apply this step if the first rollout tx doesn't get merged into the finalization
@@ -262,14 +263,14 @@ private object FinalizationTxOps {
             def mbApplySendRollout(
                 ctx: TransactionBuilder.Context
             ): Either[SomeBuildError, TransactionBuilder.Context] =
-                mbRolloutOutput.fold(Right(ctx))((output: TxOutput.Babbage) =>
+                mbRolloutOutput.fold(Right(ctx))((output: TransactionOutput.Babbage) =>
                     TransactionBuilder.modify(ctx, List(Send(output)))
                 )
 
             /////////////////////////////////////////////////////////
             // Send peer payouts
             private def mkPeerPayout(addr: ShelleyAddress, lovelace: Coin): Send = Send(
-              TxOutput.Babbage(
+              TransactionOutput.Babbage(
                 address = addr,
                 value = Value(lovelace),
                 datumOption = None,
@@ -467,7 +468,7 @@ private object FinalizationTxOps {
 
                     val rolloutTx: Transaction = firstRolloutTxPartial.ctx.transaction
 
-                    def sendOutput(x: Sized[TxOutput]): Send = Send(x.value)
+                    def sendOutput(x: Sized[TransactionOutput]): Send = Send(x.value)
 
                     val optimisticSteps: List[Send] =
                         rolloutTx.body.value.outputs.map(sendOutput).toList
