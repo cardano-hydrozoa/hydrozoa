@@ -17,6 +17,7 @@ import scalus.cardano.ledger.{Coin, Sized, Slot, Transaction, TransactionInput, 
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
+import scalus.cardano.txbuilder.TxBalancingError.InsufficientFunds
 
 sealed trait FinalizationTx
     extends Tx[FinalizationTx],
@@ -153,6 +154,7 @@ private object FinalizationTxOps {
     ) extends BlockVersion.Major.Produced,
           MultisigTreasuryUtxo.ToSpend,
           HasValidityEnd {
+
         import Build.*
         import Error.*
 
@@ -344,14 +346,10 @@ private object FinalizationTxOps {
                 rolloutTxSeqPartial: RolloutTxSeq.PartialResult,
             ): TxBuilderResult[Result.WithPayouts] = for {
                 mergeTrial <- TryMerge(state, rolloutTxSeqPartial)
-            } yield {
-                import TryMerge.Result.*
+                (finished, mergeResult) = mergeTrial
+                tx = finished.ctx.transaction
 
-                val (finished, mergeResult) = mergeTrial
-
-                val tx = finished.ctx.transaction
-
-                def withOnlyDirectPayouts(payoutCount: Int): Result.WithOnlyDirectPayouts =
+                withOnlyDirectPayouts = (payoutCount: Int) =>
                     Result.WithOnlyDirectPayouts(
                       transaction = FinalizationTx.WithOnlyDirectPayouts(
                         majorVersionProduced = majorVersionProduced,
@@ -366,36 +364,55 @@ private object FinalizationTxOps {
                       )
                     )
 
-                def withRollouts(
+                withRollouts = (
                     payoutCount: Int,
                     rollouts: RolloutTxSeq.PartialResult
-                ): Result.WithRollouts =
-                    Result.WithRollouts(
-                      transaction = FinalizationTx.WithRollouts(
-                        majorVersionProduced = majorVersionProduced,
-                        treasurySpent = treasuryToSpend,
-                        multisigRegimeUtxoSpent = config.multisigRegimeUtxo,
-                        rolloutProduced = unsafeGetRolloutProduced(finished.ctx),
-                        tx = tx,
-                        // this is safe since we always set ttl
-                        validityEnd = Slot(tx.body.value.ttl.get)
-                            .toQuantizedInstant(config.cardanoInfo.slotConfig),
-                        payoutCount = payoutCount,
-                        resolvedUtxos = finished.ctx.resolvedUtxos
-                      ),
-                      rolloutTxSeqPartial = rollouts,
-                    )
+                ) =>
+                    val totalFee = rolloutTxSeqPartial.totalFee
+                    val equity = treasuryToSpend.equity.coin
+                    if totalFee < equity
+                    then
+                        Left(
+                          SomeBuildError.BalancingError(
+                            e = InsufficientFunds(
+                              valueDiff = Value(totalFee - equity),
+                              minRequired = totalFee.value
+                            ),
+                            context = finished.ctx
+                          )
+                        ).explainConst(
+                          s"Insufficient equity (${equity}) to cover " +
+                              s"the rollout total fee (${totalFee})"
+                        )
+                    else
+                        Right(
+                          Result.WithRollouts(
+                            transaction = FinalizationTx.WithRollouts(
+                              majorVersionProduced = majorVersionProduced,
+                              treasurySpent = treasuryToSpend,
+                              multisigRegimeUtxoSpent = config.multisigRegimeUtxo,
+                              rolloutProduced = unsafeGetRolloutProduced(finished.ctx),
+                              tx = tx,
+                              // this is safe since we always set ttl
+                              validityEnd = Slot(tx.body.value.ttl.get)
+                                  .toQuantizedInstant(config.cardanoInfo.slotConfig),
+                              payoutCount = payoutCount,
+                              resolvedUtxos = finished.ctx.resolvedUtxos
+                            ),
+                            rolloutTxSeqPartial = rollouts,
+                          )
+                        )
 
-                mergeResult match {
-                    case NotMerged => withRollouts(0, rolloutTxSeqPartial)
-                    case Merged(mbFirstSkipped, payoutCount) =>
+                res <- mergeResult match {
+                    case TryMerge.Result.NotMerged => withRollouts(0, rolloutTxSeqPartial)
+                    case TryMerge.Result.Merged(mbFirstSkipped, payoutCount) =>
                         mbFirstSkipped match {
-                            case None => withOnlyDirectPayouts(payoutCount)
+                            case None => Right(withOnlyDirectPayouts(payoutCount))
                             case Some(firstSkipped) =>
                                 withRollouts(payoutCount, firstSkipped.partialResult)
                         }
                 }
-            }
+            } yield res
 
             /** Given the transaction context of a [[Builder.WithPayouts]] that has finished
               * building, apply post-processing to get the [[RolloutUtxo]] produced by the
@@ -515,5 +532,4 @@ private object FinalizationTxOps {
         }
 
     }
-
 }
