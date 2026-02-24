@@ -13,10 +13,11 @@ import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo, RolloutUtxo}
 import monocle.{Focus, Lens}
 import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.{Coin, Sized, Slot, Transaction, TransactionInput, TransactionOutput as TxOutput, Utxo, Value}
+import scalus.cardano.ledger.{Coin, Sized, Slot, Transaction, TransactionInput, TransactionOutput, Utxo, Value}
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
+import scalus.cardano.txbuilder.TxBalancingError.InsufficientFunds
 
 sealed trait FinalizationTx
     extends Tx[FinalizationTx],
@@ -153,6 +154,7 @@ private object FinalizationTxOps {
     ) extends BlockVersion.Major.Produced,
           MultisigTreasuryUtxo.ToSpend,
           HasValidityEnd {
+
         import Build.*
         import Error.*
 
@@ -241,17 +243,18 @@ private object FinalizationTxOps {
 
             /////////////////////////////////////////////////////////
             // Send rollout (maybe)
-            private def mkRolloutOutput(value: Value): TxOutput.Babbage = TxOutput.Babbage(
-              address = config.headMultisigAddress,
-              value = value,
-              datumOption = None,
-              scriptRef = None
-            )
+            private def mkRolloutOutput(value: Value): TransactionOutput.Babbage =
+                TransactionOutput.Babbage(
+                  address = config.headMultisigAddress,
+                  value = value,
+                  datumOption = None,
+                  scriptRef = None
+                )
 
             private val mbRolloutValue: Option[Value] =
                 mbRolloutTxSeqPartial.map(_.firstOrOnly.inputValueNeeded)
 
-            private val mbRolloutOutput: Option[TxOutput.Babbage] =
+            private val mbRolloutOutput: Option[TransactionOutput.Babbage] =
                 mbRolloutValue.map(mkRolloutOutput)
 
             /** We apply this step if the first rollout tx doesn't get merged into the finalization
@@ -260,14 +263,14 @@ private object FinalizationTxOps {
             def mbApplySendRollout(
                 ctx: TransactionBuilder.Context
             ): Either[SomeBuildError, TransactionBuilder.Context] =
-                mbRolloutOutput.fold(Right(ctx))((output: TxOutput.Babbage) =>
+                mbRolloutOutput.fold(Right(ctx))((output: TransactionOutput.Babbage) =>
                     TransactionBuilder.modify(ctx, List(Send(output)))
                 )
 
             /////////////////////////////////////////////////////////
             // Send peer payouts
             private def mkPeerPayout(addr: ShelleyAddress, lovelace: Coin): Send = Send(
-              TxOutput.Babbage(
+              TransactionOutput.Babbage(
                 address = addr,
                 value = Value(lovelace),
                 datumOption = None,
@@ -344,14 +347,10 @@ private object FinalizationTxOps {
                 rolloutTxSeqPartial: RolloutTxSeq.PartialResult,
             ): TxBuilderResult[Result.WithPayouts] = for {
                 mergeTrial <- TryMerge(state, rolloutTxSeqPartial)
-            } yield {
-                import TryMerge.Result.*
+                (finished, mergeResult) = mergeTrial
+                tx = finished.ctx.transaction
 
-                val (finished, mergeResult) = mergeTrial
-
-                val tx = finished.ctx.transaction
-
-                def withOnlyDirectPayouts(payoutCount: Int): Result.WithOnlyDirectPayouts =
+                withOnlyDirectPayouts = (payoutCount: Int) =>
                     Result.WithOnlyDirectPayouts(
                       transaction = FinalizationTx.WithOnlyDirectPayouts(
                         majorVersionProduced = majorVersionProduced,
@@ -366,36 +365,55 @@ private object FinalizationTxOps {
                       )
                     )
 
-                def withRollouts(
+                withRollouts = (
                     payoutCount: Int,
                     rollouts: RolloutTxSeq.PartialResult
-                ): Result.WithRollouts =
-                    Result.WithRollouts(
-                      transaction = FinalizationTx.WithRollouts(
-                        majorVersionProduced = majorVersionProduced,
-                        treasurySpent = treasuryToSpend,
-                        multisigRegimeUtxoSpent = config.multisigRegimeUtxo,
-                        rolloutProduced = unsafeGetRolloutProduced(finished.ctx),
-                        tx = tx,
-                        // this is safe since we always set ttl
-                        validityEnd = Slot(tx.body.value.ttl.get)
-                            .toQuantizedInstant(config.cardanoInfo.slotConfig),
-                        payoutCount = payoutCount,
-                        resolvedUtxos = finished.ctx.resolvedUtxos
-                      ),
-                      rolloutTxSeqPartial = rollouts,
-                    )
+                ) =>
+                    val totalFee = rolloutTxSeqPartial.totalFee
+                    val equity = treasuryToSpend.equity.coin
+                    if totalFee < equity
+                    then
+                        Left(
+                          SomeBuildError.BalancingError(
+                            e = InsufficientFunds(
+                              valueDiff = Value(totalFee - equity),
+                              minRequired = totalFee.value
+                            ),
+                            context = finished.ctx
+                          )
+                        ).explainConst(
+                          s"Insufficient equity (${equity}) to cover " +
+                              s"the rollout total fee (${totalFee})"
+                        )
+                    else
+                        Right(
+                          Result.WithRollouts(
+                            transaction = FinalizationTx.WithRollouts(
+                              majorVersionProduced = majorVersionProduced,
+                              treasurySpent = treasuryToSpend,
+                              multisigRegimeUtxoSpent = config.multisigRegimeUtxo,
+                              rolloutProduced = unsafeGetRolloutProduced(finished.ctx),
+                              tx = tx,
+                              // this is safe since we always set ttl
+                              validityEnd = Slot(tx.body.value.ttl.get)
+                                  .toQuantizedInstant(config.cardanoInfo.slotConfig),
+                              payoutCount = payoutCount,
+                              resolvedUtxos = finished.ctx.resolvedUtxos
+                            ),
+                            rolloutTxSeqPartial = rollouts,
+                          )
+                        )
 
-                mergeResult match {
-                    case NotMerged => withRollouts(0, rolloutTxSeqPartial)
-                    case Merged(mbFirstSkipped, payoutCount) =>
+                res <- mergeResult match {
+                    case TryMerge.Result.NotMerged => withRollouts(0, rolloutTxSeqPartial)
+                    case TryMerge.Result.Merged(mbFirstSkipped, payoutCount) =>
                         mbFirstSkipped match {
-                            case None => withOnlyDirectPayouts(payoutCount)
+                            case None => Right(withOnlyDirectPayouts(payoutCount))
                             case Some(firstSkipped) =>
                                 withRollouts(payoutCount, firstSkipped.partialResult)
                         }
                 }
-            }
+            } yield res
 
             /** Given the transaction context of a [[Builder.WithPayouts]] that has finished
               * building, apply post-processing to get the [[RolloutUtxo]] produced by the
@@ -450,7 +468,7 @@ private object FinalizationTxOps {
 
                     val rolloutTx: Transaction = firstRolloutTxPartial.ctx.transaction
 
-                    def sendOutput(x: Sized[TxOutput]): Send = Send(x.value)
+                    def sendOutput(x: Sized[TransactionOutput]): Send = Send(x.value)
 
                     val optimisticSteps: List[Send] =
                         rolloutTx.body.value.outputs.map(sendOutput).toList
@@ -495,36 +513,6 @@ private object FinalizationTxOps {
             }
         }
 
-        private object PostProcess {
-
-            /** Given the transaction context of a [[Builder]] that has finished building, apply
-              * post-processing to get the [[MultisigTreasuryUtxo]] produced by the
-              * [[FinalizationTx]]. Assumes that the treasury output is present in the transaction
-              * and is the first output.
-              *
-              * @param ctx
-              *   The transaction context of a finished builder state.
-              * @throws AssertionError
-              *   when the assumption is broken.
-              * @return
-              */
-            @throws[AssertionError]
-            def getTreasuryProduced(
-                majorVersion: BlockVersion.Major,
-                treasurySpent: MultisigTreasuryUtxo,
-                ctx: State
-            ): MultisigTreasuryUtxo = {
-                val tx = ctx.ctx.transaction
-                val outputs = tx.body.value.outputs
-
-                assert(outputs.nonEmpty)
-                // TODO: Throw other assertion errors in `.fromUtxo` and instead of `.get`?
-                MultisigTreasuryUtxo
-                    .fromUtxo(Utxo(TransactionInput(tx.id, 0), outputs.head.value))
-                    .get
-            }
-        }
-
         private object TxBuilder {
             private val diffHandler = Change.changeOutputDiffHandler(
               _,
@@ -545,5 +533,4 @@ private object FinalizationTxOps {
         }
 
     }
-
 }

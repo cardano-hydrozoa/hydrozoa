@@ -7,7 +7,7 @@ import hydrozoa.config.node.TestNodeConfig
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, quantize}
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq
-import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigTreasuryUtxo}
+import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, Equity, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import java.util.concurrent.TimeUnit
 import org.scalacheck.Arbitrary.arbitrary
@@ -133,7 +133,6 @@ def genSettlementTxSeqBuilder(config: TestNodeConfig)(
     )
 
     for {
-        seedUtxo <- arbitrary[TransactionInput]
         majorVersion <- Gen.posNum[Int]
 
         genDeposit = genDepositUtxo(
@@ -146,10 +145,6 @@ def genSettlementTxSeqBuilder(config: TestNodeConfig)(
         payoutAda = payouts
             .map(_.utxo.value.coin)
             .fold(Coin.zero)(_ + _)
-        utxo <- genTreasuryUtxo(
-          config.nodeConfig,
-          Some(payoutAda + Coin(1_000_000_000L))
-        )
 
         kzg: KzgCommitment <- kzgCommitment match {
             case None =>
@@ -158,12 +153,26 @@ def genSettlementTxSeqBuilder(config: TestNodeConfig)(
             case Some(kzg) => Gen.const(kzg)
         }
 
+        multisigTreasury <- for {
+            utxoId <- Arbitrary.arbitrary[TransactionInput]
+
+            equity <- Gen.choose(100_000_000L, 10_000_000_000L).map(l => Equity(Coin(l)).get)
+            treasuryValue = payoutAda + equity.coin
+        } yield MultisigTreasuryUtxo(
+          treasuryTokenName = config.nodeConfig.headTokenNames.treasuryTokenName,
+          utxoId = utxoId,
+          address = config.nodeConfig.headMultisigAddress,
+          datum = MultisigTreasuryUtxo.Datum(kzg, majorVersion),
+          value = Value(treasuryValue),
+          equity = equity
+        )
+
     } yield SettlementTxSeq.Build(config.nodeConfig)(
       kzgCommitment = kzg,
       majorVersionProduced = BlockVersion.Major(majorVersion),
       depositsToSpend = deposits,
       payoutObligationsRemaining = payouts,
-      treasuryToSpend = utxo,
+      treasuryToSpend = multisigTreasury,
       competingFallbackValidityStart = fallbackValidityStart,
       blockCreatedOn = blockCreatedOn
     )

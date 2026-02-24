@@ -61,12 +61,14 @@ def generateInitialBlock(testPeers: TestPeers)(
             case ps: InitializationParameters => Gen.const(ps)
         }
 
-        config = HeadConfig.Preinit.HeadConfig(
-          cardanoNetwork = cardanoNetwork,
-          headParams = headParams,
-          headPeers = testPeers.headPeers,
-          initializationParams = initializationParameters
-        )
+        config = HeadConfig
+            .Preinit(
+              cardanoNetwork = cardanoNetwork,
+              headParams = headParams,
+              headPeers = testPeers.headPeers,
+              initializationParams = initializationParameters
+            )
+            .get
 
         initTxSeq =
             InitializationTxSeq.Build(config).result match {

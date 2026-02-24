@@ -38,7 +38,7 @@ def generateHeadConfigPreInit(headPeers: HeadPeersSpec)(
         InitializationParametersGenTopDown.GenWithDeps =
         InitializationParametersGenBottomUp.generateInitializationParameters,
     generateSettlementConfig: SettlementConfigGen = generateSettlementConfig
-): Gen[HeadConfig.Preinit.HeadConfig] = for {
+): Gen[HeadConfig.Preinit] = for {
     testPeers <- headPeers.generate
     cardanoNetwork <- generateCardanoNetwork
     headParams <- generateHeadParameters(cardanoNetwork)(
@@ -68,12 +68,14 @@ def generateHeadConfigPreInit(headPeers: HeadPeersSpec)(
             )
     }
 
-} yield HeadConfig.Preinit.HeadConfig(
-  cardanoNetwork = cardanoNetwork,
-  headParams = headParams,
-  headPeers = testPeers.headPeers,
-  initializationParams = initializationParams
-)
+} yield HeadConfig
+    .Preinit(
+      cardanoNetwork = cardanoNetwork,
+      headParams = headParams,
+      headPeers = testPeers.headPeers,
+      initializationParams = initializationParams
+    )
+    .get
 
 def generateHeadConfig(headPeers: HeadPeersSpec)(
     generateCardanoNetwork: Gen[CardanoNetwork] = generateStandardCardanoNetwork,

@@ -83,7 +83,6 @@ object VirtualLedgerM {
         tx: Tx.Serialized,
         time: QuantizedInstant
     ): VirtualLedgerM[Vector[Payout.Obligation]] =
-        given OriginalCborByteArray = OriginalCborByteArray(tx)
         // NOTE: We can probably write a cbor deserialization directly to L2EventTransaction.
         // The question is what conditions we should check during deserialization -- our L2ConformanceValidator
         // is currently run as a ledger validation rule, but could also be run during parsing.

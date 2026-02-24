@@ -3,21 +3,29 @@ package hydrozoa.multisig.ledger.dapp.utxo
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.{KzgCommitment, kzgCommitment}
-import scala.util.Try
 import scalus.*
-import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
-import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.{AssetName, TransactionInput, TransactionOutput, Utxo, Utxos, Value}
-import scalus.uplc.builtin.Data.{FromData, ToData, fromData, toData}
+import scalus.cardano.address.ShelleyAddress
+import scalus.cardano.ledger.{AssetName, Coin, TransactionInput, TransactionOutput, Utxo, Utxos, Value}
+import scalus.uplc.builtin.Data.{FromData, ToData, toData}
 import scalus.uplc.builtin.{ByteString, Data, FromData, ToData}
 
-// TODO: Make opaque
+/** @param treasuryTokenName
+  * @param utxoId
+  * @param address
+  * @param datum
+  * @param value
+  *   Contains equity and liabilities (use to "cover" the L2 in the evacuation map)
+  * @param equity
+  *   Is the excess treasury value above what is needed to back the liabilities. Equity is used to
+  *   pay fees for settlement and rollout.
+  */
 final case class MultisigTreasuryUtxo(
     treasuryTokenName: AssetName,
     utxoId: TransactionInput,
     address: ShelleyAddress,
     datum: MultisigTreasuryUtxo.Datum,
-    value: Value
+    value: Value,
+    equity: Equity
 ) {
     def asUtxo: Utxo =
         Utxo(
@@ -30,6 +38,18 @@ final case class MultisigTreasuryUtxo(
         )
 
     def kzgCommitment: KzgCommitment = ByteString.fromArray(datum.commit.bytes)
+}
+
+/** Equity must always be positive
+  * @param coin
+  */
+final case class Equity private (coin: Coin)
+
+object Equity {
+    def apply(amount: Coin): Option[Equity] =
+        if amount.value >= 0L
+        then Some(new Equity(amount))
+        else None
 }
 
 object MultisigTreasuryUtxo {
@@ -68,27 +88,4 @@ object MultisigTreasuryUtxo {
           BigInt(BlockVersion.Major(0).toLong)
         )
 
-    // TODO: Make into Either?
-    def fromUtxo(utxo: Utxo): Option[MultisigTreasuryUtxo] = {
-        val t = for {
-            // Utxo has to be at a shelley address
-            shelleyAddress <- Try(utxo.output.address.asInstanceOf[ShelleyAddress])
-
-            // Treasury token name has to be the only asset in the value of the UTxO that is at the policy ID corresponding
-            // to the script hash
-            hnsScriptHash <- Try(shelleyAddress._2.asInstanceOf[ShelleyPaymentPart.Script].hash)
-            treasuryTokenName <- Try(utxo.output.value.assets.assets(hnsScriptHash).keys.head)
-
-            // Datum has to be inline and deserializable from Data
-            inline <- Try(utxo.output.datumOption.get.asInstanceOf[Inline].data)
-            datum: MultisigTreasuryUtxo.Datum <- Try(fromData[MultisigTreasuryUtxo.Datum](inline))
-        } yield MultisigTreasuryUtxo(
-          treasuryTokenName = treasuryTokenName,
-          utxoId = utxo.input,
-          address = shelleyAddress,
-          datum = datum,
-          value = utxo.output.value
-        )
-        t.toOption
-    }
 }

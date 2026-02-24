@@ -33,31 +33,19 @@ object SettlementTxSeqBuilderTest extends Properties("SettlementTxSeq") {
                             val unsignedTxsAndUtxos
                                 : (Vector[Transaction], TransactionBuilder.ResolvedUtxos) =
                                 txSeq match {
-                                    case NoRollouts(settlementTx, fallbackTx) => {
+                                    case NoRollouts(settlementTx, fallbackTx) =>
                                         (
                                           Vector(settlementTx.tx, fallbackTx.tx),
-                                          // FIXME: Because of scalus issue #207, the settlement tx is not currently
-                                          // referencing the multisig regime utxo. Thus, we need to add it explicitly
-                                          // here. Once that issue is fixed, we can restore this to simply
-                                          // settlementTx.resolvedUtxos
                                           settlementTx.resolvedUtxos
-                                              .addUtxo(fallbackTx.multisigRegimeUtxoSpent.asUtxo)
-                                              .get
                                         )
-                                    }
+
                                     case WithRollouts(settlementTx, fallbackTx, rolloutTxSeq) =>
                                         (
                                           Vector(settlementTx.tx)
                                               .appendedAll(rolloutTxSeq.notLast.map(_.tx))
                                               .appended(rolloutTxSeq.last.tx)
                                               .appended(fallbackTx.tx),
-                                          // FIXME: Because of scalus issue #207, the settlement tx is not currently
-                                          // referencing the multisig regime utxo. Thus, we need to add it explicitly
-                                          // here. Once that issue is fixed, we can restore this to simply
-                                          // settlementTx.resolvedUtxos
                                           settlementTx.resolvedUtxos
-                                              .addUtxo(fallbackTx.multisigRegimeUtxoSpent.asUtxo)
-                                              .get
                                         )
                                 }
 

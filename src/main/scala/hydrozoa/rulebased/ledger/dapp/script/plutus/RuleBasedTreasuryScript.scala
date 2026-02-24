@@ -17,7 +17,7 @@ import scalus.cardano.onchain.plutus.prelude.Option.{None, Some}
 import scalus.cardano.onchain.plutus.prelude.crypto.bls12_381.G2
 import scalus.cardano.onchain.plutus.prelude.crypto.bls12_381.G2.scale
 import scalus.cardano.onchain.plutus.v1.Value.+
-import scalus.cardano.onchain.plutus.v3.*
+import scalus.cardano.onchain.plutus.v3.{Validator, *}
 import scalus.uplc.DeBruijnedProgram
 import scalus.uplc.builtin.*
 import scalus.uplc.builtin.Builtins.*

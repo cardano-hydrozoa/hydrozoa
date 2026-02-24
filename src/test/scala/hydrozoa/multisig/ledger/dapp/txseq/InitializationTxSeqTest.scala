@@ -327,9 +327,10 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                 })
 
                 props.append(
-                  "rules-based treasury utxo has at least as much coin as multisig treasury" |: {
+                  "rules-based treasury utxo has at least as much coin as multisig treasury (minus equity)" |: {
                       // can have more because of the max fallback fee in the multisig regime utxo
-                      fbTx.treasurySpent.value.coin.value <= fbTx.treasuryProduced.output.value.coin.value
+                      fbTx.treasurySpent.value.coin.value - fbTx.treasurySpent.equity.coin.value
+                          <= fbTx.treasuryProduced.output.value.coin.value
                   }
                 )
 

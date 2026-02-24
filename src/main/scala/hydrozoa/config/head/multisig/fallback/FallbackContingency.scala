@@ -32,18 +32,34 @@ object FallbackContingency {
         lazy val total: Coin = defaultVoteDeposit + fallbackTxFee
     }
 
-    /** This amount is collected from each peer in the initialization tx. */
+    /** This amount is collected from each peer in the initialization tx.
+      * @param collateralDeposit
+      *   the collateral for scripts that we put into the collateral utxo
+      * @param tallyTxFee
+      *   the allocation for the tally transaction fee
+      * @param voteDeposit
+      *   the min-ADA that we put into the vote utxo
+      * @param voteTxFee
+      *   the allocation for the vote transaction fee
+      */
     final case class Individual(
         collateralDeposit: Coin,
         tallyTxFee: Coin,
         voteDeposit: Coin,
         voteTxFee: Coin,
     ) {
-        lazy val collateralUtxo: Coin = collateralDeposit + tallyTxFee
 
-        lazy val voteUtxo: Coin = voteDeposit + voteTxFee
+        /** The ADA that should be put into the collateral utxo, which includes both the collateral
+          * for scripts and the tally tx fee.
+          */
+        lazy val forCollateralUtxo: Coin = collateralDeposit + tallyTxFee
 
-        lazy val total: Coin = collateralUtxo + voteUtxo
+        /** The ADA that should be put into the vote utxo, which includes both the min-ADA and the
+          * vote tx fee.
+          */
+        lazy val forVoteUtxo: Coin = voteDeposit + voteTxFee
+
+        lazy val total: Coin = forCollateralUtxo + forVoteUtxo
     }
 
     trait Section {

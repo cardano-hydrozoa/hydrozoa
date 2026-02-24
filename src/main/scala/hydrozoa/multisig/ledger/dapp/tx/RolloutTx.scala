@@ -99,6 +99,7 @@ private object RolloutTxOps {
         final case class State[T <: RolloutTx](
             override val ctx: TransactionBuilder.Context,
             override val inputValueNeeded: Value,
+            override val fee: Coin,
             override val payoutObligationsRemaining: Vector[Payout.Obligation]
         ) extends State.Section[T] {
             override transparent inline def state: State[T] = this
@@ -109,6 +110,7 @@ private object RolloutTxOps {
                 extends Tx.Builder.HasCtx,
                   Payout.Obligation.Many.Remaining {
                 def state: State[T]
+                def fee: Coin
                 def inputValueNeeded: Value
             }
         }
@@ -194,6 +196,7 @@ private object RolloutTxOps {
                     basePessimistic = State[T](
                       ctx = withPayout._1,
                       inputValueNeeded = withPayout._2,
+                      fee = Coin.zero,
                       payoutObligationsRemaining = nePayoutObligationsRemaining.tail
                     )
 
@@ -208,10 +211,11 @@ private object RolloutTxOps {
                 state.payoutObligationsRemaining match {
                     case obligation +: otherObligations =>
                         tryAddPayout(state.ctx, obligation) match {
-                            case Right((newCtx, value)) =>
+                            case Right((newCtx, valueNeeded, fee)) =>
                                 val newState: State[T] = state.copy(
                                   ctx = newCtx,
-                                  inputValueNeeded = value,
+                                  inputValueNeeded = valueNeeded,
+                                  fee = fee,
                                   payoutObligationsRemaining = otherObligations
                                 )
                                 addPayoutsLoop(newState)
@@ -235,14 +239,14 @@ private object RolloutTxOps {
             private def tryAddPayout(
                 ctx: TransactionBuilder.Context,
                 payoutObligation: Payout.Obligation
-            ): BuilderResultSimple[(TransactionBuilder.Context, Value)] =
+            ): BuilderResultSimple[(TransactionBuilder.Context, Value, Coin)] =
                 val payoutStep = Send(payoutObligation.utxo)
                 for {
                     newCtx <- TransactionBuilder
                         .modify(ctx, List(payoutStep))
                         .explainConst("could not add payout")
-                    valueNeededWithFee <- TrialFinish(Build.this, newCtx)
-                } yield (newCtx, valueNeededWithFee)
+                    valueNeededAndFee <- TrialFinish(Build.this, newCtx)
+                } yield (newCtx, valueNeededAndFee._1, valueNeededAndFee._2)
         }
 
         private[tx] object PostProcess {
@@ -324,7 +328,7 @@ private object RolloutTxOps {
             def apply(
                 builder: Build[T],
                 ctx: TransactionBuilder.Context
-            ): BuilderResultSimple[Value] = {
+            ): BuilderResultSimple[(Value, Coin)] = {
                 // The deficit in the inputs to the transaction prior to adding the placeholder
                 val valueNeeded =
                     TrialFinish.inputValueNeeded(ctx, config.cardanoProtocolParams)
@@ -343,11 +347,12 @@ private object RolloutTxOps {
             )
 
             @tailrec
+            // Returns the value needed (inclusive of the fee), alongside the fee itself
             private def trialFinishLoop(
                 builder: Build[T],
                 ctx: TransactionBuilder.Context,
                 trialValue: Value
-            ): BuilderResultSimple[Value] = {
+            ): BuilderResultSimple[(Value, Coin)] = {
                 val placeholder = List(spendPlaceholderRollout(trialValue))
                 val res = for {
                     // TODO: move out of loop
@@ -376,7 +381,7 @@ private object RolloutTxOps {
                           )
                         ) =>
                         trialFinishLoop(builder, ctx, trialValue - Value(Coin(diff)))
-                    case Right(_) => Right(trialValue)
+                    case Right(ctx) => Right(trialValue, ctx.transaction.body.value.fee)
                     case e =>
                         throw new RuntimeException(
                           "should be impossible; " +
@@ -415,9 +420,10 @@ private object RolloutTxOps {
     trait PartialResult[T <: RolloutTx](_payoutObligationsRemaining: Vector[Payout.Obligation])
         extends Build.State.Section[T] {
         def builder: Build[T]
+        def fee: Coin
 
         override transparent inline def state: State[T] =
-            State(ctx, inputValueNeeded, payoutObligationsRemaining)
+            State(ctx, inputValueNeeded, fee, payoutObligationsRemaining)
         override transparent inline def payoutObligationsRemaining: Vector[Payout.Obligation] =
             _payoutObligationsRemaining
 
@@ -474,8 +480,14 @@ private object RolloutTxOps {
             import state.*
             NonEmptyVector.fromVector(payoutObligationsRemaining) match
                 case None =>
-                    PartialResult.First(builder, ctx, inputValueNeeded, builder.payoutCount(ctx))
-                case Some(nev) => PartialResult.NotFirst(builder, ctx, inputValueNeeded, nev)
+                    PartialResult.First(
+                      builder,
+                      ctx,
+                      inputValueNeeded,
+                      fee,
+                      builder.payoutCount(ctx)
+                    )
+                case Some(nev) => PartialResult.NotFirst(builder, ctx, inputValueNeeded, nev, fee)
         }
 
         /** The first [[RolloutTx]] in the sequence. As such, it doesn't have any [[RolloutTx]]
@@ -495,6 +507,7 @@ private object RolloutTxOps {
             override val builder: Build[TT],
             override val ctx: TransactionBuilder.Context,
             override val inputValueNeeded: Value,
+            override val fee: Coin,
             payoutCount: Int
         ) extends PartialResult[TT](Vector.empty)
 
@@ -517,14 +530,16 @@ private object RolloutTxOps {
             override val builder: Build[TT],
             override val ctx: TransactionBuilder.Context,
             override val inputValueNeeded: Value,
-            override val nePayoutObligationsRemaining: NonEmptyVector[Payout.Obligation]
+            override val nePayoutObligationsRemaining: NonEmptyVector[Payout.Obligation],
+            override val fee: Coin
         ) extends PartialResult[TT](nePayoutObligationsRemaining.toVector),
               Payout.Obligation.Many.Remaining.NonEmpty {
             def asFirst: PartialResult.First[TT] = First(
               builder = builder,
               ctx = ctx,
               inputValueNeeded = inputValueNeeded,
-              payoutCount = builder.payoutCount(ctx)
+              payoutCount = builder.payoutCount(ctx),
+              fee = fee
             )
         }
     }
