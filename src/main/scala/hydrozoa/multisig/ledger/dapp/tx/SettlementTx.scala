@@ -233,6 +233,13 @@ private object SettlementTxOps {
                 Spend(treasuryToSpend.asUtxo, config.headMultisigScript.witnessAttached)
 
             /////////////////////////////////////////////////////////
+            // Spend deposits
+            private def mkDepositStep(deposit: DepositUtxo): Spend =
+                Spend(deposit.toUtxo, config.headMultisigScript.witnessAttached)
+
+            private val spendDeposits: List[Spend] = depositsToSpend.toList.map(mkDepositStep)
+
+            /////////////////////////////////////////////////////////
             // Send rollout (maybe)
             private def mkRolloutOutput(value: Value): TxOutput.Babbage = TxOutput.Babbage(
               address = config.headMultisigAddress,
@@ -285,14 +292,7 @@ private object SettlementTxOps {
             /////////////////////////////////////////////////////////
             // Definite steps
             private val definiteSteps: List[TransactionBuilderStep] =
-                baseSteps ++ List(spendTreasury, sendTreasury) ++ AddDeposits()
-        }
-
-        private object AddDeposits {
-            def apply(): List[Spend] = depositsToSpend.toList.map(mkDepositStep)
-
-            private def mkDepositStep(deposit: DepositUtxo): Spend =
-                Spend(deposit.toUtxo, config.headMultisigScript.witnessAttached)
+                baseSteps ++ List(spendTreasury, sendTreasury) ++ spendDeposits
         }
 
         private[tx] object CompleteNoPayouts {
