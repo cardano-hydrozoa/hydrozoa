@@ -3,6 +3,7 @@ package hydrozoa.config.head
 import cats.data.{NonEmptyList, NonEmptyMap}
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
+import hydrozoa.config.head.multisig.settlement.SettlementConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.HeadParameters
@@ -10,6 +11,7 @@ import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.config.head.rulebased.scripts.RuleBasedScriptAddresses
 import hydrozoa.lib.cardano.scalus.QuantizedTime
+import hydrozoa.lib.logging.Logging
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
 import hydrozoa.multisig.ledger.block.Block
@@ -20,26 +22,48 @@ import scalus.cardano.ledger.{CardanoInfo, Coin, Hash32, ProtocolParams, SlotCon
 import scalus.crypto.ed25519.VerificationKey
 
 final case class HeadConfig private (
-    override val cardanoNetwork: CardanoNetwork,
-    override val headParams: HeadParameters,
-    override val headPeers: HeadPeers,
+    override val headConfigPreinit: HeadConfig.Preinit,
     override val initialBlock: Block.MultiSigned.Initial,
-    override val initializationParams: InitializationParameters,
 ) extends HeadConfig.Section {
     override transparent inline def headConfig: HeadConfig = this
 }
 
 object HeadConfig {
+    private val logger = Logging.logger("HeadConfig")
+
+    def apply(
+        headConfigPreinit: HeadConfig.Preinit,
+        initialBlock: Block.MultiSigned.Initial
+    ): Option[HeadConfig] =
+        import headConfigPreinit.*
+        apply(cardanoNetwork, headParams, headPeers, initialBlock, initializationParams)
+
     def apply(
         cardanoNetwork: CardanoNetwork,
         headParams: HeadParameters,
         headPeers: HeadPeers,
         initialBlock: Block.MultiSigned.Initial,
         initializationParams: InitializationParameters,
-    ): Option[HeadConfig] =
-        Option.when(initialBlock.startTime == initializationParams.headStartTime)(
-          new HeadConfig(cardanoNetwork, headParams, headPeers, initialBlock, initializationParams)
-        )
+    ): Option[HeadConfig] = {
+        val startTimesMatch = initialBlock.startTime == initializationParams.headStartTime
+
+        if !startTimesMatch then {
+            logger.error(
+              "Start times don't match between initial block and initialization parameters."
+            )
+        }
+
+        for {
+            headConfigPreinit <- HeadConfig.Preinit(
+              cardanoNetwork,
+              headParams,
+              headPeers,
+              initializationParams
+            )
+            result <- Option.when(startTimesMatch)(new HeadConfig(headConfigPreinit, initialBlock))
+        } yield result
+
+    }
 
     trait Section extends HeadConfig.Preinit.Section, InitialBlock.Section {
         def headConfig: HeadConfig
@@ -48,28 +72,47 @@ object HeadConfig {
           initialBlock
         )
 
-        override transparent inline def headConfigPreInit: Preinit.HeadConfig = {
-            Preinit.HeadConfig(
-              headConfig.cardanoNetwork,
-              headConfig.headParams,
-              headConfig.headPeers,
-              headConfig.initializationParams
-            )
-        }
+        override def cardanoNetwork: CardanoNetwork =
+            headConfigPreinit.cardanoNetwork
+        override def headParams: HeadParameters = headConfigPreinit.headParams
+        override def headPeers: HeadPeers = headConfigPreinit.headPeers
+        override def initializationParams: InitializationParameters =
+            headConfigPreinit.initializationParams
 
         override transparent inline def headStartTime: QuantizedTime.QuantizedInstant =
             initialBlockSection.headStartTime
     }
 
+    final case class Preinit private[head] (
+        override val cardanoNetwork: CardanoNetwork,
+        override val headParams: HeadParameters,
+        override val headPeers: HeadPeers,
+        override val initializationParams: InitializationParameters,
+    ) extends Preinit.Section {
+        override transparent inline def headConfigPreinit: Preinit = this
+    }
+
     object Preinit {
-        // TODO: rename to avoid HeadConfig.Preinit.HeadConfig?
-        final case class HeadConfig(
-            override val cardanoNetwork: CardanoNetwork,
-            override val headParams: HeadParameters,
-            override val headPeers: HeadPeers,
-            override val initializationParams: InitializationParameters,
-        ) extends Preinit.Section {
-            override transparent inline def headConfigPreInit: Preinit.HeadConfig = this
+        def apply(
+            cardanoNetwork: CardanoNetwork,
+            headParams: HeadParameters,
+            headPeers: HeadPeers,
+            initializationParams: InitializationParameters
+        ): Option[HeadConfig.Preinit] = {
+            val headConfigPreinit = new HeadConfig.Preinit(
+              cardanoNetwork,
+              headParams,
+              headPeers,
+              initializationParams
+            )
+
+            val isBalancedInitializationFunding = headConfigPreinit.isBalancedInitializationFunding
+
+            if !isBalancedInitializationFunding then {
+                logger.error("Initialization funding is unbalanced.")
+            }
+
+            Option.when(isBalancedInitializationFunding)(headConfigPreinit)
         }
 
         trait Section
@@ -77,8 +120,10 @@ object HeadConfig {
               HeadParameters.Section,
               HeadPeers.Section,
               InitializationParameters.Section {
-            def headConfigPreInit: Preinit.HeadConfig
+            def headConfigPreinit: HeadConfig.Preinit
 
+            override transparent inline def settlementConfig: SettlementConfig =
+                headParams.settlementConfig
             override transparent inline def cardanoInfo: CardanoInfo = cardanoNetwork.cardanoInfo
             override transparent inline def network: Network = cardanoNetwork.network
             override transparent inline def slotConfig: SlotConfig = cardanoNetwork.slotConfig

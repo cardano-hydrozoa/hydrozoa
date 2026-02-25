@@ -494,14 +494,15 @@ final case class JointLedger(
 
             (eligible, ineligible, rejected) = ret
 
+            // TODO: wiring point for Peter
+            (absorbedDeposits, unabsorbedDeposits) = eligible.splitAt(maxDepositsAbsorbedPerBlock)
+
             _ = logger.trace(
-              s"joint ledger: eligible=${eligible}" + "\n" +
+              s"joint ledger: absorbed=${absorbedDeposits}" + "\n" +
+                  s"joint ledger: unabsorbed=${unabsorbedDeposits}" + "\n" +
                   s"joint ledger: ineligible=${ineligible}" + "\n" +
                   s"joint ledger: rejected=${rejected}" + "\n"
             )
-
-            // TODO: wiring point for Peter
-            absorbedDeposits = eligible // first N of eligible
 
             ret <- mkBlockBrief(
               absorbedDeposits = absorbedDeposits,
@@ -516,7 +517,10 @@ final case class JointLedger(
             // Block is done
 
             // This is also sort of "handling", but internal  to ledgers
-            _ <- this.runDappLedgerM(DappLedgerM.handleBlockBrief(ineligible), onSuccess = IO.pure)
+            _ <- this.runDappLedgerM(
+              DappLedgerM.handleBlockBrief(unabsorbedDeposits ++ ineligible),
+              onSuccess = IO.pure
+            )
 
             _ <- mbGenesisEvent.fold(IO.pure(())) { l2Genesis =>
                 this.runVirtualLedgerM(VirtualLedgerM.applyGenesisEvent(l2Genesis))

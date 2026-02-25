@@ -4,6 +4,7 @@ import cats.data.NonEmptyList
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.Fallback
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
@@ -12,10 +13,10 @@ import hydrozoa.rulebased.ledger.dapp.state.VoteDatum as VD
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteDatum
 import hydrozoa.rulebased.ledger.dapp.utxo.RuleBasedTreasuryUtxo
 import monocle.{Focus, Lens}
-import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
+import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{Mint as _, *}
+import scalus.cardano.ledger.{Mint as _, TransactionOutput, *}
 import scalus.cardano.onchain.plutus.prelude.List as SList
 import scalus.cardano.onchain.plutus.v1.PubKeyHash
 import scalus.cardano.txbuilder.*
@@ -147,7 +148,7 @@ private object FallbackTxOps {
                     def apply() = Send(
                       Babbage(
                         address = config.ruleBasedTreasuryAddress,
-                        value = treasuryUtxoSpent.value,
+                        value = treasuryUtxoSpent.value - Value(treasuryUtxoSpent.equity.coin),
                         datumOption = Some(Inline(datum.toData)),
                         scriptRef = None
                       )
@@ -205,33 +206,40 @@ private object FallbackTxOps {
                               )
                             )
                             datums.map(datum =>
-                                mkVoteUtxo(datum.toData, config.individualContingency.voteDeposit)
+                                mkVoteUtxo(
+                                  datum.toData,
+                                  config.individualContingency.forVoteUtxo
+                                )
                             )
                         }
                     }
                 }
 
                 object Collaterals {
-                    def apply(): NonEmptyList[Send] = utxos.map(Send(_))
-
-                    val utxos: NonEmptyList[TransactionOutput] = time("collateralUtxos") {
-                        NonEmptyList.fromListUnsafe(
-                          hns.requiredSigners
-                              .map(es =>
-                                  Babbage(
-                                    address = ShelleyAddress(
-                                      network = config.network,
-                                      payment = ShelleyPaymentPart.Key(es.hash),
-                                      delegation = ShelleyDelegationPart.Null
-                                    ),
-                                    value = Value(config.individualContingency.collateralDeposit),
-                                    datumOption = None,
-                                    scriptRef = None
-                                  ).ensureMinAda(config)
+                    def apply(): NonEmptyList[Send] = NonEmptyList.fromListUnsafe(
+                      config.headPeerAddresses.toSortedMap
+                          .transform((pNum, addr) =>
+                              mkPeerPayout(
+                                addr,
+                                equityPayouts(pNum)
+                                    + config.individualContingency.forCollateralUtxo
                               )
-                              .toList
-                        )
-                    }
+                          )
+                          .values
+                          .toList
+                    )
+
+                    private def mkPeerPayout(addr: ShelleyAddress, lovelace: Coin): Send = Send(
+                      TransactionOutput.Babbage(
+                        address = addr,
+                        value = Value(lovelace),
+                        datumOption = None,
+                        scriptRef = None,
+                      )
+                    )
+
+                    val equityPayouts: Map[HeadPeerNumber, Coin] =
+                        config.distributeEquity(treasuryUtxoSpent.equity.coin).toSortedMap
                 }
 
             }
@@ -246,7 +254,7 @@ private object FallbackTxOps {
                   utxoId = TransactionInput(txId, 0),
                   address = config.ruleBasedTreasuryAddress,
                   datum = RuleBasedTreasuryDatum.Unresolved(Steps.Sends.Treasury.datum),
-                  value = treasuryUtxoSpent.value
+                  value = treasuryUtxoSpent.value - Value(treasuryUtxoSpent.equity.coin)
                 )
 
                 FallbackTx(

@@ -2,7 +2,6 @@ package test
 
 import cats.data.{NonEmptyList, NonEmptyVector}
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.value.coin.Distribution
 import hydrozoa.lib.cardano.value.coin.Distribution.NormalizedWeights
 import hydrozoa.multisig.ledger.VirtualLedgerM
@@ -272,56 +271,6 @@ object Generators {
                 )
 
             } yield genesisObligation
-
-        /** Generate a treasury utxo with at least minAda */
-        def genTreasuryUtxo(
-            config: CardanoNetwork.Section & HeadPeers.Section,
-            coin: Option[Coin] = None // None to generate
-        ): Gen[MultisigTreasuryUtxo] =
-            for {
-                txId <- arbitrary[TransactionInput]
-                headTn <- genHeadTokenName
-
-                scriptAddress = config.headMultisigAddress
-                datum <- genTreasuryDatum
-
-                treasuryToken: Value = Value(
-                  Coin.zero,
-                  MultiAsset(
-                    SortedMap(
-                      scriptAddress.payment.asInstanceOf[ShelleyPaymentPart.Script].hash ->
-                          SortedMap(headTn -> 1L)
-                    )
-                  )
-                )
-
-                treasuryMinAda = ensureMinAda(
-                  MultisigTreasuryUtxo(
-                    treasuryTokenName = headTn,
-                    utxoId = txId,
-                    address = scriptAddress,
-                    datum = datum,
-                    value = Value(Coin(0L)) + treasuryToken
-                  ).asUtxo._2,
-                  config.cardanoProtocolParams
-                ).value.coin
-
-                treasuryAda <- arbitrary[Coin].map(l => l - Coin(1L) + treasuryMinAda)
-
-            } yield MultisigTreasuryUtxo(
-              treasuryTokenName = headTn,
-              utxoId = txId,
-              datum = datum,
-              address = scriptAddress,
-              value = Value(coin.getOrElse(treasuryAda)) + treasuryToken
-            )
-
-        /** Generate a treasury utxo according to a builder config */
-        def genTreasuryUtxo(
-            config: CardanoNetwork.Section & HeadPeers.Section
-        ): Gen[MultisigTreasuryUtxo] = {
-            genTreasuryUtxo(config = config, coin = None)
-        }
 
         /** Given a set of inputs event, construct a withdrawal event attempting to withdraw all
           * inputs with the given key to a single output
