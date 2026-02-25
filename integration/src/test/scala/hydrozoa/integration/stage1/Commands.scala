@@ -157,7 +157,9 @@ object Commands:
       */
     final case class SubmitDepositCommand(
         deposits: List[(LedgerEventId, Transaction)]
-    )
+    ) {
+        override def toString: String = s"SubmitDepositCommand: ${deposits.map(_._1)}"
+    }
 
     implicit given CommandProp[SubmitDepositCommand, Unit, Model.State] with {}
 

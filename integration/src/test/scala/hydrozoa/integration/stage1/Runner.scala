@@ -6,7 +6,7 @@ import hydrozoa.integration.stage1.ScenarioGenerators.*
 import hydrozoa.integration.stage1.Stage1PropertiesL1Mock.property
 import hydrozoa.integration.stage1.SuiteCardano.{Mock, Yaci}
 import hydrozoa.integration.yaci.DevKit
-import hydrozoa.multisig.backend.cardano.yaciTestSauceGenesis
+import hydrozoa.multisig.backend.cardano.{richAlice, yaciTestSauceGenesis}
 import org.scalacheck.YetAnotherProperties
 
 object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 on L1 mock"):
@@ -65,12 +65,14 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
 
     /** Deposits
       *
-      * TODO:
+      * This scenario brings up deposits to the scene by adding two additional commands:
+      *   - [[RegisterDepositCommand]]
+      *   - [[SubmitDepositCommand]]
       */
     val _ = property("Deposits") = Suite(
       suiteCardano = Mock(preprod),
       txTimingGen = generateDefaultTxTiming,
-      mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
+      mkGenesisUtxos = richAlice(preprod.network),
       scenarioGen = DepositsScenarioGen
     ).property()
 

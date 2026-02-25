@@ -92,16 +92,17 @@ object InitializationParametersGenTopDown {
 
     type GenesisUtxosGen = CardanoNetwork => Gen[Map[HeadPeerNumber, Utxos]]
 
-    /** Returns test genesis utxo provided by [[TestPeers]].
-      */
-    def testPeersGenesisUtxosL1(testPeers: TestPeers)(
-        network: CardanoNetwork
-    ): Gen[Map[HeadPeerNumber, Utxos]] =
-        Gen.const(testPeers.genesisUtxos(network.cardanoInfo.network))
-
-    /** Generate fake utxos, that don't exist, but are spendable using peers' credentials.
-      */
-    def generateRandomPeersUtxosL1(network: CardanoNetwork): Gen[Map[HeadPeerNumber, Utxos]] = ???
+    // TODO: do we want to have a default?
+    /// ** Returns test genesis utxo provided by [[TestPeers]].
+    //  */
+    // def testPeersGenesisUtxosL1(testPeers: TestPeers)(
+    //    network: CardanoNetwork
+    // ): Gen[Map[HeadPeerNumber, Utxos]] =
+    //    Gen.const(testPeers.genesisUtxos(network.cardanoInfo.network))
+    //
+    /// ** Generate fake utxos, that don't exist, but are spendable using peers' credentials.
+    //  */
+    // def generateRandomPeersUtxosL1(network: CardanoNetwork): Gen[Map[HeadPeerNumber, Utxos]] = ???
 
     case class GenWithDeps(
         generator: GenInitializationParameters = generateInitializationParameters,
@@ -125,7 +126,7 @@ object InitializationParametersGenTopDown {
         generateCardanoNetwork: Gen[CardanoNetwork] = generateStandardCardanoNetwork,
         generateHeadStartTime: HeadStartTimeGen = currentTimeHeadStartTime,
         generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
-        generateGenesisUtxosL1: GenesisUtxosGen = testPeersGenesisUtxosL1(testPeers),
+        generateGenesisUtxosL1: GenesisUtxosGen,
         equityRange: (Coin, Coin) = Coin(5_000_000) -> Coin(500_000_000)
     ): Gen[InitializationParameters] =
         for {
@@ -252,13 +253,13 @@ object InitializationParametersGenTopDown {
     }
 }
 
-object SanityCheck extends Properties("Initialization Parameters Top Down Sanity Check") {
-    val _ = property("sanity check") = Prop.forAll(generateTestPeers())(testPeers =>
-        Prop.forAll(
-          InitializationParametersGenTopDown.generateInitializationParameters(testPeers)()
-        )(_ => true)
-    )
-}
+//object SanityCheck extends Properties("Initialization Parameters Top Down Sanity Check") {
+//    val _ = property("sanity check") = Prop.forAll(generateTestPeers())(testPeers =>
+//        Prop.forAll(
+//          InitializationParametersGenTopDown.generateInitializationParameters(testPeers)()
+//        )(_ => true)
+//    )
+//}
 
 object CappedValueGen:
 

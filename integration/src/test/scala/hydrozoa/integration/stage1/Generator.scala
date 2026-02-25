@@ -617,44 +617,35 @@ object ScenarioGenerators:
 
                             val depositsForSubmission = state.depositForSubmission
 
-                            logger.trace(s"depositsForSubmission = $depositsForSubmission")
-                            lazy val genSubmitDeposits
-                                : Option[Gen[AnyCommand[Model.State, Stage1Sut]]] =
-                                if depositsForSubmission.nonEmpty
-                                then
-                                    Some(
-                                      CommandGen
-                                          .genSubmitDepositsCommand(depositsForSubmission, state)
-                                          .map(AnyCommand.apply)
-                                    )
-                                else None
-
-                            lazy val genOtherCommands: Gen[AnyCommand[Model.State, Stage1Sut]] =
-                                Gen.frequency(
-                                  3 -> (if (state.peerUtxosL1 -- state.utxoLocked).nonEmpty
-                                        then
-                                            CommandGen
-                                                .genRegisterDepositCommand(state)
-                                                .flatMap {
-                                                    case Some(cmd) => Gen.const(AnyCommand(cmd))
-                                                    case None      => Gen.const(noOp)
-                                                }
-                                        else Gen.const(noOp)),
-                                  1 -> CommandGen
-                                      .genCompleteBlock(blockNumber, state.depositUtxoIds)
-                                      .map(AnyCommand.apply),
-                                  10 -> (if state.activeUtxos.nonEmpty
-                                         then
-                                             CommandGen
-                                                 .genValidNonPlutusL2Tx(
-                                                   txStrategy = RandomWithdrawals,
-                                                   txMutator = Identity
-                                                 )(state)
-                                                 .map(AnyCommand.apply)
-                                         else Gen.const(noOp))
-                                )
-
-                            genSubmitDeposits.getOrElse(genOtherCommands)
+                            Gen.frequency(
+                              3 -> (if (state.peerUtxosL1 -- state.utxoLocked).nonEmpty
+                                    then
+                                        CommandGen
+                                            .genRegisterDepositCommand(state)
+                                            .flatMap {
+                                                case Some(cmd) => Gen.const(AnyCommand(cmd))
+                                                case None      => Gen.const(noOp)
+                                            }
+                                    else Gen.const(noOp)),
+                              3 -> (if depositsForSubmission.nonEmpty
+                                    then
+                                        CommandGen
+                                            .genSubmitDepositsCommand(depositsForSubmission, state)
+                                            .map(AnyCommand.apply)
+                                    else Gen.const(noOp)),
+                              1 -> CommandGen
+                                  .genCompleteBlock(blockNumber, state.depositUtxoIds)
+                                  .map(AnyCommand.apply),
+                              10 -> (if state.activeUtxos.nonEmpty
+                                     then
+                                         CommandGen
+                                             .genValidNonPlutusL2Tx(
+                                               txStrategy = RandomWithdrawals,
+                                               txMutator = Identity
+                                             )(state)
+                                             .map(AnyCommand.apply)
+                                     else Gen.const(noOp))
+                            )
 
                         case HeadFinalized => Gen.const(noOp)
                     }

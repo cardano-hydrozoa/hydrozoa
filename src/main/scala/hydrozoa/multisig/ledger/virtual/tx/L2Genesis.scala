@@ -16,6 +16,7 @@ import scalus.uplc.builtin.{ByteString, Data, platform}
 
 final case class L2Genesis(
     // We allow  this to be empty so that we can do the "push the fallback forward" tx
+    // TODO: do we need Queue here though?
     genesisObligations: Queue[GenesisObligation],
     // blake2b_256(treasuryTokenName.bytestring ++ nextBlockVersion)
     // TODO: Type this better? It shouldn't really be a TransactionHash, because it's
@@ -33,6 +34,14 @@ final case class L2Genesis(
 
 // TODO: Fix to work with the new way that virtual utxos are created in deposit transactions.
 object L2Genesis:
+
+    // TODO: implement
+    def apply(obligations: NonEmptyList[GenesisObligation]): L2Genesis =
+        L2Genesis(
+          genesisObligations = Queue.from(obligations.toList),
+          genesisId = ???
+        )
+
     enum L2GenesisError:
         case EmptyInputs
 

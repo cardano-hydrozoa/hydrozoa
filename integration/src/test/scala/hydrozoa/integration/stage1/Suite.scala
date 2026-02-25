@@ -21,7 +21,6 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost.URL
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendMock, MockState}
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, ConsensusActor, EventSequencer}
 import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.block.{BlockEffects, BlockNumber, BlockVersion}
@@ -130,7 +129,7 @@ case class Suite(
     override def genInitialState(env: Env): Gen[State] = {
 
         // One-peer head
-        val spec = HeadPeersSpec.Exact(1)
+        val spec = HeadPeersSpec.Exact(peers = 1)
         val ownTestPeer = Alice
 
         val generateHeadStartTime: HeadStartTimeGen = slotConfig =>
@@ -140,23 +139,25 @@ case class Suite(
 
         for {
             testPeers <- spec.generate
+            testPeerToUtxos = mkGenesisUtxos(List(ownTestPeer))
+
             headConfig <- generateHeadConfig(spec)(
               generateCardanoNetwork = generateCardanoNetwork,
               generateHeadStartTime = generateHeadStartTime,
               generateTxTiming = generateTxTiming,
               generateInitializationParameters = InitializationParametersGenTopDown.GenWithDeps(
                 generateGenesisUtxosL1 =
-                    InitializationParametersGenTopDown.testPeersGenesisUtxosL1(testPeers)
+                    network => Gen.const(testPeerToUtxos.map((k, v) => k.peerNum -> v))
               )
-            )
-
-            peerL1GenesisUtxos = testPeers.genesisUtxos(env.cardanoNetwork.network)(
-              HeadPeerNumber.zero
             )
 
             _ = logger.debug(s"total contingency: ${headConfig.fallbackContingency}")
             _ = logger.debug(s"l2 utxos: ${headConfig.initialL2Utxos.size}")
             _ = logger.debug(s"l2 total: ${headConfig.initialL2Value}")
+
+            peerL1GenesisUtxos = testPeerToUtxos.values.flatten.toMap
+
+            _ = logger.debug(s"peerL1GenesisUtxos: ${peerL1GenesisUtxos}")
 
             operationalMultisigConfig <- generateNodeOperationMultisigConfig
             operationalLiquidationConfig <- generateNodeOperationLiquidationConfig
@@ -213,7 +214,7 @@ case class Suite(
             } yield ())
 
             _ <- loggerIO.debug(s"peerKeys: ${headConfig.headPeers.headPeerVKeys}")
-            _ <- loggerIO.debug(s"peer L1 utxos: ${state.peerUtxosL1.map(_._1)}")
+            _ <- loggerIO.debug(s"model peer L1 utxos: ${state.peerUtxosL1.map(_._1)}")
 
             nodeConfig: NodeConfig = NodeConfig
                 .apply(

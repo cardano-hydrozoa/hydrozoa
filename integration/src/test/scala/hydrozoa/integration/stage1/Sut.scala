@@ -182,7 +182,7 @@ object SutCommands:
             // Submission errors are ignored, but dumped here
             submissionErrors = ret.filter(_.isLeft)
             _ <- IO.whenA(submissionErrors.nonEmpty)(
-              logger.warn(
+              logger.info(
                 "Submit deposit errors:" + submissionErrors
                     .map(a => s"\n\t- ${a.left}")
                     .mkString
