@@ -68,7 +68,7 @@ private object FallbackTxOps {
         val start = System.nanoTime()
         val result = block
         val elapsed = (System.nanoTime() - start) / 1_000_000.0
-        logger.info(f"\t\t⏱️ $label: ${elapsed}%.2f ms")
+        logger.debug(f"\t\t⏱️ $label: ${elapsed}%.2f ms")
         result
     }
 
@@ -218,12 +218,15 @@ private object FallbackTxOps {
                 object Collaterals {
                     def apply(): NonEmptyList[Send] = NonEmptyList.fromListUnsafe(
                       config.headPeerAddresses.toSortedMap
-                          .transform((pNum, addr) =>
+                          .transform((pNum, addr) => {
+                              val coin = equityPayouts(pNum) + config.individualContingency.forCollateralUtxo
+                              logger.info(s"Collaterals: equity = ${equityPayouts(pNum)}")
+                              logger.info(s"Collaterals: contingency = ${config.individualContingency.forCollateralUtxo}")
                               mkPeerPayout(
-                                addr,
-                                equityPayouts(pNum)
-                                    + config.individualContingency.forCollateralUtxo
+                                  addr,
+                                  coin
                               )
+                          }
                           )
                           .values
                           .toList
@@ -235,7 +238,7 @@ private object FallbackTxOps {
                         value = Value(lovelace),
                         datumOption = None,
                         scriptRef = None,
-                      )
+                      ).ensureMinAda(config)
                     )
 
                     val equityPayouts: Map[HeadPeerNumber, Coin] =

@@ -11,8 +11,8 @@
     <logger name="CardanoLiaison" level="debug"/>
     <logger name="CardanoLiaisonTest" level="debug"/>
     <logger name="InitializationTxSeq" level="warn"/>
-    <logger name="InitializationTx" level="warn"/>
-    <logger name="FallbackTx" level="warn"/>
+    <logger name="InitializationTx" level="info"/>
+    <logger name="FallbackTx" level="info"/>
     <logger name="SettlementTxSeq" level="warn"/>
     <logger name="SettlementTx" level="warn"/>
     <logger name="scalus" level="warn"/>

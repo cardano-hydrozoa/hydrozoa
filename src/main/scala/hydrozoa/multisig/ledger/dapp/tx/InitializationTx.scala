@@ -55,7 +55,7 @@ private object InitializationTxOps {
         val start = System.nanoTime()
         val result = block
         val elapsed = (System.nanoTime() - start) / 1_000_000.0
-        logger.info(f"\t\t⏱️ $label: ${elapsed}%.2f ms")
+        logger.debug(f"\t\t⏱️ $label: ${elapsed}%.2f ms")
         result
     }
 
@@ -180,6 +180,9 @@ private object InitializationTxOps {
                           config.headTokenNames.multisigRegimeTokenName,
                           1L
                         )
+
+                    logger.info(s"collectiveContingency=${config.collectiveContingency.total.value}")
+                    logger.info(s"individualContingency=${config.individualContingency.total.value}")
 
                     private[tx] val multisigRegimeOutput = Babbage(
                       config.headMultisigAddress,
