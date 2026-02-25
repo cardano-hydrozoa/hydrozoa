@@ -28,6 +28,7 @@ object FallbackContingency {
     final case class Collective(
         defaultVoteDeposit: Coin,
         fallbackTxFee: Coin,
+        minAdaForTreasury: Coin
     ) {
         lazy val total: Coin = defaultVoteDeposit + fallbackTxFee
     }
@@ -104,6 +105,7 @@ object FallbackContingency {
 
         def mkCollectiveContingencyWithDefaults: Collective = Collective(
           defaultVoteDeposit = voteUtxoMinLovelace,
+          minAdaForTreasury = noLiabilitesTreasuryMinLovelace,
           fallbackTxFee = fallbackTxFee
         )
 
@@ -133,6 +135,9 @@ object FallbackContingency {
             Coin(ret.underlying.ceil.toLong)
         }
 
+        private def noLiabilitesTreasuryMinLovelace: Coin =
+            config.babbageUtxoMinLovelace(Assumptions.maxNoLiabilitiesTreasuryUtxoBytes)
+
         private def collateralUtxoMinLovelace: Coin =
             config.babbageUtxoMinLovelace(Assumptions.adaOnlyBaseAddressUtxoBytes)
 
@@ -145,6 +150,9 @@ object FallbackContingency {
         val adaOnlyBaseAddressUtxoBytes: PositiveInt = PositiveInt.unsafeApply(67)
 
         // Max serialized size of a vote utxo (with/without vote)
-        val maxVoteUtxoBytes: PositiveInt = PositiveInt.unsafeApply(150)
+        val maxVoteUtxoBytes: PositiveInt = PositiveInt.unsafeApply(155)
+
+        // Max serialized size of a rule-based treasury utxo when there are no L2 liabilities
+        val maxNoLiabilitiesTreasuryUtxoBytes: PositiveInt = PositiveInt.unsafeApply(155)
     }
 }
