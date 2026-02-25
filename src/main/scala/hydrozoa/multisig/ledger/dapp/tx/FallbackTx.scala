@@ -2,7 +2,6 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
 import hydrozoa.config.head.HeadConfig
-import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
@@ -22,6 +21,7 @@ import scalus.cardano.onchain.plutus.v1.PubKeyHash
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
+import scalus.uplc.builtin.Builtins.blake2b_224
 import scalus.uplc.builtin.Data
 import scalus.uplc.builtin.Data.toData
 
@@ -145,20 +145,13 @@ private object FallbackTxOps {
                 def apply(): List[Send] = List(Treasury()) ++ Collaterals().toList ++ Votes().toList
 
                 object Treasury {
-                    def apply() = Send(
-                      Babbage(
-                        address = config.ruleBasedTreasuryAddress,
-                        value = treasuryUtxoSpent.value - Value(treasuryUtxoSpent.equity.coin),
-                        datumOption = Some(Inline(datum.toData)),
-                        scriptRef = None
-                      )
-                    )
+                    def apply() = Send(output)
 
                     val datum: UnresolvedDatum = time("newTreasuryDatum") {
                         UnresolvedDatum(
                           headMp = hns.policyId,
                           disputeId = config.headTokenNames.voteTokenName.bytes,
-                          peers = SList.from(hns.requiredSigners.map(_.hash)),
+                          peers = SList.from(config.headPeerVKeys.toList),
                           peersN = hns.numSigners,
                           deadlineVoting =
                               config.slotConfig.slotToTime(validityStartTime.toSlot.slot) +
@@ -169,6 +162,13 @@ private object FallbackTxOps {
                           setup = SList.empty
                         )
                     }
+
+                    private val output = Babbage(
+                      address = config.ruleBasedTreasuryAddress,
+                      value = treasuryUtxoSpent.value - Value(treasuryUtxoSpent.equity.coin),
+                      datumOption = Some(Inline(datum.toData)),
+                      scriptRef = None
+                    )
                 }
 
                 object Votes {
@@ -183,7 +183,7 @@ private object FallbackTxOps {
                           ),
                           datumOption = Some(Inline(datum)),
                           scriptRef = None
-                        ).ensureMinAda(config)
+                        )
 
                     object Default {
                         def apply() = Send(utxo)
@@ -201,9 +201,8 @@ private object FallbackTxOps {
 
                         private val utxos = time("peerVoteUtxos") {
                             val datums = VD(
-                              NonEmptyList.fromListUnsafe(
-                                hns.requiredSigners.map(x => PubKeyHash(x.hash)).toList
-                              )
+                              config.headPeerVKeys
+                                  .map(x => PubKeyHash(blake2b_224(x)))
                             )
                             datums.map(datum =>
                                 mkVoteUtxo(
@@ -223,6 +222,9 @@ private object FallbackTxOps {
                                 addr,
                                 equityPayouts(pNum)
                                     + config.individualContingency.forCollateralUtxo
+                                    + (if pNum.convert == 0
+                                       then config.collectiveContingency.fallbackTxFee
+                                       else Coin.zero)
                               )
                           )
                           .values
@@ -286,7 +288,7 @@ private object FallbackTxOps {
               _,
               _,
               protocolParams = config.cardanoProtocolParams,
-              changeOutputIdx = 0
+              changeOutputIdx = 1
             )
 
             def finalizeContext(
