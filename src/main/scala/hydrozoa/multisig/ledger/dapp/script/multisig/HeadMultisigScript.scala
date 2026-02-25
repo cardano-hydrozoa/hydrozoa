@@ -1,12 +1,11 @@
 package hydrozoa.multisig.ledger.dapp.script.multisig
 
 import hydrozoa.config.head.peers.HeadPeers
-import scala.collection.SortedSet
 import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
+import scalus.cardano.ledger.*
 import scalus.cardano.ledger.Timelock.{AllOf, Signature}
-import scalus.cardano.ledger.{Hash, *}
 import scalus.cardano.txbuilder.ScriptSource.{NativeScriptAttached, NativeScriptValue}
 import scalus.cardano.txbuilder.{ExpectedSigner, NativeScriptWitness}
 import scalus.uplc.builtin.Builtins.blake2b_224
@@ -21,21 +20,20 @@ case class HeadMultisigScript(private val script0: Script.Native) {
         )
     val policyId: PolicyId = script.scriptHash
 
-    // TODO: Make NonEmptySortedSet? This is basically what the implementation would look like
+    /** NOTE: because this is [[Set]], the traversal order WILL NOT be the same as
+      * [[headPeers.headPeerVKeys]]
+      */
     val requiredSigners: Set[ExpectedSigner] = {
-        val sortedKeys = script.script
+        script.script
             .asInstanceOf[Timelock.AllOf]
             .scripts
             .map(_.asInstanceOf[Signature].keyHash)
-            .sorted(using Hash.Ordering)
-        SortedSet
-            .from(
-              sortedKeys.map(pkh => ExpectedSigner(pkh))
-              // TODO: make an order instance upstream
-            )(using (x: ExpectedSigner, y: ExpectedSigner) => Hash.Ordering.compare(x.hash, y.hash))
             .toSet
+            .map(ExpectedSigner(_))
     }
     val numSigners: Int = requiredSigners.toSeq.size
+
+    def checkSigners(signers: Set[ExpectedSigner]): Boolean = signers == requiredSigners
 
     // use when the multisig witness utxo id not available
     val witnessValue: NativeScriptWitness = NativeScriptWitness(
@@ -61,7 +59,6 @@ object HeadMultisigScript:
                   .map(vkey => AddrKeyHash(blake2b_224(vkey)))
                   .toList
                   .toIndexedSeq
-                  .sorted(using Ordering[AddrKeyHash])
                   .map(Signature(_))
             )
           )

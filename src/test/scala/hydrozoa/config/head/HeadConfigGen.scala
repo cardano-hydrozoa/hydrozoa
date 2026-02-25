@@ -11,7 +11,7 @@ import hydrozoa.config.head.parameters.{GenHeadParams, HeadParameters, generateH
 import hydrozoa.config.head.peers.{TestPeers, generateTestPeers}
 import hydrozoa.config.head.rulebased.{DisputeResolutionConfigGen, generateDisputeResolutionConfig}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
-import org.scalacheck.{Gen, Prop, Properties, Test}
+import org.scalacheck.{Gen, Prop, Properties}
 import scalus.cardano.ledger.SlotConfig
 
 enum HeadPeersSpec:
@@ -117,9 +117,6 @@ def generateHeadConfig(headPeers: HeadPeersSpec)(
     ).get
 
 object HeadConfigGen extends Properties("Sanity Check") {
-    override def overrideParameters(p: Test.Parameters): Test.Parameters =
-        p.withMinSuccessfulTests(1000)
-
     val _ = property("head config generator doesn't throw") =
-        Prop.forAll(generateHeadConfig(Random)())(_ => true)
+        Prop.forAll(generateHeadConfig(HeadPeersSpec.Random)())(_ => true)
 }

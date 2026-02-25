@@ -24,6 +24,7 @@ import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
 import scalus.cardano.onchain.plutus.v1.PubKeyHash
+import scalus.uplc.builtin.Builtins.blake2b_224
 import scalus.uplc.builtin.Data.toData
 import test.*
 import test.TransactionChain.observeTxChain
@@ -369,17 +370,15 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                 )
 
                 props.append("vote utxos created per peer" |: {
-                    val pkhs = NonEmptyList.fromListUnsafe(
-                      expectedHeadNativeScript.requiredSigners
-                          .map(es => PubKeyHash(es.hash))
-                          .toList
-                    )
+                    val pkhs =
+                        config.headPeers.headPeerVKeys.map(vkey => PubKeyHash(blake2b_224(vkey)))
+
                     val datums = VoteDatum(pkhs)
                     val expectedPeerVoteOutputs = datums.map(d =>
                         Babbage(
                           address = disputeResolutionAddress,
                           value = Value(
-                            config.individualContingency.voteDeposit,
+                            config.individualContingency.forVoteUtxo,
                             MultiAsset(
                               SortedMap(
                                 hns.policyId -> SortedMap(config.headTokenNames.voteTokenName -> 1L)
