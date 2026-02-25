@@ -479,7 +479,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
           _ <- for {
 
               // Sensible stands for the opposite for SubmissionPeriodIsOver error
-              submissionDeadline <- pick(
+              submissionDeadline <- pick[TestR, QuantizedInstant](
                 Gen.choose(1, 10).map(s => blockStartTime + FiniteDuration(s, TimeUnit.SECONDS))
               )
 
@@ -516,7 +516,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
           _ <- for {
 
               // Sensible stands for the opposite for SubmissionPeriodIsOver error
-              submissionDeadline <- pick(
+              submissionDeadline <- pick[TestR, QuantizedInstant](
                 Gen.choose(0, 10).map(s => blockStartTime - FiniteDuration(s, TimeUnit.SECONDS))
               )
 

@@ -1,6 +1,6 @@
 package hydrozoa.integration.stage1
 
-import hydrozoa.integration.stage1.Generators.{TxMutator, TxStrategy}
+import hydrozoa.integration.stage1.CommandGen.{TxMutator, TxStrategy}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
@@ -9,7 +9,7 @@ import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId}
 import org.scalacheck.Prop
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.commands.{CommandLabel, CommandProp}
-import scalus.cardano.ledger.Transaction
+import scalus.cardano.ledger.{Transaction, TransactionInput}
 
 object Commands:
 
@@ -35,7 +35,7 @@ object Commands:
 
         def duration: QuantizedFiniteDuration = d
 
-    implicit given CommandProp[DelayCommand, Unit, ModelState] with {}
+    implicit given CommandProp[DelayCommand, Unit, Model.State] with {}
 
     implicit given CommandLabel[DelayCommand] with
         override def label(cmd: DelayCommand): String = cmd.delaySpec match
@@ -53,7 +53,7 @@ object Commands:
         creationTime: QuantizedInstant
     )
 
-    implicit given CommandProp[StartBlockCommand, Unit, ModelState] with {}
+    implicit given CommandProp[StartBlockCommand, Unit, Model.State] with {}
 
     implicit given CommandLabel[StartBlockCommand] with
         override def label(cmd: StartBlockCommand): String = "StartBlock"
@@ -69,7 +69,7 @@ object Commands:
         txMutator: TxMutator
     )
 
-    implicit given CommandProp[L2TxCommand, Unit, ModelState] with {}
+    implicit given CommandProp[L2TxCommand, Unit, Model.State] with {}
 
     implicit given CommandLabel[L2TxCommand] with
         override def label(cmd: L2TxCommand): String = cmd.txStrategy match {
@@ -103,18 +103,19 @@ object Commands:
     /** Complete the current block (regular or final).  Result is the [[BlockBrief]] produced. */
     final case class CompleteBlockCommand(
         blockNumber: BlockNumber,
-        isFinal: Boolean
+        isFinal: Boolean,
+        pollResults: Set[TransactionInput]
     )
 
     /** Postcondition for [[CompleteBlockCommand]]: verifies model and SUT agree on the block brief.
       */
-    implicit given CommandProp[CompleteBlockCommand, BlockBrief, ModelState] with
+    implicit given CommandProp[CompleteBlockCommand, BlockBrief, Model.State] with
 
         override def onSuccessCheck(
             cmd: CompleteBlockCommand,
             expectedResult: BlockBrief,
-            stateBefore: ModelState,
-            stateAfter: ModelState,
+            stateBefore: Model.State,
+            stateAfter: Model.State,
             result: BlockBrief
         ): Prop =
             logger.trace(s"expected result: $expectedResult")
@@ -143,7 +144,7 @@ object Commands:
         override def toString: String = s"RegisterDepositCommand: ${registerDeposit.eventId}"
     }
 
-    implicit given CommandProp[RegisterDepositCommand, Unit, ModelState] with {}
+    implicit given CommandProp[RegisterDepositCommand, Unit, Model.State] with {}
 
     implicit given CommandLabel[RegisterDepositCommand] with
         override def label(cmd: RegisterDepositCommand): String = "Register deposit"
@@ -155,12 +156,15 @@ object Commands:
     /** The command submits the deposit transaction from the corresponding register deposit event.
       */
     final case class SubmitDepositCommand(
-        depositEventId: LedgerEventId
-    )
+        deposits: List[(LedgerEventId, Transaction)]
+    ) {
+        override def toString: String = s"SubmitDepositCommand: ${deposits.map(_._1)}"
+    }
 
-    implicit given CommandProp[SubmitDepositCommand, Unit, ModelState] with {}
+    implicit given CommandProp[SubmitDepositCommand, Unit, Model.State] with {}
 
     implicit given CommandLabel[SubmitDepositCommand] with
-        override def label(cmd: SubmitDepositCommand): String = "Submit deposit"
+        override def label(cmd: SubmitDepositCommand): String =
+            s"Submit deposits (n=${cmd.deposits.size})"
 
 end Commands

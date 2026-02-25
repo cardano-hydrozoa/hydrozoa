@@ -12,7 +12,8 @@ import hydrozoa.config.head.{HeadPeersSpec, generateHeadConfig}
 import hydrozoa.config.node.NodeConfig
 import hydrozoa.config.node.operation.liquidation.generateNodeOperationLiquidationConfig
 import hydrozoa.config.node.operation.multisig.generateNodeOperationMultisigConfig
-import hydrozoa.integration.stage1.CurrentTime.{AfterCompetingFallbackStartTime, BeforeHappyPathExpiration}
+import hydrozoa.integration.stage1.Model.CurrentTime.{AfterCompetingFallbackStartTime, BeforeHappyPathExpiration}
+import hydrozoa.integration.stage1.Model.{BlockCycle, CurrentTime}
 import hydrozoa.integration.stage1.SuiteCardano.*
 import hydrozoa.integration.yaci.DevKit
 import hydrozoa.integration.yaci.DevKit.DevnetInfo
@@ -20,7 +21,6 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost.URL
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendMock, MockState}
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, ConsensusActor, EventSequencer}
 import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.block.{BlockEffects, BlockNumber, BlockVersion}
@@ -28,7 +28,7 @@ import hydrozoa.multisig.ledger.dapp.tx.{FinalizationTx, SettlementTx}
 import hydrozoa.multisig.ledger.event.LedgerEventNumber
 import java.util.concurrent.TimeUnit
 import org.scalacheck.Prop.propBoolean
-import org.scalacheck.commands.{CommandGen, ModelBasedSuite}
+import org.scalacheck.commands.{ModelBasedSuite, ScenarioGen}
 import org.scalacheck.{Gen, Prop}
 import org.typelevel.log4cats.Logger
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
@@ -63,7 +63,7 @@ enum SuiteCardano:
 
 case class Suite(
     suiteCardano: SuiteCardano,
-    override val commandGen: CommandGen[ModelState, Stage1Sut],
+    override val scenarioGen: ScenarioGen[Model.State, Stage1Sut],
     txTimingGen: TxTimingGen,
     mkGenesisUtxos: List[TestPeer] => Map[TestPeer, Utxos],
 ) extends ModelBasedSuite {
@@ -75,7 +75,7 @@ case class Suite(
         cardanoNetwork: CardanoNetwork
     )
 
-    override type State = ModelState
+    override type State = Model.State
     override type Sut = Stage1Sut
 
     override val useTestControl: Boolean = suiteCardano match {
@@ -129,7 +129,7 @@ case class Suite(
     override def genInitialState(env: Env): Gen[State] = {
 
         // One-peer head
-        val spec = HeadPeersSpec.Exact(1)
+        val spec = HeadPeersSpec.Exact(peers = 1)
         val ownTestPeer = Alice
 
         val generateHeadStartTime: HeadStartTimeGen = slotConfig =>
@@ -139,43 +139,48 @@ case class Suite(
 
         for {
             testPeers <- spec.generate
+            testPeerToUtxos = mkGenesisUtxos(List(ownTestPeer))
+
             headConfig <- generateHeadConfig(spec)(
               generateCardanoNetwork = generateCardanoNetwork,
               generateHeadStartTime = generateHeadStartTime,
               generateTxTiming = generateTxTiming,
               generateInitializationParameters = InitializationParametersGenTopDown.GenWithDeps(
                 generateGenesisUtxosL1 =
-                    InitializationParametersGenTopDown.testPeersGenesisUtxosL1(testPeers)
+                    network => Gen.const(testPeerToUtxos.map((k, v) => k.peerNum -> v))
               )
-            )
-
-            peerL1GenesisUtxos = testPeers.genesisUtxos(env.cardanoNetwork.network)(
-              HeadPeerNumber.zero
             )
 
             _ = logger.debug(s"total contingency: ${headConfig.fallbackContingency}")
             _ = logger.debug(s"l2 utxos: ${headConfig.initialL2Utxos.size}")
             _ = logger.debug(s"l2 total: ${headConfig.initialL2Value}")
 
+            peerL1GenesisUtxos = testPeerToUtxos.values.flatten.toMap
+
+            _ = logger.debug(s"peerL1GenesisUtxos: ${peerL1GenesisUtxos}")
+
             operationalMultisigConfig <- generateNodeOperationMultisigConfig
             operationalLiquidationConfig <- generateNodeOperationLiquidationConfig
-        } yield ModelState(
-          ownTestPeer = ownTestPeer,
-          headConfig = headConfig,
-          operationalMultisigConfig = operationalMultisigConfig,
-          operationalLiquidationConfig = operationalLiquidationConfig,
-          nextLedgerEventNumber = LedgerEventNumber(0),
-          currentTime = BeforeHappyPathExpiration(headConfig.headStartTime),
-          blockCycle = BlockCycle.Done(BlockNumber.zero, BlockVersion.Full.zero),
-          competingFallbackStartTime =
-              headConfig.txTiming.newFallbackStartTime(headConfig.headStartTime),
-          activeUtxos = headConfig.initialL2Utxos,
-          utxoL1 = peerL1GenesisUtxos,
-          depositEnqueued = List.empty,
-          utxoLocked = List.empty,
-          depositSigned = Map.empty,
-          depositSubmitted = List.empty
-        ).applyContinuingL1Tx(headConfig.initializationTx.tx)
+        } yield Model
+            .State(
+              ownTestPeer = ownTestPeer,
+              headConfig = headConfig,
+              operationalMultisigConfig = operationalMultisigConfig,
+              operationalLiquidationConfig = operationalLiquidationConfig,
+              nextLedgerEventNumber = LedgerEventNumber(0),
+              currentTime = BeforeHappyPathExpiration(headConfig.headStartTime),
+              blockCycle = BlockCycle.Done(BlockNumber.zero, BlockVersion.Full.zero),
+              competingFallbackStartTime =
+                  headConfig.txTiming.newFallbackStartTime(headConfig.headStartTime),
+              activeUtxos = headConfig.initialL2Utxos,
+              peerUtxosL1 = peerL1GenesisUtxos,
+              depositEnqueued = List.empty,
+              utxoLocked = List.empty,
+              depositSigned = Map.empty,
+              depositSubmitted = List.empty,
+              depositUtxoIds = Set.empty
+            )
+            .applyContinuingL1Tx(headConfig.initializationTx.tx)
     }
 
     // ===================================
@@ -185,7 +190,7 @@ case class Suite(
     // TODO: do we want to run multiple SUTs when using L1 mock?
     override def canStartupNewSut(): Boolean = true
 
-    override def startupSut(state: ModelState): IO[Sut] = {
+    override def startupSut(state: Model.State): IO[Sut] = {
         val headConfig = state.headConfig
 
         for {
@@ -209,7 +214,7 @@ case class Suite(
             } yield ())
 
             _ <- loggerIO.debug(s"peerKeys: ${headConfig.headPeers.headPeerVKeys}")
-            _ <- loggerIO.debug(s"peer L1 utxos: ${state.utxoL1.map(_._1)}")
+            _ <- loggerIO.debug(s"model peer L1 utxos: ${state.peerUtxosL1.map(_._1)}")
 
             nodeConfig: NodeConfig = NodeConfig
                 .apply(

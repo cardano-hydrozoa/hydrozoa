@@ -177,8 +177,10 @@ def noOp[State, Sut]: AnyCommand[State, Sut] =
 /** Abstracts the command-generation strategy. Different properties can supply different
   * implementations to drive generation differently (e.g. only invalid events, only minor blocks,
   * etc.).
+  *
+  * Scenario is a sequence of commands of some legth, where the tail typically contains NoOps.
   */
-trait CommandGen[State, Sut]:
+trait ScenarioGen[State, Sut]:
     /** Generates the next command based on the current model state. */
     def genNextCommand(state: State): Gen[AnyCommand[State, Sut]]
 
@@ -244,7 +246,7 @@ trait ModelBasedSuite {
       * [[ModelCommand.preCondition]] and the expected behavior of SUT is checked based on that
       * flag.
       */
-    def commandGen: CommandGen[State, Sut]
+    def scenarioGen: ScenarioGen[State, Sut]
 
     /** A custom command generator modificator like resize or something like that (noop by default).
       */
@@ -390,7 +392,7 @@ trait ModelBasedSuite {
             l.foldLeft(Gen.const((initialState, Nil: Commands))) { (g, _) =>
                 for {
                     (s0, cs) <- g
-                    c <- commandGen.genNextCommand(s0).suchThat(_.preCondition(s0))
+                    c <- scenarioGen.genNextCommand(s0).suchThat(_.preCondition(s0))
                 } yield (c.advanceState(s0), cs :+ c)
             }
         }
@@ -398,7 +400,7 @@ trait ModelBasedSuite {
         def precondition(targetState: State, tc: TestCase): Boolean =
             initialStatePreCondition(tc.initialState)
                 && cmdsPrecond(tc.initialState, tc.commands)._2
-                && this.commandGen.targetStatePrecondition(targetState)
+                && this.scenarioGen.targetStatePrecondition(targetState)
 
         /** Checks all preconditions and evaluates the final state.
           *
