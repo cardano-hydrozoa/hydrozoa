@@ -5,7 +5,7 @@ import cats.syntax.all.*
 import hydrozoa.*
 import hydrozoa.multisig.ledger.dapp.txseq.DepositRefundTxSeq
 import io.bullet.borer.Cbor
-import scala.collection.immutable.Queue
+import scala.collection.immutable.{Queue, TreeMap}
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.Script.Native
@@ -23,8 +23,8 @@ final case class L2Genesis(
     // preimage is not a [[Transaction]]
     genesisId: TransactionHash
 ) {
-    val asUtxos: Map[TransactionInput, KeepRaw[TransactionOutput]] = {
-        Map.from(
+    val asUtxos: TreeMap[TransactionInput, KeepRaw[TransactionOutput]] = {
+        TreeMap.from(
           genesisObligations.toList.zipWithIndex.map(x =>
               (TransactionInput(genesisId, x._2), KeepRaw(x._1.toTransactionOutput))
           )

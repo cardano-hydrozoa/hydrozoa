@@ -179,7 +179,7 @@ object Generators {
                   datumOption = Some(Inline(datum.toData)),
                   scriptRef = None
                 )
-            } yield Payout.Obligation(l2UtxoId = l2Input, utxo = KeepRaw(output))
+            } yield Payout.Obligation(utxo = KeepRaw(output))
 
         /** Ada-only pub key utxo from the given peer, at least minAda, random tx id, random index,
           * no datum, no script ref
@@ -343,7 +343,7 @@ object Generators {
                     val bogusInputId: TransactionHash = Hash(
                       genByteStringOfN(32)
                           .suchThat(txId =>
-                              !state.activeUtxosKR.toSeq
+                              !state.evacuationMap.cooked.toSeq
                                   .map(_._1.transactionId.bytes)
                                   .contains(txId.bytes)
                           )
@@ -420,7 +420,7 @@ object Generators {
                       datumOption = Some(Inline(datum.toData)),
                       scriptRef = None
                     )
-                } yield Payout.Obligation(l2UtxoId = l2Input, utxo = KeepRaw(output))
+                } yield Payout.Obligation(utxo = KeepRaw(output))
             }
 
             given Arbitrary[LedgerEvent] = Arbitrary {

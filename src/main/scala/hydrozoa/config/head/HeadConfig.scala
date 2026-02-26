@@ -17,8 +17,9 @@ import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
 import hydrozoa.multisig.ledger.block.Block
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
+import hydrozoa.multisig.ledger.virtual.EvacuationMap
 import scalus.cardano.address.{Network, ShelleyAddress}
-import scalus.cardano.ledger.{CardanoInfo, Coin, Hash32, KeepRaw, ProtocolParams, SlotConfig, TransactionInput, TransactionOutput, Utxo, Utxos, Value}
+import scalus.cardano.ledger.{CardanoInfo, Coin, Hash32, ProtocolParams, SlotConfig, TransactionInput, TransactionOutput, Utxo, Utxos, Value}
 import scalus.crypto.ed25519.VerificationKey
 
 final case class HeadConfig private (
@@ -164,9 +165,8 @@ object HeadConfig {
                 initializationParams.headStartTime
 
             // TODO: this type allows non-babbage outputs
-            override transparent inline def initialL2Utxos
-                : Map[TransactionInput, KeepRaw[TransactionOutput]] =
-                initializationParams.initialL2Utxos
+            override transparent inline def initialEvacuationMap: EvacuationMap[TransactionInput] =
+                initializationParams.initialEvacuationMap
             override transparent inline def initialEquityContributions
                 : NonEmptyMap[HeadPeerNumber, Coin] =
                 initializationParams.initialEquityContributions

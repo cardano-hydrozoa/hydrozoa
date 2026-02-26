@@ -18,14 +18,12 @@ import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag
 import hydrozoa.multisig.ledger.event.LedgerEventNumber.increment
 import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId, LedgerEventNumber}
-import hydrozoa.multisig.ledger.virtual.HydrozoaTransactionMutator
-import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
-import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.kzgCommitment
 import hydrozoa.multisig.ledger.virtual.tx.{GenesisObligation, L2Genesis, L2Tx}
+import hydrozoa.multisig.ledger.virtual.{EvacuationMap, HydrozoaTransactionMutator}
 import monocle.Lens
 import monocle.syntax.all.focus
 import org.scalacheck.commands.ModelCommand
-import scala.collection.immutable.Queue
+import scala.collection.immutable.{Queue, TreeMap}
 import scala.util.chaining.*
 import scalus.cardano.ledger.{AssetName, KeepRaw, Transaction, TransactionHash, TransactionInput, TransactionOutput, Utxos}
 import test.TestPeer
@@ -61,7 +59,7 @@ object Model:
         competingFallbackStartTime: QuantizedInstant,
 
         // L2 state
-        activeUtxos: Map[TransactionInput, KeepRaw[TransactionOutput]],
+        evacuationMap: EvacuationMap[TransactionInput],
 
         // L1 state - the only peer's utxos
         peerUtxosL1: Utxos,
@@ -248,7 +246,7 @@ object Model:
             val ret = HydrozoaTransactionMutator.transit(
               config = state.headConfig,
               time = state.currentTime.instant,
-              state = VirtualLedgerM.State(state.activeUtxos),
+              state = VirtualLedgerM.State(state.evacuationMap),
               l2Tx = l2Tx
             )
 
@@ -265,8 +263,8 @@ object Model:
                               .andThen(eventsLens)
                               .modify(_ :+ (cmd.event, l2Tx, ValidityFlag.Valid))
                         )
-                        .focus(_.activeUtxos)
-                        .replace(mutatorState.activeUtxosKR)
+                        .focus(_.evacuationMap)
+                        .replace(mutatorState.evacuationMap)
             }
 
             val finalState = newState
@@ -301,7 +299,7 @@ object Model:
                       creationTime,
                       prevVersion,
                       cmd.isFinal,
-                      state.activeUtxos,
+                      state.evacuationMap,
                       state.depositEnqueued,
                       state.depositSubmitted,
                       state.headConfig.headTokenNames.treasuryTokenName
@@ -324,7 +322,7 @@ object Model:
                             cmd._1.eventId
                           )
                       ),
-                      activeUtxos = newActiveUtxos
+                      evacuationMap = newActiveUtxos
                     )
                     blockBrief -> newState
                 case _ =>
@@ -340,11 +338,11 @@ object Model:
             blockStartTime: QuantizedInstant,
             prevVersion: BlockVersion.Full,
             isFinal: Boolean,
-            activeUtxos: Map[TransactionInput, KeepRaw[TransactionOutput]],
+            evacuationMap: EvacuationMap[TransactionInput],
             depositEnqueued: List[RegisterDepositCommand],
             depositSubmitted: List[LedgerEventId],
             treasuryTokenName: AssetName
-        ): (BlockBrief, Map[TransactionInput, KeepRaw[TransactionOutput]]) = {
+        ): (BlockBrief, EvacuationMap[TransactionInput]) = {
 
             logger.trace(s"mkBlockBrief: blockNumber: $blockNumber")
             logger.trace(s"mkBlockBrief: blockStartTime: $blockStartTime")
@@ -411,7 +409,7 @@ object Model:
                     )
                     .flatMap(_.depositRefundTxSeq.depositTx.depositProduced.virtualOutputs.toList)
 
-            val genesisUtxos: Option[Map[TransactionInput, KeepRaw[TransactionOutput]]] = for {
+            val genesisUtxos: Option[TreeMap[TransactionInput, KeepRaw[TransactionOutput]]] = for {
                 obligations <-
                     if genesisObligations.nonEmpty
                     then Some(genesisObligations)
@@ -420,14 +418,16 @@ object Model:
                 l2Genesis = L2Genesis(Queue.from(obligations), genesisId)
             } yield l2Genesis.asUtxos
 
-            val newActiveUtxos = activeUtxos ++ genesisUtxos.getOrElse(Map.empty)
+            val newActiveUtxos = evacuationMap.appended(
+              genesisUtxos.getOrElse(TreeMap.empty[TransactionInput, KeepRaw[TransactionOutput]])
+            )
 
             lazy val majorBlock = Major(
               header = BlockHeader.Major(
                 blockNum = blockNumber,
                 blockVersion = prevVersion.incrementMajor,
                 startTime = blockStartTime,
-                kzgCommitment = newActiveUtxos.map((i, o) => (i, o.value)).kzgCommitment
+                kzgCommitment = newActiveUtxos.kzgCommitment
               ),
               body = BlockBody.Major(
                 events = events_,
@@ -441,7 +441,7 @@ object Model:
                 blockNum = blockNumber,
                 blockVersion = prevVersion.incrementMinor,
                 startTime = blockStartTime,
-                kzgCommitment = activeUtxos.map((i, o) => (i, o.value)).kzgCommitment
+                kzgCommitment = evacuationMap.kzgCommitment
               ),
               body = BlockBody.Minor(
                 events = events.map((le, _, flag) => le.eventId -> flag),

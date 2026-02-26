@@ -1,14 +1,14 @@
 package hydrozoa.multisig.ledger.joint.obligation
 
 import cats.data.NonEmptyVector
-import scalus.cardano.ledger.{KeepRaw, TransactionInput, TransactionOutput}
+import scalus.cardano.ledger.{KeepRaw, TransactionOutput}
 
 object Payout {
 
     /** A payout obligation created by an L2 transaction that marked one of its utxo outputs as
       * bound for L1.
       */
-    final case class Obligation(l2UtxoId: TransactionInput, utxo: KeepRaw[TransactionOutput]) {
+    final case class Obligation(utxo: KeepRaw[TransactionOutput]) {
         // We use this instead of `Sized`, because `Sized` will re-encode
         def outputSize: Int = utxo.raw.length
     }

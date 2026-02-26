@@ -37,6 +37,7 @@ import scala.collection.immutable.Queue
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scalus.cardano.ledger.{Block as _, BlockHeader as _, Coin, *}
 import scalus.uplc.builtin.ByteString
+import scalus.|>
 import test.*
 import test.Generators.Hydrozoa.*
 import test.Generators.Other.genCoinDistributionWithMinAdaUtxo
@@ -433,7 +434,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               )
 
               // Expected UTxOs: The genesis utxos from the deposit + the initial l2 set
-              expectedUtxos = L2Genesis(
+              expectedEvacMap = L2Genesis(
                 Queue.from(depositRefundTxSeq.depositTx.depositProduced.virtualOutputs.toList),
                 TransactionHash.fromByteString(
                   scalus.uplc.builtin.platform.blake2b_256(
@@ -443,17 +444,17 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                         )
                   )
                 )
-              ).asUtxos ++ env.config.initialL2Utxos
+              ).asUtxos |> env.config.initialEvacuationMap.appended
 
               _ <- assertWith[TestR](
                 msg = "Virtual Ledger should contain expected active utxo",
-                condition = jlState.virtualLedgerState.activeUtxosKR == expectedUtxos
+                condition = jlState.virtualLedgerState.evacuationMap == expectedEvacMap
               )
 
               kzgCommit = jlState.virtualLedgerState.kzgCommitment
 
               expectedKzg = KzgCommitment.calculateKzgCommitment(
-                KzgCommitment.hashToScalar(expectedUtxos.map((i, o) => (i, o.value)))
+                KzgCommitment.hashToScalar(expectedEvacMap.cooked)
               )
 
               _ <- assertWith[TestR](

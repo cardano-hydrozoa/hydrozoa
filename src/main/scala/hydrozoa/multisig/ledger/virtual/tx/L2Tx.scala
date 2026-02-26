@@ -24,9 +24,7 @@ final case class L2Tx(
 
     def payoutObligations: Vector[Payout.Obligation] =
         Vector.from(
-          l1utxos.map(utxo =>
-              Payout.Obligation(utxo._1, KeepRaw(utxo._2.asInstanceOf[TransactionOutput]))
-          )
+          l1utxos.map(utxo => Payout.Obligation(KeepRaw(utxo._2.asInstanceOf[TransactionOutput])))
         )
 }
 
