@@ -212,12 +212,14 @@ object CommandGen:
 
         val cardanoNetwork: CardanoNetwork = state.headConfig.cardanoNetwork
         val generateCappedValueC = generateCappedValue(cardanoNetwork)
-        val l2AddressesInUse = state.activeUtxos.values.map(_.address).toSet
-        val ownedUtxos = state.activeUtxos.filter((_, o) =>
-            o.address.asInstanceOf[ShelleyAddress].payment.asHash == blake2b_224(
-              state.ownTestPeer.wallet.exportVerificationKey
+        val l2AddressesInUse = state.activeUtxos.values.map(_.value.address).toSet
+        val ownedUtxos = state.activeUtxos
+            .filter((_, o) =>
+                o.value.address.asInstanceOf[ShelleyAddress].payment.asHash == blake2b_224(
+                  state.ownTestPeer.wallet.exportVerificationKey
+                )
             )
-        )
+            .map((i, o) => (i, o.value))
 
         for {
             // Inputs

@@ -6,7 +6,7 @@ import scala.util.Try
 import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.Metadatum.Int
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{Metadatum, Transaction, TransactionInput, TransactionOutput, Word64}
+import scalus.cardano.ledger.{KeepRaw, Metadatum, Transaction, TransactionInput, TransactionOutput, Word64}
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 
 // TODO: Refactor it using our usual style
@@ -23,7 +23,11 @@ final case class L2Tx(
     def volume: Long = tx.body.value.outputs.map(sto => sto.value.value.coin.value).sum
 
     def payoutObligations: Vector[Payout.Obligation] =
-        Vector.from(l1utxos.map(utxo => Payout.Obligation(utxo._1, utxo._2)))
+        Vector.from(
+          l1utxos.map(utxo =>
+              Payout.Obligation(utxo._1, KeepRaw(utxo._2.asInstanceOf[TransactionOutput]))
+          )
+        )
 }
 
 object L2Tx:

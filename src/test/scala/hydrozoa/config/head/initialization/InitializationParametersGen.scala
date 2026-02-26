@@ -171,7 +171,9 @@ object InitializationParametersGenTopDown {
             genesisId = JointLedger.mkGenesisId(HeadTokenNames(seedUtxo.input).treasuryTokenName, 0)
             initialL2Utxos =
                 total.l2transactionOutput.zipWithIndex
-                    .map((o, ix) => TransactionInput(transactionId = genesisId, index = ix) -> o)
+                    .map((o, ix) =>
+                        TransactionInput(transactionId = genesisId, index = ix) -> KeepRaw(o)
+                    )
                     .toMap
 
         } yield InitializationParameters(
@@ -444,7 +446,7 @@ object InitializationParametersGenBottomUp {
 
         } yield InitializationParameters(
           headStartTime = headStartTime,
-          initialL2Utxos = l2Utxos,
+          initialL2Utxos = l2Utxos.map((i, o) => (i, KeepRaw(o))),
           initialEquityContributions = equityContributions,
           initialSeedUtxo = seedUtxo,
           initialAdditionalFundingUtxos = additionalFundingUtxos,

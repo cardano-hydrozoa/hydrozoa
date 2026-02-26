@@ -10,7 +10,7 @@ import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, S
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.Script.Native
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{Blake2b_256, Coin, Hash, Hash32, Script, ScriptRef, TransactionHash, TransactionInput, TransactionOutput, Utxos, Value}
+import scalus.cardano.ledger.{Blake2b_256, Coin, Hash, Hash32, KeepRaw, Script, ScriptRef, TransactionHash, TransactionInput, TransactionOutput, Value}
 import scalus.cardano.onchain.plutus.prelude.Option as SOption
 import scalus.uplc.builtin.{ByteString, Data, platform}
 
@@ -23,27 +23,14 @@ final case class L2Genesis(
     // preimage is not a [[Transaction]]
     genesisId: TransactionHash
 ) {
-    val asUtxos: Utxos = {
+    val asUtxos: Map[TransactionInput, KeepRaw[TransactionOutput]] = {
         Map.from(
           genesisObligations.toList.zipWithIndex.map(x =>
-              (TransactionInput(genesisId, x._2), x._1.toBabbage)
+              (TransactionInput(genesisId, x._2), KeepRaw(x._1.toTransactionOutput))
           )
         )
     }
 }
-
-// TODO: Fix to work with the new way that virtual utxos are created in deposit transactions.
-object L2Genesis:
-
-    // TODO: implement
-    def apply(obligations: NonEmptyList[GenesisObligation]): L2Genesis =
-        L2Genesis(
-          genesisObligations = Queue.from(obligations.toList),
-          genesisId = ???
-        )
-
-    enum L2GenesisError:
-        case EmptyInputs
 
 /** A genesis obligation is the boundary between the L1 and L2 ledgers. It contains the well-formed
   * fields of L2-conformant UTxOs.
@@ -55,7 +42,7 @@ case class GenesisObligation(
     l2OutputValue: Coin,
     l2OutputRefScript: Option[Script.Native | Script.PlutusV3]
 ) {
-    def toBabbage: Babbage =
+    def toTransactionOutput: TransactionOutput =
         Babbage(
           address = ShelleyAddress(
             network = l2OutputNetwork,
@@ -114,7 +101,7 @@ object GenesisObligation {
     def serialize(obligations: NonEmptyList[GenesisObligation]): Array[Byte] =
         Cbor
             .encode(
-              obligations.toList.map(_.toBabbage.asInstanceOf[TransactionOutput])
+              obligations.toList.map(_.toTransactionOutput.asInstanceOf[TransactionOutput])
             )
             .toByteArray
 

@@ -82,7 +82,8 @@ def generateInitialBlock(testPeers: TestPeers)(
         blockBrief = BlockBrief.Initial(
           BlockHeader.Initial(
             startTime = initializationParameters.headStartTime,
-            kzgCommitment = initializationParameters.initialL2Utxos.kzgCommitment
+            kzgCommitment =
+                initializationParameters.initialL2Utxos.map((i, o) => (i, o.value)).kzgCommitment
           )
         ),
         effects = BlockEffects.MultiSigned.Initial(

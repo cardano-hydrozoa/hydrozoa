@@ -98,4 +98,4 @@ object EvacuatingMutator:
     ): State =
         val l1UtxosToRemove = l2Tx.l1utxos.map(_._1).toSet
         // TODO: check all evacuatees exist?
-        state.copy(state.activeUtxos -- l1UtxosToRemove)
+        state.copy(state.activeUtxosKR -- l1UtxosToRemove)

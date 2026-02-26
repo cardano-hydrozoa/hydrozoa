@@ -144,6 +144,9 @@ private object RolloutTxOps {
             addedPayouts <- AddPayouts(pessimistic)
         } yield PartialResult(Build.this, addedPayouts)
 
+        // Base Pessimisitic adds:
+        //   - Metadata
+        //   - The rollout Utxo, if it exists (only for the not-last rollout)
         private[tx] object BasePessimistic {
             def apply(): BuilderResultSimple[TransactionBuilder.Context] = for {
                 ctx <- TransactionBuilder
@@ -185,68 +188,68 @@ private object RolloutTxOps {
             private val definiteSteps = commonSteps ++ mbSendRollout
         }
 
+        // Here we add the payouts according to their (pre-serialized) size.
+        // We start with the base size of the transaction, which ONLY includes the BasePessimistic steps
+        // (i.e., no rollout input or witnesses). This means we need to add all of these up front.
         private object AddPayouts {
             def apply(ctx: TransactionBuilder.Context): BuilderResultSimple[State[T]] = {
-                for {
-                    withPayout <- tryAddPayout(
-                      ctx,
-                      payoutObligation = nePayoutObligationsRemaining.head
-                    )
+                val baseSize = ctx.transaction.toCborForFeeCalculation.length.toLong
+                val dummySignaturesSize = config.headMultisigScript.numSigners * (32 + 64)
+                val nativeScriptSize = config.headMultisigScript.script.script.toCbor.length
+                val maxSize = config.cardanoProtocolParams.maxTxSize
+                val margin = 500
+                // The total maximum size of all the payout obligations we can add to this transaction
+                val obligationAggregateSizeLimit =
+                    maxSize
+                        - baseSize
+                        - dummySignaturesSize
+                        - nativeScriptSize
+                        - margin
 
-                    basePessimistic = State[T](
-                      ctx = withPayout._1,
-                      inputValueNeeded = withPayout._2,
-                      fee = Coin.zero,
-                      payoutObligationsRemaining = nePayoutObligationsRemaining.tail
-                    )
-
-                    res <- addPayoutsLoop(basePessimistic)
-                } yield res
-            }
-
-            @tailrec
-            private def addPayoutsLoop(
-                state: State[T]
-            ): BuilderResultSimple[State[T]] = {
-                state.payoutObligationsRemaining match {
-                    case obligation +: otherObligations =>
-                        tryAddPayout(state.ctx, obligation) match {
-                            case Right((newCtx, valueNeeded, fee)) =>
-                                val newState: State[T] = state.copy(
-                                  ctx = newCtx,
-                                  inputValueNeeded = valueNeeded,
-                                  fee = fee,
-                                  payoutObligationsRemaining = otherObligations
-                                )
-                                addPayoutsLoop(newState)
-                            case Left(err) =>
-                                Tx.Builder.Incremental
-                                    .replaceInvalidSizeException(err._1, state)
-                                    .explainConst(err._2)
-                        }
-                    case _Empty => Right(state)
+                @tailrec
+                def go(
+                    remainingSize: Long,
+                    addedPayouts: Vector[Payout.Obligation],
+                    remainingObligations: Vector[Payout.Obligation]
+                ): (Vector[Payout.Obligation], Vector[Payout.Obligation]) = {
+                    val currentObligation = remainingObligations.head
+                    val remainingSizeAfter = remainingSize - currentObligation.outputSize
+                    if remainingSizeAfter >= 0
+                    then {
+                        if remainingObligations.tail.isEmpty
+                        then (addedPayouts.prepended(currentObligation), Vector.empty)
+                        else
+                            go(
+                              remainingSizeAfter,
+                              addedPayouts.prepended(currentObligation),
+                              remainingObligations.tail
+                            )
+                    } else (addedPayouts, remainingObligations)
                 }
-            }
 
-            /** Try to add payouts one-by-one until adding another payout would exceed transaction
-              * size limits.
-              */
+                val (obligationsToDischarge, undischargedObligations) =
+                    go(
+                      obligationAggregateSizeLimit,
+                      Vector.empty,
+                      nePayoutObligationsRemaining.toVector
+                    )
 
-            /** Try to add a single payout to the rollout transaction, and then trial a finalization
-              * with a placeholder rollout utxo as an input. If successful, returns the new
-              * [[Context]] and the actual value needed for the prior rollout utxo.
-              */
-            private def tryAddPayout(
-                ctx: TransactionBuilder.Context,
-                payoutObligation: Payout.Obligation
-            ): BuilderResultSimple[(TransactionBuilder.Context, Value, Coin)] =
-                val payoutStep = Send(payoutObligation.utxo)
                 for {
                     newCtx <- TransactionBuilder
-                        .modify(ctx, List(payoutStep))
-                        .explainConst("could not add payout")
+                        .modify(
+                          ctx,
+                          obligationsToDischarge.map(obligation => Send(obligation.utxo.value))
+                        )
+                        .explainConst("adding the pre-sized payout obligations failed")
                     valueNeededAndFee <- TrialFinish(Build.this, newCtx)
-                } yield (newCtx, valueNeededAndFee._1, valueNeededAndFee._2)
+                    res = State[T](
+                      newCtx,
+                      valueNeededAndFee._1,
+                      valueNeededAndFee._2,
+                      undischargedObligations
+                    )
+                } yield res
+            }
         }
 
         private[tx] object PostProcess {

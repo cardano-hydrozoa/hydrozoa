@@ -447,13 +447,13 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
               _ <- assertWith[TestR](
                 msg = "Virtual Ledger should contain expected active utxo",
-                condition = jlState.virtualLedgerState.activeUtxos == expectedUtxos
+                condition = jlState.virtualLedgerState.activeUtxosKR == expectedUtxos
               )
 
               kzgCommit = jlState.virtualLedgerState.kzgCommitment
 
               expectedKzg = KzgCommitment.calculateKzgCommitment(
-                KzgCommitment.hashToScalar(expectedUtxos)
+                KzgCommitment.hashToScalar(expectedUtxos.map((i, o) => (i, o.value)))
               )
 
               _ <- assertWith[TestR](

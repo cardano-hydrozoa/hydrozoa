@@ -27,7 +27,7 @@ import monocle.syntax.all.focus
 import org.scalacheck.commands.ModelCommand
 import scala.collection.immutable.Queue
 import scala.util.chaining.*
-import scalus.cardano.ledger.{AssetName, Transaction, TransactionHash, TransactionInput, Utxos}
+import scalus.cardano.ledger.{AssetName, KeepRaw, Transaction, TransactionHash, TransactionInput, TransactionOutput, Utxos}
 import test.TestPeer
 
 object Model:
@@ -61,7 +61,7 @@ object Model:
         competingFallbackStartTime: QuantizedInstant,
 
         // L2 state
-        activeUtxos: Utxos,
+        activeUtxos: Map[TransactionInput, KeepRaw[TransactionOutput]],
 
         // L1 state - the only peer's utxos
         peerUtxosL1: Utxos,
@@ -266,7 +266,7 @@ object Model:
                               .modify(_ :+ (cmd.event, l2Tx, ValidityFlag.Valid))
                         )
                         .focus(_.activeUtxos)
-                        .replace(mutatorState.activeUtxos)
+                        .replace(mutatorState.activeUtxosKR)
             }
 
             val finalState = newState
@@ -340,11 +340,11 @@ object Model:
             blockStartTime: QuantizedInstant,
             prevVersion: BlockVersion.Full,
             isFinal: Boolean,
-            activeUtxos: Utxos,
+            activeUtxos: Map[TransactionInput, KeepRaw[TransactionOutput]],
             depositEnqueued: List[RegisterDepositCommand],
             depositSubmitted: List[LedgerEventId],
             treasuryTokenName: AssetName
-        ): (BlockBrief, Utxos) = {
+        ): (BlockBrief, Map[TransactionInput, KeepRaw[TransactionOutput]]) = {
 
             logger.trace(s"mkBlockBrief: blockNumber: $blockNumber")
             logger.trace(s"mkBlockBrief: blockStartTime: $blockStartTime")
@@ -411,7 +411,7 @@ object Model:
                     )
                     .flatMap(_.depositRefundTxSeq.depositTx.depositProduced.virtualOutputs.toList)
 
-            val genesisUtxos: Option[Utxos] = for {
+            val genesisUtxos: Option[Map[TransactionInput, KeepRaw[TransactionOutput]]] = for {
                 obligations <-
                     if genesisObligations.nonEmpty
                     then Some(genesisObligations)
@@ -420,14 +420,14 @@ object Model:
                 l2Genesis = L2Genesis(Queue.from(obligations), genesisId)
             } yield l2Genesis.asUtxos
 
-            val newActiveUtxos = activeUtxos ++ genesisUtxos.getOrElse(Utxos.empty)
+            val newActiveUtxos = activeUtxos ++ genesisUtxos.getOrElse(Map.empty)
 
             lazy val majorBlock = Major(
               header = BlockHeader.Major(
                 blockNum = blockNumber,
                 blockVersion = prevVersion.incrementMajor,
                 startTime = blockStartTime,
-                kzgCommitment = newActiveUtxos.kzgCommitment
+                kzgCommitment = newActiveUtxos.map((i, o) => (i, o.value)).kzgCommitment
               ),
               body = BlockBody.Major(
                 events = events_,
@@ -441,7 +441,7 @@ object Model:
                 blockNum = blockNumber,
                 blockVersion = prevVersion.incrementMinor,
                 startTime = blockStartTime,
-                kzgCommitment = activeUtxos.kzgCommitment
+                kzgCommitment = activeUtxos.map((i, o) => (i, o.value)).kzgCommitment
               ),
               body = BlockBody.Minor(
                 events = events.map((le, _, flag) => le.eventId -> flag),

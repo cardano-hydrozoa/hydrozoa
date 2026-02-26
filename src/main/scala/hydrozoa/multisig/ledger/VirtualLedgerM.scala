@@ -55,7 +55,7 @@ object VirtualLedgerM {
     def applyGenesisEvent(genesisEvent: L2Genesis): VirtualLedgerM[Unit] =
         for {
             s <- get
-            newState = s.copy(s.activeUtxos ++ genesisEvent.asUtxos)
+            newState = s.copy(s.activeUtxosKR ++ genesisEvent.asUtxos)
             _ <- set(newState)
         } yield ()
 
@@ -76,7 +76,7 @@ object VirtualLedgerM {
     def mockApplyGenesis(genesisEvent: L2Genesis): VirtualLedgerM[KzgCommitment] =
         for {
             s <- get
-            newState = s.copy(s.activeUtxos ++ genesisEvent.asUtxos)
+            newState = s.copy(s.activeUtxosKR ++ genesisEvent.asUtxos)
         } yield newState.kzgCommitment
 
     def applyInternalTx(
@@ -120,17 +120,23 @@ object VirtualLedgerM {
 
     type Config = CardanoNetwork.Section
 
-    final case class State(activeUtxos: Map[TransactionInput, TransactionOutput]) {
+    // We keep the serialized from because this is what we (want to) receive from a black-box l2 ledger.
+    // Using KeepRaw means that we don't need to re-encode when trying to determine the size of the output when
+    // calculating rollouts
+    final case class State(activeUtxosKR: Map[TransactionInput, KeepRaw[TransactionOutput]]) {
         lazy val kzgCommitment: KzgCommitment = this.activeUtxos.kzgCommitment
 
+        val activeUtxos: Utxos = activeUtxosKR.map((i, o) => (i, o.value))
         def toScalusState: ScalusState = ScalusState(utxos = activeUtxos)
     }
 
     object State {
 
-        val empty: State = State(activeUtxos = Map.empty)
+        val empty: State = State(activeUtxosKR = Map.empty)
 
-        def fromScalusState(scalusState: ScalusState): State = State(scalusState.utxos)
+        def fromScalusState(scalusState: ScalusState): State = State(
+          scalusState.utxos.map((i, o) => (i, KeepRaw(o)))
+        )
     }
 
     object Error {
