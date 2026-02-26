@@ -193,15 +193,17 @@ private object RolloutTxOps {
         // (i.e., no rollout input or witnesses). This means we need to add all of these up front.
         private object AddPayouts {
             def apply(ctx: TransactionBuilder.Context): BuilderResultSimple[State[T]] = {
-                val baseSize = ctx.transaction.toCborForFeeCalculation.length.toLong
+                val maxSize = config.cardanoProtocolParams.maxTxSize
                 val dummySignaturesSize = config.headMultisigScript.numSigners * (32 + 64)
                 val nativeScriptSize = config.headMultisigScript.script.script.toCbor.length
-                val maxSize = config.cardanoProtocolParams.maxTxSize
+
+                // includes the base size of the transaction, spent rollout input, possible rollout output, metadata,
+                // and all the other structural fields of a cardano transaction
                 val margin = 500
+
                 // The total maximum size of all the payout obligations we can add to this transaction
                 val obligationAggregateSizeLimit =
                     maxSize
-                        - baseSize
                         - dummySignaturesSize
                         - nativeScriptSize
                         - margin
