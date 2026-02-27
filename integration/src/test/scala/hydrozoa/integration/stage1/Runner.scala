@@ -91,7 +91,7 @@ object Stage1PropertiesYaci extends YetAnotherProperties("Integration Stage 1 wi
 
     private val preprod = CardanoNetwork.Preprod
 
-    val _ = property("Block promotion Yaci") = Suite(
+    lazy val _ = property("Block promotion Yaci") = Suite(
       suiteCardano = Yaci(
         protocolParams = DevKit.yaciParams
       ),
@@ -100,11 +100,20 @@ object Stage1PropertiesYaci extends YetAnotherProperties("Integration Stage 1 wi
       scenarioGen = NoWithdrawalsScenarioGen
     ).property()
 
-    val _ = property("Dusty head finalization Yaci") = Suite(
+    lazy val _ = property("Dusty head finalization Yaci") = Suite(
       suiteCardano = Yaci(
         protocolParams = DevKit.yaciParams
       ),
       txTimingGen = generateYaciTxTiming,
       mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
       scenarioGen = MakeDustScenarioGen(minL2Utxos = 500)
+    ).property()
+
+    val _ = property("Deposits on Yaci") = Suite(
+      suiteCardano = Yaci(
+        protocolParams = DevKit.yaciParams
+      ),
+      txTimingGen = generateYaciTxTiming,
+      mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
+      scenarioGen = DepositsScenarioGen
     ).property()

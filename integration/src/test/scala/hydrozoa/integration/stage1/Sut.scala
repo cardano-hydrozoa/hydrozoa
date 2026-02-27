@@ -2,6 +2,7 @@ package hydrozoa.integration.stage1
 
 import cats.effect.{Deferred, IO, Ref}
 import cats.syntax.all.catsSyntaxFlatMapOps
+import com.bloxbean.cardano.client.util.HexUtil
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.actor.ActorSystem
@@ -21,16 +22,18 @@ import hydrozoa.multisig.ledger.event.LedgerEvent
 import org.scalacheck.commands.SutCommand
 import org.typelevel.log4cats.Logger
 import scala.concurrent.duration.DurationInt
+import scalus.cardano.address.ShelleyAddress
 
 // ===================================
 // Stage 1 SUT
 // ===================================
 
 case class Stage1Sut(
+    headAddress: ShelleyAddress,
     system: ActorSystem[IO],
     cardanoBackend: CardanoBackend[IO],
     agent: AgentActor.Handle,
-    effectsAcc: Ref[IO, List[BlockEffects.Unsigned]] = Ref.unsafe(List.empty)
+    effectsAcc: Ref[IO, List[BlockEffects.Unsigned]] = Ref.unsafe(List.empty),
 )
 
 // ===================================
@@ -158,10 +161,14 @@ object SutCommands:
             _ <- logger.debug(
               s">> CompleteBlockCommand(blockNumber=${cmd.blockNumber}, isFinal=${cmd.isFinal})"
             )
+            headUtxosRet <- sut.cardanoBackend
+                .utxosAt(sut.headAddress)
+                .map(_.fold(err => throw RuntimeException(err.toString), _.keySet))
             block <- IO.pure(
               if cmd.isFinal
               then CompleteBlockFinal(None)
-              else CompleteBlockRegular(None, cmd.pollResults, false)
+              // TODO: use mock state, not cmd.pollResults
+              else CompleteBlockRegular(None, headUtxosRet, false)
             )
             // All sync commands should be timed out since the system may terminate
             d <- (sut.agent ?: AgentActor.CompleteBlock(block, cmd.blockNumber)).timeout(10.seconds)
@@ -176,15 +183,22 @@ object SutCommands:
                 (sut.agent ! cmd.registerDeposit)
     }
 
-    given SutCommand[SubmitDepositCommand, Unit, Stage1Sut] with {
-        override def run(cmd: SubmitDepositCommand, sut: Stage1Sut): IO[Unit] = for {
-            ret <- IO.traverse(cmd.deposits.map(_._2))(sut.cardanoBackend.submitTx)
-            // Submission errors are ignored, but dumped here
-            submissionErrors = ret.filter(_.isLeft)
+    given SutCommand[SubmitDepositsCommand, Unit, Stage1Sut] with {
+
+        // This uses only depositsForSubmission and ignores rejected deposits
+        override def run(cmd: SubmitDepositsCommand, sut: Stage1Sut): IO[Unit] = for {
+            _ <- logger.debug(s">> SubmitDepositCommand (${cmd.depositsForSubmission.map(_._1)})")
+            ret <- IO.traverse(cmd.depositsForSubmission)((id, tx) =>
+                sut.cardanoBackend.submitTx(tx) >>= (ret => IO.pure((id, tx) -> ret))
+            )
+
+            submissionErrors = ret.filter(_._2.isLeft)
             _ <- IO.whenA(submissionErrors.nonEmpty)(
               logger.info(
                 "Submit deposit errors:" + submissionErrors
-                    .map(a => s"\n\t- ${a.left}")
+                    .map(a =>
+                        s"\n\t- ${a._1._1}, error: ${a._2.left}, cbor: ${HexUtil.encodeHexString(a._1._2.toCbor)}"
+                    )
                     .mkString
               )
             )

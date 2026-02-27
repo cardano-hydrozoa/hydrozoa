@@ -16,6 +16,7 @@ import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, Block
 import hydrozoa.multisig.ledger.dapp.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag
+import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag.Valid
 import hydrozoa.multisig.ledger.event.LedgerEventNumber.increment
 import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId, LedgerEventNumber}
 import hydrozoa.multisig.ledger.virtual.HydrozoaTransactionMutator
@@ -67,21 +68,23 @@ object Model:
         peerUtxosL1: Utxos,
 
         // Deposits
-        // The queue of deposits that may be submitted if timing is lucky, or discarded as expired
+
+        // The queue of deposits that may be submitted if timing is lucky, or discarded as expired.
+        // At all times, all deposits in the list are unrelated in terms of funding utxo.
         depositEnqueued: List[RegisterDepositCommand],
+        depositsRegistered: List[LedgerEventId],
         // Utxos used in the deposit enqueued as funding utxos.
         // We need this not to generate deposits that use the same utxos for funding many times.
-        utxoLocked: List[TransactionInput],
+        utxoLocked: Set[TransactionInput],
+
         // Signed deposit transactions
         depositSigned: Map[TransactionHash, Transaction],
 
-        // TODO: these two seem to be a bit redundant?
         // Deposits, that have been submitted, so they are expected to appear in the
         // very first block that satisfies their absorption window.
         // Deposits along with their maturity start time
         depositSubmitted: List[LedgerEventId],
-        // Deposit UTXO IDs (output 0 of deposit txs) that have been submitted
-        depositUtxoIds: Set[TransactionInput]
+        depositRejected: List[LedgerEventId],
     ) {
         override def toString: String = "<model state (hidden)>"
 
@@ -94,7 +97,9 @@ object Model:
           * preexisting state.
           */
         def applyContinuingL1Tx(l1Tx: Transaction): State = {
+            // TODO: this is a bit unwieldy
             val peerAddresses = this.peerUtxosL1.map(_._2.address).toSet
+                + ownTestPeer.address(headConfig.network)
             val survivedUtxo = this.peerUtxosL1 -- l1Tx.body.value.inputs.toSet
             val newUtxos = survivedUtxo ++ l1Tx.body.value.outputs.toList
                 .map(_.value)
@@ -104,9 +109,13 @@ object Model:
             this.copy(peerUtxosL1 = newUtxos)
         }
 
-        def depositForSubmission: Set[LedgerEventId] =
-            this.depositEnqueued.map(_.registerDeposit.eventId).toSet --
-                depositSubmitted.toSet
+        def depositForSubmission: List[(LedgerEventId, QuantizedInstant)] =
+            this.depositEnqueued
+                .map(cmd =>
+                    cmd.registerDeposit.eventId -> cmd.depositRefundTxSeq.depositTx.validityEnd
+                )
+                .filter(e => depositsRegistered.contains(e._1))
+                .filterNot(e => depositSubmitted.contains(e._1) || depositRejected.contains(e._1))
     }
 
     enum CurrentTime(qi: QuantizedInstant):
@@ -180,7 +189,7 @@ object Model:
     given ModelCommand[DelayCommand, Unit, State] with {
 
         override def runState(cmd: DelayCommand, state: State): (Unit, State) = {
-            logger.debug("MODEL>> DelayCommand")
+            logger.debug(s"MODEL>> DelayCommand: ${cmd.delaySpec}")
             val newBlock = state.blockCycle match {
                 case BlockCycle.Done(blockNumber, version) =>
                     logger.trace(s"Transitioning Done -> Ready for block ${blockNumber}")
@@ -293,7 +302,7 @@ object Model:
                     logger.trace(
                       s"Completing block with ${events.length} events: ${events.map(_._1.eventId)}"
                     )
-                    val (blockBrief, newActiveUtxos) = mkBlockBrief(
+                    val (blockBrief, newActiveUtxos, withdrawnUtxos) = mkBlockBrief(
                       cmd.blockNumber,
                       events,
                       state.competingFallbackStartTime,
@@ -303,6 +312,7 @@ object Model:
                       cmd.isFinal,
                       state.activeUtxos,
                       state.depositEnqueued,
+                      state.depositsRegistered,
                       state.depositSubmitted,
                       state.headConfig.headTokenNames.treasuryTokenName
                     )
@@ -318,13 +328,25 @@ object Model:
                           if cmd.isFinal then BlockCycle.HeadFinalized
                           else BlockCycle.Done(cmd.blockNumber, blockBrief.blockVersion),
                       competingFallbackStartTime = newCompetingFallbackStartTime,
-                      // Remove handled deposits
+                      // Remove handled deposits and add registered deposits
                       depositEnqueued = state.depositEnqueued.filterNot(cmd =>
                           (blockBrief.depositsAbsorbed ++ blockBrief.depositsRefunded).contains(
                             cmd._1.eventId
                           )
                       ),
-                      activeUtxos = newActiveUtxos
+                      depositsRegistered = state.depositsRegistered
+                          ++ blockBrief.events
+                              .filter(_._2 == Valid)
+                              .map(_._1)
+                              .filter(e =>
+                                  state.depositEnqueued.map(_.registerDeposit.eventId).contains(e)
+                              ),
+                      activeUtxos = newActiveUtxos,
+                      peerUtxosL1 = state.peerUtxosL1 ++ withdrawnUtxos
+                    )
+                    logger.trace(
+                      s"block ${cmd.blockNumber}, newState.depositEnqueued=${newState.depositEnqueued}, " +
+                          s"newState.depositsRegistered=${newState.depositsRegistered}"
                     )
                     blockBrief -> newState
                 case _ =>
@@ -342,35 +364,39 @@ object Model:
             isFinal: Boolean,
             activeUtxos: Utxos,
             depositEnqueued: List[RegisterDepositCommand],
-            depositSubmitted: List[LedgerEventId],
+            depositRegistered: List[LedgerEventId],
+            depositsSubmitted: List[LedgerEventId],
             treasuryTokenName: AssetName
-        ): (BlockBrief, Utxos) = {
+        ): (BlockBrief, Utxos, Utxos) = {
 
             logger.trace(s"mkBlockBrief: blockNumber: $blockNumber")
             logger.trace(s"mkBlockBrief: blockStartTime: $blockStartTime")
+            val settlementValidityEnd =
+                txTiming.newSettlementEndTime(competingFallbackStartTime)
+            logger.trace(s"settlementValidityEnd=$settlementValidityEnd")
 
             val events_ = events.map((le, _, flag) => le.eventId -> flag)
 
-            val depositsAbsorbed = depositEnqueued
+            val depositsToCheck =
+                depositEnqueued.filter(d => depositRegistered.contains(d.registerDeposit.eventId))
+
+            val depositsAbsorbed = depositsToCheck
                 .filter(cmd => {
                     val submissionDeadline = cmd.depositRefundTxSeq.depositTx.validityEnd
-                    val settlementValidityEnd =
-                        txTiming.newSettlementEndTime(competingFallbackStartTime)
                     val depositAbsorptionStart =
                         txTiming.depositAbsorptionStartTime(submissionDeadline)
                     val depositAbsorptionEnd = txTiming.depositAbsorptionEndTime(submissionDeadline)
-                    val depositUtxoFound = depositSubmitted.contains(cmd.registerDeposit.eventId)
+                    val depositUtxoFound = depositsSubmitted.contains(cmd.registerDeposit.eventId)
 
                     logger.trace(
-                      s"MODEL deposit check - eligible: ${cmd.registerDeposit.eventId},\n" +
+                      s"MODEL deposit eligibility check: ${cmd.registerDeposit.eventId},\n" +
                           s"depositAbsorptionStart=$depositAbsorptionStart, " +
                           s"depositAbsorptionEnd=$depositAbsorptionEnd, " +
-                          s"settlementValidityEnd=$settlementValidityEnd, " +
                           s"utxo is found: $depositUtxoFound"
                     )
 
-                    depositAbsorptionStart < blockStartTime
-                    && depositAbsorptionEnd > settlementValidityEnd
+                    depositAbsorptionStart <= blockStartTime
+                    && depositAbsorptionEnd >= settlementValidityEnd
                     && depositUtxoFound
                 })
                 .map(_._1.eventId)
@@ -379,22 +405,27 @@ object Model:
 
             val depositsRefunded =
                 (if isFinal
-                 then depositEnqueued // all known deposits should be refunded
+                 then depositsToCheck // all known deposits should be refunded
                  else
-                     depositEnqueued.filter(cmd =>
+                     depositsToCheck.filter(cmd =>
                          val submissionDeadline = cmd.depositRefundTxSeq.depositTx.validityEnd
+                         val depositAbsorptionStart =
+                             txTiming.depositAbsorptionStartTime(submissionDeadline)
                          val settlementValidityEnd =
                              txTiming.newSettlementEndTime(competingFallbackStartTime)
                          val depositAbsorptionEnd =
                              txTiming.depositAbsorptionEndTime(submissionDeadline)
+                         val depositUtxoFound =
+                             depositsSubmitted.contains(cmd.registerDeposit.eventId)
 
                          logger.trace(
-                           s"MODEL deposit check - ineligible: ${cmd.registerDeposit.eventId},\n" +
+                           s"MODEL deposit rejection check: ${cmd.registerDeposit.eventId},\n" +
                                s"depositAbsorptionEnd=$depositAbsorptionEnd, " +
                                s"settlementValidityEnd=$settlementValidityEnd"
                          )
 
-                         settlementValidityEnd > depositAbsorptionEnd
+                         settlementValidityEnd > depositAbsorptionEnd ||
+                         (depositAbsorptionStart < blockStartTime && !depositUtxoFound)
                      )
                 ).map(_._1.eventId)
 
@@ -421,6 +452,14 @@ object Model:
             } yield l2Genesis.asUtxos
 
             val newActiveUtxos = activeUtxos ++ genesisUtxos.getOrElse(Utxos.empty)
+
+            // Extract all L1-bound UTXOs from L2Tx events
+            // TODO: this is not correct, mention in the comments
+            val withdrawnUtxos: Utxos = Utxos.empty
+            // val withdrawnUtxos: Utxos = events.flatMap {
+            //    case (_, l2tx: L2Tx, _) => l2tx.l1utxos
+            //    case _                  => List.empty
+            // }.toMap
 
             lazy val majorBlock = Major(
               header = BlockHeader.Major(
@@ -476,7 +515,9 @@ object Model:
                     else minorBlock
                 } else majorBlock
 
-            (brief, newActiveUtxos)
+            logger.trace(s"block brief: $brief")
+
+            (brief, newActiveUtxos, withdrawnUtxos)
         }
 
         override def preCondition(cmd: CompleteBlockCommand, state: State): Boolean =
@@ -520,6 +561,8 @@ object Model:
               blockStartTime < config.txTiming.depositAbsorptionEndTime(seq.depositTx.validityEnd)
             )
 
+            logger.trace(s"deposit txHash=${seq.depositTx.tx.id}")
+
             val depositUtxo = seq.depositTx.depositProduced
 
             val finalState = state
@@ -551,17 +594,20 @@ object Model:
         }
     }
 
-    given ModelCommand[SubmitDepositCommand, Unit, State] with {
+    given ModelCommand[SubmitDepositsCommand, Unit, State] with {
         override def runState(
-            cmd: SubmitDepositCommand,
+            cmd: SubmitDepositsCommand,
             state: State
         ): (Unit, State) = {
             logger.debug(
-              s"MODEL>> SubmitDepositCommand for ${cmd.deposits.size} deposits"
+              s"MODEL>> SubmitDepositCommand, for submission: ${cmd.depositsForSubmission.size}, for rejection: ${cmd.depositsForRejection.size}"
             )
 
+            val allDeposits = cmd.depositsForSubmission.map(e => true -> e._1)
+                ++ cmd.depositsForRejection.map(e => false -> e)
+
             // Attach corresponding register deposit commands
-            val depositsAug = cmd.deposits.map((eventId, tx) =>
+            val depositsAug = allDeposits.map((flag, eventId) =>
                 val registerDepositCmd = state.depositEnqueued
                     .find(_.registerDeposit.eventId == eventId)
                     .getOrElse(
@@ -569,32 +615,31 @@ object Model:
                         s"Deposit with event ID $eventId not found in enqueued"
                       )
                     )
-                (eventId, tx, registerDepositCmd)
+                (flag, eventId, registerDepositCmd)
             )
 
             // Apply each deposit transaction to peerUtxosL1, checking TTL
             // Also collect deposit UTXO IDs (output 0 of deposit txs)
             val newState =
-                depositsAug.foldLeft(state) { case (acc, (eventId, signedTx, registerDepositCmd)) =>
-                    val validityEnd =
-                        registerDepositCmd.depositRefundTxSeq.depositTx.validityEnd
-                    val depositTxId = registerDepositCmd.depositRefundTxSeq.depositTx.tx.id
-                    val isExpired = acc.currentTime.instant > validityEnd
-                    val depositUtxoId = TransactionInput(signedTx.id, 0)
+                depositsAug.foldLeft(state) { case (acc, (flag, eventId, registerDepositCmd)) =>
+                    val signedTx = registerDepositCmd.depositTxBytesSigned
+                    val fundingUtxos = signedTx.body.value.inputs.toSet
 
-                    // Don't mutate state for expired deposits
-                    if isExpired then
-                        logger.info(
-                          s"Deposit $eventId, tx hash $depositTxId, is expired: " +
-                              s"(validityEnd=$validityEnd, currentTime=${acc.currentTime.instant}), not applying L1 tx"
-                        )
-                        acc
-                    else
+                    if flag then
+                        // "submit" deposit tx
                         logger.trace(s"Stepping model: submit deposit tx for event ID: $eventId")
                         acc.copy(
-                          depositSubmitted = acc.depositSubmitted :+ eventId,
-                          depositUtxoIds = acc.depositUtxoIds + depositUtxoId
+                          depositSubmitted = acc.depositSubmitted :+ eventId
                         ).applyContinuingL1Tx(signedTx)
+                    else
+                        // Unlock funding utxos
+                        logger.info(
+                          s"Deposit $eventId is expired, unlocking funding utxos"
+                        )
+                        acc.copy(
+                          utxoLocked = acc.utxoLocked -- fundingUtxos,
+                          depositRejected = acc.depositRejected :+ eventId
+                        )
                 }
 
             () -> newState
