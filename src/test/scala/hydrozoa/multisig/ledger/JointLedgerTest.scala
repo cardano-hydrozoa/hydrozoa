@@ -4,37 +4,45 @@ import cats.*
 import cats.data.*
 import cats.effect.*
 import cats.effect.unsafe.implicits.*
-import cats.syntax.all.*
+import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.actor.{ActorSystem, test as _}
 import hydrozoa.config.head.HeadPeersSpec.Exact
+import hydrozoa.config.head.multisig.timing.TxTiming
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.{TestPeers, generateTestPeers}
 import hydrozoa.config.node.{NodeConfig, generateNodeConfig}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.multisig.consensus.ConsensusActor
 import hydrozoa.multisig.consensus.ConsensusActor.Request
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
-import hydrozoa.multisig.ledger.JointLedger.{Done, Producing}
+import hydrozoa.multisig.ledger.JointLedger.{Done, Producing, sortDepositStream}
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.*
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Requests.*
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Scenarios.*
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockNumber, BlockVersion}
+import hydrozoa.multisig.ledger.dapp.tx.genDepositUtxo
 import hydrozoa.multisig.ledger.dapp.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.event.LedgerEvent.DepositEvent
-import hydrozoa.multisig.ledger.event.LedgerEventId
 import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag.{Invalid, Valid}
+import hydrozoa.multisig.ledger.event.{LedgerEventId, LedgerEventNumber}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.tx.{GenesisObligation, L2Genesis}
 import java.util.concurrent.TimeUnit
 import org.scalacheck.*
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.PropertyM.monadForPropM
+import org.scalacheck.rng.Seed
 import org.scalacheck.util.Pretty
+import scala.annotation.tailrec
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
+import scala.util.{Failure, Success, Try}
+import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.{Block as _, BlockHeader as _, Coin, *}
 import scalus.uplc.builtin.ByteString
 import test.*
@@ -322,14 +330,163 @@ object JointLedgerTestHelpers {
     }
 }
 
+// Annoyingly, `Gen` doesn't have `Monad[Gen]` already. But I want to use `traverse` below, so I'm vendoring it here
+implicit val genMonad: Monad[Gen] = new Monad[Gen] {
+    def pure[A](a: A): Gen[A] = Gen.const(a)
+    def flatMap[A, B](fa: Gen[A])(f: A => Gen[B]): Gen[B] = fa.flatMap(f)
+    def tailRecM[A, B](a: A)(f: A => Gen[Either[A, B]]): Gen[B] =
+        flatMap(f(a)) {
+            case Left(a1) => tailRecM(a1)(f)
+            case Right(b) => pure(b)
+        }
+}
+
 object JointLedgerTest extends Properties("Joint Ledger Test") {
+    override def overrideParameters(p: Test.Parameters): Test.Parameters =
+        p.withInitialSeed(Seed.fromBase64("_cO3yONWJeBMtw0XJ1i1kDMLpecMm_13gd0CRL2142J=").get)
 
     import TestM.*
 
-    override def overrideParameters(p: Test.Parameters): Test.Parameters = {
-        p
-            .withMinSuccessfulTests(100)
-    }
+    //  We can observe three test statistics:
+    //  - Whether or not ties are occurring
+    // - Whether or not the sorting is trivial due to events being pre - sorted
+    //  - Whether or not the sorting is trivial due < 2 events
+    //
+    //  The properties we check:
+    //    - Deposits are indeed sorted according to start time
+    //    - Sorting does not change the number of elements
+    //    - The sequences of deposits grouped by the same start times are all sub-sequences of the unsorted stream.
+    val _ = property("deposit sorting") = run(
+      // FIXME: initializer is too bulky, we can reduce it significantly
+      initializer = defaultInitializer,
+      testM = {
+          // FIXME: These generators are quite inefficient.
+
+          // monotonic sequence, duplicates may occur
+          val genMonotonic: Gen[List[Int]] = Gen.listOf(Gen.choose(0, 1000)).map(_.sorted)
+          val genStrictMonotonic: Gen[List[Int]] = genMonotonic.map(_.distinct)
+          def genLedgerEventIdsStrictMonotonic(
+              headPeerNum: HeadPeerNumber
+          ): Gen[Queue[LedgerEventId]] =
+              for {
+                  monotonic <- genStrictMonotonic
+              } yield Queue.from(
+                monotonic.map(i => LedgerEventId(headPeerNum, LedgerEventNumber(i)))
+              )
+
+          def genPeerDeposits(
+              headPeerNum: HeadPeerNumber,
+              config: CardanoNetwork.Section & TxTiming.Section,
+              headAddress: ShelleyAddress
+          ): Gen[Queue[(LedgerEventId, DepositUtxo)]] =
+              for {
+                  eventIds <- genLedgerEventIdsStrictMonotonic(headPeerNum)
+                  deposits <- Gen.listOfN(
+                    eventIds.length,
+                    genDepositUtxo(
+                      config = config,
+                      headAddress = Some(headAddress)
+                    )
+                  )
+              } yield eventIds.zip(deposits)
+
+          def genInterleaved[A](queues: Vector[Queue[A]]): Gen[Queue[A]] =
+              Gen.tailRecM(queues -> Queue.empty[A]) { case (remaining, acc) =>
+                  val nonEmpty = remaining.filter(_.nonEmpty)
+                  if nonEmpty.isEmpty then Gen.const(Right(acc))
+                  else
+                      Gen.choose(0, nonEmpty.length - 1).map { idx =>
+                          val (head, tail) = nonEmpty(idx).dequeue
+                          Left(nonEmpty.updated(idx, tail) -> (acc :+ head))
+                      }
+              }
+
+          def genEventStream(
+              config: CardanoNetwork.Section & TxTiming.Section,
+              headAddress: ShelleyAddress
+          ): Gen[Queue[(LedgerEventId, DepositUtxo)]] =
+              for {
+                  headPeerNumbers <- for {
+                      n <- Gen.choose(2, 100)
+                  } yield Vector.range(0, n).map(HeadPeerNumber(_))
+                  peerDeposits <- headPeerNumbers.traverse(n =>
+                      genPeerDeposits(n, config, headAddress)
+                  )
+                  eventStream <- genInterleaved(peerDeposits)
+              } yield eventStream
+
+          // order-preserving, non-contiguous matching;
+          // isSubsequenceOf( List(1, 2, 3), List(1, 6, 3, 2, 3, 7, 1)) == true
+          @tailrec
+          def isSubsequenceOf[A](sub: Seq[A], seq: Seq[A]): Boolean = {
+              if sub.isEmpty then true
+              else
+                  Try(seq.dropWhile(_ != sub.head).tail) match {
+                      case Success(nextSeq) => isSubsequenceOf(sub.tail, nextSeq)
+                      case Failure(_)       => false
+                  }
+          }
+
+          for {
+              env <- ask[TestR]
+              eventStream <- pick(genEventStream(env.config, env.config.headMultisigAddress))
+              sorted = sortDepositStream(eventStream, env.config.txTiming)
+              startTimeGroups = sorted
+                  .groupBy((id, deposit) =>
+                      env.config.txTiming
+                          .depositAbsorptionStartTime(deposit.submissionDeadline)
+                  )
+                  .values
+
+              // Test statistic:  make sure that ties are actually occurring in some samples
+              _ <- lift(PropertyM.monitor[IO](Prop.collect {
+                  if eventStream.length <= 1
+                  then "events.length <= 1 (trivial case)"
+                  else "events.length > 1 (non-trivial case)"
+              }))
+
+              // Test statistic:  make sure that ties are actually occurring in some samples
+              _ <- lift(PropertyM.monitor[IO](Prop.collect {
+                  val collectionSizes = startTimeGroups.map(_.length)
+                  if collectionSizes.isEmpty then "no duplicate start times"
+                  else "some duplicate start times"
+              }))
+
+              // Test statistic: the sorted and unsorted streams are different
+              _ <- lift(PropertyM.monitor[IO](Prop.collect {
+                  if sorted == eventStream then "event stream pre-sorted"
+                  else "event stream not pre-sorted"
+              }))
+
+              _ <- assertWith(
+                msg = "Deposits are sorted by absorption start time",
+                condition = {
+                    val startTimes = sorted.map(deposit =>
+                        env.config.txTiming.depositAbsorptionStartTime(
+                          deposit._2.submissionDeadline
+                        )
+                    )
+                    startTimes.sorted == startTimes
+                }
+              )
+
+              _ <- assertWith(
+                msg = "Sorting does not change the number of elements",
+                condition = sorted.length == eventStream.length
+              )
+
+              _ <- assertWith(
+                msg =
+                    "If multiple deposits have the same absorption start time, order of the sorted deposits must be" +
+                        " a subsequence of the event stream",
+                condition = {
+                    startTimeGroups.forall(groupQueue => isSubsequenceOf(groupQueue, eventStream))
+                }
+              )
+          } yield true
+
+      }
+    )
 
     val _ = property("Joint Ledger Happy Path") = run(
       initializer = defaultInitializer,
@@ -544,9 +701,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
     // TODO: This property is disabled by lazy, since a deposit cannot be registered and absorbed in
     //  in the same block; requires updating.
-    lazy val _ = property(
-      "Absorbs deposit: absoprtion starts at block start time"
-    ) = run(
+    lazy val _ = property("Absorbs deposit: absoprtion starts at block start time") = run(
       initializer = defaultInitializer,
       testM = for {
           env <- ask[TestR]
@@ -606,9 +761,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
     // TODO: This property is disabled by lazy, since a deposit cannot be registered and absorbed in
     //  in the same block; requires updating.
-    lazy val _ = property(
-      "Absorbs deposit: absorprtion starts 1s after block start time"
-    ) = run(
+    lazy val _ = property("Absorbs deposit: absorprtion starts 1s after block start time") = run(
       initializer = defaultInitializer,
       testM = for {
           env <- ask[TestR]

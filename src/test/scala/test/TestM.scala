@@ -85,4 +85,6 @@ object TestM {
     def lift[R, A](e: IO[A]): TestM[R, A] =
         TestM(Kleisli.liftF(PropertyM.run(e)))
 
+    def lift[R, A](propertyM: PropertyM[IO, A]): TestM[R, A] = TestM(Kleisli.liftF(propertyM))
+
 }

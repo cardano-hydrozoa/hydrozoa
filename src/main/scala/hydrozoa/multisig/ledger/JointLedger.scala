@@ -5,6 +5,7 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
 import hydrozoa.config.head.HeadConfig
+import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.actor.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
@@ -26,7 +27,7 @@ import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.tx.{GenesisObligation, L2Genesis}
 import monocle.Focus.focus
-import scala.collection.immutable.Queue
+import scala.collection.immutable.{Queue, TreeMap}
 import scala.math.Ordered.orderingToOrdered
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{AssetName, TransactionHash, TransactionInput}
@@ -256,7 +257,7 @@ final case class JointLedger(
           */
 
         def partitionDeposits(
-            deposits: Queue[(LedgerEventId, DepositUtxo)],
+            depositStream: Queue[(LedgerEventId, DepositUtxo)],
             blockStartTime: QuantizedInstant,
             settlementValidityEnd: QuantizedInstant
         ): IO[
@@ -267,6 +268,8 @@ final case class JointLedger(
           )
         ] = for {
             _ <- IO.pure(())
+
+            deposits = sortDepositStream(depositStream, config.txTiming)
 
             _ = logger.trace(
               s"partitionDeposits: deposits: ${deposits.map(_._1)}, " +
@@ -486,7 +489,7 @@ final case class JointLedger(
             producing <- unsafeGetProducing
 
             ret <- partitionDeposits(
-              deposits = producing.dappLedgerState.deposits,
+              depositStream = producing.dappLedgerState.deposits,
               blockStartTime = producing.startTime,
               settlementValidityEnd =
                   txTiming.newSettlementEndTime(producing.competingFallbackValidityStart)
@@ -660,6 +663,33 @@ final case class JointLedger(
   */
 object JointLedger {
 
+    /** @param depositStream
+      *   The stream of deposits sorted according to the total ordering.
+      * @param txTiming
+      * @return
+      *   The same stream, re-ordered according to absorption start time, with ties broken according
+      *   to the ordering in which they appear in depositStream. The result is that if deposits are
+      *   grouped into sequences [s1, s2, ...], according to identical absorption start time, each
+      *   sequence s_i will be a (possibly non-contiguous) subsequence of depositStream.
+      */
+    def sortDepositStream(
+        depositStream: Queue[(LedgerEventId, DepositUtxo)],
+        txTiming: TxTiming
+    ): Queue[(LedgerEventId, DepositUtxo)] = {
+        val intermediateMap: TreeMap[QuantizedInstant, Queue[(LedgerEventId, DepositUtxo)]] =
+            depositStream
+                .foldLeft(TreeMap.empty[QuantizedInstant, Queue[(LedgerEventId, DepositUtxo)]])(
+                  (acc, deposit) =>
+                      acc.updatedWith(
+                        txTiming.depositAbsorptionStartTime(deposit._2.submissionDeadline)
+                      ) {
+                          case None        => Some(Queue(deposit))
+                          case Some(queue) => Some(queue.appended(deposit))
+                      }
+                )
+        intermediateMap.foldLeft(Queue.empty) { case (q, (_, deposits)) => q ++ deposits }
+    }
+
     type Handle = ActorRef[IO, Requests.Request]
 
     type Config = HeadConfig.Section & OwnHeadPeerPrivate.Section
@@ -745,4 +775,5 @@ object JointLedger {
                 )
           )
         )
+
 }

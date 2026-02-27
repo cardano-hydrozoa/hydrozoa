@@ -222,6 +222,8 @@ object DappLedgerM {
     final case class State(
         treasury: MultisigTreasuryUtxo,
         // TODO: Queue[(EventId, DepositUtxo, RefundTx.PostDated)]
+        // Deposits according to the total order of events
+        // (specifically, NOT according to the deposit absorption start time)
         deposits: Queue[(LedgerEventId, DepositUtxo)] = Queue()
     ) {
         def appendToQueue(t: (LedgerEventId, DepositUtxo)): State =
