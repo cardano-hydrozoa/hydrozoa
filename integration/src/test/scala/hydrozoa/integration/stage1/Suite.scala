@@ -175,10 +175,11 @@ case class Suite(
               activeUtxos = headConfig.initialL2Utxos,
               peerUtxosL1 = peerL1GenesisUtxos,
               depositEnqueued = List.empty,
-              utxoLocked = List.empty,
+              depositsRegistered = List.empty,
+              utxoLocked = Set.empty,
               depositSigned = Map.empty,
               depositSubmitted = List.empty,
-              depositUtxoIds = Set.empty
+              depositRejected = List.empty,
             )
             .applyContinuingL1Tx(headConfig.initializationTx.tx)
     }
@@ -289,7 +290,12 @@ case class Suite(
 
             _ <- jointLedgerD.complete(jointLedger)
 
-        } yield Stage1Sut(system, cardanoBackend, agent)
+        } yield Stage1Sut(
+          headAddress = headConfig.headMultisigAddress,
+          system = system,
+          cardanoBackend = cardanoBackend,
+          agent = agent
+        )
     }
 
     enum CardanoBackendConfig:

@@ -9,7 +9,7 @@ import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId}
 import org.scalacheck.Prop
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.commands.{CommandLabel, CommandProp}
-import scalus.cardano.ledger.{Transaction, TransactionInput}
+import scalus.cardano.ledger.Transaction
 
 object Commands:
 
@@ -23,7 +23,10 @@ object Commands:
       */
     final case class DelayCommand(
         delaySpec: Delay
-    )
+    ) {
+        override def toString: String =
+            s"DelayCommand - ${delaySpec.name}, ${delaySpec.duration.finiteDuration}"
+    }
 
     /** Which timing region the delay lands in, used to drive the [[CurrentTime]] transition in the
       * model.
@@ -34,6 +37,11 @@ object Commands:
         case EndsAfterHappyPathExpires(d: QuantizedFiniteDuration) extends Delay(d)
 
         def duration: QuantizedFiniteDuration = d
+
+        def name: String = this match
+            case EndsBeforeHappyPathExpires(_) => "EndsBeforeHappyPathExpires"
+            case EndsInTheSilencePeriod(_)     => "EndsInTheSilencePeriod"
+            case EndsAfterHappyPathExpires(_)  => "EndsAfterHappyPathExpires"
 
     implicit given CommandProp[DelayCommand, Unit, Model.State] with {}
 
@@ -51,7 +59,10 @@ object Commands:
     final case class StartBlockCommand(
         blockNumber: BlockNumber,
         creationTime: QuantizedInstant
-    )
+    ) {
+        override def toString: String =
+            s"StartBlockCommand(block=$blockNumber, time=${creationTime.instant})"
+    }
 
     implicit given CommandProp[StartBlockCommand, Unit, Model.State] with {}
 
@@ -67,7 +78,10 @@ object Commands:
         event: LedgerEvent.L2TxEvent,
         txStrategy: TxStrategy,
         txMutator: TxMutator
-    )
+    ) {
+        override def toString: String =
+            s"L2TxCommand(eventId=${event.eventId}, strategy=$txStrategy, mutator=$txMutator)"
+    }
 
     implicit given CommandProp[L2TxCommand, Unit, Model.State] with {}
 
@@ -104,8 +118,10 @@ object Commands:
     final case class CompleteBlockCommand(
         blockNumber: BlockNumber,
         isFinal: Boolean,
-        pollResults: Set[TransactionInput]
-    )
+    ) {
+        override def toString: String =
+            s"CompleteBlockCommand(block=$blockNumber, isFinal=$isFinal)"
+    }
 
     /** Postcondition for [[CompleteBlockCommand]]: verifies model and SUT agree on the block brief.
       */
@@ -141,7 +157,9 @@ object Commands:
         depositRefundTxSeq: DepositRefundTxSeq,
         depositTxBytesSigned: Transaction
     ) {
-        override def toString: String = s"RegisterDepositCommand: ${registerDeposit.eventId}"
+        override def toString: String =
+            s"RegisterDepositCommand(eventId=${registerDeposit.eventId}, " +
+                s"ada=${depositRefundTxSeq.depositTx.depositProduced.value.coin})"
     }
 
     implicit given CommandProp[RegisterDepositCommand, Unit, Model.State] with {}
@@ -155,16 +173,19 @@ object Commands:
 
     /** The command submits the deposit transaction from the corresponding register deposit event.
       */
-    final case class SubmitDepositCommand(
-        deposits: List[(LedgerEventId, Transaction)]
+    final case class SubmitDepositsCommand(
+        depositsForSubmission: List[(LedgerEventId, Transaction)],
+        depositsForRejection: List[LedgerEventId]
     ) {
-        override def toString: String = s"SubmitDepositCommand: ${deposits.map(_._1)}"
+        override def toString: String =
+            s"SubmitDepositsCommand(for submission=${depositsForSubmission.map(_._1).mkString("[", ", ", "]")}, " +
+                s"for rejection=${depositsForRejection.mkString("[", ", ", "]")})"
     }
 
-    implicit given CommandProp[SubmitDepositCommand, Unit, Model.State] with {}
+    implicit given CommandProp[SubmitDepositsCommand, Unit, Model.State] with {}
 
-    implicit given CommandLabel[SubmitDepositCommand] with
-        override def label(cmd: SubmitDepositCommand): String =
-            s"Submit deposits (n=${cmd.deposits.size})"
+    implicit given CommandLabel[SubmitDepositsCommand] with
+        override def label(cmd: SubmitDepositsCommand): String =
+            s"Submit deposits (n=${cmd.depositsForSubmission.size})"
 
 end Commands

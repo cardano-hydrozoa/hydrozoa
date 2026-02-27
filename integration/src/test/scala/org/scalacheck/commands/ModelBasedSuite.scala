@@ -3,10 +3,43 @@ package org.scalacheck.commands
 import cats.effect.IO
 import cats.effect.testkit.TestControl
 import cats.effect.unsafe.implicits.global
+import ch.qos.logback.classic.Level
 import org.scalacheck.{Gen, Prop, Shrink}
-import org.slf4j.Logger
+import org.slf4j.{Logger, LoggerFactory}
 import scala.annotation.tailrec
 import scala.concurrent.duration.{Duration, DurationInt, FiniteDuration}
+
+/** Utility for temporarily changing log levels. */
+object LoggingControl {
+
+    /** Temporarily suspends ALL loggers with a warning message.
+      *
+      * @param reason
+      *   A description of why logging is being suspended (e.g., "command generation")
+      * @param block
+      *   The code to execute with logging suspended
+      */
+    def withSuppressedLogs[A](reason: String)(block: => A): A = {
+        import ch.qos.logback.classic.LoggerContext
+        import scala.jdk.CollectionConverters.*
+
+        val loggerContext = LoggerFactory.getILoggerFactory.asInstanceOf[LoggerContext]
+        val allLoggers = loggerContext.getLoggerList.asScala.toList
+
+        // Save original levels
+        val originalLevels = allLoggers.map(logger => (logger, logger.getLevel))
+
+        // Print warning before suspending logs
+        println(s"⚠️  All loggers are suspended while $reason...")
+
+        try {
+            allLoggers.foreach(_.setLevel(Level.OFF))
+            block
+        } finally {
+            originalLevels.foreach { case (logger, level) => logger.setLevel(level) }
+        }
+    }
+}
 
 /** TODO:
   *   - Reproducibility (now seeding is broken)
@@ -392,15 +425,22 @@ trait ModelBasedSuite {
             l.foldLeft(Gen.const((initialState, Nil: Commands))) { (g, _) =>
                 for {
                     (s0, cs) <- g
-                    c <- scenarioGen.genNextCommand(s0).suchThat(_.preCondition(s0))
-                } yield (c.advanceState(s0), cs :+ c)
+                    // TODO: do we need that suchThat?
+                    c <- scenarioGen.genNextCommand(s0) // .suchThat(_.preCondition(s0))
+                    s1 = c.advanceState(s0)
+                } yield (s1, cs :+ c)
             }
         }
 
-        def precondition(targetState: State, tc: TestCase): Boolean =
-            initialStatePreCondition(tc.initialState)
+        def precondition(targetState: State, tc: TestCase): Boolean = {
+            // We don't want to see those logs again
+            LoggingControl.withSuppressedLogs("precondition checking") {
+                initialStatePreCondition(tc.initialState)
                 && cmdsPrecond(tc.initialState, tc.commands)._2
-                && this.scenarioGen.targetStatePrecondition(targetState)
+                &&
+                this.scenarioGen.targetStatePrecondition(targetState)
+            }
+        }
 
         /** Checks all preconditions and evaluates the final state.
           *
@@ -416,9 +456,6 @@ trait ModelBasedSuite {
         }
 
         for {
-            _ <- Gen.const(
-              logger.debug("Initializing the environment and generate the test case...")
-            )
             s0: State <- genInitialState(initEnv)
             (s, seqCmds) <- commandGenTweaker(sized(sizedCmds(s0)))
             tc = TestCase(s0, seqCmds)
@@ -435,7 +472,7 @@ trait ModelBasedSuite {
         startupSut: State => IO[Sut]
     ): Prop = {
         val size = testCase.commands.size
-        logger.debug(s"Sequential Commands:\n${prettyCmdsRes(testCase.commands, size)}\n")
+        logger.info(s"Sequential Commands:\n${prettyCmdsRes(testCase.commands, size)}\n")
 
         val (_sut, p, s, lastCmd, _) =
             if useTestControl
@@ -457,10 +494,27 @@ trait ModelBasedSuite {
     }
 
     private def prettyCmdsRes(rs: List[AnyCommand[State, Sut]], lastCmd: Int) = {
+        def formatDuration(d: FiniteDuration): String = {
+            val totalSeconds = d.toSeconds
+            val hours = totalSeconds / 3600
+            val minutes = (totalSeconds % 3600) / 60
+            val seconds = totalSeconds % 60
+
+            if hours > 0 then f"${hours}h${minutes}%02dm${seconds}%02ds"
+            else if minutes > 0 then f"${minutes}m${seconds}%02ds"
+            else f"${seconds}s"
+        }
+
         val maxNumberWidth = "%d".format(lastCmd).length
-        val lineLayout = "  %%%dd. %%s".format(maxNumberWidth)
-        val cs = rs.zipWithIndex.map { case (r, i) =>
-            lineLayout.format(i + 1, r)
+
+        // Calculate cumulative times and find max time width
+        val cumulativeTimes = rs.scanLeft(0.seconds)((acc, cmd) => acc + cmd.delay).tail
+        val timeStrings = cumulativeTimes.map(formatDuration)
+        val maxTimeWidth = if timeStrings.nonEmpty then timeStrings.map(_.length).max else 0
+
+        val lineLayout = "  %%%ds  %%%dd. %%s".format(maxTimeWidth, maxNumberWidth)
+        val cs = rs.zipWithIndex.zip(timeStrings).map { case ((r, i), timeStr) =>
+            lineLayout.format(timeStr, i + 1, r)
         }
         if cs.isEmpty then "  <no commands>"
         else cs.mkString("\n")
@@ -478,18 +532,30 @@ trait ModelBasedSuite {
             initial <- startupSut(testCase.initialState).map(sut =>
                 (sut, Prop.proved, testCase.initialState, 0)
             )
-            result <- testCase.commands.foldLeft(IO.pure(initial)) { case (acc, c) =>
-                acc.flatMap { case (sut, p, s, lastCmd) =>
-                    // Short-circuit: if the property has already failed, skip remaining commands
-                    val currentResult = p.apply(Gen.Parameters.default)
-                    if currentResult.failure then IO.pure((sut, p, s, lastCmd))
-                    else
-                        IO.sleep(c.delay) >> c.runPC(sut).map { pred =>
-                            (sut, p && pred(s), c.advanceState(s), lastCmd + 1)
-                        }
-                }
+            (sut, p, s, lastCmd) = initial
+            result <- testCase.commands.foldLeft(IO.pure((sut, p, s, lastCmd, false))) {
+                case (acc, c) =>
+                    acc.flatMap { case (sut, p, s, lastCmd, hasFailed) =>
+                        // Short-circuit: if the property has already failed, skip remaining commands
+                        if hasFailed then IO.pure((sut, p, s, lastCmd, true))
+                        else
+                            IO.sleep(c.delay) >> c.runPC(sut).map { pred =>
+                                val newProp = p && pred(s)
+                                // Only check the NEW predicate, not the entire accumulated property
+                                // Suppress logs during predicate evaluation and state advancement
+                                val (newPredResult, newState) =
+                                    LoggingControl.withSuppressedLogs(
+                                      "predicate evaluation and state advancement"
+                                    ) {
+                                        val predResult = pred(s).apply(Gen.Parameters.default)
+                                        val nextState = c.advanceState(s)
+                                        (predResult, nextState)
+                                    }
+                                (sut, newProp, newState, lastCmd + 1, newPredResult.failure)
+                            }
+                    }
             }
-            (sut, prop, s, lastCmd) = result
+            (sut, prop, s, lastCmd, _) = result
             shutdownProp <- shutdownSut(s, sut)
         } yield (sut, prop && shutdownProp, s, lastCmd, testCase)
 
@@ -533,13 +599,12 @@ trait ModelBasedSuite {
         // Finally shutdownSut.
         val innerIO: IO[(Sut, Prop, State, Int, TestCase)] = for {
             initial <- startupSut(testCase.initialState).map(sut =>
-                (sut, Prop.proved, testCase.initialState, 0)
+                (sut, Prop.proved, testCase.initialState, 0, false)
             )
             result <- testCase.commands.foldLeft(IO.pure(initial)) { case (acc, c) =>
-                acc.flatMap { case (sut, p, s, lastCmd) =>
+                acc.flatMap { case (sut, p, s, lastCmd, hasFailed) =>
                     // Short-circuit: if the property has already failed, skip remaining commands
-                    val currentResult = p.apply(Gen.Parameters.default)
-                    if currentResult.failure then IO.pure((sut, p, s, lastCmd))
+                    if hasFailed then IO.pure((sut, p, s, lastCmd, true))
                     else
                         for {
                             // Sleep for the settling window so the outer can tick actors
@@ -551,10 +616,17 @@ trait ModelBasedSuite {
                             _ <- IO(gate.set(false))
                             _ <- IO.sleep(settling)
                             pred <- c.runPC(sut)
-                        } yield (sut, p && pred(s), c.advanceState(s), lastCmd + 1)
+                            (newPredResult, newState) = LoggingControl.withSuppressedLogs(
+                              "predicate evaluation and state advancement"
+                            ) {
+                                val predResult = pred(s).apply(Gen.Parameters.default)
+                                val nextState = c.advanceState(s)
+                                (predResult, nextState)
+                            }
+                        } yield (sut, p && pred(s), newState, lastCmd + 1, newPredResult.failure)
                 }
             }
-            (sut, prop, s, lastCmd) = result
+            (sut, prop, s, lastCmd, _) = result
             shutdownProp <- shutdownSut(s, sut)
         } yield (sut, prop && shutdownProp, s, lastCmd, testCase)
 
