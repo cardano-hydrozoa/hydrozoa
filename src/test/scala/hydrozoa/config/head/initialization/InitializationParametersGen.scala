@@ -15,10 +15,11 @@ import hydrozoa.lib.cardano.value.coin.Distribution.unsafeNormalizeWeights
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.dapp.token.CIP67.HeadTokenNames
+import hydrozoa.multisig.ledger.virtual.{EvacuationMap, given}
 import java.time.Instant
 import monocle.syntax.all.*
 import org.scalacheck.{Gen, Prop, Properties}
-import scala.collection.immutable.SortedMap
+import scala.collection.immutable.{SortedMap, TreeMap}
 import scala.concurrent.duration.DurationInt
 import scalus.cardano.address.Address
 import scalus.cardano.ledger.*
@@ -169,14 +170,19 @@ object InitializationParametersGenTopDown {
             total = Semigroup.combineAllOption(contributions).get
             seedUtxo <- Gen.oneOf(total.fundingUtxos)
             genesisId = JointLedger.mkGenesisId(HeadTokenNames(seedUtxo.input).treasuryTokenName, 0)
-            initialL2Utxos =
-                total.l2transactionOutput.zipWithIndex
-                    .map((o, ix) => TransactionInput(transactionId = genesisId, index = ix) -> o)
-                    .toMap
+            initialEvacuationMap =
+                EvacuationMap(
+                  TreeMap.from(
+                    total.l2transactionOutput.zipWithIndex
+                        .map((o, ix) =>
+                            TransactionInput(transactionId = genesisId, index = ix) -> KeepRaw(o)
+                        )
+                  )
+                )
 
         } yield InitializationParameters(
           headStartTime = headStartTime,
-          initialL2Utxos = initialL2Utxos,
+          initialEvacuationMap = initialEvacuationMap,
           initialEquityContributions = NonEmptyMap.fromMapUnsafe(peersEquity),
           initialSeedUtxo = seedUtxo,
           initialAdditionalFundingUtxos = total.fundingUtxos.asUtxos - seedUtxo.input,
@@ -444,7 +450,8 @@ object InitializationParametersGenBottomUp {
 
         } yield InitializationParameters(
           headStartTime = headStartTime,
-          initialL2Utxos = l2Utxos,
+          initialEvacuationMap =
+              EvacuationMap(TreeMap.from(l2Utxos.map((i, o) => (i, KeepRaw(o))))),
           initialEquityContributions = equityContributions,
           initialSeedUtxo = seedUtxo,
           initialAdditionalFundingUtxos = additionalFundingUtxos,

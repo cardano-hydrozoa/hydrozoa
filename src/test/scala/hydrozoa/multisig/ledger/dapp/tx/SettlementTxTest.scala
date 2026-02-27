@@ -143,7 +143,7 @@ def genSettlementTxSeqBuilder(config: TestNodeConfig)(
 
         payouts <- genHelper(genPayoutObligation(config.nodeConfig.cardanoNetwork))
         payoutAda = payouts
-            .map(_.utxo.value.coin)
+            .map(_.utxo.value.value.coin)
             .fold(Coin.zero)(_ + _)
 
         kzg: KzgCommitment <- kzgCommitment match {
@@ -220,7 +220,7 @@ def genNextSettlementTxSeqBuilder(config: TestNodeConfig)(
             .find(prefix =>
                 getValue(
                   prefix
-                      .map(_.utxo.value)
+                      .map(_.utxo.value.value)
                       .fold(Value.zero)(_ + _)
                 ) <= getValue(treasuryToSpend.value)
             )
