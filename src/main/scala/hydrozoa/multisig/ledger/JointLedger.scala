@@ -29,7 +29,6 @@ import hydrozoa.multisig.ledger.virtual.tx.{GenesisObligation, L2Genesis}
 import monocle.Focus.focus
 import scala.collection.immutable.{Queue, TreeMap}
 import scala.math.Ordered.orderingToOrdered
-import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{AssetName, TransactionHash, TransactionInput}
 import scalus.uplc.builtin.{ByteString, platform}
 
@@ -58,7 +57,7 @@ final case class JointLedger(
             lastFallbackValidityStart = config.initialFallbackTx.validityStart,
             dappLedgerState =
                 DappLedgerM.State(config.initializationTx.treasuryProduced, Queue.empty),
-            virtualLedgerState = VirtualLedgerM.State.apply(config.initialL2Utxos)
+            virtualLedgerState = VirtualLedgerM.State.apply(config.initialEvacuationMap)
           )
         )
 
@@ -554,9 +553,7 @@ final case class JointLedger(
             finalizationTxSeq <- this.runDappLedgerM(
               DappLedgerM.finalizeLedger(
                 payoutObligationsRemaining = Vector.from(
-                  p.virtualLedgerState.activeUtxos.map((i, o) =>
-                      Payout.Obligation(i, o.asInstanceOf[Babbage])
-                  )
+                  p.virtualLedgerState.evacuationMap.evacMap.map((i, o) => Payout.Obligation(o))
                 ),
                 blockCreatedOn = p.startTime,
                 competingFallbackValidityStart = p.startTime

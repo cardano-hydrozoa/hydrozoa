@@ -212,12 +212,13 @@ object CommandGen:
 
         val cardanoNetwork: CardanoNetwork = state.headConfig.cardanoNetwork
         val generateCappedValueC = generateCappedValue(cardanoNetwork)
-        val l2AddressesInUse = state.activeUtxos.values.map(_.address).toSet
-        val ownedUtxos = state.activeUtxos.filter((_, o) =>
-            o.address.asInstanceOf[ShelleyAddress].payment.asHash == blake2b_224(
-              state.ownTestPeer.wallet.exportVerificationKey
+        val l2AddressesInUse = state.evacuationMap.outputsCooked.map(_.address).toSet
+        val ownedUtxos = state.evacuationMap.cooked
+            .filter((_, o) =>
+                o.address.asInstanceOf[ShelleyAddress].payment.asHash == blake2b_224(
+                  state.ownTestPeer.wallet.exportVerificationKey
+                )
             )
-        )
 
         for {
             // Inputs
@@ -507,7 +508,7 @@ object ScenarioGenerators:
                               1 -> CommandGen
                                   .genCompleteBlock(blockNumber, state.depositUtxoIds)
                                   .map(AnyCommand.apply),
-                              10 -> (if state.activeUtxos.isEmpty
+                              10 -> (if state.evacuationMap.isEmpty
                                      then Gen.const(noOp)
                                      else generateL2Tx(state).map(AnyCommand.apply))
                             )
@@ -549,7 +550,7 @@ object ScenarioGenerators:
 
                         case InProgress(blockNumber, _, _, _) =>
                             Gen.frequency(
-                              1 -> (if state.activeUtxos.size >= minL2Utxos
+                              1 -> (if state.evacuationMap.size >= minL2Utxos
                                     then
                                         CommandGen
                                             .genCompleteBlockFinal(blockNumber)
@@ -636,7 +637,7 @@ object ScenarioGenerators:
                               1 -> CommandGen
                                   .genCompleteBlock(blockNumber, state.depositUtxoIds)
                                   .map(AnyCommand.apply),
-                              10 -> (if state.activeUtxos.nonEmpty
+                              10 -> (if state.evacuationMap.nonEmpty
                                      then
                                          CommandGen
                                              .genValidNonPlutusL2Tx(

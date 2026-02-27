@@ -19,7 +19,8 @@ case object GenesisObligationTest extends Properties("Genesis Obligation Propert
             )(genesisObligations =>
                 val bytes = Cbor
                     .encode(
-                      genesisObligations.toList.map(_.toBabbage.asInstanceOf[TransactionOutput])
+                      genesisObligations.toList
+                          .map(_.toTransactionOutput.asInstanceOf[TransactionOutput])
                     )
                     .toByteArray
                 given OriginalCborByteArray = OriginalCborByteArray(bytes)
