@@ -29,6 +29,12 @@ case class TestM[R, A](unTestM: RT[R, A]) {
     )
 }
 
+implicit def testMMonad[R]: Monad[[A] =>> TestM[R, A]] = new Monad[[A] =>> TestM[R, A]] {
+    def pure[A](a: A): TestM[R, A] = TestM.pure(a)
+    def flatMap[A, B](fa: TestM[R, A])(f: A => TestM[R, B]): TestM[R, B] = fa.flatMap(f)
+    def tailRecM[A, B](a: A)(f: A => TestM[R, Either[A, B]]): TestM[R, B] = ???
+}
+
 object TestM {
 
     /** Get the instantiated TestR test environment

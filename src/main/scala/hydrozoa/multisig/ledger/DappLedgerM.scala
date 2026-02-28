@@ -4,6 +4,7 @@ import cats.data.*
 import cats.effect.IO
 import cats.syntax.all.*
 import hydrozoa.config.head.HeadConfig
+import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger
 import hydrozoa.multisig.ledger.DappLedgerM.Error.{ParseError, SettlementTxSeqBuilderError, SubmissionPeriodIsOver}
@@ -16,7 +17,7 @@ import hydrozoa.multisig.ledger.event.LedgerEventId
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import monocle.syntax.all.*
-import scala.collection.immutable.Queue
+import scala.collection.immutable.{Queue, TreeMap}
 import scala.math.Ordered.orderingToOrdered
 
 private type E[A] = Either[DappLedgerM.Error, A]
@@ -39,8 +40,6 @@ case class DappLedgerM[A] private (private val unDappLedger: RT[A]) {
         DappLedgerM(this.unDappLedger.flatMap(a => f(a).unDappLedger))
 
     /** Use [[runDappLedgerM()]] instead
-      * @param config
-      * @param initialState
       * @return
       */
     private def run(
@@ -98,7 +97,6 @@ object DappLedgerM {
                     .left
                     .map(ParseError(_))
             depositRefundTxSeq <- lift(parseRes)
-            s <- get
 
             depositProduced <- lift(
               // TODO: add explicit vals to cope boolean blindness
@@ -115,7 +113,13 @@ object DappLedgerM {
               // then Left(AbsorptionPeriodExpired(depositRefundTxSeq))
               else Right(depositRefundTxSeq.depositTx.depositProduced)
             )
-            newState = s.appendToQueue((eventId, depositProduced))
+
+            s <- get
+            absorptionStartTime = config.txTiming.depositAbsorptionStartTime(
+              depositProduced.submissionDeadline
+            )
+            updatedMap <- s.deposits.appended((eventId, depositProduced))
+            newState = s.copy(deposits = updatedMap)
             _ <- set(newState)
         } yield ()
     }
@@ -171,12 +175,10 @@ object DappLedgerM {
 
     /** Remove the absorbed/refunded deposits and update the treasury in the ledger state. Called
       * when the block weaver sends the single to close the block in leader mode.
-      *
-      * @param ineligibleDeposits
       * @return
       */
     def handleBlockBrief(
-        ineligibleDeposits: Queue[(LedgerEventId, DepositUtxo)],
+        ineligibleDeposits: DepositsMap,
     ): DappLedgerM[Unit] = for {
         state <- get
 
@@ -221,16 +223,78 @@ object DappLedgerM {
 
     final case class State(
         treasury: MultisigTreasuryUtxo,
-        // TODO: Queue[(EventId, DepositUtxo, RefundTx.PostDated)]
-        // Deposits according to the total order of events
-        // (specifically, NOT according to the deposit absorption start time)
-        deposits: Queue[(LedgerEventId, DepositUtxo)] = Queue()
-    ) {
-        def appendToQueue(t: (LedgerEventId, DepositUtxo)): State =
-            this.copy(treasury, deposits.appended(t))
+        deposits: DepositsMap
+    )
 
-        def depositUtxoByEventId(ledgerEventId: LedgerEventId): Option[DepositUtxo] = ???
+    /** deposits in a TreeMap according to their absorption start time. The Tree map ensures that
+      * the traversal order is according to the absorption start time, with ties being broken
+      * according to the total ordering of the ledger events, such that each queue in this map is a
+      * subsequence of the totally-ordered event stream.
+      */
+    final case class DepositsMap private (
+        treeMap: TreeMap[QuantizedInstant, Queue[(LedgerEventId, DepositUtxo)]]
+    ) {
+
+        /** Append an event to the end of the queue of events with the same start time.
+          */
+        def appended(event: (LedgerEventId, DepositUtxo)): DappLedgerM[DepositsMap] = {
+            for {
+                config <- ask
+                res = this.appended(event, config.txTiming)
+            } yield res
+        }
+
+        /** Append an event to the end of the queue of events with the same start time.
+          */
+        def appended(event: (LedgerEventId, DepositUtxo), txTiming: TxTiming): DepositsMap = {
+            val absorptionStartTime =
+                txTiming.depositAbsorptionStartTime(event._2.submissionDeadline)
+            DepositsMap(this.treeMap.updatedWith(absorptionStartTime) {
+                case None        => Some(Queue(event))
+                case Some(queue) => Some(queue.appended(event))
+            })
+        }
+
+        def ++(otherMap: DepositsMap): DepositsMap =
+            DepositsMap(this.treeMap ++ otherMap.treeMap)
+
+        def splitAt(n: Int): (DepositsMap, DepositsMap) = {
+            val (p1, p2) = this.treeMap.splitAt(n)
+            (DepositsMap(p1), DepositsMap(p2))
+        }
+
+        def foldLeft[Acc](acc: Acc)(
+            f: (Acc, (QuantizedInstant, Queue[(LedgerEventId, DepositUtxo)])) => Acc
+        ): Acc =
+            treeMap.foldLeft(acc)(f)
+
+        lazy val isEmpty: Boolean = numberOfDeposits == 0
+
+        lazy val numberOfDeposits: Int = flatValues.size
+
+        /** Event-deposit tuples traversed in order of absorption start time, with ties broken
+          * according to the order in which they were added to the DepositsMap (which should
+          * correspond to the total order of the event stream)
+          */
+        lazy val flatValues: Iterable[(LedgerEventId, DepositUtxo)] = treeMap.values.flatten
+
+        /** Event IDs traversed in order of the absorption start time associated with the
+          * corresponding ddeposit, with ties broken according to the order in which they were added
+          * to the DepositsMap (which should correspond to the total order of the event stream)
+          */
+        lazy val flatEvents: Iterable[LedgerEventId] = flatValues.map(_._1)
+
+        /** Deposits traversed in order of absorption start time, with ties broken according to the
+          * order in which they were added to the DepositsMap (which should correspond to the total
+          * order of the event stream)
+          */
+        lazy val flatDeposits: Iterable[DepositUtxo] = flatValues.map(_._2)
     }
+
+    object DepositsMap:
+        def empty: DepositsMap = DepositsMap(
+          TreeMap.empty[QuantizedInstant, Queue[(LedgerEventId, DepositUtxo)]]
+        )
 
     sealed trait Error
     object Error {
@@ -266,12 +330,10 @@ object DappLedgerM {
           * update within JointLedger must happen within [[IO]], this takes two continuations (one
           * for success, one for failure) and returns in [[IO]].
           *
-          * @param action
           * @param onFailure
           *   continuation if an error is raised. Defaults to throwing an exception.
           * @param onSuccess
           *   continuation if a value is returned.
-          * @tparam A
           * @return
           */
         def runDappLedgerM[A, B](

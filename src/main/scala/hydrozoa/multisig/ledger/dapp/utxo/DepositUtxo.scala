@@ -134,7 +134,6 @@ object DepositUtxo {
         }
 
         object Spent {
-            DepositUtxoConversionError
             trait Partition extends Spent, ToSpend
         }
 
