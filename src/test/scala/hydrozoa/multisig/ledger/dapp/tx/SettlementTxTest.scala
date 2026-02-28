@@ -64,9 +64,18 @@ def genDepositDatum(network: CardanoNetwork.Section): Gen[DepositUtxo.Datum] = {
 // In particular, with the introduction of "Virtual Utxos" in the deposit utxo, and with the deposit amount
 // set deterministically from the sum of the virtual utxos + fees necessary for refund, this
 // generator DOES NOT produce actual semantically valid deposit utxos
+//
+/** @param zeroTime
+  *   generates deposits at some random offset (in the future) from a "zero time"
+  */
 def genDepositUtxo(
     config: CardanoNetwork.Section & TxTiming.Section,
     headAddress: Option[ShelleyAddress] = None,
+)(
+    zeroTime: QuantizedInstant = QuantizedInstant(
+      config.slotConfig,
+      config.slotConfig.slotToInstant(config.slotConfig.zeroSlot)
+    )
 ): Gen[DepositUtxo] =
     for {
         utxoId <- arbitrary[TransactionInput]
@@ -94,10 +103,8 @@ def genDepositUtxo(
         // Generate some offset to the "zero slot" time.
         offsetFromZero <- Gen.posNum[Long]
 
-        submissionDeadline = QuantizedInstant(
-          config.slotConfig,
-          config.slotConfig.slotToInstant(config.slotConfig.zeroSlot)
-        ) + FiniteDuration(offsetFromZero, TimeUnit.SECONDS)
+        submissionDeadline =
+            zeroTime + FiniteDuration(offsetFromZero, TimeUnit.SECONDS)
 
     } yield DepositUtxo(
       utxoId = utxoId,
@@ -138,7 +145,7 @@ def genSettlementTxSeqBuilder(config: TestNodeConfig)(
         genDeposit = genDepositUtxo(
           config = config.nodeConfig,
           headAddress = Some(config.nodeConfig.headMultisigAddress)
-        )
+        )()
         deposits <- genHelper(genDeposit).map(_.take(config.nodeConfig.maxDepositsAbsorbedPerBlock))
 
         payouts <- genHelper(genPayoutObligation(config.nodeConfig.cardanoNetwork))
@@ -208,7 +215,7 @@ def genNextSettlementTxSeqBuilder(config: TestNodeConfig)(
     val genDeposit = genDepositUtxo(
       config.nodeConfig,
       headAddress = Some(config.nodeConfig.headMultisigAddress)
-    )
+    )()
 
     given Ord[v1.Value] = valueOrd
 

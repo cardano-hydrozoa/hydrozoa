@@ -12,8 +12,6 @@ import hydrozoa.multisig.ledger.joint.obligation.Payout
 import monocle.{Focus, Lens}
 import scala.Function.const
 import scala.annotation.tailrec
-import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
-import scalus.cardano.ledger.rules.TransactionSizeValidator
 import scalus.cardano.ledger.utils.TxBalance
 import scalus.cardano.ledger.{Coin, ProtocolParams, Transaction, TransactionHash, TransactionInput, TransactionOutput as TxOutput, Utxo, Value}
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
@@ -366,19 +364,10 @@ private object RolloutTxOps {
                       config.cardanoProtocolParams,
                       prebalancedLovelaceDiffHandler,
                       builder.config.plutusScriptEvaluatorForTxBuild,
-                      List(TransactionSizeValidator)
+                      List.empty
                     )
-
                 } yield res
                 res match {
-                    case Left(
-                          SomeBuildError.ValidationError(
-                            e: InvalidTransactionSizeException,
-                            errorCtx
-                          )
-                        ) =>
-                        Left(SomeBuildError.ValidationError(e, errorCtx))
-                            .explainConst("trial to add payout failed")
                     case Left(
                           SomeBuildError.BalancingError(
                             TxBalancingError.Failed(WrappedCoin(Coin(diff))),
@@ -390,7 +379,7 @@ private object RolloutTxOps {
                     case e =>
                         throw new RuntimeException(
                           "should be impossible; " +
-                              s"loop only has two possible Lefts, but got $e"
+                              s"loop only has one possible Left, but got $e"
                         )
                 }
             }
@@ -467,7 +456,12 @@ private object RolloutTxOps {
                       evaluator = builder.config.plutusScriptEvaluatorForTxBuild,
                       validators = Tx.Validators.nonSigningValidators
                     )
-                    .explain(const("Could not finalize context after spending rollout input"))
+                    .explain(
+                      const(
+                        "Could not finalize context after spending rollout input. " +
+                            "This may indicate that size estimates are incorrect for the partial result"
+                      )
+                    )
             } yield finished
         }
     }
