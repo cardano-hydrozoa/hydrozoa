@@ -146,7 +146,7 @@ object QuantizedTime {
 
     given Ordering[QuantizedFiniteDuration] with {
         override def compare(self: QuantizedFiniteDuration, other: QuantizedFiniteDuration): Int = {
-            // Whether this "require" is needed is up to semantic interpretation.
+            // Whether this "required" is needed is up to semantic interpretation.
             // I'm choosing to include it because in our particular case such a comparison would almost certainly be a
             // programming error, and it is not a priori given what should happen if the instants being compared as "close"
             // within their respective quantization window.
