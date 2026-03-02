@@ -371,12 +371,7 @@ object PropertyM:
       *
       * > {p} x ← e{q}
       *
-      * as
-      * ```
-      * pre p
-      * x <- run e
-      * assert q
-      * ```
+      * as `` pre p x <- run e assert q ``
       */
     def pre[M[_]](condition: Boolean)(using Monad[M]): PropertyM[M, Unit] =
         if condition then monadForPropM.pure(()) else stop(undecided)
@@ -491,7 +486,7 @@ object PropertyM:
         // This is adapted from the haskell equivalent:
         //        instance Testable prop => Testable (Gen prop) where
         //          property mp = MkProperty $ do p <- mp; unProperty (property p)
-        // but I'm not totally sure its correct. Do I need to slide the seed here?
+        // but I'm not totally sure it's correct. Do I need to slide the seed here?
         val testableGenProp: (Gen[Prop] => Prop) = mp =>
             Prop.apply(f = params => {
                 val (p, s) = Prop.startSeed(params)

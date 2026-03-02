@@ -53,19 +53,19 @@ import test.Generators.Hydrozoa.*
 import test.Generators.Other.genCoinDistributionWithMinAdaUtxo
 import test.TestM.*
 
-// Pretty Printers for more managable scalacheck logs
+// Pretty Printers for more manageable scalacheck logs
 given ppNodeConfig: (NodeConfig => Pretty) = nodeConfig =>
     Pretty(_ => "NodeConfig (too long to print)")
 
 given ppTestPeers: (TestPeers => Pretty) = testPeers =>
     Pretty(_ =>
-        "TestPeers:"
+        ("TestPeers:"
             + s"\n\t Num Peers: ${testPeers._testPeers.length}"
             + testPeers._testPeers.map(testPeer =>
-                f"\n\t${testPeer._1.peerNum.toInt}%2d"
+                (f"\n\t${testPeer._1.peerNum.toInt}%2d"
                     + s" | ${testPeer._2.wallet.exportVerificationKey.take(2)}(...)"
-                    + s" | ${testPeer._2.name} "
-            )
+                    + s" | ${testPeer._2.name} ")
+            ))
     )
 
 /** This object contains component-specific helpers to utilize the TestM type.
@@ -439,7 +439,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               )
 
               eventStreamFullResults <- eventStreamActions.sequence
-              // This is the format we actually care about; its commensurate with the DappLedgerState
+              // This is the format we actually care about; it's commensurate with the DappLedgerState
               eventStream: Queue[(LedgerEventId, DepositUtxo)] = eventStreamFullResults.map {
                   case (txSeq, event) => (event.eventId, txSeq.depositTx.depositProduced)
               }
@@ -447,27 +447,27 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               depositsMap <- getState.map(_.dappLedgerState.deposits)
 
               // Test statistic:  make sure that ties are actually occurring in some samples
-              _ <- lift(PropertyM.monitor[IO](Prop.collect {
+              _ <- lift[TestR, Unit](PropertyM.monitor[IO](Prop.collect {
                   if eventStream.length <= 1
                   then "events.length <= 1"
                   else "events.length > 1"
               }))
 
               // Test statistic:  make sure that ties are actually occurring in some samples
-              _ <- lift(PropertyM.monitor[IO](Prop.collect {
+              _ <- lift[TestR, Unit](PropertyM.monitor[IO](Prop.collect {
                   val collectionSizes = depositsMap.treeMap.map(_._2.length)
                   if collectionSizes.isEmpty then "no duplicate start times"
                   else "some duplicate start times"
               }))
 
               // Test statistic: the flattened deposits map and unsorted stream are different
-              _ <- lift(PropertyM.monitor[IO](Prop.collect {
+              _ <- lift[TestR, Unit](PropertyM.monitor[IO](Prop.collect {
                   if depositsMap.flatValues == eventStream
                   then "depositsMap.flatValues == eventStream"
                   else "depositsMap.flatValues != eventStream"
               }))
 
-              _ <- assertWith(
+              _ <- assertWith[TestR](
                 msg = "Deposits are sorted by absorption start time",
                 condition = {
                     val startTimes = depositsMap.flatDeposits.map(deposit =>
@@ -479,13 +479,13 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                 }
               )
 
-              _ <- assertWith(
+              _ <- assertWith[TestR](
                 msg =
                     "Deposit ledger state includes the same number of elements as the event stream",
                 condition = depositsMap.numberOfDeposits == eventStream.length
               )
 
-              _ <- assertWith(
+              _ <- assertWith[TestR](
                 msg =
                     "If multiple deposits have the same absorption start time, order of the sorted deposits must be" +
                         " a subsequence of the event stream",
@@ -581,7 +581,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                   )
               } yield ()
 
-          // Complete another block, assume the deposit shows up in the poll results -- but its not mature yet
+          // Complete another block, assume the deposit shows up in the poll results -- but it's not mature yet
           _ <- startBlockNow(BlockNumber.zero.increment.increment)
           _ <- completeBlockRegular(
             None,

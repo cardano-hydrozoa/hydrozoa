@@ -250,7 +250,7 @@ final case class JointLedger(
         /** @return
           *   Queue order:
           *   - eligible for absorption
-          *   - ineligible for absorption - (inmature + mature but non-existent)
+          *   - ineligible for absorption - (immature + mature but non-existent)
           *   - rejected
           */
 

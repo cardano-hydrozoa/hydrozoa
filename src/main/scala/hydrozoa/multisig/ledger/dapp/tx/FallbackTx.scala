@@ -30,14 +30,6 @@ import scalus.uplc.builtin.Data.toData
   *   - Collateral Utxos (n)
   *   - Peer Vote Utxos (n)
   *   - Default Vote Utxo
-  * @param validityStart
-  * @param treasurySpent
-  * @param treasuryProduced
-  * @param multisigRegimeUtxoSpent
-  * @param tx
-  * @param txLens
-  * @param resolvedUtxos
-  * @param peerVoteUtxosProduced
   */
 final case class FallbackTx(
     override val validityStart: QuantizedInstant,
@@ -48,7 +40,7 @@ final case class FallbackTx(
     override val txLens: Lens[FallbackTx, Transaction] = Focus[FallbackTx](_.tx),
     override val resolvedUtxos: ResolvedUtxos,
     // TODO type better
-    val peerVoteUtxosProduced: NonEmptyList[Utxo]
+    peerVoteUtxosProduced: NonEmptyList[Utxo]
 ) extends HasValidityStart,
       MultisigTreasuryUtxo.Spent,
       MultisigRegimeUtxo.Spent,
@@ -68,7 +60,7 @@ private object FallbackTxOps {
         val start = System.nanoTime()
         val result = block
         val elapsed = (System.nanoTime() - start) / 1_000_000.0
-        logger.info(f"\t\t⏱️ $label: ${elapsed}%.2f ms")
+        logger.info(f"\t\t⏱️ $label: $elapsed%.2f ms")
         result
     }
 
@@ -123,7 +115,7 @@ private object FallbackTxOps {
             object Mints {
                 def apply(): List[Mint] = List(BurnMultisigRegime(), MintVotes())
 
-                object BurnMultisigRegime {
+                private object BurnMultisigRegime {
                     def apply() = Mint(
                       hns.policyId,
                       assetName = config.headTokenNames.multisigRegimeTokenName,
@@ -132,7 +124,7 @@ private object FallbackTxOps {
                     )
                 }
 
-                object MintVotes {
+                private object MintVotes {
                     def apply() = Mint(
                       hns.policyId,
                       assetName = config.headTokenNames.voteTokenName,
@@ -185,7 +177,7 @@ private object FallbackTxOps {
                           scriptRef = None
                         )
 
-                    object Default {
+                    private object Default {
                         def apply() = Send(utxo)
 
                         private val utxo = time("defaultVoteUtxo") {
@@ -214,7 +206,7 @@ private object FallbackTxOps {
                     }
                 }
 
-                object Collaterals {
+                private object Collaterals {
                     def apply(): NonEmptyList[Send] = NonEmptyList.fromListUnsafe(
                       config.headPeerAddresses.toSortedMap
                           .transform((pNum, addr) =>
@@ -240,7 +232,7 @@ private object FallbackTxOps {
                       )
                     )
 
-                    val equityPayouts: Map[HeadPeerNumber, Coin] =
+                    private val equityPayouts: Map[HeadPeerNumber, Coin] =
                         config.distributeEquity(treasuryUtxoSpent.equity.coin).toSortedMap
                 }
 

@@ -142,7 +142,7 @@ private object RolloutTxOps {
             addedPayouts <- AddPayouts(pessimistic)
         } yield PartialResult(Build.this, addedPayouts)
 
-        // Base Pessimisitic adds:
+        // Base Pessimistic adds:
         //   - Metadata
         //   - The rollout Utxo, if it exists (only for the not-last rollout)
         private[tx] object BasePessimistic {
