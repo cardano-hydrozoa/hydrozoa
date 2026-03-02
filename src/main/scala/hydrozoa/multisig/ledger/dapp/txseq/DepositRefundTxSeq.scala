@@ -72,7 +72,7 @@ import scalus.uplc.builtin.Data
   */
 final case class DepositRefundTxSeq(
     depositTx: DepositTx,
-    refundTx: RefundTx
+    refundTx: RefundTx.PostDated
 )
 
 object DepositRefundTxSeq {
