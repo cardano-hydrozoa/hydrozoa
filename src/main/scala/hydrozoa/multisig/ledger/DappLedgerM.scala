@@ -291,6 +291,7 @@ object DappLedgerM {
         lazy val flatDeposits: Iterable[DepositUtxo] = flatValues.map(_._2)
     }
 
+    // TODO: Make a constructor method taking variadic args, or _.from method?
     object DepositsMap:
         def empty: DepositsMap = DepositsMap(
           TreeMap.empty[QuantizedInstant, Queue[(LedgerEventId, DepositUtxo)]]

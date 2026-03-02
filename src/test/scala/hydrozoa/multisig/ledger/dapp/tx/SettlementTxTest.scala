@@ -113,7 +113,8 @@ def genDepositUtxo(
       value = depositAmount,
       virtualOutputs = vos,
       depositFee = Coin.zero,
-      submissionDeadline = submissionDeadline
+      submissionDeadline = submissionDeadline,
+      absorptionStartTime = config.txTiming.depositAbsorptionStartTime(submissionDeadline)
     )
 
 /** Generate a "standalone" settlement tx. */

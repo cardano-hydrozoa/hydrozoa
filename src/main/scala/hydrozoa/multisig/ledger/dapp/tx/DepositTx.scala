@@ -130,7 +130,9 @@ private object DepositTxOps {
                   value = depositValue,
                   virtualOutputs = virtualOutputs,
                   depositFee = depositFee,
-                  submissionDeadline = submissionDeadline
+                  submissionDeadline = submissionDeadline,
+                  absorptionStartTime =
+                      config.txTiming.depositAbsorptionStartTime(submissionDeadline)
                 )
             } yield DepositTx(
               depositProduced,
@@ -251,7 +253,8 @@ private object DepositTxOps {
                               headNativeScriptAddress = config.headMultisigAddress,
                               virtualOutputs = virtualOutputs,
                               depositFee = depositFee,
-                              submissionDeadline = validityEnd
+                              submissionDeadline = validityEnd,
+                              txTiming = config.txTiming
                             )
                             .left
                             .map(DepositUtxoError(_))

@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.utxo
 
 import cats.data.NonEmptyList
+import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant}
 import hydrozoa.lib.cardano.scalus.ledger.plutusAddressToShelley
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo.DepositUtxoConversionError.*
@@ -23,8 +24,9 @@ final case class DepositUtxo(
     value: Value,
     virtualOutputs: NonEmptyList[GenesisObligation],
     depositFee: Coin,
-    // This field comes from DepositTx, but it's convenient to duplicate it here
+    // The following fields come from DepositTx, but it's convenient to duplicate it here
     submissionDeadline: QuantizedInstant,
+    absorptionStartTime: QuantizedInstant
 ) {
     def toUtxo: Utxo =
         Utxo(
@@ -37,12 +39,6 @@ final case class DepositUtxo(
           )
         )
 
-    // NOTE: I need this in the dapp ledger, but can't access it because the field is private and
-    // this is a separate package.
-    // we could make the _constructor_ private with
-    //   final case class DepositUtxo private ( ... )
-    // but then we need to make sure that the DepositTx build can still access it...
-    // val datum: DepositUtxo.Datum = datum
 }
 
 object DepositUtxo {
@@ -162,7 +158,8 @@ object DepositUtxo {
         headNativeScriptAddress: ShelleyAddress,
         virtualOutputs: NonEmptyList[GenesisObligation],
         depositFee: Coin,
-        submissionDeadline: QuantizedInstant
+        submissionDeadline: QuantizedInstant,
+        txTiming: TxTiming
     ): Either[DepositUtxoConversionError, DepositUtxo] =
         for {
             babbage <- utxo._2 match {
@@ -194,6 +191,7 @@ object DepositUtxo {
           value = babbage.value,
           virtualOutputs = virtualOutputs,
           depositFee = depositFee,
-          submissionDeadline = submissionDeadline
+          submissionDeadline = submissionDeadline,
+          absorptionStartTime = txTiming.depositAbsorptionStartTime(submissionDeadline)
         )
 }

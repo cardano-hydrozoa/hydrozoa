@@ -18,6 +18,7 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuanti
 import hydrozoa.multisig.consensus.ConsensusActor
 import hydrozoa.multisig.consensus.ConsensusActor.Request
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.ledger.DappLedgerM.DepositsMap
 import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.ledger.JointLedger.{Done, Producing}
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.*
@@ -342,7 +343,7 @@ object JointLedgerTestHelpers {
 implicit val genMonad: Monad[Gen] = new Monad[Gen] {
     def pure[A](a: A): Gen[A] = Gen.const(a)
     def flatMap[A, B](fa: Gen[A])(f: A => Gen[B]): Gen[B] = fa.flatMap(f)
-    def tailRecM[A, B](a: A)(f: A => Gen[Either[A, B]]): Gen[B] = ???
+    def tailRecM[A, B](a: A)(f: A => Gen[Either[A, B]]): Gen[B] = Gen.tailRecM(a)(f)
 }
 
 object JointLedgerTest extends Properties("Joint Ledger Test") {
@@ -363,13 +364,8 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
       testM = {
 
           // monotonic sequence, duplicates may occur
-          val genMonotonic: Gen[List[Int]] =
-              for {
-                  // Limiting size becuse I keep getting stack overflows
-                  size <- Gen.choose(0, 10)
-                  res <- Gen.listOfN(size, Gen.choose(0, 1000))
-              } yield res.sorted
-          val genStrictMonotonic: Gen[List[Int]] = genMonotonic.map(_.distinct)
+          val genStrictMonotonic: Gen[List[Int]] =
+              Gen.listOf(Gen.choose(0, 100)).map(_.scanLeft(0)(_ + _))
           def genLedgerEventIdsStrictMonotonic(
               headPeerNum: HeadPeerNumber
           ): Gen[Queue[LedgerEventId]] =
@@ -379,53 +375,60 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                 monotonic.map(i => LedgerEventId(headPeerNum, LedgerEventNumber(i)))
               )
 
-          // Generates a stream of deposits for a single peer
-          def genPeerDeposits(
-              headPeerNum: HeadPeerNumber,
-              config: CardanoNetwork.Section & TxTiming.Section,
-              headAddress: ShelleyAddress,
-              blockStartTime: QuantizedInstant
-          ): Gen[Queue[JLTest[(DepositRefundTxSeq, DepositEvent)]]] =
-              for {
-                  eventIds <- genLedgerEventIdsStrictMonotonic(headPeerNum)
-                  submissionDeadlineOffset <- Gen.choose(1, 1000).map(_.seconds)
-                  depositActions = eventIds.map(eventId =>
-                      deposit(
-                        submissionDeadline = blockStartTime + submissionDeadlineOffset,
-                        eventId = eventId,
-                        blockStartTime = blockStartTime
-                      )
-                  )
-              } yield depositActions
-
-          // Given a vector of queues, generates a order-preserving interleaving such that each queue in the
-          // vector is a subsequence of the resulting queue
-          def genInterleaved[A](queues: Vector[Queue[A]]): Gen[Queue[A]] =
-              Gen.tailRecM(queues -> Queue.empty[A]) { case (remaining, acc) =>
-                  val nonEmpty = remaining.filter(_.nonEmpty)
-                  if nonEmpty.isEmpty then Gen.const(Right(acc))
-                  else
-                      Gen.choose(0, nonEmpty.length - 1).map { idx =>
-                          val (head, tail) = nonEmpty(idx).dequeue
-                          Left(nonEmpty.updated(idx, tail) -> (acc :+ head))
-                      }
-              }
-
-          // Generates a interleaved queue respecting the total ordering according to per-peer event streams
           def genEventStream(
               config: CardanoNetwork.Section & TxTiming.Section,
               headAddress: ShelleyAddress,
               blockStartTime: QuantizedInstant
           ): Gen[Queue[JLTest[(DepositRefundTxSeq, DepositEvent)]]] =
               for {
-                  headPeerNumbers <- for {
+                  lastEventIds0: Map[HeadPeerNumber, LedgerEventNumber] <- for {
                       n <- Gen.choose(2, 20)
-                  } yield Vector.range(0, n).map(HeadPeerNumber(_))
-                  peerDeposits <- headPeerNumbers.traverse(n =>
-                      genPeerDeposits(n, config, headAddress, blockStartTime)
+                      headPeerNumbers = Vector.range(0, n).map(HeadPeerNumber(_))
+                      tuples <- headPeerNumbers
+                          .map(peerNum =>
+                              Gen.posNum[Int]
+                                  .map(eventNum => (peerNum, LedgerEventNumber(eventNum)))
+                          )
+                          .sequence
+                  } yield Map.from(tuples)
+
+                  events <- Gen.tailRecM(
+                    (lastEventIds0, Queue.empty[JLTest[(DepositRefundTxSeq, DepositEvent)]])
+                  )(
+                    (
+                        lastEventIds: Map[HeadPeerNumber, LedgerEventNumber],
+                        actionQueue: Queue[JLTest[(DepositRefundTxSeq, DepositEvent)]]
+                    ) =>
+                        // In the recursive case: pick a random peer, increment their event number, and generate a
+                        // deposit action for them
+                        lazy val appendEvent: Gen[
+                          (
+                              Map[HeadPeerNumber, LedgerEventNumber],
+                              Queue[JLTest[(DepositRefundTxSeq, DepositEvent)]]
+                          )
+                        ] =
+                            for {
+                                peer <- Gen.oneOf(lastEventIds.keys)
+                                lastEventId = lastEventIds(peer)
+                                newEventIds = lastEventIds.updated(peer, lastEventId.increment)
+                                submissionDeadlineOffset <- Gen.choose(1, 1000).map(_.seconds)
+
+                            } yield (
+                              newEventIds,
+                              actionQueue.appended(
+                                deposit(
+                                  submissionDeadline = blockStartTime + submissionDeadlineOffset,
+                                  eventId = LedgerEventId(peer, lastEventId.increment),
+                                  blockStartTime = blockStartTime
+                                )
+                              )
+                            )
+                        Gen.frequency(
+                          (1, Gen.const(Right(actionQueue))),
+                          (10, appendEvent.map(Left(_)))
+                        )
                   )
-                  eventStream <- genInterleaved(peerDeposits)
-              } yield eventStream
+              } yield events
 
           // order-preserving, non-contiguous matching;
           // isSubsequenceOf( List(1, 2, 3), List(1, 6, 3, 2, 3, 7, 1)) == true
@@ -444,8 +447,6 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               blockStartTime <- startBlockNow(BlockNumber.zero.increment)
               eventStreamActions <- pick(
                 genEventStream(env.config, env.config.headMultisigAddress, blockStartTime)
-                    // Blows the stack if we don't limit the number of actions -_-
-                    .map(_.take(10))
               )
 
               eventStreamFullResults <- eventStreamActions.sequence
@@ -676,8 +677,9 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
               _ <- assertWith[TestR](
                 msg = "Deposit should be in dapp ledger state",
-                condition = jlState.dappLedgerState.deposits == Queue(
-                  (depositReq.eventId, depositRefundTxSeq.depositTx.depositProduced)
+                condition = jlState.dappLedgerState.deposits == DepositsMap.empty.appended(
+                  (depositReq.eventId, depositRefundTxSeq.depositTx.depositProduced),
+                  env.config.txTiming
                 )
               )
 
@@ -752,8 +754,9 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
               _ <- assertWith[TestR](
                 msg = "Deposit should be in dapp ledger state",
-                condition = jlState.dappLedgerState.deposits == Queue(
-                  (depositReq.eventId, depositRefundTxSeq.depositTx.depositProduced)
+                condition = jlState.dappLedgerState.deposits == DepositsMap.empty.appended(
+                  (depositReq.eventId, depositRefundTxSeq.depositTx.depositProduced),
+                  env.config.txTiming
                 )
               )
 
@@ -811,8 +814,9 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
               _ <- assertWith[TestR](
                 msg = "Deposit should be in dapp ledger state",
-                condition = jlState.dappLedgerState.deposits == Queue(
-                  (depositReq.eventId, depositRefundTxSeq.depositTx.depositProduced)
+                condition = jlState.dappLedgerState.deposits == DepositsMap.empty.appended(
+                  (depositReq.eventId, depositRefundTxSeq.depositTx.depositProduced),
+                  env.config.txTiming
                 )
               )
 
