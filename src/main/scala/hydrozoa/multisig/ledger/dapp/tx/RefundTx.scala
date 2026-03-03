@@ -121,7 +121,7 @@ private object RefundTxOps {
         import Parse.*
         import Parse.Error.*
 
-        def result: ParseErrorOr[RefundTx] = {
+        def result: ParseErrorOr[RefundTx.PostDated] = {
 
             given OriginalCborByteArray = OriginalCborByteArray(txBytes)
             given ProtocolVersion = config.cardanoProtocolVersion
@@ -137,7 +137,7 @@ private object RefundTxOps {
                             case Left(e) => Left(MetadataParseError(e))
                         }
 
-                        refundTx: RefundTx <- tx.body.value.validityStartSlot match {
+                        refundTx: RefundTx.PostDated <- tx.body.value.validityStartSlot match {
                             case Some(startSlot) =>
                                 Right(
                                   RefundTx.PostDated(

@@ -9,11 +9,7 @@ import scalus.cardano.ledger.{AssetName, Coin, TransactionInput, TransactionOutp
 import scalus.uplc.builtin.Data.{FromData, ToData, toData}
 import scalus.uplc.builtin.{ByteString, Data, FromData, ToData}
 
-/** @param treasuryTokenName
-  * @param utxoId
-  * @param address
-  * @param datum
-  * @param value
+/** @param value
   *   Contains equity and liabilities (use to "cover" the L2 in the evacuation map)
   * @param equity
   *   Is the excess treasury value above what is needed to back the liabilities. Equity is used to
@@ -41,7 +37,6 @@ final case class MultisigTreasuryUtxo(
 }
 
 /** Equity must always be positive
-  * @param coin
   */
 final case class Equity private (coin: Coin)
 

@@ -15,6 +15,7 @@ import hydrozoa.config.head.peers.{TestPeers, generateTestPeers}
 import hydrozoa.config.node.{NodeConfig, generateNodeConfig}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
+import hydrozoa.lib.cardano.scalus.ledger.stripVKeyWitnesses
 import hydrozoa.multisig.consensus.ConsensusActor
 import hydrozoa.multisig.consensus.ConsensusActor.Request
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
@@ -33,6 +34,7 @@ import hydrozoa.multisig.ledger.event.{LedgerEventId, LedgerEventNumber}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.tx.{GenesisObligation, L2Genesis}
 import java.util.concurrent.TimeUnit
+import monocle.Focus
 import monocle.Focus.focus
 import org.scalacheck.*
 import org.scalacheck.Prop.propBoolean
@@ -51,18 +53,18 @@ import test.Generators.Hydrozoa.*
 import test.Generators.Other.genCoinDistributionWithMinAdaUtxo
 import test.TestM.*
 
-// Pretty Printers for more managable scalacheck logs
+// Pretty Printers for more manageable scalacheck logs
 given ppNodeConfig: (NodeConfig => Pretty) = nodeConfig =>
     Pretty(_ => "NodeConfig (too long to print)")
 
 given ppTestPeers: (TestPeers => Pretty) = testPeers =>
     Pretty(_ =>
-        "TestPeers:"
+        ("TestPeers:"
             + s"\n\t Num Peers: ${testPeers._testPeers.length}"
-            + (testPeers._testPeers.map(testPeer =>
-                f"\n\t${testPeer._1.peerNum.toInt}%2d"
+            + testPeers._testPeers.map(testPeer =>
+                (f"\n\t${testPeer._1.peerNum.toInt}%2d"
                     + s" | ${testPeer._2.wallet.exportVerificationKey.take(2)}(...)"
-                    + s" | ${testPeer._2.name} "
+                    + s" | ${testPeer._2.name} ")
             ))
     )
 
@@ -174,7 +176,7 @@ object JointLedgerTestHelpers {
               CompleteBlockRegular(referenceBlock, pollResults: Set[TransactionInput], false)
             )
 
-        /** WAARNING: This method performs pre-and-post condition checks on the joint ledger. This
+        /** WARNING: This method performs pre-and-post condition checks on the joint ledger. This
           * means two things:
           *   - This will send three messages to the JointLedger -- two to check the state before
           *     and after, and one to actually send the CompleteBlockRegular request
@@ -219,7 +221,7 @@ object JointLedgerTestHelpers {
 
     }
 
-    /** Helper utilties to execute particular scenarios, such as "generating a random deposit and
+    /** Helper utilities to execute particular scenarios, such as "generating a random deposit and
       * sending it to the JointLedger"
       */
     object Scenarios {
@@ -350,9 +352,9 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
     import TestM.*
 
     //  We can observe three test statistics:
-    //  - Whether or not ties are occurring
-    //  - Whether or not the sorting is trivial due to events being pre-sorted
-    //  - Whether or not the sorting is trivial due < 2 events
+    //  - Whether ties are occurring
+    //  - Whether the sorting is trivial due to events being pre-sorted
+    //  - Whether the sorting is trivial due < 2 events
     //
     //  The properties we check:
     //    - Deposits are indeed sorted according to start time
@@ -362,19 +364,6 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
       // FIXME: initializer is too bulky, we can reduce it significantly
       initializer = defaultInitializer,
       testM = {
-
-          // monotonic sequence, duplicates may occur
-          val genStrictMonotonic: Gen[List[Int]] =
-              Gen.listOf(Gen.choose(0, 100)).map(_.scanLeft(0)(_ + _))
-          def genLedgerEventIdsStrictMonotonic(
-              headPeerNum: HeadPeerNumber
-          ): Gen[Queue[LedgerEventId]] =
-              for {
-                  monotonic <- genStrictMonotonic
-              } yield Queue.from(
-                monotonic.map(i => LedgerEventId(headPeerNum, LedgerEventNumber(i)))
-              )
-
           def genEventStream(
               config: CardanoNetwork.Section & TxTiming.Section,
               headAddress: ShelleyAddress,
@@ -445,12 +434,12 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
           for {
               env <- ask[TestR]
               blockStartTime <- startBlockNow(BlockNumber.zero.increment)
-              eventStreamActions <- pick(
+              eventStreamActions <- pick[TestR, Queue[JLTest[(DepositRefundTxSeq, DepositEvent)]]](
                 genEventStream(env.config, env.config.headMultisigAddress, blockStartTime)
               )
 
               eventStreamFullResults <- eventStreamActions.sequence
-              // This is the format we actually care about; its commensurate with the DappLedgerState
+              // This is the format we actually care about; it's commensurate with the DappLedgerState
               eventStream: Queue[(LedgerEventId, DepositUtxo)] = eventStreamFullResults.map {
                   case (txSeq, event) => (event.eventId, txSeq.depositTx.depositProduced)
               }
@@ -458,27 +447,27 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               depositsMap <- getState.map(_.dappLedgerState.deposits)
 
               // Test statistic:  make sure that ties are actually occurring in some samples
-              _ <- lift(PropertyM.monitor[IO](Prop.collect {
+              _ <- lift[TestR, Unit](PropertyM.monitor[IO](Prop.collect {
                   if eventStream.length <= 1
                   then "events.length <= 1"
                   else "events.length > 1"
               }))
 
               // Test statistic:  make sure that ties are actually occurring in some samples
-              _ <- lift(PropertyM.monitor[IO](Prop.collect {
+              _ <- lift[TestR, Unit](PropertyM.monitor[IO](Prop.collect {
                   val collectionSizes = depositsMap.treeMap.map(_._2.length)
                   if collectionSizes.isEmpty then "no duplicate start times"
                   else "some duplicate start times"
               }))
 
               // Test statistic: the flattened deposits map and unsorted stream are different
-              _ <- lift(PropertyM.monitor[IO](Prop.collect {
+              _ <- lift[TestR, Unit](PropertyM.monitor[IO](Prop.collect {
                   if depositsMap.flatValues == eventStream
                   then "depositsMap.flatValues == eventStream"
                   else "depositsMap.flatValues != eventStream"
               }))
 
-              _ <- assertWith(
+              _ <- assertWith[TestR](
                 msg = "Deposits are sorted by absorption start time",
                 condition = {
                     val startTimes = depositsMap.flatDeposits.map(deposit =>
@@ -490,13 +479,13 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                 }
               )
 
-              _ <- assertWith(
+              _ <- assertWith[TestR](
                 msg =
                     "Deposit ledger state includes the same number of elements as the event stream",
                 condition = depositsMap.numberOfDeposits == eventStream.length
               )
 
-              _ <- assertWith(
+              _ <- assertWith[TestR](
                 msg =
                     "If multiple deposits have the same absorption start time, order of the sorted deposits must be" +
                         " a subsequence of the event stream",
@@ -547,6 +536,18 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                 msg = "Correct treasury in state",
                 condition = dlState.treasury == env.config.initializationTx.treasuryProduced
               )
+              _ <- assertWith[TestR](
+                msg = "Correct refund in state",
+                condition =
+                    val refundsWithoutSignatures =
+                        jlState
+                            .asInstanceOf[Producing]
+                            .nextBlockData
+                            .postDatedRefundTxs
+                            // Zero out the vkey witnesses before checking equality
+                            .map(_.focus(_.tx).modify(_.stripVKeyWitnesses))
+                    refundsWithoutSignatures == Vector(depositRefundTxSeq.refundTx)
+              )
           } yield ()
 
           // Complete a block, but assume the deposit didn't show up in the poll results
@@ -571,9 +572,16 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                     condition = minorBlock.body.depositsRefunded.isEmpty
                         && minorBlock.body.depositsAbsorbed.isEmpty
                   )
+                  _ <- assertWith[TestR](
+                    msg = "Post-dated refund should appear",
+                    condition = minorBlock.effects.postDatedRefundTxs
+                        .map(_.focus(_.tx).modify(_.stripVKeyWitnesses)) == List(
+                      depositRefundTxSeq.refundTx
+                    )
+                  )
               } yield ()
 
-          // Complete another block, assume the deposit shows up in the poll results -- but its not mature yet
+          // Complete another block, assume the deposit shows up in the poll results -- but it's not mature yet
           _ <- startBlockNow(BlockNumber.zero.increment.increment)
           _ <- completeBlockRegular(
             None,
@@ -641,7 +649,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
               _ <- assertWith[TestR](
                 msg =
-                    s"KZG Commitment is correct.\n\tObtained: ${kzgCommit}\n\tExpected: ${expectedKzg}",
+                    s"KZG Commitment is correct.\n\tObtained: $kzgCommit\n\tExpected: $expectedKzg",
                 condition = kzgCommit == expectedKzg
               )
 

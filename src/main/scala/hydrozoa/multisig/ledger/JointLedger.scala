@@ -17,6 +17,7 @@ import hydrozoa.multisig.ledger.JointLedger.*
 import hydrozoa.multisig.ledger.JointLedger.Requests.*
 import hydrozoa.multisig.ledger.VirtualLedgerM.runVirtualLedgerM
 import hydrozoa.multisig.ledger.block.*
+import hydrozoa.multisig.ledger.dapp.tx.RefundTx
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.event.LedgerEvent.*
@@ -35,7 +36,8 @@ import scalus.uplc.builtin.{ByteString, platform}
 // Fields of a work-in-progress block, with an additional field for dealing with withdrawn utxos
 private case class TransientFields(
     events: List[(LedgerEventId, ValidityFlag)],
-    blockWithdrawnUtxos: Vector[Payout.Obligation]
+    blockWithdrawnUtxos: Vector[Payout.Obligation],
+    postDatedRefundTxs: Vector[RefundTx.PostDated]
 )
 
 // NOTE: Joint ledger is created by the MultisigManager.
@@ -164,12 +166,14 @@ final case class JointLedger(
                       _ <- state.set(newState)
                       _ = logger.debug(s"registerDeposit failure: $e")
                   } yield (),
-              onSuccess = _s =>
+              onSuccess = refundTx =>
                   for {
                       oldState <- unsafeGetProducing
                       newState = oldState
                           .focus(_.nextBlockData.events)
                           .modify(_.appended((eventId, Valid)))
+                          .focus(_.nextBlockData.postDatedRefundTxs)
+                          .modify(_.appended(refundTx))
                       _ <- state.set(newState)
                   } yield ()
             )
@@ -227,7 +231,8 @@ final case class JointLedger(
                 startTime = blockCreationTime,
                 TransientFields(
                   events = List.empty,
-                  blockWithdrawnUtxos = Vector.empty
+                  blockWithdrawnUtxos = Vector.empty,
+                  postDatedRefundTxs = Vector.empty
                 ),
                 dappLedgerState = d.dappLedgerState,
                 virtualLedgerState = d.virtualLedgerState
@@ -245,7 +250,7 @@ final case class JointLedger(
         /** @return
           *   Queue order:
           *   - eligible for absorption
-          *   - ineligible for absorption - (inmature + mature but non-existent)
+          *   - ineligible for absorption - (immature + mature but non-existent)
           *   - rejected
           */
 
@@ -434,13 +439,14 @@ final case class JointLedger(
 
         def mkBlockEffects(
             next: BlockBrief.Intermediate,
-            absorbedDeposits: Queue[(LedgerEventId, DepositUtxo)]
+            absorbedDeposits: Queue[(LedgerEventId, DepositUtxo)],
+            postDatedRefundTxs: List[RefundTx.PostDated]
         ): IO[Block.Unsigned.Next] = for {
             ret <- next match {
                 case blockBrief @ BlockBrief.Minor(header, _) =>
                     val blockEffects = BlockEffects.Unsigned.Minor(
                       headerSerialized = header.onchainMsg,
-                      postDatedRefundTxs = List() // FIXME: Where are they?
+                      postDatedRefundTxs = postDatedRefundTxs
                     )
                     IO.pure(Block.Unsigned.Minor(blockBrief, blockEffects))
                 case blockBrief @ BlockBrief.Major(header, _) =>
@@ -465,7 +471,7 @@ final case class JointLedger(
                           settlementTx = settlementTxSeq.settlementTx,
                           fallbackTx = settlementTxSeq.fallbackTx,
                           rolloutTxs = settlementTxSeq.rolloutTxs,
-                          postDatedRefundTxs = List() // FIXME: Where are they?
+                          postDatedRefundTxs = postDatedRefundTxs
                         )
                     } yield Block.Unsigned.Major(blockBrief, blockEffects)
             }
@@ -504,7 +510,11 @@ final case class JointLedger(
             )
             (blockBrief, mbGenesisEvent) = ret
 
-            block <- mkBlockEffects(blockBrief, Queue.from(absorbedDeposits.flatValues))
+            block <- mkBlockEffects(
+              blockBrief,
+              Queue.from(absorbedDeposits.flatValues),
+              producing.nextBlockData.postDatedRefundTxs.toList
+            )
 
             _ <- checkReferenceBlock(referenceBlockBrief, block)
 
@@ -545,7 +555,7 @@ final case class JointLedger(
             finalizationTxSeq <- this.runDappLedgerM(
               DappLedgerM.finalizeLedger(
                 payoutObligationsRemaining = Vector.from(
-                  p.virtualLedgerState.evacuationMap.evacMap.map((i, o) => Payout.Obligation(o))
+                  p.virtualLedgerState.evacuationMap.evacMap.map((_, o) => Payout.Obligation(o))
                 ),
                 blockCreatedOn = p.startTime,
                 competingFallbackValidityStart = p.startTime

@@ -9,6 +9,7 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger
 import hydrozoa.multisig.ledger.DappLedgerM.Error.{ParseError, SettlementTxSeqBuilderError, SubmissionPeriodIsOver}
 import hydrozoa.multisig.ledger.block.BlockVersion
+import hydrozoa.multisig.ledger.dapp.tx.RefundTx
 import hydrozoa.multisig.ledger.dapp.txseq
 import hydrozoa.multisig.ledger.dapp.txseq.{DepositRefundTxSeq, FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigTreasuryUtxo}
@@ -82,7 +83,7 @@ object DappLedgerM {
     def registerDeposit(
         req: DepositEvent,
         blockStartTime: QuantizedInstant
-    ): DappLedgerM[Unit] = {
+    ): DappLedgerM[RefundTx.PostDated] = {
         import req.*
         for {
             config <- ask
@@ -121,7 +122,7 @@ object DappLedgerM {
             updatedMap <- s.deposits.appended((eventId, depositProduced))
             newState = s.copy(deposits = updatedMap)
             _ <- set(newState)
-        } yield ()
+        } yield depositRefundTxSeq.refundTx
     }
 
     /** Construct settlement tx seq and set the new treasury to the state.
