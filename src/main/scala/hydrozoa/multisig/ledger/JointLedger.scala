@@ -15,7 +15,6 @@ import hydrozoa.multisig.consensus.{ConsensusActor, PeerLiaison}
 import hydrozoa.multisig.ledger.DappLedgerM.*
 import hydrozoa.multisig.ledger.JointLedger.*
 import hydrozoa.multisig.ledger.JointLedger.Requests.*
-import hydrozoa.multisig.ledger.VirtualLedgerM.runVirtualLedgerM
 import hydrozoa.multisig.ledger.block.*
 import hydrozoa.multisig.ledger.dapp.tx.RefundTx
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
@@ -25,13 +24,11 @@ import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag
 import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag.{Invalid, Valid}
 import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
-import hydrozoa.multisig.ledger.virtual.tx.{GenesisObligation, L2Genesis}
+import hydrozoa.multisig.ledger.virtual.{EvacuationMap, VirtualLedger, VirtualLedgerError}
 import monocle.Focus.focus
 import scala.collection.immutable.Queue
 import scala.math.Ordered.orderingToOrdered
-import scalus.cardano.ledger.{AssetName, TransactionHash, TransactionInput}
-import scalus.uplc.builtin.{ByteString, platform}
+import scalus.cardano.ledger.TransactionInput
 
 // Fields of a work-in-progress block, with an additional field for dealing with withdrawn utxos
 private case class TransientFields(
@@ -45,6 +42,7 @@ private case class TransientFields(
 final case class JointLedger(
     config: JointLedger.Config,
     pendingConnections: MultisigRegimeManager.PendingConnections | JointLedger.Connections,
+    virtualLedger: VirtualLedger[IO]
 ) extends Actor[IO, Requests.Request] {
     import config.*
 
@@ -59,7 +57,7 @@ final case class JointLedger(
             lastFallbackValidityStart = config.initialFallbackTx.validityStart,
             dappLedgerState =
                 DappLedgerM.State(config.initializationTx.treasuryProduced, DepositsMap.empty),
-            virtualLedgerState = VirtualLedgerM.State.apply(config.initialEvacuationMap)
+            evacuationMap = config.initialEvacuationMap
           )
         )
 
@@ -139,6 +137,45 @@ final case class JointLedger(
             }
     }
 
+    /** Run a LedgerM action within a JointLedger. If the action is successful (returns `Right`),
+      * the state of the JointLedger is updated. Because the state update within JointLedger must
+      * happen within [[IO]], this takes two continuations (one for success, one for failure) and
+      * returns in [[IO]].
+      *
+      * @param onFailure
+      *   continuation if an error is raised. Defaults to throwing an exception.
+      * @param onSuccess
+      *   continuation if a value is returned. Defaults to IO.pure
+      * @return
+      */
+    private def runVirtualLedgerM[A, B](
+        action: virtualLedger.LedgerM[A],
+        onFailure: VirtualLedgerError => IO[B] = e =>
+            // FIXME: Type the exception better
+            throw new RuntimeException(s"Error running Virtual.LedgerM: $e"),
+        onSuccess: A => IO[B] = IO.pure[B]
+    ): IO[B] = {
+        for {
+            oldState <- this.state.get
+            res <- action.run(
+              oldState.evacuationMap
+            )
+            b <- res match {
+                case Left(error) => onFailure(error)
+                case Right(newState, a) =>
+                    for {
+                        _ <- this.state.set(oldState match {
+                            case d: JointLedger.Done =>
+                                d.focus(_.evacuationMap).replace(newState)
+                            case p: JointLedger.Producing =>
+                                p.focus(_.evacuationMap).replace(newState)
+                        })
+                        b <- onSuccess(a)
+                    } yield b
+            }
+        } yield b
+    }
+
     private def registerLedgerEvent(e: LedgerEvent): IO[Unit] = {
         e match {
             case req: DepositEvent => registerDeposit(req)
@@ -190,8 +227,8 @@ final case class JointLedger(
 
         for {
             p <- unsafeGetProducing
-            _ <- this.runVirtualLedgerM(
-              action = VirtualLedgerM.applyInternalTx(tx, p.startTime),
+            _ <- runVirtualLedgerM(
+              action = this.virtualLedger.LedgerM.applyInternalTx(tx, p.startTime),
               // Invalid transaction continuation
               onFailure = _ =>
                   for {
@@ -235,7 +272,7 @@ final case class JointLedger(
                   postDatedRefundTxs = Vector.empty
                 ),
                 dappLedgerState = d.dappLedgerState,
-                virtualLedgerState = d.virtualLedgerState
+                evacuationMap = d.evacuationMap
               )
             )
         } yield ()
@@ -345,7 +382,7 @@ final case class JointLedger(
         def mkBlockBrief(
             absorbedDeposits: Queue[(LedgerEventId, DepositUtxo)],
             rejectedDeposits: Queue[(LedgerEventId, DepositUtxo)],
-        ): IO[(BlockBrief.Intermediate, Option[L2Genesis])] = for {
+        ): IO[BlockBrief.Intermediate] = for {
 
             p <- unsafeGetProducing
 
@@ -364,63 +401,36 @@ final case class JointLedger(
             )
 
             // Block header
-            ret <-
-
+            headerIntermediate: BlockHeader.Intermediate <-
                 if absorbedDeposits.isEmpty && blockWithdrawnUtxos.isEmpty
                 then
                     IO.pure(
-                      (
-                        previousHeader.nextHeaderIntermediate(
-                          txTiming,
-                          blockStartTime,
-                          competingFallbackValidityStart,
-                          // this doesn't include genesis
-                          p.virtualLedgerState.kzgCommitment
-                        ),
-                        None
+                      previousHeader.nextHeaderIntermediate(
+                        txTiming,
+                        blockStartTime,
+                        competingFallbackValidityStart,
+                        // this doesn't include genesis
+                        p.evacuationMap.kzgCommitment
                       )
                     )
                 else
                     for {
-                        ret <-
-                            if absorbedDeposits.isEmpty
-                            then
-                                IO.pure(
-                                  (
-                                    p.virtualLedgerState.kzgCommitment,
-                                    None
-                                  )
+                        _ <- absorbedDeposits
+                            .map((_, depositUtxo) =>
+                                runVirtualLedgerM(
+                                  this.virtualLedger.LedgerM
+                                      .applyGenesisEvent(
+                                        depositUtxo.toDepositTuple
+                                      )
                                 )
-                            else {
-                                val treasuryToSpend = p.dappLedgerState.treasury
-                                val genesisObligations: Queue[GenesisObligation] =
-                                    absorbedDeposits
-                                        .map(_._2.virtualOutputs)
-                                        .foldLeft(Queue.empty)((acc, ob) =>
-                                            acc.appendedAll(ob.toList)
-                                        )
-                                val genesisEvent = L2Genesis(
-                                  genesisObligations,
-                                  mkGenesisId(
-                                    headTokenNames.treasuryTokenName,
-                                    treasuryToSpend.datum.versionMajor.toInt + 1
-                                  )
-                                )
-
-                                for {
-                                    kzgCommitment <- this.runVirtualLedgerM(
-                                      VirtualLedgerM.mockApplyGenesis(genesisEvent)
-                                    )
-                                } yield (kzgCommitment, Some(genesisEvent))
-                            }
-                        (kzgCommitment, mbGenesisEvent) = ret
+                            )
+                            .sequence
+                        kzgCommitment <- state.get.map(_.evacuationMap.kzgCommitment)
                         headerIntermediate = previousHeader.nextHeaderMajor(
                           blockStartTime,
                           kzgCommitment
                         )
-                    } yield (headerIntermediate, mbGenesisEvent)
-
-            (headerIntermediate, mbGenesisEvent) = ret
+                    } yield headerIntermediate
 
             // Block brief
             blockBrief: BlockBrief.Intermediate = headerIntermediate match {
@@ -435,7 +445,7 @@ final case class JointLedger(
                     )
                     BlockBrief.Major(header, blockBody)
             }
-        } yield (blockBrief, mbGenesisEvent)
+        } yield blockBrief
 
         def mkBlockEffects(
             next: BlockBrief.Intermediate,
@@ -504,11 +514,10 @@ final case class JointLedger(
                   s"joint ledger: rejected=$rejected" + "\n"
             )
 
-            ret <- mkBlockBrief(
+            blockBrief <- mkBlockBrief(
               absorbedDeposits = Queue.from(absorbedDeposits.flatValues),
               rejectedDeposits = Queue.from(rejected.flatValues)
             )
-            (blockBrief, mbGenesisEvent) = ret
 
             block <- mkBlockEffects(
               blockBrief,
@@ -525,10 +534,6 @@ final case class JointLedger(
               DappLedgerM.handleBlockBrief(unabsorbedDeposits ++ ineligible),
               onSuccess = IO.pure
             )
-
-            _ <- mbGenesisEvent.fold(IO.pure(())) { l2Genesis =>
-                this.runVirtualLedgerM(VirtualLedgerM.applyGenesisEvent(l2Genesis))
-            }
 
             // Tell others about the block
             _ <- handleBlock(block, finalizationLocallyTriggered)
@@ -555,7 +560,7 @@ final case class JointLedger(
             finalizationTxSeq <- this.runDappLedgerM(
               DappLedgerM.finalizeLedger(
                 payoutObligationsRemaining = Vector.from(
-                  p.virtualLedgerState.evacuationMap.evacMap.map((_, o) => Payout.Obligation(o))
+                  p.evacuationMap.evacuationMap.map((_, o) => Payout.Obligation(o))
                 ),
                 blockCreatedOn = p.startTime,
                 competingFallbackValidityStart = p.startTime
@@ -630,7 +635,7 @@ final case class JointLedger(
                     actualBlock.block,
                     fallbackValidityStart,
                     p.dappLedgerState,
-                    p.virtualLedgerState
+                    p.evacuationMap
                   )
                 )
             case Some(_) =>
@@ -643,7 +648,7 @@ final case class JointLedger(
                     actualBlock.block,
                     fallbackValidityStart,
                     p.dappLedgerState,
-                    p.virtualLedgerState
+                    p.evacuationMap
                   )
                 )
         }
@@ -716,7 +721,7 @@ object JointLedger {
 
     sealed trait State {
         val dappLedgerState: DappLedgerM.State
-        val virtualLedgerState: VirtualLedgerM.State
+        val evacuationMap: EvacuationMap
     }
 
     final case class Done(
@@ -724,27 +729,16 @@ object JointLedger {
         // None for the first block
         lastFallbackValidityStart: QuantizedInstant,
         override val dappLedgerState: DappLedgerM.State,
-        override val virtualLedgerState: VirtualLedgerM.State
+        override val evacuationMap: EvacuationMap
     ) extends State
 
     final case class Producing(
         override val dappLedgerState: DappLedgerM.State,
-        override val virtualLedgerState: VirtualLedgerM.State,
+        override val evacuationMap: EvacuationMap,
         previousBlock: Block,
         // None for the first block
         competingFallbackValidityStart: QuantizedInstant,
         startTime: QuantizedInstant,
         nextBlockData: TransientFields
     ) extends State
-
-    def mkGenesisId(treasuryTokenName: AssetName, majorVersion: Int): TransactionHash =
-        TransactionHash.fromByteString(
-          platform.blake2b_256(
-            treasuryTokenName.bytes ++
-                ByteString.fromBigIntBigEndian(
-                  BigInt(majorVersion)
-                )
-          )
-        )
-
 }

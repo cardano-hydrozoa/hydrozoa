@@ -15,10 +15,14 @@ import hydrozoa.multisig.consensus.*
 import hydrozoa.multisig.consensus.ack.AckBlock
 import hydrozoa.multisig.consensus.peer.HeadPeerId
 import hydrozoa.multisig.ledger.JointLedger
+import hydrozoa.multisig.ledger.virtual.VirtualLedger
 import scala.concurrent.duration.DurationInt
 
-trait MultisigRegimeManager(config: NodeConfig, cardanoBackend: CardanoBackend[IO])
-    extends Actor[IO, Request] {
+trait MultisigRegimeManager(
+    config: NodeConfig,
+    cardanoBackend: CardanoBackend[IO],
+    virtualLedger: VirtualLedger[IO]
+) extends Actor[IO, Request] {
 
     private val logger = Logging.loggerIO("hydrozoa.multisig.MultisigRegimeManager")
 
@@ -44,7 +48,7 @@ trait MultisigRegimeManager(config: NodeConfig, cardanoBackend: CardanoBackend[I
 
             eventSequencer <- context.actorOf(EventSequencer(config, pendingConnections))
 
-            jointLedger <- context.actorOf(JointLedger(config, pendingConnections))
+            jointLedger <- context.actorOf(JointLedger(config, pendingConnections, virtualLedger))
 
             localPeerLiaisons <-
                 config.headPeerIds
@@ -127,8 +131,12 @@ object MultisigRegimeManager {
 
     type PendingConnections = Deferred[IO, Connections]
 
-    def apply(config: NodeConfig, cardanoBackend: CardanoBackend[IO]): IO[MultisigRegimeManager] =
-        IO(new MultisigRegimeManager(config, cardanoBackend) {})
+    def apply(
+        config: NodeConfig,
+        cardanoBackend: CardanoBackend[IO],
+        virtualLedger: VirtualLedger[IO]
+    ): IO[MultisigRegimeManager] =
+        IO(new MultisigRegimeManager(config, cardanoBackend, virtualLedger) {})
 
     /** Multisig regime's protocol for actor requests and responses. See diagram:
       * [[https://app.excalidraw.com/s/9N3iw9j24UW/9eRJ7Dwu42X]]

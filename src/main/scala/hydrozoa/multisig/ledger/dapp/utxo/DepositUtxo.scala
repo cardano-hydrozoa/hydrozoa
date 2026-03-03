@@ -1,11 +1,9 @@
 package hydrozoa.multisig.ledger.dapp.utxo
 
-import cats.data.NonEmptyList
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant}
 import hydrozoa.lib.cardano.scalus.ledger.plutusAddressToShelley
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo.DepositUtxoConversionError.*
-import hydrozoa.multisig.ledger.virtual.tx.GenesisObligation
 import scala.util.{Failure, Success, Try}
 import scalus.*
 import scalus.cardano.address.{Network, ShelleyAddress}
@@ -17,12 +15,25 @@ import scalus.cardano.onchain.plutus.v3.{Address as PlutusAddress, PosixTime}
 import scalus.uplc.builtin.Data.{FromData, ToData, fromData, toData}
 import scalus.uplc.builtin.{Data, FromData, ToData}
 
+// TODO: Better name?
+case class DepositTuple(
+    l2Payload: Array[Byte],
+    l2Value: Value,
+    depositFee: Coin,
+    depositTransactionInput: TransactionInput
+)
+
+/** @param l2Payload
+  *   The L2 payload associated with the deposit transaction that created this deposit utxo. A hash
+  *   of this must appear in the metadata of the corresponding deposit transaction. This includes
+  *   ONLY the part relevant to L2, and not the hydrozoa/cardano/L1-specific stuff.
+  */
 final case class DepositUtxo(
     utxoId: TransactionInput,
     address: ShelleyAddress,
     datum: DepositUtxo.Datum,
     value: Value,
-    virtualOutputs: NonEmptyList[GenesisObligation],
+    l2Payload: Array[Byte],
     depositFee: Coin,
     // The following fields come from DepositTx, but it's convenient to duplicate it here
     submissionDeadline: QuantizedInstant,
@@ -39,6 +50,10 @@ final case class DepositUtxo(
           )
         )
 
+    val l2Value: Value = value - Value(depositFee)
+
+    def toDepositTuple: DepositTuple =
+        DepositTuple(l2Payload, l2Value, depositFee, utxoId)
 }
 
 object DepositUtxo {
@@ -156,7 +171,7 @@ object DepositUtxo {
     def fromUtxo(
         utxo: Utxo,
         headNativeScriptAddress: ShelleyAddress,
-        virtualOutputs: NonEmptyList[GenesisObligation],
+        l2Payload: Array[Byte],
         depositFee: Coin,
         submissionDeadline: QuantizedInstant,
         txTiming: TxTiming
@@ -189,7 +204,7 @@ object DepositUtxo {
           address = addr,
           datum = datum,
           value = babbage.value,
-          virtualOutputs = virtualOutputs,
+          l2Payload = l2Payload,
           depositFee = depositFee,
           submissionDeadline = submissionDeadline,
           absorptionStartTime = txTiming.depositAbsorptionStartTime(submissionDeadline)

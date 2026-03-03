@@ -1,13 +1,15 @@
 package hydrozoa.multisig.ledger.virtual
 
+import cats.implicits.*
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
+import java.util
 import scala.collection.immutable.TreeMap
 import scalus.cardano.ledger.*
 import scalus.cardano.onchain.plutus.prelude.List as SList
 import scalus.uplc.builtin.Builtins.{blake2b_224, serialiseData}
 import scalus.uplc.builtin.Data.toData
-import scalus.uplc.builtin.{Data, ToData}
+import scalus.uplc.builtin.{ByteString, Data, ToData}
 import scalus.|>
 import supranational.blst.Scalar
 
@@ -16,36 +18,52 @@ given toDataTransactionInput: ToData[TransactionInput] with {
         toData(LedgerToPlutusTranslation.getTxOutRefV3(i))
 }
 
-final case class EvacuationMap[EvacuationKey](
-    evacMap: TreeMap[EvacuationKey, KeepRaw[TransactionOutput]]
+given evacuationKeyOrdering: Ordering[EvacuationKey] with {
+    override def compare(x: EvacuationKey, y: EvacuationKey): Int =
+        util.Arrays.compare(x.bytes, y.bytes)
+}
+
+given evacuationKeyToData: ToData[EvacuationKey] with {
+    override def apply(v1: EvacuationKey): Data = toData(ByteString.fromArray(v1.bytes))
+}
+
+final case class EvacuationKey private (bytes: Array[Byte])
+
+object EvacuationKey:
+    def apply(bytes: Array[Byte]): Option[EvacuationKey] = Some(new EvacuationKey(bytes))
+    // if bytes.length == 32 then Some(new EvacuationKey(bytes)) else None
+
+final case class EvacuationMap(
+    evacuationMap: TreeMap[EvacuationKey, KeepRaw[TransactionOutput]]
 )(using Ordering[EvacuationKey], ToData[EvacuationKey]) {
-    val isEmpty: Boolean = evacMap.isEmpty
-    val nonEmpty: Boolean = evacMap.nonEmpty
-    val size: Int = evacMap.size
+    val isEmpty: Boolean = evacuationMap.isEmpty
+    val nonEmpty: Boolean = evacuationMap.nonEmpty
+    val size: Int = evacuationMap.size
 
     /** The evac map, where we threw away the "KeepRaw".
       */
     // Its a silly name, but we use the term "value" too much
-    val cooked: TreeMap[EvacuationKey, TransactionOutput] = evacMap.map((i, kr) => (i, kr.value))
-    val outputs: Iterable[KeepRaw[TransactionOutput]] = evacMap.values
+    val cooked: TreeMap[EvacuationKey, TransactionOutput] =
+        evacuationMap.map((i, kr) => (i, kr.value))
+    val outputs: Iterable[KeepRaw[TransactionOutput]] = evacuationMap.values
 
     /** The outputs of the evac map, where we threw away the "KeepRaw"
       */
-    val outputsCooked: Iterable[TransactionOutput] = evacMap.values.map(_.value)
+    val outputsCooked: Iterable[TransactionOutput] = evacuationMap.values.map(_.value)
 
     def appended(
         otherMap: TreeMap[EvacuationKey, KeepRaw[TransactionOutput]]
-    ): EvacuationMap[EvacuationKey] =
-        EvacuationMap(evacMap ++ otherMap)
+    ): EvacuationMap =
+        EvacuationMap(evacuationMap ++ otherMap)
 
-    def removed(keys: Set[EvacuationKey]): EvacuationMap[EvacuationKey] =
-        EvacuationMap(evacMap -- keys)
+    def removed(keys: Set[EvacuationKey]): EvacuationMap =
+        EvacuationMap(evacuationMap -- keys)
 
     def kzgCommitment: KzgCommitment = KzgCommitment.calculateKzgCommitment(scalars)
 
     private def scalars: SList[Scalar] = {
         SList.from(
-          evacMap.toList.map(e =>
+          evacuationMap.toList.map(e =>
               // FIXME: redundant CBOR encoding with `Sized`, since we're keeping the original serialization anyways
               (e._1, LedgerToPlutusTranslation.getTxOutV2(Sized(e._2.value)))
                   |> ToData.tupleToData
@@ -59,7 +77,19 @@ final case class EvacuationMap[EvacuationKey](
 }
 
 object EvacuationMap:
-    def empty[EvacuationKey](using
-        Ordering[EvacuationKey],
-        ToData[EvacuationKey]
-    ): EvacuationMap[EvacuationKey] = EvacuationMap(TreeMap.empty)
+    def empty: EvacuationMap = EvacuationMap(TreeMap.empty)
+
+    def applyDiffs(evacuationMap: EvacuationMap, diffs: Seq[EvacuationDiff]): EvacuationMap =
+        evacuationMap |> diffs
+            .map {
+                case EvacuationDiff.Update(key, value) =>
+                    (em: EvacuationMap) => EvacuationMap(em.evacuationMap.updated(key, value))
+                case EvacuationDiff.Delete(key) =>
+                    (em: EvacuationMap) => EvacuationMap(em.evacuationMap.removed(key))
+            }
+            .foldLeft(identity: EvacuationMap => EvacuationMap)(_.andThen(_))
+
+// TODO: Turn into a Map (for Add) and a Set (for delete)
+enum EvacuationDiff:
+    case Update(key: EvacuationKey, value: KeepRaw[TransactionOutput])
+    case Delete(key: EvacuationKey)

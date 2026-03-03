@@ -6,10 +6,11 @@ import hydrozoa.config.node.{NodeConfig, TestNodeConfig}
 import hydrozoa.lib.cardano.scalus.given_Choose_Coin
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
+import hydrozoa.multisig.ledger.virtual.tx.GenesisObligation
 import java.util.concurrent.TimeUnit
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Prop.propBoolean
-import org.scalacheck.{Gen, Prop, Properties}
+import org.scalacheck.{Arbitrary, Gen, Prop, Properties}
 import scala.concurrent.duration.FiniteDuration
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.{Hash, *}
@@ -47,7 +48,7 @@ def genDepositBuilder(testNodeConfig: TestNodeConfig): Gen[DepositTx.Build] = {
 
         txId <- arbitrary[TransactionInput]
 
-        virtualOutputs <- Gen
+        l2Outputs <- Gen
             .nonEmptyListOf(genGenesisObligation(config, Alice, minimumCoin = Coin.ada(2)))
             .map(NonEmptyList.fromListUnsafe)
 
@@ -56,8 +57,8 @@ def genDepositBuilder(testNodeConfig: TestNodeConfig): Gen[DepositTx.Build] = {
           5 -> Gen.choose(Coin(500_000), Coin(5_000_000))
         )
 
-        virtualValue = Value.combine(virtualOutputs.map(vo => Value(vo.l2OutputValue)).toList)
-        depositValue = virtualValue + Value(depositFee)
+        l2Value = Value.combine(l2Outputs.map(vo => Value(vo.l2OutputValue)).toList)
+        depositValue = l2Value + Value(depositFee)
 
         // TODO: use arbitrary values, not just ADA only
         fundingUtxos <- Gen
@@ -73,11 +74,12 @@ def genDepositBuilder(testNodeConfig: TestNodeConfig): Gen[DepositTx.Build] = {
 
     } yield DepositTx.Build(config)(
       utxosFunding = fundingUtxos,
-      virtualOutputs = virtualOutputs,
+      l2Payload = GenesisObligation.serialize(l2Outputs),
       depositFee = depositFee,
       changeAddress = depositor.address(config.network),
       submissionDeadline = submissionDeadline,
-      refundInstructions = instructions
+      refundInstructions = instructions,
+      l2Value = l2Value
     )
 }
 
@@ -90,15 +92,14 @@ object DepositTxTest extends Properties("Deposit Tx Test") {
                 addr <- genScriptAddress(config)
                 hash <- genByteStringOfN(32)
                 index <- Gen.posNum[Int].map(_ - 1)
-            } yield (addr, index, Hash[Blake2b_256, Any](hash))
+                fee <- Arbitrary.arbitrary[Coin]
+            } yield (addr, index, Hash[Blake2b_256, Any](hash), fee)
 
-            Prop.forAll(gen)((addr, idx, hash) =>
-                val aux = MD(MD.Deposit(addr, idx, hash))
+            Prop.forAll(gen)((addr, idx, hash, fee) =>
+                val aux = MD(MD.Deposit(addr, idx, hash, fee))
                 MD.parse(Some(KeepRaw(aux)))(using config.cardanoProtocolVersion) match {
                     case Right(x: MD.Deposit) =>
-                        "Metadata is as expected" |: (x.headAddress == addr
-                            && x.depositUtxoIx == idx
-                            && x.virtualOutputsHash == hash)
+                        "Metadata is as expected" |: (x == MD.Deposit(addr, idx, hash, fee))
                     case Right(_) => "Metadata is MD.deposit" |: Prop(false)
                     case Left(e)  => "Metadata parsing returns Right" |: Prop(false)
                 }
@@ -114,7 +115,7 @@ object DepositTxTest extends Properties("Deposit Tx Test") {
                     DepositTx
                         .Parse(config)(
                           depositTx.tx.toCbor,
-                          depositTx.depositProduced.virtualOutputs
+                          depositTx.depositProduced.l2Payload
                         )
                         .result match {
                         case Left(e) =>

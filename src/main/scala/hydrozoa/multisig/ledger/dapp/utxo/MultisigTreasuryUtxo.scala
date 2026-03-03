@@ -1,11 +1,11 @@
 package hydrozoa.multisig.ledger.dapp.utxo
 
 import hydrozoa.multisig.ledger.block.BlockVersion
-import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
-import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.{KzgCommitment, kzgCommitment}
+import hydrozoa.multisig.ledger.virtual.EvacuationMap
+import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import scalus.*
 import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.{AssetName, Coin, TransactionInput, TransactionOutput, Utxo, Utxos, Value}
+import scalus.cardano.ledger.{AssetName, Coin, TransactionInput, TransactionOutput, Utxo, Value}
 import scalus.uplc.builtin.Data.{FromData, ToData, toData}
 import scalus.uplc.builtin.{ByteString, Data, FromData, ToData}
 
@@ -77,9 +77,9 @@ object MultisigTreasuryUtxo {
     ) derives FromData,
           ToData
 
-    def mkInitMultisigTreasuryDatum(initialL2Utxos: Utxos): Datum =
+    def mkInitMultisigTreasuryDatum(initialEvacuationMap: EvacuationMap): Datum =
         Datum(
-          initialL2Utxos.kzgCommitment,
+          initialEvacuationMap.kzgCommitment,
           BigInt(BlockVersion.Major(0).toLong)
         )
 

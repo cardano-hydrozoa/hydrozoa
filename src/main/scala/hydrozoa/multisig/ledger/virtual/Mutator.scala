@@ -2,12 +2,11 @@ package hydrozoa.multisig.ledger.virtual
 
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
-import hydrozoa.multisig.ledger.VirtualLedgerM
-import hydrozoa.multisig.ledger.VirtualLedgerM.{Config, State}
+import hydrozoa.multisig.ledger.EutxoL2Ledger.Config
 import hydrozoa.multisig.ledger.virtual.tx.L2Tx
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.rules.{State as L1State, *}
-import scalus.cardano.ledger.{CertState, Coin, TransactionException}
+import scalus.cardano.ledger.{CertState, Coin, TransactionException, Utxos}
 
 // FIXME: This is heavily inherited from the scalus STS. We don't really follow it too closely any more, so it
 // could probably just be folded into VirtualLedger
@@ -39,15 +38,15 @@ object HydrozoaTransactionMutator {
     def transit(
         config: Config,
         time: QuantizedInstant,
-        state: State,
+        state: Utxos,
         l2Tx: L2Tx
-    ): Either[String | TransactionException, State] = {
+    ): Either[String | TransactionException, Utxos] = {
 
         // A helper for mapping the error type and applying arguments
         def helper(v: Validator): Either[String | TransactionException, Unit] =
             v.validate(
               CardanoLedgerContext.fromCardanoNetwork(config, time),
-              L1State(utxos = state.activeUtxos),
+              L1State(utxos = state),
               l2Tx.tx
             )
         for
@@ -76,11 +75,11 @@ object HydrozoaTransactionMutator {
             scalusState <-
                 PlutusScriptsTransactionMutator.transit(
                   CardanoLedgerContext.fromCardanoNetwork(config, time),
-                  state.toScalusState,
+                  scalus.cardano.ledger.rules.State(state),
                   l2Tx.tx
                 )
             // Native mutators: removes the L1-marked outputs, leaving only L2 outputs
-            state = EvacuatingMutator.transit(config, State.fromScalusState(scalusState), l2Tx)
+            state = EvacuatingMutator.transit(config, scalusState.utxos, l2Tx)
         yield state
     }
 }
@@ -93,9 +92,9 @@ object EvacuatingMutator:
 
     def transit(
         config: Config,
-        state: State,
+        state: Utxos,
         l2Tx: L2Tx
-    ): State =
+    ): Utxos =
         val l1UtxosToRemove = l2Tx.l1utxos.map(_._1).toSet
         // TODO: check all evacuatees exist?
-        state.copy(state.evacuationMap.removed(l1UtxosToRemove))
+        state.removedAll(l1UtxosToRemove)

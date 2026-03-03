@@ -7,7 +7,7 @@ import io.bullet.borer.{Cbor, Decoder, Encoder}
 import scala.util.Try
 import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger.AuxiliaryData.Metadata as MD
-import scalus.cardano.ledger.{AuxiliaryData, Hash32, KeepRaw, Metadatum, OriginalCborByteArray, ProtocolVersion, Transaction, TransactionInput, Word64}
+import scalus.cardano.ledger.{AuxiliaryData, Coin, Hash32, KeepRaw, Metadatum, OriginalCborByteArray, ProtocolVersion, Transaction, TransactionInput, Word64}
 import scalus.uplc.builtin.ByteString
 
 /** The metadata associated with hydrozoa L1 transactions serves two purposes:
@@ -45,10 +45,20 @@ object Metadata {
         val headAddress: ShelleyAddress
     }
 
+    /** @param headAddress
+      *   The address of the head that this deposit belongs to
+      * @param depositUtxoIx
+      *   The output index of the deposit utxo in this transaction
+      * @param l2PayloadHash
+      *   The L2 payload is passed out-of-band. This is the blake2b_256 hash of that payload
+      */
+    // TODO: Should virtualValue also be represented in the L2PayloadHash, so that the L2 Payload contains a (cleartext)
+    // Value and the (encrypted) payload?
     case class Deposit(
         override val headAddress: ShelleyAddress,
         depositUtxoIx: Int,
-        virtualOutputsHash: Hash32
+        l2PayloadHash: Hash32,
+        depositFee: Coin
     ) extends L1TxTypes
     given Encoder[Deposit] = Encoder.derived
     given depositDecoder(using OriginalCborByteArray, ProtocolVersion): Decoder[Deposit] =

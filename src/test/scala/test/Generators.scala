@@ -4,8 +4,8 @@ import cats.data.{NonEmptyList, NonEmptyVector}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.value.coin.Distribution
 import hydrozoa.lib.cardano.value.coin.Distribution.NormalizedWeights
-import hydrozoa.multisig.ledger.VirtualLedgerM
-import hydrozoa.multisig.ledger.VirtualLedgerM.{Config, State}
+import hydrozoa.multisig.ledger
+import hydrozoa.multisig.ledger.EutxoL2Ledger
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
@@ -327,14 +327,14 @@ object Generators {
           * actual context of the errors raised.
           */
         def genL2EventTransactionAttack: Gen[
-          (VirtualLedgerM.Config, State, L2Tx) => (
+          (EutxoL2Ledger.Config, EutxoL2Ledger.State, L2Tx) => (
               L2Tx,
               String | TransactionException
           )
         ] = {
 
             // Violates "AllInputsMustBeInUtxoValidator" ledger rule
-            def inputsNotInUtxoAttack: (VirtualLedgerM.Config, State, L2Tx) => (
+            def inputsNotInUtxoAttack: (ledger.EutxoL2Ledger.Config, EutxoL2Ledger.State, L2Tx) => (
                 L2Tx,
                 (String | TransactionException)
             ) =
@@ -343,7 +343,7 @@ object Generators {
                     val bogusInputId: TransactionHash = Hash(
                       genByteStringOfN(32)
                           .suchThat(txId =>
-                              !state.evacuationMap.cooked.toSeq
+                              !state.toSeq
                                   .map(_._1.transactionId.bytes)
                                   .contains(txId.bytes)
                           )

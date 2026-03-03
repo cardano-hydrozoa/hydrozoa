@@ -10,7 +10,6 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, quantizeLoss
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.explainConst
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
-import hydrozoa.multisig.ledger.virtual.tx.GenesisObligation
 import monocle.{Focus, Lens}
 import scala.util.{Failure, Success, Try}
 import scalus.cardano.address.ShelleyAddress
@@ -18,6 +17,8 @@ import scalus.cardano.ledger.*
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, ReferenceOutput, Send, Spend, ValidityEndSlot}
+import scalus.uplc.builtin.Builtins.blake2b_256
+import scalus.uplc.builtin.ByteString
 import scalus.uplc.builtin.Data.{fromData, toData}
 
 // TODO: George: add funding utxos?
@@ -39,8 +40,8 @@ private object DepositTxOps {
 
     final case class Build(config: Config)(
         utxosFunding: NonEmptyList[Utxo],
-        // TODO: instead passing virtual outputs we can pass the total value and the hash
-        virtualOutputs: NonEmptyList[GenesisObligation],
+        l2Payload: Array[Byte],
+        l2Value: Value,
         depositFee: Coin,
         changeAddress: ShelleyAddress,
         submissionDeadline: QuantizedInstant,
@@ -56,11 +57,7 @@ private object DepositTxOps {
             val depositDatum: DepositUtxo.Datum =
                 DepositUtxo.Datum(DepositUtxo.Refund.Instructions.Onchain.apply(refundInstructions))
 
-            val virtualValue = Value.combine(
-              virtualOutputs.toList.map(vo => Value(vo.l2OutputValue))
-            )
-
-            val depositValue = virtualValue + Value(depositFee)
+            val depositValue = l2Value + Value(depositFee)
 
             val sendDeposit = Send(
               TransactionOutput.Babbage(
@@ -82,18 +79,19 @@ private object DepositTxOps {
 
             val ttl = ValidityEndSlot(submissionDeadline.toSlot.slot)
 
-            val addRefundMetadata =
-                ModifyAuxiliaryData(_ =>
-                    Some(
-                      MD(
-                        MD.Deposit(
-                          headAddress = config.headMultisigAddress,
-                          depositUtxoIx = 0, // This builder produces the deposit utxo at index 0
-                          virtualOutputsHash = GenesisObligation.hash(virtualOutputs)
-                        )
-                      )
-                    )
+            val payloadHash: Hash32 = Hash(blake2b_256(ByteString.fromArray(l2Payload)))
+            val metadata = Some(
+              MD(
+                MD.Deposit(
+                  headAddress = config.headMultisigAddress,
+                  depositUtxoIx = 0, // This builder produces the deposit utxo at index 0
+                  l2PayloadHash = payloadHash,
+                  depositFee = depositFee
                 )
+              )
+            )
+            val addRefundMetadata =
+                ModifyAuxiliaryData(_ => metadata)
 
             for {
                 ctx <- TransactionBuilder
@@ -128,11 +126,11 @@ private object DepositTxOps {
                   address = config.headMultisigAddress,
                   datum = depositDatum,
                   value = depositValue,
-                  virtualOutputs = virtualOutputs,
+                  l2Payload = l2Payload,
                   depositFee = depositFee,
                   submissionDeadline = submissionDeadline,
                   absorptionStartTime =
-                      config.txTiming.depositAbsorptionStartTime(submissionDeadline)
+                      config.txTiming.depositAbsorptionStartTime(submissionDeadline),
                 )
             } yield DepositTx(
               depositProduced,
@@ -149,7 +147,7 @@ private object DepositTxOps {
             case MetadataParseError(e: MD.ParseError)
             case AlienDeposit(headAddress: ShelleyAddress)
             case HashMismatchVirtualOutputs(
-                virtualOutputs: NonEmptyList[GenesisObligation],
+                l2Payload: Array[Byte],
                 hash: Hash32
             )
             case MissingDepositOutputAtIndex(e: Int)
@@ -167,7 +165,7 @@ private object DepositTxOps {
       */
     final case class Parse(config: Config)(
         txBytes: Tx.Serialized,
-        virtualOutputs: NonEmptyList[GenesisObligation]
+        l2Payload: Array[Byte]
     ) {
         import Parse.*
         import Parse.Error.*
@@ -188,7 +186,8 @@ private object DepositTxOps {
                                 Left(MetadataParseError(MD.UnexpectedTxType(o, "Deposit")))
                             case Left(e) => Left(MetadataParseError(e))
                         }
-                        Metadata.Deposit(headAddress, depositUtxoIx, virtualOutputsHash) = d
+                        Metadata.Deposit(headAddress, depositUtxoIx, l2PayloadHash, depositFee) =
+                            d
 
                         // Check head address
                         _ <- Either.cond(
@@ -198,11 +197,13 @@ private object DepositTxOps {
                         )
 
                         // Compare hash with virtual outputs
-                        calculatedVirtualOutputsHash = GenesisObligation.hash(virtualOutputs)
+                        calculatedL2PayloadHash: Hash32 = Hash(
+                          blake2b_256(ByteString.fromArray(l2Payload))
+                        )
                         _ <- Either.cond(
-                          virtualOutputsHash == calculatedVirtualOutputsHash,
+                          l2PayloadHash == calculatedL2PayloadHash,
                           (),
-                          HashMismatchVirtualOutputs(virtualOutputs, virtualOutputsHash)
+                          HashMismatchVirtualOutputs(l2Payload, l2PayloadHash)
                         )
 
                         // Grab the deposit output at the index specified in the metadata
@@ -210,12 +211,8 @@ private object DepositTxOps {
                             .lift(depositUtxoIx)
                             .toRight(MissingDepositOutputAtIndex(depositUtxoIx))
 
-                        virtualValue = Value.combine(
-                          virtualOutputs.toList.map(vo => Value(vo.l2OutputValue))
-                        )
-
                         // TODO: check: contains ada only
-                        depositFee = (depositOutput.value.value - virtualValue).coin
+                        l2Value = depositOutput.value.value - Value(depositFee)
 
                         // Parse the deposit datum
                         depositDatum <- depositOutput.value.datumOption match {
@@ -251,10 +248,10 @@ private object DepositTxOps {
                               utxo =
                                   Utxo(TransactionInput(tx.id, depositUtxoIx), depositOutput.value),
                               headNativeScriptAddress = config.headMultisigAddress,
-                              virtualOutputs = virtualOutputs,
+                              l2Payload = l2Payload,
                               depositFee = depositFee,
                               submissionDeadline = validityEnd,
-                              txTiming = config.txTiming
+                              txTiming = config.txTiming,
                             )
                             .left
                             .map(DepositUtxoError(_))

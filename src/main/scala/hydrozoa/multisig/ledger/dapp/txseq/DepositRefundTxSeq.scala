@@ -10,8 +10,6 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuant
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.SomeBuildErrorOnly
 import hydrozoa.multisig.ledger.dapp.tx.{DepositTx, RefundTx, Tx}
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
-import hydrozoa.multisig.ledger.virtual.tx.GenesisObligation
-import io.bullet.borer.Cbor
 import monocle.*
 import monocle.syntax.all.*
 import scalus.cardano.address.ShelleyAddress
@@ -105,8 +103,10 @@ private object DepositRefundTxSeqOps {
     }
 
     /** * @param config
-      * @param virtualOutputs
-      *   Virtual (l2) outputs to be created (should satisfy l2 utxo requirements).
+      * @param l2Value
+      *   The actual deposit value becomes virtualValue + depositFee
+      * @param l2Payload
+      *   The L2 payload to pass to the virtual ledger
       * @param depositFee
       *   Deposit fee is an amount that goes to the head's treasury, may equal zero.
       * @param utxosFunding
@@ -122,7 +122,8 @@ private object DepositRefundTxSeqOps {
       *   Optional datum to add to the refund utxo.
       */
     final case class Build(config: Config)(
-        virtualOutputs: NonEmptyList[GenesisObligation],
+        l2Payload: Array[Byte],
+        l2Value: Value,
         depositFee: Coin,
         utxosFunding: NonEmptyList[Utxo],
         changeAddress: ShelleyAddress,
@@ -131,26 +132,21 @@ private object DepositRefundTxSeqOps {
         refundDatum: Option[Data]
     ) {
         def result: Either[Build.Error, DepositRefundTxSeq] = {
+            val expectedDepositValue = l2Value + Value(depositFee)
+
+            val refundInstructions = DepositUtxo.Refund.Instructions(
+              address = refundAddress,
+              datum = refundDatum,
+              validityStart = config.txTiming.refundValidityStart(submissionDeadline)
+            )
+
             for {
-
-                virtualValue <- Right(
-                  Value.combine(
-                    virtualOutputs.toList.map(vo => Value(vo.l2OutputValue))
-                  )
-                )
-
-                expectedDepositValue = virtualValue + Value(depositFee)
-
-                refundInstructions = DepositUtxo.Refund.Instructions(
-                  address = refundAddress,
-                  datum = refundDatum,
-                  validityStart = config.txTiming.refundValidityStart(submissionDeadline)
-                )
 
                 depositTx <- DepositTx
                     .Build(config)(
                       utxosFunding,
-                      virtualOutputs,
+                      l2Payload,
+                      l2Value,
                       depositFee,
                       changeAddress,
                       submissionDeadline,
@@ -232,6 +228,7 @@ private object DepositRefundTxSeqOps {
             case VirtualOutputDatumNotInline(output: TransactionOutput)
             case VirtualOutputMultiAssetNotEmpty(output: TransactionOutput)
             case VirtualOutputRefScriptInvalid(output: TransactionOutput)
+            case CborToTransactionOutputDecodingFailure(wrapped: Throwable)
             case TimingIncoherence
 
             override def toString: String = this match {
@@ -267,7 +264,7 @@ private object DepositRefundTxSeqOps {
       *
       * @param depositTxBytes
       * @param refundTxBytes
-      * @param virtualOutputsBytes
+      * @param l2Payload
       * @param donationToTreasury
       * @param config
       * @return
@@ -275,34 +272,14 @@ private object DepositRefundTxSeqOps {
     final case class Parse(config: Config)(
         depositTxBytes: Tx.Serialized,
         refundTxBytes: Tx.Serialized,
-        virtualOutputsBytes: Array[Byte]
+        l2Payload: Array[Byte],
     ) {
         import Parse.*
 
         def result: ParseErrorOr[DepositRefundTxSeq] = {
             for {
-                virtualOutputs: NonEmptyList[GenesisObligation] <- for {
-                    parsed <- Cbor
-                        .decode(virtualOutputsBytes)
-                        .to[List[TransactionOutput]]
-                        .valueTry
-                        .toEither
-                        .left
-                        .map(Parse.Error.VirtualOutputs(_))
-                    nonEmpty <- NonEmptyList.fromList(parsed).toRight(Parse.Error.NoVirtualOutputs)
-                    // This whole inner traverse could probably be factored out just to parse a genesis obligation from
-                    // a transaction output
-                    genesisObligations <- nonEmpty.traverse[ParseErrorOr, GenesisObligation](
-                      GenesisObligation.fromTransactionOutput
-                    )
-                } yield genesisObligations
-
-                virtualValue = Value.combine(
-                  virtualOutputs.toList.map(vo => Value(vo.l2OutputValue))
-                )
-
                 depositTx <- DepositTx
-                    .Parse(config)(txBytes = depositTxBytes, virtualOutputs = virtualOutputs)
+                    .Parse(config)(txBytes = depositTxBytes, l2Payload = l2Payload)
                     .result
                     .left
                     .map(Parse.Error.Deposit(_))
@@ -319,6 +296,7 @@ private object DepositRefundTxSeqOps {
 
                 depositUtxo = depositTx.depositProduced
                 depositValue = depositUtxo.value
+                l2Value = depositUtxo.l2Value
 
                 refundInstructions = DepositUtxo.Refund.Instructions(
                   depositUtxo.datum.refundInstructions,
@@ -326,7 +304,7 @@ private object DepositRefundTxSeqOps {
                   config.slotConfig
                 )
 
-                depositFee = depositValue - virtualValue
+                depositFee = depositValue - l2Value
 
                 expectedRefundTx <- RefundTx.Build
                     .PostDated(config)(depositTx.depositProduced, refundInstructions)

@@ -162,7 +162,7 @@ private object InitializationTxOps {
 
                     private[tx] val treasuryDatum =
                         MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum(
-                          config.initialEvacuationMap.cooked
+                          config.initialEvacuationMap
                         )
 
                     private val treasuryOutput = Babbage(
@@ -326,7 +326,7 @@ private object InitializationTxOps {
             expectedEndTime = config.txTiming.initializationEndTime(config.headStartTime)
 
             expectedTreasuryDatum = MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum(
-              config.initialEvacuationMap.cooked
+              config.initialEvacuationMap
             )
 
             actualOutputs = tx.body.value.outputs.map(_.value)

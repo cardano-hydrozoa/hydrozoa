@@ -9,6 +9,7 @@ import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, Equity, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
+import hydrozoa.multisig.ledger.virtual.tx.GenesisObligation
 import java.util.concurrent.TimeUnit
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
@@ -96,7 +97,7 @@ def genDepositUtxo(
 
         // NOTE: these genesis obligations are completely arbitrary and WILL NOT be coherent with the
         // deposit amount
-        vos <- Gen
+        l2Outputs <- Gen
             .nonEmptyListOf(genGenesisObligation(config, Alice))
             .map(NonEmptyList.fromListUnsafe)
 
@@ -111,7 +112,7 @@ def genDepositUtxo(
       address = headAddress_,
       datum = dd,
       value = depositAmount,
-      virtualOutputs = vos,
+      l2Payload = GenesisObligation.serialize(l2Outputs),
       depositFee = Coin.zero,
       submissionDeadline = submissionDeadline,
       absorptionStartTime = config.txTiming.depositAbsorptionStartTime(submissionDeadline)

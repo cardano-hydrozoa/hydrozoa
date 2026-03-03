@@ -1,6 +1,6 @@
 package hydrozoa.multisig.ledger.virtual
 
-import hydrozoa.multisig.ledger.VirtualLedgerM.{Config, State}
+import hydrozoa.multisig.ledger.EutxoL2Ledger
 import hydrozoa.multisig.ledger.virtual.tx.{L2Genesis, L2Tx}
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Address, ShelleyAddress}
@@ -38,7 +38,11 @@ trait L2ConformanceValidator[L1]:
 
 object L2ConformanceValidator {
 
-    def validate(context: Config, state: State, event: L2Tx | L2Genesis): Either[String, Unit] =
+    def validate(
+        context: EutxoL2Ledger.Config,
+        state: Utxos,
+        event: L2Tx | L2Genesis
+    ): Either[String, Unit] =
         event match {
             case L2Tx(tx, _, _, _) => given_L2ConformanceValidator_Transaction.l2Validate(tx)
             case L2Genesis(_, _)   => Right(()) // Correct by construction

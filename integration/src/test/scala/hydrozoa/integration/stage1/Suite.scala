@@ -22,10 +22,10 @@ import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost.URL
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendMock, MockState}
 import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, ConsensusActor, EventSequencer}
-import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.block.{BlockEffects, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.dapp.tx.{FinalizationTx, SettlementTx}
 import hydrozoa.multisig.ledger.event.LedgerEventNumber
+import hydrozoa.multisig.ledger.{EutxoL2Ledger, JointLedger}
 import java.util.concurrent.TimeUnit
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.commands.{ModelBasedSuite, ScenarioGen}
@@ -280,10 +280,12 @@ case class Suite(
               peerLiaisons = List()
             )
 
+            l2Ledger <- EutxoL2Ledger(nodeConfig)
             jointLedger <- system.actorOf(
               JointLedger(
                 nodeConfig,
-                jointLedgerConnections
+                jointLedgerConnections,
+                l2Ledger
               )
             )
 

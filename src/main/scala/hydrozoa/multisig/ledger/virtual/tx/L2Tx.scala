@@ -14,7 +14,7 @@ import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 
 final case class L2Tx(
     tx: Transaction,
-    l1utxos: List[(TransactionInput, Babbage)],
+    l1utxos: List[(TransactionInput, TransactionOutput)],
     l2utxos: List[(TransactionInput, Babbage)],
     // TODO: do we need it?
     resolvedUtxos: ResolvedUtxos
