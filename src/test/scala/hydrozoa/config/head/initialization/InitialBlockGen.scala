@@ -5,9 +5,8 @@ import hydrozoa.config.head.initialization.HeadStartTimeGen.{HeadStartTimeGen, c
 import hydrozoa.config.head.multisig.fallback.{FallbackContingencyGen, generateFallbackContingency}
 import hydrozoa.config.head.multisig.settlement.{SettlementConfigGen, generateSettlementConfig}
 import hydrozoa.config.head.multisig.timing.{TxTimingGen, generateDefaultTxTiming}
-import hydrozoa.config.head.network.{CardanoNetwork, generateStandardCardanoNetwork}
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.{GenHeadParams, generateHeadParameters}
-import hydrozoa.config.head.peers.{TestPeers, generateTestPeers}
 import hydrozoa.config.head.rulebased.{DisputeResolutionConfigGen, generateDisputeResolutionConfig}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
 import hydrozoa.multisig.ledger.dapp.txseq.InitializationTxSeq
@@ -16,9 +15,9 @@ import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.kzgCommitment
 import monocle.Focus.focus
 import org.scalacheck.Test.Parameters
 import org.scalacheck.{Gen, Prop, Properties}
+import test.{TestPeers, TestPeersSpec}
 
 def generateInitialBlock(testPeers: TestPeers)(
-    generateCardanoNetwork: Gen[CardanoNetwork] = generateStandardCardanoNetwork,
     generateTxTiming: TxTimingGen = generateDefaultTxTiming,
     generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
     generateDisputeResolutionConfig: DisputeResolutionConfigGen = generateDisputeResolutionConfig,
@@ -30,7 +29,7 @@ def generateInitialBlock(testPeers: TestPeers)(
     generateSettlementConfig: SettlementConfigGen = generateSettlementConfig
 ): Gen[InitialBlock] = {
     for {
-        cardanoNetwork <- generateCardanoNetwork
+        cardanoNetwork <- testPeers.network.generateStandardCardanoNetwork
 
         headParams <- generateHeadParameters(cardanoNetwork)(
           generateTxTiming,
@@ -42,7 +41,6 @@ def generateInitialBlock(testPeers: TestPeers)(
         initializationParameters <- generateInitializationParameters match {
             case g: InitializationParametersGenBottomUp.GenInitializationParameters =>
                 g(testPeers)(
-                  Gen.const(cardanoNetwork),
                   generateHeadStartTime,
                   _ => Gen.const(headParams.fallbackContingency)
                 )
@@ -52,7 +50,6 @@ def generateInitialBlock(testPeers: TestPeers)(
                   equityRange
                 ) =>
                 generator(testPeers)(
-                  Gen.const(cardanoNetwork),
                   generateHeadStartTime,
                   generateFallbackContingency,
                   generateGenesisUtxosL1,
@@ -65,7 +62,7 @@ def generateInitialBlock(testPeers: TestPeers)(
             .Preinit(
               cardanoNetwork = cardanoNetwork,
               headParams = headParams,
-              headPeers = testPeers.headPeers,
+              headPeers = testPeers.mkHeadPeers,
               initializationParams = initializationParameters
             )
             .get
@@ -97,12 +94,15 @@ def generateInitialBlock(testPeers: TestPeers)(
     )
 }
 
-object InitialBlockGenerator extends Properties("Sanity Check") {
+object InitialBlockGeneratorTest extends Properties("Initial block") {
     override def overrideParameters(p: Parameters): Parameters = {
         p.withMinSuccessfulTests(1_000)
     }
 
-    val _ = property("Sanity Check") = Prop.forAll(generateTestPeers())(testPeers =>
-        Prop.forAll(generateInitialBlock(testPeers)())(_ => true)
-    )
+    val _ = property("generates") = Prop.forAll(
+      TestPeersSpec
+          .generate()
+          .flatMap(TestPeers.generate)
+          .flatMap(generateInitialBlock(_)())
+    )(_ => true)
 }

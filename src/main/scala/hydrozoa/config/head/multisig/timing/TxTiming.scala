@@ -125,6 +125,15 @@ object TxTiming {
       depositAbsorptionDuration = 1.hours.quantize(slotConfig),
     )
 
+    // TODO: move to integration
+    def testnet(slotConfig: SlotConfig) = TxTiming(
+      minSettlementDuration = 1.hour.quantize(slotConfig),
+      inactivityMarginDuration = 20.seconds.quantize(slotConfig),
+      silenceDuration = 5.minute.quantize(slotConfig),
+      depositMaturityDuration = 10.second.quantize(slotConfig),
+      depositAbsorptionDuration = 2.hours.quantize(slotConfig),
+    )
+
     trait Section {
         def txTiming: TxTiming
 

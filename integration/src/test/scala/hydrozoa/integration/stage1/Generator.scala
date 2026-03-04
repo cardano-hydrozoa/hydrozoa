@@ -16,8 +16,8 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, Quant
 import hydrozoa.lib.cardano.scalus.given_Choose_QuantizedInstant
 import hydrozoa.lib.cardano.scalus.ledger.{asUtxoList, withZeroFees}
 import hydrozoa.lib.cardano.scalus.txbuilder.DiffHandler.prebalancedLovelaceDiffHandler
-import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.logging.Logging
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.txseq.DepositRefundTxSeq
@@ -34,7 +34,6 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{AuxiliaryData, Coin, Metadatum, SlotConfig, TransactionInput, TransactionOutput, Utxo, Utxos, Value, Word64}
 import scalus.cardano.txbuilder.TransactionBuilder
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Fee, ModifyAuxiliaryData, Send, Spend}
-import scalus.uplc.builtin.Builtins.blake2b_224
 
 // ===================================
 // Per-command generators
@@ -220,13 +219,14 @@ object CommandGen:
         txMutator: TxMutator
     )(state: Model.State): Gen[L2TxCommand] =
 
-        val cardanoNetwork: CardanoNetwork = state.headConfig.cardanoNetwork
+        val config = state.multiNodeConfig
+        val cardanoNetwork: CardanoNetwork = config.headConfig.cardanoNetwork
         val generateCappedValueC = generateCappedValue(cardanoNetwork)
         val l2AddressesInUse = state.activeUtxos.values.map(_.address).toSet
+
         val ownedUtxos = state.activeUtxos.filter((_, o) =>
-            o.address.asInstanceOf[ShelleyAddress].payment.asHash == blake2b_224(
-              state.ownTestPeer.wallet.exportVerificationKey
-            )
+            o.address.asInstanceOf[ShelleyAddress].payment.asHash == config
+                .addressOf(HeadPeerNumber.zero)
         )
 
         for {
@@ -255,9 +255,9 @@ object CommandGen:
                 )
                 .flatMap(
                   _.finalizeContext(
-                    protocolParams = state.headConfig.cardanoProtocolParams.withZeroFees,
+                    protocolParams = config.headConfig.cardanoProtocolParams.withZeroFees,
                     diffHandler = prebalancedLovelaceDiffHandler,
-                    evaluator = state.headConfig.plutusScriptEvaluatorForTxBuild,
+                    evaluator = config.headConfig.plutusScriptEvaluatorForTxBuild,
                     validators = Seq.empty
                   )
                 )
@@ -266,10 +266,9 @@ object CommandGen:
                   ctx => ctx.transaction
                 )
 
-            witness = state.ownTestPeer.wallet.mkVKeyWitness(txUnsigned)
-            txSigned = txUnsigned.attachVKeyWitnesses(List(witness))
+            txSigned = config.multisignTx(txUnsigned)
 
-            _ = logger.trace(s"l2Tx: ${HexUtil.encodeHexString(txSigned.toCbor)}")
+            _ = logger.trace(s"signed l2Tx: ${HexUtil.encodeHexString(txSigned.toCbor)}")
 
         } yield L2TxCommand(
           event = L2TxEvent(
@@ -311,14 +310,19 @@ object CommandGen:
     /** May fail if there is no enough funds in peer's utxos.
       */
     def genRegisterDepositCommand(state: Model.State): Gen[Option[RegisterDepositCommand]] = {
-        import state.headConfig
+        import state.multiNodeConfig
 
+        val peerAddress = multiNodeConfig.addressOf(HeadPeerNumber.zero)
+
+        // TODO: remove?
         // TODO: This gives the enterprise address without the stake, which is not compatible with the model
-        val peerAddress = state.ownTestPeer.address(state.headConfig.network)
+        // val peerAddress = state.ownTestPeer.address(state.headConfig.network)
         // peerAddress
         // <- Gen.oneOf(state.peerUtxosL1.map(_._2.address)).map(_.asInstanceOf[ShelleyAddress])
-        val generateCappedValueC = generateCappedValue(headConfig.cardanoNetwork)
-        val ensureMinAdaLenientC = ensureMinAdaLenient(headConfig.cardanoNetwork)
+
+        val cardanoNetwork = multiNodeConfig.headConfig.cardanoNetwork
+        val generateCappedValueC = generateCappedValue(cardanoNetwork)
+        val ensureMinAdaLenientC = ensureMinAdaLenient(cardanoNetwork)
 
         val l1UtxoAvailable = state.peerUtxosL1 -- state.utxoLocked
         if l1UtxoAvailable.isEmpty
@@ -395,7 +399,7 @@ object CommandGen:
                                         _ = logger.trace(s"depositAmount: $depositAmount")
 
                                         depositRefundSeq = DepositRefundTxSeq
-                                            .Build(headConfig)(
+                                            .Build(multiNodeConfig.headConfig)(
                                               virtualOutputs = virtualOutputs,
                                               depositFee = Coin.zero,
                                               utxosFunding = NonEmptyList
@@ -413,9 +417,10 @@ object CommandGen:
                                               identity
                                             )
 
-                                        depositTxSigned = state.ownTestPeer.signTx(
-                                          depositRefundSeq.depositTx.tx
-                                        )
+                                        depositTxSigned = multiNodeConfig
+                                            .signTxAs(HeadPeerNumber.zero)(
+                                              depositRefundSeq.depositTx.tx
+                                            )
 
                                         _ = logger.trace(
                                           s"deposit tx signed: ${HexUtil.encodeHexString(depositTxSigned.toCbor)}"
@@ -532,7 +537,7 @@ object ScenarioGenerators:
                     state.blockCycle match {
                         case Done(blockNumber, _) =>
                             val settlementExpirationTime =
-                                state.headConfig.txTiming.newSettlementEndTime(
+                                state.multiNodeConfig.headConfig.txTiming.newSettlementEndTime(
                                   state.competingFallbackStartTime
                                 )
                             CommandGen
@@ -540,7 +545,7 @@ object ScenarioGenerators:
                                   currentTime = state.currentTime.instant,
                                   settlementExpirationTime = settlementExpirationTime,
                                   competingFallbackStartTime = state.competingFallbackStartTime,
-                                  slotConfig = state.headConfig.slotConfig,
+                                  slotConfig = state.multiNodeConfig.headConfig.slotConfig,
                                   blockNumber = blockNumber
                                 )
                                 .map(AnyCommand.apply)
@@ -579,7 +584,7 @@ object ScenarioGenerators:
                     state.blockCycle match {
                         case Done(blockNumber, _) =>
                             val settlementExpirationTime =
-                                state.headConfig.txTiming.newSettlementEndTime(
+                                state.multiNodeConfig.headConfig.txTiming.newSettlementEndTime(
                                   state.competingFallbackStartTime
                                 )
                             // We need to avoid fallbacks to finalize the head
@@ -642,7 +647,7 @@ object ScenarioGenerators:
                     state.blockCycle match {
                         case Done(blockNumber, _) =>
                             val settlementExpirationTime =
-                                state.headConfig.txTiming.newSettlementEndTime(
+                                state.multiNodeConfig.headConfig.txTiming.newSettlementEndTime(
                                   state.competingFallbackStartTime
                                 )
                             CommandGen
@@ -650,7 +655,7 @@ object ScenarioGenerators:
                                   currentTime = state.currentTime.instant,
                                   settlementExpirationTime = settlementExpirationTime,
                                   competingFallbackStartTime = state.competingFallbackStartTime,
-                                  slotConfig = state.headConfig.slotConfig,
+                                  slotConfig = state.multiNodeConfig.headConfig.slotConfig,
                                   blockNumber = blockNumber
                                 )
                                 .map(AnyCommand.apply)
@@ -664,7 +669,7 @@ object ScenarioGenerators:
 
                             val depositsForSubmission = state.depositForSubmission
 
-                            val genFreq = Gen.frequency(
+                            Gen.frequency(
                               3 -> CommandGen
                                   .genRegisterDepositCommand(state)
                                   .map(_.map(AnyCommand.apply(_))),
@@ -686,8 +691,8 @@ object ScenarioGenerators:
                                             )(state)
                                             .map(cmd => Some(AnyCommand.apply(cmd)))
                                     else Gen.const(None))
-                            )
-                            genFreq.retryUntil(_.isDefined).map(_.get)
+                            ).retryUntil(_.isDefined)
+                                .map(_.get)
 
                         case HeadFinalized => Gen.const(noOp)
                     }

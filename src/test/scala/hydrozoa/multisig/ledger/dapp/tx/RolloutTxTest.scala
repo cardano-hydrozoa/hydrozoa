@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
-import hydrozoa.config.node.TestNodeConfig.generateTestNodeConfig
+import hydrozoa.config.node.MultiNodeConfig
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
 import org.scalacheck.*
 import scalus.cardano.ledger.*
@@ -15,8 +16,8 @@ import test.Generators.Other as GenOther
 object RolloutTxTest extends Properties("RolloutTxTest") {
     val genLastBuilder: Gen[RolloutTx.Build.Last] =
         for {
-            testNodeConfig <- generateTestNodeConfig
-            genPayouts = genPayoutObligation(testNodeConfig.nodeConfig.cardanoNetwork)
+            multiNodeConfig <- MultiNodeConfig.generate(TestPeersSpec.default)()
+            genPayouts = genPayoutObligation(multiNodeConfig.headConfig.cardanoNetwork)
             // We want to test small, medium, and large, so we do it with frequency
             payouts <-
                 Gen.frequency(
@@ -24,16 +25,17 @@ object RolloutTxTest extends Properties("RolloutTxTest") {
                   (7, Gen.sized(size => GenOther.nonEmptyVectorOfN(size * 3 + 1, genPayouts))),
                   (2, Gen.sized(size => GenOther.nonEmptyVectorOfN(size * 6 + 1, genPayouts)))
                 )
-        } yield RolloutTx.Build.Last(testNodeConfig.nodeConfig)(payouts)
+        } yield RolloutTx.Build.Last(multiNodeConfig.nodeConfigs(HeadPeerNumber.zero))(payouts)
 
     val genNotLastBuilder: Gen[RolloutTx.Build.NotLast] =
         for {
-            testNodeConfig <- generateTestNodeConfig
+            multiNodeConfig <- MultiNodeConfig.generate(TestPeersSpec.default)()
             payouts <- GenOther.nonEmptyVectorOf(
-              genPayoutObligation(testNodeConfig.nodeConfig.cardanoNetwork)
+              genPayoutObligation(multiNodeConfig.headConfig.cardanoNetwork)
             )
             rolloutSpentVal <- Arbitrary.arbitrary[Coin].map(Value(_))
-        } yield RolloutTx.Build.NotLast(testNodeConfig.nodeConfig)(payouts, rolloutSpentVal)
+        } yield RolloutTx.Build
+            .NotLast(multiNodeConfig.nodeConfigs(HeadPeerNumber.zero))(payouts, rolloutSpentVal)
 
     // ===================================
     // Last

@@ -1,9 +1,9 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.*
+import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.config.node.TestNodeConfig
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, quantize}
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq
@@ -29,7 +29,6 @@ import scalus.uplc.builtin.Data.toData
 import test.*
 import test.Generators.Hydrozoa.*
 import test.Generators.Other
-import test.TestPeer.Alice
 
 def genDepositDatum(network: CardanoNetwork.Section): Gen[DepositUtxo.Datum] = {
     for {
@@ -87,8 +86,9 @@ def genDepositUtxo(
 
         // NOTE: these genesis obligations are completely arbitrary and WILL NOT be coherent with the
         // deposit amount
+        address <- arbitrary[ShelleyAddress]
         vos <- Gen
-            .nonEmptyListOf(genGenesisObligation(config, Alice))
+            .nonEmptyListOf(genGenesisObligation(config, address))
             .map(NonEmptyList.fromListUnsafe)
 
         // Generate some offset to the "zero slot" time.
@@ -110,17 +110,16 @@ def genDepositUtxo(
     )
 
 /** Generate a "standalone" settlement tx. */
-def genSettlementTxSeqBuilder(config: TestNodeConfig)(
+def genSettlementTxSeqBuilder(config: HeadConfig)(
     estimatedFee: Coin = Coin(5_000_000L),
     // If passed, the kzg commitment will be set to the value.
     // If not, its randomly generated
     kzgCommitment: Option[KzgCommitment] = None,
     fallbackValidityStart: QuantizedInstant = java.time.Instant
         .ofEpochMilli(java.time.Instant.now().toEpochMilli + 3_600_000)
-        .quantize(config.nodeConfig.slotConfig),
-    blockCreatedOn: QuantizedInstant =
-        java.time.Instant.now().quantize(config.nodeConfig.slotConfig),
-    txTiming: TxTiming = TxTiming.default(config.nodeConfig.slotConfig)
+        .quantize(config.slotConfig),
+    blockCreatedOn: QuantizedInstant = java.time.Instant.now().quantize(config.slotConfig),
+    txTiming: TxTiming = TxTiming.default(config.slotConfig)
 ): Gen[SettlementTxSeq.Build] = {
     // A helper to generator empty, small, medium, large (up to 1000)
     def genHelper[T](gen: Gen[T]): Gen[Vector[T]] = Gen.sized(size =>
@@ -136,12 +135,12 @@ def genSettlementTxSeqBuilder(config: TestNodeConfig)(
         majorVersion <- Gen.posNum[Int]
 
         genDeposit = genDepositUtxo(
-          config = config.nodeConfig,
-          headAddress = Some(config.nodeConfig.headMultisigAddress)
+          config = config,
+          headAddress = Some(config.headMultisigAddress)
         )
-        deposits <- genHelper(genDeposit).map(_.take(config.nodeConfig.maxDepositsAbsorbedPerBlock))
+        deposits <- genHelper(genDeposit).map(_.take(config.maxDepositsAbsorbedPerBlock))
 
-        payouts <- genHelper(genPayoutObligation(config.nodeConfig.cardanoNetwork))
+        payouts <- genHelper(genPayoutObligation(config.cardanoNetwork))
         payoutAda = payouts
             .map(_.utxo.value.coin)
             .fold(Coin.zero)(_ + _)
@@ -159,15 +158,15 @@ def genSettlementTxSeqBuilder(config: TestNodeConfig)(
             equity <- Gen.choose(100_000_000L, 10_000_000_000L).map(l => Equity(Coin(l)).get)
             treasuryValue = payoutAda + equity.coin
         } yield MultisigTreasuryUtxo(
-          treasuryTokenName = config.nodeConfig.headTokenNames.treasuryTokenName,
+          treasuryTokenName = config.headTokenNames.treasuryTokenName,
           utxoId = utxoId,
-          address = config.nodeConfig.headMultisigAddress,
+          address = config.headMultisigAddress,
           datum = MultisigTreasuryUtxo.Datum(kzg, majorVersion),
           value = Value(treasuryValue),
           equity = equity
         )
 
-    } yield SettlementTxSeq.Build(config.nodeConfig)(
+    } yield SettlementTxSeq.Build(config)(
       kzgCommitment = kzg,
       majorVersionProduced = BlockVersion.Major(majorVersion),
       depositsToSpend = deposits,
@@ -185,7 +184,7 @@ def genSettlementTxSeqBuilder(config: TestNodeConfig)(
   * @param majorVersion
   *   the version of the next block
   */
-def genNextSettlementTxSeqBuilder(config: TestNodeConfig)(
+def genNextSettlementTxSeqBuilder(config: HeadConfig)(
     treasuryToSpend: MultisigTreasuryUtxo,
     fallbackValidityStart: QuantizedInstant,
     blockCreatedOn: QuantizedInstant,
@@ -206,15 +205,15 @@ def genNextSettlementTxSeqBuilder(config: TestNodeConfig)(
     )
 
     val genDeposit = genDepositUtxo(
-      config.nodeConfig,
-      headAddress = Some(config.nodeConfig.headMultisigAddress)
+      config,
+      headAddress = Some(config.headMultisigAddress)
     )
 
     given Ord[v1.Value] = valueOrd
 
     for {
         deposits <- genHelper(genDeposit)
-        payouts <- genHelper(genPayoutObligation(config.nodeConfig.cardanoNetwork))
+        payouts <- genHelper(genPayoutObligation(config.cardanoNetwork))
         prefixes = (payouts.length to 0 by -1).map(payouts.take)
         infimum = prefixes
             .find(prefix =>
@@ -233,7 +232,7 @@ def genNextSettlementTxSeqBuilder(config: TestNodeConfig)(
             case Some(kzg) => Gen.const(kzg)
         }
     } yield (
-      SettlementTxSeq.Build(config.nodeConfig)(
+      SettlementTxSeq.Build(config)(
         kzgCommitment = kzg,
         majorVersionProduced = BlockVersion.Major(majorVersion),
         depositsToSpend = deposits,

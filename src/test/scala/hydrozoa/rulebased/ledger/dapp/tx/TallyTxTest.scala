@@ -1,8 +1,7 @@
 package hydrozoa.rulebased.ledger.dapp.tx
 
-import hydrozoa.config.head.HeadPeersSpec.Exact
-import hydrozoa.config.head.peers.generateTestPeers
-import hydrozoa.config.node.generateNodeConfig
+import hydrozoa.config.node.MultiNodeConfig
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Validators.nonSigningValidators
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.cip67DisputeTokenPrefix
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
@@ -23,6 +22,8 @@ import scalus.cardano.onchain.plutus.v3.TokenName
 import scalus.uplc.builtin.Builtins.blake2b_224
 import scalus.uplc.builtin.ByteString
 import scalus.uplc.builtin.Data.toData
+import test.PeersNumberSpec.Exact
+import test.TestPeersSpec
 
 /** Generate a vote datum with a cast vote for tally testing
   */
@@ -106,8 +107,10 @@ def genTallyTxRecipe(
     for {
 
         // Test currently uses two peers
-        testPeers <- generateTestPeers(minPeers = 2)
-        config <- generateNodeConfig(Exact(testPeers.nHeadPeers.toInt))()
+        multiNodeConfig <- MultiNodeConfig.generate(
+          TestPeersSpec.default.withPeersNumberSpec(Exact(2))
+        )()
+        config = multiNodeConfig.headConfig
 
         // This is 4 bytes shorter to accommodate CIP-67 prefixes
         // NB: we use the same token name _suffix_ for all head tokens so far, which is not the case in reality
@@ -142,7 +145,7 @@ def genTallyTxRecipe(
           config.headMultisigScript.policyId,
           voteTokenName,
           continuingVoteDatum,
-          AddrKeyHash(blake2b_224(testPeers.headPeers.headPeerVKeys.head)),
+          AddrKeyHash(blake2b_224(config.headPeers.headPeerVKeys.head)),
           config.network
         )
 
@@ -152,11 +155,14 @@ def genTallyTxRecipe(
           config.headMultisigScript.policyId,
           voteTokenName,
           removedVoteDatum,
-          AddrKeyHash(blake2b_224(testPeers.headPeers.headPeerVKeys.toList(1))),
+          AddrKeyHash(blake2b_224(config.headPeers.headPeerVKeys.toList(1))),
           config.network
         )
 
-        collateralUtxo <- genCollateralUtxo(config, testPeers._testPeers.head._2)
+        collateralUtxo <- genCollateralUtxo(
+          config,
+          multiNodeConfig.addressOf(HeadPeerNumber.zero)
+        )
 
     } yield TallyTx.Recipe(
       continuingVoteUtxo = continuingVoteUtxo,

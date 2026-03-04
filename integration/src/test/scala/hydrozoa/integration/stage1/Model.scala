@@ -2,6 +2,7 @@ package hydrozoa.integration.stage1
 
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
+import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.config.node.operation.liquidation.NodeOperationLiquidationConfig
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.integration.stage1.Commands.*
@@ -9,6 +10,7 @@ import hydrozoa.integration.stage1.Model.Error.UnexpectedState
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant.mkOrderingOps
 import hydrozoa.lib.logging.Logging
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.JointLedger.mkGenesisId
 import hydrozoa.multisig.ledger.VirtualLedgerM
 import hydrozoa.multisig.ledger.block.BlockBrief.{Final, Major, Minor}
@@ -29,7 +31,6 @@ import org.scalacheck.commands.ModelCommand
 import scala.collection.immutable.Queue
 import scala.util.chaining.*
 import scalus.cardano.ledger.{AssetName, Transaction, TransactionHash, TransactionInput, Utxos}
-import test.TestPeer
 
 object Model:
     private val logger = Logging.logger("Stage1.Model")
@@ -43,10 +44,7 @@ object Model:
       */
     case class State(
         // Read-only: minimal configuration needed for model and SUT
-        // TODO: I wanted TestPeer not to leave the config generation part, check whether it's possible
-        //   One place we use it - signing deposit tx during the generation
-        ownTestPeer: TestPeer,
-        headConfig: HeadConfig,
+        multiNodeConfig: MultiNodeConfig,
         operationalMultisigConfig: NodeOperationMultisigConfig,
         operationalLiquidationConfig: NodeOperationLiquidationConfig,
 
@@ -66,6 +64,9 @@ object Model:
 
         // L1 state - the only peer's utxos
         peerUtxosL1: Utxos,
+
+        // Non-mutable
+        peerGenesisUtxosL1: Utxos,
 
         // Deposits
 
@@ -89,7 +90,7 @@ object Model:
         override def toString: String = "<model state (hidden)>"
 
         def nextLedgerEventId: LedgerEventId =
-            LedgerEventId(peerNum = ownTestPeer.peerNum, eventNum = nextLedgerEventNumber)
+            LedgerEventId(peerNum = HeadPeerNumber.zero, eventNum = nextLedgerEventNumber)
 
         /** To save time and keep things simple we exploit the fact that all txs that may mutate the
           * L1 state of the peer's utxo are continuing - they spend and pays back at least one utxo
@@ -98,8 +99,10 @@ object Model:
           */
         def applyContinuingL1Tx(l1Tx: Transaction): State = {
             // TODO: this is a bit unwieldy
+            // TODO: make a constant?
+            // TODO: review
             val peerAddresses = this.peerUtxosL1.map(_._2.address).toSet
-                + ownTestPeer.address(headConfig.network)
+                + this.multiNodeConfig.addressOf(HeadPeerNumber.zero)
             val survivedUtxo = this.peerUtxosL1 -- l1Tx.body.value.inputs.toSet
             val newUtxos = survivedUtxo ++ l1Tx.body.value.outputs.toList
                 .map(_.value)
@@ -255,7 +258,7 @@ object Model:
                 .fold(err => throw RuntimeException(s"Failed to parse L2Tx: $err"), identity)
 
             val ret = HydrozoaTransactionMutator.transit(
-              config = state.headConfig,
+              config = state.multiNodeConfig.headConfig,
               time = state.currentTime.instant,
               state = VirtualLedgerM.State(state.activeUtxos),
               l2Tx = l2Tx
@@ -306,7 +309,7 @@ object Model:
                       cmd.blockNumber,
                       events,
                       state.competingFallbackStartTime,
-                      state.headConfig.txTiming,
+                      state.multiNodeConfig.headConfig.txTiming,
                       creationTime,
                       prevVersion,
                       cmd.isFinal,
@@ -314,12 +317,14 @@ object Model:
                       state.depositEnqueued,
                       state.depositsRegistered,
                       state.depositSubmitted,
-                      state.headConfig.headTokenNames.treasuryTokenName
+                      state.multiNodeConfig.headConfig.headTokenNames.treasuryTokenName
                     )
 
                     val newCompetingFallbackStartTime =
                         if blockBrief.isInstanceOf[Major]
-                        then state.headConfig.txTiming.newFallbackStartTime(creationTime)
+                        then
+                            state.multiNodeConfig.headConfig.txTiming
+                                .newFallbackStartTime(creationTime)
                         else state.competingFallbackStartTime
                     logger.debug(s"newCompetingFallbackStartTime: $newCompetingFallbackStartTime")
 
@@ -535,7 +540,7 @@ object Model:
         ): (Unit, State) = {
 
             import cmd.registerDeposit as req
-            import state.headConfig as config
+            import state.multiNodeConfig as config
 
             logger.debug(
               s"MODEL>> RegisterDepositCommand for event ID: ${cmd.registerDeposit.eventId}"
@@ -547,7 +552,7 @@ object Model:
 
             val seq =
                 DepositRefundTxSeq
-                    .Parse(config)(
+                    .Parse(config.headConfig)(
                       depositTxBytes = req.depositTxBytes,
                       refundTxBytes = req.refundTxBytes,
                       virtualOutputsBytes = req.virtualOutputsBytes
@@ -558,7 +563,9 @@ object Model:
             // For now, all deposits request should be valid by construction
             require(blockStartTime < seq.depositTx.validityEnd)
             require(
-              blockStartTime < config.txTiming.depositAbsorptionEndTime(seq.depositTx.validityEnd)
+              blockStartTime < config.headConfig.txTiming.depositAbsorptionEndTime(
+                seq.depositTx.validityEnd
+              )
             )
 
             logger.trace(s"deposit txHash=${seq.depositTx.tx.id}")

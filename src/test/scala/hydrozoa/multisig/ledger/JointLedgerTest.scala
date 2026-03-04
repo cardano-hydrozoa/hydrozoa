@@ -8,13 +8,12 @@ import cats.syntax.all.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.actor.{ActorSystem, test as _}
-import hydrozoa.config.head.HeadPeersSpec.Exact
-import hydrozoa.config.head.peers.{TestPeers, generateTestPeers}
-import hydrozoa.config.node.{NodeConfig, generateNodeConfig}
+import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.multisig.consensus.ConsensusActor
 import hydrozoa.multisig.consensus.ConsensusActor.Request
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.ledger.JointLedger.{Done, Producing}
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.*
@@ -46,16 +45,17 @@ import test.TestM.*
 given ppNodeConfig: (NodeConfig => Pretty) = nodeConfig =>
     Pretty(_ => "NodeConfig (too long to print)")
 
-given ppTestPeers: (TestPeers => Pretty) = testPeers =>
-    Pretty(_ =>
-        "TestPeers:"
-            + s"\n\t Num Peers: ${testPeers._testPeers.length}"
-            + (testPeers._testPeers.map(testPeer =>
-                f"\n\t${testPeer._1.peerNum.toInt}%2d"
-                    + s" | ${testPeer._2.wallet.exportVerificationKey.take(2)}(...)"
-                    + s" | ${testPeer._2.name} "
-            ))
-    )
+// TODO: restore
+//given ppTestPeers: (TestPeers => Pretty) = testPeers =>
+//    Pretty(_ =>
+//        "TestPeers:"
+//            + s"\n\t Num Peers: ${testPeers._headPeersName.length}"
+//            + (testPeers._headPeersName.map(testPeer =>
+//                f"\n\t${testPeer._1.peerNum.toInt}%2d"
+//                    + s" | ${testPeers.wallet(testPeer._2).exportVerificationKey.take(2)}(...)"
+//                    + s" | ${testPeer._2.name} "
+//            ))
+//    )
 
 /** This object contains component-specific helpers to utilize the TestM type.
   *
@@ -82,10 +82,19 @@ object JointLedgerTestHelpers {
     type JLTest[A] = TestM[TestR, A]
     val defaultInitializer: PropertyM[IO, TestR] = {
         for {
-            testPeers <- PropertyM.pick[IO, TestPeers](generateTestPeers())
-            config <- PropertyM.pick[IO, NodeConfig](
-              generateNodeConfig(Exact(testPeers.headPeers.nHeadPeers.toInt))()
+            multiNodeConfig <- PropertyM.pick[IO, MultiNodeConfig](
+              MultiNodeConfig.generate(
+                TestPeersSpec.default.withPeersNumberSpec(PeersNumberSpec.Exact(1))
+              )()
             )
+
+            // testPeers <- PropertyM.pick[IO, TestHeadPeers](generateTestPeers())
+            // config <- PropertyM.pick[IO, NodeConfig](
+            //  generateNodeConfig(Exact(SeedPhrase.Yaci, testPeers.headPeers.nHeadPeers.toInt))()
+            // )
+
+            config = multiNodeConfig.nodeConfigs(HeadPeerNumber.zero)
+
             system <- PropertyM.run(ActorSystem[IO]("DappLedger").allocated.map(_._1))
 
             consensusActorStub <- PropertyM.run(
@@ -106,7 +115,7 @@ object JointLedgerTestHelpers {
               )
             )
         } yield TestR(
-          testPeers = testPeers,
+          multiNodeConfig = multiNodeConfig,
           config = config,
           actorSystem = system,
           jointLedger = jointLedger
@@ -116,8 +125,7 @@ object JointLedgerTestHelpers {
     /** The "environment" that is contained in the ReaderT of the JLTest
       */
     case class TestR(
-        // These might not strictly be needed
-        testPeers: TestPeers,
+        multiNodeConfig: MultiNodeConfig,
         config: JointLedger.Config,
         actorSystem: ActorSystem[IO],
         jointLedger: ActorRef[IO, JointLedger.Requests.Request]
@@ -244,12 +252,13 @@ object JointLedgerTestHelpers {
             import Requests.*
             for {
                 env <- ask[TestR]
-                peer = env.testPeers._testPeers.head._2
+
+                address = env.multiNodeConfig.addressOf(HeadPeerNumber.zero)
 
                 virtualOutputs <-
                     pick[TestR, NonEmptyList[GenesisObligation]](
                       Gen.nonEmptyListOf(
-                        genGenesisObligation(env.config, peer, minimumCoin = Coin.ada(5))
+                        genGenesisObligation(env.config, address, minimumCoin = Coin.ada(5))
                       ).map(NonEmptyList.fromListUnsafe)
                           .label(s"Virtual Outputs for deposit $eventId")
                     )
@@ -263,7 +272,7 @@ object JointLedgerTestHelpers {
                 utxosFunding <- pick[TestR, NonEmptyList[Utxo]]((for {
                     utxosWith0Coin <- Gen
                         .nonEmptyListOf(
-                          genAdaOnlyPubKeyUtxo(env.config, peer, minimumCoin = Coin.ada(3))
+                          genAdaOnlyPubKeyUtxo(env.config, address, minimumCoin = Coin.ada(3))
                         )
                     utxoDist <- genCoinDistributionWithMinAdaUtxo(
                       virtualOutputsValue.coin,
@@ -278,9 +287,9 @@ object JointLedgerTestHelpers {
                   virtualOutputs = virtualOutputs,
                   depositFee = Coin.zero,
                   utxosFunding = utxosFunding,
-                  changeAddress = peer.address(env.config.network),
+                  changeAddress = address,
                   submissionDeadline = submissionDeadline,
-                  refundAddress = peer.address(env.config.network),
+                  refundAddress = address,
                   refundDatum = None
                 )
 
@@ -307,10 +316,12 @@ object JointLedgerTestHelpers {
                   condition = depositRefundTxSeq.refundTx.tx.body.value.ttl.isEmpty
                 )
 
+                signTx = env.multiNodeConfig.signTxAs(HeadPeerNumber.zero)
+
                 req =
                     DepositEvent(
-                      depositTxBytes = peer.signTx(depositRefundTxSeq.depositTx.tx).toCbor,
-                      refundTxBytes = peer.signTx(depositRefundTxSeq.refundTx.tx).toCbor,
+                      depositTxBytes = signTx(depositRefundTxSeq.depositTx.tx).toCbor,
+                      refundTxBytes = signTx(depositRefundTxSeq.refundTx.tx).toCbor,
                       depositFee = Coin.zero,
                       virtualOutputsBytes = virtualOutputsBytes,
                       eventId = eventId

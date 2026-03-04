@@ -1,5 +1,6 @@
 package hydrozoa.multisig.consensus.peer
 
+import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.cardano.wallet.*
 import hydrozoa.multisig.consensus.ack.{AckBlock, AckId, AckNumber}
 import hydrozoa.multisig.ledger.block.{Block, BlockHeader}
@@ -26,6 +27,11 @@ final class HeadPeerWallet(
 
     def mkTxSignature(tx: Transaction): TxSignature =
         TxSignature(mkVKeyWitness(tx))
+
+    // TODO: do we want to keep in tests only?
+    def signTx(txUnsigned: Transaction): Transaction =
+        val keyWitness = mkVKeyWitness(txUnsigned)
+        txUnsigned.attachVKeyWitnesses(List(keyWitness))
 
     def mkMinorHeaderSignature(
         headerSerialized: BlockHeader.Minor.Onchain.Serialized

@@ -33,7 +33,6 @@ import scalus.uplc.builtin.{ByteString, Data}
 import scalus.|>
 import spire.math.{Rational, SafeLong}
 import test.Generators.Hydrozoa.genAdaOnlyPubKeyUtxo
-import test.TestPeer.Alice
 
 /** This module contains shared generators and arbitrary instances that may be shared among multiple
   * tests. We separate them into "Hydrozoa" and "Other" objects for ease of upstreaming.
@@ -187,14 +186,14 @@ object Generators {
         // TODO: make this take all fields as Option and default to generation if None.
         def genAdaOnlyPubKeyUtxo(
             config: CardanoNetwork.Section,
-            peer: TestPeer,
+            address: Address,
             minimumCoin: Coin = Coin.zero,
             datumGenerator: Option[Gen[Option[DatumOption]]] = None
         ): Gen[Utxo] =
             for {
                 txId <- arbitrary[TransactionInput]
                 txOutput <- genAdaOnlyBabbageOutput(
-                  peer,
+                  address,
                   config,
                   minimumCoin,
                   datumGenerator
@@ -210,7 +209,7 @@ object Generators {
           * @return
           */
         def genAdaOnlyBabbageOutput(
-            peer: TestPeer,
+            address: Address,
             config: CardanoNetwork.Section,
             minimumCoin: Coin = Coin.zero,
             datumGenerator: Option[Gen[Option[DatumOption]]] = None
@@ -225,7 +224,7 @@ object Generators {
                 }
                 txOutput: TransactionOutput.Babbage = ensureMinAda(
                   Babbage(
-                    address = peer.address(config.network),
+                    address = address, // peer.address(config.network),
                     value = Value(coin),
                     datumOption = datum,
                     scriptRef = None
@@ -237,7 +236,7 @@ object Generators {
         // Has duplication with genAdaOnlyBabbageOutput
         def genGenesisObligation(
             config: CardanoNetwork.Section,
-            peer: TestPeer,
+            address: ShelleyAddress,
             minimumCoin: Coin = Coin.zero,
             datumGenerator: Option[Gen[Option[Inline]]] = None
         ): Gen[GenesisObligation] =
@@ -251,7 +250,7 @@ object Generators {
                 }
                 txOutput: TransactionOutput.Babbage = ensureMinAda(
                   Babbage(
-                    address = peer.address(config.network),
+                    address = address, // peer.address(config.network),
                     value = Value(coin),
                     datumOption = datum,
                     scriptRef = None
@@ -260,7 +259,7 @@ object Generators {
                 ).asInstanceOf[Babbage].focus(_.value).modify(_ + value)
 
                 genesisObligation = GenesisObligation(
-                  l2OutputPaymentAddress = peer.address(config.network).payment,
+                  l2OutputPaymentAddress = address.payment, // peer.address(config.network).payment,
                   l2OutputNetwork = config.network,
                   l2OutputDatum = datum match {
                       case None    => SOption.None
@@ -278,7 +277,7 @@ object Generators {
         def genL2WithdrawalFromUtxosAndPeer(
             config: CardanoNetwork.Section,
             inputUtxos: Utxos,
-            peer: TestPeer
+            peer: TestPeerName
         ): Gen[L2Tx] =
             for {
                 addr <- genShelleyAddress(config)
@@ -595,21 +594,24 @@ object GeneratorTests extends Properties("Generator Tests") {
             )
         )
 
-    val _ = property("genCoinDistributionWithMinAda sums to original amount") = Prop.forAll(
-      Gen.posNum[Long],
-      Gen.posNum[Int],
-      Gen.nonEmptyListOf(genAdaOnlyPubKeyUtxo(CardanoNetwork.Mainnet, Alice))
-    )((amount, n, utxos) =>
-        Prop.forAll(
-          Generators.Other.genCoinDistributionWithMinAdaUtxo(
-            coin = Coin(amount),
-            utxoList = NonEmptyList.fromListUnsafe(utxos),
-            params = CardanoNetwork.Mainnet.cardanoProtocolParams
-          )
-        )(distribution =>
-            val expectedAmount = distribution.toList.map(_.output.value.coin.value).sum
-            expectedAmount == amount + utxos.toList.map(_.output.value.coin.value).sum
+    val _ = property("genCoinDistributionWithMinAda sums to original amount") =
+        Prop.forAll(arbitrary[ShelleyAddress])(address =>
+            Prop.forAll(
+              Gen.posNum[Long],
+              Gen.posNum[Int],
+              Gen.nonEmptyListOf(genAdaOnlyPubKeyUtxo(CardanoNetwork.Mainnet, address))
+            )((amount, n, utxos) =>
+                Prop.forAll(
+                  Generators.Other.genCoinDistributionWithMinAdaUtxo(
+                    coin = Coin(amount),
+                    utxoList = NonEmptyList.fromListUnsafe(utxos),
+                    params = CardanoNetwork.Mainnet.cardanoProtocolParams
+                  )
+                )(distribution =>
+                    val expectedAmount = distribution.toList.map(_.output.value.coin.value).sum
+                    expectedAmount == amount + utxos.toList.map(_.output.value.coin.value).sum
+                )
+            )
         )
-    )
 
 }

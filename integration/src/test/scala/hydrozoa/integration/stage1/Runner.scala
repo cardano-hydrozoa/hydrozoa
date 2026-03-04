@@ -1,12 +1,11 @@
 package hydrozoa.integration.stage1
 
-import hydrozoa.config.head.multisig.timing.{generateDefaultTxTiming, generateYaciTxTiming}
+import hydrozoa.config.head.multisig.timing.{generateDefaultTxTiming, generateTestnetTxTiming, generateYaciTxTiming}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.integration.stage1.ScenarioGenerators.*
 import hydrozoa.integration.stage1.Stage1PropertiesL1Mock.property
-import hydrozoa.integration.stage1.SuiteCardano.{Mock, Yaci}
+import hydrozoa.integration.stage1.SuiteCardano.{Mock, Public, Yaci}
 import hydrozoa.integration.yaci.DevKit
-import hydrozoa.multisig.backend.cardano.{richAlice, yaciTestSauceGenesis}
 import org.scalacheck.YetAnotherProperties
 
 object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 on L1 mock"):
@@ -24,15 +23,14 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
 
     /** Block promotion
       *
-      * This property checks that block promotion Minor -> Major * works correctly. It uses
+      * This property checks that block promotion Minor -> Major works correctly. It uses
       * [[NoWithdrawalsScenarioGen]] which produces L2 transactions with no withdrawals. L2 events
       * not strictly needed for testing block promotion, which must work on empty blocks, but we
       * additionally decided to check block brief at the same time.
       */
-    val _ = property("Block promotion with real L2 txs") = Suite(
+    lazy val _ = property("Block promotion with real L2 txs") = Suite(
       suiteCardano = Mock(preprod),
       txTimingGen = generateDefaultTxTiming,
-      mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
       scenarioGen = NoWithdrawalsScenarioGen
     ).property()
 
@@ -43,10 +41,9 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
       * and once the target is hit finalizes the head immediately. Only command sequences that
       * satisfy the condition "head is finalized" are run.
       */
-    val _ = property("Dusty head finalization") = Suite(
+    lazy val _ = property("Dusty head finalization") = Suite(
       suiteCardano = Mock(preprod),
       txTimingGen = generateDefaultTxTiming,
-      mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
       scenarioGen = MakeDustScenarioGen(minL2Utxos = 500)
     ).property()
 
@@ -56,10 +53,9 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
       *
       * TODO: do we want to test the rollout sequence with in the settlement tx seq specifically?
       */
-    val _ = property("Ongoing withdrawals") = Suite(
+    lazy val _ = property("Ongoing withdrawals") = Suite(
       suiteCardano = Mock(preprod),
       txTimingGen = generateDefaultTxTiming,
-      mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
       scenarioGen = OngoingWithdrawalsScenarioGen
     ).property()
 
@@ -72,7 +68,6 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
     val _ = property("Deposits") = Suite(
       suiteCardano = Mock(preprod),
       txTimingGen = generateDefaultTxTiming,
-      mkGenesisUtxos = richAlice(preprod.network),
       scenarioGen = DepositsScenarioGen
     ).property()
 
@@ -89,14 +84,11 @@ object Stage1PropertiesYaci extends YetAnotherProperties("Integration Stage 1 wi
             .withMinSuccessfulTests(1)
     }
 
-    private val preprod = CardanoNetwork.Preprod
-
     lazy val _ = property("Block promotion Yaci") = Suite(
       suiteCardano = Yaci(
         protocolParams = DevKit.yaciParams
       ),
       txTimingGen = generateYaciTxTiming,
-      mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
       scenarioGen = NoWithdrawalsScenarioGen
     ).property()
 
@@ -105,7 +97,6 @@ object Stage1PropertiesYaci extends YetAnotherProperties("Integration Stage 1 wi
         protocolParams = DevKit.yaciParams
       ),
       txTimingGen = generateYaciTxTiming,
-      mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
       scenarioGen = MakeDustScenarioGen(minL2Utxos = 500)
     ).property()
 
@@ -114,6 +105,41 @@ object Stage1PropertiesYaci extends YetAnotherProperties("Integration Stage 1 wi
         protocolParams = DevKit.yaciParams
       ),
       txTimingGen = generateYaciTxTiming,
-      mkGenesisUtxos = yaciTestSauceGenesis(preprod.network),
+      scenarioGen = DepositsScenarioGen
+    ).property()
+
+/** TODO:
+  */
+object Stage1PropertiesPublic extends YetAnotherProperties("Integration Stage 1 with Preview"):
+
+    override def overrideParameters(
+        p: org.scalacheck.Test.Parameters
+    ): org.scalacheck.Test.Parameters = {
+        p.withWorkers(1)
+            .withMinSuccessfulTests(1)
+    }
+
+    // lazy val _ = property("Block promotion Yaci") = Suite(
+    //    suiteCardano = Yaci(
+    //        protocolParams = DevKit.yaciParams
+    //    ),
+    //    txTimingGen = generateYaciTxTiming,
+    //    scenarioGen = NoWithdrawalsScenarioGen
+    // ).property()
+    //
+    // lazy val _ = property("Dusty head finalization Yaci") = Suite(
+    //    suiteCardano = Yaci(
+    //        protocolParams = DevKit.yaciParams
+    //    ),
+    //    txTimingGen = generateYaciTxTiming,
+    //    scenarioGen = MakeDustScenarioGen(minL2Utxos = 500)
+    // ).property()
+
+    val _ = property("Deposits on Preview") = Suite(
+      suiteCardano = Public(
+        cardanoNetwork = CardanoNetwork.Preview,
+        blockfrostKey = "previewQQFamFAznFQgz0uRG9OntxgqJczreq9z"
+      ),
+      txTimingGen = generateTestnetTxTiming,
       scenarioGen = DepositsScenarioGen
     ).property()
