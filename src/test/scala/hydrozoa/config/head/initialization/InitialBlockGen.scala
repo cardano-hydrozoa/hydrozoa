@@ -29,7 +29,7 @@ def generateInitialBlock(testPeers: TestPeers)(
     generateSettlementConfig: SettlementConfigGen = generateSettlementConfig
 ): Gen[InitialBlock] = {
     for {
-        cardanoNetwork <- testPeers.network.generateStandardCardanoNetwork
+        cardanoNetwork <- Gen.const(testPeers.network)
 
         headParams <- generateHeadParameters(cardanoNetwork)(
           generateTxTiming,

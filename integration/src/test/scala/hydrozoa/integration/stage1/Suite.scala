@@ -40,7 +40,7 @@ import scalus.cardano.ledger.{CardanoInfo, CertState, Coin, EvaluatorMode, Plutu
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Send, Spend}
 import scalus.cardano.txbuilder.{Change, TransactionBuilder}
 import test.TestPeerName.Alice
-import test.{GoodNetwork, PeersNumberSpec, SeedPhrase, TestPeerName, TestPeersSpec}
+import test.{PeersNumberSpec, SeedPhrase, TestPeerName, TestPeersSpec}
 
 /** Integration Stage 1 (the simplest).
   *   - Only three real actors are involved: [[JointLedger]], [[ConsensusActor]], and
@@ -307,12 +307,11 @@ case class Suite(
 
         // One-peer head
         val spec =
-            TestPeersSpec.apply(SeedPhrase.Yaci, GoodNetwork.Preprod, PeersNumberSpec.Exact(1))
+            TestPeersSpec.apply(SeedPhrase.Yaci, env.cardanoNetwork, PeersNumberSpec.Exact(1))
         val ownTestPeer = Alice
 
         val generateHeadStartTime: HeadStartTimeGen = slotConfig =>
             Gen.const(env.startTime.quantize(slotConfig))
-        val generateCardanoNetwork = Gen.const(env.cardanoNetwork)
         val generateTxTiming = txTimingGen
 
         for {

@@ -68,7 +68,7 @@ def generateHeadConfigPreInit(testPeers: TestPeers)(
         InitializationParametersGenBottomUp.generateInitializationParameters,
     generateSettlementConfig: SettlementConfigGen = generateSettlementConfig
 ): Gen[HeadConfig.Preinit] = for {
-    cardanoNetwork <- testPeers.network.generateStandardCardanoNetwork
+    cardanoNetwork <- Gen.const(testPeers.network)
     headParams <- generateHeadParameters(cardanoNetwork)(
       generateTxTiming,
       generateFallbackContingency,

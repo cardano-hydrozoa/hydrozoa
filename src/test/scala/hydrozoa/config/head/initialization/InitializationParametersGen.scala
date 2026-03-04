@@ -126,7 +126,7 @@ object InitializationParametersGenTopDown {
         equityRange: (Coin, Coin) = Coin(5_000_000) -> Coin(500_000_000)
     ): Gen[InitializationParameters] =
         for {
-            cardanoNetwork <- testPeers.network.generateStandardCardanoNetwork
+            cardanoNetwork <- Gen.const(testPeers.network)
             headStartTime <- generateHeadStartTime(cardanoNetwork.slotConfig)
             fallbackContingency <- generateFallbackContingency(cardanoNetwork)
             genesisUtxos <- generateGenesisUtxosL1(cardanoNetwork)
@@ -392,7 +392,7 @@ object InitializationParametersGenBottomUp {
         generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency
     ): Gen[InitializationParameters] =
         for {
-            cardanoNetwork <- testPeers.network.generateStandardCardanoNetwork
+            cardanoNetwork <- Gen.const(testPeers.network)
             headStartTime <- generateHeadStartTime(cardanoNetwork.slotConfig)
 
             fallbackContingency <- generateFallbackContingency(cardanoNetwork)

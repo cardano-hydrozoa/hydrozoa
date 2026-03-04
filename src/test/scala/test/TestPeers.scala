@@ -6,15 +6,17 @@ import com.bloxbean.cardano.client.common.model.Network as BloxbeanNetwork
 import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath.createExternalAddressDerivationPathForAccount
 import hydrozoa.*
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.network.CardanoNetworkGen.given_Arbitrary_CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.ShelleyAddressExtra.mkShelleyAddress
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.cardano.wallet.WalletModule
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber, HeadPeerWallet}
+import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Gen
 import scala.collection.mutable
-import scalus.cardano.address.{Network, ShelleyAddress}
+import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.ArbitraryInstances.*
 import scalus.cardano.ledger.{Transaction, VKeyWitness}
 import scalus.crypto.ed25519.VerificationKey
@@ -28,7 +30,8 @@ import scalus.crypto.ed25519.VerificationKey
   *
   * There is a good reason why this thing exists separately from the head config / node config /
   * multi-node config: integration tests use it when setting up the environment (see
-  * ModelBasedSuite.Env).
+  * ModelBasedSuite.Env). This happens before the initial state is built, but we need to run some
+  * transactions on behalf of prospective head peers.
   *
   * @param seedPhrase
   * @param network
@@ -36,7 +39,7 @@ import scalus.crypto.ed25519.VerificationKey
   */
 case class TestPeers private (
     seedPhrase: SeedPhrase,
-    network: GoodNetwork,
+    network: CardanoNetwork,
     peersNumber: Int
 ) {
     import TestPeerName.maxPeers
@@ -52,12 +55,10 @@ case class TestPeers private (
 
     def mkHeadPeers: HeadPeers = HeadPeers(headPeerVKeys)
 
-    // TODO: do we want to have it?
     def nHeadPeers: PositiveInt = PositiveInt.unsafeApply(peersNumber)
 
     private val peerNumbers: List[Int] = List.range(0, peersNumber)
 
-    // TODO: do we want to have it?
     def headPeerNums: NonEmptyList[HeadPeerNumber] =
         NonEmptyList.fromListUnsafe(
           peerNumbers.map(ix => HeadPeerNumber(ix))
@@ -142,7 +143,7 @@ case class TestPeers private (
 
     private val addressCache: mutable.Map[TestPeerName, ShelleyAddress] =
         mutable.Map.empty.withDefault(peer =>
-            mkShelleyAddress(verificationKeyFor(peer), network.asScalusNetwork)
+            mkShelleyAddress(verificationKeyFor(peer), network.network)
         )
 
     private val walletCache: mutable.Map[TestPeerName, HeadPeerWallet] = mutable.Map.empty
@@ -164,7 +165,7 @@ object TestPeers:
         testPeers <- generate(spec)
     } yield testPeers
 
-    def apply(seedPhrase: SeedPhrase, network: GoodNetwork, peersNumber: Int): TestPeers =
+    def apply(seedPhrase: SeedPhrase, network: CardanoNetwork, peersNumber: Int): TestPeers =
         new TestPeers(seedPhrase, network, peersNumber)
 
     def generate(spec: TestPeersSpec): Gen[TestPeers] =
@@ -234,7 +235,7 @@ object TestPeerName:
 
 case class TestPeersSpec(
     seedPhrase: SeedPhrase,
-    network: GoodNetwork,
+    network: CardanoNetwork,
     peersNumberSpec: PeersNumberSpec
 ) {
     def withPeersNumberSpec(spec: PeersNumberSpec) = this.copy(peersNumberSpec = spec)
@@ -245,49 +246,26 @@ object TestPeersSpec:
     def default: TestPeersSpec =
         TestPeersSpec(
           SeedPhrase.Yaci,
-          GoodNetwork.Preprod,
+          CardanoNetwork.Preprod,
           PeersNumberSpec.Range(Some(2), Some(5))
         )
 
     def generate(): Gen[TestPeersSpec] =
         for {
             seedPhrase <- Gen.oneOf(SeedPhrase.Yaci, SeedPhrase.Public)
-            network <- Gen.oneOf(GoodNetwork.values)
+            network <- arbitrary[CardanoNetwork]
             peersNumberSpec <- PeersNumberSpec.generate()
         } yield TestPeersSpec(seedPhrase, network, peersNumberSpec)
 
-/** This exists due to scalus.cardano.address.Network cannot tell apart preprod and preview.
-  */
-enum GoodNetwork:
-    case Mainnet
-    case Preprod
-    case Preview
-
+extension (self: CardanoNetwork)
     def asBloxbeanNetwork: BloxbeanNetwork =
-        import GoodNetwork.*
+        import CardanoNetwork.*
 
-        this match {
+        self match {
             case Preprod => BloxbeanNetwork(0, 1)
             case Preview => BloxbeanNetwork(0, 2)
             case Mainnet => BloxbeanNetwork(1, 764824073)
-        }
-
-    def asScalusNetwork: Network =
-        import GoodNetwork.*
-
-        this match {
-            case Mainnet => Network.Mainnet
-            case Preprod => Network.Testnet
-            case Preview => Network.Testnet
-        }
-
-    val generateStandardCardanoNetwork: Gen[CardanoNetwork] =
-        Gen.const {
-            this match {
-                case Mainnet => CardanoNetwork.Mainnet
-                case Preprod => CardanoNetwork.Preprod
-                case Preview => CardanoNetwork.Preview
-            }
+            case _       => throw RuntimeException("Unexpected Cardano network")
         }
 
 enum PeersNumberSpec:
