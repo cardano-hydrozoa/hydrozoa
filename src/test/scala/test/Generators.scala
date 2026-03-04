@@ -5,15 +5,15 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.value.coin.Distribution
 import hydrozoa.lib.cardano.value.coin.Distribution.NormalizedWeights
 import hydrozoa.multisig.ledger
-import hydrozoa.multisig.ledger.EutxoL2Ledger
-import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.token.CIP67
-import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
+import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
+import hydrozoa.multisig.ledger.eutxol2.tx.{GenesisObligation, L2Tx}
 import hydrozoa.multisig.ledger.event.LedgerEvent.L2TxEvent
 import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import hydrozoa.multisig.ledger.virtual.tx.{GenesisObligation, L2Tx}
-import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.genShelleyAddress
+import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
+import hydrozoa.multisig.ledger.l1.token.CIP67
+import hydrozoa.multisig.ledger.l1.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
+import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.genShelleyAddress
 import monocle.*
 import monocle.syntax.all.*
 import org.scalacheck.Arbitrary.arbitrary
@@ -334,7 +334,7 @@ object Generators {
         ] = {
 
             // Violates "AllInputsMustBeInUtxoValidator" ledger rule
-            def inputsNotInUtxoAttack: (ledger.EutxoL2Ledger.Config, EutxoL2Ledger.State, L2Tx) => (
+            def inputsNotInUtxoAttack: (EutxoL2Ledger.Config, EutxoL2Ledger.State, L2Tx) => (
                 L2Tx,
                 (String | TransactionException)
             ) =

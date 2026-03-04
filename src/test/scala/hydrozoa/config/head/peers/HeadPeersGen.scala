@@ -5,7 +5,7 @@ import hydrozoa.config.node.NodeConfig
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
-import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
+import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
 import org.scalacheck.Gen
 import scalus.cardano.ledger.{Transaction, VKeyWitness}
 import scalus.crypto.ed25519.VerificationKey

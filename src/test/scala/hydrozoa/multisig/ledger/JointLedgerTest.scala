@@ -19,20 +19,22 @@ import hydrozoa.lib.cardano.scalus.ledger.stripVKeyWitnesses
 import hydrozoa.multisig.consensus.ConsensusActor
 import hydrozoa.multisig.consensus.ConsensusActor.Request
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.DappLedgerM.DepositsMap
-import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
-import hydrozoa.multisig.ledger.JointLedger.{Done, Producing}
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.*
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Requests.*
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Scenarios.*
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockNumber}
-import hydrozoa.multisig.ledger.dapp.txseq.DepositRefundTxSeq
-import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
+import hydrozoa.multisig.ledger.eutxol2.tx.{GenesisObligation, L2Genesis}
+import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toEvacuationKey}
 import hydrozoa.multisig.ledger.event.LedgerEvent.DepositEvent
 import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag.{Invalid, Valid}
 import hydrozoa.multisig.ledger.event.{LedgerEventId, LedgerEventNumber}
-import hydrozoa.multisig.ledger.virtual.tx.{GenesisObligation, L2Genesis}
-import hydrozoa.multisig.ledger.virtual.{EvacuationMap, given}
+import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
+import hydrozoa.multisig.ledger.joint.JointLedger.{Done, Producing}
+import hydrozoa.multisig.ledger.joint.given
+import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
+import hydrozoa.multisig.ledger.l1.L1LedgerM.DepositsMap
+import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
+import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import java.util.concurrent.TimeUnit
 import monocle.Focus
 import monocle.Focus.focus
@@ -461,7 +463,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                       (event.eventId, txSeq.depositTx.depositProduced)
               }
 
-              depositsMap <- getState.map(_.dappLedgerState.deposits)
+              depositsMap <- getState.map(_.l1LedgerState.deposits)
 
               // Test statistic:  make sure that ties are actually occurring in some samples
               _ <- lift[TestR, Unit](PropertyM.monitor[IO](Prop.collect {
@@ -537,7 +539,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
           _ <- for {
               jlState <- getState
-              dlState = jlState.dappLedgerState
+              dlState = jlState.l1LedgerState
 
               _ <- assertWith[TestR](
                 msg =
@@ -698,7 +700,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
               _ <- assertWith[TestR](
                 msg = "Deposit should be in dapp ledger state",
-                condition = jlState.dappLedgerState.deposits == DepositsMap.empty.appended(
+                condition = jlState.l1LedgerState.deposits == DepositsMap.empty.appended(
                   (depositReq.eventId, depositRefundTxSeq.depositTx.depositProduced),
                   env.config.txTiming
                 )
@@ -736,7 +738,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
               _ <- assertWith[TestR](
                 msg = "Deposit should not be in dapp ledger state",
-                condition = jlState.dappLedgerState.deposits.isEmpty
+                condition = jlState.l1LedgerState.deposits.isEmpty
               )
 
               _ <- assertWith[TestR](
@@ -775,7 +777,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
               _ <- assertWith[TestR](
                 msg = "Deposit should be in dapp ledger state",
-                condition = jlState.dappLedgerState.deposits == DepositsMap.empty.appended(
+                condition = jlState.l1LedgerState.deposits == DepositsMap.empty.appended(
                   (depositReq.eventId, depositRefundTxSeq.depositTx.depositProduced),
                   env.config.txTiming
                 )
@@ -835,7 +837,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
               _ <- assertWith[TestR](
                 msg = "Deposit should be in dapp ledger state",
-                condition = jlState.dappLedgerState.deposits == DepositsMap.empty.appended(
+                condition = jlState.l1LedgerState.deposits == DepositsMap.empty.appended(
                   (depositReq.eventId, depositRefundTxSeq.depositTx.depositProduced),
                   env.config.txTiming
                 )

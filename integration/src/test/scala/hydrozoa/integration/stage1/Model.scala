@@ -11,20 +11,20 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.ledger.block.BlockBrief.{Final, Major, Minor}
 import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
-import hydrozoa.multisig.ledger.dapp.txseq.DepositRefundTxSeq
-import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
+import hydrozoa.multisig.ledger.eutxol2.tx.L2Genesis.mkGenesisId
+import hydrozoa.multisig.ledger.eutxol2.tx.{GenesisObligation, L2Genesis, L2Tx, genesisObligationDecoder}
+import hydrozoa.multisig.ledger.eutxol2.{HydrozoaTransactionMutator, toEvacuationKey}
 import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag
 import hydrozoa.multisig.ledger.event.LedgerEventNumber.increment
 import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId, LedgerEventNumber}
-import hydrozoa.multisig.ledger.toEvacuationKey
-import hydrozoa.multisig.ledger.virtual.tx.L2Genesis.mkGenesisId
-import hydrozoa.multisig.ledger.virtual.tx.{GenesisObligation, L2Genesis, L2Tx, genesisObligationDecoder}
-import hydrozoa.multisig.ledger.virtual.{EvacuationKey, EvacuationMap, HydrozoaTransactionMutator, given}
+import hydrozoa.multisig.ledger.joint.given
+import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap}
+import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
+import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import io.bullet.borer.Cbor
 import monocle.Lens
 import monocle.syntax.all.focus
 import org.scalacheck.commands.ModelCommand
-
 import scala.collection.immutable.{Queue, TreeMap}
 import scala.util.chaining.*
 import scalus.cardano.ledger.{AssetName, KeepRaw, Transaction, TransactionHash, TransactionInput, TransactionOutput, Utxos}

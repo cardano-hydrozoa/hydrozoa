@@ -14,14 +14,14 @@ import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
 import hydrozoa.multisig.consensus.ack.AckBlock
 import hydrozoa.multisig.consensus.peer.HeadPeerId
-import hydrozoa.multisig.ledger.JointLedger
-import hydrozoa.multisig.ledger.virtual.VirtualLedger
+import hydrozoa.multisig.ledger.joint.JointLedger
+import hydrozoa.multisig.ledger.l2.L2Ledger
 import scala.concurrent.duration.DurationInt
 
 trait MultisigRegimeManager(
     config: NodeConfig,
     cardanoBackend: CardanoBackend[IO],
-    virtualLedger: VirtualLedger[IO]
+    l2Ledger: L2Ledger[IO]
 ) extends Actor[IO, Request] {
 
     private val logger = Logging.loggerIO("hydrozoa.multisig.MultisigRegimeManager")
@@ -48,7 +48,7 @@ trait MultisigRegimeManager(
 
             eventSequencer <- context.actorOf(EventSequencer(config, pendingConnections))
 
-            jointLedger <- context.actorOf(JointLedger(config, pendingConnections, virtualLedger))
+            jointLedger <- context.actorOf(JointLedger(config, pendingConnections, l2Ledger))
 
             localPeerLiaisons <-
                 config.headPeerIds
@@ -134,7 +134,7 @@ object MultisigRegimeManager {
     def apply(
         config: NodeConfig,
         cardanoBackend: CardanoBackend[IO],
-        virtualLedger: VirtualLedger[IO]
+        virtualLedger: L2Ledger[IO]
     ): IO[MultisigRegimeManager] =
         IO(new MultisigRegimeManager(config, cardanoBackend, virtualLedger) {})
 

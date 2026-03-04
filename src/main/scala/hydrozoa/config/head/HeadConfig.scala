@@ -15,9 +15,9 @@ import hydrozoa.lib.logging.Logging
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
 import hydrozoa.multisig.ledger.block.Block
-import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.token.CIP67
-import hydrozoa.multisig.ledger.virtual.EvacuationMap
+import hydrozoa.multisig.ledger.joint.EvacuationMap
+import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
+import hydrozoa.multisig.ledger.l1.token.CIP67
 import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.*
 import scalus.crypto.ed25519.VerificationKey

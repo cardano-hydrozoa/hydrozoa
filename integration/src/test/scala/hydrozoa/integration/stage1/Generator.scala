@@ -17,11 +17,11 @@ import hydrozoa.lib.cardano.scalus.txbuilder.DiffHandler.prebalancedLovelaceDiff
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.ledger.block.BlockNumber
-import hydrozoa.multisig.ledger.dapp.token.CIP67
-import hydrozoa.multisig.ledger.dapp.txseq.DepositRefundTxSeq
+import hydrozoa.multisig.ledger.eutxol2.tx.GenesisObligation
 import hydrozoa.multisig.ledger.event.LedgerEvent.L2TxEvent
 import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId}
-import hydrozoa.multisig.ledger.virtual.tx.GenesisObligation
+import hydrozoa.multisig.ledger.l1.token.CIP67
+import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import io.bullet.borer.Cbor
 import org.scalacheck.Gen
 import org.scalacheck.commands.{AnyCommand, ScenarioGen, noOp}

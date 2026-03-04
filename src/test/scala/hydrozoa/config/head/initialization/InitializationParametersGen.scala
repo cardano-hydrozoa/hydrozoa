@@ -13,9 +13,10 @@ import hydrozoa.lib.cardano.scalus.given_Choose_Coin
 import hydrozoa.lib.cardano.scalus.ledger.{asUtxoList, asUtxos}
 import hydrozoa.lib.cardano.value.coin.Distribution.unsafeNormalizeWeights
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.toEvacuationKey
-import hydrozoa.multisig.ledger.virtual.tx.L2Genesis
-import hydrozoa.multisig.ledger.virtual.{EvacuationKey, EvacuationMap, given}
+import hydrozoa.multisig.ledger.eutxol2.toEvacuationKey
+import hydrozoa.multisig.ledger.eutxol2.tx.L2Genesis
+import hydrozoa.multisig.ledger.joint.given
+import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap}
 import java.time.Instant
 import monocle.syntax.all.*
 import org.scalacheck.{Gen, Prop, Properties}

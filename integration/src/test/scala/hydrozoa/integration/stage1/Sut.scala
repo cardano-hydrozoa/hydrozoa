@@ -14,10 +14,10 @@ import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.CardanoLiaison.Timeout
 import hydrozoa.multisig.consensus.ack.AckBlock
 import hydrozoa.multisig.consensus.{CardanoLiaison, ConsensusActor}
-import hydrozoa.multisig.ledger.JointLedger
-import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockNumber}
 import hydrozoa.multisig.ledger.event.LedgerEvent
+import hydrozoa.multisig.ledger.joint.JointLedger
+import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import org.scalacheck.commands.SutCommand
 import org.typelevel.log4cats.Logger
 import scala.concurrent.duration.DurationInt

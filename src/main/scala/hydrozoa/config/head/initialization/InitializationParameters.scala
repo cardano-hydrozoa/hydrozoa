@@ -6,8 +6,8 @@ import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.number.Distribution
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.dapp.token.CIP67.{HasTokenNames, HeadTokenNames}
-import hydrozoa.multisig.ledger.virtual.EvacuationMap
+import hydrozoa.multisig.ledger.joint.EvacuationMap
+import hydrozoa.multisig.ledger.l1.token.CIP67.{HasTokenNames, HeadTokenNames}
 import scala.collection.immutable.TreeMap
 import scalus.cardano.ledger.{Blake2b_256, Coin, Hash, Hash32, TransactionOutput, Utxo, Utxos, Value}
 import scalus.uplc.builtin.{ByteString, platform}

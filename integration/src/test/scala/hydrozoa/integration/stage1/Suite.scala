@@ -23,9 +23,10 @@ import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost.URL
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendMock, MockState}
 import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, ConsensusActor, EventSequencer}
 import hydrozoa.multisig.ledger.block.{BlockEffects, BlockNumber, BlockVersion}
-import hydrozoa.multisig.ledger.dapp.tx.{FinalizationTx, SettlementTx}
+import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
 import hydrozoa.multisig.ledger.event.LedgerEventNumber
-import hydrozoa.multisig.ledger.{EutxoL2Ledger, JointLedger}
+import hydrozoa.multisig.ledger.joint.JointLedger
+import hydrozoa.multisig.ledger.l1.tx.{FinalizationTx, SettlementTx}
 import java.util.concurrent.TimeUnit
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.commands.{ModelBasedSuite, ScenarioGen}
