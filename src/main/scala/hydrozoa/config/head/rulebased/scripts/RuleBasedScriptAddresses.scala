@@ -1,7 +1,7 @@
 package hydrozoa.config.head.rulebased.scripts
 
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
+import hydrozoa.rulebased.ledger.l1.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
 import scalus.cardano.address.{Network, ShelleyAddress}
 
 final case class RuleBasedScriptAddresses private (

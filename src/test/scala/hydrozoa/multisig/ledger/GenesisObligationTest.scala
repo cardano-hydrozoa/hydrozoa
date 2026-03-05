@@ -3,7 +3,7 @@ package hydrozoa.multisig.ledger
 import cats.data.NonEmptyList
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.network.CardanoNetworkGen.given_Arbitrary_CardanoNetwork
-import hydrozoa.multisig.ledger.virtual.tx.GenesisObligation
+import hydrozoa.multisig.ledger.eutxol2.tx.GenesisObligation
 import io.bullet.borer.Cbor
 import org.scalacheck.*
 import org.scalacheck.Arbitrary.arbitrary

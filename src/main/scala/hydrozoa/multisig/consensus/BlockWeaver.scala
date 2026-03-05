@@ -9,10 +9,10 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
 import hydrozoa.lib.cardano.scalus.QuantizedTime.toEpochQuantizedInstant
 import hydrozoa.multisig.MultisigRegimeManager
-import hydrozoa.multisig.ledger.JointLedger
-import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockHeader, BlockNumber, BlockStatus}
-import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId}
+import hydrozoa.multisig.ledger.event.{LedgerEventId, UserEvent}
+import hydrozoa.multisig.ledger.joint.JointLedger
+import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import scalus.cardano.ledger.TransactionInput
 
 /** Block weaver actor.
@@ -99,7 +99,7 @@ object BlockWeaver:
     }
 
     type Handle = ActorRef[IO, Request]
-    type Request = LedgerEvent | BlockBrief.Next | BlockConfirmed | PollResults |
+    type Request = UserEvent | BlockBrief.Next | BlockConfirmed | PollResults |
         FinalizationLocallyTriggered.type
 
     // ===================================
@@ -116,14 +116,14 @@ object BlockWeaver:
       *   vector to store order of event ids
       */
     case class Mempool(
-        events: Map[LedgerEventId, LedgerEvent] = Map.empty,
+        events: Map[LedgerEventId, UserEvent] = Map.empty,
         receivingOrder: Vector[LedgerEventId] = Vector.empty
     )
 
     object Mempool {
         val empty: Mempool = Mempool()
 
-        def apply(events: Seq[LedgerEvent]): Mempool =
+        def apply(events: Seq[UserEvent]): Mempool =
             events.foldLeft(Mempool.empty)((mempool, event) => mempool.add(event))
 
         // Extension methods
@@ -137,7 +137,7 @@ object BlockWeaver:
               *   an updated mempool
               */
             def add(
-                event: LedgerEvent
+                event: UserEvent
             ): Mempool = {
 
                 val eventId = event.eventId
@@ -166,11 +166,11 @@ object BlockWeaver:
             }
 
             // Find by ID
-            def findById(id: LedgerEventId): Option[LedgerEvent] =
+            def findById(id: LedgerEventId): Option[UserEvent] =
                 mempool.events.get(id)
 
             // Iterate in insertion order
-            def inOrder: Iterator[LedgerEvent] =
+            def inOrder: Iterator[UserEvent] =
                 mempool.receivingOrder.iterator.flatMap(mempool.events.get)
 
             def isEmpty: Boolean = mempool.events.isEmpty
@@ -232,7 +232,7 @@ trait BlockWeaver(
 
     private def receiveTotal(req: Request): IO[Unit] =
         req match {
-            case msg: LedgerEvent             => handleLedgerEvent(msg)
+            case msg: UserEvent               => handleLedgerEvent(msg)
             case b: BlockBrief.Next           => handleNewBlock(b)
             case bc: BlockConfirmed           => handleBlockConfirmed(bc)
             case pr: PollResults              => handlePollResults(pr)
@@ -243,7 +243,7 @@ trait BlockWeaver(
     // Mailbox message handlers
     // ===================================
 
-    private def handleLedgerEvent(event: LedgerEvent): IO[Unit] = {
+    private def handleLedgerEvent(event: UserEvent): IO[Unit] = {
         import FeedResult.*
 
         for {
@@ -498,7 +498,7 @@ trait BlockWeaver(
 
     private def continueFeedBlock(
         blockBrief: BlockBrief.Next,
-        event: LedgerEvent,
+        event: UserEvent,
         mempool: Mempool
     ): IO[FeedResult] =
         tryFeedBlock(blockBrief, mempool.add(event), Some(event.eventId))

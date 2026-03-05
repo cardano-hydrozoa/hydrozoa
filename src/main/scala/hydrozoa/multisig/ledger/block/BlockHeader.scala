@@ -2,8 +2,9 @@ package hydrozoa.multisig.ledger.block
 
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
-import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
-import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
+import hydrozoa.multisig.ledger.commitment.KzgCommitment
+
+import KzgCommitment.KzgCommitment
 
 sealed trait BlockHeader extends BlockHeader.Section {
     def asUnsigned: this.type & BlockStatus.Unsigned =
@@ -128,7 +129,7 @@ object BlockHeader {
     }
 
     object Minor {
-        import hydrozoa.rulebased.ledger.dapp.state.VoteState
+        import hydrozoa.rulebased.ledger.l1.state.VoteState
         import scalus.uplc.builtin.{FromData, ToData}
         import scalus.cardano.onchain.plutus.v3.PosixTime
         import scalus.uplc.builtin.ByteString

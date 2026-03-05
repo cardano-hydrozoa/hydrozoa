@@ -1,6 +1,6 @@
 package hydrozoa.benchmarks
 
-import hydrozoa.multisig.ledger.virtual.commitment.{KzgCommitment, TrustedSetup}
+import hydrozoa.multisig.ledger.commitment.{KzgCommitment, TrustedSetup}
 import java.util.concurrent.TimeUnit
 import org.openjdk.jmh.annotations.*
 import org.scalacheck.Arbitrary.arbitrary

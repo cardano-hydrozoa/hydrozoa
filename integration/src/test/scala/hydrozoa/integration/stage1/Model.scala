@@ -9,18 +9,20 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant.mkOrderingOps
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.JointLedger.mkGenesisId
-import hydrozoa.multisig.ledger.VirtualLedgerM
 import hydrozoa.multisig.ledger.block.BlockBrief.{Final, Major, Minor}
 import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
-import hydrozoa.multisig.ledger.dapp.txseq.DepositRefundTxSeq
-import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
+import hydrozoa.multisig.ledger.eutxol2.tx.L2Genesis.mkGenesisId
+import hydrozoa.multisig.ledger.eutxol2.tx.{GenesisObligation, L2Genesis, L2Tx, genesisObligationDecoder}
+import hydrozoa.multisig.ledger.eutxol2.{HydrozoaTransactionMutator, toEvacuationKey}
 import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag
 import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag.Valid
 import hydrozoa.multisig.ledger.event.LedgerEventNumber.increment
-import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId, LedgerEventNumber}
-import hydrozoa.multisig.ledger.virtual.tx.{GenesisObligation, L2Genesis, L2Tx}
-import hydrozoa.multisig.ledger.virtual.{EvacuationMap, HydrozoaTransactionMutator, toDataTransactionInput}
+import hydrozoa.multisig.ledger.event.{LedgerEventId, LedgerEventNumber, UserEvent}
+import hydrozoa.multisig.ledger.joint.given
+import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap}
+import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
+import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
+import io.bullet.borer.Cbor
 import monocle.Lens
 import monocle.syntax.all.focus
 import org.scalacheck.commands.ModelCommand
@@ -57,11 +59,10 @@ object Model:
         // NB: for block zero it's more initializationExpirationTime
         competingFallbackStartTime: QuantizedInstant,
 
+        // Evacuation Map
+        evacuationMap: EvacuationMap,
         // L1 state - the only peer's utxos
         peerUtxosL1: Utxos,
-
-        // L2 state
-        evacuationMap: EvacuationMap[TransactionInput],
 
         // Deposits
 
@@ -163,7 +164,7 @@ object Model:
             events: List[
               (
                   // Raw ledger event
-                  LedgerEvent,
+                  UserEvent,
                   // Parsed counterpart
                   L2Tx | DepositUtxo,
                   // Validity flag
@@ -184,8 +185,8 @@ object Model:
         )
 
     private val eventsLens
-        : Lens[BlockCycle.InProgress, List[(LedgerEvent, L2Tx | DepositUtxo, ValidityFlag)]] =
-        Lens[BlockCycle.InProgress, List[(LedgerEvent, L2Tx | DepositUtxo, ValidityFlag)]](
+        : Lens[BlockCycle.InProgress, List[(UserEvent, L2Tx | DepositUtxo, ValidityFlag)]] =
+        Lens[BlockCycle.InProgress, List[(UserEvent, L2Tx | DepositUtxo, ValidityFlag)]](
           get = _.events
         )(
           replace = events => bc => bc.copy(events = events)
@@ -260,13 +261,15 @@ object Model:
             logger.trace(s"INPUT state.blockCycle event IDs: ${currentEvents.map(_._1.eventId)}")
 
             val l2Tx: L2Tx = L2Tx
-                .parse(cmd.event.tx)
+                .parse(cmd.event.l2Payload)
                 .fold(err => throw RuntimeException(s"Failed to parse L2Tx: $err"), identity)
 
             val ret = HydrozoaTransactionMutator.transit(
               config = state.multiNodeConfig.headConfig,
               time = state.currentTime.instant,
-              state = VirtualLedgerM.State(state.evacuationMap),
+              state = state.evacuationMap.cooked.map((ek, o) =>
+                  Cbor.decode(ek.bytes).to[TransactionInput].value -> o
+              ),
               l2Tx = l2Tx
             )
 
@@ -284,7 +287,13 @@ object Model:
                               .modify(_ :+ (cmd.event, l2Tx, ValidityFlag.Valid))
                         )
                         .focus(_.evacuationMap)
-                        .replace(mutatorState.evacuationMap)
+                        .replace(
+                          EvacuationMap(
+                            TreeMap.from(
+                              mutatorState.map((ti, to) => ti.toEvacuationKey -> KeepRaw(to))
+                            )
+                          )
+                        )
             }
 
             val finalState = newState
@@ -353,7 +362,7 @@ object Model:
                                   state.depositEnqueued.map(_.registerDeposit.eventId).contains(e)
                               ),
                       evacuationMap = newActiveUtxos,
-                      peerUtxosL1 = state.peerUtxosL1 ++ withdrawnUtxos.cooked
+                      peerUtxosL1 = state.peerUtxosL1 // ++  withdrawnUtxos.cooked
                     )
                     logger.trace(
                       s"block ${cmd.blockNumber}, newState.depositEnqueued=${newState.depositEnqueued}, " +
@@ -367,18 +376,18 @@ object Model:
 
         private def mkBlockBrief(
             blockNumber: BlockNumber,
-            events: List[(LedgerEvent, L2Tx | DepositUtxo, ValidityFlag)],
+            events: List[(UserEvent, L2Tx | DepositUtxo, ValidityFlag)],
             competingFallbackStartTime: QuantizedInstant,
             txTiming: TxTiming,
             blockStartTime: QuantizedInstant,
             prevVersion: BlockVersion.Full,
             isFinal: Boolean,
-            evacuationMap: EvacuationMap[TransactionInput],
+            evacuationMap: EvacuationMap,
             depositEnqueued: List[RegisterDepositCommand],
             depositRegistered: List[LedgerEventId],
             depositsSubmitted: List[LedgerEventId],
             treasuryTokenName: AssetName
-        ): (BlockBrief, EvacuationMap[TransactionInput], EvacuationMap[TransactionInput]) = {
+        ): (BlockBrief, EvacuationMap, EvacuationMap) = {
 
             logger.trace(s"mkBlockBrief: blockNumber: $blockNumber")
             logger.trace(s"mkBlockBrief: blockStartTime: $blockStartTime")
@@ -451,32 +460,36 @@ object Model:
                               throw RuntimeException(s"deposit not found: $eventId")
                             )
                     )
-                    .flatMap(_.depositRefundTxSeq.depositTx.depositProduced.virtualOutputs.toList)
+                    .flatMap(rdc => {
+                        val l2Payload: Array[Byte] =
+                            rdc.depositRefundTxSeq.depositTx.depositProduced.l2Payload
+                        Cbor.decode(l2Payload).to[Queue[GenesisObligation]].value.toList
+                    })
 
-            val genesisUtxos: Option[TreeMap[TransactionInput, KeepRaw[TransactionOutput]]] = for {
+            val genesisUtxos: Option[TreeMap[EvacuationKey, KeepRaw[TransactionOutput]]] = for {
                 obligations <-
                     if genesisObligations.nonEmpty
                     then Some(genesisObligations)
                     else None
-                genesisId = mkGenesisId(treasuryTokenName, prevVersion.incrementMajor.major)
+                genesisId = mkGenesisId(???)
                 l2Genesis = L2Genesis(Queue.from(obligations), genesisId)
-            } yield l2Genesis.asUtxos
+            } yield l2Genesis.asUtxos.map((ti, krto) => ti.toEvacuationKey -> krto)
 
-            val newActiveUtxos = evacuationMap.appended(
-              genesisUtxos.getOrElse(TreeMap.empty[TransactionInput, KeepRaw[TransactionOutput]])
+            val newEvacuationMap = evacuationMap.appended(
+              genesisUtxos.getOrElse(TreeMap.empty[EvacuationKey, KeepRaw[TransactionOutput]])
             )
 
             // TODO: the idea was to reuse withdrawn utxos on L1.
             // The problem with that approach is that the model knows nothing about the effects;
             // So we don't know utxo ids in the model, we cannot reuse them.
-            val withdrawnUtxos: EvacuationMap[TransactionInput] = EvacuationMap.empty
+            val withdrawnUtxos: EvacuationMap = EvacuationMap.empty
 
             lazy val majorBlock = Major(
               header = BlockHeader.Major(
                 blockNum = blockNumber,
                 blockVersion = prevVersion.incrementMajor,
                 startTime = blockStartTime,
-                kzgCommitment = newActiveUtxos.kzgCommitment
+                kzgCommitment = newEvacuationMap.kzgCommitment
               ),
               body = BlockBody.Major(
                 events = events_,
@@ -527,7 +540,7 @@ object Model:
 
             logger.trace(s"block brief: $brief")
 
-            (brief, newActiveUtxos, withdrawnUtxos)
+            (brief, newEvacuationMap, withdrawnUtxos)
         }
 
         override def preCondition(cmd: CompleteBlockCommand, state: State): Boolean =
@@ -560,7 +573,7 @@ object Model:
                     .Parse(config.headConfig)(
                       depositTxBytes = req.depositTxBytes,
                       refundTxBytes = req.refundTxBytes,
-                      virtualOutputsBytes = req.virtualOutputsBytes
+                      l2Payload = req.l2Payload
                     )
                     .result
                     .fold(e => throw RuntimeException(e), identity)

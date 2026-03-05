@@ -12,7 +12,7 @@ import hydrozoa.multisig.consensus.PeerLiaison.Request.*
 import hydrozoa.multisig.consensus.ack.{AckBlock, AckId, AckNumber}
 import hydrozoa.multisig.consensus.peer.HeadPeerId
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber, BlockStatus, BlockType}
-import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId, LedgerEventNumber}
+import hydrozoa.multisig.ledger.event.{LedgerEventId, LedgerEventNumber, UserEvent}
 import scala.collection.immutable.Queue
 
 trait PeerLiaison(
@@ -104,7 +104,7 @@ trait PeerLiaison(
         private val nEvent = Ref.unsafe[IO, LedgerEventNumber](LedgerEventNumber(0))
         private val qAck = Ref.unsafe[IO, Queue[AckBlock]](Queue())
         private val qBlock = Ref.unsafe[IO, Queue[BlockBrief.Next]](Queue())
-        private val qEvent = Ref.unsafe[IO, Queue[LedgerEvent]](Queue())
+        private val qEvent = Ref.unsafe[IO, Queue[UserEvent]](Queue())
         private val sendBatchImmediately = Ref.unsafe[IO, Option[GetMsgBatch]](None)
 
         /** Check whether there are no acks, blocks, or events queued-up to be sent out. */
@@ -117,7 +117,7 @@ trait PeerLiaison(
 
         infix def appendToOutbox(x: RemoteBroadcast): IO[Unit] =
             x match {
-                case y: LedgerEvent =>
+                case y: UserEvent =>
                     for {
                         nEvent <- this.nEvent.get
                         nY = y.eventNum
@@ -308,7 +308,7 @@ object PeerLiaison {
     type Request = RemoteBroadcast | GetMsgBatch | NewMsgBatch | BlockConfirmed
 
     object Request {
-        type RemoteBroadcast = AckBlock | BlockBrief.Next | LedgerEvent
+        type RemoteBroadcast = AckBlock | BlockBrief.Next | UserEvent
 
         /** Request by a comm actor to its remote comm-actor counterpart for a batch of events,
           * blocks, or block acknowledgements originating from the remote peer.
@@ -357,7 +357,7 @@ object PeerLiaison {
             batchNum: Batch.Number,
             ack: Option[AckBlock],
             blockBrief: Option[BlockBrief.Next],
-            events: List[LedgerEvent]
+            events: List[UserEvent]
         )
     }
 

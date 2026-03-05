@@ -15,7 +15,7 @@ import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.BlockWeaver.PollResults
 import hydrozoa.multisig.ledger.block.BlockVersion.Major.increment
 import hydrozoa.multisig.ledger.block.{BlockEffects, BlockHeader, BlockVersion}
-import hydrozoa.multisig.ledger.dapp.tx.*
+import hydrozoa.multisig.ledger.l1.tx.*
 import scala.collection.immutable.{Seq, TreeMap}
 import scala.math.Ordered.orderingToOrdered
 import scalus.cardano.ledger.{Block as _, BlockHeader as _, Transaction, TransactionHash, TransactionInput}

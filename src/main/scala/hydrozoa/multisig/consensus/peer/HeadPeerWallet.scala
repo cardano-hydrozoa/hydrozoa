@@ -4,7 +4,7 @@ import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.cardano.wallet.*
 import hydrozoa.multisig.consensus.ack.{AckBlock, AckId, AckNumber}
 import hydrozoa.multisig.ledger.block.{Block, BlockHeader}
-import hydrozoa.multisig.ledger.dapp.tx.TxSignature
+import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import scala.language.implicitConversions
 import scalus.cardano.ledger.{Transaction, VKeyWitness}
 import scalus.crypto.ed25519.VerificationKey

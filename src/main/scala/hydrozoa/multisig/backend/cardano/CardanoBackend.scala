@@ -8,32 +8,23 @@ import scalus.uplc.builtin.Data
   *   - Only [[ShelleyAddress]] are supported
   *   - The return data types are limited by what is really needed for Hydrozoa, but can be expanded
   *     if needed
-  *
-  * @tparam F
   */
 trait CardanoBackend[F[_]]:
     import CardanoBackend.*
 
     /** All utxos at the [[address]]. The ordering of items from the point of view of the blockchain -
       * oldest first, newest last.
-      *
-      * @param address
       * @return
       */
     def utxosAt(address: ShelleyAddress): F[Either[Error, Utxos]]
 
     /** All the utxos that contain [[asset]] at the [[address]]. The ordering of items from the
       * point of view of the blockchain - oldest first, newest last.
-      *
-      * @param address
-      * @param asset
       * @return
       */
     def utxosAt(address: ShelleyAddress, asset: (PolicyId, AssetName)): F[Either[Error, Utxos]]
 
     /** Checks whether a tx specified by [[txHash]] is known to the backend ledger.
-      *
-      * @param txHash
       * @return
       *   true - known, false - unknown or an error
       */
@@ -59,7 +50,6 @@ trait CardanoBackend[F[_]]:
     ): F[Either[CardanoBackend.Error, List[(TransactionHash, Data)]]]
 
     /** Submits a transaction.
-      * @param tx
       * @return
       */
     def submitTx(tx: Transaction): F[Either[Error, Unit]]

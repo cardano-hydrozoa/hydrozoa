@@ -19,11 +19,12 @@ import hydrozoa.lib.cardano.scalus.txbuilder.DiffHandler.prebalancedLovelaceDiff
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockNumber
-import hydrozoa.multisig.ledger.dapp.token.CIP67
-import hydrozoa.multisig.ledger.dapp.txseq.DepositRefundTxSeq
-import hydrozoa.multisig.ledger.event.LedgerEvent.L2TxEvent
-import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId}
-import hydrozoa.multisig.ledger.virtual.tx.GenesisObligation
+import hydrozoa.multisig.ledger.eutxol2.tx.GenesisObligation
+import hydrozoa.multisig.ledger.event.UserEvent.L2Event
+import hydrozoa.multisig.ledger.event.{LedgerEventId, UserEvent}
+import hydrozoa.multisig.ledger.l1.token.CIP67
+import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
+import io.bullet.borer.Cbor
 import org.scalacheck.Gen
 import org.scalacheck.commands.{AnyCommand, ScenarioGen, noOp}
 import scala.concurrent.duration.DurationInt
@@ -229,6 +230,7 @@ object CommandGen:
                 o.address.asInstanceOf[ShelleyAddress].payment.asHash == config
                     .addressOf(HeadPeerNumber.zero)
             )
+            .map((ek, to) => Cbor.decode(ek.bytes).to[TransactionInput].value -> to)
 
         for {
             // Inputs
@@ -272,9 +274,9 @@ object CommandGen:
             _ = logger.trace(s"signed l2Tx: ${HexUtil.encodeHexString(txSigned.toCbor)}")
 
         } yield L2TxCommand(
-          event = L2TxEvent(
+          event = L2Event(
             eventId = state.nextLedgerEventId,
-            tx = txSigned.toCbor
+            l2Payload = txSigned.toCbor
           ),
           txStrategy = txStrategy,
           txMutator = txMutator
@@ -386,7 +388,7 @@ object CommandGen:
                                                   )
                                             )
 
-                                        virtualOutputs = NonEmptyList.fromListUnsafe(
+                                        l2Outputs = NonEmptyList.fromListUnsafe(
                                           outputs.map(
                                             GenesisObligation
                                                 .fromTransactionOutput(_)
@@ -394,14 +396,14 @@ object CommandGen:
                                           )
                                         )
 
-                                        depositAmount = Value.combine(
-                                          virtualOutputs.toList.map(vo => Value(vo.l2OutputValue))
+                                        l2Value = Value.combine(
+                                          l2Outputs.toList.map(vo => Value(vo.l2OutputValue))
                                         )
-                                        _ = logger.trace(s"depositAmount: $depositAmount")
+                                        _ = logger.trace(s"l2Value: $l2Value")
 
                                         depositRefundSeq = DepositRefundTxSeq
                                             .Build(multiNodeConfig.headConfig)(
-                                              virtualOutputs = virtualOutputs,
+                                              l2Payload = GenesisObligation.serialize(l2Outputs),
                                               depositFee = Coin.zero,
                                               utxosFunding = NonEmptyList
                                                   .fromListUnsafe(fundingUtxos.asUtxoList),
@@ -410,7 +412,8 @@ object CommandGen:
                                               submissionDeadline =
                                                   state.currentTime.instant + 1.minutes, // 1.hour,
                                               refundAddress = peerAddress,
-                                              refundDatum = None
+                                              refundDatum = None,
+                                              l2Value = l2Value
                                             )
                                             .result
                                             .fold(
@@ -429,13 +432,13 @@ object CommandGen:
 
                                     } yield Some(
                                       RegisterDepositCommand(
-                                        registerDeposit = LedgerEvent.DepositEvent(
+                                        registerDeposit = UserEvent.DepositEvent(
                                           eventId = state.nextLedgerEventId,
                                           depositTxBytes = depositRefundSeq.depositTx.tx.toCbor,
                                           refundTxBytes = depositRefundSeq.refundTx.tx.toCbor,
-                                          virtualOutputsBytes =
-                                              GenesisObligation.serialize(virtualOutputs),
-                                          depositFee = Coin.zero
+                                          l2Payload = GenesisObligation.serialize(l2Outputs),
+                                          depositFee = Coin.zero,
+                                          l2Value = l2Value
                                         ),
                                         depositRefundTxSeq = depositRefundSeq,
                                         depositTxBytesSigned = depositTxSigned
