@@ -25,7 +25,8 @@ object GenesisObligationTest extends Properties("Genesis Obligation Properties")
     )(genesisObligations =>
         val bytes = Cbor
             .encode(
-              genesisObligations.toList.map(_.toBabbage.asInstanceOf[TransactionOutput])
+              genesisObligations.toList
+                  .map(_.toTransactionOutput.asInstanceOf[TransactionOutput])
             )
             .toByteArray
 

@@ -7,8 +7,9 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.number.Distribution
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.dapp.token.CIP67.{HasTokenNames, HeadTokenNames}
+import hydrozoa.multisig.ledger.virtual.EvacuationMap
 import scala.collection.immutable.TreeMap
-import scalus.cardano.ledger.{Blake2b_256, Coin, Hash, Hash32, TransactionOutput, Utxo, Utxos, Value}
+import scalus.cardano.ledger.{Blake2b_256, Coin, Hash, Hash32, TransactionInput, TransactionOutput, Utxo, Utxos, Value}
 import scalus.uplc.builtin.{ByteString, platform}
 import spire.math.Rational
 
@@ -18,7 +19,7 @@ export InitializationParameters.isBalancedInitializationFunding
   *
   * @param headStartTime
   *   TODO:
-  * @param initialL2Utxos
+  * @param initialEvacuationMap
   *   the utxos with which the head's L2 ledger should be populated upon initialization.
   * @param initialEquityContributions
   *   the ADA amounts (if any) that each peer contributed to the head's equity. The total ADA
@@ -35,7 +36,7 @@ export InitializationParameters.isBalancedInitializationFunding
   */
 final case class InitializationParameters(
     override val headStartTime: QuantizedInstant,
-    override val initialL2Utxos: Utxos,
+    override val initialEvacuationMap: EvacuationMap[TransactionInput],
     override val initialEquityContributions: NonEmptyMap[HeadPeerNumber, Coin],
     override val initialSeedUtxo: Utxo,
     override val initialAdditionalFundingUtxos: Utxos,
@@ -44,7 +45,7 @@ final case class InitializationParameters(
     override transparent inline def initializationParams: InitializationParameters = this
 
     override lazy val initialL2Value: Value =
-        initialL2Utxos.values.map(_.value).fold(Value.zero)(_ + _)
+        initialEvacuationMap.outputs.map(_.value.value).fold(Value.zero)(_ + _)
 
     override lazy val initialEquityContributed: Coin =
         initialEquityContributions.toSortedMap.values.fold(Coin.zero)(_ + _)
@@ -68,7 +69,7 @@ object InitializationParameters {
 
         def headStartTime: QuantizedInstant
 
-        def initialL2Utxos: Utxos
+        def initialEvacuationMap: EvacuationMap[TransactionInput]
         def initialEquityContributions: NonEmptyMap[HeadPeerNumber, Coin]
         def initialSeedUtxo: Utxo
         def initialAdditionalFundingUtxos: Utxos

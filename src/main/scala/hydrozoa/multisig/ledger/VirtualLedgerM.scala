@@ -9,11 +9,11 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.VirtualLedgerM.Error.{TransactionInvalidError, TxParseError}
 import hydrozoa.multisig.ledger.dapp.tx.Tx
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import hydrozoa.multisig.ledger.virtual.*
-import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
-import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.{KzgCommitment, kzgCommitment}
+import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.tx.{L2Genesis, L2Tx}
+import hydrozoa.multisig.ledger.virtual.{*, given}
 import monocle.syntax.all.*
+import scala.collection.immutable.TreeMap
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.rules.State as ScalusState
 
@@ -55,7 +55,7 @@ object VirtualLedgerM {
     def applyGenesisEvent(genesisEvent: L2Genesis): VirtualLedgerM[Unit] =
         for {
             s <- get
-            newState = s.copy(s.activeUtxos ++ genesisEvent.asUtxos)
+            newState = s.copy(s.evacuationMap.appended(genesisEvent.asUtxos))
             _ <- set(newState)
         } yield ()
 
@@ -76,7 +76,7 @@ object VirtualLedgerM {
     def mockApplyGenesis(genesisEvent: L2Genesis): VirtualLedgerM[KzgCommitment] =
         for {
             s <- get
-            newState = s.copy(s.activeUtxos ++ genesisEvent.asUtxos)
+            newState = s.copy(s.evacuationMap.appended(genesisEvent.asUtxos))
         } yield newState.kzgCommitment
 
     def applyInternalTx(
@@ -120,17 +120,23 @@ object VirtualLedgerM {
 
     type Config = CardanoNetwork.Section
 
-    final case class State(activeUtxos: Map[TransactionInput, TransactionOutput]) {
-        lazy val kzgCommitment: KzgCommitment = this.activeUtxos.kzgCommitment
+    // We keep the serialized from because this is what we (want to) receive from a black-box l2 ledger.
+    // Using KeepRaw means that we don't need to re-encode when trying to determine the size of the output when
+    // calculating rollouts
+    final case class State(evacuationMap: EvacuationMap[TransactionInput]) {
+        lazy val kzgCommitment: KzgCommitment = this.evacuationMap.kzgCommitment
 
+        val activeUtxos: Utxos = evacuationMap.cooked
         def toScalusState: ScalusState = ScalusState(utxos = activeUtxos)
     }
 
     object State {
 
-        val empty: State = State(activeUtxos = Map.empty)
+        val empty: State = State(evacuationMap = EvacuationMap.empty[TransactionInput])
 
-        def fromScalusState(scalusState: ScalusState): State = State(scalusState.utxos)
+        def fromScalusState(scalusState: ScalusState): State = State(
+          EvacuationMap(TreeMap.from(scalusState.utxos.map((i, o) => (i, KeepRaw(o)))))
+        )
     }
 
     object Error {

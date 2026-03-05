@@ -10,8 +10,6 @@ import hydrozoa.config.head.parameters.{GenHeadParams, generateHeadParameters}
 import hydrozoa.config.head.rulebased.{DisputeResolutionConfigGen, generateDisputeResolutionConfig}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
 import hydrozoa.multisig.ledger.dapp.txseq.InitializationTxSeq
-import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
-import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.kzgCommitment
 import monocle.Focus.focus
 import org.scalacheck.Test.Parameters
 import org.scalacheck.{Gen, Prop, Properties}
@@ -79,7 +77,7 @@ def generateInitialBlock(testPeers: TestPeers)(
         blockBrief = BlockBrief.Initial(
           BlockHeader.Initial(
             startTime = initializationParameters.headStartTime,
-            kzgCommitment = initializationParameters.initialL2Utxos.kzgCommitment
+            kzgCommitment = initializationParameters.initialEvacuationMap.kzgCommitment
           )
         ),
         effects = BlockEffects.MultiSigned.Initial(

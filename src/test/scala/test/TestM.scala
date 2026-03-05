@@ -13,13 +13,11 @@ private type PT[A] = PropertyM[IO, A]
 private type RT[R, A] = ReaderT[PT, R, A]
 
 /** Describes a computation that:
-  *   - Has access to some [[TestR]] environment
+  *   - Has access to some test environment
   *   - Accepts continuations (within [[PropertyM]])
   *   - Can perform [[IO]]
   *   - Can generate values (via the [[Gen]] within [[PropertyM]]
   *   - Returns values of type A
-  * @param unTestM
-  * @tparam A
   */
 // See JointLedgerTest for an example of how this is intended to be used
 case class TestM[R, A](unTestM: RT[R, A]) {
@@ -27,6 +25,12 @@ case class TestM[R, A](unTestM: RT[R, A]) {
     def flatMap[B](f: A => TestM[R, B]): TestM[R, B] = TestM(
       this.unTestM.flatMap(a => f(a).unTestM)
     )
+}
+
+implicit def testMMonad[R]: Monad[[A] =>> TestM[R, A]] = new Monad[[A] =>> TestM[R, A]] {
+    def pure[A](a: A): TestM[R, A] = TestM.pure(a)
+    def flatMap[A, B](fa: TestM[R, A])(f: A => TestM[R, B]): TestM[R, B] = fa.flatMap(f)
+    def tailRecM[A, B](a: A)(f: A => TestM[R, Either[A, B]]): TestM[R, B] = ???
 }
 
 object TestM {
@@ -54,13 +58,12 @@ object TestM {
       * @param testM
       *   The computation to run
       * @param initializer
-      *   the computation that generates and sets up the [[TestR]] environment passed to [[testM]].
+      *   the computation that generates and sets up the [[R]] environment passed to [[TestM]].
       *   Defaults to a (sensibly) randomly generated environment.
       * @param toProp
       *   The implicit function that transforms the result of the computation into a [[Prop]]
       * @param ioRuntime
       *   The implicit IO runtime in which [[IO]] effects can be executed
-      * @tparam A
       * @return
       */
     def run[R, A](testM: TestM[R, A], initializer: PT[R])(using
@@ -84,5 +87,7 @@ object TestM {
 
     def lift[R, A](e: IO[A]): TestM[R, A] =
         TestM(Kleisli.liftF(PropertyM.run(e)))
+
+    def lift[R, A](propertyM: PropertyM[IO, A]): TestM[R, A] = TestM(Kleisli.liftF(propertyM))
 
 }

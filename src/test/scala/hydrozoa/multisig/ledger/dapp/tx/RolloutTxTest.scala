@@ -4,6 +4,7 @@ import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
 import org.scalacheck.*
+import org.scalacheck.util.Pretty
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.TransactionOutput.Babbage
@@ -14,6 +15,9 @@ import test.Generators.Other as GenOther
 
 // TODO: All of these tests can be written in PropertyM[Either, _], or a shrinking variant
 object RolloutTxTest extends Properties("RolloutTxTest") {
+
+    given ppLastBuilder: (RolloutTx.Build.Last => Pretty) = builder =>
+        Pretty(_ => builder.config.headMultisigScript.policyId.toString)
 
     val genLastBuilder: Gen[RolloutTx.Build.Last] =
         for {
@@ -28,6 +32,8 @@ object RolloutTxTest extends Properties("RolloutTxTest") {
                 )
         } yield RolloutTx.Build.Last(multiNodeConfig.nodeConfigs(HeadPeerNumber.zero))(payouts)
 
+    given ppNotLastBuilder: (RolloutTx.Build.NotLast => Pretty) = builder =>
+        Pretty(_ => "NotLast (too long to print)")
     val genNotLastBuilder: Gen[RolloutTx.Build.NotLast] =
         for {
             multiNodeConfig <- MultiNodeConfig.generate(TestPeersSpec.default)()

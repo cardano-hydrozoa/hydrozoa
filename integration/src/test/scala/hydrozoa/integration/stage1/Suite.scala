@@ -293,7 +293,7 @@ case class Suite(
             )
 
             _ = logger.debug(s"total contingency: ${config.headConfig.fallbackContingency}")
-            _ = logger.debug(s"l2 utxos: ${config.headConfig.initialL2Utxos.size}")
+            _ = logger.debug(s"l2 utxos: ${config.headConfig.initialEvacuationMap.size}")
             _ = logger.debug(s"l2 total: ${config.headConfig.initialL2Value}")
 
             peerL1GenesisUtxos = testPeerToUtxos.values.flatten.toMap
@@ -310,7 +310,7 @@ case class Suite(
               blockCycle = BlockCycle.Done(BlockNumber.zero, BlockVersion.Full.zero),
               competingFallbackStartTime =
                   config.headConfig.txTiming.newFallbackStartTime(config.headConfig.headStartTime),
-              activeUtxos = config.headConfig.initialL2Utxos,
+              evacuationMap = config.headConfig.initialEvacuationMap,
               peerUtxosL1 = peerL1GenesisUtxos,
               peerGenesisUtxosL1 = peerL1GenesisUtxos,
               depositEnqueued = List.empty,
@@ -529,7 +529,7 @@ case class Suite(
         )
 
         _ <- IO.whenA(expectedEffects.nonEmpty)(
-          loggerIO.info(s"Utxo set size: ${lastState.activeUtxos.size}") >>
+          loggerIO.info(s"Utxo set size: ${lastState.evacuationMap.size}") >>
               loggerIO.info("Expected effects:" + expectedEffects.map { case (label, hash) =>
                   s"\n\t- $label: $hash"
               }.mkString)

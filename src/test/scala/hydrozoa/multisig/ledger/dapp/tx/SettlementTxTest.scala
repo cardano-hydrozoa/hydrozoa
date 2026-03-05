@@ -63,9 +63,18 @@ def genDepositDatum(network: CardanoNetwork.Section): Gen[DepositUtxo.Datum] = {
 // In particular, with the introduction of "Virtual Utxos" in the deposit utxo, and with the deposit amount
 // set deterministically from the sum of the virtual utxos + fees necessary for refund, this
 // generator DOES NOT produce actual semantically valid deposit utxos
+//
+/** @param zeroTime
+  *   generates deposits at some random offset (in the future) from a "zero time"
+  */
 def genDepositUtxo(
     config: CardanoNetwork.Section & TxTiming.Section,
     headAddress: Option[ShelleyAddress] = None,
+)(
+    zeroTime: QuantizedInstant = QuantizedInstant(
+      config.slotConfig,
+      config.slotConfig.slotToInstant(config.slotConfig.zeroSlot)
+    )
 ): Gen[DepositUtxo] =
     for {
         utxoId <- arbitrary[TransactionInput]
@@ -94,10 +103,8 @@ def genDepositUtxo(
         // Generate some offset to the "zero slot" time.
         offsetFromZero <- Gen.posNum[Long]
 
-        submissionDeadline = QuantizedInstant(
-          config.slotConfig,
-          config.slotConfig.slotToInstant(config.slotConfig.zeroSlot)
-        ) + FiniteDuration(offsetFromZero, TimeUnit.SECONDS)
+        submissionDeadline =
+            zeroTime + FiniteDuration(offsetFromZero, TimeUnit.SECONDS)
 
     } yield DepositUtxo(
       utxoId = utxoId,
@@ -106,7 +113,8 @@ def genDepositUtxo(
       value = depositAmount,
       virtualOutputs = vos,
       depositFee = Coin.zero,
-      submissionDeadline = submissionDeadline
+      submissionDeadline = submissionDeadline,
+      absorptionStartTime = config.txTiming.depositAbsorptionStartTime(submissionDeadline)
     )
 
 /** Generate a "standalone" settlement tx. */
@@ -137,12 +145,12 @@ def genSettlementTxSeqBuilder(config: HeadConfig)(
         genDeposit = genDepositUtxo(
           config = config,
           headAddress = Some(config.headMultisigAddress)
-        )
+        )()
         deposits <- genHelper(genDeposit).map(_.take(config.maxDepositsAbsorbedPerBlock))
 
         payouts <- genHelper(genPayoutObligation(config.cardanoNetwork))
         payoutAda = payouts
-            .map(_.utxo.value.coin)
+            .map(_.utxo.value.value.coin)
             .fold(Coin.zero)(_ + _)
 
         kzg: KzgCommitment <- kzgCommitment match {
@@ -207,7 +215,7 @@ def genNextSettlementTxSeqBuilder(config: HeadConfig)(
     val genDeposit = genDepositUtxo(
       config,
       headAddress = Some(config.headMultisigAddress)
-    )
+    )()
 
     given Ord[v1.Value] = valueOrd
 
@@ -219,7 +227,7 @@ def genNextSettlementTxSeqBuilder(config: HeadConfig)(
             .find(prefix =>
                 getValue(
                   prefix
-                      .map(_.utxo.value)
+                      .map(_.utxo.value.value)
                       .fold(Value.zero)(_ + _)
                 ) <= getValue(treasuryToSpend.value)
             )
