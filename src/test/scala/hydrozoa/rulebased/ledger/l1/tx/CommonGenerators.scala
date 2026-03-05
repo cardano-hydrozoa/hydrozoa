@@ -3,7 +3,8 @@ package hydrozoa.rulebased.ledger.l1.tx
 import cats.data.NonEmptyList
 import hydrozoa.*
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.config.head.peers.{HeadPeers, generateTestPeers}
+import hydrozoa.config.head.peers.HeadPeers
+import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.commitment.TrustedSetup
 import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
@@ -28,11 +29,12 @@ import test.Generators.Hydrozoa.genPubkeyAddress
 /** Common test generators for rule-based transaction tests */
 object CommonGenerators {
 
+    // TODO: remove, looks redundant
     def genHeadParams: Gen[
       (
           HeadMultisigScript,
           TokenName,
-          NonEmptyList[TestPeer],
+          NonEmptyList[TestPeerName], // TODO: what's that?
           NonEmptyList[VerificationKey],
           ByteString,
           BigInt,
@@ -40,11 +42,10 @@ object CommonGenerators {
       )
     ] =
         for {
-
             // This is 4 bytes shorter to accommodate CIP-67 prefixes
             // NB: we use the same token name _suffix_ for all head tokens so far, which is not the case in reality
             headTokenSuffix <- genByteStringOfN(28)
-            headPeers <- generateTestPeers()
+            multiNodeConfig <- MultiNodeConfig.generate(TestPeersSpec.default)()
             // headPeers = HeadPeers(peers.map(_.wallet.exportVerificationKey))
             // L2 consensus parameters hash
             params <- genByteStringOfN(32)
@@ -53,10 +54,12 @@ object CommonGenerators {
             // Fallback tx id - should be common for the vote utxo and treasury utxo
             fallbackTxId <- genByteStringOfN(32).map(TransactionHash.fromByteString)
         } yield (
-          headPeers.headMultisigScript,
+          multiNodeConfig.headConfig.headMultisigScript,
           headTokenSuffix,
-          headPeers._testPeers.map(_._2),
-          headPeers.headPeerVKeys,
+          NonEmptyList.fromListUnsafe(
+            List.range(0, multiNodeConfig.nodeConfigs.size).map(TestPeerName.fromOrdinal)
+          ),
+          multiNodeConfig.headConfig.headPeerVKeys,
           params,
           versionMajor,
           fallbackTxId
@@ -114,14 +117,14 @@ object CommonGenerators {
 
     def genCollateralUtxo(
         config: CardanoNetwork.Section,
-        peer: TestPeer
+        address: ShelleyAddress,
     ): Gen[(TransactionInput, Babbage)] =
         for {
             input <- arbitrary[TransactionInput]
         } yield (
           input,
           Babbage(
-            address = peer.address(config.network),
+            address = address,
             value = Value(Coin(5_000_000L)),
             datumOption = None,
             scriptRef = None
@@ -158,15 +161,6 @@ object CommonGenerators {
           versionMinor = versionMinor,
           commitment = commitment
         )
-
-    def signBlockHeader(
-        blockHeader: BlockHeader.Minor.Onchain,
-        peers: NonEmptyList[TestPeer]
-    ): List[BlockHeader.Minor.HeaderSignature] = {
-        // TODO: use Header.Minor.mkMessage
-        val bs = BlockHeader.Minor.Onchain.Serialized(blockHeader)
-        peers.toList.map(peer => peer.wallet.mkMinorHeaderSignature(bs))
-    }
 
     /** Generator for Shelley address */
     def genShelleyAddress(config: CardanoNetwork.Section): Gen[ShelleyAddress] =

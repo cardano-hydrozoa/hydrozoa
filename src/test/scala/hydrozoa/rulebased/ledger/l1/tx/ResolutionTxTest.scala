@@ -2,9 +2,8 @@ package hydrozoa.rulebased.ledger.l1.tx
 
 import cats.data.NonEmptyList
 import com.bloxbean.cardano.client.util.HexUtil
-import hydrozoa.config.head.HeadPeersSpec.Exact
-import hydrozoa.config.head.peers.generateTestPeers
-import hydrozoa.config.node.generateNodeConfig
+import hydrozoa.config.node.MultiNodeConfig
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.l1.tx.Tx.Validators.nonSigningValidators
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.cip67DisputeTokenPrefix
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
@@ -76,6 +75,7 @@ def genResolutionTallyVoteUtxo(
     )
 }
 
+// TODO: update
 def genResolutionTxRecipe(
     estimatedFee: Coin = Coin(5_000_000L)
 ): Gen[ResolutionTx.Recipe] =
@@ -94,8 +94,8 @@ def genResolutionTxRecipe(
         ) <-
             genHeadParams
 
-        testPeers <- generateTestPeers()
-        config <- generateNodeConfig(Exact(testPeers.nHeadPeers.toInt))()
+        multiNodeConfig <- MultiNodeConfig.generate(TestPeersSpec.default)()
+        config = multiNodeConfig.headConfig
 
         // Generate a treasury UTXO with Unresolved datum
         beaconTokenName = cip67BeaconTokenPrefix.concat(headTokensSuffix)
@@ -132,7 +132,10 @@ def genResolutionTxRecipe(
           config.network
         )
 
-        collateralUtxo <- genCollateralUtxo(config, testPeers._testPeers.head._2)
+        collateralUtxo <- genCollateralUtxo(
+          config,
+          multiNodeConfig.addressOf(HeadPeerNumber.zero)
+        )
 
     } yield ResolutionTx.Recipe(
       talliedVoteUtxo = talliedVoteUtxo,

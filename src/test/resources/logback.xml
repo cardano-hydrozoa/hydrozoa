@@ -15,5 +15,6 @@
     <logger name="FallbackTx" level="warn"/>
     <logger name="SettlementTxSeq" level="warn"/>
     <logger name="SettlementTx" level="warn"/>
+    <logger name="Generators" level="trace"/>
     <logger name="scalus" level="warn"/>
 </configuration>

@@ -1,9 +1,9 @@
 package hydrozoa.multisig.ledger.l1.tx
 
 import cats.data.NonEmptyList
-import hydrozoa.config.node.TestNodeConfig.generateTestNodeConfig
-import hydrozoa.config.node.{NodeConfig, TestNodeConfig}
+import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.cardano.scalus.given_Choose_Coin
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.eutxol2.tx.GenesisObligation
 import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
@@ -17,14 +17,14 @@ import scalus.cardano.ledger.{Hash, *}
 import scalus.cardano.onchain.plutus.v3.ArbitraryInstances.*
 import test.*
 import test.Generators.Hydrozoa.*
-import test.TestPeer.Alice
 
-def genDepositBuilder(testNodeConfig: TestNodeConfig): Gen[DepositTx.Build] = {
-    val testPeers = testNodeConfig.testPeers
-    val config = testNodeConfig.nodeConfig
+def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = {
+
+    val config = multiNodeConfig.nodeConfigs(HeadPeerNumber.zero)
+
     for {
-        depositor <- Gen.oneOf(testPeers._testPeers.toList.map(_._2))
-        headAddress = config.headMultisigAddress
+        headAddress <- Gen.const(config.headMultisigAddress)
+
         genData = Gen.frequency(
           (99, genByteStringData.map(data => Some(data))),
           (1, None)
@@ -48,8 +48,12 @@ def genDepositBuilder(testNodeConfig: TestNodeConfig): Gen[DepositTx.Build] = {
 
         txId <- arbitrary[TransactionInput]
 
+        depositorAddress <- multiNodeConfig.pickPeer.map(multiNodeConfig.addressOf)
+
         l2Outputs <- Gen
-            .nonEmptyListOf(genGenesisObligation(config, Alice, minimumCoin = Coin.ada(2)))
+            .nonEmptyListOf(
+              genGenesisObligation(config, depositorAddress, minimumCoin = Coin.ada(2))
+            )
             .map(NonEmptyList.fromListUnsafe)
 
         depositFee <- Gen.frequency(
@@ -62,7 +66,7 @@ def genDepositBuilder(testNodeConfig: TestNodeConfig): Gen[DepositTx.Build] = {
 
         // TODO: use arbitrary values, not just ADA only
         fundingUtxos <- Gen
-            .nonEmptyListOf(genAdaOnlyPubKeyUtxo(config, depositor))
+            .nonEmptyListOf(genAdaOnlyPubKeyUtxo(config, depositorAddress))
             .map(NonEmptyList.fromListUnsafe)
             // FIXME: suchThat wastes a lot of generation time
             // TODO: Use Hydrozoa's Value once tokens are added
@@ -76,7 +80,7 @@ def genDepositBuilder(testNodeConfig: TestNodeConfig): Gen[DepositTx.Build] = {
       utxosFunding = fundingUtxos,
       l2Payload = GenesisObligation.serialize(l2Outputs),
       depositFee = depositFee,
-      changeAddress = depositor.address(config.network),
+      changeAddress = depositorAddress,
       submissionDeadline = submissionDeadline,
       refundInstructions = instructions,
       l2Value = l2Value
@@ -85,9 +89,9 @@ def genDepositBuilder(testNodeConfig: TestNodeConfig): Gen[DepositTx.Build] = {
 
 object DepositTxTest extends Properties("Deposit Tx Test") {
 
-    val _ = property("Metadata can be parsed") = Prop.forAll(generateTestNodeConfig) {
-        testNodeConfig =>
-            val config = testNodeConfig.nodeConfig
+    val _ = property("Metadata can be parsed") =
+        Prop.forAll(MultiNodeConfig.generate(TestPeersSpec.default)()) { multiNodeConfig =>
+            val config = multiNodeConfig.nodeConfigs(HeadPeerNumber.zero)
             val gen = for {
                 addr <- genScriptAddress(config)
                 hash <- genByteStringOfN(32)
@@ -104,29 +108,30 @@ object DepositTxTest extends Properties("Deposit Tx Test") {
                     case Left(e)  => "Metadata parsing returns Right" |: Prop(false)
                 }
             )
-    }
+        }
 
-    val _ = property("Build deposit tx") = Prop.forAll(generateTestNodeConfig) { testNodeConfig =>
-        val config = testNodeConfig.nodeConfig
-        Prop.forAll(genDepositBuilder(testNodeConfig))(depositBuilder =>
-            depositBuilder.result match {
-                case Left(e) => "Build failed" |: Prop(false)
-                case Right(depositTx) =>
-                    DepositTx
-                        .Parse(config)(
-                          depositTx.tx.toCbor,
-                          depositTx.depositProduced.l2Payload
-                        )
-                        .result match {
-                        case Left(e) =>
-                            "Produced deposit tx deserializes from CBOR: ${e.getCause}"
-                                |: Prop(false)
+    val _ = property("Build deposit tx") =
+        Prop.forAll(MultiNodeConfig.generate(TestPeersSpec.default)()) { multiNodeConfig =>
+            val config = multiNodeConfig.nodeConfigs(HeadPeerNumber.zero)
+            Prop.forAll(genDepositBuilder(multiNodeConfig))(depositBuilder =>
+                depositBuilder.result match {
+                    case Left(e) => "Build failed" |: Prop(false)
+                    case Right(depositTx) =>
+                        DepositTx
+                            .Parse(config)(
+                              depositTx.tx.toCbor,
+                              depositTx.depositProduced.l2Payload
+                            )
+                            .result match {
+                            case Left(e) =>
+                                "Produced deposit tx deserializes from CBOR: ${e.getCause}"
+                                    |: Prop(false)
 
-                        case Right(cborParsed) if cborParsed != depositTx =>
-                            "Parsed cbor round-trips" |: Prop(false)
-                        case _ => Prop(true)
-                    }
-            }
-        )
-    }
+                            case Right(cborParsed) if cborParsed != depositTx =>
+                                "Parsed cbor round-trips" |: Prop(false)
+                            case _ => Prop(true)
+                        }
+                }
+            )
+        }
 }

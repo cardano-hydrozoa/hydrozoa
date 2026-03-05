@@ -1,6 +1,6 @@
 package hydrozoa.multisig.ledger.l1.txseq
 
-import hydrozoa.config.node.TestNodeConfig.generateTestNodeConfig
+import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.multisig.ledger.l1.tx.*
 import hydrozoa.multisig.ledger.l1.txseq.SettlementTxSeq.{NoRollouts, WithRollouts}
 import hydrozoa.rulebased.ledger.l1.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
@@ -12,7 +12,6 @@ import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
 import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
 import scalus.cardano.txbuilder.TransactionBuilder
 import test.*
-import test.TestPeer.signTx
 import test.TransactionChain.*
 
 object SettlementTxSeqBuilderTest extends Properties("SettlementTxSeq") {
@@ -23,8 +22,8 @@ object SettlementTxSeqBuilderTest extends Properties("SettlementTxSeq") {
 
         val props = mutable.Buffer.empty[Prop]
 
-        Prop.forAll(generateTestNodeConfig)(config =>
-            Prop.forAll(genSettlementTxSeqBuilder(config)()) { builder =>
+        Prop.forAll(MultiNodeConfig.generate(TestPeersSpec.default)())(multiNodeConfig =>
+            Prop.forAll(genSettlementTxSeqBuilder(multiNodeConfig.headConfig)()) { builder =>
                 {
 
                     builder.result match {
@@ -52,9 +51,7 @@ object SettlementTxSeqBuilderTest extends Properties("SettlementTxSeq") {
                             val initialState: State = State(utxos = unsignedTxsAndUtxos._2.utxos)
 
                             val signedTxs: Vector[Transaction] =
-                                config.testPeers._testPeers.foldLeft(unsignedTxsAndUtxos._1)(
-                                  (txsToSign, peer) => txsToSign.map(tx => peer._2.signTx(tx))
-                                )
+                                unsignedTxsAndUtxos._1.map(multiNodeConfig.multisignTx)
 
                             val eRes = observeTxChain(signedTxs)(
                               initialState,
@@ -63,11 +60,11 @@ object SettlementTxSeqBuilderTest extends Properties("SettlementTxSeq") {
                                 fee = Coin.zero,
                                 env = UtxoEnv(
                                   slot = 0L,
-                                  params = config.nodeConfig.cardanoProtocolParams,
+                                  params = multiNodeConfig.headConfig.cardanoProtocolParams,
                                   certState = CertState.empty,
-                                  network = config.nodeConfig.network
+                                  network = multiNodeConfig.headConfig.network
                                 ),
-                                slotConfig = config.nodeConfig.slotConfig,
+                                slotConfig = multiNodeConfig.headConfig.slotConfig,
                                 evaluatorMode = EvaluateAndComputeCost
                               )
                             )
@@ -96,7 +93,7 @@ object SettlementTxSeqBuilderTest extends Properties("SettlementTxSeq") {
                                           .count(identity)
                                   helper(beforeFallback) == 0 && helper(
                                     afterFallback
-                                  ) == config.testPeers._testPeers.length + 1
+                                  ) == multiNodeConfig.headConfig.headPeers.nHeadPeers + 1
                               }
                             )
 

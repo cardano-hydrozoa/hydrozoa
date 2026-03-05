@@ -3,15 +3,14 @@ package hydrozoa.config.head.initialization
 import cats.*
 import cats.data.*
 import cats.syntax.semigroup.*
-import hydrozoa.config.head.initialization.InitializationParametersGenBottomUp.generateInitializationParameters
 import hydrozoa.config.head.multisig.fallback.{FallbackContingency, FallbackContingencyGen, generateFallbackContingency}
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
-import hydrozoa.config.head.network.{CardanoNetwork, generateStandardCardanoNetwork}
-import hydrozoa.config.head.peers.{TestPeers, generateTestPeers}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.cardano.scalus.given_Choose_Coin
 import hydrozoa.lib.cardano.scalus.ledger.{asUtxoList, asUtxos}
 import hydrozoa.lib.cardano.value.coin.Distribution.unsafeNormalizeWeights
+import hydrozoa.multisig.backend.cardano.yaciTestSauceGenesis
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.eutxol2.toEvacuationKey
 import hydrozoa.multisig.ledger.eutxol2.tx.L2Genesis
@@ -28,7 +27,8 @@ import scalus.cardano.ledger.TransactionOutput.{Babbage, valueLens}
 import spire.math.{Rational, SafeLong}
 import test.Generators.Hydrozoa.*
 import test.Generators.Other.genCoinDistributionWithMinAdaUtxo
-import test.TestPeer
+import test.Generators.loggerGenerators
+import test.{TestPeers, TestPeersSpec}
 
 // TODO: George: what do you think of expanding our shortening citizenship?
 //   - generate -> gen
@@ -72,7 +72,6 @@ object InitializationParametersGenTopDown {
 
     type GenInitializationParameters =
         (testPeers: TestPeers) => (
-            generateCardanoNetwork: Gen[CardanoNetwork],
             generateHeadStartTime: HeadStartTimeGen,
             generateFallbackContingency: FallbackContingencyGen,
             generateGenesisUtxosL1: GenesisUtxosGen,
@@ -83,7 +82,6 @@ object InitializationParametersGenTopDown {
 
     type GenInitializationParameters2 =
         (
-            generateCardanoNetwork: Gen[CardanoNetwork],
             generateHeadStartTime: HeadStartTimeGen,
             generateFallbackContingency: FallbackContingencyGen,
             generateGenesisUtxosL1: GenesisUtxosGen,
@@ -94,26 +92,14 @@ object InitializationParametersGenTopDown {
 
     type GenesisUtxosGen = CardanoNetwork => Gen[Map[HeadPeerNumber, Utxos]]
 
-    // TODO: do we want to have a default?
-    /// ** Returns test genesis utxo provided by [[TestPeers]].
-    //  */
-    // def testPeersGenesisUtxosL1(testPeers: TestPeers)(
-    //    network: CardanoNetwork
-    // ): Gen[Map[HeadPeerNumber, Utxos]] =
-    //    Gen.const(testPeers.genesisUtxos(network.cardanoInfo.network))
-    //
-    /// ** Generate fake utxos, that don't exist, but are spendable using peers' credentials.
-    //  */
-    // def generateRandomPeersUtxosL1(network: CardanoNetwork): Gen[Map[HeadPeerNumber, Utxos]] = ???
-
     case class GenWithDeps(
         generator: GenInitializationParameters = generateInitializationParameters,
         generateGenesisUtxosL1: GenesisUtxosGen,
         equityRange: (Coin, Coin) = Coin(5_000_000) -> Coin(500_000_000)
     )
 
-    /** This is a "bad" generator, that executes top-down approach that limits significantly its
-      * coverage. It exists for a reason:
+    /** This is a generator that executes top-down approach. This may limits significantly its
+      * coverage (depending on [[generateGenesisUtxosL1]] provided). It exists for a reason:
       *   - On Yaci you are limited to a set of initial utxos
       *   - Even if you can spawn utxos on Yaci you can't on a public testnet
       *   - When doing integration testing we don't want need to cover a wide space since we are
@@ -125,14 +111,13 @@ object InitializationParametersGenTopDown {
       * Support multi assets.
       */
     def generateInitializationParameters(testPeers: TestPeers)(
-        generateCardanoNetwork: Gen[CardanoNetwork] = generateStandardCardanoNetwork,
         generateHeadStartTime: HeadStartTimeGen = currentTimeHeadStartTime,
         generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
         generateGenesisUtxosL1: GenesisUtxosGen,
         equityRange: (Coin, Coin) = Coin(5_000_000) -> Coin(500_000_000)
     ): Gen[InitializationParameters] =
         for {
-            cardanoNetwork <- generateCardanoNetwork
+            cardanoNetwork <- Gen.const(testPeers.network)
             headStartTime <- generateHeadStartTime(cardanoNetwork.slotConfig)
             fallbackContingency <- generateFallbackContingency(cardanoNetwork)
             genesisUtxos <- generateGenesisUtxosL1(cardanoNetwork)
@@ -227,13 +212,27 @@ object InitializationParametersGenTopDown {
 
         for {
             // 1. Funding utxos, at least one since individual contingency is mandatory
-            fundingUtxos <- Gen.atLeastOne(peerUtxos.asUtxoList)
+
+            // TODO: review and make minimal contribution and funding utxos number a parameter
+            contingency <- Gen.const(fallbackContingency.totalContingencyFor(headPeerNumber))
+            minFunding <- Gen.const(Value(contingency) + Value(peerEquity) + Value.ada(20))
+
+            _ = loggerGenerators.debug(s"minFunding=$minFunding")
+
+            fundingUtxos <- Gen
+                .pick(1, peerUtxos.asUtxoList)
+                .suchThat(ret => {
+                    val selectedValue = Value.combine(ret.map(_.output.value))
+                    loggerGenerators.debug(s"selectedValue=$selectedValue")
+                    loggerGenerators.debug(s"ret.size=$selectedValue")
+                    (selectedValue - minFunding).isPositive
+                })
+
             fundingValue = fundingUtxos.map(_.output.value).fold(Value.zero)(_ + _)
 
             // 2. Subtracting contingency and equity
-            contingency = fallbackContingency.totalContingencyFor(headPeerNumber)
-            netFundingValue = fundingValue - Value.lovelace(contingency.value)
-            maxChange = netFundingValue - Value.lovelace(peerEquity.value)
+            netFundingValue = fundingValue - Value(contingency)
+            maxChange = netFundingValue - Value(peerEquity)
 
             // 3. Generate change
             change <- generateCappedValue(cardanoNetwork)(capValue = maxChange)
@@ -369,36 +368,37 @@ object CappedValueGen:
 
 end CappedValueGen
 
+// ===================================
+// Bottom Up Generator
+// ===================================
+
 object InitializationParametersGenBottomUp {
     import HeadStartTimeGen.*
 
-    /** @param generateHeadPeers
-      * @param generateCardanoNetwork
-      * @return
-      *
-      *   - An L2 utxo set that contains only pub key, ada-only utxos, spendable by some test peer
+    /**   - An L2 utxo set that contains only pub key, ada-only utxos, spendable by some test peer
       *   - A seed utxo from a known peer with enough ada to cover the l2 utxo set
       *   - Arbitrary additional funding utxos from known peers, with a 10 to 10k ADA surplus
       *   - Exactly 4 change utxos, ada only, pubkey from a known peer, with the excess funding
       *     distributed.
+      *
+      * TODO:
+      *   - Choose variable number of change utxos in advance, estimate surplus funding to cover at
+      *     least min ADA
+      *   - Non ADA assets in funding utxos
+      *   - Distribute equity more randomly among seed + funding utxos
       */
-    // TODO:
-    // - Choose variable number of change utxos in advance, estimate surplus funding to cover at least min ADA
-    // - Non ADA assets in funding utxos
-    // - Distribute equity more randomly among seed + funding utxos
 
     type GenInitializationParameters =
-        TestPeers => (Gen[CardanoNetwork], HeadStartTimeGen, FallbackContingencyGen) => Gen[
+        TestPeers => (HeadStartTimeGen, FallbackContingencyGen) => Gen[
           InitializationParameters
         ]
 
     def generateInitializationParameters(testPeers: TestPeers)(
-        generateCardanoNetwork: Gen[CardanoNetwork] = generateStandardCardanoNetwork,
         generateHeadStartTime: HeadStartTimeGen = currentTimeHeadStartTime,
         generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency
     ): Gen[InitializationParameters] =
         for {
-            cardanoNetwork <- generateCardanoNetwork
+            cardanoNetwork <- Gen.const(testPeers.network)
             headStartTime <- generateHeadStartTime(cardanoNetwork.slotConfig)
 
             fallbackContingency <- generateFallbackContingency(cardanoNetwork)
@@ -406,10 +406,10 @@ object InitializationParametersGenBottomUp {
             // Helper generator for l2 utxos and seed utxo
             genUtxoFromKnownPeer: Gen[Utxo] =
                 for {
-                    peer <- Gen.oneOf(testPeers._testPeers.toList).flatMap(_._2)
+                    peer <- Gen.oneOf(testPeers.headPeerNums.toList)
                     utxo <- genAdaOnlyPubKeyUtxo(
                       config = cardanoNetwork,
-                      peer = peer
+                      address = testPeers.addressFor(peer)
                     )
                 } yield utxo
 
@@ -420,7 +420,7 @@ object InitializationParametersGenBottomUp {
             }
             l2Value = l2Utxos.values.map(_.value).fold(Value.zero)(_ + _)
 
-            equityContributions <- generateEquityContributions(testPeers.headPeers.nHeadPeers)
+            equityContributions <- generateEquityContributions(testPeers.nHeadPeers)
             equity = equityContributions.toSortedMap.values.map(Value(_)).fold(Value.zero)(_ + _)
 
             // Need to limit the number so that we don't exceed tx size limits
@@ -432,7 +432,7 @@ object InitializationParametersGenBottomUp {
                 + l2Value
                 + Value(fallbackContingency.collectiveContingency.total)
                 + Value.lovelace(
-                  fallbackContingency.individualContingency.total.value * testPeers.headPeers.nHeadPeers
+                  fallbackContingency.individualContingency.total.value * testPeers.nHeadPeers
                 )
                 + changeAmount
 
@@ -476,15 +476,32 @@ object InitializationParametersGenBottomUp {
 
         } yield peerShares
 
-    def arbitraryHeadPeerUtxo(cardanoNetwork: CardanoNetwork, peer: TestPeer): Gen[Utxo] =
+    def arbitraryHeadPeerUtxo(cardanoNetwork: CardanoNetwork, address: Address): Gen[Utxo] =
         genAdaOnlyPubKeyUtxo(
           config = cardanoNetwork,
-          peer = peer
+          address = address
         )
 }
 
-object SanityCheckBottomUp extends Properties("Initialization Parameters Bottom Up Sanity Check") {
-    val _ = property("sanity check") = Prop.forAll(generateTestPeers())(testPeers =>
-        Prop.forAll(generateInitializationParameters(testPeers)())(_ => true)
-    )
+object InitializationParametersTest extends Properties("Initialization Parameters Sanity Check") {
+
+    val _ = property("Top Down generates") = Prop.forAll(
+      TestPeersSpec
+          .generate()
+          .flatMap(TestPeers.generate)
+          .flatMap(testPeers =>
+              InitializationParametersGenTopDown.generateInitializationParameters(testPeers)(
+                generateGenesisUtxosL1 = cn =>
+                    yaciTestSauceGenesis(cn.network)(testPeers).map((k, v) => k.headPeerNumber -> v)
+              )
+          )
+    )(_ => true)
+
+    val _ = property("Bottom Up generates") = Prop.forAll(
+      TestPeersSpec
+          .generate()
+          .flatMap(TestPeers.generate)
+          .flatMap(InitializationParametersGenBottomUp.generateInitializationParameters(_)())
+    )(_ => true)
+
 }

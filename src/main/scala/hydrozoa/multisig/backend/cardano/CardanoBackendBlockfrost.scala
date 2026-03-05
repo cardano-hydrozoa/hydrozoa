@@ -387,11 +387,11 @@ object CardanoBackendBlockfrost:
     type URL = String
     type ApiKey = String
 
-    def apply(
+    def apply_(
         network: Either[StandardCardanoNetwork, (CardanoNetwork.Custom, URL)],
         apiKey: ApiKey = "",
         pageSize: Int = 100,
-    ): IO[CardanoBackendBlockfrost] = {
+    ): CardanoBackendBlockfrost = {
         // 1. BloxBean service
         val baseUrl = network.fold(_.baseUrl, _._2)
         // NB: Bloxbean requires the trailing slash
@@ -419,14 +419,19 @@ object CardanoBackendBlockfrost:
                     )
             }
 
-        // TODO: we may remove IO here
-        IO.delay(
-          new CardanoBackendBlockfrost(
-            backendService,
-            pageSize,
-            blockfrostProviderFuture
-          )
+        new CardanoBackendBlockfrost(
+          backendService,
+          pageSize,
+          blockfrostProviderFuture
         )
+    }
+
+    def apply(
+        network: Either[StandardCardanoNetwork, (CardanoNetwork.Custom, URL)],
+        apiKey: ApiKey = "",
+        pageSize: Int = 100,
+    ): IO[CardanoBackendBlockfrost] = {
+        IO.delay(apply_(network, apiKey, pageSize))
     }
 
     extension (self: StandardCardanoNetwork)

@@ -2,9 +2,8 @@ package hydrozoa.rulebased.ledger.l1.tx
 
 import cats.data.NonEmptyList
 import hydrozoa.*
-import hydrozoa.config.head.HeadPeersSpec.Exact
-import hydrozoa.config.head.peers.generateTestPeers
-import hydrozoa.config.node.generateNodeConfig
+import hydrozoa.config.node.MultiNodeConfig
+import hydrozoa.lib.cardano.scalus.ShelleyAddressExtra
 import hydrozoa.multisig.ledger.l1.tx.Tx.Validators.nonSigningValidators
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
@@ -27,6 +26,7 @@ import scalus.crypto.ed25519.VerificationKey
 import scalus.uplc.builtin.Builtins.blake2b_224
 import scalus.uplc.builtin.ByteString
 import scalus.uplc.builtin.Data.toData
+import test.TestPeersSpec
 
 /** key != 0
   *
@@ -80,15 +80,14 @@ def genVoteTxRecipe(
 ): Gen[VoteTx.Recipe] =
     for {
 
-        // Common head parameters
-        testPeers <- generateTestPeers()
-        nodeConfig <- generateNodeConfig(Exact(testPeers.headPeers.nHeadPeers.toInt))()
+        multiNodeConfig <- MultiNodeConfig.generate(TestPeersSpec.default)()
+        config = multiNodeConfig.headConfig
 
         versionMajor <- Gen.choose(1L, 99L).map(BigInt(_))
         // Generate a treasury UTXO to use a reference input
         treasuryDatum <- genTreasuryUnresolvedDatum(
-          nodeConfig,
-          nodeConfig.headTokenNames.voteTokenName.bytes,
+          config,
+          config.headTokenNames.voteTokenName.bytes,
           versionMajor
         )
         fallbackTxId <- genByteStringOfN(32).map(TransactionHash.fromByteString)
@@ -98,32 +97,37 @@ def genVoteTxRecipe(
         headTokenSuffix <- genByteStringOfN(28)
 
         treasuryUtxo <- genRuleBasedTreasuryUtxo(
-          config = nodeConfig,
+          config = config,
           fallbackTxId = fallbackTxId,
-          headMp = nodeConfig.headMultisigScript.policyId,
+          headMp = config.headMultisigScript.policyId,
           treasuryTokenName = cip67BeaconTokenPrefix.concat(headTokenSuffix),
           treasuryDatum
         )
 
         // Generate a vote UTXO with NoVote status (input)
-        voteDatum <- genPeerVoteDatum(nodeConfig.headPeerVKeys)
+        voteDatum <- genPeerVoteDatum(config.headPeerVKeys)
         voteUtxo <- genVoteUtxo(
           fallbackTxId = fallbackTxId,
-          numberOfPeers = nodeConfig.nHeadPeers.toInt,
-          headMp = nodeConfig.headMultisigScript.policyId,
-          voteTokenName = nodeConfig.headTokenNames.voteTokenName.bytes,
+          numberOfPeers = config.nHeadPeers.toInt,
+          headMp = config.headMultisigScript.policyId,
+          voteTokenName = config.headTokenNames.voteTokenName.bytes,
           voteDatum = voteDatum,
-          network = nodeConfig.network
+          network = config.network
         )
 
         // Generate an onchain block header and sign using peers' wallets
         blockHeader <- genOnchainBlockHeader(versionMajor)
-        signatures = signBlockHeader(blockHeader, testPeers._testPeers.map(_._2))
-        // Make vote details
 
+        signatures = multiNodeConfig.multisignHeader(blockHeader)
+
+        // Make vote details
+        // TODO: simplify getting peers addresses
+        peerAddresses = config.headPeerVKeys.map(vkey =>
+            ShelleyAddressExtra.mkShelleyAddress(vkey, config.network)
+        )
         collateralUtxo <- genCollateralUtxo(
-          nodeConfig,
-          testPeers._testPeers.map(_._2).toList(voteDatum.key.intValue - 1)
+          config,
+          peerAddresses.toList(voteDatum.key.intValue - 1)
         )
 
         // Create builder context (not needed for Recipe anymore)
@@ -138,13 +142,12 @@ def genVoteTxRecipe(
       treasuryUtxo = treasuryUtxo,
       collateralUtxo = Utxo(collateralUtxo._1, collateralUtxo._2),
       blockHeader = blockHeader,
-      signatures = signatures,
+      signatures = signatures.toList,
       // TODO: now sure how to do that properly
       validityEndSlot = 200,
-      network = nodeConfig.network,
-      protocolParams = nodeConfig.cardanoProtocolParams,
-      evaluator =
-          PlutusScriptEvaluator(nodeConfig.cardanoInfo, EvaluatorMode.EvaluateAndComputeCost),
+      network = config.network,
+      protocolParams = config.cardanoProtocolParams,
+      evaluator = PlutusScriptEvaluator(config.cardanoInfo, EvaluatorMode.EvaluateAndComputeCost),
       validators = nonSigningValidators
     )
 
@@ -174,7 +177,7 @@ class VoteTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
                       "Spent vote UTXO should match recipe input"
                     )
                     assert(tx.voteUtxoProduced != null, "Vote UTXO produced should not be null")
-                    assert(tx.tx != null, "Transaction should not be null")
+                    assert(tx.tx != null, "Transaction testPeersshould not be null")
             }
         }
     }

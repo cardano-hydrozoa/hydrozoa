@@ -1,8 +1,7 @@
 package hydrozoa.multisig.ledger.l1.txseq
 
 import cats.data.NonEmptyVector
-import hydrozoa.config.node.TestNodeConfig
-import hydrozoa.config.node.TestNodeConfig.generateTestNodeConfig
+import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.l1.utxo.RolloutUtxo
 import org.scalacheck.{Arbitrary, Gen, Prop, Properties}
@@ -16,15 +15,15 @@ object RolloutTxSeqBuilderTest extends Properties("RolloutTxSeq Builder") {
 
     val genBuilder: Gen[RolloutTxSeq.Build] =
         for {
-            config <- generateTestNodeConfig
+            config <- MultiNodeConfig.generate(TestPeersSpec.default)()
             payouts <- Gen
                 .containerOfN[Vector, Payout.Obligation](
                   160,
-                  genPayoutObligation(config.nodeConfig.cardanoNetwork)
+                  genPayoutObligation(config.headConfig.cardanoNetwork)
                 )
                 .map(NonEmptyVector.fromVectorUnsafe)
 
-        } yield RolloutTxSeq.Build(config.nodeConfig)(payouts)
+        } yield RolloutTxSeq.Build(config.headConfig)(payouts)
 
     val _ = property("Build partial rollout seq") =
         Prop.forAll(genBuilder)(builder => Prop(builder.partialResult.isRight))

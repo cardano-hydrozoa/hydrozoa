@@ -1,7 +1,7 @@
 package hydrozoa.multisig.ledger.l1.tx
 
-import hydrozoa.config.node.TestNodeConfig.generateTestNodeConfig
-import hydrozoa.config.node.{NodeConfig, TestNodeConfig}
+import hydrozoa.config.node.MultiNodeConfig
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.l1.utxo.RolloutUtxo
 import org.scalacheck.*
 import org.scalacheck.util.Pretty
@@ -15,13 +15,14 @@ import test.Generators.Other as GenOther
 
 // TODO: All of these tests can be written in PropertyM[Either, _], or a shrinking variant
 object RolloutTxTest extends Properties("RolloutTxTest") {
+
     given ppLastBuilder: (RolloutTx.Build.Last => Pretty) = builder =>
         Pretty(_ => builder.config.headMultisigScript.policyId.toString)
 
     val genLastBuilder: Gen[RolloutTx.Build.Last] =
         for {
-            testNodeConfig <- generateTestNodeConfig
-            genPayouts = genPayoutObligation(testNodeConfig.nodeConfig.cardanoNetwork)
+            multiNodeConfig <- MultiNodeConfig.generate(TestPeersSpec.default)()
+            genPayouts = genPayoutObligation(multiNodeConfig.headConfig.cardanoNetwork)
             // We want to test small, medium, and large, so we do it with frequency
             payouts <-
                 Gen.frequency(
@@ -29,18 +30,19 @@ object RolloutTxTest extends Properties("RolloutTxTest") {
                   (7, Gen.sized(size => GenOther.nonEmptyVectorOfN(size * 3 + 1, genPayouts))),
                   (2, Gen.sized(size => GenOther.nonEmptyVectorOfN(size * 6 + 1, genPayouts)))
                 )
-        } yield RolloutTx.Build.Last(testNodeConfig.nodeConfig)(payouts)
+        } yield RolloutTx.Build.Last(multiNodeConfig.nodeConfigs(HeadPeerNumber.zero))(payouts)
 
     given ppNotLastBuilder: (RolloutTx.Build.NotLast => Pretty) = builder =>
         Pretty(_ => "NotLast (too long to print)")
     val genNotLastBuilder: Gen[RolloutTx.Build.NotLast] =
         for {
-            testNodeConfig <- generateTestNodeConfig
+            multiNodeConfig <- MultiNodeConfig.generate(TestPeersSpec.default)()
             payouts <- GenOther.nonEmptyVectorOf(
-              genPayoutObligation(testNodeConfig.nodeConfig.cardanoNetwork)
+              genPayoutObligation(multiNodeConfig.headConfig.cardanoNetwork)
             )
             rolloutSpentVal <- Arbitrary.arbitrary[Coin].map(Value(_))
-        } yield RolloutTx.Build.NotLast(testNodeConfig.nodeConfig)(payouts, rolloutSpentVal)
+        } yield RolloutTx.Build
+            .NotLast(multiNodeConfig.nodeConfigs(HeadPeerNumber.zero))(payouts, rolloutSpentVal)
 
     // ===================================
     // Last

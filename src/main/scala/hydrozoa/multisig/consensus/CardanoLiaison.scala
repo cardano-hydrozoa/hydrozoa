@@ -545,16 +545,18 @@ trait CardanoLiaison(
                                       s"Submitting tx hash: ${tx.id} cbor: ${HexUtil.encodeHexString(tx.toCbor)}"
                                     )
                                     ret <- cardanoBackend.submitTx(tx)
-                                } yield ret
+                                } yield tx -> ret
                             )
                         else IO.pure(List.empty)
 
                     // Submission errors are ignored, but dumped here
-                    submissionErrors = submitRet.filter(_.isLeft)
+                    submissionErrors = submitRet.filter(_._2.isLeft)
                     _ <- IO.whenA(submissionErrors.nonEmpty)(
                       loggerIO.warn(
                         "Submission errors:" + submissionErrors
-                            .map(a => s"\n\t- ${a.left}")
+                            .map(a =>
+                                s"\n\t- ${a._2.left}, cbor=${HexUtil.encodeHexString(a._1.toCbor)}"
+                            )
                             .mkString
                       )
                     )

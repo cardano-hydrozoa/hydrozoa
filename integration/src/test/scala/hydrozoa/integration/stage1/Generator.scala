@@ -9,13 +9,15 @@ import hydrozoa.integration.stage1.CommandGen.TxMutator.Identity
 import hydrozoa.integration.stage1.CommandGen.TxStrategy.{Dust, RandomWithdrawals, Regular}
 import hydrozoa.integration.stage1.Commands.*
 import hydrozoa.integration.stage1.Model.BlockCycle.HeadFinalized
+import hydrozoa.integration.stage1.Model.given
 import hydrozoa.integration.stage1.SutCommands.given
+import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant.mkOrderingOps
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
 import hydrozoa.lib.cardano.scalus.given_Choose_QuantizedInstant
 import hydrozoa.lib.cardano.scalus.ledger.{asUtxoList, withZeroFees}
 import hydrozoa.lib.cardano.scalus.txbuilder.DiffHandler.prebalancedLovelaceDiffHandler
-import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.logging.Logging
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.eutxol2.tx.GenesisObligation
 import hydrozoa.multisig.ledger.event.UserEvent.L2Event
@@ -26,13 +28,13 @@ import io.bullet.borer.Cbor
 import org.scalacheck.Gen
 import org.scalacheck.commands.{AnyCommand, ScenarioGen, noOp}
 import scala.concurrent.duration.DurationInt
+import scala.math.Ordering.Implicits.infixOrderingOps
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{AuxiliaryData, Coin, Metadatum, SlotConfig, TransactionInput, TransactionOutput, Utxo, Utxos, Value, Word64}
 import scalus.cardano.txbuilder.TransactionBuilder
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Fee, ModifyAuxiliaryData, Send, Spend}
-import scalus.uplc.builtin.Builtins.blake2b_224
 
 // ===================================
 // Per-command generators
@@ -52,10 +54,16 @@ object CommandGen:
     def genStayOnHappyPathDelay(
         currentTime: QuantizedInstant,
         settlementExpirationTime: QuantizedInstant
-    ): Gen[DelayCommand] =
+    ): Gen[DelayCommand] = {
         Gen
-            .choose(currentTime, settlementExpirationTime)
+            // TODO: parameter
+            //    .choose(currentTime, settlementExpirationTime - 20.seconds)
+            .choose(
+              currentTime,
+              (currentTime + 10.seconds).min(settlementExpirationTime - 20.seconds)
+            )
             .flatMap(d => DelayCommand(Delay.EndsBeforeHappyPathExpires(d - currentTime)))
+    }
 
     def genRandomDelay(
         currentTime: QuantizedInstant,
@@ -70,12 +78,13 @@ object CommandGen:
 
         for {
             delay <-
-                if blockNumber < 1
+                // TODO: make a parameter?
+                if blockNumber.convert < 20
                 then genStayOnHappyPathDelay1
                 else
                     Gen
                         .frequency(
-                          1 -> genStayOnHappyPathDelay1,
+                          50 -> genStayOnHappyPathDelay1,
                           1 -> Gen
                               .choose(settlementExpirationTime, competingFallbackStartTime)
                               .flatMap(d =>
@@ -211,14 +220,15 @@ object CommandGen:
         txMutator: TxMutator
     )(state: Model.State): Gen[L2TxCommand] =
 
-        val cardanoNetwork: CardanoNetwork = state.headConfig.cardanoNetwork
+        val config = state.multiNodeConfig
+        val cardanoNetwork: CardanoNetwork = config.headConfig.cardanoNetwork
         val generateCappedValueC = generateCappedValue(cardanoNetwork)
         val l2AddressesInUse = state.evacuationMap.outputsCooked.map(_.address).toSet
+
         val ownedUtxos = state.evacuationMap.cooked
             .filter((_, o) =>
-                o.address.asInstanceOf[ShelleyAddress].payment.asHash == blake2b_224(
-                  state.ownTestPeer.wallet.exportVerificationKey
-                )
+                o.address.asInstanceOf[ShelleyAddress].payment.asHash == config
+                    .addressOf(HeadPeerNumber.zero)
             )
             .map((ek, to) => Cbor.decode(ek.bytes).to[TransactionInput].value -> to)
 
@@ -248,9 +258,9 @@ object CommandGen:
                 )
                 .flatMap(
                   _.finalizeContext(
-                    protocolParams = state.headConfig.cardanoProtocolParams.withZeroFees,
+                    protocolParams = config.headConfig.cardanoProtocolParams.withZeroFees,
                     diffHandler = prebalancedLovelaceDiffHandler,
-                    evaluator = state.headConfig.plutusScriptEvaluatorForTxBuild,
+                    evaluator = config.headConfig.plutusScriptEvaluatorForTxBuild,
                     validators = Seq.empty
                   )
                 )
@@ -259,10 +269,9 @@ object CommandGen:
                   ctx => ctx.transaction
                 )
 
-            witness = state.ownTestPeer.wallet.mkVKeyWitness(txUnsigned)
-            txSigned = txUnsigned.attachVKeyWitnesses(List(witness))
+            txSigned = config.multisignTx(txUnsigned)
 
-            _ = logger.trace(s"l2Tx: ${HexUtil.encodeHexString(txSigned.toCbor)}")
+            _ = logger.trace(s"signed l2Tx: ${HexUtil.encodeHexString(txSigned.toCbor)}")
 
         } yield L2TxCommand(
           event = L2Event(
@@ -278,169 +287,213 @@ object CommandGen:
     // ===================================
 
     def genCompleteBlockRegular(
-        blockNumber: BlockNumber,
-        depositUtxoIds: Set[TransactionInput]
+        blockNumber: BlockNumber
     ): Gen[CompleteBlockCommand] =
-        Gen.const(CompleteBlockCommand(blockNumber, false, depositUtxoIds))
+        Gen.const(CompleteBlockCommand(blockNumber, false))
 
     def genCompleteBlockFinal(blockNumber: BlockNumber): Gen[CompleteBlockCommand] =
-        Gen.const(CompleteBlockCommand(blockNumber, true, Set.empty))
+        Gen.const(CompleteBlockCommand(blockNumber, true))
 
     def genCompleteBlock(
-        blockNumber: BlockNumber,
-        depositUtxoIds: Set[TransactionInput]
-    ): Gen[CompleteBlockCommand] =
-        Gen.frequency(
-          1 -> genCompleteBlockFinal(blockNumber),
-          20 -> genCompleteBlockRegular(blockNumber, depositUtxoIds)
-        )
+        blockNumber: BlockNumber
+    ): Gen[CompleteBlockCommand] = {
+        if blockNumber.convert < 20
+        then genCompleteBlockRegular(blockNumber)
+        else
+            Gen.frequency(
+              1 -> genCompleteBlockFinal(blockNumber),
+              20 -> genCompleteBlockRegular(blockNumber)
+            )
+    }
 
     // ===================================
     // Register deposit command
     // ===================================
 
-    /** May fail if there is no enough fund in peer's utxos.
+    /** May fail if there is no enough funds in peer's utxos.
       */
     def genRegisterDepositCommand(state: Model.State): Gen[Option[RegisterDepositCommand]] = {
-        import state.headConfig
+        import state.multiNodeConfig
 
-        val peerAddress = state.ownTestPeer.address(state.headConfig.network)
-        val generateCappedValueC = generateCappedValue(headConfig.cardanoNetwork)
-        val ensureMinAdaLenientC = ensureMinAdaLenient(headConfig.cardanoNetwork)
+        val peerAddress = multiNodeConfig.addressOf(HeadPeerNumber.zero)
 
-        for {
-            fundingUtxos <- Gen.atLeastOne(state.peerUtxosL1 -- state.utxoLocked).map(_.toMap)
-            totalValue = Value.combine(fundingUtxos.map(_._2.value))
+        // TODO: remove?
+        // TODO: This gives the enterprise address without the stake, which is not compatible with the model
+        // val peerAddress = state.ownTestPeer.address(state.headConfig.network)
+        // peerAddress
+        // <- Gen.oneOf(state.peerUtxosL1.map(_._2.address)).map(_.asInstanceOf[ShelleyAddress])
 
-            _ = logger.trace(s"fundingUtxos: $fundingUtxos")
-            _ = logger.trace(s"totalValue: $totalValue")
+        val cardanoNetwork = multiNodeConfig.headConfig.cardanoNetwork
+        val generateCappedValueC = generateCappedValue(cardanoNetwork)
+        val ensureMinAdaLenientC = ensureMinAdaLenient(cardanoNetwork)
 
-            // Change should be big enough to make balancing of the DEPOSIT tx always possible
-            minimalChangeCoins = 1_500_000L
-            // Deposit value should be big enough to make balancing of the REFUND tx always possible
-            minimalDepositValueCoins = 1_500_000L
-            // Total
-            minimalTotalValueCoins = minimalChangeCoins + minimalDepositValueCoins
+        val l1UtxoAvailable = state.peerUtxosL1 -- state.utxoLocked
+        if l1UtxoAvailable.isEmpty
+        then Gen.const(None)
+        else
+            for {
+                fundingUtxos <- Gen.atLeastOne(l1UtxoAvailable).map(_.toMap)
+                totalValue = Value.combine(fundingUtxos.map(_._2.value))
 
-            ret <-
-                if ensureMinAdaLenientC(
-                      totalValue
-                    ) != totalValue || minimalTotalValueCoins > totalValue.coin.value
-                then Gen.const(None)
-                else {
-                    // Reserved to cover refund tx fee
-                    val reserved = Value.lovelace(minimalDepositValueCoins)
-                    val totalValueAvailable = totalValue - reserved
-                    for {
-                        change <- generateCappedValueC(
-                          totalValueAvailable,
-                          Some(minimalChangeCoins),
-                          None,
-                          None
-                        )
-                        _ = logger.trace(s"change: $change")
+                _ = logger.trace(s"fundingUtxos: $fundingUtxos")
+                _ = logger.trace(s"totalValue: $totalValue")
 
-                        depositValue = totalValue - change
-                        _ = logger.trace(s"depositValue: $depositValue")
+                // Change should be big enough to make balancing of the DEPOSIT tx always possible
+                minimalChangeCoins = 1_500_000L
+                // Deposit value should be big enough to make balancing of the REFUND tx always possible
+                minimalDepositValueCoins = 1_500_000L
+                // Total
+                minimalTotalValueCoins = minimalChangeCoins + minimalDepositValueCoins
 
-                        ret <-
-                            if ensureMinAdaLenientC(depositValue) != depositValue
-                            then Gen.const(None)
-                            else
-                                for {
+                ret <-
+                    if ensureMinAdaLenientC(
+                          totalValue
+                        ) != totalValue || minimalTotalValueCoins > totalValue.coin.value
+                    then Gen.const(None)
+                    else {
+                        // Reserved to cover refund tx fee
+                        val reserved = Value.lovelace(minimalDepositValueCoins)
+                        val totalValueAvailable = totalValue - reserved
+                        for {
+                            change <- generateCappedValueC(
+                              totalValueAvailable,
+                              Some(minimalChangeCoins),
+                              None,
+                              None
+                            )
+                            _ = logger.trace(s"change: $change")
 
-                                    outputValues <- genOutputValues(
-                                      depositValue,
-                                      TxStrategy.Regular,
-                                      generateCappedValueC
-                                    )
+                            depositValue = totalValue - change
+                            _ = logger.trace(s"depositValue: $depositValue")
 
-                                    _ = logger.trace(s"outputValues: $outputValues")
+                            ret <-
+                                if ensureMinAdaLenientC(depositValue) != depositValue
+                                then Gen.const(None)
+                                else
+                                    for {
 
-                                    outputs <- Gen
-                                        .sequence[List[TransactionOutput], TransactionOutput](
-                                          outputValues
-                                              .map(v =>
-                                                  Gen.const(peerAddress).map(a => Babbage(a, v))
-                                              )
+                                        outputValues <- genOutputValues(
+                                          depositValue,
+                                          TxStrategy.Regular,
+                                          generateCappedValueC
                                         )
 
-                                    l2Outputs = NonEmptyList.fromListUnsafe(
-                                      outputs.map(
-                                        GenesisObligation
-                                            .fromTransactionOutput(_)
-                                            .fold(err => throw RuntimeException(err), identity)
-                                      )
-                                    )
+                                        _ = logger.trace(s"outputValues: $outputValues")
 
-                                    l2Value = Value.combine(
-                                      l2Outputs.toList.map(vo => Value(vo.l2OutputValue))
-                                    )
-                                    _ = logger.trace(s"l2Value: $l2Value")
+                                        outputs <- Gen
+                                            .sequence[List[TransactionOutput], TransactionOutput](
+                                              outputValues
+                                                  .map(v =>
+                                                      Gen.const(peerAddress).map(a => Babbage(a, v))
+                                                  )
+                                            )
 
-                                    depositRefundSeq = DepositRefundTxSeq
-                                        .Build(headConfig)(
+                                        l2Outputs = NonEmptyList.fromListUnsafe(
+                                          outputs.map(
+                                            GenesisObligation
+                                                .fromTransactionOutput(_)
+                                                .fold(err => throw RuntimeException(err), identity)
+                                          )
+                                        )
+
+                                        l2Value = Value.combine(
+                                          l2Outputs.toList.map(vo => Value(vo.l2OutputValue))
+                                        )
+                                        _ = logger.trace(s"l2Value: $l2Value")
+
+                                        depositRefundSeq = DepositRefundTxSeq
+                                            .Build(multiNodeConfig.headConfig)(
+                                              l2Payload = GenesisObligation.serialize(l2Outputs),
+                                              depositFee = Coin.zero,
+                                              utxosFunding = NonEmptyList
+                                                  .fromListUnsafe(fundingUtxos.asUtxoList),
+                                              changeAddress = peerAddress,
+                                              // TODO: will it work with Mock?
+                                              submissionDeadline =
+                                                  state.currentTime.instant + 1.minutes, // 1.hour,
+                                              refundAddress = peerAddress,
+                                              refundDatum = None,
+                                              l2Value = l2Value
+                                            )
+                                            .result
+                                            .fold(
+                                              err => throw RuntimeException(err.toString),
+                                              identity
+                                            )
+
+                                        depositTxSigned = multiNodeConfig
+                                            .signTxAs(HeadPeerNumber.zero)(
+                                              depositRefundSeq.depositTx.tx
+                                            )
+
+                                        _ = logger.trace(
+                                          s"deposit tx signed: ${HexUtil.encodeHexString(depositTxSigned.toCbor)}"
+                                        )
+
+                                    } yield Some(
+                                      RegisterDepositCommand(
+                                        registerDeposit = UserEvent.DepositEvent(
+                                          eventId = state.nextLedgerEventId,
+                                          depositTxBytes = depositRefundSeq.depositTx.tx.toCbor,
+                                          refundTxBytes = depositRefundSeq.refundTx.tx.toCbor,
                                           l2Payload = GenesisObligation.serialize(l2Outputs),
                                           depositFee = Coin.zero,
-                                          utxosFunding =
-                                              NonEmptyList.fromListUnsafe(fundingUtxos.asUtxoList),
-                                          changeAddress = peerAddress,
-                                          submissionDeadline = state.currentTime.instant + 1.hour,
-                                          refundAddress = peerAddress,
-                                          refundDatum = None,
                                           l2Value = l2Value
-                                        )
-                                        .result
-                                        .fold(err => throw RuntimeException(err.toString), identity)
-
-                                    depositTxSigned = state.ownTestPeer.signTx(
-                                      depositRefundSeq.depositTx.tx
+                                        ),
+                                        depositRefundTxSeq = depositRefundSeq,
+                                        depositTxBytesSigned = depositTxSigned
+                                      )
                                     )
-
-                                    _ = logger.trace(
-                                      s"deposit tx signeRd: ${HexUtil.encodeHexString(depositTxSigned.toCbor)}"
-                                    )
-
-                                } yield Some(
-                                  RegisterDepositCommand(
-                                    registerDeposit = UserEvent.DepositEvent(
-                                      eventId = state.nextLedgerEventId,
-                                      depositTxBytes = depositRefundSeq.depositTx.tx.toCbor,
-                                      refundTxBytes = depositRefundSeq.refundTx.tx.toCbor,
-                                      l2Payload = GenesisObligation.serialize(l2Outputs),
-                                      depositFee = Coin.zero,
-                                      l2Value = l2Value
-                                    ),
-                                    depositRefundTxSeq = depositRefundSeq,
-                                    depositTxBytesSigned = depositTxSigned
-                                  )
-                                )
-                    } yield ret
-                }
-        } yield ret
+                        } yield ret
+                    }
+            } yield ret
     }
 
     // ===================================
     // Submit Deposits Command
     // ===================================
+
+    // TODO: we have to decide here whether we want to try to submit a deposit
+    //   because when executing we don't have access to the time
+
     def genSubmitDepositsCommand(
-        depositForSubmission: Set[LedgerEventId],
+        depositForSubmission: List[(LedgerEventId, QuantizedInstant)],
         state: Model.State
-    ): Gen[SubmitDepositCommand] =
-        Gen.atLeastOne(depositForSubmission).map { selected =>
-            val depositsWithTxs = selected.toList.map { eventId =>
+    ): Gen[SubmitDepositsCommand] = {
+        // Prefix is easier to think about, though we can pick up arbitrary elements
+        Gen.choose(1, depositForSubmission.size).map { n =>
+            logger.trace(
+              s"genSubmitDepositsCommand depositForSubmission: ${depositForSubmission.map(_._1)}, n=$n"
+            )
+            val selected = depositForSubmission.take(n)
+
+            val partition = selected.map { (eventId, submissionDeadline) =>
+
                 // Find the deposit command to get the signed transaction
                 val depositCmd = state.depositEnqueued
                     .find(_.registerDeposit.eventId == eventId)
-                    .getOrElse(
-                      throw RuntimeException(
-                        s"Deposit with event ID $eventId not found in enqueued"
-                      )
-                    )
-                eventId -> depositCmd.depositTxBytesSigned
+                    .getOrElse {
+                        throw RuntimeException(
+                          s"Deposit with event ID $eventId not found in enqueued"
+                        )
+                    }
+
+                val tuple = eventId -> depositCmd.depositTxBytesSigned
+                // TODO: parameter
+                val submissionRunway = state.currentTime.instant + 20.seconds
+
+                logger.trace(s"genSubmitDepositsCommand: submissionDeadline=$submissionDeadline")
+                logger.trace(s"genSubmitDepositsCommand: submissionRunway=$submissionRunway")
+                if submissionDeadline > submissionRunway
+                then (true, tuple)
+                else (false, tuple)
             }
-            SubmitDepositCommand(depositsWithTxs)
+            SubmitDepositsCommand(
+              depositsForSubmission = partition.filter(_._1).map(_._2),
+              depositsForRejection = partition.filterNot(_._1).map(_._2._1)
+            )
         }
+    }
 
 end CommandGen
 
@@ -488,7 +541,7 @@ object ScenarioGenerators:
                     state.blockCycle match {
                         case Done(blockNumber, _) =>
                             val settlementExpirationTime =
-                                state.headConfig.txTiming.newSettlementEndTime(
+                                state.multiNodeConfig.headConfig.txTiming.newSettlementEndTime(
                                   state.competingFallbackStartTime
                                 )
                             CommandGen
@@ -496,7 +549,7 @@ object ScenarioGenerators:
                                   currentTime = state.currentTime.instant,
                                   settlementExpirationTime = settlementExpirationTime,
                                   competingFallbackStartTime = state.competingFallbackStartTime,
-                                  slotConfig = state.headConfig.slotConfig,
+                                  slotConfig = state.multiNodeConfig.headConfig.slotConfig,
                                   blockNumber = blockNumber
                                 )
                                 .map(AnyCommand.apply)
@@ -509,7 +562,7 @@ object ScenarioGenerators:
                         case InProgress(blockNumber, _, _, _) =>
                             Gen.frequency(
                               1 -> CommandGen
-                                  .genCompleteBlock(blockNumber, state.depositUtxoIds)
+                                  .genCompleteBlock(blockNumber)
                                   .map(AnyCommand.apply),
                               10 -> (if state.evacuationMap.isEmpty
                                      then Gen.const(noOp)
@@ -535,7 +588,7 @@ object ScenarioGenerators:
                     state.blockCycle match {
                         case Done(blockNumber, _) =>
                             val settlementExpirationTime =
-                                state.headConfig.txTiming.newSettlementEndTime(
+                                state.multiNodeConfig.headConfig.txTiming.newSettlementEndTime(
                                   state.competingFallbackStartTime
                                 )
                             // We need to avoid fallbacks to finalize the head
@@ -561,8 +614,7 @@ object ScenarioGenerators:
                                     else
                                         CommandGen
                                             .genCompleteBlockRegular(
-                                              blockNumber,
-                                              state.depositUtxoIds
+                                              blockNumber
                                             )
                                             .map(AnyCommand.apply)),
                               10 -> CommandGen
@@ -599,7 +651,7 @@ object ScenarioGenerators:
                     state.blockCycle match {
                         case Done(blockNumber, _) =>
                             val settlementExpirationTime =
-                                state.headConfig.txTiming.newSettlementEndTime(
+                                state.multiNodeConfig.headConfig.txTiming.newSettlementEndTime(
                                   state.competingFallbackStartTime
                                 )
                             CommandGen
@@ -607,7 +659,7 @@ object ScenarioGenerators:
                                   currentTime = state.currentTime.instant,
                                   settlementExpirationTime = settlementExpirationTime,
                                   competingFallbackStartTime = state.competingFallbackStartTime,
-                                  slotConfig = state.headConfig.slotConfig,
+                                  slotConfig = state.multiNodeConfig.headConfig.slotConfig,
                                   blockNumber = blockNumber
                                 )
                                 .map(AnyCommand.apply)
@@ -622,34 +674,29 @@ object ScenarioGenerators:
                             val depositsForSubmission = state.depositForSubmission
 
                             Gen.frequency(
-                              3 -> (if (state.peerUtxosL1 -- state.utxoLocked).nonEmpty
-                                    then
-                                        CommandGen
-                                            .genRegisterDepositCommand(state)
-                                            .flatMap {
-                                                case Some(cmd) => Gen.const(AnyCommand(cmd))
-                                                case None      => Gen.const(noOp)
-                                            }
-                                    else Gen.const(noOp)),
-                              3 -> (if depositsForSubmission.nonEmpty
+                              3 -> CommandGen
+                                  .genRegisterDepositCommand(state)
+                                  .map(_.map(AnyCommand.apply(_))),
+                              5 -> (if depositsForSubmission.nonEmpty
                                     then
                                         CommandGen
                                             .genSubmitDepositsCommand(depositsForSubmission, state)
-                                            .map(AnyCommand.apply)
-                                    else Gen.const(noOp)),
+                                            .map(cmd => Some(AnyCommand.apply(cmd)))
+                                    else Gen.const(None)),
                               1 -> CommandGen
-                                  .genCompleteBlock(blockNumber, state.depositUtxoIds)
-                                  .map(AnyCommand.apply),
-                              10 -> (if state.evacuationMap.nonEmpty
-                                     then
-                                         CommandGen
-                                             .genValidNonPlutusL2Tx(
-                                               txStrategy = RandomWithdrawals,
-                                               txMutator = Identity
-                                             )(state)
-                                             .map(AnyCommand.apply)
-                                     else Gen.const(noOp))
-                            )
+                                  .genCompleteBlock(blockNumber)
+                                  .map(cmd => Some(AnyCommand.apply(cmd))),
+                              3 -> (if state.evacuationMap.nonEmpty
+                                    then
+                                        CommandGen
+                                            .genValidNonPlutusL2Tx(
+                                              txStrategy = RandomWithdrawals,
+                                              txMutator = Identity
+                                            )(state)
+                                            .map(cmd => Some(AnyCommand.apply(cmd)))
+                                    else Gen.const(None))
+                            ).retryUntil(_.isDefined)
+                                .map(_.get)
 
                         case HeadFinalized => Gen.const(noOp)
                     }

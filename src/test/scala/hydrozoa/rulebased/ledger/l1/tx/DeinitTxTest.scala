@@ -2,10 +2,8 @@ package hydrozoa.rulebased.ledger.l1.tx
 
 import cats.data.NonEmptyList
 import hydrozoa.*
-import hydrozoa.config.head.HeadPeersSpec.Exact
 import hydrozoa.config.head.network.{CardanoNetwork, ensureMinAda}
-import hydrozoa.config.head.peers.generateTestPeers
-import hydrozoa.config.node.generateNodeConfig
+import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.l1.tx.Tx.Validators.nonSigningValidators
@@ -144,9 +142,11 @@ class DeinitTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
 
     test("DeinitTx builds successfully") {
         forAll(for {
-            testPeers <- generateTestPeers()
-            nodeConfig <- generateNodeConfig(Exact(testPeers.nHeadPeers.toInt))()
-            recipe <- genSimpleDeinitTxRecipe(nodeConfig.cardanoNetwork, nodeConfig.cardanoInfo)
+            multiNodeConfig <- MultiNodeConfig.generate(TestPeersSpec.default)()
+            recipe <- genSimpleDeinitTxRecipe(
+              multiNodeConfig.headConfig.cardanoNetwork,
+              multiNodeConfig.headConfig.cardanoInfo
+            )
         } yield recipe) { recipe =>
             // println(
             //  s"equity: ${recipe.treasuryUtxo.value.coin}, number of shares: ${recipe.shares._2.size}, shares: ${recipe.shares._2
