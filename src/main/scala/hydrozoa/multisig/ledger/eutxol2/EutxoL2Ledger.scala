@@ -6,13 +6,15 @@ import cats.effect.{Async, IO, Ref}
 import cats.syntax.all.*
 import hydrozoa.config.head.initialization.InitializationParameters
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.eutxol2.tx.{L2Genesis, L2Tx}
+import hydrozoa.multisig.ledger.event.LedgerEventId
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationKey}
-import hydrozoa.multisig.ledger.l1.utxo.DepositTuple
 import hydrozoa.multisig.ledger.l2.*
+import hydrozoa.multisig.ledger.l2.L2LedgerEvent.DepositEventRegistration
 import io.bullet.borer.Cbor
+import monocle.syntax.all.*
+import scala.util.Try
 import scalus.cardano.ledger.*
 
 extension (ti: TransactionInput) {
@@ -23,7 +25,8 @@ extension (ti: TransactionInput) {
 
 object EutxoL2Ledger {
     type Config = CardanoNetwork.Section & InitializationParameters.Section
-    type State = Utxos
+
+    case class State(activeUtxos: Utxos, pendingDeposits: Map[LedgerEventId, L2Genesis])
 
     // As above: technically partial, but used in the context of the EutxoL2Ledger, it's not.
     private def toTransactionInput(ek: EvacuationKey): TransactionInput =
@@ -35,7 +38,12 @@ object EutxoL2Ledger {
 
         for {
             ref <- Ref[IO].of(
-              config.initialEvacuationMap.cooked.map((ti, to) => toTransactionInput(ti) -> to).toMap
+              State(
+                activeUtxos = config.initialEvacuationMap.cooked.map((ti, to) =>
+                    toTransactionInput(ti) -> to
+                ),
+                pendingDeposits = Map.empty
+              )
             )
         } yield new EutxoL2Ledger(config, ref)
     }
@@ -47,14 +55,13 @@ case class EutxoL2Ledger private (
 ) extends L2Ledger[IO] {
     implicit def monadF: Monad[IO] = Async[IO]
 
-    override def sendInternalRequest(
-        payload: Array[Byte],
-        time: QuantizedInstant
-    ): IO[Either[L2LedgerError, (Vector[EvacuationDiff], Vector[Payout.Obligation])]] = {
-        (for {
+    override def sendL2Event(
+        req: L2LedgerEvent.L2Event
+    ): EitherT[IO, L2LedgerError, (Vector[EvacuationDiff], Vector[Payout.Obligation])] = {
+        for {
             s <- EitherT.right(state.get)
             l2Tx <- EitherT.fromEither(
-              L2Tx.parse(payload)
+              L2Tx.parse(req.l2Payload)
                   .left
                   .map(error =>
                       L2LedgerError(
@@ -63,12 +70,12 @@ case class EutxoL2Ledger private (
                   )
             )
 
-            newState <- EitherT.fromEither(
+            newActiveUtxos <- EitherT.fromEither(
               HydrozoaTransactionMutator
                   .transit(
                     config = config,
-                    time = time,
-                    state = s,
+                    time = req.blockCreationStartTime,
+                    state = s.activeUtxos,
                     l2Tx = l2Tx
                   )
                   .left
@@ -76,30 +83,54 @@ case class EutxoL2Ledger private (
             )
 
             adds =
-                newState
-                    .removedAll(s.keys)
+                newActiveUtxos
+                    .removedAll(s.activeUtxos.keys)
                     .map((ti, to) => EvacuationDiff.Update(ti.toEvacuationKey, KeepRaw(to)))
                     .toVector
 
             deletes =
-                s.removedAll(newState.keys)
+                s.activeUtxos
+                    .removedAll(newActiveUtxos.keys)
                     .map((ti, _) => EvacuationDiff.Delete(ti.toEvacuationKey))
                     .toVector
 
-            _ <- EitherT.right(state.set(newState))
+            _ <- EitherT.right(state.set(s.focus(_.activeUtxos).replace(newActiveUtxos)))
         } yield (
           adds ++ deletes,
           Vector.from(l2Tx.l1utxos.map((_, to) => Payout.Obligation(KeepRaw(to))))
-        )).value
+        )
     }
 
-    override def sendGenesisRequest(
-        deposit: DepositTuple
-    ): IO[Either[L2LedgerError, Vector[EvacuationDiff]]] = {
-        val genesisEvent =
-            L2Genesis.fromDepositTuple(deposit)
-        val evacuationDiffs = genesisEvent.asUtxos
-            .map((ti, krto) => EvacuationDiff.Update(ti.toEvacuationKey, krto))
-        IO.pure(Right(Vector.from(evacuationDiffs)))
-    }
+    override def sendDepositEventRegistration(
+        req: DepositEventRegistration
+    ): EitherT[IO, L2LedgerError, Unit] =
+        for {
+            s <- EitherT.right(state.get)
+            l2Genesis <-
+                EitherT.fromEither(
+                  Try(L2Genesis.fromDepositEventRegistration(req)).toEither.left
+                      .map(e => L2LedgerError(s"Invalid deposit transaction payload $e".getBytes))
+                )
+            newState = s
+                .focus(_.pendingDeposits)
+                .modify(pending => pending.updated(req.eventId, l2Genesis))
+            _ <- EitherT.right(state.set(newState))
+        } yield ()
+
+    override def sendDepositEventDecisions(
+        req: L2LedgerEvent.DepositEventDecisions
+    ): EitherT[IO, L2LedgerError, Vector[EvacuationDiff]] =
+        for {
+            s <- EitherT.right(state.get)
+            addedL2Utxos = req.absorbedDeposits.flatMap(id => s.pendingDeposits(id).asUtxos)
+            newState =
+                s
+                    .focus(_.activeUtxos)
+                    .modify(_ ++ addedL2Utxos.map((i, o) => i -> o.value))
+                    .focus(_.pendingDeposits)
+                    .modify(_.removedAll(req.absorbedDeposits ++ req.rejectedDeposits))
+            _ <- EitherT.right(state.set(newState))
+            evacuationDiffs: Vector[EvacuationDiff] =
+                Vector.from(addedL2Utxos.map((i, o) => EvacuationDiff.Update(i.toEvacuationKey, o)))
+        } yield evacuationDiffs
 }

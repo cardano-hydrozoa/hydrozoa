@@ -4,7 +4,7 @@ import cats.data.NonEmptyList
 import cats.syntax.all.*
 import hydrozoa.*
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
-import hydrozoa.multisig.ledger.l1.utxo.DepositTuple
+import hydrozoa.multisig.ledger.l2.L2LedgerEvent
 import io.bullet.borer.derivation.MapBasedCodecs.derived
 import io.bullet.borer.{Cbor, Decoder, Encoder, Writer}
 import scala.collection.immutable.{Queue, TreeMap}
@@ -39,6 +39,11 @@ given l2GenesisDecoder: Decoder[L2Genesis] =
     Decoder.derived[L2Genesis]
 
 object L2Genesis {
+
+    /** A hash of the deposit utxo transaction input
+      * @param ti
+      * @return
+      */
     def mkGenesisId(ti: TransactionInput): TransactionHash =
         TransactionHash.fromByteString(
           platform.blake2b_256(ByteString.fromArray(Cbor.encode(ti).toByteArray))
@@ -46,15 +51,15 @@ object L2Genesis {
 
     /** Warning: this is partial, but I'm keeping with the conventions of the CBOR decoder.
       */
-    def fromDepositTuple(
-        depositTuple: DepositTuple,
+    def fromDepositEventRegistration(
+        req: L2LedgerEvent.DepositEventRegistration,
     ): L2Genesis = {
         val genesisObligations = Cbor
-            .decode(depositTuple.l2Payload)
+            .decode(req.l2Payload)
             .to[Queue[GenesisObligation]]
             .value
         val genesisId: TransactionHash =
-            mkGenesisId(depositTuple.depositTransactionInput)
+            mkGenesisId(req.depositUtxoId)
         L2Genesis(genesisObligations, genesisId)
     }
 

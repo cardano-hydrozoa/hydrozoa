@@ -25,8 +25,8 @@ import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Scenarios.*
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.eutxol2.tx.{GenesisObligation, L2Genesis}
 import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toEvacuationKey}
-import hydrozoa.multisig.ledger.event.LedgerEvent.DepositEvent
 import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag.{Invalid, Valid}
+import hydrozoa.multisig.ledger.event.UserEvent.DepositEvent
 import hydrozoa.multisig.ledger.event.{LedgerEventId, LedgerEventNumber}
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.ledger.joint.JointLedger.{Done, Producing}
@@ -561,7 +561,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                     val refundsWithoutSignatures =
                         jlState
                             .asInstanceOf[Producing]
-                            .nextBlockData
+                            .userEventState
                             .postDatedRefundTxs
                             // Zero out the vkey witnesses before checking equality
                             .map(_.focus(_.tx).modify(_.stripVKeyWitnesses))
@@ -654,7 +654,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               expectedEvacMap = EvacuationMap(initialEvacMap ++ depositEvacMap)
 
               _ <- assertWith[TestR](
-                msg = "Virtual Ledger should contain expected active utxo",
+                msg = "Evacuation map should contain deposit",
                 condition = jlState.evacuationMap == expectedEvacMap
               )
 
@@ -708,7 +708,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
               _ <- assertWith[TestR](
                 msg = "Deposit should be in transient fields as valid",
-                condition = jlState.nextBlockData.events == List((depositReq.eventId, Valid))
+                condition = jlState.userEventState.events == List((depositReq.eventId, Valid))
               )
           } yield ()
       } yield true
@@ -743,7 +743,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
               _ <- assertWith[TestR](
                 msg = "Deposit should be in transient fields as invalid",
-                condition = jlState.nextBlockData.events == List((depositReq.eventId, Invalid))
+                condition = jlState.userEventState.events == List((depositReq.eventId, Invalid))
               )
           } yield ()
       } yield true
@@ -785,7 +785,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
               _ <- assertWith[TestR](
                 msg = "Deposit should be in transient fields as valid",
-                condition = jlState.nextBlockData.events == List((depositReq.eventId, Valid))
+                condition = jlState.userEventState.events == List((depositReq.eventId, Valid))
               )
 
               // Now we complete the block, including this deposit in the poll results.
@@ -845,7 +845,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
               _ <- assertWith[TestR](
                 msg = "Deposit should be in transient fields as valid",
-                condition = jlState.nextBlockData.events == List((depositReq.eventId, Valid))
+                condition = jlState.userEventState.events == List((depositReq.eventId, Valid))
               )
 
               // Now we complete the block, including this deposit in the poll results.

@@ -15,7 +15,7 @@ import hydrozoa.multisig.consensus.CardanoLiaison.Timeout
 import hydrozoa.multisig.consensus.ack.AckBlock
 import hydrozoa.multisig.consensus.{CardanoLiaison, ConsensusActor}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockNumber}
-import hydrozoa.multisig.ledger.event.LedgerEvent
+import hydrozoa.multisig.ledger.event.UserEvent
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import org.scalacheck.commands.SutCommand
@@ -59,7 +59,7 @@ object AgentActor:
         type Sync = SyncRequest.Envelope[IO, CompleteBlock, Block.Unsigned.Next]
 
     type Request =
-        LedgerEvent | StartBlock | CompleteBlock.Sync | ConsensusActor.Request |
+        UserEvent | StartBlock | CompleteBlock.Sync | ConsensusActor.Request |
             CardanoLiaison.Timeout.type | Unit
 
     type Handle = ActorRef[IO, Request]
@@ -96,8 +96,8 @@ case class AgentActor(
             } yield ()
 
         // Joint ledger - proxying
-        case x: LedgerEvent => jointLedger >>= (_ ! x)
-        case x: StartBlock  => jointLedger >>= (_ ! x)
+        case x: UserEvent  => jointLedger >>= (_ ! x)
+        case x: StartBlock => jointLedger >>= (_ ! x)
 
         // Consensus actor
         // Intercepting unsigned blocks

@@ -3,94 +3,145 @@ package hydrozoa.multisig.ledger.l2
 import cats.*
 import cats.data.*
 import cats.syntax.all.*
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationMap}
-import hydrozoa.multisig.ledger.l1.utxo.DepositTuple
+import monocle.Focus.focus
 
-private type EV[F[_], A] = EitherT[F, L2LedgerError, A]
-private type SV[F[_], A] = cats.data.StateT[[X] =>> EV[F, X], EvacuationMap, A]
+private type EF[F[_], A] = EitherT[F, L2LedgerError, A]
+// See: "Kendo" from the test library
+private type KEF[F[_]] = data.Kleisli[[X] =>> EF[F, X], L2LedgerState, L2LedgerState]
 
+/** Errors occurring from interaction with the L2 Ledger (i.e., as seen from the Joint Ledger).
+  *
+  * @param bytes
+  *   The parameter is [[Array[Byte]] because Hydrozoa itself does not define a codec (though
+  *   frontends may).
+  */
 case class L2LedgerError(bytes: Array[Byte])
 
+/** State changes accumulated via interaction with the L2 Ledger (i.e., as seen from the Joint
+  * Ledger).
+  * @param diffs
+  *   Evacuation diffs generated from [[L2LedgerEvent.DepositEventDecisions]]s and
+  *   [[L2LedgerEvent.L2Event]]
+  * @param payouts
+  *   Payouts generated from [[L2LedgerEvent.L2Event]]
+  */
+final case class L2LedgerState private (
+    diffs: Vector[EvacuationDiff],
+    payouts: Vector[Payout.Obligation]
+)
+
+object L2LedgerState:
+    def empty: L2LedgerState = L2LedgerState(Vector.empty, Vector.empty)
+
+    /** Protected _specifically_ because we want to prevent arbitrary evolution from the empty
+      * state. You _must_ begin with the empty state and evolve it using [[applyL2LedgerEvent]].
+      */
+    protected[l2] def apply(diffs: Vector[EvacuationDiff], payouts: Vector[Payout.Obligation]) =
+        new L2LedgerState(diffs, payouts)
+
+/** A trait defining an interface to interact with a black-box ledger component (i.e., via the Joint
+  * Ledger). The L2Ledger and the state associated with the interactions via the interface are named
+  * from the perspective of the _consumer_.
+  *
+  * NOTE:
+  *   - The constructor of [[L2LedgerState]] is private. The only way to construct a new state is
+  *     via the [[L2LedgerState.empty]] method in the companion object.
+  *   - The only way to _evolve_ the state is by using the "applyXYZ" methods in the
+  *     [[L2LedgerAction]] companion object. These methods are declared final and ensure that the
+  *     state is properly updated (so that you can't forget to accumulate the [[EvacuationDiff]]s or
+  *     [[Payout.Obligation]]s correctly)
+  *   - Implementors of this trait only need to define the actual methods of sending the requests.
+  *
+  * @tparam F
+  *   A monad in which the "transport" runs. This will be IO for most implementations (for network
+  *   or unix socket access, etc), but can also be something like [[State]] for pure implementations
+  */
 trait L2Ledger[F[_]] {
     implicit def monadF: Monad[F]
 
-//    def sendStartBlock(time : QuantizedInstant, blockNumber : BlockNumber) : F[Either[VirtualLedgerError, Unit]]
-
-    // FIXME: This can probably just be EitherT directly
-    // TODO: This should get split up into the 2-phase register + absorb/reject
-    /** The implementation of this function must send the payload to the virtual ledger and update
-      * the virtual ledger's state.
+    /** See:
+      * https://gummiwormlabs.github.io/gummiworm-writing-room/gummiworm-poc/sugar-rush-overview/ledger-events#deposit-events
       * @return
-      *   Either an error blob if the request could not be applied, or a vector of diffs to apply to
-      *   the JointLedger's evacuation map.
+      *   Either an error blob if the request could not be applied, or unit on success.
       */
-    def sendGenesisRequest(
-        deposit: DepositTuple
-    ): F[Either[L2LedgerError, Vector[EvacuationDiff]]]
+    def sendDepositEventRegistration(
+        req: L2LedgerEvent.DepositEventRegistration
+    ): EitherT[F, L2LedgerError, Unit]
 
-    // FIXME: This can probably just be EitherT directly
-    /** The implementation of this function must send the payload to the virtual ledger and update
-      * the virtual ledger's state.
+    /** See:
+      * https://gummiwormlabs.github.io/gummiworm-writing-room/gummiworm-poc/sugar-rush-overview/ledger-events#deposit-events
       *
-      * @param payload
-      *   An opaque blob to send to the L2 ledger
+      * @return
+      *   Either an error blob if the request could not be applied, or a vector of evacuation diffs
+      *   on success.
+      */
+    def sendDepositEventDecisions(
+        req: L2LedgerEvent.DepositEventDecisions
+    ): EitherT[F, L2LedgerError, Vector[EvacuationDiff]]
+
+    /** See:
+      * https://gummiwormlabs.github.io/gummiworm-writing-room/gummiworm-poc/sugar-rush-overview/ledger-events#l2-events
       * @return
       *   Either an error blob if the request could not be applied, or a vector of diffs to apply to
-      *   the JointLedger's evacuation map.
+      *   the JointLedger's evacuation map and a vector of payout obligations.
       */
-    def sendInternalRequest(
-        payload: Array[Byte],
-        time: QuantizedInstant
-    ): F[Either[L2LedgerError, (Vector[EvacuationDiff], Vector[Payout.Obligation])]]
+    def sendL2Event(
+        req: L2LedgerEvent.L2Event
+    ): EitherT[F, L2LedgerError, (Vector[EvacuationDiff], Vector[Payout.Obligation])]
 
-    case class L2LedgerM[A] private (private val unLedger: SV[F, A]) {
-
-        private def map[B](f: A => B): L2LedgerM[B] = L2LedgerM(this.unLedger.map(f))
-
-        private def flatMap[B](f: A => L2LedgerM[B]): L2LedgerM[B] =
-            L2LedgerM(this.unLedger.flatMap(a => f(a).unLedger))
-
+    /** Actions (effectful endomorphisms) on the L2Ledger state. They may return an error or a new
+      * state, and run effects in the base monad [[F]].
+      */
+    case class L2LedgerAction private (private val unLedgerAction: KEF[F]) {
         def run(
-            initialEvacuationMap: EvacuationMap
-        ): F[Either[L2LedgerError, (EvacuationMap, A)]] =
-            this.unLedger.run(initialEvacuationMap).value
+            state: L2LedgerState
+        ): F[Either[L2LedgerError, L2LedgerState]] =
+            this.unLedgerAction.run(state).value
     }
 
-    object L2LedgerM {
+    object L2LedgerAction {
 
-        private val get: L2LedgerM[EvacuationMap] =
-            L2LedgerM(cats.data.StateT.get)
+        def fromL2LedgerEvent(e: L2LedgerEvent): L2LedgerAction = e match {
+            case e: L2LedgerEvent.DepositEventDecisions    => applyDepositEventDecisions(e)
+            case e: L2LedgerEvent.L2Event                  => applyL2Event(e)
+            case e: L2LedgerEvent.DepositEventRegistration => applyDepositEventRegistration(e)
+        }
 
-        private def lift[A](e: EitherT[F, L2LedgerError, A]): L2LedgerM[A] =
-            L2LedgerM(StateT.liftF(e))
+        private def applyDepositEventRegistration(
+            req: L2LedgerEvent.DepositEventRegistration
+        ): L2LedgerAction =
+            L2LedgerAction(
+              Kleisli(ledgerState =>
+                  for {
+                      _ <- sendDepositEventRegistration(req)
+                  } yield ledgerState
+              )
+            )
 
-        private def set(newEvacMap: EvacuationMap): L2LedgerM[Unit] =
-            L2LedgerM(cats.data.StateT.set(newEvacMap))
+        private def applyDepositEventDecisions(
+            req: L2LedgerEvent.DepositEventDecisions
+        ): L2LedgerAction =
+            L2LedgerAction(
+              Kleisli(ledgerState =>
+                  for {
+                      resDiffs <- sendDepositEventDecisions(req)
+                      newState = L2LedgerState(ledgerState.diffs ++ resDiffs, ledgerState.payouts)
+                  } yield newState
+              )
+            )
 
-        // TODO: Move this out of here. We want to calculate the diffs, collect them in the joint ledger, and apply
-        //   them later
-        /** Applies a genesis event, fully updating the Ledger's state */
-        final def applyGenesisEvent(absorbedDeposit: DepositTuple): L2LedgerM[Unit] =
-            for {
-                s <- get
-                evacDiffs <- lift(EitherT(sendGenesisRequest(absorbedDeposit)))
-                newState = EvacuationMap.applyDiffs(s, evacDiffs)
-                _ <- set(newState)
-            } yield ()
-
-        // TODO: Move this out of here. We want to calculate the diffs, collect them in the joint ledger, and apply
-        //   them later
-        final def applyInternalTx(
-            payload: Array[Byte],
-            time: QuantizedInstant
-        ): L2LedgerM[Vector[Payout.Obligation]] =
-            for {
-                s <- get
-                res <- lift(EitherT(sendInternalRequest(payload, time)))
-                newState = EvacuationMap.applyDiffs(s, res._1)
-                _ <- set(newState)
-            } yield res._2
+        private def applyL2Event(
+            req: L2LedgerEvent.L2Event
+        ): L2LedgerAction = L2LedgerAction(
+          Kleisli(ledgerState =>
+              for {
+                  res <- sendL2Event(req)
+                  newState =
+                      L2LedgerState(ledgerState.diffs ++ res._1, ledgerState.payouts ++ res._2)
+              } yield newState
+          )
+        )
     }
 }
