@@ -4,8 +4,8 @@ import hydrozoa.integration.stage1.CommandGen.{TxMutator, TxStrategy}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
-import hydrozoa.multisig.ledger.dapp.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId}
+import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import org.scalacheck.Prop
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.commands.{CommandLabel, CommandProp}

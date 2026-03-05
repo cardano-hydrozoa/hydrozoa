@@ -10,9 +10,9 @@ import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.EventSequencer.*
 import hydrozoa.multisig.consensus.PeerLiaison.Handle
 import hydrozoa.multisig.ledger.block.{BlockBody, BlockEffects, BlockStatus}
-import hydrozoa.multisig.ledger.dapp.tx.RefundTx
 import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag
 import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId, LedgerEventNumber}
+import hydrozoa.multisig.ledger.l1.tx.RefundTx
 
 // TODO: move around
 final case class L2TxRequest(
@@ -22,7 +22,7 @@ final case class L2TxRequest(
 final case class DepositRequest(
     depositTxBytes: Array[Byte],
     refundTxBytes: Array[Byte],
-    virtualOutputsBytes: Array[Byte],
+    l2Payload: Array[Byte],
     depositFee: Long,
 )
 

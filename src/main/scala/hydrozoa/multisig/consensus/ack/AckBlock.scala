@@ -2,7 +2,7 @@ package hydrozoa.multisig.consensus.ack
 
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber, BlockType}
-import hydrozoa.multisig.ledger.dapp.tx.TxSignature
+import hydrozoa.multisig.ledger.l1.tx.TxSignature
 
 sealed trait AckBlock {
     def ackId: AckId

@@ -13,9 +13,10 @@ import hydrozoa.lib.cardano.scalus.given_Choose_Coin
 import hydrozoa.lib.cardano.scalus.ledger.{asUtxoList, asUtxos}
 import hydrozoa.lib.cardano.value.coin.Distribution.unsafeNormalizeWeights
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.JointLedger
-import hydrozoa.multisig.ledger.dapp.token.CIP67.HeadTokenNames
-import hydrozoa.multisig.ledger.virtual.{EvacuationMap, given}
+import hydrozoa.multisig.ledger.eutxol2.toEvacuationKey
+import hydrozoa.multisig.ledger.eutxol2.tx.L2Genesis
+import hydrozoa.multisig.ledger.joint.given
+import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap}
 import java.time.Instant
 import monocle.syntax.all.*
 import org.scalacheck.{Gen, Prop, Properties}
@@ -169,14 +170,20 @@ object InitializationParametersGenTopDown {
             // Combining together, .get is safe since it's derived from non-empty [[testPeers]]
             total = Semigroup.combineAllOption(contributions).get
             seedUtxo <- Gen.oneOf(total.fundingUtxos)
-            genesisId = JointLedger.mkGenesisId(HeadTokenNames(seedUtxo.input).treasuryTokenName, 0)
+            genesisId = L2Genesis.mkGenesisId(seedUtxo.input)
+
             initialEvacuationMap =
                 EvacuationMap(
                   TreeMap.from(
                     total.l2transactionOutput.zipWithIndex
-                        .map((o, ix) =>
-                            TransactionInput(transactionId = genesisId, index = ix) -> KeepRaw(o)
-                        )
+                        .map((o, ix) => {
+                            val evacuationKey: EvacuationKey =
+                                TransactionInput(
+                                  transactionId = genesisId,
+                                  index = ix
+                                ).toEvacuationKey
+                            evacuationKey -> KeepRaw(o)
+                        })
                   )
                 )
 
@@ -451,7 +458,7 @@ object InitializationParametersGenBottomUp {
         } yield InitializationParameters(
           headStartTime = headStartTime,
           initialEvacuationMap =
-              EvacuationMap(TreeMap.from(l2Utxos.map((i, o) => (i, KeepRaw(o))))),
+              EvacuationMap(TreeMap.from(l2Utxos.map((i, o) => (i.toEvacuationKey, KeepRaw(o))))),
           initialEquityContributions = equityContributions,
           initialSeedUtxo = seedUtxo,
           initialAdditionalFundingUtxos = additionalFundingUtxos,
