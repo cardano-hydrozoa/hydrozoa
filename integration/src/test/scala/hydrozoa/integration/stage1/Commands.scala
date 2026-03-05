@@ -4,7 +4,7 @@ import hydrozoa.integration.stage1.CommandGen.{TxMutator, TxStrategy}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
-import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId}
+import hydrozoa.multisig.ledger.event.{LedgerEventId, UserEvent}
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import org.scalacheck.Prop
 import org.scalacheck.Prop.propBoolean
@@ -64,7 +64,7 @@ object Commands:
 
     /** Feed a single L2 transaction into the current block. */
     final case class L2TxCommand(
-        event: LedgerEvent.L2TxEvent,
+        event: UserEvent.L2Event,
         txStrategy: TxStrategy,
         txMutator: TxMutator
     )
@@ -137,7 +137,7 @@ object Commands:
     /** The command corresponds to the register deposit action with the event id known upfront.
       */
     final case class RegisterDepositCommand(
-        registerDeposit: LedgerEvent.DepositEvent,
+        registerDeposit: UserEvent.DepositEvent,
         depositRefundTxSeq: DepositRefundTxSeq,
         depositTxBytesSigned: Transaction
     ) {

@@ -16,7 +16,7 @@ import hydrozoa.multisig.ledger.eutxol2.tx.{GenesisObligation, L2Genesis, L2Tx, 
 import hydrozoa.multisig.ledger.eutxol2.{HydrozoaTransactionMutator, toEvacuationKey}
 import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag
 import hydrozoa.multisig.ledger.event.LedgerEventNumber.increment
-import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId, LedgerEventNumber}
+import hydrozoa.multisig.ledger.event.{LedgerEventId, LedgerEventNumber, UserEvent}
 import hydrozoa.multisig.ledger.joint.given
 import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap}
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
@@ -145,7 +145,7 @@ object Model:
             events: List[
               (
                   // Raw ledger event
-                  LedgerEvent,
+                  UserEvent,
                   // Parsed counterpart
                   L2Tx | DepositUtxo,
                   // Validity flag
@@ -166,8 +166,8 @@ object Model:
         )
 
     private val eventsLens
-        : Lens[BlockCycle.InProgress, List[(LedgerEvent, L2Tx | DepositUtxo, ValidityFlag)]] =
-        Lens[BlockCycle.InProgress, List[(LedgerEvent, L2Tx | DepositUtxo, ValidityFlag)]](
+        : Lens[BlockCycle.InProgress, List[(UserEvent, L2Tx | DepositUtxo, ValidityFlag)]] =
+        Lens[BlockCycle.InProgress, List[(UserEvent, L2Tx | DepositUtxo, ValidityFlag)]](
           get = _.events
         )(
           replace = events => bc => bc.copy(events = events)
@@ -242,7 +242,7 @@ object Model:
             logger.trace(s"INPUT state.blockCycle event IDs: ${currentEvents.map(_._1.eventId)}")
 
             val l2Tx: L2Tx = L2Tx
-                .parse(cmd.event.tx)
+                .parse(cmd.event.l2Payload)
                 .fold(err => throw RuntimeException(s"Failed to parse L2Tx: $err"), identity)
 
             val ret = HydrozoaTransactionMutator.transit(
@@ -342,7 +342,7 @@ object Model:
 
         private def mkBlockBrief(
             blockNumber: BlockNumber,
-            events: List[(LedgerEvent, L2Tx | DepositUtxo, ValidityFlag)],
+            events: List[(UserEvent, L2Tx | DepositUtxo, ValidityFlag)],
             competingFallbackStartTime: QuantizedInstant,
             txTiming: TxTiming,
             blockStartTime: QuantizedInstant,

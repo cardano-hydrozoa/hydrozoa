@@ -9,8 +9,8 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
-import hydrozoa.multisig.ledger.event.LedgerEvent.DepositEvent
 import hydrozoa.multisig.ledger.event.LedgerEventId
+import hydrozoa.multisig.ledger.event.UserEvent.DepositEvent
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.l1.tx.RefundTx
@@ -85,7 +85,7 @@ object L1LedgerM {
     def registerDeposit(
         req: DepositEvent,
         blockStartTime: QuantizedInstant
-    ): L1LedgerM[RefundTx.PostDated] = {
+    ): L1LedgerM[(DepositUtxo, RefundTx.PostDated)] = {
         import req.*
         for {
             config <- ask
@@ -124,7 +124,7 @@ object L1LedgerM {
             updatedMap <- s.deposits.appended((eventId, depositProduced))
             newState = s.copy(deposits = updatedMap)
             _ <- set(newState)
-        } yield depositRefundTxSeq.refundTx
+        } yield (depositProduced, depositRefundTxSeq.refundTx)
     }
 
     /** Construct settlement tx seq and set the new treasury to the state.

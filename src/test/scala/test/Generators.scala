@@ -7,8 +7,8 @@ import hydrozoa.lib.cardano.value.coin.Distribution.NormalizedWeights
 import hydrozoa.multisig.ledger
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
 import hydrozoa.multisig.ledger.eutxol2.tx.{GenesisObligation, L2Tx}
-import hydrozoa.multisig.ledger.event.LedgerEvent.L2TxEvent
-import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId}
+import hydrozoa.multisig.ledger.event.UserEvent.L2Event
+import hydrozoa.multisig.ledger.event.{LedgerEventId, UserEvent}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.l1.token.CIP67
@@ -343,7 +343,7 @@ object Generators {
                     val bogusInputId: TransactionHash = Hash(
                       genByteStringOfN(32)
                           .suchThat(txId =>
-                              !state.toSeq
+                              !state.activeUtxos.toSeq
                                   .map(_._1.transactionId.bytes)
                                   .contains(txId.bytes)
                           )
@@ -423,13 +423,13 @@ object Generators {
                 } yield Payout.Obligation(utxo = KeepRaw(output))
             }
 
-            given Arbitrary[LedgerEvent] = Arbitrary {
+            given Arbitrary[UserEvent] = Arbitrary {
                 for {
                     eventId <- genEventId
                     // genesisObligation <-genGenesisObligation()
                     event <- Gen.frequency(
                       // TODO: improve
-                      2 -> Gen.const(L2TxEvent(eventId, Array.empty))
+                      2 -> Gen.const(L2Event(eventId, Array.empty))
                       // 8 -> Gen.const(RegisterDeposit(eventId, Array.empty))
                     )
                 } yield event

@@ -15,14 +15,6 @@ import scalus.cardano.onchain.plutus.v3.{Address as PlutusAddress, PosixTime}
 import scalus.uplc.builtin.Data.{FromData, ToData, fromData, toData}
 import scalus.uplc.builtin.{Data, FromData, ToData}
 
-// TODO: Better name?
-case class DepositTuple(
-    l2Payload: Array[Byte],
-    l2Value: Value,
-    depositFee: Coin,
-    depositTransactionInput: TransactionInput
-)
-
 /** @param l2Payload
   *   The L2 payload associated with the deposit transaction that created this deposit utxo. A hash
   *   of this must appear in the metadata of the corresponding deposit transaction. This includes
@@ -51,9 +43,6 @@ final case class DepositUtxo(
         )
 
     val l2Value: Value = value - Value(depositFee)
-
-    def toDepositTuple: DepositTuple =
-        DepositTuple(l2Payload, l2Value, depositFee, utxoId)
 }
 
 object DepositUtxo {

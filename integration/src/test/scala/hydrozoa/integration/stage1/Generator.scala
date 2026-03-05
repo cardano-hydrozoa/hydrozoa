@@ -18,8 +18,8 @@ import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.eutxol2.tx.GenesisObligation
-import hydrozoa.multisig.ledger.event.LedgerEvent.L2TxEvent
-import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId}
+import hydrozoa.multisig.ledger.event.UserEvent.L2Event
+import hydrozoa.multisig.ledger.event.{LedgerEventId, UserEvent}
 import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import io.bullet.borer.Cbor
@@ -265,9 +265,9 @@ object CommandGen:
             _ = logger.trace(s"l2Tx: ${HexUtil.encodeHexString(txSigned.toCbor)}")
 
         } yield L2TxCommand(
-          event = L2TxEvent(
+          event = L2Event(
             eventId = state.nextLedgerEventId,
-            tx = txSigned.toCbor
+            l2Payload = txSigned.toCbor
           ),
           txStrategy = txStrategy,
           txMutator = txMutator
@@ -403,7 +403,7 @@ object CommandGen:
 
                                 } yield Some(
                                   RegisterDepositCommand(
-                                    registerDeposit = LedgerEvent.DepositEvent(
+                                    registerDeposit = UserEvent.DepositEvent(
                                       eventId = state.nextLedgerEventId,
                                       depositTxBytes = depositRefundSeq.depositTx.tx.toCbor,
                                       refundTxBytes = depositRefundSeq.refundTx.tx.toCbor,

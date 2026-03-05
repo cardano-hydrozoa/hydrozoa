@@ -5,19 +5,19 @@ import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import scalus.cardano.ledger.{Coin, Value}
 
 /** This is just a wrapper that adds event id. */
-sealed trait LedgerEvent {
+sealed trait UserEvent {
     def eventId: LedgerEventId
 
     final transparent inline def eventNum: LedgerEventNumber = eventId.eventNum
     final transparent inline def peerNum: HeadPeerNumber = eventId.peerNum
 }
 
-object LedgerEvent {
+object UserEvent {
 
-    final case class L2TxEvent(
+    final case class L2Event(
         override val eventId: LedgerEventId,
-        tx: Array[Byte]
-    ) extends LedgerEvent
+        l2Payload: Array[Byte]
+    ) extends UserEvent
 
     // TODO: factor out a true request type - depositTxBytes + refundTxBytes + virtualOutputsBytes + depositFee
     // TODO: See also: EventSequencer.DepositRequest
@@ -29,6 +29,6 @@ object LedgerEvent {
         l2Value: Value,
         // TODO: explain the name, previously was known as donationToTreasury
         depositFee: Coin,
-    ) extends LedgerEvent
+    ) extends UserEvent
 
 }
