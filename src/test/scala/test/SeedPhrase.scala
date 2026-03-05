@@ -34,5 +34,6 @@ enum SeedPhrase:
                 "either august present asset " +
                 "muffin glass fat olympic " +
                 "secret thunder envelope "
+
         case Custom(mnemonic) => mnemonic
     }

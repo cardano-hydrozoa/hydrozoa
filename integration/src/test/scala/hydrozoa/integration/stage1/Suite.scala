@@ -34,13 +34,13 @@ import org.scalacheck.commands.{ModelBasedSuite, ScenarioGen}
 import org.scalacheck.{Gen, Prop}
 import org.typelevel.log4cats.Logger
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
-import scalus.cardano.address.Network
+import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.rules.{Context, UtxoEnv}
 import scalus.cardano.ledger.{CardanoInfo, CertState, Coin, EvaluatorMode, PlutusScriptEvaluator, ProtocolParams, SlotConfig, Transaction, TransactionHash, TransactionOutput, Utxo, Utxos, Value}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Send, Spend}
 import scalus.cardano.txbuilder.{Change, TransactionBuilder}
 import test.TestPeerName.Alice
-import test.{PeersNumberSpec, SeedPhrase, TestPeerName, TestPeersSpec}
+import test.{SeedPhrase, TestPeerName, TestPeers}
 
 /** Integration Stage 1 (the simplest).
   *   - Only three real actors are involved: [[JointLedger]], [[ConsensusActor]], and
@@ -65,6 +65,7 @@ enum SuiteCardano:
         protocolParams: ProtocolParams
     )
     case Public(
+        seedPhrase: SeedPhrase,
         cardanoNetwork: StandardCardanoNetwork,
         blockfrostKey: String
     )
@@ -80,7 +81,8 @@ case class Suite(
     case class Stage1Env(
         startTime: java.time.Instant,
         cardanoNetwork: CardanoNetwork,
-        genesisUtxo: List[TestPeerName] => Map[TestPeerName, Utxos]
+        genesisUtxo: TestPeers => Map[TestPeerName, Utxos],
+        testPeers: TestPeers
     )
 
     override type State = Model.State
@@ -99,22 +101,25 @@ case class Suite(
     }
 
     override def initEnv: Env = suiteCardano match {
-        case SuiteCardano.Mock(network) =>
+
+        case SuiteCardano.Mock(cardanoNetwork) =>
+            val testPeers = TestPeers.apply(
+              SeedPhrase.Yaci,
+              cardanoNetwork,
+              1
+            )
+
             Stage1Env(
               startTime = java.time.Instant.now(),
-              cardanoNetwork = network,
-              genesisUtxo = yaciTestSauceGenesis(network.network)
+              cardanoNetwork = cardanoNetwork,
+              genesisUtxo = yaciTestSauceGenesis(cardanoNetwork.network),
+              testPeers = testPeers
             )
 
         case SuiteCardano.Yaci(url, protocolParams) =>
+
             logger.info("Resetting Yaci...")
             DevKit.reset()
-
-            // TODO: Here we need peer wallets/addresses
-            val aliceAddress = ??? // Alice.address(Testnet)
-            // logger.info(s"Topping up Alice's address ${aliceAddress.toBech32.get}")
-
-            DevKit.topup(aliceAddress, Coin(20_000_000_000L))
 
             logger.info("Getting devnet info...")
             val devnetInfo: DevnetInfo = DevKit.devnetInfo()
@@ -133,68 +138,30 @@ case class Suite(
             )
 
             val cardanoNetwork: CardanoNetwork.Custom = CardanoNetwork.Custom(cardanoInfo)
+
+            val testPeers = TestPeers.apply(
+              SeedPhrase.Yaci,
+              cardanoNetwork,
+              1
+            )
+
+            // Topup Alice's address
+            val aliceAddress = testPeers.addressFor(Alice)
+            logger.info(s"Topping up Alice's address ${aliceAddress.toBech32.get}")
+            DevKit.topup(aliceAddress, Coin(20_000_000_000L))
+
+            // Mix/split up utxos
             val backend = CardanoBackendBlockfrost.apply_(Right((cardanoNetwork, url)))
-
-            val peerUtxos = backend
-                .utxosAt(aliceAddress)
-                .unsafeRunSync()
-                .fold(err => throw RuntimeException(err), identity)
-            val totalValue = Value.combine(peerUtxos.map((_, o) => o.value))
-            val foo = CappedValueGen.generateCappedValue(cardanoNetwork)
-            val outputValues = Gen
-                .tailRecM((totalValue, List.empty: List[Value]))((rest, acc) =>
-                    foo(rest, Some(20_000_000L), Some(1000_000_000), None).map(next =>
-                        if next == rest
-                        then Right(acc :+ next)
-                        else Left((rest - next, acc :+ next))
-                    )
-                )
-                .sample
-                .get
-
-            val splitTx: Transaction = (for {
-                unbalanced <- TransactionBuilder
-                    .build(
-                      cardanoNetwork.cardanoInfo.network,
-                      peerUtxos.map { case (utxoId, output) =>
-                          Spend(Utxo(utxoId, output))
-                      }.toList ++ outputValues.map(value =>
-                          Send(
-                            TransactionOutput.Babbage(
-                              address = aliceAddress,
-                              value = value
-                            )
-                          )
-                      )
-                    )
-                balanced <- unbalanced.balanceContext(
-                  diffHandler = Change.changeOutputDiffHandler(
-                    _,
-                    _,
-                    protocolParams = protocolParams,
-                    changeOutputIdx = 0
-                  ),
-                  protocolParams = protocolParams,
-                  evaluator =
-                      PlutusScriptEvaluator(cardanoInfo, EvaluatorMode.EvaluateAndComputeCost)
-                )
-            } yield balanced.transaction)
-                .fold(err => throw RuntimeException(err.toString), identity)
-
-            logger.trace(s"splitTx = ${HexUtil.encodeHexString(splitTx.toCbor)}")
-
-            // TODO:
-            val splitTxSigned = ???
-            // splitTx.attachVKeyWitnesses(List(Alice.wallet.mkVKeyWitness(splitTx)))
-            // logger.trace(s"splitTxSigned = ${HexUtil.encodeHexString(splitTxSigned.toCbor)}")
-
-            val ret = backend.submitTx(splitTxSigned).unsafeRunSync()
-
+            val mixSplitTx = mkMixSplitTx(cardanoNetwork, backend, aliceAddress)
+            val mixSplitTxSigned = testPeers.walletFor(Alice).signTx(mixSplitTx)
+            logger.trace(s"mixSplitTxSigned = ${HexUtil.encodeHexString(mixSplitTxSigned.toCbor)}")
+            val ret = backend.submitTx(mixSplitTxSigned).unsafeRunSync()
             logger.trace(s"submission response: $ret")
 
+            // TODO: await tx
             Thread.sleep(5_000)
 
-            //
+            // Query utxos and finalize the environment
             val splitUpUtxos = backend
                 .utxosAt(aliceAddress)
                 .unsafeRunSync()
@@ -205,82 +172,31 @@ case class Suite(
               cardanoNetwork = CardanoNetwork.Custom(
                 cardanoInfo
               ),
-              genesisUtxo = _ => Map(Alice -> splitUpUtxos) // yaciTestSauceGenesis(testnet)
+              genesisUtxo = _ => Map(Alice -> splitUpUtxos),
+              testPeers = testPeers
             )
 
-        case SuiteCardano.Public(cardanoNetwork, blockfrostKey) =>
+        case SuiteCardano.Public(seedPhrase, cardanoNetwork, blockfrostKey) =>
 
-            // TODO: Here we need peer wallets/addresses
-            val aliceAddress = ??? // Alice.address(Testnet)
-            // logger.info(s"Topping up Alice's address ${aliceAddress.toBech32.get}")
+            // Mix and split up utxos
+            val testPeers = TestPeers.apply(
+              seedPhrase,
+              cardanoNetwork,
+              1
+            )
 
+            val aliceAddress = testPeers.addressFor(Alice)
             val backend = CardanoBackendBlockfrost.apply_(Left(cardanoNetwork), blockfrostKey)
+            logger.info(s"Splitting up utxos at Alice's address ${aliceAddress.toBech32.get}")
+            val mixSplitTx = mkMixSplitTx(cardanoNetwork, backend, aliceAddress)
+            val splitTxSigned = testPeers.walletFor(Alice).signTx(mixSplitTx)
+            logger.trace(s"splitTxSigned = ${HexUtil.encodeHexString(splitTxSigned.toCbor)}")
+            val ret = backend.submitTx(splitTxSigned).unsafeRunSync()
+            logger.trace(s"submission response: $ret")
 
-            // logger.info(s"Splitting up utxos at Alice's address ${aliceAddress.toBech32.get}")
-            //
-            // val peerUtxos = backend
-            //    .utxosAt(aliceAddress)
-            //    .unsafeRunSync()
-            //    .fold(err => throw RuntimeException(err), identity)
-            //
-            // logger.trace(s"existing utxos: $peerUtxos")
-            //
-            // val totalValue = Value.combine(peerUtxos.map((_, o) => o.value))
-            // val foo = CappedValueGen.generateCappedValue(cardanoNetwork)
-            // val outputValues = Gen
-            //    .tailRecM((totalValue, List.empty: List[Value]))((rest, acc) =>
-            //        foo(rest, Some(20_000_000L), Some(1000_000_000), None).map(next =>
-            //            if next == rest
-            //            then Right(acc :+ next)
-            //            else Left((rest - next, acc :+ next))
-            //        )
-            //    )
-            //    .sample
-            //    .get
-            //
-            // val splitTx: Transaction = (for {
-            //    unbalanced <- TransactionBuilder
-            //        .build(
-            //            cardanoNetwork.cardanoInfo.network,
-            //            peerUtxos.map { case (utxoId, output) =>
-            //                Spend(Utxo(utxoId, output))
-            //            }.toList ++ outputValues.map(value =>
-            //                Send(
-            //                    TransactionOutput.Babbage(
-            //                        address = aliceAddress,
-            //                        value = value
-            //                    )
-            //                )
-            //            )
-            //        )
-            //    balanced <- unbalanced.balanceContext(
-            //        diffHandler = Change.changeOutputDiffHandler(
-            //            _,
-            //            _,
-            //            protocolParams = cardanoNetwork.protocolParams,
-            //            changeOutputIdx = 0
-            //        ),
-            //        protocolParams = cardanoNetwork.protocolParams,
-            //        evaluator =
-            //            PlutusScriptEvaluator(cardanoNetwork.cardanoInfo, EvaluatorMode.EvaluateAndComputeCost)
-            //    )
-            // } yield balanced.transaction)
-            //    .fold(err => throw RuntimeException(err.toString), identity)
-            //
-            // logger.trace(s"splitTx = ${HexUtil.encodeHexString(splitTx.toCbor)}")
-            //
-            // val splitTxSigned =
-            //    splitTx.attachVKeyWitnesses(List(Alice.wallet.mkVKeyWitness(splitTx)))
-            //
-            // logger.trace(s"splitTxSigned = ${HexUtil.encodeHexString(splitTxSigned.toCbor)}")
-            //
-            // val ret = backend.submitTx(splitTxSigned).unsafeRunSync()
-            //
-            // logger.trace(s"submission response: $ret")
-            //
-            // Thread.sleep(60_000)
+            // TODO: await tx
+            Thread.sleep(60_000)
 
-            //
             val splitUpUtxos = backend
                 .utxosAt(aliceAddress)
                 .unsafeRunSync()
@@ -289,8 +205,63 @@ case class Suite(
             Stage1Env(
               startTime = java.time.Instant.now(),
               cardanoNetwork = cardanoNetwork,
-              genesisUtxo = _ => Map(Alice -> splitUpUtxos) // yaciTestSauceGenesis(testnet)
+              genesisUtxo = _ => Map(Alice -> splitUpUtxos),
+              testPeers = testPeers
             )
+    }
+
+    def mkMixSplitTx(
+        cardanoNetwork: CardanoNetwork,
+        backend: CardanoBackendBlockfrost,
+        address: ShelleyAddress
+    ): Transaction = {
+        val peerUtxos = backend
+            .utxosAt(address)
+            .unsafeRunSync()
+            .fold(err => throw RuntimeException(err), identity)
+        val totalValue = Value.combine(peerUtxos.map((_, o) => o.value))
+        val gen = CappedValueGen.generateCappedValue(cardanoNetwork)
+        val outputValues = Gen
+            .tailRecM((totalValue, List.empty: List[Value]))((rest, acc) =>
+                gen(rest, Some(20_000_000L), Some(1000_000_000), None).map(next =>
+                    if next == rest
+                    then Right(acc :+ next)
+                    else Left((rest - next, acc :+ next))
+                )
+            )
+            .sample
+            .get
+
+        (for {
+            unbalanced <- TransactionBuilder
+                .build(
+                  cardanoNetwork.cardanoInfo.network,
+                  peerUtxos.map { case (utxoId, output) =>
+                      Spend(Utxo(utxoId, output))
+                  }.toList ++ outputValues.map(value =>
+                      Send(
+                        TransactionOutput.Babbage(
+                          address = address,
+                          value = value
+                        )
+                      )
+                  )
+                )
+            balanced <- unbalanced.balanceContext(
+              diffHandler = Change.changeOutputDiffHandler(
+                _,
+                _,
+                protocolParams = cardanoNetwork.cardanoProtocolParams,
+                changeOutputIdx = 0
+              ),
+              protocolParams = cardanoNetwork.cardanoProtocolParams,
+              evaluator = PlutusScriptEvaluator(
+                cardanoNetwork.cardanoInfo,
+                EvaluatorMode.EvaluateAndComputeCost
+              )
+            )
+        } yield balanced.transaction)
+            .fold(err => throw RuntimeException(err.toString), identity)
     }
 
     val logger: org.slf4j.Logger = Logging.logger("Stage1.Suite")
@@ -303,22 +274,16 @@ case class Suite(
     override def genInitialState(env: Env): Gen[State] = {
 
         logger.trace(s"env start time: ${env.startTime}")
-        logger.trace(s"env genesis utxo: ${env.genesisUtxo.apply(List(Alice))}")
+        import env.testPeers
+        val testPeerToUtxos = env.genesisUtxo(testPeers)
 
-        // One-peer head
-        val spec =
-            TestPeersSpec.apply(SeedPhrase.Yaci, env.cardanoNetwork, PeersNumberSpec.Exact(1))
-        val ownTestPeer = Alice
-
+        // Additional generators
         val generateHeadStartTime: HeadStartTimeGen = slotConfig =>
             Gen.const(env.startTime.quantize(slotConfig))
         val generateTxTiming = txTimingGen
 
         for {
-
-            testPeerToUtxos <- Gen.const(env.genesisUtxo(List(ownTestPeer)))
-
-            config <- MultiNodeConfig.generate(spec)(
+            config <- MultiNodeConfig.generateForTestPeers(testPeers)(
               generateHeadStartTime = generateHeadStartTime,
               generateTxTiming = generateTxTiming,
               generateInitializationParameters = InitializationParametersGenTopDown.GenWithDeps(
@@ -340,8 +305,6 @@ case class Suite(
         } yield Model
             .State(
               multiNodeConfig = config,
-              operationalMultisigConfig = operationalMultisigConfig,
-              operationalLiquidationConfig = operationalLiquidationConfig,
               nextLedgerEventNumber = LedgerEventNumber(0),
               currentTime = BeforeHappyPathExpiration(config.headConfig.headStartTime),
               blockCycle = BlockCycle.Done(BlockNumber.zero, BlockVersion.Full.zero),
@@ -405,8 +368,6 @@ case class Suite(
             cardanoBackendConfig = suiteCardano match {
                 case Mock(_) =>
                     CardanoBackendConfig.Mock(
-                      // TODO: remove
-                      ownTestPeerName = ???,
                       network = multiNodeConfig.headConfig.cardanoInfo.network,
                       slotConfig = multiNodeConfig.headConfig.cardanoInfo.slotConfig,
                       protocolParams = multiNodeConfig.headConfig.cardanoInfo.protocolParams,
@@ -418,7 +379,7 @@ case class Suite(
                         (CardanoNetwork.Custom(multiNodeConfig.headConfig.cardanoInfo), url)
                       )
                     )
-                case Public(cardanoNetwork, blockfrostKey) =>
+                case Public(_, cardanoNetwork, blockfrostKey) =>
                     CardanoBackendConfig.Blockfrost(
                       network = Left(cardanoNetwork),
                       blockfrostKey = blockfrostKey
@@ -478,7 +439,6 @@ case class Suite(
 
     enum CardanoBackendConfig:
         case Mock(
-            ownTestPeerName: TestPeerName,
             network: Network,
             slotConfig: SlotConfig,
             protocolParams: ProtocolParams,
@@ -517,6 +477,7 @@ case class Suite(
                   _._1.cardanoProtocolParams
                 )
                 for {
+                    // TODO: this is needed for Yaci only
                     _ <- loggerIO.info("Wait a bit for backend being ready...")
                     _ <- IO.sleep(1.second)
                     _ <- loggerIO.info(

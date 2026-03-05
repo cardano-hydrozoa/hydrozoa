@@ -3,7 +3,6 @@ package hydrozoa.config.head.initialization
 import cats.*
 import cats.data.*
 import cats.syntax.semigroup.*
-import hydrozoa.config.head.initialization.InitialBlockGeneratorTest.property
 import hydrozoa.config.head.multisig.fallback.{FallbackContingency, FallbackContingencyGen, generateFallbackContingency}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
@@ -11,6 +10,7 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.cardano.scalus.given_Choose_Coin
 import hydrozoa.lib.cardano.scalus.ledger.{asUtxoList, asUtxos}
 import hydrozoa.lib.cardano.value.coin.Distribution.unsafeNormalizeWeights
+import hydrozoa.multisig.backend.cardano.yaciTestSauceGenesis
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.dapp.token.CIP67.HeadTokenNames
@@ -25,6 +25,7 @@ import scalus.cardano.ledger.TransactionOutput.{Babbage, valueLens}
 import spire.math.{Rational, SafeLong}
 import test.Generators.Hydrozoa.*
 import test.Generators.Other.genCoinDistributionWithMinAdaUtxo
+import test.Generators.loggerGenerators
 import test.{TestPeers, TestPeersSpec}
 
 // TODO: George: what do you think of expanding our shortening citizenship?
@@ -89,26 +90,14 @@ object InitializationParametersGenTopDown {
 
     type GenesisUtxosGen = CardanoNetwork => Gen[Map[HeadPeerNumber, Utxos]]
 
-    // TODO: do we want to have a default?
-    /// ** Returns test genesis utxo provided by [[TestPeers]].
-    //  */
-    // def testPeersGenesisUtxosL1(testPeers: TestPeers)(
-    //    network: CardanoNetwork
-    // ): Gen[Map[HeadPeerNumber, Utxos]] =
-    //    Gen.const(testPeers.genesisUtxos(network.cardanoInfo.network))
-    //
-    /// ** Generate fake utxos, that don't exist, but are spendable using peers' credentials.
-    //  */
-    // def generateRandomPeersUtxosL1(network: CardanoNetwork): Gen[Map[HeadPeerNumber, Utxos]] = ???
-
     case class GenWithDeps(
         generator: GenInitializationParameters = generateInitializationParameters,
         generateGenesisUtxosL1: GenesisUtxosGen,
         equityRange: (Coin, Coin) = Coin(5_000_000) -> Coin(500_000_000)
     )
 
-    /** This is a "bad" generator, that executes top-down approach that limits significantly its
-      * coverage. It exists for a reason:
+    /** This is a generator that executes top-down approach. This may limits significantly its
+      * coverage (depending on [[generateGenesisUtxosL1]] provided). It exists for a reason:
       *   - On Yaci you are limited to a set of initial utxos
       *   - Even if you can spawn utxos on Yaci you can't on a public testnet
       *   - When doing integration testing we don't want need to cover a wide space since we are
@@ -211,18 +200,18 @@ object InitializationParametersGenTopDown {
         for {
             // 1. Funding utxos, at least one since individual contingency is mandatory
 
-            // TODO: review
+            // TODO: review and make minimal contribution and funding utxos number a parameter
             contingency <- Gen.const(fallbackContingency.totalContingencyFor(headPeerNumber))
             minFunding <- Gen.const(Value(contingency) + Value(peerEquity) + Value.ada(20))
 
-            _ = println(minFunding)
+            _ = loggerGenerators.debug(s"minFunding=$minFunding")
 
             fundingUtxos <- Gen
                 .pick(1, peerUtxos.asUtxoList)
                 .suchThat(ret => {
                     val selectedValue = Value.combine(ret.map(_.output.value))
-                    println(s"selectedValue=$selectedValue")
-                    println(s"ret.size=$selectedValue")
+                    loggerGenerators.debug(s"selectedValue=$selectedValue")
+                    loggerGenerators.debug(s"ret.size=$selectedValue")
                     (selectedValue - minFunding).isPositive
                 })
 
@@ -366,6 +355,10 @@ object CappedValueGen:
 
 end CappedValueGen
 
+// ===================================
+// Bottom Up Generator
+// ===================================
+
 object InitializationParametersGenBottomUp {
     import HeadStartTimeGen.*
 
@@ -476,11 +469,25 @@ object InitializationParametersGenBottomUp {
         )
 }
 
-object SanityCheckBottomUp extends Properties("Initialization Parameters Bottom Up Sanity Check") {
-    val _ = property("generates") = Prop.forAll(
+object InitializationParametersTest extends Properties("Initialization Parameters Sanity Check") {
+
+    val _ = property("Top Down generates") = Prop.forAll(
+      TestPeersSpec
+          .generate()
+          .flatMap(TestPeers.generate)
+          .flatMap(testPeers =>
+              InitializationParametersGenTopDown.generateInitializationParameters(testPeers)(
+                generateGenesisUtxosL1 = cn =>
+                    yaciTestSauceGenesis(cn.network)(testPeers).map((k, v) => k.headPeerNumber -> v)
+              )
+          )
+    )(_ => true)
+
+    val _ = property("Bottom Up generates") = Prop.forAll(
       TestPeersSpec
           .generate()
           .flatMap(TestPeers.generate)
           .flatMap(InitializationParametersGenBottomUp.generateInitializationParameters(_)())
     )(_ => true)
+
 }

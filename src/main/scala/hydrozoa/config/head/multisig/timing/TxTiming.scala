@@ -125,6 +125,8 @@ object TxTiming {
       depositAbsorptionDuration = 1.hours.quantize(slotConfig),
     )
 
+    // TODO: For the March demo the deposit maturity: 5.minutes
+
     // TODO: move to integration
     def testnet(slotConfig: SlotConfig) = TxTiming(
       minSettlementDuration = 1.hour.quantize(slotConfig),

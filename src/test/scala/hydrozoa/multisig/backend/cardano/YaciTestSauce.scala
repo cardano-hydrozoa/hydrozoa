@@ -3,43 +3,47 @@ package hydrozoa.multisig.backend.cardano
 import scalus.cardano.address.Network
 import scalus.cardano.ledger.{Blake2b_256, Hash, HashPurpose, TransactionInput, TransactionOutput, Utxos, Value}
 import scalus.uplc.builtin.ByteString
-import test.TestPeerName
 import test.TestPeerName.*
+import test.{TestPeerName, TestPeers}
 
 type MkGenesis = (network: Network) => (peers: List[TestPeerName]) => Map[TestPeerName, Utxos]
 
-def mkGenesis(genesisUtxo: List[(String, TestPeerName)])(network: Network)(
-    peers: List[TestPeerName]
-): Map[TestPeerName, Utxos] =
-    // TODO
-    // val mkAddress = TestPeer.address(network)
+def mkGenesis(setup: List[(String, TestPeerName)])(network: Network)(
+    testPeers: TestPeers
+): Map[TestPeerName, Utxos] = {
 
-    genesisUtxo
-        .filter((_, peer) => peers.contains(peer))
-        .map((txHash, peer) =>
-            peer ->
+    val peerNames = testPeers.headPeerIds.map(id => TestPeerName.fromOrdinal(id._1)).toList
+
+    setup
+        // filtering out unneeded elements from the setup
+        .filter((_, peerName) => peerNames.contains(peerName))
+        .map((txHash, peerName) =>
+            peerName ->
                 (
                   TransactionInput(
                     Hash[Blake2b_256, HashPurpose.TransactionHash](ByteString.fromHex(txHash)),
                     0
                   ),
                   TransactionOutput
-                      // .Babbage(address = mkAddress(peer), value = Value.lovelace(10_000_000_000L))
-                      .Babbage(address = ???, value = Value.lovelace(10_000_000_000L))
+                      .Babbage(
+                        address = testPeers.addressFor(peerName),
+                        value = Value.lovelace(10_000_000_000L)
+                      )
                 )
         )
         .groupBy((peer, _) => peer)
         .view
         .mapValues(a => a.map(_._2).toMap)
         .toMap
+}
 
-def yaciTestSauceGenesis(network: Network)(peers: List[TestPeerName]): Map[TestPeerName, Utxos] =
-    mkGenesis(yaciTestSauce)(network)(peers)
+def yaciTestSauceGenesis(network: Network)(testPeers: TestPeers): Map[TestPeerName, Utxos] =
+    mkGenesis(yaciTestSauceSetup)(network)(testPeers)
 
-def richAlice(network: Network)(peers: List[TestPeerName]): Map[TestPeerName, Utxos] =
-    mkGenesis(richAlice)(network)(peers)
+def richAlice(network: Network)(testPeers: TestPeers): Map[TestPeerName, Utxos] =
+    mkGenesis(richAliceSetup)(network)(testPeers)
 
-val yaciTestSauce: List[(String, TestPeerName)] =
+val yaciTestSauceSetup: List[(String, TestPeerName)] =
     List(
       (
         "6d36c0e2f304a5c27b85b3f04e95fc015566d35aef5f061c17c70e3e8b9ee508",
@@ -123,7 +127,7 @@ val yaciTestSauce: List[(String, TestPeerName)] =
       )
     )
 
-val richAlice: List[(String, TestPeerName)] =
+val richAliceSetup: List[(String, TestPeerName)] =
     List(
       (
         "6d36c0e2f304a5c27b85b3f04e95fc015566d35aef5f061c17c70e3e8b9ee508",

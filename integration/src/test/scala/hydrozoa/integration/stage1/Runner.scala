@@ -7,6 +7,7 @@ import hydrozoa.integration.stage1.Stage1PropertiesL1Mock.property
 import hydrozoa.integration.stage1.SuiteCardano.{Mock, Public, Yaci}
 import hydrozoa.integration.yaci.DevKit
 import org.scalacheck.YetAnotherProperties
+import test.SeedPhrase
 
 object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 on L1 mock"):
 
@@ -138,7 +139,8 @@ object Stage1PropertiesPublic extends YetAnotherProperties("Integration Stage 1 
     val _ = property("Deposits on Preview") = Suite(
       suiteCardano = Public(
         cardanoNetwork = CardanoNetwork.Preview,
-        blockfrostKey = "previewQQFamFAznFQgz0uRG9OntxgqJczreq9z"
+        blockfrostKey = "previewQQFamFAznFQgz0uRG9OntxgqJczreq9z",
+        seedPhrase = SeedPhrase.Public
       ),
       txTimingGen = generateTestnetTxTiming,
       scenarioGen = DepositsScenarioGen

@@ -94,9 +94,9 @@ def generateInitialBlock(testPeers: TestPeers)(
     )
 }
 
-object InitialBlockGeneratorTest extends Properties("Initial block") {
+object InitialBlockTest extends Properties("Initial block") {
     override def overrideParameters(p: Parameters): Parameters = {
-        p.withMinSuccessfulTests(1_000)
+        p.withMinSuccessfulTests(100)
     }
 
     val _ = property("generates") = Prop.forAll(

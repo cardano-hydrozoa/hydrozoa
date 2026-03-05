@@ -14,6 +14,7 @@ import test.Generators.Other as GenOther
 
 // TODO: All of these tests can be written in PropertyM[Either, _], or a shrinking variant
 object RolloutTxTest extends Properties("RolloutTxTest") {
+
     val genLastBuilder: Gen[RolloutTx.Build.Last] =
         for {
             multiNodeConfig <- MultiNodeConfig.generate(TestPeersSpec.default)()

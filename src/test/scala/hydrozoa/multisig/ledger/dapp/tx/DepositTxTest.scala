@@ -22,8 +22,8 @@ def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = 
     val config = multiNodeConfig.nodeConfigs(HeadPeerNumber.zero)
 
     for {
-        depositorAddress <- multiNodeConfig.pickPeer.map(multiNodeConfig.addressOf)
-        headAddress = config.headMultisigAddress
+        headAddress <- Gen.const(config.headMultisigAddress)
+
         genData = Gen.frequency(
           (99, genByteStringData.map(data => Some(data))),
           (1, None)
@@ -47,7 +47,8 @@ def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = 
 
         txId <- arbitrary[TransactionInput]
 
-        // TODO: check Peter - was Alice before
+        depositorAddress <- multiNodeConfig.pickPeer.map(multiNodeConfig.addressOf)
+
         virtualOutputs <- Gen
             .nonEmptyListOf(
               genGenesisObligation(config, depositorAddress, minimumCoin = Coin.ada(2))

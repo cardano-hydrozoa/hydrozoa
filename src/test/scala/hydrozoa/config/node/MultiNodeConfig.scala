@@ -22,6 +22,12 @@ import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.{SlotConfig, Transaction, VKeyWitness}
 import test.{TestPeers, TestPeersSpec}
 
+/** Multi-node config is a tool for test suites that allows multisigning effects as well ad gives
+  * the access to the head config, which is common for all peers.
+  *
+  * @param nodePrivateConfigs
+  * @param headConfig
+  */
 case class MultiNodeConfig private (
     nodePrivateConfigs: Map[HeadPeerNumber, NodePrivateConfig],
     headConfig: HeadConfig,
@@ -85,10 +91,38 @@ object MultiNodeConfig {
             generateNodeOperationLiquidationConfig,
         generateNodeOperationMultisigConfig: Gen[NodeOperationMultisigConfig] =
             generateNodeOperationMultisigConfig
+    ): Gen[MultiNodeConfig] = for {
+        testPeers <- TestPeers.generate(spec)
+        ret <- generateForTestPeers(testPeers)(
+          generateHeadConfig,
+          generateHeadStartTime,
+          generateTxTiming,
+          generateFallbackContingency,
+          generateDisputeResolutionConfig,
+          generateHeadParameters,
+          generateInitializationParameters,
+          generateNodeOperationLiquidationConfig,
+          generateNodeOperationMultisigConfig
+        )
+    } yield ret
+
+    def generateForTestPeers(testPeers: TestPeers)(
+        generateHeadConfig: HeadConfigGen = hydrozoa.config.head.generateHeadConfig,
+        generateHeadStartTime: SlotConfig => Gen[QuantizedInstant] = currentTimeHeadStartTime,
+        generateTxTiming: TxTimingGen = generateDefaultTxTiming,
+        generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
+        generateDisputeResolutionConfig: DisputeResolutionConfigGen =
+            generateDisputeResolutionConfig,
+        generateHeadParameters: GenHeadParams = generateHeadParameters,
+        generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
+            InitializationParametersGenTopDown.GenWithDeps =
+            InitializationParametersGenBottomUp.generateInitializationParameters,
+        generateNodeOperationLiquidationConfig: Gen[NodeOperationLiquidationConfig] =
+            generateNodeOperationLiquidationConfig,
+        generateNodeOperationMultisigConfig: Gen[NodeOperationMultisigConfig] =
+            generateNodeOperationMultisigConfig
     ): Gen[MultiNodeConfig] =
         for {
-            testPeers <- TestPeers.generate(spec)
-
             headConfig <- generateHeadConfig(testPeers)(
               generateHeadStartTime = generateHeadStartTime,
               generateTxTiming = generateTxTiming,
@@ -123,7 +157,7 @@ object MultiNodeConfig {
         )
 }
 
-object MultiNodeConfigGeneratorTest extends Properties("Multi-node config") {
+object MultiNodeConfigTest extends Properties("Multi-node config") {
     val _ = property("generates") = Prop.forAll(
       TestPeersSpec
           .generate()

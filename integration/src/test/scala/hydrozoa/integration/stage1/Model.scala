@@ -3,8 +3,6 @@ package hydrozoa.integration.stage1
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.node.MultiNodeConfig
-import hydrozoa.config.node.operation.liquidation.NodeOperationLiquidationConfig
-import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.integration.stage1.Commands.*
 import hydrozoa.integration.stage1.Model.Error.UnexpectedState
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
@@ -43,47 +41,57 @@ object Model:
       * construction.
       */
     case class State(
-        // Read-only: minimal configuration needed for model and SUT
+        // Non-mutable
         multiNodeConfig: MultiNodeConfig,
-        operationalMultisigConfig: NodeOperationMultisigConfig,
-        operationalLiquidationConfig: NodeOperationLiquidationConfig,
+        // Initial state of the peer's L1 utxos.
+        // It's needed since [[peerUtxosL1]] reflects the state after running the initialization tx
+        // which applies upon initial state generation (is there a better spot to run the init tx?)
+        peerGenesisUtxosL1: Utxos,
 
         // "Mutable" part
         nextLedgerEventNumber: LedgerEventNumber,
         currentTime: CurrentTime,
-        // Block producing cycle
 
+        // Block producing cycle
         blockCycle: BlockCycle,
 
         // This is put here to avoid tossing over Done/Ready/InProgress
         // NB: for block zero it's more initializationExpirationTime
         competingFallbackStartTime: QuantizedInstant,
 
-        // L2 state
-        activeUtxos: Utxos,
-
         // L1 state - the only peer's utxos
         peerUtxosL1: Utxos,
 
-        // Non-mutable
-        peerGenesisUtxosL1: Utxos,
+        // L2 state
+        activeUtxos: Utxos,
 
         // Deposits
 
-        // The queue of deposits that may be submitted if timing is lucky, or discarded as expired.
-        // At all times, all deposits in the list are unrelated in terms of funding utxo.
+        // The queue of all generated deposits that Alice intends to register.
+        // At all times, all deposits in the list are disjoint in terms of their funding utxo.
         depositEnqueued: List[RegisterDepositCommand],
-        depositsRegistered: List[LedgerEventId],
+        // Signed deposit transactions - we need them when we submit deposits.
+        depositSigned: Map[TransactionHash, Transaction],
         // Utxos used in the deposit enqueued as funding utxos.
         // We need this not to generate deposits that use the same utxos for funding many times.
         utxoLocked: Set[TransactionInput],
 
-        // Signed deposit transactions
-        depositSigned: Map[TransactionHash, Transaction],
+        // Subset of depositEnqueued which has been registered by Hydrozoa, i.e.
+        // included in a block brief with positive validity flag.
+        depositsRegistered: List[LedgerEventId],
 
-        // Deposits, that have been submitted, so they are expected to appear in the
-        // very first block that satisfies their absorption window.
-        // Deposits along with their maturity start time
+        // After a deposit was registered, we may submit it or cancel it depending on
+        // how much time is left until its deposit tx's TTL is up - I call it runway.
+        // Upon generating [[SubmitDepositsCommand]] we assess whether we have enough
+        // runway to take off the deposit - i.e. how much time we have from now to the
+        // ttl. This is needed, because the test fails if SUT can't submit deposit tx
+        // that model expects to see.
+        //
+        // So we have two partitions here:
+        //  - deposits, that have been submitted, so they are expected to appear in the
+        // very first block that satisfies their absorption window
+        //  - deposits, that the model decided not to submit - their funding utdxos get
+        // unlocked so they can be used again
         depositSubmitted: List[LedgerEventId],
         depositRejected: List[LedgerEventId],
     ) {
@@ -607,7 +615,8 @@ object Model:
             state: State
         ): (Unit, State) = {
             logger.debug(
-              s"MODEL>> SubmitDepositCommand, for submission: ${cmd.depositsForSubmission.size}, for rejection: ${cmd.depositsForRejection.size}"
+              s"MODEL>> SubmitDepositCommand, for submission: ${cmd.depositsForSubmission.size}, " +
+                  s"for rejection: ${cmd.depositsForRejection.size}"
             )
 
             val allDeposits = cmd.depositsForSubmission.map(e => true -> e._1)

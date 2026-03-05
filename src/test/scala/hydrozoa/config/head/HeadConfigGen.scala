@@ -103,7 +103,8 @@ def generateHeadConfigPreInit(testPeers: TestPeers)(
     )
     .get
 
-object HeadConfigGen extends Properties("Head config") {
+object HeadConfigTest extends Properties("Head config") {
+
     val _ = property("pre-init config generates") = Prop.forAll(
       TestPeersSpec
           .generate()

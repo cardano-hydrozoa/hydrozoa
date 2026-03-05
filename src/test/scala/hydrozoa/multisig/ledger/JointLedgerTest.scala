@@ -45,7 +45,7 @@ import test.TestM.*
 given ppNodeConfig: (NodeConfig => Pretty) = nodeConfig =>
     Pretty(_ => "NodeConfig (too long to print)")
 
-// TODO: restore
+// TODO: restore? Do we use it?
 //given ppTestPeers: (TestPeers => Pretty) = testPeers =>
 //    Pretty(_ =>
 //        "TestPeers:"

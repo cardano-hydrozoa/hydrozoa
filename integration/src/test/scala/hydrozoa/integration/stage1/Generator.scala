@@ -450,7 +450,7 @@ object CommandGen:
     // ===================================
 
     // TODO: we have to decide here whether we want to try to submit a deposit
-    // When executing we don't have access to the time
+    //   because when executing we don't have access to the time
 
     def genSubmitDepositsCommand(
         depositForSubmission: List[(LedgerEventId, QuantizedInstant)],

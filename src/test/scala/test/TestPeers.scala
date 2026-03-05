@@ -14,12 +14,14 @@ import hydrozoa.lib.cardano.wallet.WalletModule
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber, HeadPeerWallet}
 import org.scalacheck.Arbitrary.arbitrary
-import org.scalacheck.Gen
+import org.scalacheck.Test.Parameters
+import org.scalacheck.{Gen, Prop, Properties}
 import scala.collection.mutable
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.ArbitraryInstances.*
 import scalus.cardano.ledger.{Transaction, VKeyWitness}
 import scalus.crypto.ed25519.VerificationKey
+import test.Generators.loggerGenerators
 
 /** TestPeers object provides everything test suites may need to operate a peer in a head:
   *   - head peer numbers
@@ -45,7 +47,7 @@ case class TestPeers private (
     import TestPeerName.maxPeers
 
     require(
-      peersNumber < maxPeers,
+      peersNumber <= maxPeers,
       s"The number of peers are limited to $maxPeers "
     )
 
@@ -285,10 +287,40 @@ object PeersNumberSpec:
           Range(mbMax = Some(maxPeers))
       },
       Gen.choose(3, 5).flatMap { minPeers =>
-          Gen.choose(minPeers + 1, 5)
+          Gen.choose(minPeers + 1, 10)
               .map(maxPeers => Range(mbMin = Some(minPeers), mbMax = Some(maxPeers)))
       },
       Gen.const(Exact(1)),
       Gen.const(Exact(2)),
       Gen.const(Exact(TestPeerName.maxPeers))
     )
+
+object TestPeersTest extends Properties("Test peers") {
+    override def overrideParameters(p: Parameters): Parameters =
+        p.withMinSuccessfulTests(500)
+
+    val distinct = mutable.Set.empty[TestPeers]
+    var hasLogged = false
+
+    val _ = property("generates") = Prop.forAll(
+      TestPeersSpec
+          .generate()
+          .flatMap(TestPeers.generate)
+    )(testPeers => {
+        val _ = distinct.add(testPeers)
+        true
+    })
+
+    val _ = property("z-print-results") = Prop.forAllNoShrink(Gen.const(())) { _ =>
+        if !hasLogged then {
+            loggerGenerators.trace(
+              distinct.toList
+                  .map(_.toString)
+                  .sorted
+                  .mkString("Unique values:", "\n\t-", "\n\n-----")
+            )
+            hasLogged = true
+        }
+        Prop.passed
+    }
+}

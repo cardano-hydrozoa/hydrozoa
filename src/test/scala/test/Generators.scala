@@ -4,6 +4,7 @@ import cats.data.{NonEmptyList, NonEmptyVector}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.value.coin.Distribution
 import hydrozoa.lib.cardano.value.coin.Distribution.NormalizedWeights
+import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.ledger.VirtualLedgerM
 import hydrozoa.multisig.ledger.VirtualLedgerM.{Config, State}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
@@ -39,6 +40,11 @@ import test.Generators.Hydrozoa.genAdaOnlyPubKeyUtxo
   */
 
 object Generators {
+
+    // This guy is used everywhere through tests to log some traces when generating various things.
+    // Use:
+    //   - trace level for diversity traces (z-print-results property)
+    val loggerGenerators = Logging.logger("Generators")
 
     /** NOTE: generators here are opinionated. They are not directly suitable for upstreaming and
       * contain reasonable, hydrozoa-specific defaults.
