@@ -88,7 +88,6 @@ ThisBuild / scalacOptions ++= Seq(
   "-Wunused:all",
   "-Wall",
   "-Yretain-trees", // Essential for incremental compilation
-  "-Ypartial-unification" // needed for http4s, see https://http4s.org/v1/docs/service.html#running-your-service
 )
 
 // Add the Scalus compiler plugin

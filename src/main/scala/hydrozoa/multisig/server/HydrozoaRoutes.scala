@@ -10,8 +10,11 @@ import org.http4s.circe.*
 import org.http4s.dsl.io.*
 import org.http4s.{EntityDecoder, HttpRoutes}
 
-/** HTTP routes for the Hydrozoa server */
+/** HTTP routes for the Hydrozoa server. These routes are what get called by the frontend (or a
+  * proxy -- load-balancer, unified api).
+  */
 class HydrozoaRoutes(eventSequencer: EventSequencer.Handle) {
+    import hydrozoa.multisig
 
     // Implicit decoders for request bodies
     implicit val l2TxRequestEntityDecoder: EntityDecoder[IO, L2TxRequest] = jsonOf[IO, L2TxRequest]

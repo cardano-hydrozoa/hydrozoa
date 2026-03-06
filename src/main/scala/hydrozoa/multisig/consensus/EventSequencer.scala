@@ -16,6 +16,13 @@ import hydrozoa.multisig.ledger.event.{LedgerEventId, LedgerEventNumber, UserEve
 import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import scalus.cardano.ledger.{Coin, Value}
 
+/** The first actor responsible for processing events from end-users, as received by the
+  * [[HydrozoaServer]]. Only one event sequencer is running per node, specifically to handle _only_
+  * the events that will be tagged with this Peer's [[HeadPeerNumber]] and sequential
+  * [[LedgerEventId]]s.
+  *
+  * The messages are subsequently passed to the [[BlockWeaver]] and [[PeerLiaison]]s.
+  */
 trait EventSequencer(
     config: Config,
     pendingConnections: MultisigRegimeManager.PendingConnections | EventSequencer.Connections
@@ -87,7 +94,7 @@ trait EventSequencer(
                                     refundTxBytes = depositReq.refundTxBytes,
                                     l2Payload = depositReq.l2Payload,
                                     l2Value = depositReq.l2Value,
-                                    depositFee = Coin(depositReq.depositFee)
+                                    depositFee = depositReq.depositFee
                                   )
                                   _ <- conn.blockWeaver ! newEvent
                                   _ <- (conn.peerLiaisons ! newEvent).parallel
@@ -162,7 +169,7 @@ object EventSequencer {
         depositTxBytes: Array[Byte],
         refundTxBytes: Array[Byte],
         l2Payload: Array[Byte],
-        depositFee: Long,
+        depositFee: Coin,
         l2Value: Value
     ) extends SyncRequest[IO, DepositRequest, LedgerEventId] {
         export DepositRequest.Sync

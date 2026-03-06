@@ -9,7 +9,9 @@ import org.http4s.server.Server
 import org.typelevel.log4cats.Logger
 import org.typelevel.log4cats.slf4j.Slf4jLogger
 
-/** HTTP server for Hydrozoa L2 event submission */
+/** HTTP server for Hydrozoa L2 event submission from end-users (or a proxy -- load-balancer,
+  * unified API)
+  */
 object HydrozoaServer {
 
     private given logger: Logger[IO] = Slf4jLogger.getLogger[IO]

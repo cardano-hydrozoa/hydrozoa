@@ -16,7 +16,8 @@ import scalus.cardano.ledger.{Coin, KeepRaw, TransactionInput, TransactionOutput
 object RemoteL2LedgerCodecs {
 
     // Reuse codecs from the HTTP server
-    import hydrozoa.multisig.server.JsonCodecs.{byteArrayEncoder, byteArrayDecoder, coinEncoder, coinDecoder, valueEncoder, valueDecoder, ledgerEventIdEncoder, ledgerEventIdDecoder}
+    import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
+    import hydrozoa.multisig.server.JsonCodecs.{ledgerEventIdEncoder, ledgerEventIdDecoder}
 
     // QuantizedInstant codec (simplified - loses SlotConfig context)
     // TODO: Include SlotConfig in serialization for proper reconstruction
@@ -34,25 +35,6 @@ object RemoteL2LedgerCodecs {
 
     implicit val blockNumberDecoder: Decoder[BlockNumber] =
         Decoder.decodeInt.map(BlockNumber.apply)
-
-    // TransactionInput codec (simplified)
-    implicit val transactionInputEncoder: Encoder[TransactionInput] = (ti: TransactionInput) =>
-        io.circe.Json.obj(
-          "txId" -> ti.transactionId.bytes.asJson,
-          "index" -> ti.index.toInt.asJson
-        )
-
-    implicit val transactionInputDecoder: Decoder[TransactionInput] = c =>
-        for {
-            txIdBytes <- c.downField("txId").as[Array[Byte]]
-            index <- c.downField("index").as[Int]
-        } yield {
-            import scalus.cardano.ledger.{Blake2b_256, Hash, HashPurpose}
-            val txHash = Hash[Blake2b_256, HashPurpose.TransactionHash](
-              scalus.uplc.builtin.ByteString.fromArray(txIdBytes)
-            )
-            TransactionInput(txHash, index)
-        }
 
     // L2LedgerEvent codecs
     implicit val l2EventEncoder: Encoder[L2LedgerEvent.L2Event] = deriveEncoder
