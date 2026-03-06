@@ -64,6 +64,7 @@ lazy val core: Project = (project in file("."))
         // http4s - web server and websocket client
         "org.http4s" %% "http4s-ember-server" % http4sVersion,
         "org.http4s" %% "http4s-ember-client" % http4sVersion,
+        "org.http4s" %% "http4s-jdk-http-client" % "0.9.1",
         "org.http4s" %% "http4s-dsl" % http4sVersion,
         "org.http4s" %% "http4s-circe" % http4sVersion,
         "com.comcast" %% "ip4s-core" % "3.6.0",
