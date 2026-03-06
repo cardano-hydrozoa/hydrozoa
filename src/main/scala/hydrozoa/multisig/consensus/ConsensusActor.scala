@@ -630,7 +630,6 @@ class ConsensusActor(
                         conn.cardanoLiaison ! x
                     case _ => IO.unit
                 }
-                _ <- conn.eventSequencer ! blockConfirmed
                 _ <- (conn.peerLiaisons ! blockConfirmed).parallel
                 // Announce the ack if present
                 _ <- mbAck.traverse_(announceAck)

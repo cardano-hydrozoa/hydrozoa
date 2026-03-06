@@ -5,6 +5,7 @@
 
 val scalusVersion = "0.15.1"
 val bloxbeanVersion = "0.7.1"
+val http4sVersion = "0.23.32"
 
 //Compile / mainClass := Some("hydrozoa.HydrozoaNode")
 // Docker / packageName := "cardano-hydrozoa/hydrozoa"
@@ -60,6 +61,18 @@ lazy val core: Project = (project in file("."))
         "org.typelevel" %% "spire" % "0.18.0",
         "org.scalactic" %% "scalactic" % "3.2.19",
         "org.typelevel" %% "cats-core" % "2.13.0",
+        // http4s - web server and websocket client
+        "org.http4s" %% "http4s-ember-server" % http4sVersion,
+        "org.http4s" %% "http4s-ember-client" % http4sVersion,
+        "org.http4s" %% "http4s-dsl" % http4sVersion,
+        "org.http4s" %% "http4s-circe" % http4sVersion,
+        "com.comcast" %% "ip4s-core" % "3.6.0",
+        // circe for JSON
+        "io.circe" %% "circe-core" % "0.14.10",
+        "io.circe" %% "circe-generic" % "0.14.10",
+        "io.circe" %% "circe-parser" % "0.14.10",
+        // scodec for hex encoding
+        "org.scodec" %% "scodec-bits" % "1.2.1",
         // "io.netty" % "netty-all" % "4.2.4.Final"
       ),
       libraryDependencies ++= Seq(
