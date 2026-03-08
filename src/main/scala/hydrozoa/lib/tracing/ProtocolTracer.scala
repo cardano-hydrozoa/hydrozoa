@@ -1,9 +1,7 @@
 package hydrozoa.lib.tracing
 
 import cats.effect.{IO, Ref}
-import java.util.concurrent.atomic.AtomicLong
-import org.typelevel.log4cats.Logger
-import org.typelevel.log4cats.slf4j.Slf4jLogger
+import hydrozoa.lib.logging.Logging
 
 /** Protocol trace emitter for the Hydrozoa conformance checker.
   *
@@ -75,110 +73,25 @@ object ProtocolTracer {
       * @param nodeId
       *   node identity string (e.g. "head:0", "head:1")
       */
-    def jsonLines(nodeId: String): IO[ProtocolTracer] = IO {
-        val logger: Logger[IO] = Slf4jLogger.getLoggerFromName[IO]("hydrozoa.trace")
-        val seqCounter = new AtomicLong(0L)
-
-        new ProtocolTracer {
-            private def emit(event: TraceEvent): IO[Unit] =
-                logger.info(event.toJson)
-
-            private def nextSeq(): Long = seqCounter.getAndIncrement()
-
-            private def now(): Long = System.currentTimeMillis()
-
-            def leaderStarted(blockNum: Long, peer: Int): IO[Unit] =
-                emit(TraceEvent.LeaderStarted(nextSeq(), now(), nodeId, blockNum, peer))
-
-            def briefProduced(
-                blockNum: Long,
-                peer: Int,
-                blockType: String,
-                vMajor: Int,
-                vMinor: Int,
-                eventCount: Int
-            ): IO[Unit] =
-                emit(
-                  TraceEvent.BriefProduced(
-                    nextSeq(),
-                    now(),
-                    nodeId,
-                    blockNum,
-                    peer,
-                    blockType,
-                    vMajor,
-                    vMinor,
-                    eventCount
-                  )
-                )
-
-            def ack(blockNum: Long, peer: Int, ackType: String): IO[Unit] =
-                emit(TraceEvent.Ack(nextSeq(), now(), nodeId, blockNum, peer, ackType))
-
-            def roundComplete(blockNum: Long, blockType: String, round: Int): IO[Unit] =
-                emit(TraceEvent.RoundComplete(nextSeq(), now(), nodeId, blockNum, blockType, round))
-
-            def blockConfirmed(
-                blockNum: Long,
-                blockType: String,
-                vMajor: Int,
-                vMinor: Int
-            ): IO[Unit] =
-                emit(
-                  TraceEvent.BlockConfirmed(
-                    nextSeq(),
-                    now(),
-                    nodeId,
-                    blockNum,
-                    blockType,
-                    vMajor,
-                    vMinor
-                  )
-                )
-
-            def eventProcessed(eventId: String, blockNum: Long, valid: Boolean): IO[Unit] =
-                emit(TraceEvent.EventProcessed(nextSeq(), now(), nodeId, eventId, blockNum, valid))
-
-            def depositAbsorbed(depositId: String, blockNum: Long, amount: Long): IO[Unit] =
-                emit(
-                  TraceEvent.DepositAbsorbed(nextSeq(), now(), nodeId, depositId, blockNum, amount)
-                )
-
-            def balanceSnapshot(blockNum: Long, l2Total: Long, l1Treasury: Long): IO[Unit] =
-                emit(
-                  TraceEvent.BalanceSnapshot(
-                    nextSeq(),
-                    now(),
-                    nodeId,
-                    blockNum,
-                    l2Total,
-                    l1Treasury
-                  )
-                )
-
-            def settlement(blockNum: Long, vMajor: Int): IO[Unit] =
-                emit(TraceEvent.Settlement(nextSeq(), now(), nodeId, blockNum, vMajor))
-
-            def traceError(blockNum: Long, errorType: String, msg: String): IO[Unit] =
-                emit(TraceEvent.TraceError(nextSeq(), now(), nodeId, blockNum, errorType, msg))
-        }
-    }
-
-    /** Collecting implementation for tests — stores JSON lines in a Ref. */
-    def collecting(nodeId: String): IO[(ProtocolTracer, Ref[IO, List[String]])] =
+    def jsonLines(nodeId: String): IO[ProtocolTracer] =
         for {
-            ref <- Ref.of[IO, List[String]](List.empty)
+            seqCounter <- Ref.of[IO, Long](0L)
         } yield {
-            val seqCounter = new AtomicLong(0L)
-            val tracer = new ProtocolTracer {
+            val logger = Logging.loggerIO("hydrozoa.trace")
+            new ProtocolTracer {
                 private def emit(event: TraceEvent): IO[Unit] =
-                    ref.update(lines => lines :+ event.toJson)
+                    logger.info(event.toJson)
 
-                private def nextSeq(): Long = seqCounter.getAndIncrement()
+                private def nextSeq(): IO[Long] =
+                    seqCounter.getAndUpdate(_ + 1)
+
                 private def now(): Long = System.currentTimeMillis()
 
                 def leaderStarted(blockNum: Long, peer: Int): IO[Unit] =
-                    emit(TraceEvent.LeaderStarted(nextSeq(), now(), nodeId, blockNum, peer))
+                    nextSeq().flatMap { seq =>
+                        emit(TraceEvent.LeaderStarted(seq, now(), nodeId, blockNum, peer))
+                    }
+
                 def briefProduced(
                     blockNum: Long,
                     peer: Int,
@@ -187,72 +100,221 @@ object ProtocolTracer {
                     vMinor: Int,
                     eventCount: Int
                 ): IO[Unit] =
-                    emit(
-                      TraceEvent.BriefProduced(
-                        nextSeq(),
-                        now(),
-                        nodeId,
-                        blockNum,
-                        peer,
-                        blockType,
-                        vMajor,
-                        vMinor,
-                        eventCount
-                      )
-                    )
+                    nextSeq().flatMap { seq =>
+                        emit(
+                          TraceEvent.BriefProduced(
+                            seq,
+                            now(),
+                            nodeId,
+                            blockNum,
+                            peer,
+                            blockType,
+                            vMajor,
+                            vMinor,
+                            eventCount
+                          )
+                        )
+                    }
+
                 def ack(blockNum: Long, peer: Int, ackType: String): IO[Unit] =
-                    emit(TraceEvent.Ack(nextSeq(), now(), nodeId, blockNum, peer, ackType))
+                    nextSeq().flatMap { seq =>
+                        emit(TraceEvent.Ack(seq, now(), nodeId, blockNum, peer, ackType))
+                    }
+
                 def roundComplete(blockNum: Long, blockType: String, round: Int): IO[Unit] =
-                    emit(
-                      TraceEvent.RoundComplete(nextSeq(), now(), nodeId, blockNum, blockType, round)
-                    )
+                    nextSeq().flatMap { seq =>
+                        emit(
+                          TraceEvent.RoundComplete(seq, now(), nodeId, blockNum, blockType, round)
+                        )
+                    }
+
                 def blockConfirmed(
                     blockNum: Long,
                     blockType: String,
                     vMajor: Int,
                     vMinor: Int
                 ): IO[Unit] =
-                    emit(
-                      TraceEvent.BlockConfirmed(
-                        nextSeq(),
-                        now(),
-                        nodeId,
-                        blockNum,
-                        blockType,
-                        vMajor,
-                        vMinor
-                      )
-                    )
+                    nextSeq().flatMap { seq =>
+                        emit(
+                          TraceEvent.BlockConfirmed(
+                            seq,
+                            now(),
+                            nodeId,
+                            blockNum,
+                            blockType,
+                            vMajor,
+                            vMinor
+                          )
+                        )
+                    }
+
                 def eventProcessed(eventId: String, blockNum: Long, valid: Boolean): IO[Unit] =
-                    emit(
-                      TraceEvent.EventProcessed(nextSeq(), now(), nodeId, eventId, blockNum, valid)
-                    )
+                    nextSeq().flatMap { seq =>
+                        emit(
+                          TraceEvent.EventProcessed(seq, now(), nodeId, eventId, blockNum, valid)
+                        )
+                    }
+
                 def depositAbsorbed(depositId: String, blockNum: Long, amount: Long): IO[Unit] =
-                    emit(
-                      TraceEvent.DepositAbsorbed(
-                        nextSeq(),
-                        now(),
-                        nodeId,
-                        depositId,
-                        blockNum,
-                        amount
-                      )
-                    )
+                    nextSeq().flatMap { seq =>
+                        emit(
+                          TraceEvent.DepositAbsorbed(
+                            seq,
+                            now(),
+                            nodeId,
+                            depositId,
+                            blockNum,
+                            amount
+                          )
+                        )
+                    }
+
                 def balanceSnapshot(blockNum: Long, l2Total: Long, l1Treasury: Long): IO[Unit] =
-                    emit(
-                      TraceEvent.BalanceSnapshot(
-                        nextSeq(),
-                        now(),
-                        nodeId,
-                        blockNum,
-                        l2Total,
-                        l1Treasury
-                      )
-                    )
+                    nextSeq().flatMap { seq =>
+                        emit(
+                          TraceEvent.BalanceSnapshot(
+                            seq,
+                            now(),
+                            nodeId,
+                            blockNum,
+                            l2Total,
+                            l1Treasury
+                          )
+                        )
+                    }
+
                 def settlement(blockNum: Long, vMajor: Int): IO[Unit] =
-                    emit(TraceEvent.Settlement(nextSeq(), now(), nodeId, blockNum, vMajor))
+                    nextSeq().flatMap { seq =>
+                        emit(TraceEvent.Settlement(seq, now(), nodeId, blockNum, vMajor))
+                    }
+
                 def traceError(blockNum: Long, errorType: String, msg: String): IO[Unit] =
-                    emit(TraceEvent.TraceError(nextSeq(), now(), nodeId, blockNum, errorType, msg))
+                    nextSeq().flatMap { seq =>
+                        emit(TraceEvent.TraceError(seq, now(), nodeId, blockNum, errorType, msg))
+                    }
+            }
+        }
+
+    /** Collecting implementation for tests — stores JSON lines in a Ref. */
+    def collecting(nodeId: String): IO[(ProtocolTracer, Ref[IO, List[String]])] =
+        for {
+            ref <- Ref.of[IO, List[String]](List.empty)
+            seqCounter <- Ref.of[IO, Long](0L)
+        } yield {
+            val tracer = new ProtocolTracer {
+                private def emit(event: TraceEvent): IO[Unit] =
+                    ref.update(lines => lines :+ event.toJson)
+
+                private def nextSeq(): IO[Long] =
+                    seqCounter.getAndUpdate(_ + 1)
+
+                private def now(): Long = System.currentTimeMillis()
+
+                def leaderStarted(blockNum: Long, peer: Int): IO[Unit] =
+                    nextSeq().flatMap { seq =>
+                        emit(TraceEvent.LeaderStarted(seq, now(), nodeId, blockNum, peer))
+                    }
+
+                def briefProduced(
+                    blockNum: Long,
+                    peer: Int,
+                    blockType: String,
+                    vMajor: Int,
+                    vMinor: Int,
+                    eventCount: Int
+                ): IO[Unit] =
+                    nextSeq().flatMap { seq =>
+                        emit(
+                          TraceEvent.BriefProduced(
+                            seq,
+                            now(),
+                            nodeId,
+                            blockNum,
+                            peer,
+                            blockType,
+                            vMajor,
+                            vMinor,
+                            eventCount
+                          )
+                        )
+                    }
+
+                def ack(blockNum: Long, peer: Int, ackType: String): IO[Unit] =
+                    nextSeq().flatMap { seq =>
+                        emit(TraceEvent.Ack(seq, now(), nodeId, blockNum, peer, ackType))
+                    }
+
+                def roundComplete(blockNum: Long, blockType: String, round: Int): IO[Unit] =
+                    nextSeq().flatMap { seq =>
+                        emit(
+                          TraceEvent.RoundComplete(seq, now(), nodeId, blockNum, blockType, round)
+                        )
+                    }
+
+                def blockConfirmed(
+                    blockNum: Long,
+                    blockType: String,
+                    vMajor: Int,
+                    vMinor: Int
+                ): IO[Unit] =
+                    nextSeq().flatMap { seq =>
+                        emit(
+                          TraceEvent.BlockConfirmed(
+                            seq,
+                            now(),
+                            nodeId,
+                            blockNum,
+                            blockType,
+                            vMajor,
+                            vMinor
+                          )
+                        )
+                    }
+
+                def eventProcessed(eventId: String, blockNum: Long, valid: Boolean): IO[Unit] =
+                    nextSeq().flatMap { seq =>
+                        emit(
+                          TraceEvent.EventProcessed(seq, now(), nodeId, eventId, blockNum, valid)
+                        )
+                    }
+
+                def depositAbsorbed(depositId: String, blockNum: Long, amount: Long): IO[Unit] =
+                    nextSeq().flatMap { seq =>
+                        emit(
+                          TraceEvent.DepositAbsorbed(
+                            seq,
+                            now(),
+                            nodeId,
+                            depositId,
+                            blockNum,
+                            amount
+                          )
+                        )
+                    }
+
+                def balanceSnapshot(blockNum: Long, l2Total: Long, l1Treasury: Long): IO[Unit] =
+                    nextSeq().flatMap { seq =>
+                        emit(
+                          TraceEvent.BalanceSnapshot(
+                            seq,
+                            now(),
+                            nodeId,
+                            blockNum,
+                            l2Total,
+                            l1Treasury
+                          )
+                        )
+                    }
+
+                def settlement(blockNum: Long, vMajor: Int): IO[Unit] =
+                    nextSeq().flatMap { seq =>
+                        emit(TraceEvent.Settlement(seq, now(), nodeId, blockNum, vMajor))
+                    }
+
+                def traceError(blockNum: Long, errorType: String, msg: String): IO[Unit] =
+                    nextSeq().flatMap { seq =>
+                        emit(TraceEvent.TraceError(seq, now(), nodeId, blockNum, errorType, msg))
+                    }
             }
             (tracer, ref)
         }

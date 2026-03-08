@@ -57,19 +57,19 @@ import test.{SeedPhrase, TestPeerName, TestPeers}
 class BlockWeaverMock(
     tracer: ProtocolTracer,
     ownPeerNum: Int,
-    numHeads: Int
+    numPeers: Int
 ) extends Actor[IO, BlockWeaver.Request] {
     // The real BlockWeaver emits leader_started in switchToIdle:
     //  - At startup for the first block (block 1)
     //  - On BlockConfirmed(N) for the next block (N+1)
     override def preStart: IO[Unit] =
-        if 1 % numHeads == ownPeerNum then tracer.leaderStarted(1, ownPeerNum)
+        if 1 % numPeers == ownPeerNum then tracer.leaderStarted(1, ownPeerNum)
         else IO.pure(())
 
     override def receive: Receive[IO, BlockWeaver.Request] = {
         case bc: BlockWeaver.BlockConfirmed =>
             val nextBlockNum = (bc.blockNum: Int) + 1
-            if nextBlockNum % numHeads == ownPeerNum then
+            if nextBlockNum % numPeers == ownPeerNum then
                 tracer.leaderStarted(nextBlockNum, ownPeerNum)
             else IO.pure(())
         case _ => IO.pure(())
