@@ -44,7 +44,8 @@ private case class UserEventState(
 final case class JointLedger(
     config: JointLedger.Config,
     pendingConnections: MultisigRegimeManager.PendingConnections | JointLedger.Connections,
-    l2Ledger: L2Ledger[IO]
+    l2Ledger: L2Ledger[IO],
+    tracer: hydrozoa.lib.tracing.ProtocolTracer
 ) extends Actor[IO, Requests.Request] {
     import config.*
 
@@ -82,8 +83,7 @@ final case class JointLedger(
                   Some(
                     Connections(
                       consensusActor = _connections.consensusActor,
-                      peerLiaisons = _connections.peerLiaisons,
-                      tracer = _connections.tracer
+                      peerLiaisons = _connections.peerLiaisons
                     )
                   )
                 )
@@ -191,7 +191,6 @@ final case class JointLedger(
 
         val rejectEvent = (e: L1LedgerM.Error | L2LedgerError) =>
             for {
-                conn <- getConnections
                 oldState <- unsafeGetProducing
                 currentBlockNum = oldState.nextBlockNumber
                 newState = oldState
@@ -199,7 +198,7 @@ final case class JointLedger(
                     .modify(_.appended((eventId, Invalid)))
                 _ <- state.set(newState)
                 _ = logger.debug(s"registerUserDeposit failure: $e")
-                _ <- conn.tracer.eventProcessed(
+                _ <- tracer.eventProcessed(
                   s"${eventId.peerNum: Int}:${eventId.eventNum: Int}",
                   currentBlockNum: Int,
                   false
@@ -236,7 +235,6 @@ final case class JointLedger(
                         onFailure = rejectEvent,
                         onSuccess = _ =>
                             for {
-                                conn <- getConnections
                                 oldState <- unsafeGetProducing
                                 currentBlockNum = oldState.nextBlockNumber
                                 newState = oldState
@@ -245,7 +243,7 @@ final case class JointLedger(
                                     .focus(_.userEventState.postDatedRefundTxs)
                                     .modify(_.appended(refundTx))
                                 _ <- state.set(newState)
-                                _ <- conn.tracer.eventProcessed(
+                                _ <- tracer.eventProcessed(
                                   s"${eventId.peerNum: Int}:${eventId.eventNum: Int}",
                                   currentBlockNum: Int,
                                   true
@@ -266,7 +264,6 @@ final case class JointLedger(
     ): IO[Unit] = {
         import userL2Event.*
         for {
-            conn <- getConnections
             p <- unsafeGetProducing
             currentBlockNum = p.nextBlockNumber
             l2Event: L2LedgerEvent.L2Event = L2LedgerEvent.L2Event(
@@ -285,7 +282,7 @@ final case class JointLedger(
                           .focus(_.userEventState.events)
                           .modify(_.appended((eventId, Invalid)))
                       _ <- state.set(newState)
-                      _ <- conn.tracer.eventProcessed(
+                      _ <- tracer.eventProcessed(
                         s"${eventId.peerNum: Int}:${eventId.eventNum: Int}",
                         currentBlockNum: Int,
                         false
@@ -299,7 +296,7 @@ final case class JointLedger(
                           .focus(_.userEventState.events)
                           .modify(_.appended((eventId, Valid)))
                       _ <- state.set(newState)
-                      _ <- conn.tracer.eventProcessed(
+                      _ <- tracer.eventProcessed(
                         s"${eventId.peerNum: Int}:${eventId.eventNum: Int}",
                         currentBlockNum: Int,
                         true
@@ -706,7 +703,7 @@ final case class JointLedger(
         for {
             conn <- getConnections
             (bt, vMaj, vMin, evtCnt) = extractBlockTraceMetadata(block)
-            _ <- conn.tracer.briefProduced(
+            _ <- tracer.briefProduced(
               block.blockNum: Int,
               config.ownHeadPeerNum: Int,
               bt,
@@ -776,8 +773,7 @@ object JointLedger {
 
     final case class Connections(
         consensusActor: ConsensusActor.Handle,
-        peerLiaisons: List[PeerLiaison.Handle],
-        tracer: hydrozoa.lib.tracing.ProtocolTracer = hydrozoa.lib.tracing.ProtocolTracer.noop
+        peerLiaisons: List[PeerLiaison.Handle]
     )
 
     final case class CompleteBlockError() extends Throwable

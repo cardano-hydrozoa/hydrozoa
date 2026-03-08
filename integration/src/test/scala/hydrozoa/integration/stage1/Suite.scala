@@ -455,7 +455,6 @@ case class Suite(
             jointLedgerConnections = JointLedger.Connections(
               consensusActor = agent,
               peerLiaisons = List(),
-              tracer = tracer
             )
 
             l2Ledger <- EutxoL2Ledger(nodeConfig)
@@ -463,7 +462,8 @@ case class Suite(
               JointLedger(
                 nodeConfig,
                 jointLedgerConnections,
-                l2Ledger
+                l2Ledger,
+                tracer
               )
             )
 

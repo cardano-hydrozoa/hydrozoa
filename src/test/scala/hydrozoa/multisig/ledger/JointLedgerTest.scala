@@ -122,7 +122,8 @@ object JointLedgerTestHelpers {
                     consensusActor = consensusActorStub,
                     peerLiaisons = List()
                   ),
-                  eutxoLedger
+                  eutxoLedger,
+                  hydrozoa.lib.tracing.ProtocolTracer.noop
                 )
               )
             )

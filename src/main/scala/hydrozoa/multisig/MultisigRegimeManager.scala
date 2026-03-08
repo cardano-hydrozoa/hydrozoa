@@ -52,7 +52,9 @@ trait MultisigRegimeManager(
 
             eventSequencer <- context.actorOf(EventSequencer(config, pendingConnections))
 
-            jointLedger <- context.actorOf(JointLedger(config, pendingConnections, l2Ledger))
+            jointLedger <- context.actorOf(
+              JointLedger(config, pendingConnections, l2Ledger, tracer)
+            )
 
             localPeerLiaisons <-
                 config.headPeerIds
