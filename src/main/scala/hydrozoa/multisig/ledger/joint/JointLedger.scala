@@ -44,7 +44,8 @@ private case class UserEventState(
 final case class JointLedger(
     config: JointLedger.Config,
     pendingConnections: MultisigRegimeManager.PendingConnections | JointLedger.Connections,
-    l2Ledger: L2Ledger[IO]
+    l2Ledger: L2Ledger[IO],
+    tracer: hydrozoa.lib.tracing.ProtocolTracer
 ) extends Actor[IO, Requests.Request] {
     import config.*
 
@@ -191,11 +192,17 @@ final case class JointLedger(
         val rejectEvent = (e: L1LedgerM.Error | L2LedgerError) =>
             for {
                 oldState <- unsafeGetProducing
+                currentBlockNum = oldState.nextBlockNumber
                 newState = oldState
                     .focus(_.userEventState.events)
                     .modify(_.appended((eventId, Invalid)))
                 _ <- state.set(newState)
                 _ = logger.debug(s"registerUserDeposit failure: $e")
+                _ <- tracer.eventProcessed(
+                  s"${eventId.peerNum: Int}:${eventId.eventNum: Int}",
+                  currentBlockNum: Int,
+                  false
+                )
             } yield ()
 
         for {
@@ -229,12 +236,18 @@ final case class JointLedger(
                         onSuccess = _ =>
                             for {
                                 oldState <- unsafeGetProducing
+                                currentBlockNum = oldState.nextBlockNumber
                                 newState = oldState
                                     .focus(_.userEventState.events)
                                     .modify(_.appended((eventId, Valid)))
                                     .focus(_.userEventState.postDatedRefundTxs)
                                     .modify(_.appended(refundTx))
                                 _ <- state.set(newState)
+                                _ <- tracer.eventProcessed(
+                                  s"${eventId.peerNum: Int}:${eventId.eventNum: Int}",
+                                  currentBlockNum: Int,
+                                  true
+                                )
                             } yield ()
                       )
 
@@ -252,6 +265,7 @@ final case class JointLedger(
         import userL2Event.*
         for {
             p <- unsafeGetProducing
+            currentBlockNum = p.nextBlockNumber
             l2Event: L2LedgerEvent.L2Event = L2LedgerEvent.L2Event(
               eventId = userL2Event.eventId,
               blockNumber = p.nextBlockNumber,
@@ -268,6 +282,11 @@ final case class JointLedger(
                           .focus(_.userEventState.events)
                           .modify(_.appended((eventId, Invalid)))
                       _ <- state.set(newState)
+                      _ <- tracer.eventProcessed(
+                        s"${eventId.peerNum: Int}:${eventId.eventNum: Int}",
+                        currentBlockNum: Int,
+                        false
+                      )
                   } yield (),
               // Valid transaction continuation
               onSuccess = payoutObligations =>
@@ -277,6 +296,11 @@ final case class JointLedger(
                           .focus(_.userEventState.events)
                           .modify(_.appended((eventId, Valid)))
                       _ <- state.set(newState)
+                      _ <- tracer.eventProcessed(
+                        s"${eventId.peerNum: Int}:${eventId.eventNum: Int}",
+                        currentBlockNum: Int,
+                        true
+                      )
                   } yield ()
             )
         } yield ()
@@ -632,6 +656,39 @@ final case class JointLedger(
         } yield ()
     }
 
+    /** Extract trace metadata from a block for the tracer.
+      *
+      * @param block
+      *   the block to extract metadata from
+      * @return
+      *   tuple of (blockType, versionMajor, versionMinor, eventCount)
+      */
+    private def extractBlockTraceMetadata(
+        block: Block.Unsigned.Next
+    ): (String, Int, Int, Int) = block match {
+        case b: Block.Unsigned.Minor =>
+            (
+              "minor",
+              b.header.blockVersion.major: Int,
+              b.header.blockVersion.minor: Int,
+              b.body.events.size
+            )
+        case b: Block.Unsigned.Major =>
+            (
+              "major",
+              b.header.blockVersion.major: Int,
+              b.header.blockVersion.minor: Int,
+              b.body.events.size
+            )
+        case b: Block.Unsigned.Final =>
+            (
+              "final",
+              b.header.blockVersion.major: Int,
+              b.header.blockVersion.minor: Int,
+              b.body.events.size
+            )
+    }
+
     /** When a block is finished, we handle it by:
       *   - sending the pure (with no effects) block to peer liaisons for circulation
       *   - sending the block brief to the peer liaisons
@@ -645,6 +702,15 @@ final case class JointLedger(
     ): IO[Unit] =
         for {
             conn <- getConnections
+            (bt, vMaj, vMin, evtCnt) = extractBlockTraceMetadata(block)
+            _ <- tracer.briefProduced(
+              block.blockNum: Int,
+              config.ownHeadPeerNum: Int,
+              bt,
+              vMaj,
+              vMin,
+              evtCnt
+            )
             acks = ownHeadWallet.mkAcks(block, localFinalization)
             _ <- (conn.peerLiaisons ! block.blockBriefNext).parallel
             _ <- conn.consensusActor ! block

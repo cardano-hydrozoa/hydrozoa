@@ -20,6 +20,7 @@ import hydrozoa.integration.yaci.DevKit
 import hydrozoa.integration.yaci.DevKit.DevnetInfo
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.tracing.ProtocolTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost.URL
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendMock, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
@@ -53,8 +54,26 @@ import test.{SeedPhrase, TestPeerName, TestPeers}
   */
 
 // TODO: copied from cardano liaison test suite
-class BlockWeaverMock extends Actor[IO, BlockWeaver.Request] {
-    override def receive: Receive[IO, BlockWeaver.Request] = _ => IO.pure(())
+class BlockWeaverMock(
+    tracer: ProtocolTracer,
+    ownPeerNum: Int,
+    numPeers: Int
+) extends Actor[IO, BlockWeaver.Request] {
+    // The real BlockWeaver emits leader_started in switchToIdle:
+    //  - At startup for the first block (block 1)
+    //  - On BlockConfirmed(N) for the next block (N+1)
+    override def preStart: IO[Unit] =
+        if 1 % numPeers == ownPeerNum then tracer.leaderStarted(1, ownPeerNum)
+        else IO.pure(())
+
+    override def receive: Receive[IO, BlockWeaver.Request] = {
+        case bc: BlockWeaver.BlockConfirmed =>
+            val nextBlockNum = (bc.blockNum: Int) + 1
+            if nextBlockNum % numPeers == ownPeerNum then
+                tracer.leaderStarted(nextBlockNum, ownPeerNum)
+            else IO.pure(())
+        case _ => IO.pure(())
+    }
 }
 
 enum SuiteCardano:
@@ -75,6 +94,7 @@ case class Suite(
     suiteCardano: SuiteCardano,
     override val scenarioGen: ScenarioGen[Model.State, Stage1Sut],
     txTimingGen: TxTimingGen,
+    label: String = "unknown",
 ) extends ModelBasedSuite {
 
     override type Env = Stage1Env
@@ -332,10 +352,13 @@ case class Suite(
     override def canStartupNewSut(): Boolean = true
 
     override def startupSut(state: Model.State): IO[Sut] = {
+
         val multiNodeConfig = state.multiNodeConfig
 
+        val runId = java.util.UUID.randomUUID().toString.take(8)
+
         for {
-            _ <- loggerIO.info("Creating new SUT")
+            _ <- loggerIO.info(s"Creating new SUT [${label}/${runId}]")
 
             // Fast-forward to the current time if TestControl is used
             _ <- IO.whenA(useTestControl)(for {
@@ -389,8 +412,20 @@ case class Suite(
             }
             cardanoBackend <- mkCardanoBackend(cardanoBackendConfig)
 
-            // Weaver stub
-            blockWeaver <- system.actorOf(new BlockWeaverMock)
+            // Protocol tracer — runId in node field lets us detect interleaved traces
+            tracerResult <- ProtocolTracer.collecting(
+              s"head:${nodeConfig.ownHeadPeerNum: Int}/${runId}"
+            )
+            (tracer, traceRef) = tracerResult
+
+            // Weaver stub — emits leader_started for tracing
+            blockWeaver <- system.actorOf(
+              new BlockWeaverMock(
+                tracer,
+                nodeConfig.ownHeadPeerNum: Int,
+                nodeConfig.headPeers.nHeadPeers: Int
+              )
+            )
 
             // Cardano liaison
             cardanoLiaison <- system.actorOf(
@@ -407,7 +442,8 @@ case class Suite(
               blockWeaver = blockWeaver,
               cardanoLiaison = cardanoLiaison,
               eventSequencer = eventSequencerStub,
-              peerLiaisons = List.empty
+              peerLiaisons = List.empty,
+              tracer = tracer
             )
 
             consensusActor <- system.actorOf(ConsensusActor(nodeConfig, consensusConnections))
@@ -418,7 +454,7 @@ case class Suite(
 
             jointLedgerConnections = JointLedger.Connections(
               consensusActor = agent,
-              peerLiaisons = List()
+              peerLiaisons = List(),
             )
 
             l2Ledger <- EutxoL2Ledger(nodeConfig)
@@ -426,7 +462,8 @@ case class Suite(
               JointLedger(
                 nodeConfig,
                 jointLedgerConnections,
-                l2Ledger
+                l2Ledger,
+                tracer
               )
             )
 
@@ -436,7 +473,9 @@ case class Suite(
           headAddress = multiNodeConfig.headConfig.headMultisigAddress,
           system = system,
           cardanoBackend = cardanoBackend,
-          agent = agent
+          agent = agent,
+          runId = runId,
+          traceRef = traceRef
         )
     }
 
@@ -510,6 +549,24 @@ case class Suite(
     override def shutdownSut(lastState: State, sut: Sut): IO[Prop] = for {
 
         _ <- loggerIO.info("shutdownSut")
+
+        // Dump protocol trace
+        traceLines <- sut.traceRef.get
+        _ <- IO.whenA(traceLines.nonEmpty) {
+            val traceDir = new java.io.File("target/traces")
+            IO(traceDir.mkdirs()) >>
+                IO {
+                    val safeLabel = label.replaceAll("[^a-zA-Z0-9_-]", "_")
+                    val traceFile =
+                        new java.io.File(traceDir, s"stage1-${safeLabel}-${sut.runId}.jsonl")
+                    val pw = new java.io.PrintWriter(traceFile)
+                    traceLines.foreach(pw.println)
+                    pw.close()
+                    logger.info(
+                      s"Protocol trace: ${traceLines.size} events → ${traceFile.getAbsolutePath}"
+                    )
+                }
+        }
 
         /** Important: this action should ensure that the actor system was not terminated.
           *

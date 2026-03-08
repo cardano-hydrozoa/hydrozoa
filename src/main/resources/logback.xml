@@ -6,6 +6,15 @@
             </pattern>
         </encoder>
     </appender>
+    <!-- Protocol trace: writes JSONL to file, no formatting overhead -->
+    <appender name="TRACE_FILE" class="ch.qos.logback.core.FileAppender">
+        <file>hydrozoa-trace.jsonl</file>
+        <encoder><pattern>%msg%n</pattern></encoder>
+    </appender>
+    <logger name="hydrozoa.trace" level="info" additivity="false">
+        <appender-ref ref="TRACE_FILE"/>
+    </logger>
+
     <root level="debug">
         <appender-ref ref="STDOUT"/>
     </root>

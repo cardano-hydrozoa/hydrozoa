@@ -9,6 +9,7 @@ import com.suprnation.actor.SupervisorStrategy.Escalate
 import com.suprnation.actor.{OneForOneStrategy, SupervisionStrategy}
 import hydrozoa.config.node.NodeConfig
 import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.tracing.ProtocolTracer
 import hydrozoa.multisig.MultisigRegimeManager.*
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
@@ -39,6 +40,9 @@ trait MultisigRegimeManager(
         for {
             pendingConnections <- Deferred[IO, MultisigRegimeManager.Connections]
 
+            nodeId = s"head:${config.ownHeadPeerNum: Int}"
+            tracer <- ProtocolTracer.jsonLines(nodeId)
+
             blockWeaver <- context.actorOf(BlockWeaver(config, pendingConnections))
 
             cardanoLiaison <-
@@ -48,7 +52,9 @@ trait MultisigRegimeManager(
 
             eventSequencer <- context.actorOf(EventSequencer(config, pendingConnections))
 
-            jointLedger <- context.actorOf(JointLedger(config, pendingConnections, l2Ledger))
+            jointLedger <- context.actorOf(
+              JointLedger(config, pendingConnections, l2Ledger, tracer)
+            )
 
             localPeerLiaisons <-
                 config.headPeerIds
@@ -69,7 +75,8 @@ trait MultisigRegimeManager(
                 jointLedger = jointLedger,
                 peerLiaisons = localPeerLiaisons,
                 // FIXME:
-                remotePeerLiaisons = ???
+                remotePeerLiaisons = ???,
+                tracer = tracer,
               )
             )
 
@@ -127,6 +134,7 @@ object MultisigRegimeManager {
         jointLedger: JointLedger.Handle,
         peerLiaisons: List[PeerLiaison.Handle],
         remotePeerLiaisons: Map[HeadPeerId, PeerLiaison.Handle],
+        tracer: ProtocolTracer = ProtocolTracer.noop,
     )
 
     type PendingConnections = Deferred[IO, Connections]

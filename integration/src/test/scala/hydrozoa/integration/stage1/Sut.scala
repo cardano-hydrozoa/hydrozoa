@@ -34,6 +34,8 @@ case class Stage1Sut(
     cardanoBackend: CardanoBackend[IO],
     agent: AgentActor.Handle,
     effectsAcc: Ref[IO, List[BlockEffects.Unsigned]] = Ref.unsafe(List.empty),
+    runId: String = "",
+    traceRef: Ref[IO, List[String]] = Ref.unsafe(List.empty)
 )
 
 // ===================================

@@ -32,7 +32,8 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
     lazy val _ = property("Block promotion with real L2 txs") = Suite(
       suiteCardano = Mock(preprod),
       txTimingGen = generateDefaultTxTiming,
-      scenarioGen = NoWithdrawalsScenarioGen
+      scenarioGen = NoWithdrawalsScenarioGen,
+      label = "block-promotion-mock"
     ).property()
 
     /** Dusty head finalization
@@ -45,7 +46,8 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
     lazy val _ = property("Dusty head finalization") = Suite(
       suiteCardano = Mock(preprod),
       txTimingGen = generateDefaultTxTiming,
-      scenarioGen = MakeDustScenarioGen(minL2Utxos = 500)
+      scenarioGen = MakeDustScenarioGen(minL2Utxos = 500),
+      label = "dusty-finalization-mock"
     ).property()
 
     /** Ongoing withdrawals
@@ -57,7 +59,8 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
     lazy val _ = property("Ongoing withdrawals") = Suite(
       suiteCardano = Mock(preprod),
       txTimingGen = generateDefaultTxTiming,
-      scenarioGen = OngoingWithdrawalsScenarioGen
+      scenarioGen = OngoingWithdrawalsScenarioGen,
+      label = "ongoing-withdrawals-mock"
     ).property()
 
     /** Deposits
@@ -69,7 +72,8 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
     val _ = property("Deposits") = Suite(
       suiteCardano = Mock(preprod),
       txTimingGen = generateDefaultTxTiming,
-      scenarioGen = DepositsScenarioGen
+      scenarioGen = DepositsScenarioGen,
+      label = "deposits-mock"
     ).property()
 
 /** The Yaci runner has only some of the properties which are worth running on Yaci, see property
@@ -90,7 +94,8 @@ object Stage1PropertiesYaci extends YetAnotherProperties("Integration Stage 1 wi
         protocolParams = DevKit.yaciParams
       ),
       txTimingGen = generateYaciTxTiming,
-      scenarioGen = NoWithdrawalsScenarioGen
+      scenarioGen = NoWithdrawalsScenarioGen,
+      label = "block-promotion-yaci"
     ).property()
 
     lazy val _ = property("Dusty head finalization Yaci") = Suite(
@@ -98,7 +103,8 @@ object Stage1PropertiesYaci extends YetAnotherProperties("Integration Stage 1 wi
         protocolParams = DevKit.yaciParams
       ),
       txTimingGen = generateYaciTxTiming,
-      scenarioGen = MakeDustScenarioGen(minL2Utxos = 500)
+      scenarioGen = MakeDustScenarioGen(minL2Utxos = 500),
+      label = "dusty-finalization-yaci"
     ).property()
 
     val _ = property("Deposits on Yaci") = Suite(
@@ -106,7 +112,8 @@ object Stage1PropertiesYaci extends YetAnotherProperties("Integration Stage 1 wi
         protocolParams = DevKit.yaciParams
       ),
       txTimingGen = generateYaciTxTiming,
-      scenarioGen = DepositsScenarioGen
+      scenarioGen = DepositsScenarioGen,
+      label = "deposits-yaci"
     ).property()
 
 /** TODO:
@@ -125,7 +132,8 @@ object Stage1PropertiesPublic extends YetAnotherProperties("Integration Stage 1 
     //        protocolParams = DevKit.yaciParams
     //    ),
     //    txTimingGen = generateYaciTxTiming,
-    //    scenarioGen = NoWithdrawalsScenarioGen
+    //    scenarioGen = NoWithdrawalsScenarioGen,
+    //    label = "block-promotion-public"
     // ).property()
     //
     // lazy val _ = property("Dusty head finalization Yaci") = Suite(
@@ -133,7 +141,8 @@ object Stage1PropertiesPublic extends YetAnotherProperties("Integration Stage 1 
     //        protocolParams = DevKit.yaciParams
     //    ),
     //    txTimingGen = generateYaciTxTiming,
-    //    scenarioGen = MakeDustScenarioGen(minL2Utxos = 500)
+    //    scenarioGen = MakeDustScenarioGen(minL2Utxos = 500),
+    //    label = "dusty-finalization-public"
     // ).property()
 
     val _ = property("Deposits on Preview") = Suite(
@@ -143,5 +152,6 @@ object Stage1PropertiesPublic extends YetAnotherProperties("Integration Stage 1 
         seedPhrase = SeedPhrase.Public
       ),
       txTimingGen = generateTestnetTxTiming,
-      scenarioGen = DepositsScenarioGen
+      scenarioGen = DepositsScenarioGen,
+      label = "deposits-public"
     ).property()
