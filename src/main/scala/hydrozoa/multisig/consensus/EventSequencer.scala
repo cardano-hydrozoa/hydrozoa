@@ -10,9 +10,9 @@ import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.EventSequencer.*
 import hydrozoa.multisig.consensus.PeerLiaison.Handle
 import hydrozoa.multisig.ledger.block.{BlockBody, BlockEffects, BlockStatus}
-import hydrozoa.multisig.ledger.dapp.tx.RefundTx
 import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag
-import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId, LedgerEventNumber}
+import hydrozoa.multisig.ledger.event.{LedgerEventId, LedgerEventNumber, UserEvent}
+import hydrozoa.multisig.ledger.l1.tx.RefundTx
 
 // TODO: move around
 final case class L2TxRequest(
@@ -22,7 +22,7 @@ final case class L2TxRequest(
 final case class DepositRequest(
     depositTxBytes: Array[Byte],
     refundTxBytes: Array[Byte],
-    virtualOutputsBytes: Array[Byte],
+    l2Payload: Array[Byte],
     depositFee: Long,
 )
 
@@ -68,13 +68,13 @@ trait EventSequencer(
 
     private def receiveTotal(req: Request, conn: Connections): IO[Unit] =
         req match {
-            case x: LedgerEvent =>
+            case x: UserEvent =>
                 for {
                     newNum <- state.nextLedgerEventNum()
                     newId = LedgerEventId(config.ownHeadPeerId.peerNum, newNum)
-                    newEvent: LedgerEvent = x match {
-                        case y: LedgerEvent.L2TxEvent    => y.copy(eventId = newId)
-                        case y: LedgerEvent.DepositEvent => y.copy(eventId = newId)
+                    newEvent: UserEvent = x match {
+                        case y: UserEvent.L2Event      => y.copy(eventId = newId)
+                        case y: UserEvent.DepositEvent => y.copy(eventId = newId)
                     }
                     _ <- conn.blockWeaver ! newEvent
                     _ <- (conn.peerLiaisons ! newEvent).parallel
@@ -143,5 +143,5 @@ object EventSequencer {
         }
     }
 
-    type Request = LedgerEvent | BlockConfirmed
+    type Request = UserEvent | BlockConfirmed
 }

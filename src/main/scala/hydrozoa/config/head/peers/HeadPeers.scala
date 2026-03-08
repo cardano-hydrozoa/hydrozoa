@@ -4,7 +4,7 @@ import cats.data.{NonEmptyList, NonEmptyMap}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
-import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
+import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
 import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.AddrKeyHash
 import scalus.crypto.ed25519.VerificationKey

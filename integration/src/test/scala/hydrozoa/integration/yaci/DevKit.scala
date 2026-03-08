@@ -3,7 +3,8 @@ package hydrozoa.integration.yaci
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration.*
 import scala.concurrent.{Await, ExecutionContext}
-import scalus.cardano.ledger.ProtocolParams
+import scalus.cardano.address.ShelleyAddress
+import scalus.cardano.ledger.{Coin, ProtocolParams}
 import sttp.client4.*
 import sttp.model.{StatusCode, Uri}
 
@@ -17,7 +18,7 @@ object DevKit {
     )
 
     val blockfrostApiBaseUri = "http://localhost:8080/api/v1"
-    val adminApiBaseUri: Uri = uri"http://localhost:10000/local-cluster/api/admin"
+    val yaciApiBaseUri: Uri = uri"http://localhost:10000/local-cluster/api"
 
     /** Partial response.
       *
@@ -37,7 +38,7 @@ object DevKit {
 
         // Obtain the cluster information
         val request = basicRequest
-            .get(uri"$adminApiBaseUri/devnet")
+            .get(uri"$yaciApiBaseUri/admin/devnet")
             .send(backend)
             .map(resp =>
                 if resp.code == StatusCode.Ok then {
@@ -65,12 +66,36 @@ object DevKit {
 
     def reset(timeout: FiniteDuration = 30.seconds): Unit = {
         val request = basicRequest
-            .post(uri"$adminApiBaseUri/devnet/reset")
+            .post(uri"$yaciApiBaseUri/admin/devnet/reset")
             .send(backend)
             .map(resp =>
                 if resp.code == StatusCode.Ok then ()
                 else throw RuntimeException(s"Cannot reset Yaci: ${resp.body}")
             )
+        Await.result(request, timeout)
+    }
+
+    def topup(
+        address: ShelleyAddress,
+        coins: Coin,
+        timeout: FiniteDuration = 30.seconds
+    ): Unit = {
+        val adaAmount = coins.value / 1_000_000.0
+        val jsonBody = s"""{"address": "${address.toBech32.get}", "adaAmount": $adaAmount}"""
+
+        val request = basicRequest
+            .post(uri"$yaciApiBaseUri/addresses/topup")
+            .header("Content-Type", "application/json")
+            .body(jsonBody)
+            .send(backend)
+            .map(resp =>
+                if resp.code == StatusCode.Ok then ()
+                else
+                    throw new RuntimeException(
+                      s"Topup failed with status ${resp.code}: ${resp.body}"
+                    )
+            )
+
         Await.result(request, timeout)
     }
 }

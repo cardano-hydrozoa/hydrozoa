@@ -2,35 +2,39 @@ package hydrozoa.integration.stage1
 
 import cats.effect.{Deferred, IO, Ref}
 import cats.syntax.all.catsSyntaxFlatMapOps
+import com.bloxbean.cardano.client.util.HexUtil
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.actor.ActorSystem
 import hydrozoa.integration.stage1
 import hydrozoa.integration.stage1.AgentActor.CompleteBlock
+import hydrozoa.integration.stage1.Commands.*
 import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.CardanoLiaison.Timeout
 import hydrozoa.multisig.consensus.ack.AckBlock
 import hydrozoa.multisig.consensus.{CardanoLiaison, ConsensusActor}
-import hydrozoa.multisig.ledger.JointLedger
-import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockNumber}
-import hydrozoa.multisig.ledger.event.LedgerEvent
+import hydrozoa.multisig.ledger.event.UserEvent
+import hydrozoa.multisig.ledger.joint.JointLedger
+import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import org.scalacheck.commands.SutCommand
 import org.typelevel.log4cats.Logger
 import scala.concurrent.duration.DurationInt
+import scalus.cardano.address.ShelleyAddress
 
 // ===================================
 // Stage 1 SUT
 // ===================================
 
 case class Stage1Sut(
+    headAddress: ShelleyAddress,
     system: ActorSystem[IO],
     cardanoBackend: CardanoBackend[IO],
     agent: AgentActor.Handle,
-    runId: String = "",
     effectsAcc: Ref[IO, List[BlockEffects.Unsigned]] = Ref.unsafe(List.empty),
+    runId: String = "",
     traceRef: Ref[IO, List[String]] = Ref.unsafe(List.empty)
 )
 
@@ -60,7 +64,7 @@ object AgentActor:
         type Sync = SyncRequest.Envelope[IO, CompleteBlock, Block.Unsigned.Next]
 
     type Request =
-        LedgerEvent | StartBlock | CompleteBlock.Sync | ConsensusActor.Request |
+        UserEvent | StartBlock | CompleteBlock.Sync | ConsensusActor.Request |
             CardanoLiaison.Timeout.type | Unit
 
     type Handle = ActorRef[IO, Request]
@@ -97,8 +101,8 @@ case class AgentActor(
             } yield ()
 
         // Joint ledger - proxying
-        case x: LedgerEvent => jointLedger >>= (_ ! x)
-        case x: StartBlock  => jointLedger >>= (_ ! x)
+        case x: UserEvent  => jointLedger >>= (_ ! x)
+        case x: StartBlock => jointLedger >>= (_ ! x)
 
         // Consensus actor
         // Intercepting unsigned blocks
@@ -128,7 +132,7 @@ end AgentActor
 
 object SutCommands:
 
-    val logger: Logger[IO] = Logging.loggerIO("Stage1.SutCommands")
+    val logger: Logger[IO] = Logging.loggerIO("Stage1.Sut")
 
     implicit given SutCommand[DelayCommand, Unit, Stage1Sut] with {
         override def run(cmd: DelayCommand, sut: Stage1Sut): IO[Unit] = for {
@@ -159,10 +163,14 @@ object SutCommands:
             _ <- logger.debug(
               s">> CompleteBlockCommand(blockNumber=${cmd.blockNumber}, isFinal=${cmd.isFinal})"
             )
+            headUtxosRet <- sut.cardanoBackend
+                .utxosAt(sut.headAddress)
+                .map(_.fold(err => throw RuntimeException(err.toString), _.keySet))
             block <- IO.pure(
               if cmd.isFinal
               then CompleteBlockFinal(None)
-              else CompleteBlockRegular(None, Set.empty, false)
+              // TODO: use mock state, not cmd.pollResults
+              else CompleteBlockRegular(None, headUtxosRet, false)
             )
             // All sync commands should be timed out since the system may terminate
             d <- (sut.agent ?: AgentActor.CompleteBlock(block, cmd.blockNumber)).timeout(10.seconds)
@@ -171,6 +179,30 @@ object SutCommands:
         } yield d.blockBrief
     }
 
-    implicit given SutCommand[RegisterDepositCommand, Unit, Stage1Sut] with {
-        override def run(cmd: RegisterDepositCommand, sut: Stage1Sut): IO[Unit] = ???
+    given SutCommand[RegisterDepositCommand, Unit, Stage1Sut] with {
+        override def run(cmd: RegisterDepositCommand, sut: Stage1Sut): IO[Unit] =
+            logger.debug(">> RegisterDepositCommand") >>
+                (sut.agent ! cmd.registerDeposit)
+    }
+
+    given SutCommand[SubmitDepositsCommand, Unit, Stage1Sut] with {
+
+        // This uses only depositsForSubmission and ignores rejected deposits
+        override def run(cmd: SubmitDepositsCommand, sut: Stage1Sut): IO[Unit] = for {
+            _ <- logger.debug(s">> SubmitDepositCommand (${cmd.depositsForSubmission.map(_._1)})")
+            ret <- IO.traverse(cmd.depositsForSubmission)((id, tx) =>
+                sut.cardanoBackend.submitTx(tx) >>= (ret => IO.pure((id, tx) -> ret))
+            )
+
+            submissionErrors = ret.filter(_._2.isLeft)
+            _ <- IO.whenA(submissionErrors.nonEmpty)(
+              logger.info(
+                "Submit deposit errors:" + submissionErrors
+                    .map(a =>
+                        s"\n\t- ${a._1._1}, error: ${a._2.left}, cbor: ${HexUtil.encodeHexString(a._1._2.toCbor)}"
+                    )
+                    .mkString
+              )
+            )
+        } yield ()
     }

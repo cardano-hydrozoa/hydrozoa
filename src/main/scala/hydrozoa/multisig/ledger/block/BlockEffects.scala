@@ -1,6 +1,6 @@
 package hydrozoa.multisig.ledger.block
 
-import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, FinalizationTx, InitializationTx, RefundTx, RolloutTx, SettlementTx}
+import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, FinalizationTx, InitializationTx, RefundTx, RolloutTx, SettlementTx}
 
 sealed trait BlockEffects extends BlockEffects.Section
 

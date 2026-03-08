@@ -61,4 +61,12 @@ object CardanoNetwork {
     extension [T <: TransactionOutput](self: T)
         def ensureMinAda(config: CardanoNetwork.Section): T =
             TransactionBuilder.ensureMinAda(self, config.cardanoProtocolParams).asInstanceOf[T]
+
+    extension (self: StandardCardanoNetwork)
+        def protocolParams: ProtocolParams = self.cardanoProtocolParams
+        def slotConfig: SlotConfig = self.slotConfig
+        def cardanoInfo: CardanoInfo = self match
+            case CardanoNetwork.Mainnet => CardanoInfo.mainnet
+            case CardanoNetwork.Preprod => CardanoInfo.preprod
+            case CardanoNetwork.Preview => CardanoInfo.preview
 }

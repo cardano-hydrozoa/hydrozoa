@@ -36,6 +36,9 @@ object NodeConfig {
     trait Section extends NodePrivateConfig.Section, HeadConfig.Section {
         def nodeConfig: NodeConfig
 
+        override transparent inline def headConfigPreinit: HeadConfig.Preinit =
+            headConfig.headConfigPreinit
+
         override transparent inline def cardanoNetwork: CardanoNetwork =
             headConfig.cardanoNetwork
         override transparent inline def headParams: HeadParameters =

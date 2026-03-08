@@ -13,7 +13,7 @@ import hydrozoa.multisig.consensus.ack.{AckBlock, AckId}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockHeader.Minor.HeaderSignature
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader, BlockNumber}
-import hydrozoa.multisig.ledger.dapp.tx.{RefundTx, RolloutTx, Tx, TxSignature}
+import hydrozoa.multisig.ledger.l1.tx.{RefundTx, RolloutTx, Tx, TxSignature}
 import scala.Function.tupled
 import scala.util.control.NonFatal
 import scalus.cardano.ledger.{TransactionHash, VKeyWitness}

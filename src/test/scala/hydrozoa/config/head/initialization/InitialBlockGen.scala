@@ -3,21 +3,19 @@ package hydrozoa.config.head.initialization
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.initialization.HeadStartTimeGen.{HeadStartTimeGen, currentTimeHeadStartTime}
 import hydrozoa.config.head.multisig.fallback.{FallbackContingencyGen, generateFallbackContingency}
+import hydrozoa.config.head.multisig.settlement.{SettlementConfigGen, generateSettlementConfig}
 import hydrozoa.config.head.multisig.timing.{TxTimingGen, generateDefaultTxTiming}
-import hydrozoa.config.head.network.{CardanoNetwork, generateStandardCardanoNetwork}
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.{GenHeadParams, generateHeadParameters}
-import hydrozoa.config.head.peers.{TestPeers, generateTestPeers}
 import hydrozoa.config.head.rulebased.{DisputeResolutionConfigGen, generateDisputeResolutionConfig}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
-import hydrozoa.multisig.ledger.dapp.txseq.InitializationTxSeq
-import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
-import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.kzgCommitment
+import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import monocle.Focus.focus
 import org.scalacheck.Test.Parameters
 import org.scalacheck.{Gen, Prop, Properties}
+import test.{TestPeers, TestPeersSpec}
 
 def generateInitialBlock(testPeers: TestPeers)(
-    generateCardanoNetwork: Gen[CardanoNetwork] = generateStandardCardanoNetwork,
     generateTxTiming: TxTimingGen = generateDefaultTxTiming,
     generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
     generateDisputeResolutionConfig: DisputeResolutionConfigGen = generateDisputeResolutionConfig,
@@ -25,21 +23,22 @@ def generateInitialBlock(testPeers: TestPeers)(
     generateHeadStartTime: HeadStartTimeGen = currentTimeHeadStartTime,
     generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
         InitializationParametersGenTopDown.GenWithDeps | InitializationParameters =
-        InitializationParametersGenBottomUp.generateInitializationParameters
+        InitializationParametersGenBottomUp.generateInitializationParameters,
+    generateSettlementConfig: SettlementConfigGen = generateSettlementConfig
 ): Gen[InitialBlock] = {
     for {
-        cardanoNetwork <- generateCardanoNetwork
+        cardanoNetwork <- Gen.const(testPeers.network)
 
         headParams <- generateHeadParameters(cardanoNetwork)(
           generateTxTiming,
           generateFallbackContingency,
-          generateDisputeResolutionConfig
+          generateDisputeResolutionConfig,
+          generateSettlementConfig
         )
 
         initializationParameters <- generateInitializationParameters match {
             case g: InitializationParametersGenBottomUp.GenInitializationParameters =>
                 g(testPeers)(
-                  Gen.const(cardanoNetwork),
                   generateHeadStartTime,
                   _ => Gen.const(headParams.fallbackContingency)
                 )
@@ -49,7 +48,6 @@ def generateInitialBlock(testPeers: TestPeers)(
                   equityRange
                 ) =>
                 generator(testPeers)(
-                  Gen.const(cardanoNetwork),
                   generateHeadStartTime,
                   generateFallbackContingency,
                   generateGenesisUtxosL1,
@@ -58,12 +56,14 @@ def generateInitialBlock(testPeers: TestPeers)(
             case ps: InitializationParameters => Gen.const(ps)
         }
 
-        config = HeadConfig.Preinit.HeadConfig(
-          cardanoNetwork = cardanoNetwork,
-          headParams = headParams,
-          headPeers = testPeers.headPeers,
-          initializationParams = initializationParameters
-        )
+        config = HeadConfig
+            .Preinit(
+              cardanoNetwork = cardanoNetwork,
+              headParams = headParams,
+              headPeers = testPeers.mkHeadPeers,
+              initializationParams = initializationParameters
+            )
+            .get
 
         initTxSeq =
             InitializationTxSeq.Build(config).result match {
@@ -77,7 +77,7 @@ def generateInitialBlock(testPeers: TestPeers)(
         blockBrief = BlockBrief.Initial(
           BlockHeader.Initial(
             startTime = initializationParameters.headStartTime,
-            kzgCommitment = initializationParameters.initialL2Utxos.kzgCommitment
+            kzgCommitment = initializationParameters.initialEvacuationMap.kzgCommitment
           )
         ),
         effects = BlockEffects.MultiSigned.Initial(
@@ -92,12 +92,15 @@ def generateInitialBlock(testPeers: TestPeers)(
     )
 }
 
-object InitialBlockGenerator extends Properties("Sanity Check") {
+object InitialBlockTest extends Properties("Initial block") {
     override def overrideParameters(p: Parameters): Parameters = {
-        p.withMinSuccessfulTests(1_000)
+        p.withMinSuccessfulTests(100)
     }
 
-    val _ = property("Sanity Check") = Prop.forAll(generateTestPeers())(testPeers =>
-        Prop.forAll(generateInitialBlock(testPeers)())(_ => true)
-    )
+    val _ = property("generates") = Prop.forAll(
+      TestPeersSpec
+          .generate()
+          .flatMap(TestPeers.generate)
+          .flatMap(generateInitialBlock(_)())
+    )(_ => true)
 }

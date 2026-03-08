@@ -5,6 +5,7 @@ import cats.data.State
 import cats.effect.{IO, Ref}
 import cats.syntax.all.catsSyntaxFlatMapOps
 import cats.~>
+import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.backend.cardano.CardanoBackend.Error
@@ -130,21 +131,26 @@ class CardanoBackendMock private (
     }
 
     override def submitTx(tx: Transaction): MockStateF[Either[CardanoBackend.Error, Unit]] = {
-        // println(s"submitTx: ${tx.id}")
-        // println(s"submitTx: ${HexUtil.encodeHexString(tx.toCbor)}")
+        logger.debug(s"submitTx: ${tx.id}")
+        logger.trace(s"submitTx: ${HexUtil.encodeHexString(tx.toCbor)}")
 
         for {
             state <- get[MockState]
-            // _ = println(s"utxos count: ${state.ledgerState.utxos.values.size}")
-            // _ = println(
-            //  s"missing utxos: ${tx.body.value.inputs.toSet &~ state.ledgerState.utxos.keySet}"
-            // )
-            // _ = println(s"tx utxos: ${state.ledgerState.utxos.filter((i, _) => tx.body.value.inputs.toSet.contains(i))}")
+
+            _ = logger.trace(s"utxos count: ${state.ledgerState.utxos.values.size}")
+            _ = logger.trace(
+              s"missing utxos: ${tx.body.value.inputs.toSet &~ state.ledgerState.utxos.keySet}"
+            )
+            _ = logger.trace(s"tx utxos: ${state.ledgerState.utxos
+                    .filter((i, _) => tx.body.value.inputs.toSet.contains(i))}")
 
             ret <-
                 // TODO: is this what we want to have?
+                // TODO: Maybe in some cases it would be nice to know that tx has been submitted more than once
                 if state.knownTxs.contains(tx.id)
-                then pure(Right(()))
+                then
+                    logger.debug(s"tx ${tx.id} is already known, do nothing")
+                    pure(Right(()))
                 else
                     mutator.transit(
                       mkContext(state.currentSlot.slot),
