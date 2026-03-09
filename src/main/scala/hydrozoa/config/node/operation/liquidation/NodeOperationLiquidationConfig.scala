@@ -1,6 +1,6 @@
 package hydrozoa.config.node.operation.liquidation
 
-import scala.concurrent.duration.FiniteDuration
+import scala.concurrent.duration.{DurationInt, FiniteDuration}
 
 final case class NodeOperationLiquidationConfig(
     override val liquidationBotPollingPeriod: FiniteDuration
@@ -15,4 +15,7 @@ object NodeOperationLiquidationConfig {
 
         def liquidationBotPollingPeriod: FiniteDuration
     }
+
+    lazy val default: NodeOperationLiquidationConfig =
+        NodeOperationLiquidationConfig(1.minute)
 }

@@ -60,6 +60,7 @@ lazy val core: Project = (project in file("."))
         "org.typelevel" %% "spire" % "0.18.0",
         "org.scalactic" %% "scalactic" % "3.2.19",
         "org.typelevel" %% "cats-core" % "2.13.0",
+        "io.github.cdimascio" % "dotenv-java" % "3.0.0",
         // "io.netty" % "netty-all" % "4.2.4.Final"
       ),
       libraryDependencies ++= Seq(
@@ -70,8 +71,7 @@ lazy val core: Project = (project in file("."))
         "org.typelevel" %% "cats-effect-testkit" % "3.6.3" % Test,
         "org.scalus" % "scalus-testkit_3" % scalusVersion % Test,
         "dev.optics" %% "monocle-core" % "3.3.0" % Test,
-        "dev.optics" %% "monocle-macro" % "3.3.0" % Test,
-        "io.github.cdimascio" % "dotenv-java" % "3.0.0" % Test
+        "dev.optics" %% "monocle-macro" % "3.3.0" % Test
       )
     )
 
