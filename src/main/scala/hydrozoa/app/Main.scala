@@ -1,9 +1,13 @@
 package hydrozoa.app
 
 import cats.effect.{ExitCode, IO, IOApp}
+import com.bloxbean.cardano.client.util.HexUtil
+import com.suprnation.actor.ActorSystem
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.lib.logging.Logging
+import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost
+import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
 import io.github.cdimascio.dotenv.Dotenv
 import scalus.cardano.ledger.Coin
 import scalus.crypto.ed25519.{SigningKey, VerificationKey}
@@ -120,11 +124,22 @@ object Main extends IOApp {
               minEquity = env.minEquity
             )
 
-            _ <- logger.info("Hydrozoa node started successfully")
+            _ <- logger.info(s"headAddress: ${nodeConfig.headMultisigAddress}")
+            _ <- logger.info(
+              s"initTx: ${HexUtil.encodeHexString(nodeConfig.initializationTx.tx.toCbor)}"
+            )
 
-            // TODO: Start the node with nodeConfig and backend
-            _ <- logger.warn("Node execution not yet implemented")
+            l2Ledger <- EutxoL2Ledger(nodeConfig)
+
+            ret <- ActorSystem[IO]("Hydrozoa Demo").use { system =>
+                for {
+                    _ <- system.actorOf(MultisigRegimeManager.apply(nodeConfig, backend, l2Ledger))
+                    _ <- logger.info("Hydrozoa node started successfully")
+                    _ <- system.waitForTermination
+                } yield ExitCode.Success
+            }
 
             _ <- logger.info("Shutting down Hydrozoa node...")
-        } yield ExitCode.Success
+
+        } yield ret
 }
