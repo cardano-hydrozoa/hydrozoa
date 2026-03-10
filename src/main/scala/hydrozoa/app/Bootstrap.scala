@@ -2,13 +2,15 @@ package hydrozoa.app
 
 import cats.data.{NonEmptyList, NonEmptyMap}
 import cats.effect.{ExitCode, IO, IOApp}
+import com.bloxbean.cardano.client.util.HexUtil
+import hydrozoa.app.Main.loadEnv
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.HeadConfig.Preinit
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.multisig.fallback.FallbackContingency.mkFallbackContingencyWithDefaults
 import hydrozoa.config.head.multisig.settlement.SettlementConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
-import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.config.head.parameters.HeadParameters
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
@@ -17,9 +19,10 @@ import hydrozoa.config.node.operation.liquidation.NodeOperationLiquidationConfig
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import hydrozoa.lib.cardano.scalus.ShelleyAddressExtra
+import hydrozoa.lib.cardano.wallet.WalletModule
 import hydrozoa.lib.logging.Logging
 import hydrozoa.lib.number.PositiveInt
-import hydrozoa.multisig.backend.cardano.CardanoBackend
+import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost}
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, HeadPeerWallet}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
 import hydrozoa.multisig.ledger.joint.EvacuationMap
@@ -29,7 +32,10 @@ import monocle.Focus.focus
 import org.bouncycastle.crypto.generators.Ed25519KeyPairGenerator
 import org.bouncycastle.crypto.params.{Ed25519KeyGenerationParameters, Ed25519PrivateKeyParameters, Ed25519PublicKeyParameters}
 import scala.collection.immutable.SortedMap
-import scalus.cardano.ledger.{Coin, TransactionOutput, Utxo, Value}
+import scalus.cardano.address.Network
+import scalus.cardano.ledger.{Coin, PlutusScriptEvaluator, TransactionOutput, Utxo, Value}
+import scalus.cardano.txbuilder.TransactionBuilderStep.Spend
+import scalus.cardano.txbuilder.{TransactionBuilder, TransactionBuilderStep}
 import scalus.crypto.ed25519.{SigningKey, VerificationKey}
 import scalus.uplc.builtin.ByteString
 
@@ -239,9 +245,190 @@ object GenerateKeyPair extends IOApp:
                 _ <- IO.println("Generated new Ed25519 key pair:")
                 _ <- IO.println(s"Verification key (32 bytes): $vKeyHex")
                 _ <- IO.println(s"Signing key (32 bytes): $sKeyHex")
+                _ <- IO.println(
+                  s"Testnet address: ${ShelleyAddressExtra.mkShelleyAddress(vKey, Network.Testnet).toBech32.get}"
+                )
+
                 _ <- IO.println("\nAdd these to your .env file:")
                 _ <- IO.println(s"CARDANO_VERIFICATION_KEY=$vKeyHex")
                 _ <- IO.println(s"CARDANO_SIGNING_KEY=$sKeyHex")
+
             } yield ExitCode.Success
         }
 end GenerateKeyPair
+
+/** Migrate all funds from the peer's address to a new address.
+  *
+  * Usage: sbt "runMain hydrozoa.app.Migrate <bech32-address>"
+  *
+  * Reads configuration from .env (same as Main):
+  *   - BLOCKFROST_API_KEY
+  *   - CARDANO_VERIFICATION_KEY
+  *   - CARDANO_SIGNING_KEY
+  */
+object Migrate extends IOApp:
+
+    private val logger = Logging.loggerIO("hydrozoa.app.Migrate")
+
+    /** Load environment configuration from .env file (copied from Main). */
+    private lazy val dotenv = io.github.cdimascio.dotenv.Dotenv.configure().ignoreIfMissing().load()
+
+    override def run(args: List[String]): IO[ExitCode] =
+        if args.isEmpty then
+            IO.println("Usage: sbt \"runMain hydrozoa.app.Migrate <bech32-address>\"") *>
+                IO.println("Example: sbt \"runMain hydrozoa.app.Migrate addr_test1vz...\"") *>
+                IO.pure(ExitCode.Error)
+        else
+            val destinationBech32 = args.head
+            migrateAllFunds(destinationBech32)
+
+    private def migrateAllFunds(destinationBech32: String): IO[ExitCode] =
+        for {
+            _ <- logger.info(s"Starting migration to $destinationBech32")
+
+            // Load environment configuration (same as Main)
+            env <- loadEnv
+
+            // Parse destination address
+            destination <- IO
+                .delay(scalus.cardano.address.Address.fromBech32(destinationBech32))
+                .flatMap {
+                    case addr: scalus.cardano.address.ShelleyAddress =>
+                        logger.info(s"Destination address: ${addr.toBech32.get}") *>
+                            IO.pure(addr)
+                    case other =>
+                        IO.raiseError(
+                          new IllegalArgumentException(
+                            s"Destination must be a Shelley address, got: ${other.getClass.getSimpleName}"
+                          )
+                        )
+                }
+                .handleErrorWith(err =>
+                    IO.raiseError(new IllegalArgumentException(s"Invalid bech32 address: $err"))
+                )
+
+            // Create backend
+            cardanoNetwork: StandardCardanoNetwork = CardanoNetwork.Preview
+            _ <- logger.info("Creating Cardano Blockfrost backend...")
+
+            backend <- CardanoBackendBlockfrost(
+              network = Left(cardanoNetwork),
+              apiKey = env.blockfrostApiKey
+            )
+
+            // Get peer address
+            peerAddress = ShelleyAddressExtra.mkShelleyAddress(
+              env.verificationKey,
+              cardanoNetwork.network
+            )
+            _ <- logger.info(s"Peer address: ${peerAddress.toBech32.get}")
+
+            // Fetch all UTXOs from peer address
+            _ <- logger.info("Fetching UTXOs from peer address...")
+            utxosResult <- backend.utxosAt(peerAddress)
+            utxosMap <- IO.fromEither(
+              utxosResult.left.map(err => new RuntimeException(s"Failed to fetch UTXOs: $err"))
+            )
+
+            _ <-
+                if utxosMap.isEmpty then
+                    logger.warn("No UTXOs found at peer address. Nothing to migrate.") *>
+                        IO.pure(ExitCode.Success)
+                else
+                    for {
+                        _ <- logger.info(s"Found ${utxosMap.size} UTXO(s) to migrate")
+
+                        // Calculate total value
+                        totalValue = Value.combine(utxosMap.map((_, output) => output.value))
+                        _ <- logger.info(
+                          s"Total value to migrate: ${totalValue.coin.value} lovelace + ${totalValue.assets.assets.size} asset(s)"
+                        )
+
+                        // Build transaction
+                        _ <- logger.info("Building transaction...")
+                        unbalanced = TransactionBuilder
+                            .build(
+                              cardanoNetwork.network,
+                              utxosMap.map { case (utxoId, output) =>
+                                  Spend(Utxo(utxoId, output))
+                              }.toList :+
+                                  scalus.cardano.txbuilder.TransactionBuilderStep.Send(
+                                    TransactionOutput.Babbage(
+                                      address = destination,
+                                      value = totalValue,
+                                      datumOption = None,
+                                      scriptRef = None
+                                    )
+                                  )
+                            )
+                            .fold(
+                              err =>
+                                  throw new RuntimeException(s"Failed to build transaction: $err"),
+                              identity
+                            )
+
+                        // Balance transaction
+                        _ <- logger.info("Balancing transaction...")
+                        protocolParams <- backend.fetchLatestParams.flatMap(
+                          IO.fromEither(_)
+                              .adaptError(err =>
+                                  new RuntimeException(s"Failed to fetch protocol params: $err")
+                              )
+                        )
+
+                        balanced = unbalanced
+                            .balanceContext(
+                              diffHandler = scalus.cardano.txbuilder.Change.changeOutputDiffHandler(
+                                _,
+                                _,
+                                protocolParams = protocolParams,
+                                changeOutputIdx = 0
+                              ),
+                              protocolParams = protocolParams,
+                              evaluator = scalus.cardano.ledger.PlutusScriptEvaluator(
+                                cardanoNetwork.cardanoInfo,
+                                scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
+                              )
+                            )
+                            .fold(
+                              err =>
+                                  throw new RuntimeException(
+                                    s"Failed to balance transaction: $err"
+                                  ),
+                              _.transaction
+                            )
+
+                        wallet = HeadPeerWallet(
+                          HeadPeerNumber.zero,
+                          WalletModule.Scalus,
+                          env.verificationKey,
+                          env.signingKey
+                        )
+
+                        // Sign transaction
+                        _ <- logger.info("Signing transaction...")
+                        signed = wallet.signTx(balanced)
+
+                        _ <- logger.info(s"Transaction hash: ${signed.id}")
+                        _ <- logger.info(
+                          s"Transaction CBOR: ${HexUtil.encodeHexString(signed.toCbor)}"
+                        )
+
+                        // Submit transaction
+                        _ <- logger.info("Submitting transaction...")
+                        submitResult <- backend.submitTx(signed)
+                        _ <- IO.fromEither(
+                          submitResult.left.map(err =>
+                              new RuntimeException(s"Failed to submit transaction: $err")
+                          )
+                        )
+
+                        _ <- logger.info("✅ Transaction submitted successfully!")
+                        _ <- logger.info(
+                          s"Explorer: https://preview.cexplorer.io/tx/${signed.id.toHex}"
+                        )
+                    } yield ExitCode.Success
+
+        } yield ExitCode.Success
+
+end Migrate

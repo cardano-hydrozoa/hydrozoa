@@ -45,7 +45,7 @@ object Main extends IOApp {
 
     /** Read a required environment variable, checking .env file first, then system environment.
       */
-    private def getEnv(name: String): IO[String] =
+    def getEnv(name: String): IO[String] =
         IO {
             Option(dotenv.get(name))
                 .orElse(sys.env.get(name))
@@ -70,7 +70,7 @@ object Main extends IOApp {
         }
 
     /** Load configuration from environment variables. */
-    private def loadEnv: IO[EnvConfig] =
+    def loadEnv: IO[EnvConfig] =
         for {
             blockfrostKey <- getEnv("BLOCKFROST_API_KEY")
             _ <- logger.info(s"Loaded Blockfrost API key: ${blockfrostKey.take(8)}...")
