@@ -40,6 +40,14 @@ class CardanoBackendBlockfrostTest extends AnyFunSuite {
         )
         .asInstanceOf[ShelleyAddress]
 
+    // This is a frozen test node address, that contains multiple treasury and multisig witness utxos
+    // with native reference scripts.
+    private val testAddress3: ShelleyAddress = Address
+        .fromBech32(
+          "addr_test1wzwt96zke3clae92z22gevxdk52a7hsgvx8r56vxcakxqxgt6edm4"
+        )
+        .asInstanceOf[ShelleyAddress]
+
     test("Error gracefully when key and network mismatch", RequiresBlockfrostApiKey) {
         val ret = runWithKey(key =>
             for {
@@ -60,6 +68,21 @@ class CardanoBackendBlockfrostTest extends AnyFunSuite {
         )
         println(ret)
         assert(ret.isRight && ret.exists(set => set.size == 6))
+    }
+
+    test("Fetch utxos with ref script", RequiresBlockfrostApiKey) {
+        val ret = runWithKey(key =>
+            for {
+                backend <- CardanoBackendBlockfrost(Left(CardanoNetwork.Preview), key)
+                utxoSet <- backend.utxosAt(testAddress3)
+            } yield utxoSet
+        )
+        println(ret)
+        assert(
+          ret.isRight
+              && ret.exists(set => set.size == 4)
+              && ret.exists(set => set.count(_._2.scriptRef.isDefined) == 2)
+        )
     }
 
     test("Fetch some utxos, multi-page", RequiresBlockfrostApiKey) {

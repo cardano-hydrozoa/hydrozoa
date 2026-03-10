@@ -129,7 +129,9 @@ object Main extends IOApp {
               )
             )
 
-            _ <- Resource.eval(logger.info(s"headAddress: ${nodeConfig.headMultisigAddress}"))
+            _ <- Resource.eval(
+              logger.info(s"headAddress: ${nodeConfig.headMultisigAddress.toBech32.get}")
+            )
             _ <- Resource.eval(
               logger.info(
                 s"initTx: ${HexUtil.encodeHexString(nodeConfig.initializationTx.tx.toCbor)}"
