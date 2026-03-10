@@ -100,8 +100,10 @@ object BlockWeaver:
     }
 
     type Handle = ActorRef[IO, Request]
-    type Request = UserEvent | BlockBrief.Next | BlockConfirmed | PollResults |
+    type Request = PreStart.type | UserEvent | BlockBrief.Next | BlockConfirmed | PollResults |
         FinalizationLocallyTriggered.type
+
+    case object PreStart
 
     // ===================================
     // Immutable mempool state
@@ -227,23 +229,26 @@ trait BlockWeaver(
         case x: BlockWeaver.Connections => connections.set(Some(x))
     }
 
-    override def preStart: IO[Unit] =
-        for {
-            _ <- initializeConnections
-            _ <- switchToIdle(BlockHeader.Initial.blockNum.increment, Mempool.empty)
-        } yield ()
+    override def preStart: IO[Unit] = context.self ! BlockWeaver.PreStart
 
     override def receive: Receive[IO, Request] =
         PartialFunction.fromFunction(receiveTotal)
 
     private def receiveTotal(req: Request): IO[Unit] =
         req match {
+            case BlockWeaver.PreStart         => preStartLocal
             case msg: UserEvent               => handleLedgerEvent(msg)
             case b: BlockBrief.Next           => handleNewBlock(b)
             case bc: BlockConfirmed           => handleBlockConfirmed(bc)
             case pr: PollResults              => handlePollResults(pr)
             case finalizationLocallyTriggered => finalizationLocallyTriggeredRef.set(true)
         }
+
+    private def preStartLocal: IO[Unit] =
+        for {
+            _ <- initializeConnections
+            _ <- switchToIdle(BlockHeader.Initial.blockNum.increment, Mempool.empty)
+        } yield ()
 
     // ===================================
     // Mailbox message handlers

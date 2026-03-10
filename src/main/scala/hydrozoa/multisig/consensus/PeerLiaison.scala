@@ -51,13 +51,19 @@ trait PeerLiaison(
         case x: PeerLiaison.Connections => connections.set(Some(x))
     }
 
-    override def preStart: IO[Unit] = initializeConnections
+    override def preStart: IO[Unit] = context.self ! PeerLiaison.PreStart
 
     override def receive: Receive[IO, Request] =
-        PartialFunction.fromFunction(req => getConnections.flatMap(receiveTotal(req, _)))
+        PartialFunction.fromFunction {
+            case PeerLiaison.PreStart => preStartLocal
+            case req                  => getConnections.flatMap(receiveTotal(req, _))
+        }
 
     private def receiveTotal(req: Request, conn: Connections): IO[Unit] =
         req match {
+            case PeerLiaison.PreStart =>
+                // Should never reach here since PreStart is handled in receive
+                IO.raiseError(new IllegalStateException("PreStart handled in receive"))
             case x: RemoteBroadcast =>
                 for {
                     // Append the event to the corresponding queue in the state
@@ -95,6 +101,8 @@ trait PeerLiaison(
             //   the peer liaison can terminate.
             case x: BlockConfirmed => state.dequeueConfirmed(x)
         }
+
+    private def preStartLocal: IO[Unit] = initializeConnections
 
     private final class State {
         private val currentlyRequesting: Ref[IO, GetMsgBatch] =
@@ -305,7 +313,9 @@ object PeerLiaison {
         }
     }
 
-    type Request = RemoteBroadcast | GetMsgBatch | NewMsgBatch | BlockConfirmed
+    type Request = PreStart.type | RemoteBroadcast | GetMsgBatch | NewMsgBatch | BlockConfirmed
+
+    case object PreStart
 
     object Request {
         type RemoteBroadcast = AckBlock | BlockBrief.Next | UserEvent

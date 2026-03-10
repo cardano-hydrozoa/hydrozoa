@@ -126,10 +126,11 @@ final case class JointLedger(
         }
     } yield p
 
-    override def preStart: IO[Unit] = initializeConnections
+    override def preStart: IO[Unit] = context.self ! Requests.PreStart
 
     // TODO: PartialFunction.fromFunction is a noop here
     override def receive: Receive[IO, Requests.Request] = PartialFunction.fromFunction {
+        case Requests.PreStart       => preStartLocal
         case e: UserEvent            => applyUserEvent(e)
         case s: StartBlock           => startBlock(s)
         case c: CompleteBlockRegular => completeBlockRegular(c)
@@ -139,6 +140,8 @@ final case class JointLedger(
                 case r: GetState.type => r.handleSync(req, _ => state.get)
             }
     }
+
+    private def preStartLocal: IO[Unit] = initializeConnections
 
     /** Run an [[l2ledger.L2LedgerAction]] within a JointLedger. If the action is successful
       * (returns `Right`), the state of the JointLedger is updated. Because the state update within
@@ -780,9 +783,10 @@ object JointLedger {
 
     object Requests {
         type Request =
-            // RegisterDeposit is exactly the DappLedger type, we're simply forwarding it through.
-            // Does this mean we should wrap it?
-            UserEvent | StartBlock | CompleteBlockRegular | CompleteBlockFinal | GetState.Sync
+            PreStart.type | UserEvent | StartBlock | CompleteBlockRegular | CompleteBlockFinal |
+                GetState.Sync
+
+        case object PreStart
 
         case class StartBlock(
             blockNum: BlockNumber,

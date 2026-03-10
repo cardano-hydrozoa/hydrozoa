@@ -61,13 +61,19 @@ trait EventSequencer(
         case x: EventSequencer.Connections => connections.set(Some(x))
     }
 
-    override def preStart: IO[Unit] = initializeConnections
+    override def preStart: IO[Unit] = context.self ! EventSequencer.PreStart
 
     override def receive: Receive[IO, Request] =
-        PartialFunction.fromFunction(req => getConnections.flatMap(receiveTotal(req, _)))
+        PartialFunction.fromFunction {
+            case EventSequencer.PreStart => preStartLocal
+            case req                     => getConnections.flatMap(receiveTotal(req, _))
+        }
 
     private def receiveTotal(req: Request, conn: Connections): IO[Unit] =
         req match {
+            case EventSequencer.PreStart =>
+                // Should never reach here since PreStart is handled in receive
+                IO.raiseError(new IllegalStateException("PreStart handled in receive"))
             case x: UserEvent =>
                 for {
                     newNum <- state.nextLedgerEventNum()
@@ -83,6 +89,8 @@ trait EventSequencer(
                 // Complete the deferred ledger event outcomes confirmed by the block and remove them from queue
                 ???
         }
+
+    private def preStartLocal: IO[Unit] = initializeConnections
 
     private final class State {
         private val nLedgerEvent = Ref.unsafe[IO, LedgerEventNumber](LedgerEventNumber(0))
@@ -143,5 +151,7 @@ object EventSequencer {
         }
     }
 
-    type Request = UserEvent | BlockConfirmed
+    type Request = PreStart.type | UserEvent | BlockConfirmed
+
+    case object PreStart
 }

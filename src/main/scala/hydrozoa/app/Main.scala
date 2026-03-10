@@ -158,9 +158,8 @@ object Main extends IOApp {
             exitCode <- Resource.eval(
               ActorSystem[IO]("Hydrozoa Demo").use { system =>
                   for {
-                      _ <- system.actorOf(
-                        MultisigRegimeManager.apply(nodeConfig, backend, l2Ledger)
-                      )
+                      mrm <- MultisigRegimeManager.apply(nodeConfig, backend, l2Ledger)
+                      _ <- system.actorOf(mrm, "MultisigRegimeManager")
                       _ <- logger.info("Hydrozoa node started successfully")
                       _ <- system.waitForTermination
                   } yield ExitCode.Success

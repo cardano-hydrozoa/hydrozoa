@@ -274,9 +274,11 @@ object ConsensusActor:
     // Request + ActorRef + apply
     // ===================================
 
-    type Request = Block.Unsigned.Next | AckBlock
+    type Request = PreStart.type | Block.Unsigned.Next | AckBlock
 
     type Handle = ActorRef[IO, Request]
+
+    case object PreStart
 
     def apply(
         config: Config,
@@ -332,12 +334,15 @@ class ConsensusActor(
         case x: ConsensusActor.Connections => connections.set(Some(x))
     }
 
-    override def preStart: IO[Unit] = initializeConnections
+    override def preStart: IO[Unit] = context.self ! ConsensusActor.PreStart
 
     override def receive: Receive[IO, Request] = {
+        case ConsensusActor.PreStart    => preStartLocal
         case block: Block.Unsigned.Next => handleBlock(block)
         case ack: AckBlock              => handleAck(ack)
     }
+
+    private def preStartLocal: IO[Unit] = initializeConnections
 
     /** Since the ReqBlock messages are sent by the joint ledger actor directly, all we need to do
       * when receiving a new block is to store it in the proper cell. The consensus actor is

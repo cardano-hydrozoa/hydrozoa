@@ -8,7 +8,7 @@ import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.peer.HeadPeerWallet
 import scala.collection.immutable.SortedMap
 import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.{AssetName, Coin, EvaluatorMode, MultiAsset, PlutusScriptEvaluator, ScriptRef, TransactionOutput, Utxo, Utxos, Value}
+import scalus.cardano.ledger.{AssetName, Coin, EvaluatorMode, MultiAsset, PlutusScriptEvaluator, TransactionOutput, Utxo, Utxos, Value}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, Send, Spend}
 import scalus.cardano.txbuilder.{Change, TransactionBuilder}
 
@@ -65,9 +65,11 @@ object Janitor:
                         )
                     else Value.zero
 
-                hasMultisigRefScript = headUtxos.exists((_, o) =>
-                    o.scriptRef.contains(ScriptRef(config.headMultisigScript._1))
-                )
+                // NB: for a multisig head it's always true
+                hasMultisigRefScript = true
+                // hasMultisigRefScript = headUtxos.exists((_, o) =>
+                //    o.scriptRef.contains(ScriptRef(config.headMultisigScript._1))
+                // )
 
                 unbalanced = TransactionBuilder
                     .build(

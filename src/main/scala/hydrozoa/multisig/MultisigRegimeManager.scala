@@ -36,12 +36,46 @@ trait MultisigRegimeManager(
             case _: Exception => Escalate
         }
 
-    override def preStart: IO[Unit] =
+    override def preStart: IO[Unit] = {
+        context.self ! PreStart
+    }
+
+    override def receive: Receive[IO, Request] =
+        PartialFunction.fromFunction {
+            case PreStart => preStartLocal
+            case TerminatedChild(childType, _) =>
+                childType match {
+                    case Actors.BlockWeaver =>
+                        logger.warn("Terminated block weaver actor")
+                    case Actors.CardanoLiaison =>
+                        logger.warn("Terminated Cardano liaison actor")
+                    case Actors.Consensus =>
+                        logger.warn("Terminated consensus actor")
+                    case Actors.JointLedger =>
+                        logger.warn("Terminated joint ledger actor")
+                    case Actors.PeerLiaison =>
+                        logger.warn("Terminated peer liaison actor")
+                    case Actors.EventSequencer =>
+                        logger.warn("Terminated event sequencer actor")
+                }
+            case TerminatedDependency(dependencyType, _) =>
+                dependencyType match {
+                    case Dependencies.CardanoBackend =>
+                        logger.warn("Terminated cardano backend")
+                    case Dependencies.Persistence =>
+                        logger.warn("Terminated persistence")
+                }
+            // TODO: Implement a way to receive a remote comm actor and connect it to its corresponding local comm actor
+        }
+
+    def preStartLocal: IO[Unit] =
         for {
             pendingConnections <- Deferred[IO, MultisigRegimeManager.Connections]
 
             nodeId = s"head:${config.ownHeadPeerNum: Int}"
             tracer <- ProtocolTracer.jsonLines(nodeId)
+
+            _ <- logger.info("Starting multisig actors...")
 
             blockWeaver <- context.actorOf(BlockWeaver(config, pendingConnections))
 
@@ -74,11 +108,12 @@ trait MultisigRegimeManager(
                 eventSequencer = eventSequencer,
                 jointLedger = jointLedger,
                 peerLiaisons = localPeerLiaisons,
-                // FIXME:
-                remotePeerLiaisons = ???,
+                remotePeerLiaisons = Map.empty,
                 tracer = tracer,
               )
             )
+
+            _ <- logger.info("Watching multisig actors...")
 
             _ <- context.watch(blockWeaver, TerminatedChild(Actors.BlockWeaver, blockWeaver))
             _ <- localPeerLiaisons.traverse(r =>
@@ -93,34 +128,6 @@ trait MultisigRegimeManager(
               TerminatedChild(Actors.EventSequencer, eventSequencer)
             )
         } yield ()
-
-    override def receive: Receive[IO, Request] =
-        PartialFunction.fromFunction {
-            case TerminatedChild(childType, _) =>
-                childType match {
-                    case Actors.BlockWeaver =>
-                        logger.warn("Terminated block weaver actor")
-                    case Actors.CardanoLiaison =>
-                        logger.warn("Terminated Cardano liaison actor")
-                    case Actors.Consensus =>
-                        logger.warn("Terminated consensus actor")
-                    case Actors.JointLedger =>
-                        logger.warn("Terminated joint ledger actor")
-                    case Actors.PeerLiaison =>
-                        logger.warn("Terminated peer liaison actor")
-                    case Actors.EventSequencer =>
-                        logger.warn("Terminated event sequencer actor")
-                }
-            case TerminatedDependency(dependencyType, _) =>
-                dependencyType match {
-                    case Dependencies.CardanoBackend =>
-                        logger.warn("Terminated cardano backend")
-                    case Dependencies.Persistence =>
-                        logger.warn("Terminated persistence")
-                }
-            // TODO: Implement a way to receive a remote comm actor and connect it to its corresponding local comm actor
-        }
-
 }
 
 /** Multisig regime manager starts-up and monitors all the actors of the multisig regime.
@@ -153,14 +160,19 @@ object MultisigRegimeManager {
         case BlockWeaver, CardanoLiaison, Consensus, JointLedger, PeerLiaison, EventSequencer
 
     /** Requests received by the multisig regime manager. */
-    type Request = TerminatedChild | TerminatedDependency
+    type Request = PreStart.type | TerminatedChild | TerminatedDependency
 
     type Children = Actors
 
     enum Dependencies:
         case CardanoBackend, Persistence
 
-    /** ==Multisig regime manager's messages== */
+    // ===================================
+    // Multisig regime manager's messages
+    // ===================================
+
+    case object PreStart
+
     final case class TerminatedChild(childType: Actors, ref: NoSendActorRef[IO])
 
     final case class TerminatedDependency(dependencyType: Dependencies, ref: NoSendActorRef[IO])
