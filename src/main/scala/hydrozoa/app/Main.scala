@@ -1,9 +1,10 @@
 package hydrozoa.app
 
-import cats.effect.{ExitCode, IO, IOApp}
+import cats.effect.{ExitCode, IO, IOApp, Resource}
 import com.bloxbean.cardano.client.util.HexUtil
 import com.suprnation.actor.ActorSystem
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
+import hydrozoa.lib.cardano.scalus.ShelleyAddressExtra
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost
@@ -105,41 +106,67 @@ object Main extends IOApp {
     val cardanoNetwork: StandardCardanoNetwork = CardanoNetwork.Preview
 
     override def run(args: List[String]): IO[ExitCode] =
-        for {
-            _ <- logger.info("Starting Hydrozoa node...")
+        val resources = for {
+            _ <- Resource.eval(logger.info("Starting Hydrozoa node..."))
 
             // Load configuration from environment
-            env <- loadEnv
+            env <- Resource.eval(loadEnv)
 
-            _ <- logger.info("Starting Cardano Blockfrost Backend...")
-            backend <- CardanoBackendBlockfrost(
-              network = Left(cardanoNetwork),
-              apiKey = env.blockfrostApiKey
+            _ <- Resource.eval(logger.info("Starting Cardano Blockfrost Backend..."))
+            backend <- Resource.eval(
+              CardanoBackendBlockfrost(
+                network = Left(cardanoNetwork),
+                apiKey = env.blockfrostApiKey
+              )
             )
 
             // Generate node configuration
-            nodeConfig <- Bootstrap.mkNodeConfig(cardanoNetwork, backend)(
-              vKey = env.verificationKey,
-              sKey = env.signingKey,
-              minEquity = env.minEquity
+            nodeConfig <- Resource.eval(
+              Bootstrap.mkNodeConfig(cardanoNetwork, backend)(
+                vKey = env.verificationKey,
+                sKey = env.signingKey,
+                minEquity = env.minEquity
+              )
             )
 
-            _ <- logger.info(s"headAddress: ${nodeConfig.headMultisigAddress}")
-            _ <- logger.info(
-              s"initTx: ${HexUtil.encodeHexString(nodeConfig.initializationTx.tx.toCbor)}"
+            _ <- Resource.eval(logger.info(s"headAddress: ${nodeConfig.headMultisigAddress}"))
+            _ <- Resource.eval(
+              logger.info(
+                s"initTx: ${HexUtil.encodeHexString(nodeConfig.initializationTx.tx.toCbor)}"
+              )
             )
 
-            l2Ledger <- EutxoL2Ledger(nodeConfig)
+            l2Ledger <- Resource.eval(EutxoL2Ledger(nodeConfig))
 
-            ret <- ActorSystem[IO]("Hydrozoa Demo").use { system =>
+            // Shutdown hook - runs on success, error, or cancellation
+            _ <- Resource.onFinalizeCase { _ =>
                 for {
-                    _ <- system.actorOf(MultisigRegimeManager.apply(nodeConfig, backend, l2Ledger))
-                    _ <- logger.info("Hydrozoa node started successfully")
-                    _ <- system.waitForTermination
-                } yield ExitCode.Success
+                    _ <- logger.info("Hydrozoa node shut down, running janitor...")
+                    _ <- Janitor.cleanUp(
+                      backend = backend,
+                      headPeerWallet = nodeConfig.ownHeadWallet,
+                      config = nodeConfig.headConfig,
+                      faucetAddress = ShelleyAddressExtra.mkShelleyAddress(
+                        env.verificationKey,
+                        cardanoNetwork.network
+                      )
+                    )
+                } yield ()
             }
 
-            _ <- logger.info("Shutting down Hydrozoa node...")
+            // ActorSystem already provides resource-safety via .use
+            exitCode <- Resource.eval(
+              ActorSystem[IO]("Hydrozoa Demo").use { system =>
+                  for {
+                      _ <- system.actorOf(
+                        MultisigRegimeManager.apply(nodeConfig, backend, l2Ledger)
+                      )
+                      _ <- logger.info("Hydrozoa node started successfully")
+                      _ <- system.waitForTermination
+                  } yield ExitCode.Success
+              }
+            )
+        } yield exitCode
 
-        } yield ret
+        resources.use(IO.pure)
 }
