@@ -1,17 +1,6 @@
-//enablePlugins(
-//  JavaAppPackaging,
-//  DockerPlugin
-//)
-
 val scalusVersion = "0.15.1"
 val bloxbeanVersion = "0.7.1"
-
-//Compile / mainClass := Some("hydrozoa.HydrozoaNode")
-// Docker / packageName := "cardano-hydrozoa/hydrozoa"
-// dockerBaseImage := "openjdk:21-jdk"
-// dockerExposedPorts ++= Seq(4937)
-//dockerEnvVars ++= Map(("COCKROACH_HOST", "dev.localhost"))
-//dockerExposedVolumes := Seq("/opt/docker/.logs", "/opt/docker/.keys")
+val http4sVersion = "0.23.32"
 
 // Main application
 lazy val core: Project = (project in file("."))
@@ -26,33 +15,12 @@ lazy val core: Project = (project in file("."))
         "org.scalus" % "scalus_3" % scalusVersion withSources (),
         "org.scalus" % "scalus-cardano-ledger_3" % scalusVersion withSources (),
         // Cardano Client library
-        // "com.bloxbean.cardano" % "cardano-client-lib" % bloxbeanVersion,
         "com.bloxbean.cardano" % "cardano-client-backend-blockfrost" % bloxbeanVersion,
-        // Tapir for API definition
-        // "com.softwaremill.sttp.tapir" %% "tapir-netty-server-sync" % "1.11.14",
-        // "com.softwaremill.sttp.tapir" %% "tapir-swagger-ui-bundle" % "1.11.14",
-        // STTP4 Ox
-        // "com.softwaremill.sttp.client4" %% "ox" % "4.0.0-RC1", // FIXME: not the latest
-        // Argument parsing
-        // "com.monovore" %% "decline" % "2.5.0",
-        // Concurrency
-        // "com.softwaremill.ox" %% "core" % "0.5.11",
-        // "com.softwaremill.ox" %% "mdc-logback" % "0.5.13",
         // Logging
         "ch.qos.logback" % "logback-classic" % "1.5.18",
         "org.typelevel" %% "log4cats-slf4j" % "2.7.1",
         // Used for input/output
         "org.scala-lang" %% "toolkit" % "0.7.0",
-        // jsoniter + tapit-jsoniter
-        // "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-core" % "2.33.2",
-        // "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-macros" % "2.33.2" % "compile-internal",
-        // "com.softwaremill.sttp.tapir" %% "tapir-jsoniter-scala" % "1.11.19",
-        // Prometheus Java "client"
-        // "io.prometheus" % "prometheus-metrics-core" % "1.3.6",
-        // "io.prometheus" % "prometheus-metrics-instrumentation-jvm" % "1.3.6",
-        // "io.prometheus" % "prometheus-metrics-exporter-httpserver" % "1.3.6",
-        // "io.bullet" %% "borer-core" % "1.12.0",
-        // "io.bullet" %% "borer-derivation" % "1.12.0",
         // cats
         "org.typelevel" %% "cats-core" % "2.13.0",
         "org.typelevel" %% "cats-effect" % "3.6.3",
@@ -60,6 +28,19 @@ lazy val core: Project = (project in file("."))
         "org.typelevel" %% "spire" % "0.18.0",
         "org.scalactic" %% "scalactic" % "3.2.19",
         "org.typelevel" %% "cats-core" % "2.13.0",
+        // http4s - web server and websocket client
+        "org.http4s" %% "http4s-ember-server" % http4sVersion,
+        "org.http4s" %% "http4s-ember-client" % http4sVersion,
+        "org.http4s" %% "http4s-jdk-http-client" % "0.9.1",
+        "org.http4s" %% "http4s-dsl" % http4sVersion,
+        "org.http4s" %% "http4s-circe" % http4sVersion,
+        "com.comcast" %% "ip4s-core" % "3.6.0",
+        // circe for JSON
+        "io.circe" %% "circe-core" % "0.14.10",
+        "io.circe" %% "circe-generic" % "0.14.10",
+        "io.circe" %% "circe-parser" % "0.14.10",
+        // scodec for hex encoding
+        "org.scodec" %% "scodec-bits" % "1.2.1",
         // "io.netty" % "netty-all" % "4.2.4.Final"
       ),
       libraryDependencies ++= Seq(
@@ -117,17 +98,6 @@ addCommandAlias("fmtAll", ";core/scalafmtAll ;integration/scalafmtAll ;benchmark
 addCommandAlias("fmtCheckAll", ";core/scalafmtCheckAll ;integration/scalafmtCheckAll ;benchmark/scalafmtCheckAll")
 addCommandAlias("lintAll", ";core/scalafixAll ;integration/scalafixAll ;benchmark/scalafixAll")
 addCommandAlias("lintCheckAll", ";core/scalafixAll --check ;integration/scalafixAll --check ;benchmark/scalafixAll --check")
-
-// Demo workload
-//lazy val demo = (project in file("demo"))
-//    .dependsOn(core, integration)
-//    .settings(
-//      Compile / mainClass := Some("hydrozoa.demo.Workload"),
-//      publish / skip := true,
-//      libraryDependencies ++= Seq(
-//        "org.scalacheck" %% "scalacheck" % "1.18.1"
-//      )
-//    )
 
 // Test dependencies
 ThisBuild / testFrameworks += new TestFramework("org.scalatest.tools.Framework")
