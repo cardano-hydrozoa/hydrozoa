@@ -4,11 +4,25 @@ import io.circe.syntax.*
 import io.circe.{Decoder, Encoder, KeyDecoder, KeyEncoder}
 import scala.util.Try
 import scalus.cardano.ledger.*
+import scalus.crypto.ed25519.VerificationKey
 import scodec.bits.ByteVector
 
 object JsonCodecs {
     object CIP0116 {
         object Conway {
+            given verificationKeyEncoder: Encoder[VerificationKey] =
+                Encoder.encodeString.contramap(vkey => vkey.toHex)
+            given verificationKeyDecoder: Decoder[VerificationKey] =
+                Decoder.decodeString.emap(hexStr =>
+                    for {
+                        bytes <- ByteVector
+                            .fromHex(hexStr)
+                            .map(_.toArray)
+                            .toRight(s"Invalid hex string: $hexStr")
+                        vkey <- VerificationKey.fromArray(bytes)
+                    } yield vkey
+                )
+
             // Encode/decode byte arrays as lowercase hex strings
             given byteArrayEncoder: Encoder[Array[Byte]] =
                 Encoder.encodeString.contramap(bytes => ByteVector(bytes).toHex)

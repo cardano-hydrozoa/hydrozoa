@@ -7,6 +7,7 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toQuantizedI
 import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
 import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.explainConst
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
+import hydrozoa.multisig.ledger.l2.Destination
 import monocle.{Focus, Lens}
 import scala.util.{Failure, Success}
 import scalus.cardano.ledger.*
@@ -29,8 +30,11 @@ sealed trait RefundTx {
 object RefundTx {
     export RefundTxOps.{Build, Parse}
 
-    final case class PostDated(override val tx: Transaction, startTime: QuantizedInstant)
-        extends RefundTx,
+    final case class PostDated(
+        override val tx: Transaction,
+        startTime: QuantizedInstant,
+        refundDestination: Destination
+    ) extends RefundTx,
           Tx[PostDated] {
         override val txLens: Lens[PostDated, Transaction] = Focus[PostDated](_.tx)
         override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
@@ -91,7 +95,8 @@ private object RefundTxOps {
                     tx = finalized.transaction
                 } yield RefundTx.PostDated(
                   tx,
-                  refundInstructions.validityStart
+                  refundInstructions.validityStart,
+                  Destination(refundInstructions.address, refundInstructions.mbDatum)
                 )
         }
     }
@@ -112,6 +117,7 @@ private object RefundTxOps {
             case MetadataParseError(wrapped: MD.ParseError)
             case TxCborDeserializationFailed(e: Throwable)
             case ValidityStartIsMissing
+            case InvalidRefundDestination
         }
     }
 
@@ -137,16 +143,35 @@ private object RefundTxOps {
                             case Left(e) => Left(MetadataParseError(e))
                         }
 
-                        refundTx: RefundTx.PostDated <- tx.body.value.validityStartSlot match {
+                        startInstant <- tx.body.value.validityStartSlot match {
                             case Some(startSlot) =>
                                 Right(
-                                  RefundTx.PostDated(
-                                    tx,
-                                    Slot(startSlot).toQuantizedInstant(config.slotConfig)
-                                  )
+                                  Slot(startSlot).toQuantizedInstant(config.slotConfig)
                                 )
                             case None => Left(ValidityStartIsMissing)
                         }
+
+                        destination: Destination <- tx.body.value.outputs match {
+                            case IndexedSeq(
+                                  Sized(
+                                    TransactionOutput.Babbage(address, _, Some(Inline(d)), None),
+                                    _
+                                  )
+                                ) =>
+                                Right(Destination(address, Some(d)))
+                            case IndexedSeq(
+                                  Sized(TransactionOutput.Babbage(address, _, None, None), _)
+                                ) =>
+                                Right(Destination(address, None))
+                            case _ => Left(InvalidRefundDestination)
+                        }
+
+                        refundTx: RefundTx.PostDated = RefundTx.PostDated(
+                          tx,
+                          startInstant,
+                          destination
+                        )
+
                     } yield refundTx
                 case Failure(e) => Left(TxCborDeserializationFailed(e))
             }

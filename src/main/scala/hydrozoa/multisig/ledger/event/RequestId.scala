@@ -4,9 +4,9 @@ import cats.implicits.catsSyntaxOrder
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import scala.annotation.targetName
 
-type LedgerEventId = LedgerEventId.Id
+type RequestId = RequestId.Id
 
-object LedgerEventId {
+object RequestId {
 
     /** Used in the transient fields to indicate whether an event is valid or invalid. (This type is
       * solely here to avoid boolean blindness)
@@ -15,16 +15,16 @@ object LedgerEventId {
         case Valid
         case Invalid
 
-    opaque type Id = (HeadPeerNumber, LedgerEventNumber)
+    opaque type Id = (HeadPeerNumber, RequestNumber)
 
-    def apply(peerNum: HeadPeerNumber, eventNum: LedgerEventNumber): Id = (peerNum, eventNum)
+    def apply(peerNum: HeadPeerNumber, requestNum: RequestNumber): Id = (peerNum, requestNum)
 
     @targetName("apply_Int")
-    def apply(peerNum: Int, eventNum: Int): Id =
-        (HeadPeerNumber(peerNum), LedgerEventNumber(eventNum))
+    def apply(peerNum: Int, requestNum: Int): Id =
+        (HeadPeerNumber(peerNum), RequestNumber(requestNum))
 
-    def unapply(self: Id): (HeadPeerNumber, LedgerEventNumber) =
-        (HeadPeerNumber(self._1), LedgerEventNumber(self._2))
+    def unapply(self: Id): (HeadPeerNumber, RequestNumber) =
+        (HeadPeerNumber(self._1), RequestNumber(self._2))
 
     given Conversion[Id, (Int, Int)] = identity
 
@@ -34,11 +34,11 @@ object LedgerEventId {
     }
 
     extension (self: Id)
-        def increment: Id = LedgerEventId(self._1, self._2 + 1)
+        def increment: Id = RequestId(self._1, self._2 + 1)
         def peerNum: HeadPeerNumber = HeadPeerNumber(self._1)
-        def eventNum: LedgerEventNumber = LedgerEventNumber(self._2)
+        def requestNum: RequestNumber = RequestNumber(self._2)
 
         def precedes(other: Id): Boolean =
             self.peerNum == other.peerNum &&
-                self.eventNum.increment == other.eventNum
+                self.requestNum.increment == other.requestNum
 }

@@ -2,15 +2,21 @@ package hydrozoa.multisig.ledger.remote
 
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.block.BlockNumber
-import hydrozoa.multisig.ledger.event.LedgerEventId
+import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import hydrozoa.multisig.ledger.l2.L2LedgerEvent
+import hydrozoa.multisig.ledger.l2.given
+import hydrozoa.multisig.ledger.l2.{Destination, L2LedgerCommand}
 import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.{Request, Response}
+import io.bullet.borer.Cbor
+import io.circe.generic.semiauto
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
 import io.circe.{Decoder, Encoder}
+import scala.util.Try
 import scalus.cardano.ledger.{Coin, KeepRaw, TransactionInput, TransactionOutput, Value}
+import scalus.crypto.ed25519.VerificationKey
+import scodec.bits.ByteVector
 
 /** JSON codecs for RemoteL2Ledger WebSocket protocol */
 object RemoteL2LedgerCodecs {
@@ -37,17 +43,33 @@ object RemoteL2LedgerCodecs {
         Decoder.decodeInt.map(BlockNumber.apply)
 
     // L2LedgerEvent codecs
-    implicit val l2EventEncoder: Encoder[L2LedgerEvent.L2Event] = deriveEncoder
-    implicit val l2EventDecoder: Decoder[L2LedgerEvent.L2Event] = deriveDecoder
+    implicit val l2EventEncoder: Encoder[L2LedgerCommand.ApplyTransactionRequest] = deriveEncoder
+    implicit val l2EventDecoder: Decoder[L2LedgerCommand.ApplyTransactionRequest] = deriveDecoder
 
-    implicit val depositRegistrationEncoder: Encoder[L2LedgerEvent.DepositEventRegistration] =
+    /** Destination as a cbor-encoded hex-string */
+    implicit val destinationEncoder: Encoder[Destination] =
+        Encoder.encodeString.contramap(destination => destination.toHex)
+    implicit val destinationDecoder: Decoder[Destination] =
+        Decoder.decodeString.emap(hexStr =>
+            for {
+                bytes <- ByteVector
+                    .fromHex(hexStr)
+                    .map(_.toArray)
+                    .toRight(s"Invalid hex string: $hexStr")
+                dest <- Try(Cbor.decode(bytes).to[Destination].value).toEither.left.map(e =>
+                    s"Could not cbor-decode the bytes: ${e}"
+                )
+            } yield dest
+        )
+
+    implicit val depositRegistrationEncoder: Encoder[L2LedgerCommand.RegisterDepositRequest] =
         deriveEncoder
-    implicit val depositRegistrationDecoder: Decoder[L2LedgerEvent.DepositEventRegistration] =
+    implicit val depositRegistrationDecoder: Decoder[L2LedgerCommand.RegisterDepositRequest] =
         deriveDecoder
 
-    implicit val depositDecisionsEncoder: Encoder[L2LedgerEvent.DepositEventDecisions] =
+    implicit val depositDecisionsEncoder: Encoder[L2LedgerCommand.ApplyDepositDecisions] =
         deriveEncoder
-    implicit val depositDecisionsDecoder: Decoder[L2LedgerEvent.DepositEventDecisions] =
+    implicit val depositDecisionsDecoder: Decoder[L2LedgerCommand.ApplyDepositDecisions] =
         deriveDecoder
 
     // Request codecs
@@ -73,14 +95,16 @@ object RemoteL2LedgerCodecs {
         c.downField("type").as[String].flatMap {
             case "DepositRegistration" =>
                 c.downField("event")
-                    .as[L2LedgerEvent.DepositEventRegistration]
+                    .as[L2LedgerCommand.RegisterDepositRequest]
                     .map(Request.DepositRegistration.apply)
             case "DepositDecisions" =>
                 c.downField("event")
-                    .as[L2LedgerEvent.DepositEventDecisions]
+                    .as[L2LedgerCommand.ApplyDepositDecisions]
                     .map(Request.DepositDecisions.apply)
             case "L2Event" =>
-                c.downField("event").as[L2LedgerEvent.L2Event].map(Request.L2Event.apply)
+                c.downField("event")
+                    .as[L2LedgerCommand.ApplyTransactionRequest]
+                    .map(Request.L2Event.apply)
             case other =>
                 Left(io.circe.DecodingFailure(s"Unknown request type: $other", c.history))
         }

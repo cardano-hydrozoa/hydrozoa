@@ -23,9 +23,8 @@ import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Scenarios.*
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.eutxol2.tx.{GenesisObligation, L2Genesis}
 import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toEvacuationKey}
-import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag.{Invalid, Valid}
-import hydrozoa.multisig.ledger.event.UserEvent.DepositEvent
-import hydrozoa.multisig.ledger.event.{LedgerEventId, LedgerEventNumber}
+import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag.{Invalid, Valid}
+import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.ledger.joint.JointLedger.{Done, Producing}
 import hydrozoa.multisig.ledger.joint.given
@@ -33,6 +32,8 @@ import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.L1LedgerM.DepositsMap
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
+import hydrozoa.multisig.server.{DepositRequest, UserRequest, UserRequestHeader, UserRequestWithId}
+import io.bullet.borer.Cbor
 import java.util.concurrent.TimeUnit
 import monocle.Focus
 import monocle.Focus.focus
@@ -46,6 +47,8 @@ import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scala.util.{Failure, Success, Try}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.{Block as _, BlockHeader as _, Coin, *}
+import scalus.uplc.builtin.Builtins.blake2b_224
+import scalus.uplc.builtin.ByteString
 import test.*
 import test.Generators.Hydrozoa.*
 import test.Generators.Other.genCoinDistributionWithMinAdaUtxo
@@ -154,7 +157,7 @@ object JointLedgerTestHelpers {
                 state <- lift(env.jointLedger ?: JointLedger.Requests.GetState)
             } yield state
 
-        def registerDeposit(req: DepositEvent): JLTest[Unit] = {
+        def registerDeposit(req: UserRequestWithId[DepositRequest]): JLTest[Unit] = {
             for {
                 jl <- asks[TestR, ActorRef[IO, JointLedger.Requests.Request]](_.jointLedger)
                 _ <- lift(jl ? req)
@@ -259,9 +262,11 @@ object JointLedgerTestHelpers {
           */
         def deposit(
             submissionDeadline: QuantizedInstant,
-            eventId: LedgerEventId,
+            requestId: RequestId,
             blockStartTime: QuantizedInstant
-        ): JLTest[(DepositRefundTxSeq, DepositEvent, NonEmptyList[GenesisObligation])] = {
+        ): JLTest[
+          (DepositRefundTxSeq, UserRequestWithId[DepositRequest], NonEmptyList[GenesisObligation])
+        ] = {
             import Requests.*
             for {
                 env <- ask[TestR]
@@ -279,7 +284,7 @@ object JointLedgerTestHelpers {
                             )
                         } yield res
                       ).map(NonEmptyList.fromListUnsafe)
-                          .label(s"L2 Outputs for deposit $eventId")
+                          .label(s"L2 Outputs for deposit $requestId")
                     )
 
                 l2OutputsBytes = GenesisObligation.serialize(l2Outputs)
@@ -340,14 +345,51 @@ object JointLedgerTestHelpers {
 
                 signTx = env.multiNodeConfig.signTxAs(HeadPeerNumber.zero)
 
+                body = DepositRequest(
+                  l1Payload = ???,
+                  l2Payload = ???
+                )
+
+                header = UserRequestHeader(
+                  headId = Hash28(
+                    blake2b_224(
+                      ByteString.fromArray(
+                        Cbor.encode(env.config.initialSeedUtxo.input).toByteArray
+                      )
+                    )
+                  ),
+                  validityStart = ???,
+                  validityEnd = depositRefundTxSeq.depositTx.validityEnd.toPosixTime,
+                  bodyHash = ???
+                )
+
+                userWallet = env.multiNodeConfig
+                    .nodePrivateConfigs(HeadPeerNumber.zero)
+                    .ownHeadPeerPrivate
+                    .ownHeadWallet
+                userVk = userWallet.exportVerificationKey
+
+                // TODO: Add mkMsgSignature method to WalletModule class
+                signature = ??? // userWallet.walletModule.signMsg()
+
+                // FIXME: Partial pattern match
+                Right(request: UserRequest[DepositRequest]) = UserRequest(
+                  header = header,
+                  body = body,
+                  userVk = userVk,
+                  signature = signature
+                )
+
                 req =
-                    DepositEvent(
-                      depositTxBytes = signTx(depositRefundTxSeq.depositTx.tx).toCbor,
-                      refundTxBytes = signTx(depositRefundTxSeq.refundTx.tx).toCbor,
-                      depositFee = Coin.zero,
-                      l2Payload = l2OutputsBytes,
-                      eventId = eventId,
-                      l2Value = l2OutputsValue
+                    UserRequestWithId[DepositRequest](
+                      userRequest = ???,
+                      requestId = requestId
+//                      depositTxBytes = signTx(depositRefundTxSeq.depositTx.tx).toCbor,
+//                      refundTxBytes = signTx(depositRefundTxSeq.refundTx.tx).toCbor,
+//                      depositFee = Coin.zero,
+//                      l2Payload = l2OutputsBytes,
+//                      requestId = eventId,
+//                      l2Value = l2OutputsValue
                     )
 
                 _ <- registerDeposit(req)
@@ -384,56 +426,77 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               headAddress: ShelleyAddress,
               blockStartTime: QuantizedInstant
           ): Gen[
-            Queue[JLTest[(DepositRefundTxSeq, DepositEvent, NonEmptyList[GenesisObligation])]]
+            Queue[JLTest[
+              (
+                  DepositRefundTxSeq,
+                  UserRequestWithId[DepositRequest],
+                  NonEmptyList[GenesisObligation]
+              )
+            ]]
           ] =
               for {
-                  lastEventIds0: Map[HeadPeerNumber, LedgerEventNumber] <- for {
+                  lastRequestIds: Map[HeadPeerNumber, RequestNumber] <- for {
                       n <- Gen.choose(2, 20)
                       headPeerNumbers = Vector.range(0, n).map(HeadPeerNumber(_))
                       tuples <- headPeerNumbers
                           .map(peerNum =>
                               Gen.posNum[Int]
-                                  .map(eventNum => (peerNum, LedgerEventNumber(eventNum)))
+                                  .map(requestNum => (peerNum, RequestNumber(requestNum)))
                           )
                           .sequence
                   } yield Map.from(tuples)
 
                   events <- Gen.tailRecM(
                     (
-                      lastEventIds0,
+                      lastRequestIds,
                       Queue.empty[JLTest[
-                        (DepositRefundTxSeq, DepositEvent, NonEmptyList[GenesisObligation])
+                        (
+                            DepositRefundTxSeq,
+                            UserRequestWithId[DepositRequest],
+                            NonEmptyList[GenesisObligation]
+                        )
                       ]]
                     )
                   )(
                     (
-                        lastEventIds: Map[HeadPeerNumber, LedgerEventNumber],
+                        lastRequestIds: Map[HeadPeerNumber, RequestNumber],
                         actionQueue: Queue[JLTest[
-                          (DepositRefundTxSeq, DepositEvent, NonEmptyList[GenesisObligation])
+                          (
+                              DepositRefundTxSeq,
+                              UserRequestWithId[DepositRequest],
+                              NonEmptyList[GenesisObligation]
+                          )
                         ]]
                     ) =>
                         // In the recursive case: pick a random peer, increment their event number, and generate a
                         // deposit action for them
                         lazy val appendEvent: Gen[
                           (
-                              Map[HeadPeerNumber, LedgerEventNumber],
+                              Map[HeadPeerNumber, RequestNumber],
                               Queue[JLTest[
-                                (DepositRefundTxSeq, DepositEvent, NonEmptyList[GenesisObligation])
+                                (
+                                    DepositRefundTxSeq,
+                                    UserRequestWithId[DepositRequest],
+                                    NonEmptyList[GenesisObligation]
+                                )
                               ]]
                           )
                         ] =
                             for {
-                                peer <- Gen.oneOf(lastEventIds.keys)
-                                lastEventId = lastEventIds(peer)
-                                newEventIds = lastEventIds.updated(peer, lastEventId.increment)
+                                peer <- Gen.oneOf(lastRequestIds.keys)
+                                lastRequestID = lastRequestIds(peer)
+                                newRequestIds = lastRequestIds.updated(
+                                  peer,
+                                  lastRequestID.increment
+                                )
                                 submissionDeadlineOffset <- Gen.choose(1, 1000).map(_.seconds)
 
                             } yield (
-                              newEventIds,
+                              newRequestIds,
                               actionQueue.appended(
                                 deposit(
                                   submissionDeadline = blockStartTime + submissionDeadlineOffset,
-                                  eventId = LedgerEventId(peer, lastEventId.increment),
+                                  requestId = RequestId(peer, lastRequestID.increment),
                                   blockStartTime = blockStartTime
                                 )
                               )
@@ -461,16 +524,22 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               env <- ask[TestR]
               blockStartTime <- startBlockNow(BlockNumber.zero.increment)
               eventStreamActions <- pick[TestR, Queue[
-                JLTest[(DepositRefundTxSeq, DepositEvent, NonEmptyList[GenesisObligation])]
+                JLTest[
+                  (
+                      DepositRefundTxSeq,
+                      UserRequestWithId[DepositRequest],
+                      NonEmptyList[GenesisObligation]
+                  )
+                ]
               ]](
                 genEventStream(env.config, env.config.headMultisigAddress, blockStartTime)
               )
 
               eventStreamFullResults <- eventStreamActions.sequence
               // This is the format we actually care about; it's commensurate with the DappLedgerState
-              eventStream: Queue[(LedgerEventId, DepositUtxo)] = eventStreamFullResults.map {
+              eventStream: Queue[(RequestId, DepositUtxo)] = eventStreamFullResults.map {
                   case (txSeq, event, obligations) =>
-                      (event.eventId, txSeq.depositTx.depositProduced)
+                      (event.requestId, txSeq.depositTx.depositProduced)
               }
 
               depositsMap <- getState.map(_.l1LedgerState.deposits)
@@ -542,7 +611,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
           firstDepositValidityEnd = startTime + 10.minutes
           seqAndReq <- deposit(
             submissionDeadline = firstDepositValidityEnd,
-            eventId = LedgerEventId(0, 1),
+            requestId = RequestId(0, 1),
             blockStartTime = startTime
           )
           (depositRefundTxSeq, depositReq, genesisObligations) = seqAndReq
@@ -571,7 +640,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                     val refundsWithoutSignatures =
                         jlState
                             .asInstanceOf[Producing]
-                            .userEventState
+                            .userRequestState
                             .postDatedRefundTxs
                             // Zero out the vkey witnesses before checking equality
                             .map(_.focus(_.tx).modify(_.stripVKeyWitnesses))
@@ -648,7 +717,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
               _ <- assertWith[TestR](
                 msg = "Deposits should be correct with absorbed deposit",
-                condition = majorBlock.body.depositsAbsorbed == List(depositReq.eventId) &&
+                condition = majorBlock.body.depositsAbsorbed == List(depositReq.requestId) &&
                     majorBlock.body.depositsRefunded == List.empty
               )
 
@@ -701,7 +770,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
               seqAndReq <- deposit(
                 submissionDeadline = submissionDeadline,
-                LedgerEventId(0, 1),
+                RequestId(0, 1),
                 blockStartTime
               )
 
@@ -711,14 +780,14 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               _ <- assertWith[TestR](
                 msg = "Deposit should be in dapp ledger state",
                 condition = jlState.l1LedgerState.deposits == DepositsMap.empty.appended(
-                  (depositReq.eventId, depositRefundTxSeq.depositTx.depositProduced),
+                  (depositReq.requestId, depositRefundTxSeq.depositTx.depositProduced),
                   env.config.txTiming
                 )
               )
 
               _ <- assertWith[TestR](
                 msg = "Deposit should be in transient fields as valid",
-                condition = jlState.userEventState.events == List((depositReq.eventId, Valid))
+                condition = jlState.userRequestState.requests == List((depositReq.requestId, Valid))
               )
           } yield ()
       } yield true
@@ -739,7 +808,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
               seqAndReq <- deposit(
                 submissionDeadline = submissionDeadline,
-                LedgerEventId(0, 1),
+                RequestId(0, 1),
                 blockStartTime
               )
 
@@ -753,7 +822,8 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
               _ <- assertWith[TestR](
                 msg = "Deposit should be in transient fields as invalid",
-                condition = jlState.userEventState.events == List((depositReq.eventId, Invalid))
+                condition =
+                    jlState.userRequestState.requests == List((depositReq.requestId, Invalid))
               )
           } yield ()
       } yield true
@@ -779,7 +849,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               //    depositValidityEnd = blockStartTime - deposit_maturity_duration
               seqAndReq <- deposit(
                 submissionDeadline = blockStartTime - env.config.txTiming.depositMaturityDuration,
-                LedgerEventId(0, 1),
+                RequestId(0, 1),
                 blockStartTime = blockStartTime
               )
               (depositRefundTxSeq, depositReq, genesisObligations) = seqAndReq
@@ -788,14 +858,14 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               _ <- assertWith[TestR](
                 msg = "Deposit should be in dapp ledger state",
                 condition = jlState.l1LedgerState.deposits == DepositsMap.empty.appended(
-                  (depositReq.eventId, depositRefundTxSeq.depositTx.depositProduced),
+                  (depositReq.requestId, depositRefundTxSeq.depositTx.depositProduced),
                   env.config.txTiming
                 )
               )
 
               _ <- assertWith[TestR](
                 msg = "Deposit should be in transient fields as valid",
-                condition = jlState.userEventState.events == List((depositReq.eventId, Valid))
+                condition = jlState.userRequestState.requests == List((depositReq.requestId, Valid))
               )
 
               // Now we complete the block, including this deposit in the poll results.
@@ -814,7 +884,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
               _ <- assertWith[TestR](
                 msg = "Block should contain absorbed deposit",
-                condition = majorBlock.body.depositsAbsorbed == List(depositReq.eventId)
+                condition = majorBlock.body.depositsAbsorbed == List(depositReq.requestId)
               )
           } yield ()
       } yield true
@@ -839,7 +909,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               //    depositValidityEnd = blockStartTime + 1 - deposit_maturity_duration
               seqAndReq <- deposit(
                 blockStartTime + 1.seconds - env.config.txTiming.depositMaturityDuration,
-                LedgerEventId(0, 1),
+                RequestId(0, 1),
                 blockStartTime
               )
               (depositRefundTxSeq, depositReq, genesisObligations) = seqAndReq
@@ -848,14 +918,14 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               _ <- assertWith[TestR](
                 msg = "Deposit should be in dapp ledger state",
                 condition = jlState.l1LedgerState.deposits == DepositsMap.empty.appended(
-                  (depositReq.eventId, depositRefundTxSeq.depositTx.depositProduced),
+                  (depositReq.requestId, depositRefundTxSeq.depositTx.depositProduced),
                   env.config.txTiming
                 )
               )
 
               _ <- assertWith[TestR](
                 msg = "Deposit should be in transient fields as valid",
-                condition = jlState.userEventState.events == List((depositReq.eventId, Valid))
+                condition = jlState.userRequestState.requests == List((depositReq.requestId, Valid))
               )
 
               // Now we complete the block, including this deposit in the poll results.

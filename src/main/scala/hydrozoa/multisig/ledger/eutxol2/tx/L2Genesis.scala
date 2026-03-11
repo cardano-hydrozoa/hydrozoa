@@ -4,7 +4,7 @@ import cats.data.NonEmptyList
 import cats.syntax.all.*
 import hydrozoa.*
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
-import hydrozoa.multisig.ledger.l2.L2LedgerEvent
+import hydrozoa.multisig.ledger.l2.L2LedgerCommand
 import io.bullet.borer.derivation.MapBasedCodecs.derived
 import io.bullet.borer.{Cbor, Decoder, Encoder, Writer}
 import scala.collection.immutable.{Queue, TreeMap}
@@ -52,7 +52,7 @@ object L2Genesis {
     /** Warning: this is partial, but I'm keeping with the conventions of the CBOR decoder.
       */
     def fromDepositEventRegistration(
-        req: L2LedgerEvent.DepositEventRegistration,
+        req: L2LedgerCommand.RegisterDepositRequest,
     ): L2Genesis = {
         val genesisObligations = Cbor
             .decode(req.l2Payload)

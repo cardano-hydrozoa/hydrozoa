@@ -21,11 +21,12 @@ case class L2LedgerError(bytes: Array[Byte])
 
 /** State changes accumulated via interaction with the L2 Ledger (i.e., as seen from the Joint
   * Ledger).
+  *
   * @param diffs
-  *   Evacuation diffs generated from [[L2LedgerEvent.DepositEventDecisions]]s and
-  *   [[L2LedgerEvent.L2Event]]
+  *   Evacuation diffs generated from [[L2LedgerCommand.ApplyDepositDecisions]]s and
+  *   [[L2LedgerCommand.ApplyTransactionRequest]]
   * @param payouts
-  *   Payouts generated from [[L2LedgerEvent.L2Event]]
+  *   Payouts generated from [[L2LedgerCommand.ApplyTransactionRequest]]
   */
 final case class L2LedgerState private (
     diffs: Vector[EvacuationDiff],
@@ -36,7 +37,7 @@ object L2LedgerState:
     def empty: L2LedgerState = L2LedgerState(Vector.empty, Vector.empty)
 
     /** Protected _specifically_ because we want to prevent arbitrary evolution from the empty
-      * state. You _must_ begin with the empty state and evolve it using [[applyL2LedgerEvent]].
+      * state. You _must_ begin with the empty state and evolve it using [[applyL2LedgerCommand]].
       */
     protected[l2] def apply(diffs: Vector[EvacuationDiff], payouts: Vector[Payout.Obligation]) =
         new L2LedgerState(diffs, payouts)
@@ -66,8 +67,8 @@ trait L2Ledger[F[_]] {
       * @return
       *   Either an error blob if the request could not be applied, or unit on success.
       */
-    def sendDepositEventRegistration(
-        req: L2LedgerEvent.DepositEventRegistration
+    def sendRegisterDepositRequest(
+        req: L2LedgerCommand.RegisterDepositRequest
     ): EitherT[F, L2LedgerError, Unit]
 
     /** See:
@@ -77,8 +78,8 @@ trait L2Ledger[F[_]] {
       *   Either an error blob if the request could not be applied, or a vector of evacuation diffs
       *   on success.
       */
-    def sendDepositEventDecisions(
-        req: L2LedgerEvent.DepositEventDecisions
+    def sendApplyDepositDecisions(
+        req: L2LedgerCommand.ApplyDepositDecisions
     ): EitherT[F, L2LedgerError, Vector[EvacuationDiff]]
 
     /** See:
@@ -87,8 +88,8 @@ trait L2Ledger[F[_]] {
       *   Either an error blob if the request could not be applied, or a vector of diffs to apply to
       *   the JointLedger's evacuation map and a vector of payout obligations.
       */
-    def sendL2Event(
-        req: L2LedgerEvent.L2Event
+    def sendApplyTransactionRequest(
+        req: L2LedgerCommand.ApplyTransactionRequest
     ): EitherT[F, L2LedgerError, (Vector[EvacuationDiff], Vector[Payout.Obligation])]
 
     /** Actions (effectful endomorphisms) on the L2Ledger state. They may return an error or a new
@@ -103,41 +104,41 @@ trait L2Ledger[F[_]] {
 
     object L2LedgerAction {
 
-        def fromL2LedgerEvent(e: L2LedgerEvent): L2LedgerAction = e match {
-            case e: L2LedgerEvent.DepositEventDecisions    => applyDepositEventDecisions(e)
-            case e: L2LedgerEvent.L2Event                  => applyL2Event(e)
-            case e: L2LedgerEvent.DepositEventRegistration => applyDepositEventRegistration(e)
+        def fromL2LedgerCommand(e: L2LedgerCommand): L2LedgerAction = e match {
+            case e: L2LedgerCommand.ApplyDepositDecisions   => fromApplyDepositDecisions(e)
+            case e: L2LedgerCommand.ApplyTransactionRequest => fromApplyTransactionRequest(e)
+            case e: L2LedgerCommand.RegisterDepositRequest  => fromRegisterDepositRequest(e)
         }
 
-        private def applyDepositEventRegistration(
-            req: L2LedgerEvent.DepositEventRegistration
+        private def fromRegisterDepositRequest(
+            req: L2LedgerCommand.RegisterDepositRequest
         ): L2LedgerAction =
             L2LedgerAction(
               Kleisli(ledgerState =>
                   for {
-                      _ <- sendDepositEventRegistration(req)
+                      _ <- sendRegisterDepositRequest(req)
                   } yield ledgerState
               )
             )
 
-        private def applyDepositEventDecisions(
-            req: L2LedgerEvent.DepositEventDecisions
+        private def fromApplyDepositDecisions(
+            req: L2LedgerCommand.ApplyDepositDecisions
         ): L2LedgerAction =
             L2LedgerAction(
               Kleisli(ledgerState =>
                   for {
-                      resDiffs <- sendDepositEventDecisions(req)
+                      resDiffs <- sendApplyDepositDecisions(req)
                       newState = L2LedgerState(ledgerState.diffs ++ resDiffs, ledgerState.payouts)
                   } yield newState
               )
             )
 
-        private def applyL2Event(
-            req: L2LedgerEvent.L2Event
+        private def fromApplyTransactionRequest(
+            req: L2LedgerCommand.ApplyTransactionRequest
         ): L2LedgerAction = L2LedgerAction(
           Kleisli(ledgerState =>
               for {
-                  res <- sendL2Event(req)
+                  res <- sendApplyTransactionRequest(req)
                   newState =
                       L2LedgerState(ledgerState.diffs ++ res._1, ledgerState.payouts ++ res._2)
               } yield newState

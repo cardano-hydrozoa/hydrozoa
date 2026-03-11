@@ -46,9 +46,9 @@ object BlockBrief {
 
     trait Section extends BlockType, BlockHeader.Section, BlockBody.Section {
         import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
-        import hydrozoa.multisig.ledger.event.LedgerEventId
+        import hydrozoa.multisig.ledger.event.RequestId
         import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
-        import LedgerEventId.ValidityFlag
+        import RequestId.ValidityFlag
 
         def blockBrief: BlockBrief
 
@@ -57,10 +57,10 @@ object BlockBrief {
         override transparent inline def startTime: QuantizedInstant = header.startTime
         override transparent inline def kzgCommitment: KzgCommitment = header.kzgCommitment
 
-        override transparent inline def events: List[(LedgerEventId, ValidityFlag)] = body.events
-        override transparent inline def depositsAbsorbed: List[LedgerEventId] =
+        override transparent inline def events: List[(RequestId, ValidityFlag)] = body.events
+        override transparent inline def depositsAbsorbed: List[RequestId] =
             body.depositsAbsorbed
-        override transparent inline def depositsRefunded: List[LedgerEventId] =
+        override transparent inline def depositsRefunded: List[RequestId] =
             body.depositsRefunded
     }
 

@@ -11,15 +11,15 @@ import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.EventSequencer.*
 import hydrozoa.multisig.consensus.PeerLiaison.Handle
 import hydrozoa.multisig.ledger.block.{BlockBody, BlockEffects, BlockStatus}
-import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag
-import hydrozoa.multisig.ledger.event.{LedgerEventId, LedgerEventNumber, UserEvent}
+import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
+import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.l1.tx.RefundTx
-import scalus.cardano.ledger.{Coin, Value}
+import hydrozoa.multisig.server.{TransactionRequest, UserRequest, UserRequestWithId}
 
 /** The first actor responsible for processing events from end-users, as received by the
   * [[HydrozoaServer]]. Only one event sequencer is running per node, specifically to handle _only_
   * the events that will be tagged with this Peer's [[HeadPeerNumber]] and sequential
-  * [[LedgerEventId]]s.
+  * [[RequestId]]s.
   *
   * The messages are subsequently passed to the [[BlockWeaver]] and [[PeerLiaison]]s.
   */
@@ -78,13 +78,13 @@ trait EventSequencer(
                           l2TxReq =>
                               for {
                                   newNum <- state.nextLedgerEventNum()
-                                  newId = LedgerEventId(config.ownHeadPeerId.peerNum, newNum)
-                                  newEvent = UserEvent.L2Event(
-                                    eventId = newId,
-                                    l2Payload = l2TxReq.tx
+                                  newId = RequestId(config.ownHeadPeerId.peerNum, newNum)
+                                  newRequestWithId = UserRequestWithId[TransactionRequest](
+                                    userRequest = r.req,
+                                    requestId = newId
                                   )
-                                  _ <- conn.blockWeaver ! newEvent
-                                  _ <- (conn.peerLiaisons ! newEvent).parallel
+                                  _ <- conn.blockWeaver ! newRequestWithId
+                                  _ <- (conn.peerLiaisons ! newRequestWithId).parallel
                               } yield newId
                         )
                     case r: DepositRequest =>
@@ -93,17 +93,15 @@ trait EventSequencer(
                           depositReq =>
                               for {
                                   newNum <- state.nextLedgerEventNum()
-                                  newId = LedgerEventId(config.ownHeadPeerId.peerNum, newNum)
-                                  newEvent = UserEvent.DepositEvent(
-                                    eventId = newId,
-                                    depositTxBytes = depositReq.depositTxBytes,
-                                    refundTxBytes = depositReq.refundTxBytes,
-                                    l2Payload = depositReq.l2Payload,
-                                    l2Value = depositReq.l2Value,
-                                    depositFee = depositReq.depositFee
+                                  newId = RequestId(config.ownHeadPeerId.peerNum, newNum)
+                                  newRequestWithId = UserRequestWithId[
+                                    hydrozoa.multisig.server.DepositRequest
+                                  ](
+                                    requestId = newId,
+                                    userRequest = r.req
                                   )
-                                  _ <- conn.blockWeaver ! newEvent
-                                  _ <- (conn.peerLiaisons ! newEvent).parallel
+                                  _ <- conn.blockWeaver ! newRequestWithId
+                                  _ <- (conn.peerLiaisons ! newRequestWithId).parallel
                               } yield newId
                         )
                 }
@@ -112,9 +110,9 @@ trait EventSequencer(
     private def preStartLocal: IO[Unit] = initializeConnections
 
     private final class State {
-        private val nLedgerEvent = Ref.unsafe[IO, LedgerEventNumber](LedgerEventNumber(0))
+        private val nLedgerEvent = Ref.unsafe[IO, RequestNumber](RequestNumber(0))
 
-        def nextLedgerEventNum(): IO[LedgerEventNumber] =
+        def nextLedgerEventNum(): IO[RequestNumber] =
             nLedgerEvent.updateAndGet(x => x.increment)
     }
 }
@@ -151,43 +149,37 @@ object EventSequencer {
         ) extends BlockBody.Section,
               BlockEffects.Fields.HasPostDatedRefundTxs,
               BlockStatus.MultiSigned {
-            override def events: List[(LedgerEventId, ValidityFlag)] = body.events
-            override def depositsAbsorbed: List[LedgerEventId] = body.depositsAbsorbed
-            override def depositsRefunded: List[LedgerEventId] = body.depositsAbsorbed
+            override def events: List[(RequestId, ValidityFlag)] = body.events
+            override def depositsAbsorbed: List[RequestId] = body.depositsAbsorbed
+            override def depositsRefunded: List[RequestId] = body.depositsAbsorbed
         }
     }
 
     /** Request to submit an L2 transaction. Can be used synchronously to get the assigned
-      * LedgerEventId.
+      * RequestId.
       */
     final case class L2TxRequest(
-        tx: Array[Byte]
-    ) extends SyncRequest[IO, L2TxRequest, LedgerEventId] {
+        req: UserRequest[TransactionRequest]
+    ) extends SyncRequest[IO, L2TxRequest, RequestId] {
         export L2TxRequest.Sync
         def ?: : this.Send = SyncRequest.send(_, this)
     }
 
     object L2TxRequest {
-        type Sync = SyncRequest.Envelope[IO, L2TxRequest, LedgerEventId]
+        type Sync = SyncRequest.Envelope[IO, L2TxRequest, RequestId]
     }
 
-    /** Request to register a deposit. Can be used synchronously to get the assigned LedgerEventId.
+    /** Request to register a deposit. Can be used synchronously to get the assigned RequestId.
       */
     final case class DepositRequest(
-        depositTxBytes: Array[Byte],
-        // TODO: remove
-        refundTxBytes: Array[Byte],
-        l2Payload: Array[Byte],
-        depositFee: Coin,
-        // TODO: remove
-        l2Value: Value
-    ) extends SyncRequest[IO, DepositRequest, LedgerEventId] {
+        req: UserRequest[hydrozoa.multisig.server.DepositRequest]
+    ) extends SyncRequest[IO, DepositRequest, RequestId] {
         export DepositRequest.Sync
         def ?: : this.Send = SyncRequest.send(_, this)
     }
 
     object DepositRequest {
-        type Sync = SyncRequest.Envelope[IO, DepositRequest, LedgerEventId]
+        type Sync = SyncRequest.Envelope[IO, DepositRequest, RequestId]
     }
 
     case object PreStart

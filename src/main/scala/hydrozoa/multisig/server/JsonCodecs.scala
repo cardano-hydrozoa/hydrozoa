@@ -1,9 +1,8 @@
 package hydrozoa.multisig.server
 
 import hydrozoa.lib.cardano.cip116
-import hydrozoa.multisig.consensus.EventSequencer.{DepositRequest as EventSeqDepositRequest, L2TxRequest}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.event.{LedgerEventId, LedgerEventNumber}
+import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.server.ApiResponse.{Error, RequestAccepted}
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
@@ -16,7 +15,7 @@ import scodec.bits.ByteVector
 /** JSON encoders and decoders for API types */
 object JsonCodecs {
 
-    import cip116.JsonCodecs.CIP0116.Conway.{byteArrayEncoder, byteArrayDecoder, coinEncoder, coinDecoder, valueEncoder, valueDecoder}
+    import cip116.JsonCodecs.CIP0116.Conway.{byteArrayEncoder, byteArrayDecoder}
 
     // Helper for accessing ApiRequest inner types
     val apiRequest = new ApiRequest()
@@ -182,11 +181,11 @@ object JsonCodecs {
     type TransactionRequest = apiRequest.TransactionRequest
 
     // LedgerEventNumber codec
-    given ledgerEventNumberEncoder: Encoder[LedgerEventNumber] =
+    given ledgerEventNumberEncoder: Encoder[RequestNumber] =
         Encoder.encodeInt.contramap(_.convert)
 
-    given ledgerEventNumberDecoder: Decoder[LedgerEventNumber] =
-        Decoder.decodeInt.map(LedgerEventNumber.apply)
+    given requestNumberDecoder: Decoder[RequestNumber] =
+        Decoder.decodeInt.map(RequestNumber.apply)
 
     // HeadPeerNumber codec
     given headPeerNumberEncoder: Encoder[HeadPeerNumber] =
@@ -195,29 +194,18 @@ object JsonCodecs {
     given headPeerNumberDecoder: Decoder[HeadPeerNumber] =
         Decoder.decodeInt.map(HeadPeerNumber.apply)
 
-    // LedgerEventId codec
-    given ledgerEventIdEncoder: Encoder[LedgerEventId] = (eventId: LedgerEventId) =>
+    // RequestId codec
+    given ledgerEventIdEncoder: Encoder[RequestId] = (requestId: RequestId) =>
         io.circe.Json.obj(
-          "peerNum" -> eventId.peerNum.asJson,
-          "requestNum" -> eventId.eventNum.asJson
+          "peerNum" -> requestId.peerNum.asJson,
+          "requestNum" -> requestId.requestNum.asJson
         )
 
-    given ledgerEventIdDecoder: Decoder[LedgerEventId] = c =>
+    given ledgerEventIdDecoder: Decoder[RequestId] = c =>
         for {
             peerNum <- c.downField("peerNum").as[HeadPeerNumber]
-            requestNum <- c.downField("requestNum").as[LedgerEventNumber]
-        } yield LedgerEventId(peerNum, requestNum)
-
-    // EventSequencer request types (old)
-    given l2TxRequestDecoder: Decoder[L2TxRequest] = deriveDecoder[L2TxRequest]
-
-    given l2TxRequestEncoder: Encoder[L2TxRequest] = deriveEncoder[L2TxRequest]
-
-    given eventSeqDepositRequestDecoder: Decoder[EventSeqDepositRequest] =
-        deriveDecoder[EventSeqDepositRequest]
-
-    given eventSeqDepositRequestEncoder: Encoder[EventSeqDepositRequest] =
-        deriveEncoder[EventSeqDepositRequest]
+            requestNum <- c.downField("requestNum").as[RequestNumber]
+        } yield RequestId(peerNum, requestNum)
 
     // Response types
     given requestAcceptedEncoder: Encoder[RequestAccepted] = deriveEncoder[RequestAccepted]

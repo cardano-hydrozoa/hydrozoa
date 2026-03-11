@@ -10,9 +10,10 @@ import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
 import hydrozoa.lib.cardano.scalus.QuantizedTime.toEpochQuantizedInstant
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockHeader, BlockNumber, BlockStatus}
-import hydrozoa.multisig.ledger.event.{LedgerEventId, UserEvent}
+import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
+import hydrozoa.multisig.server.UserRequestWithId
 import scalus.cardano.ledger.TransactionInput
 
 /** Block weaver actor.
@@ -62,7 +63,7 @@ object BlockWeaver:
 
     final case class Awaiting(
         blockBrief: BlockBrief.Next,
-        eventIdAwaited: LedgerEventId,
+        eventIdAwaited: RequestId,
         mempool: Mempool
     ) extends State
 
@@ -100,8 +101,8 @@ object BlockWeaver:
     }
 
     type Handle = ActorRef[IO, Request]
-    type Request = PreStart.type | UserEvent | BlockBrief.Next | BlockConfirmed | PollResults |
-        FinalizationLocallyTriggered.type
+    type Request = PreStart.type | UserRequestWithId[?] | BlockBrief.Next | BlockConfirmed |
+        PollResults | FinalizationLocallyTriggered.type
 
     case object PreStart
 
@@ -109,74 +110,74 @@ object BlockWeaver:
     // Immutable mempool state
     // ===================================
 
-    /** Simple immutable mempool implementation. Duplicate ledger events IDs are NOT allowed and a
+    /** Simple immutable mempool implementation. Duplicate ledger request IDs are NOT allowed and a
       * runtime exception is thrown since this should never happen. Other components, particularly
       * the peer liaison is in charge or maintaining the integrity of the stream of messages.
       *
-      * @param events
-      *   map to store events
+      * @param requests
+      *   map to store requests
       * @param receivingOrder
-      *   vector to store order of event ids
+      *   vector to store order of request ids
       */
     case class Mempool(
-        events: Map[LedgerEventId, UserEvent] = Map.empty,
-        receivingOrder: Vector[LedgerEventId] = Vector.empty
+        requests: Map[RequestId, UserRequestWithId[_]] = Map.empty,
+        receivingOrder: Vector[RequestId] = Vector.empty
     )
 
     object Mempool {
         val empty: Mempool = Mempool()
 
-        def apply(events: Seq[UserEvent]): Mempool =
-            events.foldLeft(Mempool.empty)((mempool, event) => mempool.add(event))
+        def apply(events: Seq[UserRequestWithId[_]]): Mempool =
+            events.foldLeft(Mempool.empty)((mempool, request) => mempool.add(request))
 
         // Extension methods
         extension (mempool: Mempool)
 
             // Add event - returns new state
             /** Throws if a duplicate is detected.
-              * @param event
-              *   an event to add
+              * @param request
+              *   an request to add
               * @return
               *   an updated mempool
               */
             def add(
-                event: UserEvent
+                request: UserRequestWithId[?]
             ): Mempool = {
 
-                val eventId = event.eventId
+                val requestId = request.requestId
 
                 require(
-                  !mempool.events.contains(eventId),
-                  s"panic - duplicate event id in the pool: $eventId"
+                  !mempool.requests.contains(requestId),
+                  s"panic - duplicate event id in the pool: $requestId"
                 )
 
                 mempool.copy(
-                  events = mempool.events + (eventId -> event),
-                  receivingOrder = mempool.receivingOrder :+ eventId
+                  requests = mempool.requests + (requestId -> request),
+                  receivingOrder = mempool.receivingOrder :+ requestId
                 )
             }
 
             // Remove event - returns new state
-            def remove(id: LedgerEventId): Mempool = {
+            def remove(id: RequestId): Mempool = {
                 require(
-                  mempool.events.contains(id),
+                  mempool.requests.contains(id),
                   "panic - an attempt to remove a missing event from the mempool"
                 )
                 mempool.copy(
-                  events = mempool.events - id,
+                  requests = mempool.requests - id,
                   receivingOrder = mempool.receivingOrder.filterNot(_ == id)
                 )
             }
 
             // Find by ID
-            def findById(id: LedgerEventId): Option[UserEvent] =
-                mempool.events.get(id)
+            def findById(id: RequestId): Option[UserRequestWithId[_]] =
+                mempool.requests.get(id)
 
             // Iterate in insertion order
-            def inOrder: Iterator[UserEvent] =
-                mempool.receivingOrder.iterator.flatMap(mempool.events.get)
+            def inOrder: Iterator[UserRequestWithId[_]] =
+                mempool.receivingOrder.iterator.flatMap(mempool.requests.get)
 
-            def isEmpty: Boolean = mempool.events.isEmpty
+            def isEmpty: Boolean = mempool.requests.isEmpty
     }
 end BlockWeaver
 
@@ -237,7 +238,7 @@ trait BlockWeaver(
     private def receiveTotal(req: Request): IO[Unit] =
         req match {
             case BlockWeaver.PreStart         => preStartLocal
-            case msg: UserEvent               => handleLedgerEvent(msg)
+            case msg: UserRequestWithId[?]    => handleUserRequestWithId(msg)
             case b: BlockBrief.Next           => handleNewBlock(b)
             case bc: BlockConfirmed           => handleBlockConfirmed(bc)
             case pr: PollResults              => handlePollResults(pr)
@@ -254,11 +255,11 @@ trait BlockWeaver(
     // Mailbox message handlers
     // ===================================
 
-    private def handleLedgerEvent(event: UserEvent): IO[Unit] = {
+    private def handleUserRequestWithId(event: UserRequestWithId[?]): IO[Unit] = {
         import FeedResult.*
 
         for {
-            // _ <- IO.println("handleLedgerEvent")
+            // _ <- IO.println("handleUserRequestWithId")
             state <- stateRef.get
 
             _ <- state match {
@@ -287,7 +288,7 @@ trait BlockWeaver(
                     } yield ()
 
                 case awaiting @ Awaiting(block, eventIdAwaited, mempool) =>
-                    if event.eventId == eventIdAwaited
+                    if event.requestId == eventIdAwaited
                     then {
                         // We got the event we waited for, try to finish the block
                         for {
@@ -449,7 +450,7 @@ trait BlockWeaver(
 
     private enum FeedResult:
         case Done(mempool: Mempool)
-        case EventMissing(eventId: LedgerEventId, mempool: Mempool)
+        case EventMissing(eventId: RequestId, mempool: Mempool)
 
     /** Make an attempt to feed the whole block to the joint ledger
       * @param blockBrief
@@ -463,7 +464,7 @@ trait BlockWeaver(
     private def tryFeedBlock(
         blockBrief: BlockBrief.Next,
         initialMempool: Mempool,
-        startWith: Option[LedgerEventId] = None
+        startWith: Option[RequestId] = None
     ): IO[FeedResult] = {
         import FeedResult.*
 
@@ -509,10 +510,10 @@ trait BlockWeaver(
 
     private def continueFeedBlock(
         blockBrief: BlockBrief.Next,
-        event: UserEvent,
+        request: UserRequestWithId[?],
         mempool: Mempool
     ): IO[FeedResult] =
-        tryFeedBlock(blockBrief, mempool.add(event), Some(event.eventId))
+        tryFeedBlock(blockBrief, mempool.add(request), Some(request.requestId))
 
     // ===================================
     // Switch to Idle
