@@ -1,6 +1,7 @@
 package hydrozoa.app
 
 import cats.data.{NonEmptyList, NonEmptyMap}
+import cats.effect.unsafe.implicits.global
 import cats.effect.{ExitCode, IO, IOApp}
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.app.Main.loadEnv
@@ -114,11 +115,16 @@ object Bootstrap:
           )
         )
 
-        // Calculate required value: minEquity + max non-Plutus tx fee for initialization
+        // Calculate required value: minEquity + contingency + max non-Plutus tx fee for initialization
         maxNonPlutusTxFee = cardanoNetwork.maxNonPlutusTxFee
-        requiredValue = Value(minEquity + maxNonPlutusTxFee)
+        zeroPeerContingency = headParams.fallbackContingency.totalContingencyFor(
+          HeadPeerNumber.zero
+        )
+        requiredValue = Value(minEquity + zeroPeerContingency + maxNonPlutusTxFee)
         _ <- logger.info(
-          s"Required value: ${minEquity.value} lovelace (equity) + ${maxNonPlutusTxFee.value} lovelace (fee) = ${requiredValue.coin.value} lovelace"
+          s"Required value: ${minEquity.value} lovelace (equity) + " +
+              s"${zeroPeerContingency} lovelace (peer contingency) + " +
+              s"${maxNonPlutusTxFee.value} lovelace (fee) = ${requiredValue.coin.value} lovelace"
         )
 
         // Select UTXOs that cover the required value
@@ -178,9 +184,8 @@ object Bootstrap:
           initialChangeOutputs = List(
             TransactionOutput.Babbage(
               address = peerAddress,
-              value = valueSelected - Value(minEquity) - Value(
-                headParams.fallbackContingency.totalContingencyFor(HeadPeerNumber.zero)
-              ),
+              value = valueSelected - Value(minEquity) -
+                  Value(zeroPeerContingency),
               datumOption = None,
               scriptRef = None
             )
@@ -194,7 +199,16 @@ object Bootstrap:
           initializationParams = initializationParameters
         ).get
 
-        initTxSeq = InitializationTxSeq.Build(preinit).result.fold(e => throw e, x => x)
+        initTxSeq = InitializationTxSeq
+            .Build(preinit)
+            .result
+            .fold(
+              e => {
+                  logger.error(e.toString).unsafeRunSync()
+                  throw e
+              },
+              x => x
+            )
     } yield {
 
         val initialBlock = InitialBlock(
