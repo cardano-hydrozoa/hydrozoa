@@ -35,19 +35,21 @@ object HydrozoaServer {
     def create(
         eventSequencer: EventSequencer.Handle,
         config: Config = Config()
-    ): Resource[IO, Server] = {
-        val routes = HydrozoaRoutes(eventSequencer).routes
-
-        EmberServerBuilder
-            .default[IO]
-            .withHost(config.host)
-            .withPort(config.port)
-            .withHttpApp(routes.orNotFound)
-            .build
-            .evalTap { server =>
-                logger.info(s"Hydrozoa HTTP server started at http://${config.host}:${config.port}")
-            }
-    }
+    ): Resource[IO, Server] =
+        for {
+            hydrozoaRoutes <- Resource.eval(HydrozoaRoutes(eventSequencer))
+            server <- EmberServerBuilder
+                .default[IO]
+                .withHost(config.host)
+                .withPort(config.port)
+                .withHttpApp(hydrozoaRoutes.routes.orNotFound)
+                .build
+                .evalTap { _ =>
+                    logger.info(
+                      s"Hydrozoa HTTP server started at http://${config.host}:${config.port}"
+                    )
+                }
+        } yield server
 
     /** Run the server (for standalone use)
       *
