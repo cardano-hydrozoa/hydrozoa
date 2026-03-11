@@ -8,8 +8,8 @@ import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.ledger
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
 import hydrozoa.multisig.ledger.eutxol2.tx.{GenesisObligation, L2Tx}
-import hydrozoa.multisig.ledger.event.UserEvent.L2Event
-import hydrozoa.multisig.ledger.event.{LedgerEventId, UserEvent}
+import hydrozoa.multisig.ledger.event.UserRequest.L2Event
+import hydrozoa.multisig.ledger.event.{RequestId, UserRequest}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.l1.token.CIP67
@@ -396,10 +396,10 @@ object Generators {
         }
 
         // TODO: improve
-        def genEventId: Gen[LedgerEventId] = for {
+        def genEventId: Gen[RequestId] = for {
             headPeerNumber <- Gen.choose(0, 10)
             eventNumber <- Gen.choose(0, 1024)
-        } yield LedgerEventId(headPeerNumber, eventNumber)
+        } yield RequestId(headPeerNumber, eventNumber)
 
         /** NOTE: These will generate _fully_ arbitrary data. It is probably not what you want, but
           * may be a good starting point. For example, an arbitrary payout obligation may be for a
@@ -428,7 +428,7 @@ object Generators {
                 } yield Payout.Obligation(utxo = KeepRaw(output))
             }
 
-            given Arbitrary[UserEvent] = Arbitrary {
+            given Arbitrary[UserRequest] = Arbitrary {
                 for {
                     eventId <- genEventId
                     // genesisObligation <-genGenesisObligation()

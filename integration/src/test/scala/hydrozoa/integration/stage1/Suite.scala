@@ -27,7 +27,7 @@ import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, ConsensusActor, EventSequencer}
 import hydrozoa.multisig.ledger.block.{BlockEffects, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
-import hydrozoa.multisig.ledger.event.LedgerEventNumber
+import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l1.tx.{FinalizationTx, SettlementTx}
 import java.util.concurrent.TimeUnit

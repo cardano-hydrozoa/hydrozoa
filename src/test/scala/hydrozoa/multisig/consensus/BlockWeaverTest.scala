@@ -13,7 +13,7 @@ package hydrozoa.multisig.consensus
 //import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 //import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
 //import hydrozoa.multisig.ledger.event.LedgerEvent
-//import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag.Valid
+//import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag.Valid
 //import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 //import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.genVersion
 //import java.time.Instant

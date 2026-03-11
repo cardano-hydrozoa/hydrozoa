@@ -1,6 +1,6 @@
 package hydrozoa.multisig.server
 
-import hydrozoa.multisig.ledger.event.LedgerEventId
+import hydrozoa.multisig.ledger.event.RequestId
 import scalus.cardano.ledger.{AssetName, Hash32}
 import scalus.crypto.ed25519.{Signature, VerificationKey}
 
@@ -37,7 +37,7 @@ class ApiRequest {
     }
 
     case class UserRequestWithId(
-        requestId: LedgerEventId,
+        requestId: RequestId,
         requestBody: UserRequestBody,
         signature: Signature
     )

@@ -59,6 +59,8 @@ object QuantizedTime {
     }
 
     case class QuantizedInstant private (instant: java.time.Instant, slotConfig: SlotConfig) {
+        def toPosixTime : PosixTime =
+            BigInt(instant.toEpochMilli)
 
         /** WARNING: Will throw if the slot configuration is such that the instant is before the
           * zero slot

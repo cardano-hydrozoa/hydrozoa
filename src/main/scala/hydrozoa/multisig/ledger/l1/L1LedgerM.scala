@@ -9,8 +9,8 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
-import hydrozoa.multisig.ledger.event.LedgerEventId
-import hydrozoa.multisig.ledger.event.UserEvent.DepositEvent
+import hydrozoa.multisig.ledger.event.RequestId
+import hydrozoa.multisig.ledger.event.UserRequest.DepositEvent
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.l1.tx.RefundTx
@@ -121,7 +121,7 @@ object L1LedgerM {
             absorptionStartTime = config.txTiming.depositAbsorptionStartTime(
               depositProduced.submissionDeadline
             )
-            updatedMap <- s.deposits.appended((eventId, depositProduced))
+            updatedMap <- s.deposits.appended((requestId, depositProduced))
             newState = s.copy(deposits = updatedMap)
             _ <- set(newState)
         } yield (depositProduced, depositRefundTxSeq.refundTx)
@@ -133,7 +133,7 @@ object L1LedgerM {
       */
     def mkSettlementTxSeq(
         nextKzg: KzgCommitment,
-        absorbedDeposits: Queue[(LedgerEventId, DepositUtxo)],
+        absorbedDeposits: Queue[(RequestId, DepositUtxo)],
         payoutObligations: Vector[Payout.Obligation],
         blockCreatedOn: QuantizedInstant,
         competingFallbackValidityStart: QuantizedInstant,
@@ -235,12 +235,12 @@ object L1LedgerM {
       * subsequence of the totally-ordered event stream.
       */
     final case class DepositsMap private (
-        treeMap: TreeMap[QuantizedInstant, Queue[(LedgerEventId, DepositUtxo)]]
+        treeMap: TreeMap[QuantizedInstant, Queue[(RequestId, DepositUtxo)]]
     ) {
 
         /** Append an event to the end of the queue of events with the same start time.
           */
-        def appended(event: (LedgerEventId, DepositUtxo)): L1LedgerM[DepositsMap] = {
+        def appended(event: (RequestId, DepositUtxo)): L1LedgerM[DepositsMap] = {
             for {
                 config <- ask
                 res = this.appended(event, config.txTiming)
@@ -249,7 +249,7 @@ object L1LedgerM {
 
         /** Append an event to the end of the queue of events with the same start time.
           */
-        def appended(event: (LedgerEventId, DepositUtxo), txTiming: TxTiming): DepositsMap = {
+        def appended(event: (RequestId, DepositUtxo), txTiming: TxTiming): DepositsMap = {
             val absorptionStartTime =
                 txTiming.depositAbsorptionStartTime(event._2.submissionDeadline)
             DepositsMap(this.treeMap.updatedWith(absorptionStartTime) {
@@ -267,7 +267,7 @@ object L1LedgerM {
         }
 
         def foldLeft[Acc](acc: Acc)(
-            f: (Acc, (QuantizedInstant, Queue[(LedgerEventId, DepositUtxo)])) => Acc
+            f: (Acc, (QuantizedInstant, Queue[(RequestId, DepositUtxo)])) => Acc
         ): Acc =
             treeMap.foldLeft(acc)(f)
 
@@ -279,13 +279,13 @@ object L1LedgerM {
           * according to the order in which they were added to the DepositsMap (which should
           * correspond to the total order of the event stream)
           */
-        lazy val flatValues: Iterable[(LedgerEventId, DepositUtxo)] = treeMap.values.flatten
+        lazy val flatValues: Iterable[(RequestId, DepositUtxo)] = treeMap.values.flatten
 
         /** Event IDs traversed in order of the absorption start time associated with the
           * corresponding ddeposit, with ties broken according to the order in which they were added
           * to the DepositsMap (which should correspond to the total order of the event stream)
           */
-        lazy val flatEvents: Iterable[LedgerEventId] = flatValues.map(_._1)
+        lazy val flatEvents: Iterable[RequestId] = flatValues.map(_._1)
 
         /** Deposits traversed in order of absorption start time, with ties broken according to the
           * order in which they were added to the DepositsMap (which should correspond to the total
@@ -297,7 +297,7 @@ object L1LedgerM {
     // TODO: Make a constructor method taking variadic args, or _.from method?
     object DepositsMap:
         def empty: DepositsMap = DepositsMap(
-          TreeMap.empty[QuantizedInstant, Queue[(LedgerEventId, DepositUtxo)]]
+          TreeMap.empty[QuantizedInstant, Queue[(RequestId, DepositUtxo)]]
         )
 
     sealed trait Error

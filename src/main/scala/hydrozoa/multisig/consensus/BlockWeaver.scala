@@ -10,9 +10,10 @@ import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
 import hydrozoa.lib.cardano.scalus.QuantizedTime.toEpochQuantizedInstant
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockHeader, BlockNumber, BlockStatus}
-import hydrozoa.multisig.ledger.event.{LedgerEventId, UserEvent}
+import hydrozoa.multisig.ledger.event.{RequestId}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
+import hydrozoa.multisig.server.{UserRequest, UserRequestWithId}
 import scalus.cardano.ledger.TransactionInput
 
 /** Block weaver actor.
@@ -62,7 +63,7 @@ object BlockWeaver:
 
     final case class Awaiting(
         blockBrief: BlockBrief.Next,
-        eventIdAwaited: LedgerEventId,
+        eventIdAwaited: RequestId,
         mempool: Mempool
     ) extends State
 
@@ -100,7 +101,7 @@ object BlockWeaver:
     }
 
     type Handle = ActorRef[IO, Request]
-    type Request = PreStart.type | UserEvent | BlockBrief.Next | BlockConfirmed | PollResults |
+    type Request = PreStart.type | UserRequestWithId[_] | BlockBrief.Next | BlockConfirmed | PollResults |
         FinalizationLocallyTriggered.type
 
     case object PreStart
@@ -119,14 +120,14 @@ object BlockWeaver:
       *   vector to store order of event ids
       */
     case class Mempool(
-        events: Map[LedgerEventId, UserEvent] = Map.empty,
-        receivingOrder: Vector[LedgerEventId] = Vector.empty
+                          events: Map[RequestId, UserRequest[_]] = Map.empty,
+                          receivingOrder: Vector[RequestId] = Vector.empty
     )
 
     object Mempool {
         val empty: Mempool = Mempool()
 
-        def apply(events: Seq[UserEvent]): Mempool =
+        def apply(events: Seq[UserRequest[_]]): Mempool =
             events.foldLeft(Mempool.empty)((mempool, event) => mempool.add(event))
 
         // Extension methods
@@ -134,30 +135,30 @@ object BlockWeaver:
 
             // Add event - returns new state
             /** Throws if a duplicate is detected.
-              * @param event
-              *   an event to add
+              * @param request
+              *   an request to add
               * @return
               *   an updated mempool
               */
             def add(
-                event: UserEvent
+                       request: UserRequest[_]
             ): Mempool = {
 
-                val eventId = event.eventId
+                val requestId = request.requestId
 
                 require(
-                  !mempool.events.contains(eventId),
-                  s"panic - duplicate event id in the pool: $eventId"
+                  !mempool.events.contains(requestId),
+                  s"panic - duplicate event id in the pool: $requestId"
                 )
 
                 mempool.copy(
-                  events = mempool.events + (eventId -> event),
-                  receivingOrder = mempool.receivingOrder :+ eventId
+                  events = mempool.events + (requestId -> request),
+                  receivingOrder = mempool.receivingOrder :+ requestId
                 )
             }
 
             // Remove event - returns new state
-            def remove(id: LedgerEventId): Mempool = {
+            def remove(id: RequestId): Mempool = {
                 require(
                   mempool.events.contains(id),
                   "panic - an attempt to remove a missing event from the mempool"
@@ -169,11 +170,11 @@ object BlockWeaver:
             }
 
             // Find by ID
-            def findById(id: LedgerEventId): Option[UserEvent] =
+            def findById(id: RequestId): Option[UserRequest[_]] =
                 mempool.events.get(id)
 
             // Iterate in insertion order
-            def inOrder: Iterator[UserEvent] =
+            def inOrder: Iterator[UserRequest[_]] =
                 mempool.receivingOrder.iterator.flatMap(mempool.events.get)
 
             def isEmpty: Boolean = mempool.events.isEmpty
@@ -237,7 +238,7 @@ trait BlockWeaver(
     private def receiveTotal(req: Request): IO[Unit] =
         req match {
             case BlockWeaver.PreStart         => preStartLocal
-            case msg: UserEvent               => handleLedgerEvent(msg)
+            case msg: UserRequestWithId[_]              => handleUserRequestWithId(msg)
             case b: BlockBrief.Next           => handleNewBlock(b)
             case bc: BlockConfirmed           => handleBlockConfirmed(bc)
             case pr: PollResults              => handlePollResults(pr)
@@ -254,11 +255,11 @@ trait BlockWeaver(
     // Mailbox message handlers
     // ===================================
 
-    private def handleLedgerEvent(event: UserEvent): IO[Unit] = {
+    private def handleUserRequestWithId(event: UserRequestWithId[_]): IO[Unit] = {
         import FeedResult.*
 
         for {
-            // _ <- IO.println("handleLedgerEvent")
+            // _ <- IO.println("handleUserRequestWithId")
             state <- stateRef.get
 
             _ <- state match {
@@ -287,7 +288,7 @@ trait BlockWeaver(
                     } yield ()
 
                 case awaiting @ Awaiting(block, eventIdAwaited, mempool) =>
-                    if event.eventId == eventIdAwaited
+                    if event.requestId == eventIdAwaited
                     then {
                         // We got the event we waited for, try to finish the block
                         for {
@@ -449,7 +450,7 @@ trait BlockWeaver(
 
     private enum FeedResult:
         case Done(mempool: Mempool)
-        case EventMissing(eventId: LedgerEventId, mempool: Mempool)
+        case EventMissing(eventId: RequestId, mempool: Mempool)
 
     /** Make an attempt to feed the whole block to the joint ledger
       * @param blockBrief
@@ -463,7 +464,7 @@ trait BlockWeaver(
     private def tryFeedBlock(
         blockBrief: BlockBrief.Next,
         initialMempool: Mempool,
-        startWith: Option[LedgerEventId] = None
+        startWith: Option[RequestId] = None
     ): IO[FeedResult] = {
         import FeedResult.*
 
@@ -508,11 +509,11 @@ trait BlockWeaver(
     }
 
     private def continueFeedBlock(
-        blockBrief: BlockBrief.Next,
-        event: UserEvent,
-        mempool: Mempool
+                                     blockBrief: BlockBrief.Next,
+                                     event: UserRequest,
+                                     mempool: Mempool
     ): IO[FeedResult] =
-        tryFeedBlock(blockBrief, mempool.add(event), Some(event.eventId))
+        tryFeedBlock(blockBrief, mempool.add(event), Some(event.requestId))
 
     // ===================================
     // Switch to Idle

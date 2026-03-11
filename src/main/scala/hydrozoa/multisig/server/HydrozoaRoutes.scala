@@ -3,7 +3,7 @@ package hydrozoa.multisig.server
 import cats.effect.{IO, Ref}
 import hydrozoa.multisig.consensus.EventSequencer
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.event.{LedgerEventId, LedgerEventNumber}
+import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.server.ApiResponse.{Error, RequestAccepted}
 import hydrozoa.multisig.server.JsonCodecs.given
 import hydrozoa.multisig.server.JsonCodecs.{DepositRequest, TransactionRequest}
@@ -29,12 +29,12 @@ class HydrozoaRoutes(
     implicit val depositRequestEntityDecoder: EntityDecoder[IO, DepositRequest] =
         jsonOf[IO, DepositRequest]
 
-    /** Generate next LedgerEventId for stub responses using incrementing counter */
-    private def nextLedgerEventId: IO[LedgerEventId] =
+    /** Generate next RequestId for stub responses using incrementing counter */
+    private def nextRequestId: IO[RequestId] =
         eventCounter.getAndUpdate(_ + 1).map { eventNum =>
-            LedgerEventId(
+            RequestId(
               peerNum = HeadPeerNumber.zero,
-              eventNum = LedgerEventNumber(eventNum)
+              requestNum = RequestNumber(eventNum)
             )
         }
 
@@ -46,11 +46,11 @@ class HydrozoaRoutes(
                 transactionRequest <- req.as[TransactionRequest]
 
                 // TODO: Process TransactionRequest
-                // Send synchronous request to EventSequencer and get back LedgerEventId
+                // Send synchronous request to EventSequencer and get back RequestId
                 // eventId <- eventSequencer ?: l2TxRequest
 
                 // For now, generate next event ID and return RequestAccepted
-                eventId <- nextLedgerEventId
+                eventId <- nextRequestId
                 response = RequestAccepted(requestId = eventId)
                 resp <- Ok(response.asJson)
             } yield resp
@@ -69,11 +69,11 @@ class HydrozoaRoutes(
                 depositRequest <- req.as[DepositRequest]
 
                 // TODO: Process DepositRequest
-                // Send synchronous request to EventSequencer and get back LedgerEventId
+                // Send synchronous request to EventSequencer and get back RequestId
                 // eventId <- eventSequencer ?: depositRequest
 
                 // For now, generate next event ID and return RequestAccepted
-                eventId <- nextLedgerEventId
+                eventId <- nextRequestId
                 response = RequestAccepted(requestId = eventId)
                 resp <- Ok(response.asJson)
             } yield resp

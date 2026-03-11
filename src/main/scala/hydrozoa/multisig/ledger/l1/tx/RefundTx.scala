@@ -7,7 +7,9 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toQuantizedI
 import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
 import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.explainConst
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
+import hydrozoa.multisig.ledger.l2.Destination
 import monocle.{Focus, Lens}
+
 import scala.util.{Failure, Success}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
@@ -29,7 +31,7 @@ sealed trait RefundTx {
 object RefundTx {
     export RefundTxOps.{Build, Parse}
 
-    final case class PostDated(override val tx: Transaction, startTime: QuantizedInstant)
+    final case class PostDated(override val tx: Transaction, startTime: QuantizedInstant, refundDestination: Destination)
         extends RefundTx,
           Tx[PostDated] {
         override val txLens: Lens[PostDated, Transaction] = Focus[PostDated](_.tx)
@@ -91,7 +93,8 @@ private object RefundTxOps {
                     tx = finalized.transaction
                 } yield RefundTx.PostDated(
                   tx,
-                  refundInstructions.validityStart
+                  refundInstructions.validityStart,
+                    (refundInstructions.address, refundInstructions.mbDatum)
                 )
         }
     }

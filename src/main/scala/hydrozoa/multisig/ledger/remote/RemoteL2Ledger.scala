@@ -7,7 +7,7 @@ import cats.syntax.all.*
 import fs2.Stream
 import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerError, L2LedgerEvent}
+import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerError, L2LedgerCommand}
 import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.{Request, Response}
 import io.circe.Decoder
 import io.circe.parser.*
@@ -92,21 +92,21 @@ class RemoteL2Ledger private (
     }
 
     override def sendDepositEventRegistration(
-        req: L2LedgerEvent.DepositEventRegistration
+        req: L2LedgerCommand.RegisterDepositRequest
     ): EitherT[IO, L2LedgerError, Unit] = {
         import RemoteL2LedgerCodecs.given
         sendRequest[Unit](Request.DepositRegistration(req))
     }
 
     override def sendDepositEventDecisions(
-        req: L2LedgerEvent.DepositEventDecisions
+        req: L2LedgerCommand.ApplyDepositDecisions
     ): EitherT[IO, L2LedgerError, Vector[EvacuationDiff]] = {
         import RemoteL2LedgerCodecs.given
         sendRequest[Vector[EvacuationDiff]](Request.DepositDecisions(req))
     }
 
     override def sendL2Event(
-        req: L2LedgerEvent.L2Event
+        req: L2LedgerCommand.ApplyTransactionRequest
     ): EitherT[IO, L2LedgerError, (Vector[EvacuationDiff], Vector[Payout.Obligation])] = {
         import RemoteL2LedgerCodecs.given
         sendRequest[(Vector[EvacuationDiff], Vector[Payout.Obligation])](Request.L2Event(req))
@@ -123,11 +123,11 @@ object RemoteL2Ledger {
     object Request {
         final case class Envelope(correlationId: String, request: Request)
 
-        final case class DepositRegistration(event: L2LedgerEvent.DepositEventRegistration)
+        final case class DepositRegistration(event: L2LedgerCommand.RegisterDepositRequest)
             extends Request
-        final case class DepositDecisions(event: L2LedgerEvent.DepositEventDecisions)
+        final case class DepositDecisions(event: L2LedgerCommand.ApplyDepositDecisions)
             extends Request
-        final case class L2Event(event: L2LedgerEvent.L2Event) extends Request
+        final case class L2Event(event: L2LedgerCommand.ApplyTransactionRequest) extends Request
     }
 
     /** Response types received from the remote L2 ledger */

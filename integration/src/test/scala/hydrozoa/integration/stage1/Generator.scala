@@ -20,8 +20,8 @@ import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.eutxol2.tx.GenesisObligation
-import hydrozoa.multisig.ledger.event.UserEvent.L2Event
-import hydrozoa.multisig.ledger.event.{LedgerEventId, UserEvent}
+import hydrozoa.multisig.ledger.event.UserRequest.L2Event
+import hydrozoa.multisig.ledger.event.{RequestId, UserRequest}
 import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import io.bullet.borer.Cbor
@@ -275,7 +275,7 @@ object CommandGen:
 
         } yield L2TxCommand(
           event = L2Event(
-            eventId = state.nextLedgerEventId,
+            requestId = state.nextRequestId,
             l2Payload = txSigned.toCbor
           ),
           txStrategy = txStrategy,
@@ -432,8 +432,8 @@ object CommandGen:
 
                                     } yield Some(
                                       RegisterDepositCommand(
-                                        registerDeposit = UserEvent.DepositEvent(
-                                          eventId = state.nextLedgerEventId,
+                                        registerDeposit = UserRequest.DepositEvent(
+                                          requestId = state.nextRequestId,
                                           depositTxBytes = depositRefundSeq.depositTx.tx.toCbor,
                                           refundTxBytes = depositRefundSeq.refundTx.tx.toCbor,
                                           l2Payload = GenesisObligation.serialize(l2Outputs),
@@ -457,7 +457,7 @@ object CommandGen:
     //   because when executing we don't have access to the time
 
     def genSubmitDepositsCommand(
-        depositForSubmission: List[(LedgerEventId, QuantizedInstant)],
+        depositForSubmission: List[(RequestId, QuantizedInstant)],
         state: Model.State
     ): Gen[SubmitDepositsCommand] = {
         // Prefix is easier to think about, though we can pick up arbitrary elements
@@ -471,7 +471,7 @@ object CommandGen:
 
                 // Find the deposit command to get the signed transaction
                 val depositCmd = state.depositEnqueued
-                    .find(_.registerDeposit.eventId == eventId)
+                    .find(_.registerDeposit.requestId == eventId)
                     .getOrElse {
                         throw RuntimeException(
                           s"Deposit with event ID $eventId not found in enqueued"

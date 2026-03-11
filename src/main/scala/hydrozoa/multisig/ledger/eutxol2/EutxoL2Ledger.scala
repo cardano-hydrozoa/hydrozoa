@@ -7,11 +7,11 @@ import cats.syntax.all.*
 import hydrozoa.config.head.initialization.InitializationParameters
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.ledger.eutxol2.tx.{L2Genesis, L2Tx}
-import hydrozoa.multisig.ledger.event.LedgerEventId
+import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationKey}
 import hydrozoa.multisig.ledger.l2.*
-import hydrozoa.multisig.ledger.l2.L2LedgerEvent.DepositEventRegistration
+import hydrozoa.multisig.ledger.l2.L2LedgerCommand.RegisterDepositRequest
 import io.bullet.borer.Cbor
 import monocle.syntax.all.*
 import scala.util.Try
@@ -26,7 +26,7 @@ extension (ti: TransactionInput) {
 object EutxoL2Ledger {
     type Config = CardanoNetwork.Section & InitializationParameters.Section
 
-    case class State(activeUtxos: Utxos, pendingDeposits: Map[LedgerEventId, L2Genesis])
+    case class State(activeUtxos: Utxos, pendingDeposits: Map[RequestId, L2Genesis])
 
     // As above: technically partial, but used in the context of the EutxoL2Ledger, it's not.
     private def toTransactionInput(ek: EvacuationKey): TransactionInput =
@@ -56,7 +56,7 @@ case class EutxoL2Ledger private (
     implicit def monadF: Monad[IO] = Async[IO]
 
     override def sendL2Event(
-        req: L2LedgerEvent.L2Event
+        req: L2LedgerCommand.ApplyTransactionRequest
     ): EitherT[IO, L2LedgerError, (Vector[EvacuationDiff], Vector[Payout.Obligation])] = {
         for {
             s <- EitherT.right(state.get)
@@ -102,7 +102,7 @@ case class EutxoL2Ledger private (
     }
 
     override def sendDepositEventRegistration(
-        req: DepositEventRegistration
+        req: RegisterDepositRequest
     ): EitherT[IO, L2LedgerError, Unit] =
         for {
             s <- EitherT.right(state.get)
@@ -113,12 +113,12 @@ case class EutxoL2Ledger private (
                 )
             newState = s
                 .focus(_.pendingDeposits)
-                .modify(pending => pending.updated(req.eventId, l2Genesis))
+                .modify(pending => pending.updated(req.requestId, l2Genesis))
             _ <- EitherT.right(state.set(newState))
         } yield ()
 
     override def sendDepositEventDecisions(
-        req: L2LedgerEvent.DepositEventDecisions
+        req: L2LedgerCommand.ApplyDepositDecisions
     ): EitherT[IO, L2LedgerError, Vector[EvacuationDiff]] =
         for {
             s <- EitherT.right(state.get)

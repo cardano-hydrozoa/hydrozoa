@@ -3,7 +3,7 @@ package hydrozoa.multisig.server
 import hydrozoa.lib.cardano.cip116
 import hydrozoa.multisig.consensus.EventSequencer.{DepositRequest as EventSeqDepositRequest, L2TxRequest}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.event.{LedgerEventId, LedgerEventNumber}
+import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.server.ApiResponse.{Error, RequestAccepted}
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
@@ -182,11 +182,11 @@ object JsonCodecs {
     type TransactionRequest = apiRequest.TransactionRequest
 
     // LedgerEventNumber codec
-    given ledgerEventNumberEncoder: Encoder[LedgerEventNumber] =
+    given ledgerEventNumberEncoder: Encoder[RequestNumber] =
         Encoder.encodeInt.contramap(_.convert)
 
-    given ledgerEventNumberDecoder: Decoder[LedgerEventNumber] =
-        Decoder.decodeInt.map(LedgerEventNumber.apply)
+    given requestNumberDecoder: Decoder[RequestNumber] =
+        Decoder.decodeInt.map(RequestNumber.apply)
 
     // HeadPeerNumber codec
     given headPeerNumberEncoder: Encoder[HeadPeerNumber] =
@@ -195,18 +195,18 @@ object JsonCodecs {
     given headPeerNumberDecoder: Decoder[HeadPeerNumber] =
         Decoder.decodeInt.map(HeadPeerNumber.apply)
 
-    // LedgerEventId codec
-    given ledgerEventIdEncoder: Encoder[LedgerEventId] = (eventId: LedgerEventId) =>
+    // RequestId codec
+    given ledgerEventIdEncoder: Encoder[RequestId] = (eventId: RequestId) =>
         io.circe.Json.obj(
           "peerNum" -> eventId.peerNum.asJson,
-          "requestNum" -> eventId.eventNum.asJson
+          "requestNum" -> eventId.requestNum.asJson
         )
 
-    given ledgerEventIdDecoder: Decoder[LedgerEventId] = c =>
+    given ledgerEventIdDecoder: Decoder[RequestId] = c =>
         for {
             peerNum <- c.downField("peerNum").as[HeadPeerNumber]
-            requestNum <- c.downField("requestNum").as[LedgerEventNumber]
-        } yield LedgerEventId(peerNum, requestNum)
+            requestNum <- c.downField("requestNum").as[RequestNumber]
+        } yield RequestId(peerNum, requestNum)
 
     // EventSequencer request types (old)
     given l2TxRequestDecoder: Decoder[L2TxRequest] = deriveDecoder[L2TxRequest]

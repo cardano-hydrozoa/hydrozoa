@@ -2,10 +2,10 @@ package hydrozoa.multisig.ledger.remote
 
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.block.BlockNumber
-import hydrozoa.multisig.ledger.event.LedgerEventId
+import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import hydrozoa.multisig.ledger.l2.L2LedgerEvent
+import hydrozoa.multisig.ledger.l2.L2LedgerCommand
 import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.{Request, Response}
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
@@ -37,17 +37,17 @@ object RemoteL2LedgerCodecs {
         Decoder.decodeInt.map(BlockNumber.apply)
 
     // L2LedgerEvent codecs
-    implicit val l2EventEncoder: Encoder[L2LedgerEvent.L2Event] = deriveEncoder
-    implicit val l2EventDecoder: Decoder[L2LedgerEvent.L2Event] = deriveDecoder
+    implicit val l2EventEncoder: Encoder[L2LedgerCommand.ApplyTransactionRequest] = deriveEncoder
+    implicit val l2EventDecoder: Decoder[L2LedgerCommand.ApplyTransactionRequest] = deriveDecoder
 
-    implicit val depositRegistrationEncoder: Encoder[L2LedgerEvent.DepositEventRegistration] =
+    implicit val depositRegistrationEncoder: Encoder[L2LedgerCommand.RegisterDepositRequest] =
         deriveEncoder
-    implicit val depositRegistrationDecoder: Decoder[L2LedgerEvent.DepositEventRegistration] =
+    implicit val depositRegistrationDecoder: Decoder[L2LedgerCommand.RegisterDepositRequest] =
         deriveDecoder
 
-    implicit val depositDecisionsEncoder: Encoder[L2LedgerEvent.DepositEventDecisions] =
+    implicit val depositDecisionsEncoder: Encoder[L2LedgerCommand.ApplyDepositDecisions] =
         deriveEncoder
-    implicit val depositDecisionsDecoder: Decoder[L2LedgerEvent.DepositEventDecisions] =
+    implicit val depositDecisionsDecoder: Decoder[L2LedgerCommand.ApplyDepositDecisions] =
         deriveDecoder
 
     // Request codecs
@@ -73,14 +73,14 @@ object RemoteL2LedgerCodecs {
         c.downField("type").as[String].flatMap {
             case "DepositRegistration" =>
                 c.downField("event")
-                    .as[L2LedgerEvent.DepositEventRegistration]
+                    .as[L2LedgerCommand.RegisterDepositRequest]
                     .map(Request.DepositRegistration.apply)
             case "DepositDecisions" =>
                 c.downField("event")
-                    .as[L2LedgerEvent.DepositEventDecisions]
+                    .as[L2LedgerCommand.ApplyDepositDecisions]
                     .map(Request.DepositDecisions.apply)
             case "L2Event" =>
-                c.downField("event").as[L2LedgerEvent.L2Event].map(Request.L2Event.apply)
+                c.downField("event").as[L2LedgerCommand.ApplyTransactionRequest].map(Request.L2Event.apply)
             case other =>
                 Left(io.circe.DecodingFailure(s"Unknown request type: $other", c.history))
         }
