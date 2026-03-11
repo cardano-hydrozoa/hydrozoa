@@ -32,6 +32,12 @@ private object InitializationTxSeqOps {
         enum Error extends Throwable {
             case InitializationTxError(e: (SomeBuildErrorOnly, String))
             case FallbackTxError(e: SomeBuildError)
+
+            override def toString: String = this match {
+                case Error.InitializationTxError(e) => s"${e._2}: ${e._1.toString}"
+                case Error.FallbackTxError(e)       => s"${e.toString}"
+            }
+
         }
     }
 
