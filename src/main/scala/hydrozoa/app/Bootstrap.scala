@@ -87,7 +87,7 @@ object Bootstrap:
         minEquity: Coin,
     ): IO[NodeConfig] = for {
         _ <- IO.pure(())
-        // headConfig = ???
+
         ownHeadWallet = HeadPeerWallet.scalusWallet(HeadPeerNumber.zero, vKey, sKey)
         startTime <- IO.realTimeInstant.map(instant => instant.quantize(cardanoNetwork.slotConfig))
 

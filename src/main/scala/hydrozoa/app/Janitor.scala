@@ -71,18 +71,26 @@ object Janitor:
                 //    o.scriptRef.contains(ScriptRef(config.headMultisigScript._1))
                 // )
 
+                (withRefScript, withoutRefScript) = headUtxos.partition((_, o) =>
+                    o.scriptRef.isDefined
+                )
+
                 unbalanced = TransactionBuilder
                     .build(
                       config.cardanoNetwork.cardanoInfo.network,
-                      headUtxos.map { case (utxoId, output) =>
+                      // Utxos with ref should come first
+                      withRefScript.map { case (utxoId, output) =>
                           Spend(
                             utxo = Utxo(utxoId, output),
-                            witness =
-                                if hasMultisigRefScript then
-                                    config.headMultisigScript.witnessAttached
-                                else config.headMultisigScript.witnessValue
+                            witness = config.headMultisigScript.witnessAttached
                           )
                       }.toList ++
+                          withoutRefScript.map { case (utxoId, output) =>
+                              Spend(
+                                utxo = Utxo(utxoId, output),
+                                witness = config.headMultisigScript.witnessAttached
+                              )
+                          }.toList ++
                           (headTokens
                               .map((assetName, amount) =>
                                   Mint(

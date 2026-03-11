@@ -27,6 +27,9 @@ trait MultisigRegimeManager(
 
     private val logger = Logging.loggerIO("hydrozoa.multisig.MultisigRegimeManager")
 
+    /** Deferred that will be completed with connections once actors are started */
+    val connectionsDeferred: Deferred[IO, Connections] = Deferred.unsafe[IO, Connections]
+
     override def supervisorStrategy: SupervisionStrategy[IO] =
         OneForOneStrategy[IO](maxNrOfRetries = 3, withinTimeRange = 1.minute) {
             case _: IllegalArgumentException =>
@@ -100,18 +103,19 @@ trait MultisigRegimeManager(
                         } yield localPeerLiaison
                     )
 
-            _ <- pendingConnections.complete(
-              MultisigRegimeManager.Connections(
-                blockWeaver = blockWeaver,
-                cardanoLiaison = cardanoLiaison,
-                consensusActor = consensusActor,
-                eventSequencer = eventSequencer,
-                jointLedger = jointLedger,
-                peerLiaisons = localPeerLiaisons,
-                remotePeerLiaisons = Map.empty,
-                tracer = tracer,
-              )
+            connections = MultisigRegimeManager.Connections(
+              blockWeaver = blockWeaver,
+              cardanoLiaison = cardanoLiaison,
+              consensusActor = consensusActor,
+              eventSequencer = eventSequencer,
+              jointLedger = jointLedger,
+              peerLiaisons = localPeerLiaisons,
+              remotePeerLiaisons = Map.empty,
+              tracer = tracer,
             )
+
+            _ <- pendingConnections.complete(connections)
+            _ <- connectionsDeferred.complete(connections)
 
             _ <- logger.info("Watching multisig actors...")
 
