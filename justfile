@@ -31,6 +31,14 @@ test:
   - sbt test
   just notify "test"
 
+keygen:
+  - sbt "runMain hydrozoa.app.GenerateKeyPair"
+  just notify "keygen"
+
+migrate ADDRESS:
+  - sbt "runMain hydrozoa.app.Migrate {{ADDRESS}}"
+  just notify "migrate"
+
 integration-fast:
   - sbt "integration/testOnly * -- -s 10"
   just notify "integration-fast"

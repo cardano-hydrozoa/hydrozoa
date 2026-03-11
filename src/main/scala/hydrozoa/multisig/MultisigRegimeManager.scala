@@ -27,6 +27,9 @@ trait MultisigRegimeManager(
 
     private val logger = Logging.loggerIO("hydrozoa.multisig.MultisigRegimeManager")
 
+    /** Deferred that will be completed with connections once actors are started */
+    val connectionsDeferred: Deferred[IO, Connections] = Deferred.unsafe[IO, Connections]
+
     override def supervisorStrategy: SupervisionStrategy[IO] =
         OneForOneStrategy[IO](maxNrOfRetries = 3, withinTimeRange = 1.minute) {
             case _: IllegalArgumentException =>
@@ -36,66 +39,13 @@ trait MultisigRegimeManager(
             case _: Exception => Escalate
         }
 
-    override def preStart: IO[Unit] =
-        for {
-            pendingConnections <- Deferred[IO, MultisigRegimeManager.Connections]
-
-            nodeId = s"head:${config.ownHeadPeerNum: Int}"
-            tracer <- ProtocolTracer.jsonLines(nodeId)
-
-            blockWeaver <- context.actorOf(BlockWeaver(config, pendingConnections))
-
-            cardanoLiaison <-
-                context.actorOf(CardanoLiaison(config, cardanoBackend, pendingConnections))
-
-            consensusActor <- context.actorOf(ConsensusActor(config, pendingConnections))
-
-            eventSequencer <- context.actorOf(EventSequencer(config, pendingConnections))
-
-            jointLedger <- context.actorOf(
-              JointLedger(config, pendingConnections, l2Ledger, tracer)
-            )
-
-            localPeerLiaisons <-
-                config.headPeerIds
-                    .filterNot(_ == config.ownHeadPeerId)
-                    .traverse(pid =>
-                        for {
-                            localPeerLiaison <-
-                                context.actorOf(PeerLiaison(config, pid, pendingConnections))
-                        } yield localPeerLiaison
-                    )
-
-            _ <- pendingConnections.complete(
-              MultisigRegimeManager.Connections(
-                blockWeaver = blockWeaver,
-                cardanoLiaison = cardanoLiaison,
-                consensusActor = consensusActor,
-                eventSequencer = eventSequencer,
-                jointLedger = jointLedger,
-                peerLiaisons = localPeerLiaisons,
-                // FIXME:
-                remotePeerLiaisons = ???,
-                tracer = tracer,
-              )
-            )
-
-            _ <- context.watch(blockWeaver, TerminatedChild(Actors.BlockWeaver, blockWeaver))
-            _ <- localPeerLiaisons.traverse(r =>
-                context.watch(r, TerminatedChild(Actors.PeerLiaison, r))
-            )
-            _ <- context.watch(
-              cardanoLiaison,
-              TerminatedChild(Actors.CardanoLiaison, cardanoLiaison)
-            )
-            _ <- context.watch(
-              eventSequencer,
-              TerminatedChild(Actors.EventSequencer, eventSequencer)
-            )
-        } yield ()
+    override def preStart: IO[Unit] = {
+        context.self ! PreStart
+    }
 
     override def receive: Receive[IO, Request] =
         PartialFunction.fromFunction {
+            case PreStart => preStartLocal
             case TerminatedChild(childType, _) =>
                 childType match {
                     case Actors.BlockWeaver =>
@@ -121,6 +71,67 @@ trait MultisigRegimeManager(
             // TODO: Implement a way to receive a remote comm actor and connect it to its corresponding local comm actor
         }
 
+    def preStartLocal: IO[Unit] =
+        for {
+            pendingConnections <- Deferred[IO, MultisigRegimeManager.Connections]
+
+            nodeId = s"head:${config.ownHeadPeerNum: Int}"
+            tracer <- ProtocolTracer.jsonLines(nodeId)
+
+            _ <- logger.info("Starting multisig actors...")
+
+            blockWeaver <- context.actorOf(BlockWeaver(config, pendingConnections))
+
+            cardanoLiaison <-
+                context.actorOf(CardanoLiaison(config, cardanoBackend, pendingConnections))
+
+            consensusActor <- context.actorOf(ConsensusActor(config, pendingConnections))
+
+            eventSequencer <- context.actorOf(EventSequencer(config, pendingConnections))
+
+            jointLedger <- context.actorOf(
+              JointLedger(config, pendingConnections, l2Ledger, tracer)
+            )
+
+            localPeerLiaisons <-
+                config.headPeerIds
+                    .filterNot(_ == config.ownHeadPeerId)
+                    .traverse(pid =>
+                        for {
+                            localPeerLiaison <-
+                                context.actorOf(PeerLiaison(config, pid, pendingConnections))
+                        } yield localPeerLiaison
+                    )
+
+            connections = MultisigRegimeManager.Connections(
+              blockWeaver = blockWeaver,
+              cardanoLiaison = cardanoLiaison,
+              consensusActor = consensusActor,
+              eventSequencer = eventSequencer,
+              jointLedger = jointLedger,
+              peerLiaisons = localPeerLiaisons,
+              remotePeerLiaisons = Map.empty,
+              tracer = tracer,
+            )
+
+            _ <- pendingConnections.complete(connections)
+            _ <- connectionsDeferred.complete(connections)
+
+            _ <- logger.info("Watching multisig actors...")
+
+            _ <- context.watch(blockWeaver, TerminatedChild(Actors.BlockWeaver, blockWeaver))
+            _ <- localPeerLiaisons.traverse(r =>
+                context.watch(r, TerminatedChild(Actors.PeerLiaison, r))
+            )
+            _ <- context.watch(
+              cardanoLiaison,
+              TerminatedChild(Actors.CardanoLiaison, cardanoLiaison)
+            )
+            _ <- context.watch(
+              eventSequencer,
+              TerminatedChild(Actors.EventSequencer, eventSequencer)
+            )
+        } yield ()
 }
 
 /** Multisig regime manager starts-up and monitors all the actors of the multisig regime.
@@ -153,14 +164,19 @@ object MultisigRegimeManager {
         case BlockWeaver, CardanoLiaison, Consensus, JointLedger, PeerLiaison, EventSequencer
 
     /** Requests received by the multisig regime manager. */
-    type Request = TerminatedChild | TerminatedDependency
+    type Request = PreStart.type | TerminatedChild | TerminatedDependency
 
     type Children = Actors
 
     enum Dependencies:
         case CardanoBackend, Persistence
 
-    /** ==Multisig regime manager's messages== */
+    // ===================================
+    // Multisig regime manager's messages
+    // ===================================
+
+    case object PreStart
+
     final case class TerminatedChild(childType: Actors, ref: NoSendActorRef[IO])
 
     final case class TerminatedDependency(dependencyType: Dependencies, ref: NoSendActorRef[IO])

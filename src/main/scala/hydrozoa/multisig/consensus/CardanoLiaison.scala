@@ -208,8 +208,10 @@ object CardanoLiaison:
 
     }
 
-    type Request = BlockConfirmed.Major | BlockConfirmed.Final | Timeout.type
+    type Request = PreStart.type | BlockConfirmed.Major | BlockConfirmed.Final | Timeout.type
     type Handle = ActorRef[IO, Request]
+
+    case object PreStart
 
 end CardanoLiaison
 
@@ -248,7 +250,21 @@ trait CardanoLiaison(
         case x: CardanoLiaison.Connections => connections.set(Some(x))
     }
 
-    override def preStart: IO[Unit] =
+    override def preStart: IO[Unit] = context.self ! CardanoLiaison.PreStart
+
+    override def receive: Receive[IO, Request] = {
+        case CardanoLiaison.PreStart =>
+            preStartLocal
+        case block: BlockConfirmed.Major =>
+            handleMajorBlockL1Effects(block) >> runEffects
+        case block: BlockConfirmed.Final =>
+            handleFinalBlockL1Effects(block) >> runEffects
+        case CardanoLiaison.Timeout =>
+            loggerIO.info("Timeout received, run effects...") >>
+                runEffects
+    }
+
+    private def preStartLocal: IO[Unit] =
         for {
             _ <- initializeConnections
             // Immediate + periodic Timeout
@@ -258,16 +274,6 @@ trait CardanoLiaison(
               CardanoLiaison.Timeout
             )
         } yield ()
-
-    override def receive: Receive[IO, Request] = {
-        case block: BlockConfirmed.Major =>
-            handleMajorBlockL1Effects(block) >> runEffects
-        case block: BlockConfirmed.Final =>
-            handleFinalBlockL1Effects(block) >> runEffects
-        case CardanoLiaison.Timeout =>
-            loggerIO.info("Timeout received, run effects...") >>
-                runEffects
-    }
 
     // ===================================
     // Inbox handlers

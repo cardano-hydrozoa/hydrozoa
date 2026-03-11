@@ -11,6 +11,7 @@ import com.bloxbean.cardano.client.backend.blockfrost.service.BFBackendService
 import com.bloxbean.cardano.client.backend.model.{AssetTransactionContent, ScriptDatumCbor, TxContentRedeemers, TxContentUtxo}
 import com.bloxbean.cardano.client.plutus.spec.RedeemerTag
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
+import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.backend.cardano.CardanoBackend.Error
 import hydrozoa.multisig.backend.cardano.CardanoBackend.Error.*
 import io.bullet.borer.Cbor
@@ -18,6 +19,7 @@ import scala.collection.mutable
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.Future
 import scala.jdk.CollectionConverters.*
+import scala.util.Try
 import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger.*
 import scalus.cardano.node.BlockfrostProvider
@@ -41,11 +43,16 @@ class CardanoBackendBlockfrost private (
     private val blockfrostProviderFuture: Future[BlockfrostProvider],
 ) extends CardanoBackend[IO] {
 
+    private val logger = Logging.logger(getClass)
+
     override def utxosAt(address: ShelleyAddress): IO[Either[CardanoBackend.Error, Utxos]] =
         paginate(page =>
             backendService.getUtxoService
                 .getUtxos(address.toBech32.get, pageSize, page, OrderEnum.asc)
-        ).map(ret => ret.map(utxos => utxos.map(convert).toMap))
+        ).flatMap {
+            case Left(error)  => IO.pure(Left(error))
+            case Right(utxos) => convertUtxosWithScripts(utxos)
+        }
 
     override def utxosAt(
         address: ShelleyAddress,
@@ -55,7 +62,43 @@ class CardanoBackendBlockfrost private (
         paginate(page =>
             backendService.getUtxoService
                 .getUtxos(address.toBech32.get, unit, pageSize, page, OrderEnum.asc)
-        ).map(ret => ret.map(utxos => utxos.map(convert).toMap))
+        ).flatMap {
+            case Left(error)  => IO.pure(Left(error))
+            case Right(utxos) => convertUtxosWithScripts(utxos)
+        }
+    }
+
+    /** Converts UTXOs with script fetching. Fetches reference scripts if needed before converting.
+      */
+    private def convertUtxosWithScripts(
+        utxos: List[Utxo]
+    ): IO[Either[CardanoBackend.Error, Utxos]] = {
+        utxos
+            .traverse { utxo =>
+                val scriptRefEither
+                    : IO[Either[CardanoBackend.Error, Option[scalus.cardano.ledger.ScriptRef]]] =
+                    Option(utxo.getReferenceScriptHash) match {
+                        case None => IO.pure(Right(None))
+                        case Some(scriptHash) =>
+                            IO.delay(fetchScript(scriptHash)).map {
+                                case Left(error) =>
+                                    logger.warn(
+                                      s"Failed to fetch reference script for UTXO ${utxo.getTxHash}:${utxo.getOutputIndex}: $error"
+                                    )
+                                    Left(error)
+                                case Right(script) =>
+                                    Right(Some(scalus.cardano.ledger.ScriptRef(script)))
+                            }
+                    }
+
+                scriptRefEither.map {
+                    case Left(error)      => Left(error)
+                    case Right(scriptRef) => Right(convert(utxo, scriptRef))
+                }
+            }
+            .map { results =>
+                results.sequence.map(_.toMap)
+            }
     }
 
     private def paginate[A](
@@ -96,7 +139,143 @@ class CardanoBackendBlockfrost private (
                 }"))
         )
 
-    private def convert(utxo: Utxo): (TransactionInput, TransactionOutput) = {
+    /** Fetches a script by its hash from Blockfrost, trying both native and Plutus scripts. Returns
+      * the script as a Scalus Script type (Native or PlutusV3).
+      *
+      * Uses lazy evaluation to try native script first, then Plutus if native fails.
+      */
+    private def fetchScript(
+        scriptHash: String
+    ): Either[CardanoBackend.Error, scalus.cardano.ledger.Script] = {
+
+        lazy val nativeResult: Either[String, scalus.cardano.ledger.Script] =
+            Try(backendService.getScriptService.getNativeScript(scriptHash)).toEither.left
+                .map { ex =>
+                    val msg = s"Exception fetching native script $scriptHash: ${ex.getMessage}"
+                    logger.debug(msg)
+                    msg
+                }
+                .flatMap { res =>
+                    if res.isSuccessful then {
+                        val bloxbeanNative = res.getValue
+                        convertNativeScript(bloxbeanNative) match {
+                            case Some(script) =>
+                                logger.debug(s"Successfully converted native script $scriptHash")
+                                Right(script)
+                            case None =>
+                                val msg =
+                                    s"Failed to convert native script $scriptHash: conversion returned None"
+                                logger.debug(msg)
+                                Left(msg)
+                        }
+                    } else {
+                        val msg = s"Failed to fetch native script $scriptHash: ${res.getResponse}"
+                        logger.debug(msg)
+                        Left(msg)
+                    }
+                }
+
+        lazy val plutusResult: Either[String, scalus.cardano.ledger.Script] =
+            Try(backendService.getScriptService.getPlutusScript(scriptHash)).toEither.left
+                .map { ex =>
+                    val msg = s"Exception fetching Plutus script $scriptHash: ${ex.getMessage}"
+                    logger.debug(msg)
+                    msg
+                }
+                .flatMap { res =>
+                    if res.isSuccessful then {
+                        val bloxbeanPlutus = res.getValue
+                        convertPlutusScript(bloxbeanPlutus) match {
+                            case Some(script) =>
+                                logger.debug(s"Successfully converted Plutus script $scriptHash")
+                                Right(script)
+                            case None =>
+                                val msg =
+                                    s"Failed to convert Plutus script $scriptHash: conversion returned None"
+                                logger.debug(msg)
+                                Left(msg)
+                        }
+                    } else {
+                        val msg = s"Failed to fetch Plutus script $scriptHash: ${res.getResponse}"
+                        logger.debug(msg)
+                        Left(msg)
+                    }
+                }
+
+        // Alternative-like behavior: try native first, fallback to Plutus if it fails
+        nativeResult.orElse(plutusResult).left.map { errorMsg =>
+            logger.warn(s"Failed to fetch script $scriptHash as both native and Plutus: $errorMsg")
+            Unexpected(s"Failed to fetch script with hash $scriptHash: $errorMsg")
+        }
+    }
+
+    /** Converts a BloxBean NativeScript to a Scalus Script.Native.
+      *
+      * @return
+      *   Some(script) if conversion succeeds, None if it fails
+      */
+    private def convertNativeScript(
+        native: com.bloxbean.cardano.client.transaction.spec.script.NativeScript
+    ): Option[scalus.cardano.ledger.Script.Native] = {
+        scala.util.Try {
+            val scriptBytes = native.serializeScriptBody()
+            // Parse the native script CBOR to get the Timelock
+            import io.bullet.borer.Cbor
+            import scalus.cardano.ledger.Timelock
+            val timelock = Cbor.decode(scriptBytes).to[Timelock].value
+            scalus.cardano.ledger.Script.Native(timelock)
+        }.toEither match {
+            case Right(script) => Some(script)
+            case Left(ex) =>
+                logger.debug(s"Failed to convert native script: ${ex.getMessage}", ex)
+                None
+        }
+    }
+
+    /** Converts a BloxBean PlutusScript to a Scalus Script (PlutusV1, PlutusV2, or PlutusV3).
+      *
+      * @return
+      *   Some(script) if conversion succeeds, None if it fails or version is unsupported
+      */
+    private def convertPlutusScript(
+        plutus: com.bloxbean.cardano.client.plutus.spec.PlutusScript
+    ): Option[scalus.cardano.ledger.Script] = {
+        import com.bloxbean.cardano.client.plutus.spec.Language
+
+        scala.util.Try {
+            val scriptBytes = ByteString.fromArray(plutus.serializeScriptBody())
+            plutus.getLanguage match {
+                case Language.PLUTUS_V1 =>
+                    logger.debug("Converting PlutusV1 script")
+                    scalus.cardano.ledger.Script.PlutusV1(scriptBytes)
+                case Language.PLUTUS_V2 =>
+                    logger.debug("Converting PlutusV2 script")
+                    scalus.cardano.ledger.Script.PlutusV2(scriptBytes)
+                case Language.PLUTUS_V3 =>
+                    logger.debug("Converting PlutusV3 script")
+                    scalus.cardano.ledger.Script.PlutusV3(scriptBytes)
+            }
+        }.toEither match {
+            case Right(script) => Some(script)
+            case Left(ex) =>
+                logger.debug(s"Failed to convert Plutus script: ${ex.getMessage}", ex)
+                None
+        }
+    }
+
+    /** Pure function to convert a BloxBean UTXO to Scalus types.
+      *
+      * @param utxo
+      *   The BloxBean UTXO
+      * @param scriptRef
+      *   Optional reference script (already fetched)
+      * @return
+      *   A pair of TransactionInput and TransactionOutput
+      */
+    private def convert(
+        utxo: Utxo,
+        scriptRef: Option[scalus.cardano.ledger.ScriptRef]
+    ): (TransactionInput, TransactionOutput) = {
         import scalus.cardano.ledger.{Blake2b_256, Coin, DatumOption, Hash, HashPurpose, MultiAsset, TransactionInput, TransactionOutput, Value}
         import scalus.uplc.builtin.ByteString
 
@@ -155,11 +334,6 @@ class CardanoBackendBlockfrost private (
                     }.toOption
                 }
             }
-
-        // Script reference: Blockfrost only provides the hash, not the full script
-        // We cannot reconstruct the full ScriptRef from just the hash
-        // This would require a separate API call to fetch the script content
-        val scriptRef = None // TODO: Fetch script from reference_script_hash if needed
 
         val output =
             TransactionOutput.Babbage(

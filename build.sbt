@@ -1,3 +1,39 @@
+enablePlugins(
+    JavaAppPackaging,
+    DockerPlugin
+)
+
+Compile / mainClass := Some("hydrozoa.app.Main")
+
+// Docker settings
+Docker / packageName := "cardano-hydrozoa/hydrozoa"
+Docker / version := version.value
+Docker / daemonUser := "hydrozoa"
+Docker / daemonGroup := "hydrozoa"
+dockerBaseImage := "eclipse-temurin:21-jre-jammy"  // Use Debian-based image for better compatibility
+dockerExposedPorts ++= Seq(8080)
+
+// Skip documentation generation for Docker
+Compile / packageDoc / mappings := Seq()
+Compile / doc / sources := Seq()
+
+Docker / dockerLabels := Map(
+  "org.opencontainers.image.title" -> "Hydrozoa",
+  "org.opencontainers.image.description" -> "Cardano Hydrozoa L2 State Channel",
+  "org.opencontainers.image.version" -> version.value
+)
+
+Docker / dockerEnvVars := Map(
+  "JAVA_OPTS" -> "-Xmx2g -Xms512m"
+)
+
+// Ensure proper signal handling for graceful shutdown
+import com.typesafe.sbt.packager.docker._
+dockerCommands := dockerCommands.value.flatMap {
+  case cmd @ Cmd("FROM", _) => List(cmd, Cmd("STOPSIGNAL", "SIGTERM"))
+  case other => List(other)
+}
+
 val scalusVersion = "0.15.1"
 val bloxbeanVersion = "0.7.1"
 val http4sVersion = "0.23.32"
@@ -41,7 +77,7 @@ lazy val core: Project = (project in file("."))
         "io.circe" %% "circe-parser" % "0.14.10",
         // scodec for hex encoding
         "org.scodec" %% "scodec-bits" % "1.2.1",
-        // "io.netty" % "netty-all" % "4.2.4.Final"
+        "io.github.cdimascio" % "dotenv-java" % "3.0.0"
       ),
       libraryDependencies ++= Seq(
         "org.typelevel" %% "spire-laws" % "0.18.0" % Test,
@@ -51,8 +87,7 @@ lazy val core: Project = (project in file("."))
         "org.typelevel" %% "cats-effect-testkit" % "3.6.3" % Test,
         "org.scalus" % "scalus-testkit_3" % scalusVersion % Test,
         "dev.optics" %% "monocle-core" % "3.3.0" % Test,
-        "dev.optics" %% "monocle-macro" % "3.3.0" % Test,
-        "io.github.cdimascio" % "dotenv-java" % "3.0.0" % Test
+        "dev.optics" %% "monocle-macro" % "3.3.0" % Test
       )
     )
 

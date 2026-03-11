@@ -57,13 +57,19 @@ trait EventSequencer(
         case x: EventSequencer.Connections => connections.set(Some(x))
     }
 
-    override def preStart: IO[Unit] = initializeConnections
+    override def preStart: IO[Unit] = context.self ! EventSequencer.PreStart
 
     override def receive: Receive[IO, Request] =
-        PartialFunction.fromFunction(req => getConnections.flatMap(receiveTotal(req, _)))
+        PartialFunction.fromFunction {
+            case EventSequencer.PreStart => preStartLocal
+            case req                     => getConnections.flatMap(receiveTotal(req, _))
+        }
 
     private def receiveTotal(req: Request, conn: Connections): IO[Unit] =
         req match {
+            case EventSequencer.PreStart =>
+                // Should never reach here since PreStart is handled in receive
+                IO.raiseError(new IllegalStateException("PreStart handled in receive"))
             case req: SyncRequest.Any =>
                 req.request match {
                     case r: L2TxRequest =>
@@ -102,6 +108,8 @@ trait EventSequencer(
                         )
                 }
         }
+
+    private def preStartLocal: IO[Unit] = initializeConnections
 
     private final class State {
         private val nLedgerEvent = Ref.unsafe[IO, LedgerEventNumber](LedgerEventNumber(0))
@@ -167,9 +175,11 @@ object EventSequencer {
       */
     final case class DepositRequest(
         depositTxBytes: Array[Byte],
+        // TODO: remove
         refundTxBytes: Array[Byte],
         l2Payload: Array[Byte],
         depositFee: Coin,
+        // TODO: remove
         l2Value: Value
     ) extends SyncRequest[IO, DepositRequest, LedgerEventId] {
         export DepositRequest.Sync
@@ -180,5 +190,7 @@ object EventSequencer {
         type Sync = SyncRequest.Envelope[IO, DepositRequest, LedgerEventId]
     }
 
-    type Request = L2TxRequest.Sync | DepositRequest.Sync
+    case object PreStart
+
+    type Request = PreStart.type | L2TxRequest.Sync | DepositRequest.Sync
 }

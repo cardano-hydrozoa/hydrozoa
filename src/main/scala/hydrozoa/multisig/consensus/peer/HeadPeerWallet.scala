@@ -7,7 +7,7 @@ import hydrozoa.multisig.ledger.block.{Block, BlockHeader}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import scala.language.implicitConversions
 import scalus.cardano.ledger.{Transaction, VKeyWitness}
-import scalus.crypto.ed25519.VerificationKey
+import scalus.crypto.ed25519.{SigningKey, VerificationKey}
 
 final class HeadPeerWallet(
     peerNum: HeadPeerNumber,
@@ -106,3 +106,15 @@ final class HeadPeerWallet(
         )
     }
 }
+
+object HeadPeerWallet:
+    def scalusWallet(
+        peerNum: HeadPeerNumber,
+        verificationKey: VerificationKey,
+        signingKey: SigningKey
+    ): HeadPeerWallet = HeadPeerWallet(
+      peerNum = peerNum,
+      walletModule = WalletModule.Scalus,
+      verificationKey = verificationKey,
+      signingKey = signingKey
+    )

@@ -5,9 +5,9 @@ import hydrozoa.multisig.ledger.event.LedgerEventId
 /** Response types for the HTTP API */
 object ApiResponse {
 
-    /** Response when an event is successfully submitted */
-    final case class EventSubmitted(
-        eventId: LedgerEventId
+    /** Response when a request is successfully accepted. */
+    final case class RequestAccepted(
+        requestId: LedgerEventId
     )
 
     /** Error response */
