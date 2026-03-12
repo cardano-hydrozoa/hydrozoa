@@ -1,8 +1,7 @@
 <configuration>
     <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
-            <pattern>%X{node} %d{HH:mm:ss.SSS} %boldBlue([%thread]) %highlight(%-5level) %cyan(%logger{64}) -%kvp- %n
-                %msg%n
+            <pattern>%d{HH:mm:ss.SSS} %highlight(%-5level) %cyan(%logger{64}) %n%msg%n
             </pattern>
         </encoder>
     </appender>
@@ -14,10 +13,11 @@
     <logger name="hydrozoa.trace" level="info" additivity="false">
         <appender-ref ref="TRACE_FILE"/>
     </logger>
-
-    <root level="debug">
+    <root level="info">
         <appender-ref ref="STDOUT"/>
     </root>
-    <logger name="hydrozoa" level="debug"/>
-    <logger name="scalus" level="debug"/>
+    <logger name="CardanoLiaison" level="warn"/>
+    <logger name="JointLedger" level="warn"/>
+    <logger name="hydrozoa" level="info"/>
+    <logger name="scalus" level="info"/>
 </configuration>
