@@ -5,43 +5,36 @@ import scala.concurrent.duration.DurationInt
 import scala.math.Ordered.orderingToOrdered
 import scalus.cardano.ledger.SlotConfig
 
-/** TODO: Update/fix comment
-  *
-  * Peter and I determined that the settlement tx duration should be:
-  *   - Long enough that the settlement tx is still unexpired whenever we need to resubmit it due to
-  *     rollbacks.
-  *   - Short enough that: We don't need to push forward the fallback start too frequently with
-  *     empty major blocks.
-  *   - Whenever we have too many deposits and some get deferred for absorption in future blocks, we
-  *     aren't forced to decide to never-absorb them because they've been deferred for too long.
-  *
-  * Therefore, I think a reasonable settlement tx duration should be approximately the Cardano
-  * security parameter (~12h on average), and the deposit absorption window should be longer (~24h).
-  *
-  * Other parameter values:
-  *   - Deposit maturity duration ~= 30min to 1h,
-  *   - Deposit expiry margin ~= 5 min
-  *   - (Fallback N start - Settlement N TTL) ~= 24h
-  *
+/**
   * The reason we measure time duration in real units is that slot length is different for different
   * networks.
   *
   * @param minSettlementDuration
-  *   Minimal duration of a settlement (finalization) tx's validity range.
+  *   see spec
+  *
   * @param inactivityMarginDuration
   *   After every major block, a consecutive sequence of minor blocks can be made before this
   *   duration elapses. After it elapses, the next block must be major.
+  *
   * @param silenceDuration
-  *   A fixed-time gap between concurrent txs (i.e. fallback N and settlement/finalization N+1) to
-  *   prevent contention, typically a small value like 5 min.
+  *   A fixed-time gap between concurrent txs to prevent contention, typically a small value like 5
+  *   min:
+  *   - between fallback N and settlement/finalization N+1
+  *   - settlement tx and refund tx that tries to absorb/refund the same deposit
+  *
+  * @param depositSubmissionDuration
+  *   The fixed amount of time reserved for submitting the deposit txs by users. It's materialized as
+  *   the ttl for deposit txs, which SHOULD be exactly [[UserRequestHeader.validityEnd]] +
+  *   [[depositSubmissionDurationdefines]].
+  *
   * @param depositMaturityDuration
   *   The head waits for this duration after a deposit tx's validity end time to check whether a
   *   deposit utxo exists on L1. The deposit utxo should be mostly settled on L1 at this time (i.e.
-  *   unlikely to be rolled back).
+  *   unlikely to be rolled back). Defines _depositAbsorptionStart_ point.
+  *
   * @param depositAbsorptionDuration
   *   After a deposit utxo is mature, the head has until this duration elapses to attempt to absorb
-  *   it. In other words, the deposit utxo can be absorbed by a settlement tx only if the settlement
-  *   tx's validity end time is earlier than the maturity time plus absorption duration.
+  *   it. Defines _depositAbsorptionEnd_ point.
   */
 final case class TxTiming(
     override val minSettlementDuration: QuantizedFiniteDuration,
@@ -53,6 +46,9 @@ final case class TxTiming(
 ) extends TxTiming.Section {
     override transparent inline def txTiming: TxTiming = this
 
+    val refundValidityStartOffset: QuantizedFiniteDuration =
+        depositSubmissionDuration + depositMaturityDuration + depositAbsorptionDuration + silenceDuration
+        
     /** A block can stay minor if this predicate is true for its start time, relative to the
       * previous major block's fallback tx start time. Otherwise, it must be upgraded to a major
       * block so that the competing fallback start time is pushed forward for future blocks.
@@ -63,34 +59,30 @@ final case class TxTiming(
     ): Boolean =
         competingFallbackEndTime - blockStartTime > minSettlementDuration + silenceDuration
 
+    def initializationEndTime(initialBlockCreationEndTime: QuantizedInstant): QuantizedInstant =
+        initialBlockCreationEndTime + minSettlementDuration + inactivityMarginDuration
+        
     /** A major/initial block's fallback tx's start time should be set to this time relative to the
       * block's start time.
       */
-    def newFallbackStartTime(blockStartTime: QuantizedInstant): QuantizedInstant =
-        blockStartTime + minSettlementDuration + inactivityMarginDuration + silenceDuration
+    def newFallbackStartTime(blockCreationEndTime: QuantizedInstant): QuantizedInstant =
+        blockCreationEndTime + minSettlementDuration + inactivityMarginDuration + silenceDuration
 
     def newSettlementEndTime(competingFallbackStartTime: QuantizedInstant): QuantizedInstant =
         competingFallbackStartTime - silenceDuration
+    
+    def depositSubmissionEndTime(requestValidityEndTime: QuantizedInstant) = 
+        requestValidityEndTime + depositSubmissionDuration
 
-    def initializationEndTime(headStartTime: QuantizedInstant): QuantizedInstant =
-        headStartTime + minSettlementDuration + inactivityMarginDuration
+    def depositAbsorptionStartTime(requestValidityEndTime: QuantizedInstant): QuantizedInstant =
+        depositSubmissionEndTime(requestValidityEndTime) + depositMaturityDuration
+    
+    def depositAbsorptionEndTime(requestValidityEndTime: QuantizedInstant): QuantizedInstant =
+        depositAbsorptionStartTime(requestValidityEndTime) + depositAbsorptionDuration
+    
+    def refundValidityStart(requestValidityEndTime: QuantizedInstant): QuantizedInstant =
+        depositAbsorptionEndTime(requestValidityEndTime) + silenceDuration
 
-    // TODO: I added depositSubmissionDuration here, expect most tests to be red
-    def refundValidityStartOffset: QuantizedFiniteDuration = {
-        depositSubmissionDuration + depositMaturityDuration + depositAbsorptionDuration + silenceDuration
-    }
-
-    // TODO: update - use request validity end?
-    def refundValidityStart(submissionDeadline: QuantizedInstant): QuantizedInstant =
-        submissionDeadline + refundValidityStartOffset
-
-    // TODO: update - use request validity end?
-    def depositAbsorptionStartTime(submissionDeadline: QuantizedInstant): QuantizedInstant =
-        submissionDeadline + depositMaturityDuration
-
-    // TODO: update - use request validity end?
-    def depositAbsorptionEndTime(submissionDeadline: QuantizedInstant): QuantizedInstant =
-        depositAbsorptionStartTime(submissionDeadline) + depositAbsorptionDuration
 }
 
 /** TODO: Update/fix comment

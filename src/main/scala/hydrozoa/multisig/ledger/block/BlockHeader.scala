@@ -15,7 +15,10 @@ sealed trait BlockHeader extends BlockHeader.Section {
 
 object BlockHeader {
     final case class Initial(
+        // Creation start time: when did the peers start negotiating the head config, moderated by peer 0.
         override val startTime: QuantizedInstant,
+        // Creation end time: when did the moderator (peer 0) receive all the information 
+        // to create the head config and broadcast it to the peers.
         override val endTime: QuantizedInstant,
         override val kzgCommitment: KzgCommitment
     ) extends BlockHeader,
