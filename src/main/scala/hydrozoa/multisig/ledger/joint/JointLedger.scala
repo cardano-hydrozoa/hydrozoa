@@ -27,10 +27,8 @@ import hydrozoa.multisig.ledger.l1.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerCommand, L2LedgerError, L2LedgerState}
 import hydrozoa.multisig.server.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
-import hydrozoa.multisig.server.UserRequestWithId
-import hydrozoa.multisig.server.UserRequest
+import hydrozoa.multisig.server.{UserRequest, UserRequestWithId}
 import monocle.Focus.focus
-
 import scala.collection.immutable.Queue
 import scala.math.Ordered.orderingToOrdered
 import scalus.cardano.ledger.TransactionInput
@@ -133,7 +131,7 @@ final case class JointLedger(
     // TODO: PartialFunction.fromFunction is a noop here
     override def receive: Receive[IO, Requests.Request] = PartialFunction.fromFunction {
         case Requests.PreStart       => preStartLocal
-        case e: UserRequestWithId => applyUserRequestWithId(e)
+        case e: UserRequestWithId    => applyUserRequestWithId(e)
         case s: StartBlock           => startBlock(s)
         case c: CompleteBlockRegular => completeBlockRegular(c)
         case f: CompleteBlockFinal   => completeBlockFinal(f)
@@ -183,15 +181,17 @@ final case class JointLedger(
 
     private def applyUserRequestWithId(e: UserRequestWithId): IO[Unit] = {
         e match {
-            case req@UserRequestWithId(_, UserRequest(_, body : DepositRequestBody, _, _)) =>  registerUserDeposit(req, body)
-            case req@UserRequestWithId(_, UserRequest(_, body : TransactionRequestBody, _, _)) => applyL2UserRequest(req, body)
+            case req @ UserRequestWithId(_, UserRequest(_, body: DepositRequestBody, _, _)) =>
+                registerUserDeposit(req, body)
+            case req @ UserRequestWithId(_, UserRequest(_, body: TransactionRequestBody, _, _)) =>
+                applyL2UserRequest(req, body)
         }
     }
 
     /** Update the JointLedger's state -- the work-in-progress block -- to accept or reject deposits
       * depending on whether the [[dappLedger]] Actor can successfully register the deposit,
       */
-    private def registerUserDeposit(req: UserRequestWithId, body : DepositRequestBody): IO[Unit] = {
+    private def registerUserDeposit(req: UserRequestWithId, body: DepositRequestBody): IO[Unit] = {
         import req.*
         import body.*
 
@@ -269,7 +269,7 @@ final case class JointLedger(
       */
     private def applyL2UserRequest(
         userL2Request: UserRequestWithId,
-        body : TransactionRequestBody
+        body: TransactionRequestBody
     ): IO[Unit] = {
         import userL2Request.*
         import body.*

@@ -18,7 +18,6 @@ import hydrozoa.multisig.ledger.l1.txseq.{DepositRefundTxSeq, FinalizationTxSeq,
 import hydrozoa.multisig.ledger.l1.utxo.{DepositUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.server.UserRequestBody.DepositRequestBody
 import monocle.syntax.all.*
-
 import scala.collection.immutable.{Queue, TreeMap}
 import scala.math.Ordered.orderingToOrdered
 
@@ -83,9 +82,9 @@ object L1LedgerM {
       * validity period ended prior to the start of the current block.
       */
     def registerDeposit(
-                         body: DepositRequestBody,
-                         requestId: RequestId,
-                         blockStartTime: QuantizedInstant
+        body: DepositRequestBody,
+        requestId: RequestId,
+        blockStartTime: QuantizedInstant
     ): L1LedgerM[(DepositUtxo, RefundTx.PostDated)] = {
         for {
             config <- ask

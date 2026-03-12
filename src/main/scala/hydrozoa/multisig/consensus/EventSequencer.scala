@@ -14,7 +14,6 @@ import hydrozoa.multisig.ledger.block.{BlockBody, BlockEffects, BlockStatus}
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.l1.tx.RefundTx
-import hydrozoa.multisig.server.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.server.{UserRequest, UserRequestWithId}
 
 /** The first actor responsible for processing events from end-users, as received by the
@@ -63,20 +62,19 @@ trait EventSequencer(
     override def receive: Receive[IO, Request] = {
         case EventSequencer.PreStart => preStartLocal
         case req: UserRequest.Sync =>
-                     for {
-                        conn <- getConnections
-                        newNum <- state.nextLedgerEventNum()
-                        newId = RequestId(config.ownHeadPeerId.peerNum, newNum)
-                        newRequestWithId = UserRequestWithId(
-                            userRequest = req.request,
-                            requestId = newId
-                        )
-                        _ <- conn.blockWeaver ! newRequestWithId
-                        _ <- (conn.peerLiaisons ! newRequestWithId).parallel
-                    } yield newId
-            
+            for {
+                conn <- getConnections
+                newNum <- state.nextLedgerEventNum()
+                newId = RequestId(config.ownHeadPeerId.peerNum, newNum)
+                newRequestWithId = UserRequestWithId(
+                  userRequest = req.request,
+                  requestId = newId
+                )
+                _ <- conn.blockWeaver ! newRequestWithId
+                _ <- (conn.peerLiaisons ! newRequestWithId).parallel
+            } yield newId
+
     }
-        
 
     private def preStartLocal: IO[Unit] = initializeConnections
 

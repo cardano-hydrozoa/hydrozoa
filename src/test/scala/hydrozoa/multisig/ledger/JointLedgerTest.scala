@@ -32,7 +32,6 @@ import hydrozoa.multisig.ledger.l1.L1LedgerM.DepositsMap
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import hydrozoa.multisig.server.*
-import hydrozoa.multisig.server.UserRequestBody.DepositRequestBody
 import java.util.concurrent.TimeUnit
 import monocle.Focus
 import monocle.Focus.focus
@@ -156,7 +155,7 @@ object JointLedgerTestHelpers {
                 state <- lift(env.jointLedger ?: JointLedger.Requests.GetState)
             } yield state
 
-        def registerDeposit(req: DepositRequestWithId): JLTest[Unit] = {
+        def registerDeposit(req: UserRequestWithId): JLTest[Unit] = {
             for {
                 jl <- asks[TestR, ActorRef[IO, JointLedger.Requests.Request]](_.jointLedger)
                 _ <- lift(jl ? req)
@@ -277,7 +276,7 @@ object JointLedgerTestHelpers {
             requestId: RequestId,
             blockStartTime: QuantizedInstant
         ): JLTest[
-          (DepositRefundTxSeq, DepositRequestWithId, NonEmptyList[GenesisObligation])
+          (DepositRefundTxSeq, UserRequestWithId, NonEmptyList[GenesisObligation])
         ] = {
             import Requests.*
             for {
@@ -377,7 +376,7 @@ object JointLedgerTestHelpers {
                       IArray.genericWrapArray(userWallet.signMsg(IArray.from(header.bytes))).toArray
                     )
 
-                Right(request: DepositRequest) = UserRequest(
+                Right(request) = UserRequest(
                   header = header,
                   body = body,
                   userVk = userVk,
@@ -385,7 +384,7 @@ object JointLedgerTestHelpers {
                 ): @unchecked
 
                 req =
-                    UserRequestWithId[DepositRequestBody](
+                    UserRequestWithId(
                       userRequest = request,
                       requestId = requestId
                     )
@@ -427,7 +426,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
             Queue[JLTest[
               (
                   DepositRefundTxSeq,
-                  DepositRequestWithId,
+                  UserRequestWithId,
                   NonEmptyList[GenesisObligation]
               )
             ]]
@@ -450,7 +449,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                       Queue.empty[JLTest[
                         (
                             DepositRefundTxSeq,
-                            DepositRequestWithId,
+                            UserRequestWithId,
                             NonEmptyList[GenesisObligation]
                         )
                       ]]
@@ -461,7 +460,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                         actionQueue: Queue[JLTest[
                           (
                               DepositRefundTxSeq,
-                              DepositRequestWithId,
+                              UserRequestWithId,
                               NonEmptyList[GenesisObligation]
                           )
                         ]]
@@ -474,7 +473,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                               Queue[JLTest[
                                 (
                                     DepositRefundTxSeq,
-                                    DepositRequestWithId,
+                                    UserRequestWithId,
                                     NonEmptyList[GenesisObligation]
                                 )
                               ]]
@@ -525,7 +524,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                 JLTest[
                   (
                       DepositRefundTxSeq,
-                      DepositRequestWithId,
+                      UserRequestWithId,
                       NonEmptyList[GenesisObligation]
                   )
                 ]

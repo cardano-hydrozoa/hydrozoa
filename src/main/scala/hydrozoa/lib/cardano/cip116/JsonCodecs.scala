@@ -190,10 +190,11 @@ object JsonCodecs {
             implicit val transactionInputEncoder: Encoder[TransactionInput] =
                 (ti: TransactionInput) =>
                     io.circe.Json.obj(
-                      "transaction_id" -> ti.transactionId.bytes.asJson,
+                      "transaction_id" -> ti.transactionId.toHex.asJson,
                       // N.B.: CIP-0116 defines this a UInt32; scalus defines it as signed.
                       "index" -> ti.index.toInt.asJson
                     )
+
             implicit val transactionInputDecoder: Decoder[TransactionInput] = c =>
                 for {
                     txIdBytes <- c.downField("transaction_id").as[Array[Byte]]

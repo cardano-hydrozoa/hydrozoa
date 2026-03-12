@@ -82,8 +82,12 @@ object JsonCodecs {
             Json.obj(
               "header" -> summon[Encoder[UserRequestHeader]].apply(req.header),
               bodyFieldName -> (if bodyFieldName == "deposit"
-                    then summon[Encoder[DepositRequestBody]].apply(req.body.asInstanceOf[DepositRequestBody])
-                    else summon[Encoder[TransactionRequestBody]].apply(req.body.asInstanceOf[TransactionRequestBody])),
+                                then
+                                    summon[Encoder[DepositRequestBody]]
+                                        .apply(req.body.asInstanceOf[DepositRequestBody])
+                                else
+                                    summon[Encoder[TransactionRequestBody]]
+                                        .apply(req.body.asInstanceOf[TransactionRequestBody])),
               "userVk" -> summon[Encoder[VerificationKey]].apply(req.userVk),
               "signature" -> summon[Encoder[Signature]].apply(req.signature)
             )

@@ -1,7 +1,6 @@
 package hydrozoa.multisig.server
 
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
-import hydrozoa.multisig.server.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import io.circe.syntax.*
 import scalus.cardano.ledger.AssetName
 import scalus.crypto.ed25519.VerificationKey
@@ -27,7 +26,7 @@ object JsonExampleGenerator {
         ByteString.fromArray(Array.fill(length)((seed + 1).toByte))
 
     /** Generate example DepositRequest */
-    private def exampleDepositRequest: UserRequest[DepositRequestBody] = {
+    private def exampleDepositRequest: UserRequest = {
         val body: UserRequestBody.DepositRequestBody =
             UserRequestBody.DepositRequestBody(
               l1Payload = exampleBytes(100, seed = 2),
@@ -43,7 +42,7 @@ object JsonExampleGenerator {
 
         val signature = header.signEd25519(privateKey)
 
-        val req = UserRequest[UserRequestBody.DepositRequestBody](
+        val req = UserRequest(
           header,
           body,
           userVk,
@@ -53,7 +52,7 @@ object JsonExampleGenerator {
     }
 
     /** Generate example TransactionRequest */
-    private def exampleTransactionRequest: UserRequest[TransactionRequestBody] = {
+    private def exampleTransactionRequest: UserRequest = {
         val body: UserRequestBody.TransactionRequestBody =
             UserRequestBody.TransactionRequestBody(
               l2Payload = exampleBytes(75, seed = 11)
@@ -68,7 +67,7 @@ object JsonExampleGenerator {
 
         val signature = header.signEd25519(privateKey)
 
-        val req = UserRequest[UserRequestBody.TransactionRequestBody](
+        val req = UserRequest(
           header,
           body,
           userVk,

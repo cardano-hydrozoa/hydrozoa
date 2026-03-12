@@ -17,6 +17,7 @@ import scalus.uplc.builtin.JVMPlatformSpecific.verifyEd25519Signature
 import scalus.uplc.builtin.{ByteString, JVMPlatformSpecific}
 import scalus.|>
 
+// TODO: move away from server, it doesn't belong in here
 /** A parsed user request with a valid signature and body hash
   *
   * @param signature
@@ -68,8 +69,8 @@ object UserRequest {
 }
 
 /** @param headId
-  *   The blake2b_224 hash of the cbor-encoded seed utxo [[TransactionInput]] appended to the CIP-67 prefix HYDR.
-  *   This is the asset name of the treasury token
+  *   The blake2b_224 hash of the cbor-encoded seed utxo [[TransactionInput]] appended to the CIP-67
+  *   prefix HYDR. This is the asset name of the treasury token
   * @param bodyHash
   *   blake2b_256 hash of the Cbor-encoded
   * @param validityStart

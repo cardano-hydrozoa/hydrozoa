@@ -238,7 +238,7 @@ trait BlockWeaver(
     private def receiveTotal(req: Request): IO[Unit] =
         req match {
             case BlockWeaver.PreStart         => preStartLocal
-            case msg: UserRequestWithId    => handleUserRequestWithId(msg)
+            case msg: UserRequestWithId       => handleUserRequestWithId(msg)
             case b: BlockBrief.Next           => handleNewBlock(b)
             case bc: BlockConfirmed           => handleBlockConfirmed(bc)
             case pr: PollResults              => handlePollResults(pr)

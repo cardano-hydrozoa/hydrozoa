@@ -25,10 +25,8 @@ class HydrozoaRoutes(
 ) {
 
     // Implicit decoders for request bodies
-    implicit val transactionRequestEntityDecoder: EntityDecoder[IO, TransactionRequest] =
-        jsonOf[IO, TransactionRequest]
-    implicit val depositRequestEntityDecoder: EntityDecoder[IO, DepositRequest] =
-        jsonOf[IO, DepositRequest]
+    implicit val depositRequestEntityDecoder: EntityDecoder[IO, UserRequest] =
+        jsonOf[IO, UserRequest]
 
     /** Generate next RequestId for stub responses using incrementing counter */
     private def nextRequestId: IO[RequestId] =
@@ -44,7 +42,7 @@ class HydrozoaRoutes(
         // POST /api/l2/submit - Submit an L2 transaction
         case req @ POST -> Root / "api" / "l2" / "submit" =>
             val result: IO[org.http4s.Response[IO]] = for {
-                transactionRequest <- req.as[TransactionRequest]
+                transactionRequest <- req.as[UserRequest]
 
                 // TODO: Process TransactionRequest
                 // Send synchronous request to EventSequencer and get back RequestId
@@ -67,7 +65,7 @@ class HydrozoaRoutes(
         // POST /api/deposit/register - Register a deposit
         case req @ POST -> Root / "api" / "deposit" / "register" =>
             val result: IO[org.http4s.Response[IO]] = for {
-                depositRequest <- req.as[DepositRequest]
+                depositRequest <- req.as[UserRequest]
 
                 // TODO: Process DepositRequest
                 // Send synchronous request to EventSequencer and get back RequestId

@@ -1,9 +1,9 @@
 package hydrozoa.multisig.ledger.l1.token
+import com.bloxbean.cardano.client.cip.cip67
+import io.bullet.borer.Cbor
 import scalus.cardano.ledger.{AssetName, TransactionInput}
 import scalus.uplc.builtin.Builtins.blake2b_224
-import scalus.uplc.builtin.ByteString
-import com.bloxbean.cardano.client.cip.cip67
-import io.bullet.borer.Cbor;
+import scalus.uplc.builtin.ByteString;
 
 object CIP67 {
     object Tags {
@@ -21,7 +21,9 @@ object CIP67 {
         }
 
         private def prefixToken(cip67Tag: Int): AssetName =
-            AssetName(ByteString.fromArray(cip67.CIP67AssetNameUtil.labelToPrefix(cip67Tag) ++ tokenSuffix))
+            AssetName(
+              ByteString.fromArray(cip67.CIP67AssetNameUtil.labelToPrefix(cip67Tag) ++ tokenSuffix)
+            )
 
         val treasuryTokenName: AssetName = prefixToken(CIP67.Tags.head)
 
