@@ -179,7 +179,6 @@ object Bootstrap:
         valueSelected = Value.combine(utxosSelected.map(_.output.value).toList)
 
         initializationParameters = InitializationParameters(
-          headStartTime = startTime,
           initialEvacuationMap = evacMap,
           initialEquityContributions =
               NonEmptyMap(HeadPeerNumber.zero -> minEquity, SortedMap.empty),
@@ -204,8 +203,10 @@ object Bootstrap:
           initializationParams = initializationParameters
         ).get
 
+        endTime <- IO.realTimeInstant.map(instant => instant.quantize(cardanoNetwork.slotConfig))
+        
         initTxSeq = InitializationTxSeq
-            .Build(preinit)
+            .Build(preinit)(endTime)
             .result
             .fold(
               e => {
@@ -214,7 +215,6 @@ object Bootstrap:
               },
               x => x
             )
-        endTime <- IO.realTimeInstant.map(instant => instant.quantize(cardanoNetwork.slotConfig))
 
     } yield {
 

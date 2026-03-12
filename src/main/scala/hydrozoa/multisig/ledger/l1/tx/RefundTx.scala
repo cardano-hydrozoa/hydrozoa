@@ -22,7 +22,7 @@ import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Sen
 sealed trait RefundTx {
     def tx: Transaction
     def mStartTime: Option[QuantizedInstant] = this match {
-        case self: RefundTx.PostDated => Some(self.startTime)
+        case self: RefundTx.PostDated => Some(self.refundStart)
     }
 }
 
@@ -31,7 +31,7 @@ object RefundTx {
 
     final case class PostDated(
         override val tx: Transaction,
-        startTime: QuantizedInstant,
+        refundStart: QuantizedInstant,
         refundDestination: Destination
     ) extends RefundTx,
           Tx[PostDated] {

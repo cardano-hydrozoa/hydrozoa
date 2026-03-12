@@ -89,14 +89,14 @@ object DepositUtxo {
                 Instructions(
                   address = plutusAddressToShelley(onchain.address, network),
                   datum = onchain.datum.asScala,
-                  validityStart = onchain.validityStart.toEpochQuantizedInstant(slotConfig),
+                  validityStart = onchain.refundStart.toEpochQuantizedInstant(slotConfig),
                 )
             }
 
             final case class Onchain(
                 address: PlutusAddress,
                 datum: ScalusOption[Data],
-                validityStart: PosixTime
+                refundStart: PosixTime
             ) derives FromData,
                   ToData
 
@@ -107,7 +107,7 @@ object DepositUtxo {
                     Onchain(
                       address = LedgerToPlutusTranslation.getAddress(address),
                       datum = mbDatum.asScalus,
-                      validityStart = validityStart.instant.toEpochMilli
+                      refundStart = validityStart.instant.toEpochMilli
                     )
                 }
             }

@@ -51,7 +51,7 @@ def genDepositDatum(network: CardanoNetwork.Section): Gen[DepositUtxo.Datum] = {
       DepositUtxo.Refund.Instructions.Onchain(
         address = refundAddress,
         datum = refundDatum,
-        validityStart = QuantizedInstant(
+        refundStart = QuantizedInstant(
           network.slotConfig,
           java.time.Instant.ofEpochMilli(deadline.toLong)
         ).instant.toEpochMilli

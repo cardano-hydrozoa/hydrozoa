@@ -54,22 +54,25 @@ final case class TxTiming(
       * block so that the competing fallback start time is pushed forward for future blocks.
       */
     def blockCanStayMinor(
-        blockStartTime: QuantizedInstant,
+        blockCreationEndTime: QuantizedInstant,
         competingFallbackEndTime: QuantizedInstant
     ): Boolean =
-        competingFallbackEndTime - blockStartTime > minSettlementDuration + silenceDuration
+        competingFallbackEndTime - blockCreationEndTime > minSettlementDuration + silenceDuration
 
     def initializationEndTime(initialBlockCreationEndTime: QuantizedInstant): QuantizedInstant =
         initialBlockCreationEndTime + minSettlementDuration + inactivityMarginDuration
+
+    def newSettlementEndTime(competingFallbackStartTime: QuantizedInstant): QuantizedInstant =
+        competingFallbackStartTime - silenceDuration
+
+    def finalizationEndTime(competingFallbackStartTime: QuantizedInstant): QuantizedInstant =
+        newSettlementEndTime(competingFallbackStartTime)
         
     /** A major/initial block's fallback tx's start time should be set to this time relative to the
       * block's start time.
       */
     def newFallbackStartTime(blockCreationEndTime: QuantizedInstant): QuantizedInstant =
         blockCreationEndTime + minSettlementDuration + inactivityMarginDuration + silenceDuration
-
-    def newSettlementEndTime(competingFallbackStartTime: QuantizedInstant): QuantizedInstant =
-        competingFallbackStartTime - silenceDuration
     
     def depositSubmissionEndTime(requestValidityEndTime: QuantizedInstant) = 
         requestValidityEndTime + depositSubmissionDuration

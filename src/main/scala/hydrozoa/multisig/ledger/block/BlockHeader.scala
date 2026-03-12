@@ -109,7 +109,7 @@ object BlockHeader {
             competingFallbackStartTime: QuantizedInstant,
             newKzgCommitment: KzgCommitment
         ): BlockHeader.Intermediate =
-            if txTiming.blockCanStayMinor(newStartTime, competingFallbackStartTime)
+            if txTiming.blockCanStayMinor(newEndTime, competingFallbackStartTime)
             then nextHeaderMinor(newStartTime, newEndTime, newKzgCommitment)
             else nextHeaderMajor(newStartTime, newEndTime, newKzgCommitment)
 

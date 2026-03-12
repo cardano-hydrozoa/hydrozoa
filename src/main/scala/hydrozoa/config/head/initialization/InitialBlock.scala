@@ -17,8 +17,6 @@ object InitialBlock {
         def initialBlockSection: InitialBlock
         def initialBlock: Block.MultiSigned.Initial
 
-        def headStartTime: QuantizedInstant = initialBlock.startTime
-
         def initialKzgCommitment: KzgCommitment = initialBlock.kzgCommitment
 
         def initializationTx: InitializationTx = initialBlock.initializationTx

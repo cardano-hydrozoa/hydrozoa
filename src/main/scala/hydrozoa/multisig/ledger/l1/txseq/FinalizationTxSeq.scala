@@ -49,15 +49,14 @@ private object FinalizationTxSeqOps {
         override val majorVersionProduced: BlockVersion.Major,
         override val treasuryToSpend: MultisigTreasuryUtxo,
         override val payoutObligationsRemaining: Vector[Payout.Obligation],
-        competingFallbackValidityStart: QuantizedInstant,
-        blockCreatedOn: QuantizedInstant,
+        competingFallbackValidityStart: QuantizedInstant
     ) extends BlockVersion.Major.Produced,
           MultisigTreasuryUtxo.ToSpend,
           Payout.Obligation.Many.Remaining {
         import Build.*
 
         private val finalizationValidityEnd =
-            config.txTiming.newSettlementEndTime(competingFallbackValidityStart)
+            config.txTiming.finalizationEndTime(competingFallbackValidityStart)
 
         lazy val result: Either[Build.Error, FinalizationTxSeq] = {
             NonEmptyVector.fromVector(payoutObligationsRemaining) match {

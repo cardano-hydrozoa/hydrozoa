@@ -65,20 +65,20 @@ private object SettlementTxSeqOps {
         override val treasuryToSpend: MultisigTreasuryUtxo,
         override val depositsToSpend: Vector[DepositUtxo],
         override val payoutObligationsRemaining: Vector[Payout.Obligation],
-        competingFallbackValidityStart: QuantizedInstant,
-        blockCreatedOn: QuantizedInstant,
+        blockCreationEndTime: QuantizedInstant,
+        competingFallbackValidityStart: QuantizedInstant
     ) extends BlockVersion.Major.Produced,
           MultisigTreasuryUtxo.ToSpend,
           DepositUtxo.Many.ToSpend,
           KzgCommitment.Produced,
           Payout.Obligation.Many.Remaining {
         import Build.*
-
+        
         private val settlementValidityEnd =
             config.txTiming.newSettlementEndTime(competingFallbackValidityStart)
 
         private val newFallbackValidityEnd =
-            config.txTiming.newFallbackStartTime(blockCreatedOn)
+            config.txTiming.newFallbackStartTime(blockCreationEndTime)
 
         lazy val result: Either[Build.Error, SettlementTxSeq] = {
             NonEmptyVector.fromVector(payoutObligationsRemaining) match {

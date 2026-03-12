@@ -123,17 +123,20 @@ private object DepositRefundTxSeqOps {
         depositFee: Coin,
         utxosFunding: NonEmptyList[Utxo],
         changeAddress: ShelleyAddress,
-        submissionDeadline: QuantizedInstant,
+        requestValidityEndTime: QuantizedInstant,
         refundAddress: ShelleyAddress,
         refundDatum: Option[Data]
     ) {
         def result: Either[Build.Error, DepositRefundTxSeq] = {
             val expectedDepositValue = l2Value + Value(depositFee)
 
+            val submissionDeadline =
+                config.txTiming.depositSubmissionEndTime(requestValidityEndTime)
+
             val refundInstructions = DepositUtxo.Refund.Instructions(
               address = refundAddress,
               datum = refundDatum,
-              validityStart = config.txTiming.refundValidityStart(submissionDeadline)
+              validityStart = config.txTiming.refundValidityStart(requestValidityEndTime)
             )
 
             for {
@@ -173,34 +176,15 @@ private object DepositRefundTxSeqOps {
                       Build.Error.DepositValueMismatch(depositUtxoValue, expectedDepositValue)
                     )
 
-                /*
-                Obnoxious timing note (sorry):
+                expectedRefundStart = config.txTiming.refundValidityStart(requestValidityEndTime)
 
-                The Deposit tx validity end, deposit utxo absorption period, and post-dated refund tx timing are
-                all intertwined as follows:
+                actualRefundStartMatches = expectedRefundStart == refundTx.refundStart
+                instructionsRefundStartMatches =
+                    expectedRefundStart.toPosixTime == depositTx.depositProduced.datum.refundInstructions.refundStart
 
-                deposit(i).absorption_start = deposit(i).validity_end + deposit_maturity_duration
-                deposit(i).absorption_end = deposit(i).absorption_start + deposit_absorption_duration
-                                          = deposit(i).validity_end + deposit_maturity_duration + deposit_absorption_duration
-
-                refund(i).validity_start = deposit(i).absorption_end + silence_duration
-                refund(i).validity_end = ∅
-
-                The question becomes: which is authoritative? The refund validity start or the deposit validity end?
-                And where do we store this data in our program?
-
-                We have to, unfortunately, store this information in three places, and they have to be coherent.
-                When we get a DepositRefundTxSeq, we need the individual transactions to have coherent timing, but we
-                _also_ need to store the refund validity start time in the datum of the deposit (for use in the forthcoming
-                guard script.)
-                 */
                 _ <- Either
                     .cond(
-                      config.txTiming.refundValidityStart(
-                        depositTx.validityEnd
-                      ) == refundTx.startTime
-                          && refundTx.startTime == depositTx.depositProduced.datum.refundInstructions.validityStart
-                              .toEpochQuantizedInstant(config.slotConfig),
+                      actualRefundStartMatches && instructionsRefundStartMatches,
                       (),
                       Build.Error.TimingIncoherence // we don't return a DepositRefundTxSeq, because it's not valid
                     )

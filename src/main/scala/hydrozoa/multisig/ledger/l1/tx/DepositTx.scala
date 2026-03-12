@@ -21,10 +21,9 @@ import scalus.uplc.builtin.Builtins.blake2b_256
 import scalus.uplc.builtin.ByteString
 import scalus.uplc.builtin.Data.{fromData, toData}
 
-// TODO: George: add funding utxos?
 final case class DepositTx(
     depositProduced: DepositUtxo,
-    validityEnd: QuantizedInstant,
+    submissionDeadline: QuantizedInstant,
     override val tx: Transaction,
     override val txLens: Lens[DepositTx, Transaction] = Focus[DepositTx](_.tx),
     override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
@@ -44,7 +43,7 @@ private object DepositTxOps {
         l2Value: Value,
         depositFee: Coin,
         changeAddress: ShelleyAddress,
-        submissionDeadline: QuantizedInstant,
+        requestValidityEndTime: QuantizedInstant,
         refundInstructions: DepositUtxo.Refund.Instructions
     ) {
         def result: Either[(SomeBuildError, String), DepositTx] = {
@@ -77,6 +76,8 @@ private object DepositTxOps {
               )
             )
 
+            val submissionDeadline = config.txTiming.depositSubmissionEndTime(requestValidityEndTime)
+            
             val ttl = ValidityEndSlot(submissionDeadline.toSlot.slot)
 
             val payloadHash: Hash32 = Hash(blake2b_256(l2Payload))
@@ -130,7 +131,7 @@ private object DepositTxOps {
                   depositFee = depositFee,
                   submissionDeadline = submissionDeadline,
                   absorptionStartTime =
-                      config.txTiming.depositAbsorptionStartTime(submissionDeadline)
+                      config.txTiming.depositAbsorptionStartTime(requestValidityEndTime)
                 )
             } yield DepositTx(
               depositProduced,

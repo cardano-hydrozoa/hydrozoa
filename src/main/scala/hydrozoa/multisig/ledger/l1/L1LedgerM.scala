@@ -5,19 +5,21 @@ import cats.effect.IO
 import cats.syntax.all.*
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant}
 import hydrozoa.multisig.ledger
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import hydrozoa.multisig.ledger.l1.L1LedgerM.Error.{ParseError, SettlementTxSeqBuilderError, SubmissionPeriodIsOver}
+import hydrozoa.multisig.ledger.l1.L1LedgerM.Error.{DepositTxInvalidTTL, ParseError, SettlementTxSeqBuilderError}
 import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import hydrozoa.multisig.ledger.l1.txseq.{DepositRefundTxSeq, FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.l1.utxo.{DepositUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.server.UserRequestBody.DepositRequestBody
+import hydrozoa.multisig.server.UserRequestWithId
 import monocle.syntax.all.*
+
 import scala.collection.immutable.{Queue, TreeMap}
 import scala.math.Ordered.orderingToOrdered
 
@@ -82,10 +84,10 @@ object L1LedgerM {
       * validity period ended prior to the start of the current block.
       */
     def registerDeposit(
-        body: DepositRequestBody,
-        requestId: RequestId,
-        blockStartTime: QuantizedInstant
+        requestWithId: UserRequestWithId.DepositRequest
     ): L1LedgerM[(DepositUtxo, RefundTx.PostDated)] = {
+        import requestWithId.*
+        import request.*
         for {
             config <- ask
             parseRes =
@@ -99,26 +101,20 @@ object L1LedgerM {
                     .map(ParseError(_))
             depositRefundTxSeq <- lift(parseRes)
 
-            depositProduced <- lift(
-              // TODO: add explicit vals to cope boolean blindness
-              // Check that submission is still possible and if not - reject
-              if depositRefundTxSeq.depositTx.validityEnd <= blockStartTime
-              then Left(SubmissionPeriodIsOver)
+            depositProduced = depositRefundTxSeq.depositTx.depositProduced
 
-              // TODO: I believe we should remove it
-              // Check absorption is still possible
-              // The previous check is stronger I think
-              // else if config.txTiming.depositAbsorptionEndTime(
-              //      depositRefundTxSeq.depositTx.validityEnd
-              //    ) < blockStartTime
-              // then Left(AbsorptionPeriodExpired(depositRefundTxSeq))
+            headerValidityEndInstant = header.validityEnd.toEpochQuantizedInstant(config.slotConfig)
+            headerSubmissionDeadline = config.txTiming.depositSubmissionEndTime(
+              headerValidityEndInstant
+            )
+
+            depositProduced <- lift(
+              if depositRefundTxSeq.depositTx.submissionDeadline == headerSubmissionDeadline
+              then Left(DepositTxInvalidTTL)
               else Right(depositRefundTxSeq.depositTx.depositProduced)
             )
 
             s <- get
-            absorptionStartTime = config.txTiming.depositAbsorptionStartTime(
-              depositProduced.submissionDeadline
-            )
             updatedMap <- s.deposits.appended((requestId, depositProduced))
             newState = s.copy(deposits = updatedMap)
             _ <- set(newState)
@@ -133,7 +129,7 @@ object L1LedgerM {
         nextKzg: KzgCommitment,
         absorbedDeposits: Queue[(RequestId, DepositUtxo)],
         payoutObligations: Vector[Payout.Obligation],
-        blockCreatedOn: QuantizedInstant,
+        blockCreationEndTime: QuantizedInstant,
         competingFallbackValidityStart: QuantizedInstant,
     ): L1LedgerM[SettlementTxSeq] = {
 
@@ -158,7 +154,7 @@ object L1LedgerM {
                     depositsToSpend = Vector.from(absorbedDeposits.map(_._2).toList),
                     payoutObligationsRemaining = payoutObligations,
                     competingFallbackValidityStart = competingFallbackValidityStart,
-                    blockCreatedOn = blockCreatedOn
+                    blockCreationEndTime = blockCreationEndTime
                   )
                   .result
                   .left
@@ -199,7 +195,6 @@ object L1LedgerM {
     // TODO (fund14): add Refund.Immediates to the return type
     def finalizeLedger(
         payoutObligationsRemaining: Vector[Payout.Obligation],
-        blockCreatedOn: QuantizedInstant,
         competingFallbackValidityStart: QuantizedInstant,
     ): L1LedgerM[FinalizationTxSeq] = {
         for {
@@ -212,8 +207,7 @@ object L1LedgerM {
                         BlockVersion.Major(s.treasury.datum.versionMajor.toInt).increment,
                     treasuryToSpend = s.treasury,
                     payoutObligationsRemaining = payoutObligationsRemaining,
-                    competingFallbackValidityStart = competingFallbackValidityStart,
-                    blockCreatedOn = blockCreatedOn,
+                    competingFallbackValidityStart = competingFallbackValidityStart
                   )
                   .result
                   .left
@@ -306,7 +300,7 @@ object L1LedgerM {
         final case class ParseError(wrapped: txseq.DepositRefundTxSeq.Parse.Error)
             extends RegisterDepositError
 
-        case object SubmissionPeriodIsOver extends RegisterDepositError
+        case object DepositTxInvalidTTL extends RegisterDepositError
 
         /** This is raised during a call to `RegisterDeposit` if the deposit parses successfully,
           * but reveals an absorption window that is already prior to the block's start time. In

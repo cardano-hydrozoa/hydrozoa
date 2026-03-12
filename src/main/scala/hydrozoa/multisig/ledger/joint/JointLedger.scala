@@ -181,20 +181,37 @@ final case class JointLedger(
     private def applyUserRequestWithId(e: UserRequestWithId): IO[Unit] = {
         // TODO: check that blockStartTime is within the request's validity bounds
         e match {
-            case req: UserRequestWithId.DepositRequest     => registerUserDeposit(req)
-            case req: UserRequestWithId.TransactionRequest => applyL2UserRequest(req)
+            case req: UserRequestWithId.DepositRequest     => registerDepositRequest(req)
+            case req: UserRequestWithId.TransactionRequest => applyTransactionRequest(req)
         }
+    }
+
+    private def checkRequestValidityInterval(
+        req: UserRequestWithId,
+        blockCreationStartTime: QuantizedInstant
+    ): Boolean = {
+        val header = req.request.header
+        val bt = blockCreationStartTime.toPosixTime
+        header.validityStart <= bt && bt < header.validityEnd
     }
 
     /** Update the JointLedger's state -- the work-in-progress block -- to accept or reject deposits
       * depending on whether the [[dappLedger]] Actor can successfully register the deposit,
+      *
+      * NOTE 2026-03-12 (George). Procedure:
+      *   - Validate generic conditions for requests:
+      *     - request hashes and signatures
+      *     - validity interval
+      *   - Validate L1 payload
+      *   - Validate L2 payload
+      *   - If successful, add L1 payload to L1Ledger for future absorption decision.
       */
-    private def registerUserDeposit(req: UserRequestWithId.DepositRequest): IO[Unit] = {
+    private def registerDepositRequest(req: UserRequestWithId.DepositRequest): IO[Unit] = {
         import req.*
         import request.*
         import body.*
 
-        val rejectEvent = (e: L1LedgerM.Error | L2LedgerError) =>
+        def rejectEvent(e: JointLedger.UserRequestError | L1LedgerM.Error | L2LedgerError) =
             for {
                 oldState <- unsafeGetProducing
                 currentBlockNum = oldState.nextBlockNumber
@@ -202,7 +219,7 @@ final case class JointLedger(
                     .focus(_.userRequestState.requests)
                     .modify(_.appended((requestId, Invalid)))
                 _ <- state.set(newState)
-                _ = logger.debug(s"registerUserDeposit failure: $e")
+                _ = logger.debug(s"registerDepositRequest failure: $e")
                 _ <- tracer.eventProcessed(
                   s"${requestId.peerNum: Int}:${requestId.requestNum: Int}",
                   currentBlockNum: Int,
@@ -211,110 +228,132 @@ final case class JointLedger(
             } yield ()
 
         for {
-            blockStartTime <- unsafeGetProducing.map(_.startTime)
-            _ <- this.runL1LedgerM(
-              action = L1LedgerM.registerDeposit(body, req.requestId, blockStartTime),
-              // Left == deposit rejected
-              // FIXME: This should probably be returned as sum type in the Right
-              onFailure = rejectEvent,
-              onSuccess = (depositProduced: DepositUtxo, refundTx: RefundTx.PostDated) =>
-                  for {
-                      oldState <- unsafeGetProducing
+            p <- unsafeGetProducing
+            blockStartTime = p.startTime
+            currentBlockNum = p.nextBlockNumber
 
-                      // Create the L2 Ledger Action for deposit registration from
-                      // - The user event
-                      // - The current state
-                      // - The parse result of the deposit tx
-                      l2Command = L2LedgerCommand.RegisterDepositRequest(
-                        requestId = requestId,
-                        blockNumber = oldState.nextBlockNumber,
-                        blockCreationStartTime = oldState.startTime.toPosixTime,
-                        depositUtxoId = depositProduced.utxoId,
-                        depositFee = depositProduced.depositFee,
-                        depositL2Value = depositProduced.l2Value,
-                        l2Payload = l2Payload,
-                        refundDestination = refundTx.refundDestination,
-                        verifierKey = req.request.userVk
-                      )
+            _ <-
+                if !checkRequestValidityInterval(req, blockStartTime) then
+                    rejectEvent(
+                      JointLedger.UserRequestError.BlockOutOfRequestValidityInterval(blockStartTime)
+                    )
+                else
+                    this.runL1LedgerM(
+                      action = L1LedgerM.registerDeposit(req),
+                      // Left == deposit rejected
+                      // FIXME: This should probably be returned as sum type in the Right
+                      onFailure = rejectEvent,
+                      onSuccess = (depositProduced: DepositUtxo, refundTx: RefundTx.PostDated) =>
+                          for {
+                              oldState <- unsafeGetProducing
 
-                      _ <- this.runL2LedgerAction(
-                        action = l2Ledger.L2LedgerAction.fromL2LedgerCommand(l2Command),
-                        onFailure = rejectEvent,
-                        onSuccess = _ =>
-                            for {
-                                oldState <- unsafeGetProducing
-                                currentBlockNum = oldState.nextBlockNumber
-                                newState = oldState
-                                    .focus(_.userRequestState.requests)
-                                    .modify(_.appended((requestId, Valid)))
-                                    .focus(_.userRequestState.postDatedRefundTxs)
-                                    .modify(_.appended(refundTx))
-                                _ <- state.set(newState)
-                                _ <- tracer.eventProcessed(
-                                  s"${requestId.peerNum: Int}:${requestId.requestNum: Int}",
-                                  currentBlockNum: Int,
-                                  true
-                                )
-                            } yield ()
-                      )
+                              // Create the L2 Ledger Action for deposit registration from
+                              // - The user event
+                              // - The current state
+                              // - The parse result of the deposit tx
+                              l2Command = L2LedgerCommand.RegisterDepositRequest(
+                                requestId = requestId,
+                                blockNumber = currentBlockNum,
+                                blockCreationStartTime = oldState.startTime.toPosixTime,
+                                depositUtxoId = depositProduced.utxoId,
+                                depositFee = depositProduced.depositFee,
+                                depositL2Value = depositProduced.l2Value,
+                                l2Payload = l2Payload,
+                                refundDestination = refundTx.refundDestination,
+                                verifierKey = req.request.userVk
+                              )
 
-                  } yield ()
-            )
+                              _ <- this.runL2LedgerAction(
+                                action = l2Ledger.L2LedgerAction.fromL2LedgerCommand(l2Command),
+                                onFailure = rejectEvent,
+                                onSuccess = _ =>
+                                    for {
+                                        oldState <- unsafeGetProducing
+                                        newState = oldState
+                                            .focus(_.userRequestState.requests)
+                                            .modify(_.appended((requestId, Valid)))
+                                            .focus(_.userRequestState.postDatedRefundTxs)
+                                            .modify(_.appended(refundTx))
+                                        _ <- state.set(newState)
+                                        _ <- tracer.eventProcessed(
+                                          s"${requestId.peerNum: Int}:${requestId.requestNum: Int}",
+                                          currentBlockNum: Int,
+                                          true
+                                        )
+                                    } yield ()
+                              )
+
+                          } yield ()
+                    )
         } yield ()
     }
 
     /** Update the current block with the result of passing the tx to the virtual ledger, as well as
       * updating ledgerEventsRequired
       */
-    private def applyL2UserRequest(
-        userL2Request: UserRequestWithId.TransactionRequest
+    private def applyTransactionRequest(
+        req: UserRequestWithId.TransactionRequest
     ): IO[Unit] = {
-        import userL2Request.*
+        import req.*
         import request.*
         import body.*
 
+        def rejectEvent(e: UserRequestError | L2LedgerError) =
+            for {
+                p <- unsafeGetProducing
+                currentBlockNum = p.nextBlockNumber
+                newState = p
+                    .focus(_.userRequestState.requests)
+                    .modify(_.appended((requestId, Invalid)))
+                _ <- state.set(newState)
+                _ = logger.debug(s"applyTransactionRequest failure: $e")
+                _ <- tracer.eventProcessed(
+                  s"${requestId.peerNum: Int}:${requestId.requestNum: Int}",
+                  currentBlockNum: Int,
+                  false
+                )
+            } yield ()
+
         for {
             p <- unsafeGetProducing
+            blockStartTime = p.startTime
             currentBlockNum = p.nextBlockNumber
-            l2Command: L2LedgerCommand.ApplyTransactionRequest = L2LedgerCommand
-                .ApplyTransactionRequest(
-                  requestId = userL2Request.requestId,
-                  blockNumber = p.nextBlockNumber,
-                  blockCreationStartTime = p.startTime,
-                  l2Payload = l2Payload,
-                  verifierKey = userL2Request.request.userVk
-                )
-            _ <- runL2LedgerAction(
-              action = this.l2Ledger.L2LedgerAction.fromL2LedgerCommand(l2Command),
-              // Invalid transaction continuation
-              onFailure = _ =>
-                  for {
-                      p <- unsafeGetProducing
-                      newState = p
-                          .focus(_.userRequestState.requests)
-                          .modify(_.appended((requestId, Invalid)))
-                      _ <- state.set(newState)
-                      _ <- tracer.eventProcessed(
-                        s"${requestId.peerNum: Int}:${requestId.requestNum: Int}",
-                        currentBlockNum: Int,
-                        false
-                      )
-                  } yield (),
-              // Valid transaction continuation
-              onSuccess = payoutObligations =>
-                  for {
-                      p <- unsafeGetProducing
-                      newState = p
-                          .focus(_.userRequestState.requests)
-                          .modify(_.appended((requestId, Valid)))
-                      _ <- state.set(newState)
-                      _ <- tracer.eventProcessed(
-                        s"${requestId.peerNum: Int}:${requestId.requestNum: Int}",
-                        currentBlockNum: Int,
-                        true
-                      )
-                  } yield ()
-            )
+
+            _ <-
+                if !checkRequestValidityInterval(req, blockStartTime) then
+                    rejectEvent(
+                      JointLedger.UserRequestError.BlockOutOfRequestValidityInterval(blockStartTime)
+                    )
+                else {
+                    val l2Command: L2LedgerCommand.ApplyTransactionRequest = L2LedgerCommand
+                        .ApplyTransactionRequest(
+                          requestId = req.requestId,
+                          blockNumber = p.nextBlockNumber,
+                          blockCreationStartTime = p.startTime,
+                          l2Payload = l2Payload,
+                          verifierKey = req.request.userVk
+                        )
+                    runL2LedgerAction(
+                      action = this.l2Ledger.L2LedgerAction.fromL2LedgerCommand(l2Command),
+                      // Invalid transaction continuation
+                      onFailure = rejectEvent,
+                      // Valid transaction continuation
+                      onSuccess = payoutObligations =>
+                          for {
+                              oldState <- unsafeGetProducing
+
+                              newState = oldState
+                                  .focus(_.userRequestState.requests)
+                                  .modify(_.appended((requestId, Valid)))
+                              _ <- state.set(newState)
+                              _ <- tracer.eventProcessed(
+                                s"${requestId.peerNum: Int}:${requestId.requestNum: Int}",
+                                currentBlockNum: Int,
+                                true
+                              )
+                          } yield ()
+                    )
+                }
         } yield ()
     }
 
@@ -544,9 +583,8 @@ final case class JointLedger(
                             nextKzg = header.kzgCommitment,
                             absorbedDeposits = absorbedDeposits,
                             payoutObligations = payoutObligations,
-                            blockCreatedOn = header.startTime,
-                            competingFallbackValidityStart =
-                                txTiming.newFallbackStartTime(header.startTime)
+                            blockCreationEndTime = header.endTime,
+                            competingFallbackValidityStart = p.competingFallbackValidityStart
                           ),
                           onSuccess = IO.pure
                         )
@@ -636,11 +674,7 @@ final case class JointLedger(
                 payoutObligationsRemaining = Vector.from(
                   p.evacuationMap.evacuationMap.map((_, o) => Payout.Obligation(o))
                 ),
-                blockCreatedOn = p.startTime,
-                competingFallbackValidityStart = p.startTime
-                    + txTiming.minSettlementDuration
-                    + txTiming.inactivityMarginDuration
-                    + txTiming.silenceDuration,
+                competingFallbackValidityStart = p.competingFallbackValidityStart
               ),
               onSuccess = IO.pure
             )
@@ -792,7 +826,9 @@ object JointLedger {
         peerLiaisons: List[PeerLiaison.Handle]
     )
 
-    final case class CompleteBlockError() extends Throwable
+    enum UserRequestError extends Throwable:
+        case BlockOutOfRequestValidityInterval(blockCreationStartTime: QuantizedInstant)
+            extends UserRequestError
 
     object Requests {
         type Request =

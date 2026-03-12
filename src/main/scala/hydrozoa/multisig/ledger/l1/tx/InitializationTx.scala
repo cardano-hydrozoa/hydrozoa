@@ -58,7 +58,7 @@ private object InitializationTxOps {
         result
     }
 
-    final case class Build(config: Config) {
+    final case class Build(config: Config)(blockCreationEndTime: QuantizedInstant) {
         import Build.*
 
         lazy val result: BuilderResultSimple[InitializationTx] = for {
@@ -116,8 +116,7 @@ private object InitializationTxOps {
                         )
                     )
 
-                private[tx] val validityEndTime =
-                    config.txTiming.initializationEndTime(config.headStartTime)
+                private[tx] val validityEndTime = config.txTiming.initializationEndTime(blockCreationEndTime)
 
                 private val validityEndSlot = ValidityEndSlot(validityEndTime.toSlot.slot)
             }
@@ -284,6 +283,7 @@ private object InitializationTxOps {
     }
 
     final case class Parse(config: Config)(
+        blockCreationEndTime: QuantizedInstant,
         tx: Transaction,
         resolvedUtxos: ResolvedUtxos
     ) {
@@ -323,7 +323,7 @@ private object InitializationTxOps {
 
             expectedHeadAddress = config.headMultisigAddress
 
-            expectedEndTime = config.txTiming.initializationEndTime(config.headStartTime)
+            expectedEndTime = config.txTiming.initializationEndTime(blockCreationEndTime)
 
             expectedTreasuryDatum = MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum(
               config.initialEvacuationMap

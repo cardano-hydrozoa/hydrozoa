@@ -124,7 +124,7 @@ object Model:
         def depositForSubmission: List[(RequestId, QuantizedInstant)] =
             this.depositEnqueued
                 .map(cmd =>
-                    cmd.registerDeposit.requestId -> cmd.depositRefundTxSeq.depositTx.validityEnd
+                    cmd.registerDeposit.requestId -> cmd.depositRefundTxSeq.depositTx.submissionDeadline
                 )
                 .filter(e => depositsRegistered.contains(e._1))
                 .filterNot(e => depositSubmitted.contains(e._1) || depositRejected.contains(e._1))
@@ -404,7 +404,7 @@ object Model:
 
             val depositsAbsorbed = depositsToCheck
                 .filter(cmd => {
-                    val submissionDeadline = cmd.depositRefundTxSeq.depositTx.validityEnd
+                    val submissionDeadline = cmd.depositRefundTxSeq.depositTx.submissionDeadline
                     val depositAbsorptionStart =
                         txTiming.depositAbsorptionStartTime(submissionDeadline)
                     val depositAbsorptionEnd = txTiming.depositAbsorptionEndTime(submissionDeadline)
@@ -430,7 +430,7 @@ object Model:
                  then depositsToCheck // all known deposits should be refunded
                  else
                      depositsToCheck.filter(cmd =>
-                         val submissionDeadline = cmd.depositRefundTxSeq.depositTx.validityEnd
+                         val submissionDeadline = cmd.depositRefundTxSeq.depositTx.submissionDeadline
                          val depositAbsorptionStart =
                              txTiming.depositAbsorptionStartTime(submissionDeadline)
                          val settlementValidityEnd =
@@ -527,7 +527,7 @@ object Model:
 
             val brief =
                 if isFinal then finalBlock
-                else if txTiming.blockCanStayMinor(blockStartTime, competingFallbackStartTime)
+                else if txTiming.blockCanStayMinor(blockStartTime, competingFallbackStartTime) // FIXME: blockCreationEndTime
                 then {
                     val hasWithdrawals = events.exists(_._2 match {
                         case e: L2Tx => e.l1utxos.nonEmpty
@@ -581,10 +581,10 @@ object Model:
                     .fold(e => throw RuntimeException(e), identity)
 
             // For now, all deposits request should be valid by construction
-            require(blockStartTime < seq.depositTx.validityEnd)
+            require(blockStartTime < seq.depositTx.submissionDeadline)
             require(
               blockStartTime < config.headConfig.txTiming.depositAbsorptionEndTime(
-                seq.depositTx.validityEnd
+                seq.depositTx.submissionDeadline
               )
             )
 

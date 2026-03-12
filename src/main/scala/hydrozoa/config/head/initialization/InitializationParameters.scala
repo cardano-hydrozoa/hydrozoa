@@ -37,7 +37,6 @@ export hydrozoa.config.head.initialization.InitializationParameters.isBalancedIn
   *   excess of the unbalanced treasury value ([[initialEquityContributed]] + [[initialL2Value]]).
   */
 final case class InitializationParameters(
-    override val headStartTime: QuantizedInstant,
     override val initialEvacuationMap: EvacuationMap,
     override val initialEquityContributions: NonEmptyMap[HeadPeerNumber, Coin],
     // TODO: just seedUtxo?
@@ -72,8 +71,6 @@ final case class InitializationParameters(
 object InitializationParameters {
     trait Section extends HasTokenNames {
         def initializationParams: InitializationParameters
-
-        def headStartTime: QuantizedInstant
 
         def initialEvacuationMap: EvacuationMap
         def initialEquityContributions: NonEmptyMap[HeadPeerNumber, Coin]
