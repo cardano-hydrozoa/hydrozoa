@@ -3,18 +3,20 @@ package hydrozoa.multisig.server
 import cats.effect.{IO, Resource}
 import cats.syntax.all.*
 import com.comcast.ip4s.*
+import hydrozoa.config.head.HeadConfig
+import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.consensus.EventSequencer
 import org.http4s.ember.server.EmberServerBuilder
 import org.http4s.server.Server
+import org.http4s.server.middleware.CORS
 import org.typelevel.log4cats.Logger
-import org.typelevel.log4cats.slf4j.Slf4jLogger
 
 /** HTTP server for Hydrozoa L2 event submission from end-users (or a proxy -- load-balancer,
   * unified API)
   */
 object HydrozoaServer {
 
-    private given logger: Logger[IO] = Slf4jLogger.getLogger[IO]
+    private given logger: Logger[IO] = Logging.loggerIO("HydrozoaServer")
 
     /** Configuration for the HTTP server */
     // TODO: shall we include it into node config?
@@ -34,14 +36,16 @@ object HydrozoaServer {
       */
     def create(
         eventSequencer: EventSequencer.Handle,
+        headConfig: HeadConfig,
         config: Config = Config()
     ): Resource[IO, Server] =
         for {
-            hydrozoaRoutes <- Resource.eval(HydrozoaRoutes(eventSequencer))
+            hydrozoaRoutes <- Resource.eval(HydrozoaRoutes(eventSequencer, headConfig))
             server <- EmberServerBuilder
                 .default[IO]
                 .withHost(config.host)
                 .withPort(config.port)
+                .withHttpApp(CORS.policy.withAllowOriginAll(hydrozoaRoutes.routes.orNotFound))
                 .withHttpApp(hydrozoaRoutes.routes.orNotFound)
                 .build
                 .evalTap { _ =>
@@ -57,9 +61,10 @@ object HydrozoaServer {
       */
     def run(
         eventSequencer: EventSequencer.Handle,
+        headConfig: HeadConfig,
         config: Config = Config()
     ): IO[Nothing] = {
-        create(eventSequencer, config)
+        create(eventSequencer, headConfig, config)
             .use(_ => IO.never)
     }
 }

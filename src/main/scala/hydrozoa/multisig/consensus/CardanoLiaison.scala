@@ -558,8 +558,8 @@ trait CardanoLiaison(
                     // Submission errors are ignored, but dumped here
                     submissionErrors = submitRet.filter(_._2.isLeft)
                     _ <- IO.whenA(submissionErrors.nonEmpty)(
-                      loggerIO.warn(
-                        "Submission errors:" + submissionErrors
+                      loggerIO.debug(
+                        "Submission errors (generally ignored):" + submissionErrors
                             .map(a =>
                                 s"\n\t- ${a._2.left}, cbor=${HexUtil.encodeHexString(a._1.toCbor)}"
                             )

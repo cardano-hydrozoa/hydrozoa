@@ -54,7 +54,7 @@ private object InitializationTxOps {
         val start = System.nanoTime()
         val result = block
         val elapsed = (System.nanoTime() - start) / 1_000_000.0
-        logger.info(f"\t\t⏱️ $label: ${elapsed}%.2f ms")
+        logger.trace(f"\t\t⏱️ $label: ${elapsed}%.2f ms")
         result
     }
 

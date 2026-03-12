@@ -17,15 +17,17 @@ import hydrozoa.multisig.ledger.eutxol2.{HydrozoaTransactionMutator, toEvacuatio
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag.Valid
 import hydrozoa.multisig.ledger.event.RequestNumber.increment
-import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber, UserRequest}
+import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.joint.given
 import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap}
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
+import hydrozoa.multisig.server.UserRequest
 import io.bullet.borer.Cbor
 import monocle.Lens
 import monocle.syntax.all.focus
 import org.scalacheck.commands.ModelCommand
+
 import scala.collection.immutable.{Queue, TreeMap}
 import scala.util.chaining.*
 import scalus.cardano.ledger.{AssetName, KeepRaw, Transaction, TransactionHash, TransactionInput, TransactionOutput, Utxos}
@@ -41,63 +43,63 @@ object Model:
       * construction.
       */
     case class State(
-        // Non-mutable
-        multiNodeConfig: MultiNodeConfig,
-        // Initial state of the peer's L1 utxos.
-        // It's needed since [[peerUtxosL1]] reflects the state after running the initialization tx
-        // which applies upon initial state generation (is there a better spot to run the init tx?)
-        peerGenesisUtxosL1: Utxos,
+                      // Non-mutable
+                      multiNodeConfig: MultiNodeConfig,
+                      // Initial state of the peer's L1 utxos.
+                      // It's needed since [[peerUtxosL1]] reflects the state after running the initialization tx
+                      // which applies upon initial state generation (is there a better spot to run the init tx?)
+                      peerGenesisUtxosL1: Utxos,
 
-        // "Mutable" part
-        nextLedgerEventNumber: RequestNumber,
-        currentTime: CurrentTime,
+                      // "Mutable" part
+                      nextRequestNumber: RequestNumber,
+                      currentTime: CurrentTime,
 
-        // Block producing cycle
-        blockCycle: BlockCycle,
+                      // Block producing cycle
+                      blockCycle: BlockCycle,
 
-        // This is put here to avoid tossing over Done/Ready/InProgress
-        // NB: for block zero it's more initializationExpirationTime
-        competingFallbackStartTime: QuantizedInstant,
+                      // This is put here to avoid tossing over Done/Ready/InProgress
+                      // NB: for block zero it's more initializationExpirationTime
+                      competingFallbackStartTime: QuantizedInstant,
 
-        // Evacuation Map
-        evacuationMap: EvacuationMap,
-        // L1 state - the only peer's utxos
-        peerUtxosL1: Utxos,
+                      // Evacuation Map
+                      evacuationMap: EvacuationMap,
+                      // L1 state - the only peer's utxos
+                      peerUtxosL1: Utxos,
 
-        // Deposits
+                      // Deposits
 
-        // The queue of all generated deposits that Alice intends to register.
-        // At all times, all deposits in the list are disjoint in terms of their funding utxo.
-        depositEnqueued: List[RegisterDepositCommand],
-        // Signed deposit transactions - we need them when we submit deposits.
-        depositSigned: Map[TransactionHash, Transaction],
-        // Utxos used in the deposit enqueued as funding utxos.
-        // We need this not to generate deposits that use the same utxos for funding many times.
-        utxoLocked: Set[TransactionInput],
+                      // The queue of all generated deposits that Alice intends to register.
+                      // At all times, all deposits in the list are disjoint in terms of their funding utxo.
+                      depositEnqueued: List[RegisterDepositCommand],
+                      // Signed deposit transactions - we need them when we submit deposits.
+                      depositSigned: Map[TransactionHash, Transaction],
+                      // Utxos used in the deposit enqueued as funding utxos.
+                      // We need this not to generate deposits that use the same utxos for funding many times.
+                      utxoLocked: Set[TransactionInput],
 
-        // Subset of depositEnqueued which has been registered by Hydrozoa, i.e.
-        // included in a block brief with positive validity flag.
-        depositsRegistered: List[RequestId],
+                      // Subset of depositEnqueued which has been registered by Hydrozoa, i.e.
+                      // included in a block brief with positive validity flag.
+                      depositsRegistered: List[RequestId],
 
-        // After a deposit was registered, we may submit it or cancel it depending on
-        // how much time is left until its deposit tx's TTL is up - I call it runway.
-        // Upon generating [[SubmitDepositsCommand]] we assess whether we have enough
-        // runway to take off the deposit - i.e. how much time we have from now to the
-        // ttl. This is needed, because the test fails if SUT can't submit deposit tx
-        // that model expects to see.
-        //
-        // So we have two partitions here:
-        //  - deposits, that have been submitted, so they are expected to appear in the
-        // very first block that satisfies their absorption window
-        //  - deposits, that the model decided not to submit - their funding utdxos get
-        // unlocked so they can be used again
-        depositSubmitted: List[RequestId],
-        depositRejected: List[RequestId],
+                      // After a deposit was registered, we may submit it or cancel it depending on
+                      // how much time is left until its deposit tx's TTL is up - I call it runway.
+                      // Upon generating [[SubmitDepositsCommand]] we assess whether we have enough
+                      // runway to take off the deposit - i.e. how much time we have from now to the
+                      // ttl. This is needed, because the test fails if SUT can't submit deposit tx
+                      // that model expects to see.
+                      //
+                      // So we have two partitions here:
+                      //  - deposits, that have been submitted, so they are expected to appear in the
+                      // very first block that satisfies their absorption window
+                      //  - deposits, that the model decided not to submit - their funding utdxos get
+                      // unlocked so they can be used again
+                      depositSubmitted: List[RequestId],
+                      depositRejected: List[RequestId],
     ) {
         override def toString: String = "<model state (hidden)>"
 
-        def nextRequestId: LedgerEventId =
-            RequestId(peerNum = HeadPeerNumber.zero, eventNum = nextLedgerEventNumber)
+        def nextRequestId: RequestId =
+            RequestId(peerNum = HeadPeerNumber.zero, requestNum = nextRequestNumber)
 
         /** To save time and keep things simple we exploit the fact that all txs that may mutate the
           * L1 state of the peer's utxo are continuing - they spend and pays back at least one utxo
@@ -164,7 +166,7 @@ object Model:
             events: List[
               (
                   // Raw ledger event
-                  UserRequest,
+                  UserRequest[_],
                   // Parsed counterpart
                   L2Tx | DepositUtxo,
                   // Validity flag
@@ -185,8 +187,8 @@ object Model:
         )
 
     private val eventsLens
-        : Lens[BlockCycle.InProgress, List[(UserRequest, L2Tx | DepositUtxo, ValidityFlag)]] =
-        Lens[BlockCycle.InProgress, List[(UserRequest, L2Tx | DepositUtxo, ValidityFlag)]](
+        : Lens[BlockCycle.InProgress, List[(UserRequest[_], L2Tx | DepositUtxo, ValidityFlag)]] =
+        Lens[BlockCycle.InProgress, List[(UserRequest[_], L2Tx | DepositUtxo, ValidityFlag)]](
           get = _.events
         )(
           replace = events => bc => bc.copy(events = events)
@@ -318,7 +320,7 @@ object Model:
             state.blockCycle match {
                 case BlockCycle.InProgress(_, creationTime, prevVersion, events) =>
                     logger.trace(
-                      s"Completing block with ${events.length} events: ${events.map(_._1.requestId)}"
+                      s"Completing block with ${events.length} events: ${events.map(_._1.body.requestId)}"
                     )
                     val (blockBrief, newActiveUtxos, withdrawnUtxos) = mkBlockBrief(
                       cmd.blockNumber,
@@ -602,7 +604,7 @@ object Model:
                 .modify(_ ++ seq.depositTx.tx.body.value.inputs.toSeq)
                 .focus(_.depositSigned)
                 .modify(_ + (cmd.depositTxBytesSigned.id -> cmd.depositTxBytesSigned))
-                .focus(_.nextLedgerEventNumber)
+                .focus(_.nextRequestNumber)
                 .modify(_.increment)
 
             val BlockCycle.InProgress(_, _, _, finalEvents) = finalState.blockCycle: @unchecked

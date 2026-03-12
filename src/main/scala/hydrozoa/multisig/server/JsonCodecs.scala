@@ -1,82 +1,29 @@
 package hydrozoa.multisig.server
 
+import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.lib.cardano.cip116
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
-import hydrozoa.multisig.server.ApiResponse.{Error, RequestAccepted}
+import hydrozoa.multisig.server.ApiResponse.{Error, HeadInfo, RequestAccepted}
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
 import io.circe.{Decoder, Encoder, Json}
+import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.crypto.ed25519.{Signature, VerificationKey}
-import scalus.uplc.builtin.ByteString
-import scodec.bits.ByteVector
 
 /** JSON encoders and decoders for API types */
 object JsonCodecs {
 
-    import cip116.JsonCodecs.CIP0116.Conway.{byteArrayEncoder, byteArrayDecoder}
+    import cip116.JsonCodecs.CIP0116.Conway.given
+    import hydrozoa.config.head.initialization.InitializationParameters.HeadId.{given Encoder[HeadId], given Decoder[HeadId]}
+
+    //// Make TransactionInput codecs available as given instances
+    // given Encoder[TransactionInput] = transactionInputEncoder
+    // given Decoder[TransactionInput] = transactionInputDecoder
 
     // Helper for accessing ApiRequest inner types
     val apiRequest = new ApiRequest()
-
-    // Scalus VerificationKey codec (32 bytes as hex)
-    given Encoder[VerificationKey] =
-        Encoder.encodeString.contramap(vk => ByteVector(vk.bytes.toArray).toHex)
-
-    given Decoder[VerificationKey] =
-        Decoder.decodeString.emap { hexStr =>
-            ByteVector
-                .fromHex(hexStr)
-                .toRight(s"Invalid hex string for verification key: $hexStr")
-                .flatMap { bv =>
-                    if bv.size == 32 then
-                        Right(
-                          VerificationKey.unsafeFromByteString(ByteString.fromArray(bv.toArray))
-                        )
-                    else Left(s"Verification key must be 32 bytes, got ${bv.size}")
-                }
-        }
-
-    // Scalus Signature codec (64 bytes as hex)
-    given Encoder[Signature] =
-        Encoder.encodeString.contramap(sig => ByteVector(sig.bytes.toArray).toHex)
-
-    given Decoder[Signature] =
-        Decoder.decodeString.emap { hexStr =>
-            ByteVector
-                .fromHex(hexStr)
-                .toRight(s"Invalid hex string for signature: $hexStr")
-                .flatMap { bv =>
-                    if bv.size == 64 then
-                        Right(Signature.unsafeFromByteString(ByteString.fromArray(bv.toArray)))
-                    else Left(s"Signature must be 64 bytes, got ${bv.size}")
-                }
-        }
-
-    // Hash32 codec (32 bytes as hex) - Hash32 is Hash[Blake2b_256, Any]
-    given Encoder[Hash32] =
-        Encoder.encodeString.contramap(hash => ByteVector(hash.bytes.toArray).toHex)
-
-    given Decoder[Hash32] =
-        Decoder.decodeString.emap { hexStr =>
-            ByteVector
-                .fromHex(hexStr)
-                .toRight(s"Invalid hex string for hash: $hexStr")
-                .flatMap { bv =>
-                    if bv.size == 32 then
-                        import scalus.cardano.ledger.{Blake2b_256, Hash}
-                        Right(Hash[Blake2b_256, Any](ByteString.fromArray(bv.toArray)))
-                    else Left(s"Hash32 must be 32 bytes, got ${bv.size}")
-                }
-        }
-
-    // AssetName codec (as plain value, not key)
-    given assetNameValueEncoder: Encoder[AssetName] =
-        Encoder.encodeString.contramap(assetName => assetName.bytes.toHex)
-
-    given assetNameValueDecoder: Decoder[AssetName] =
-        Decoder.decodeString.map(s => AssetName.fromHex(s))
 
     // UserRequestBody codec (enum) - encoded as plain object without type discriminator
     given Encoder[apiRequest.UserRequestBody] = {
@@ -180,8 +127,8 @@ object JsonCodecs {
     type DepositRequest = apiRequest.DepositRequest
     type TransactionRequest = apiRequest.TransactionRequest
 
-    // LedgerEventNumber codec
-    given ledgerEventNumberEncoder: Encoder[RequestNumber] =
+    // RequestNumber codec
+    given requestNumberEncoder: Encoder[RequestNumber] =
         Encoder.encodeInt.contramap(_.convert)
 
     given requestNumberDecoder: Decoder[RequestNumber] =
@@ -195,13 +142,13 @@ object JsonCodecs {
         Decoder.decodeInt.map(HeadPeerNumber.apply)
 
     // RequestId codec
-    given ledgerEventIdEncoder: Encoder[RequestId] = (requestId: RequestId) =>
+    given requestIdEncoder: Encoder[RequestId] = (requestId: RequestId) =>
         io.circe.Json.obj(
           "peerNum" -> requestId.peerNum.asJson,
           "requestNum" -> requestId.requestNum.asJson
         )
 
-    given ledgerEventIdDecoder: Decoder[RequestId] = c =>
+    given requestIdDecoder: Decoder[RequestId] = c =>
         for {
             peerNum <- c.downField("peerNum").as[HeadPeerNumber]
             requestNum <- c.downField("requestNum").as[RequestNumber]
@@ -215,4 +162,8 @@ object JsonCodecs {
     given errorEncoder: Encoder[Error] = deriveEncoder[Error]
 
     given errorDecoder: Decoder[Error] = deriveDecoder[Error]
+
+    given headInfoEncoder: Encoder[HeadInfo] = deriveEncoder[HeadInfo]
+
+    given headInfoDecoder: Decoder[HeadInfo] = deriveDecoder[HeadInfo]
 }

@@ -77,6 +77,7 @@ trait MultisigRegimeManager(
 
             nodeId = s"head:${config.ownHeadPeerNum: Int}"
             tracer <- ProtocolTracer.jsonLines(nodeId)
+            _ <- tracer.traceError(0, "foo", "bar")
 
             _ <- logger.info("Starting multisig actors...")
 

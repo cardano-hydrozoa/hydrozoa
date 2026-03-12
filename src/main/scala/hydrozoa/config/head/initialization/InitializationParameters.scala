@@ -1,6 +1,7 @@
 package hydrozoa.config.head.initialization
 
 import cats.data.NonEmptyMap
+import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
@@ -8,12 +9,13 @@ import hydrozoa.lib.number.Distribution
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.token.CIP67.{HasTokenNames, HeadTokenNames}
+import io.circe.{Decoder, Encoder}
 import scala.collection.immutable.TreeMap
-import scalus.cardano.ledger.{Blake2b_256, Coin, Hash, Hash32, TransactionOutput, Utxo, Utxos, Value}
+import scalus.cardano.ledger.{AssetName, Blake2b_256, Coin, Hash, Hash32, TransactionOutput, Utxo, Utxos, Value}
 import scalus.uplc.builtin.{ByteString, platform}
 import spire.math.Rational
 
-export InitializationParameters.isBalancedInitializationFunding
+export hydrozoa.config.head.initialization.InitializationParameters.isBalancedInitializationFunding
 
 /** Configuration settings for the head's initialization.
   *
@@ -38,8 +40,12 @@ final case class InitializationParameters(
     override val headStartTime: QuantizedInstant,
     override val initialEvacuationMap: EvacuationMap,
     override val initialEquityContributions: NonEmptyMap[HeadPeerNumber, Coin],
+    // TODO: just seedUtxo?
     override val initialSeedUtxo: Utxo,
+    override val headId: HeadId,
+    // TODO: just additionalFundingUtxos?
     override val initialAdditionalFundingUtxos: Utxos,
+    // TODO: just changeOutputs?
     override val initialChangeOutputs: List[TransactionOutput],
 ) extends InitializationParameters.Section {
     override transparent inline def initializationParams: InitializationParameters = this
@@ -72,6 +78,7 @@ object InitializationParameters {
         def initialEvacuationMap: EvacuationMap
         def initialEquityContributions: NonEmptyMap[HeadPeerNumber, Coin]
         def initialSeedUtxo: Utxo
+        def headId: HeadId
         def initialAdditionalFundingUtxos: Utxos
         def initialChangeOutputs: List[TransactionOutput]
 
@@ -115,4 +122,16 @@ object InitializationParameters {
             ret
         }
 
+    opaque type HeadId = AssetName
+
+    object HeadId:
+        def apply(treasuryBeaconTokenName: AssetName): HeadId = treasuryBeaconTokenName
+
+        // Circe codecs using hex encoding for underlying AssetName
+        // TODO: shall we use CIP-0116 codec for AssetName?
+        given Encoder[HeadId] =
+            Encoder.encodeString.contramap((headId: HeadId) => headId.bytes.toHex)
+
+        given Decoder[HeadId] =
+            Decoder.decodeString.map(s => AssetName.fromHex(s))
 }

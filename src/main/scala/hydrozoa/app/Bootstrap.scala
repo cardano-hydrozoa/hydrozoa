@@ -1,11 +1,13 @@
 package hydrozoa.app
 
 import cats.data.{NonEmptyList, NonEmptyMap}
+import cats.effect.unsafe.implicits.global
 import cats.effect.{ExitCode, IO, IOApp}
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.app.Main.loadEnv
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.HeadConfig.Preinit
+import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.multisig.fallback.FallbackContingency.mkFallbackContingencyWithDefaults
 import hydrozoa.config.head.multisig.settlement.SettlementConfig
@@ -26,6 +28,7 @@ import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfro
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, HeadPeerWallet}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
 import hydrozoa.multisig.ledger.joint.EvacuationMap
+import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import java.security.SecureRandom
 import monocle.Focus.focus
@@ -114,11 +117,16 @@ object Bootstrap:
           )
         )
 
-        // Calculate required value: minEquity + max non-Plutus tx fee for initialization
+        // Calculate required value: minEquity + contingency + max non-Plutus tx fee for initialization
         maxNonPlutusTxFee = cardanoNetwork.maxNonPlutusTxFee
-        requiredValue = Value(minEquity + maxNonPlutusTxFee)
+        zeroPeerContingency = headParams.fallbackContingency.totalContingencyFor(
+          HeadPeerNumber.zero
+        )
+        requiredValue = Value(minEquity + zeroPeerContingency + maxNonPlutusTxFee)
         _ <- logger.info(
-          s"Required value: ${minEquity.value} lovelace (equity) + ${maxNonPlutusTxFee.value} lovelace (fee) = ${requiredValue.coin.value} lovelace"
+          s"Required value: ${minEquity.value} lovelace (equity) + " +
+              s"${zeroPeerContingency} lovelace (peer contingency) + " +
+              s"${maxNonPlutusTxFee.value} lovelace (fee) = ${requiredValue.coin.value} lovelace"
         )
 
         // Select UTXOs that cover the required value
@@ -166,6 +174,7 @@ object Bootstrap:
             }
         }
 
+        seedUtxo = utxosSelected.head
         valueSelected = Value.combine(utxosSelected.map(_.output.value).toList)
 
         initializationParameters = InitializationParameters(
@@ -173,14 +182,14 @@ object Bootstrap:
           initialEvacuationMap = evacMap,
           initialEquityContributions =
               NonEmptyMap(HeadPeerNumber.zero -> minEquity, SortedMap.empty),
-          initialSeedUtxo = utxosSelected.head,
+          initialSeedUtxo = seedUtxo,
+          headId = HeadId(CIP67.HeadTokenNames(seedUtxo.input).treasuryTokenName),
           initialAdditionalFundingUtxos = utxosSelected.tail.map(_.toTuple).toMap,
           initialChangeOutputs = List(
             TransactionOutput.Babbage(
               address = peerAddress,
-              value = valueSelected - Value(minEquity) - Value(
-                headParams.fallbackContingency.totalContingencyFor(HeadPeerNumber.zero)
-              ),
+              value = valueSelected - Value(minEquity) -
+                  Value(zeroPeerContingency),
               datumOption = None,
               scriptRef = None
             )
@@ -194,7 +203,16 @@ object Bootstrap:
           initializationParams = initializationParameters
         ).get
 
-        initTxSeq = InitializationTxSeq.Build(preinit).result.fold(e => throw e, x => x)
+        initTxSeq = InitializationTxSeq
+            .Build(preinit)
+            .result
+            .fold(
+              e => {
+                  logger.error(e.toString).unsafeRunSync()
+                  throw e
+              },
+              x => x
+            )
     } yield {
 
         val initialBlock = InitialBlock(

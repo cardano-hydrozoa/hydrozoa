@@ -5,10 +5,7 @@ import scala.concurrent.duration.DurationInt
 import scala.math.Ordered.orderingToOrdered
 import scalus.cardano.ledger.SlotConfig
 
-// TODO: Update/fix comment
-/** TODO: This should be derived from Hydrozoa parameters.
-  *
-  * TODO: move around?
+/** TODO: Update/fix comment
   *
   * Peter and I determined that the settlement tx duration should be:
   *   - Long enough that the settlement tx is still unexpired whenever we need to resubmit it due to
@@ -50,6 +47,7 @@ final case class TxTiming(
     override val minSettlementDuration: QuantizedFiniteDuration,
     override val inactivityMarginDuration: QuantizedFiniteDuration,
     override val silenceDuration: QuantizedFiniteDuration,
+    override val depositSubmissionDuration: QuantizedFiniteDuration,
     override val depositMaturityDuration: QuantizedFiniteDuration,
     override val depositAbsorptionDuration: QuantizedFiniteDuration,
 ) extends TxTiming.Section {
@@ -77,18 +75,27 @@ final case class TxTiming(
     def initializationEndTime(headStartTime: QuantizedInstant): QuantizedInstant =
         headStartTime + minSettlementDuration + inactivityMarginDuration
 
-    def refundValidityStart(submissionDeadline: QuantizedInstant): QuantizedInstant =
-        submissionDeadline + depositMaturityDuration + depositAbsorptionDuration + silenceDuration
+    // TODO: I added depositSubmissionDuration here, expect most tests to be red
+    def refundValidityStartOffset: QuantizedFiniteDuration = {
+        depositSubmissionDuration + depositMaturityDuration + depositAbsorptionDuration + silenceDuration
+    }
 
+    // TODO: update - use request validity end?
+    def refundValidityStart(submissionDeadline: QuantizedInstant): QuantizedInstant =
+        submissionDeadline + refundValidityStartOffset
+
+    // TODO: update - use request validity end?
     def depositAbsorptionStartTime(submissionDeadline: QuantizedInstant): QuantizedInstant =
         submissionDeadline + depositMaturityDuration
 
+    // TODO: update - use request validity end?
     def depositAbsorptionEndTime(submissionDeadline: QuantizedInstant): QuantizedInstant =
         depositAbsorptionStartTime(submissionDeadline) + depositAbsorptionDuration
 }
 
-// TODO: Update/fix comment
-/** Timing is hard. The precision we have to use is going to be dependent on the slot config.
+/** TODO: Update/fix comment
+  *
+  * Timing is hard. The precision we have to use is going to be dependent on the slot config.
   *
   * For example, when we're parsing a PostDated refund tx, we need to extract a start time. That
   * start time right now is represented as an Instant, and without additional mitigations, we'll get
@@ -112,6 +119,7 @@ object TxTiming {
       minSettlementDuration = 12.hours.quantize(slotConfig),
       inactivityMarginDuration = 24.hours.quantize(slotConfig),
       silenceDuration = 5.minutes.quantize(slotConfig),
+      depositSubmissionDuration = 5.minutes.quantize(slotConfig),
       depositMaturityDuration = 1.hours.quantize(slotConfig),
       depositAbsorptionDuration = 48.hours.quantize(slotConfig),
     )
@@ -121,6 +129,7 @@ object TxTiming {
       minSettlementDuration = 60.seconds.quantize(slotConfig),
       inactivityMarginDuration = 20.seconds.quantize(slotConfig),
       silenceDuration = 1.minute.quantize(slotConfig),
+      depositSubmissionDuration = 5.minutes.quantize(slotConfig),
       depositMaturityDuration = 1.second.quantize(slotConfig),
       depositAbsorptionDuration = 1.hours.quantize(slotConfig),
     )
@@ -129,6 +138,7 @@ object TxTiming {
       minSettlementDuration = 1.hour.quantize(slotConfig),
       inactivityMarginDuration = 1.minute.quantize(slotConfig),
       silenceDuration = 5.minute.quantize(slotConfig),
+      depositSubmissionDuration = 5.minutes.quantize(slotConfig),
       depositMaturityDuration = 5.minute.quantize(slotConfig),
       depositAbsorptionDuration = 2.hours.quantize(slotConfig),
     )
@@ -138,6 +148,7 @@ object TxTiming {
       minSettlementDuration = 1.hour.quantize(slotConfig),
       inactivityMarginDuration = 20.seconds.quantize(slotConfig),
       silenceDuration = 5.minute.quantize(slotConfig),
+      depositSubmissionDuration = 5.minutes.quantize(slotConfig),
       depositMaturityDuration = 10.second.quantize(slotConfig),
       depositAbsorptionDuration = 2.hours.quantize(slotConfig),
     )
@@ -148,6 +159,7 @@ object TxTiming {
         def minSettlementDuration: QuantizedFiniteDuration
         def inactivityMarginDuration: QuantizedFiniteDuration
         def silenceDuration: QuantizedFiniteDuration
+        def depositSubmissionDuration: QuantizedFiniteDuration
         def depositMaturityDuration: QuantizedFiniteDuration
         def depositAbsorptionDuration: QuantizedFiniteDuration
     }

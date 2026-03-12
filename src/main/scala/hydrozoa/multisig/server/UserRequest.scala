@@ -12,7 +12,7 @@ import scalus.uplc.builtin.ByteString
 import scalus.uplc.builtin.JVMPlatformSpecific.verifyEd25519Signature
 
 /** A parsed user request with a valid signature and body hash
- *
+  *
   * @param signature
   *   Signature of the header, encoded as the bytestring of the UTF-8 representation of json string,
   *   verifiable by userVK
@@ -63,10 +63,11 @@ given io.bullet.borer.Encoder[UserRequestHeader] = Encoder.derived
   *   The blake2b_224 hash of the cbor-encoded seed [[Utxo]] appended to the CIP-67 prefix HYDR
   * @param bodyHash
   *   blake2b_256 hash of the Cbor-encoded
- *   @param validityStart
- *     Block creation start time must be no earlier than this time in order for the request to be actionable
- *   @param validityEnd
- *     Block creation start time must be before this time in order for the request to be actionable
+  * @param validityStart
+  *   Block creation start time must be no earlier than this time in order for the request to be
+  *   actionable
+  * @param validityEnd
+  *   Block creation start time must be before this time in order for the request to be actionable
   */
 case class UserRequestHeader(
     headId: Hash28, // FIXME: Not a hash28, see doc comment
@@ -94,7 +95,7 @@ case class L1DepositRequestPayload(
     refundTxBytes: Array[Byte],
     // TODO: Remove. Deposit value - depositFee = l2Value
     l2Value: Value,
-    // TODO: Remove: deposit fee will be put in DepositTx Metadata                              
+    // TODO: Remove: deposit fee will be put in DepositTx Metadata
     depositFee: Coin
 )
 

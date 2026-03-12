@@ -24,7 +24,7 @@ private object InitializationTxSeqOps {
         val start = System.nanoTime()
         val result = block
         val elapsed = (System.nanoTime() - start) / 1_000_000.0
-        logger.info(f"\t\t⏱️ $label: ${elapsed}%.2f ms")
+        logger.trace(f"\t\t⏱️ $label: ${elapsed}%.2f ms")
         result
     }
 
@@ -32,6 +32,12 @@ private object InitializationTxSeqOps {
         enum Error extends Throwable {
             case InitializationTxError(e: (SomeBuildErrorOnly, String))
             case FallbackTxError(e: SomeBuildError)
+
+            override def toString: String = this match {
+                case Error.InitializationTxError(e) => s"${e._2}: ${e._1.toString}"
+                case Error.FallbackTxError(e)       => s"${e.toString}"
+            }
+
         }
     }
 

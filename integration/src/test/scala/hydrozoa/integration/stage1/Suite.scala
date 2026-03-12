@@ -326,7 +326,7 @@ case class Suite(
         } yield Model
             .State(
               multiNodeConfig = config,
-              nextLedgerEventNumber = LedgerEventNumber(0),
+              nextRequestNumber = LedgerEventNumber(0),
               currentTime = BeforeHappyPathExpiration(config.headConfig.headStartTime),
               blockCycle = BlockCycle.Done(BlockNumber.zero, BlockVersion.Full.zero),
               competingFallbackStartTime =

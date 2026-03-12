@@ -1,12 +1,12 @@
 package hydrozoa.multisig.server
 
 import cats.effect.{IO, Ref}
+import hydrozoa.config.head.HeadConfig
 import hydrozoa.multisig.consensus.EventSequencer
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
-import hydrozoa.multisig.server.ApiResponse.{Error, RequestAccepted}
-import hydrozoa.multisig.server.JsonCodecs.given
-import hydrozoa.multisig.server.JsonCodecs.{DepositRequest, TransactionRequest}
+import hydrozoa.multisig.server.ApiResponse.{Error, HeadInfo, RequestAccepted}
+import hydrozoa.multisig.server.JsonCodecs.{DepositRequest, TransactionRequest, given}
 import io.circe.syntax.*
 import org.http4s.circe.*
 import org.http4s.dsl.io.*
@@ -20,6 +20,7 @@ import org.http4s.{EntityDecoder, HttpRoutes}
   */
 class HydrozoaRoutes(
     @annotation.unused eventSequencer: EventSequencer.Handle,
+    headConfig: HeadConfig,
     eventCounter: Ref[IO, Int]
 ) {
 
@@ -73,13 +74,40 @@ class HydrozoaRoutes(
                 // eventId <- eventSequencer ?: depositRequest
 
                 // For now, generate next event ID and return RequestAccepted
-                eventId <- nextRequestId
-                response = RequestAccepted(requestId = eventId)
+                requestId <- nextRequestId
+                response = RequestAccepted(requestId)
                 resp <- Ok(response.asJson)
             } yield resp
 
             result.handleErrorWith { error =>
                 BadRequest(
+                  Error(
+                    error = error.getMessage
+                  ).asJson
+                )
+            }
+
+        // GET /api/head-info
+        case GET -> Root / "api" / "head-info" =>
+            val result: IO[org.http4s.Response[IO]] = for {
+                currentTimePosixSeconds <- IO.realTimeInstant.map(_.getEpochSecond)
+                resp <- Ok(
+                  HeadInfo(
+                    headId = headConfig.headId,
+                    headAddress = headConfig.headMultisigAddress,
+                    multisigRegimeUtxo = headConfig.multisigRegimeUtxo.utxoId,
+                    submissionDurationSeconds =
+                        headConfig.txTiming.depositSubmissionDuration.finiteDuration.toSeconds,
+                    refundStartOffsetSeconds =
+                        headConfig.txTiming.refundValidityStartOffset.finiteDuration.toSeconds,
+                    currentTimePosixSeconds = currentTimePosixSeconds,
+                    maxNonPlutusTxFee = headConfig.maxNonPlutusTxFee
+                  ).asJson
+                )
+            } yield resp
+
+            result.handleErrorWith { error =>
+                InternalServerError(
                   Error(
                     error = error.getMessage
                   ).asJson
@@ -93,8 +121,11 @@ class HydrozoaRoutes(
 }
 
 object HydrozoaRoutes {
-    def apply(eventSequencer: EventSequencer.Handle): IO[HydrozoaRoutes] =
+    def apply(
+        eventSequencer: EventSequencer.Handle,
+        headConfig: HeadConfig,
+    ): IO[HydrozoaRoutes] =
         Ref.of[IO, Int](0).map { counter =>
-            new HydrozoaRoutes(eventSequencer, counter)
+            new HydrozoaRoutes(eventSequencer, headConfig, counter)
         }
 }

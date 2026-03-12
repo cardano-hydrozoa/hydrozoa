@@ -20,13 +20,14 @@ import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.eutxol2.tx.GenesisObligation
-import hydrozoa.multisig.ledger.event.UserRequest.L2Event
-import hydrozoa.multisig.ledger.event.{RequestId, UserRequest}
+import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
+import hydrozoa.multisig.server.UserRequest
 import io.bullet.borer.Cbor
 import org.scalacheck.Gen
 import org.scalacheck.commands.{AnyCommand, ScenarioGen, noOp}
+
 import scala.concurrent.duration.DurationInt
 import scala.math.Ordering.Implicits.infixOrderingOps
 import scalus.cardano.address.ShelleyAddress

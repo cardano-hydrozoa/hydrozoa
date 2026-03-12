@@ -46,6 +46,9 @@ object HeadParameters {
         override transparent inline def silenceDuration: QuantizedFiniteDuration =
             txTiming.silenceDuration
 
+        override transparent inline def depositSubmissionDuration: QuantizedFiniteDuration =
+            txTiming.depositSubmissionDuration
+
         override transparent inline def depositMaturityDuration: QuantizedFiniteDuration =
             txTiming.depositMaturityDuration
 

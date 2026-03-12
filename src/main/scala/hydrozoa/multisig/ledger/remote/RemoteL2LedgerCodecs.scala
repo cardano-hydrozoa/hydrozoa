@@ -23,7 +23,7 @@ object RemoteL2LedgerCodecs {
 
     // Reuse codecs from the HTTP server
     import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
-    import hydrozoa.multisig.server.JsonCodecs.{ledgerEventIdEncoder, ledgerEventIdDecoder}
+    import hydrozoa.multisig.server.JsonCodecs.{requestIdEncoder, requestIdDecoder}
 
     // QuantizedInstant codec (simplified - loses SlotConfig context)
     // TODO: Include SlotConfig in serialization for proper reconstruction
