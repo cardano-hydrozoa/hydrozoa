@@ -46,7 +46,7 @@ object HydrozoaServer {
                 .withHost(config.host)
                 .withPort(config.port)
                 .withHttpApp(CORS.policy.withAllowOriginAll(hydrozoaRoutes.routes.orNotFound))
-                .withHttpApp(hydrozoaRoutes.routes.orNotFound)
+//                .withHttpApp(hydrozoaRoutes.routes.orNotFound)
                 .build
                 .evalTap { _ =>
                     logger.info(
