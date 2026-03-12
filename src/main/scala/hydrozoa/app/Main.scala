@@ -156,7 +156,7 @@ object Main extends IOApp {
                 _ <- mrm.connectionsDeferred.get.flatMap { connections =>
                     logger.info("Starting HTTP server...") *>
                         HydrozoaServer
-                            .create(connections.eventSequencer)
+                            .create(connections.eventSequencer, nodeConfig.headConfig)
                             .use(_ => IO.never)
                             .start // Run in background
                             .void

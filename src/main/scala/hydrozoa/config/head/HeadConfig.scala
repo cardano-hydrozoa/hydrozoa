@@ -1,6 +1,7 @@
 package hydrozoa.config.head
 
 import cats.data.{NonEmptyList, NonEmptyMap}
+import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.multisig.settlement.SettlementConfig
@@ -172,6 +173,8 @@ object HeadConfig {
                 initializationParams.initialEquityContributions
             override transparent inline def initialSeedUtxo: Utxo =
                 initializationParams.initialSeedUtxo
+            override transparent inline def headId: HeadId =
+                initializationParams.headId
             override transparent inline def initialAdditionalFundingUtxos: Utxos =
                 initializationParams.initialAdditionalFundingUtxos
             override transparent inline def initialChangeOutputs: List[TransactionOutput] =

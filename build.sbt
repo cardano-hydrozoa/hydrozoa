@@ -88,7 +88,9 @@ lazy val core: Project = (project in file("."))
         "org.scalus" % "scalus-testkit_3" % scalusVersion % Test,
         "dev.optics" %% "monocle-core" % "3.3.0" % Test,
         "dev.optics" %% "monocle-macro" % "3.3.0" % Test
-      )
+      ),
+      // Fork JVM to properly pass system properties
+      run / fork := true,
     )
 
 // Integration tests

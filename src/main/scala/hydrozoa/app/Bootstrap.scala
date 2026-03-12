@@ -7,6 +7,7 @@ import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.app.Main.loadEnv
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.HeadConfig.Preinit
+import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.multisig.fallback.FallbackContingency.mkFallbackContingencyWithDefaults
 import hydrozoa.config.head.multisig.settlement.SettlementConfig
@@ -27,6 +28,7 @@ import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfro
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, HeadPeerWallet}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
 import hydrozoa.multisig.ledger.joint.EvacuationMap
+import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import java.security.SecureRandom
 import monocle.Focus.focus
@@ -172,6 +174,7 @@ object Bootstrap:
             }
         }
 
+        seedUtxo = utxosSelected.head
         valueSelected = Value.combine(utxosSelected.map(_.output.value).toList)
 
         initializationParameters = InitializationParameters(
@@ -179,7 +182,8 @@ object Bootstrap:
           initialEvacuationMap = evacMap,
           initialEquityContributions =
               NonEmptyMap(HeadPeerNumber.zero -> minEquity, SortedMap.empty),
-          initialSeedUtxo = utxosSelected.head,
+          initialSeedUtxo = seedUtxo,
+          headId = HeadId(CIP67.HeadTokenNames(seedUtxo.input).treasuryTokenName),
           initialAdditionalFundingUtxos = utxosSelected.tail.map(_.toTuple).toMap,
           initialChangeOutputs = List(
             TransactionOutput.Babbage(

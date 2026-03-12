@@ -3,6 +3,7 @@ package hydrozoa.config.head.initialization
 import cats.*
 import cats.data.*
 import cats.syntax.semigroup.*
+import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.multisig.fallback.{FallbackContingency, FallbackContingencyGen, generateFallbackContingency}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
@@ -16,6 +17,7 @@ import hydrozoa.multisig.ledger.eutxol2.toEvacuationKey
 import hydrozoa.multisig.ledger.eutxol2.tx.L2Genesis
 import hydrozoa.multisig.ledger.joint.given
 import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap}
+import hydrozoa.multisig.ledger.l1.token.CIP67
 import java.time.Instant
 import monocle.syntax.all.*
 import org.scalacheck.{Gen, Prop, Properties}
@@ -177,6 +179,7 @@ object InitializationParametersGenTopDown {
           initialEvacuationMap = initialEvacuationMap,
           initialEquityContributions = NonEmptyMap.fromMapUnsafe(peersEquity),
           initialSeedUtxo = seedUtxo,
+          headId = HeadId(CIP67.HeadTokenNames(seedUtxo.input).treasuryTokenName),
           initialAdditionalFundingUtxos = total.fundingUtxos.asUtxos - seedUtxo.input,
           initialChangeOutputs = total.changeOutputs
         )
@@ -461,6 +464,7 @@ object InitializationParametersGenBottomUp {
               EvacuationMap(TreeMap.from(l2Utxos.map((i, o) => (i.toEvacuationKey, KeepRaw(o))))),
           initialEquityContributions = equityContributions,
           initialSeedUtxo = seedUtxo,
+          headId = HeadId(CIP67.HeadTokenNames(seedUtxo.input).treasuryTokenName),
           initialAdditionalFundingUtxos = additionalFundingUtxos,
           initialChangeOutputs = changeUtxos.map(_.output)
         )
