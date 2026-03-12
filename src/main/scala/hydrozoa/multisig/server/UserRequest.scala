@@ -24,17 +24,35 @@ import scalus.|>
   *   Signature of the header, encoded as the bytestring of the UTF-8 representation of json string,
   *   verifiable by userVK
   */
-case class UserRequest private (
-    header: UserRequestHeader,
-    body: UserRequestBody,
-    userVk: VerificationKey,
-    signature: Signature
-) extends SyncRequest[IO, UserRequest, RequestId] {
-    export UserRequest.Sync
-    def ?: : this.Send = SyncRequest.send(_, this)
+enum UserRequest {
+    def header: UserRequestHeader
+    def body: UserRequestBody
+    def userVk: VerificationKey
+    def signature: Signature
+
+    case DepositRequest(
+        override val header: UserRequestHeader,
+        override val body: UserRequestBody.DepositRequestBody,
+        override val userVk: VerificationKey,
+        override val signature: Signature
+    ) extends UserRequest
+
+    case TransactionRequest(
+        override val header: UserRequestHeader,
+        override val body: UserRequestBody.TransactionRequestBody,
+        override val userVk: VerificationKey,
+        override val signature: Signature
+    ) extends UserRequest
 }
 
+//extends SyncRequest[IO, UserRequest, RequestId] {
+//    export UserRequest.Sync
+//    def ?: : this.Send = SyncRequest.send(_, this)
+//}
+
 object UserRequest {
+    trait Section {}
+
     type Sync = SyncRequest.Envelope[IO, UserRequest, RequestId]
 
     object Error {
@@ -65,7 +83,12 @@ object UserRequest {
                 if verifyEd25519Signature(userVk, header.byteString, signature)
                 then Right(signature)
                 else Left(SignatureMismatch)
-        } yield new UserRequest(header, body, userVk, signature)
+        } yield body match {
+            case b: UserRequestBody.DepositRequestBody =>
+                new UserRequest.DepositRequest(header, b, userVk, signature)
+            case b: UserRequestBody.TransactionRequestBody =>
+                new UserRequest.TransactionRequest(header, b, userVk, signature)
+        }
 }
 
 /** @param headId
@@ -118,16 +141,28 @@ extension (urb: UserRequestBody) {
             |> Hash.apply
 }
 
-case class UserRequestWithId private (
-    requestId: RequestId,
-    request: UserRequest,
-)
+enum UserRequestWithId {
+    def requestId: RequestId
+    def request: UserRequest
+
+    case DepositRequest(
+        override val requestId: RequestId,
+        override val request: UserRequest.DepositRequest,
+    )
+
+    case TransactionRequest(
+        override val requestId: RequestId,
+        override val request: UserRequest.TransactionRequest,
+    )
+}
 
 object UserRequestWithId {
     def apply(
         userRequest: UserRequest,
         requestId: RequestId
-    ): UserRequestWithId =
-        UserRequestWithId(requestId, userRequest)
-
+    ): UserRequestWithId = userRequest match {
+        case req: UserRequest.DepositRequest => UserRequestWithId.DepositRequest(requestId, req)
+        case req: UserRequest.TransactionRequest =>
+            UserRequestWithId.TransactionRequest(requestId, req)
+    }
 }

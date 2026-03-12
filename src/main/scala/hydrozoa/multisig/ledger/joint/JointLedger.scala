@@ -26,8 +26,7 @@ import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import hydrozoa.multisig.ledger.l1.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerCommand, L2LedgerError, L2LedgerState}
-import hydrozoa.multisig.server.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
-import hydrozoa.multisig.server.{UserRequest, UserRequestWithId}
+import hydrozoa.multisig.server.UserRequestWithId
 import monocle.Focus.focus
 import scala.collection.immutable.Queue
 import scala.math.Ordered.orderingToOrdered
@@ -180,19 +179,19 @@ final case class JointLedger(
     }
 
     private def applyUserRequestWithId(e: UserRequestWithId): IO[Unit] = {
+        // TODO: check that blockStartTime is within the request's validity bounds
         e match {
-            case req @ UserRequestWithId(_, UserRequest(_, body: DepositRequestBody, _, _)) =>
-                registerUserDeposit(req, body)
-            case req @ UserRequestWithId(_, UserRequest(_, body: TransactionRequestBody, _, _)) =>
-                applyL2UserRequest(req, body)
+            case req: UserRequestWithId.DepositRequest     => registerUserDeposit(req)
+            case req: UserRequestWithId.TransactionRequest => applyL2UserRequest(req)
         }
     }
 
     /** Update the JointLedger's state -- the work-in-progress block -- to accept or reject deposits
       * depending on whether the [[dappLedger]] Actor can successfully register the deposit,
       */
-    private def registerUserDeposit(req: UserRequestWithId, body: DepositRequestBody): IO[Unit] = {
+    private def registerUserDeposit(req: UserRequestWithId.DepositRequest): IO[Unit] = {
         import req.*
+        import request.*
         import body.*
 
         val rejectEvent = (e: L1LedgerM.Error | L2LedgerError) =>
@@ -268,11 +267,12 @@ final case class JointLedger(
       * updating ledgerEventsRequired
       */
     private def applyL2UserRequest(
-        userL2Request: UserRequestWithId,
-        body: TransactionRequestBody
+        userL2Request: UserRequestWithId.TransactionRequest
     ): IO[Unit] = {
         import userL2Request.*
+        import request.*
         import body.*
+
         for {
             p <- unsafeGetProducing
             currentBlockNum = p.nextBlockNumber
