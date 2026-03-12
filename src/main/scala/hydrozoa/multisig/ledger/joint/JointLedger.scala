@@ -26,8 +26,11 @@ import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import hydrozoa.multisig.ledger.l1.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerCommand, L2LedgerError, L2LedgerState}
-import hydrozoa.multisig.server.{DepositRequestWithId, TransactionRequestWithId, UserRequestWithId}
+import hydrozoa.multisig.server.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
+import hydrozoa.multisig.server.UserRequestWithId
+import hydrozoa.multisig.server.UserRequest
 import monocle.Focus.focus
+
 import scala.collection.immutable.Queue
 import scala.math.Ordered.orderingToOrdered
 import scalus.cardano.ledger.TransactionInput
@@ -130,7 +133,7 @@ final case class JointLedger(
     // TODO: PartialFunction.fromFunction is a noop here
     override def receive: Receive[IO, Requests.Request] = PartialFunction.fromFunction {
         case Requests.PreStart       => preStartLocal
-        case e: UserRequestWithId[?] => applyUserRequestWithId(e)
+        case e: UserRequestWithId => applyUserRequestWithId(e)
         case s: StartBlock           => startBlock(s)
         case c: CompleteBlockRegular => completeBlockRegular(c)
         case f: CompleteBlockFinal   => completeBlockFinal(f)
@@ -178,18 +181,19 @@ final case class JointLedger(
         } yield b
     }
 
-    private def applyUserRequestWithId(e: UserRequestWithId[?]): IO[Unit] = {
+    private def applyUserRequestWithId(e: UserRequestWithId): IO[Unit] = {
         e match {
-            case req: DepositRequestWithId    => registerUserDeposit(req)
-            case tx: TransactionRequestWithId => applyL2UserRequest(tx)
+            case req@UserRequestWithId(_, UserRequest(_, body : DepositRequestBody, _, _)) =>  registerUserDeposit(req, body)
+            case req@UserRequestWithId(_, UserRequest(_, body : TransactionRequestBody, _, _)) => applyL2UserRequest(req, body)
         }
     }
 
     /** Update the JointLedger's state -- the work-in-progress block -- to accept or reject deposits
       * depending on whether the [[dappLedger]] Actor can successfully register the deposit,
       */
-    private def registerUserDeposit(req: DepositRequestWithId): IO[Unit] = {
+    private def registerUserDeposit(req: UserRequestWithId, body : DepositRequestBody): IO[Unit] = {
         import req.*
+        import body.*
 
         val rejectEvent = (e: L1LedgerM.Error | L2LedgerError) =>
             for {
@@ -210,7 +214,7 @@ final case class JointLedger(
         for {
             blockStartTime <- unsafeGetProducing.map(_.startTime)
             _ <- this.runL1LedgerM(
-              action = L1LedgerM.registerDeposit(req, blockStartTime),
+              action = L1LedgerM.registerDeposit(body, req.requestId, blockStartTime),
               // Left == deposit rejected
               // FIXME: This should probably be returned as sum type in the Right
               onFailure = rejectEvent,
@@ -229,7 +233,7 @@ final case class JointLedger(
                         depositUtxoId = depositProduced.utxoId,
                         depositFee = depositProduced.depositFee,
                         depositL2Value = depositProduced.l2Value,
-                        l2Payload = req.request.body.l2Payload,
+                        l2Payload = l2Payload,
                         refundDestination = refundTx.refundDestination,
                         verifierKey = req.request.userVk
                       )
@@ -264,9 +268,11 @@ final case class JointLedger(
       * updating ledgerEventsRequired
       */
     private def applyL2UserRequest(
-        userL2Request: TransactionRequestWithId
+        userL2Request: UserRequestWithId,
+        body : TransactionRequestBody
     ): IO[Unit] = {
         import userL2Request.*
+        import body.*
         for {
             p <- unsafeGetProducing
             currentBlockNum = p.nextBlockNumber
@@ -275,7 +281,7 @@ final case class JointLedger(
                   requestId = userL2Request.requestId,
                   blockNumber = p.nextBlockNumber,
                   blockCreationStartTime = p.startTime,
-                  l2Payload = userL2Request.request.body.l2Payload,
+                  l2Payload = l2Payload,
                   verifierKey = userL2Request.request.userVk
                 )
             _ <- runL2LedgerAction(
@@ -790,7 +796,7 @@ object JointLedger {
 
     object Requests {
         type Request =
-            PreStart.type | UserRequestWithId[?] | StartBlock | CompleteBlockRegular |
+            PreStart.type | UserRequestWithId | StartBlock | CompleteBlockRegular |
                 CompleteBlockFinal | GetState.Sync
 
         case object PreStart

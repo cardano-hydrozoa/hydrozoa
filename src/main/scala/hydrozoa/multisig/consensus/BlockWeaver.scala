@@ -101,7 +101,7 @@ object BlockWeaver:
     }
 
     type Handle = ActorRef[IO, Request]
-    type Request = PreStart.type | UserRequestWithId[?] | BlockBrief.Next | BlockConfirmed |
+    type Request = PreStart.type | UserRequestWithId | BlockBrief.Next | BlockConfirmed |
         PollResults | FinalizationLocallyTriggered.type
 
     case object PreStart
@@ -120,14 +120,14 @@ object BlockWeaver:
       *   vector to store order of request ids
       */
     case class Mempool(
-        requests: Map[RequestId, UserRequestWithId[_]] = Map.empty,
+        requests: Map[RequestId, UserRequestWithId] = Map.empty,
         receivingOrder: Vector[RequestId] = Vector.empty
     )
 
     object Mempool {
         val empty: Mempool = Mempool()
 
-        def apply(events: Seq[UserRequestWithId[_]]): Mempool =
+        def apply(events: Seq[UserRequestWithId]): Mempool =
             events.foldLeft(Mempool.empty)((mempool, request) => mempool.add(request))
 
         // Extension methods
@@ -141,7 +141,7 @@ object BlockWeaver:
               *   an updated mempool
               */
             def add(
-                request: UserRequestWithId[?]
+                request: UserRequestWithId
             ): Mempool = {
 
                 val requestId = request.requestId
@@ -170,11 +170,11 @@ object BlockWeaver:
             }
 
             // Find by ID
-            def findById(id: RequestId): Option[UserRequestWithId[_]] =
+            def findById(id: RequestId): Option[UserRequestWithId] =
                 mempool.requests.get(id)
 
             // Iterate in insertion order
-            def inOrder: Iterator[UserRequestWithId[_]] =
+            def inOrder: Iterator[UserRequestWithId] =
                 mempool.receivingOrder.iterator.flatMap(mempool.requests.get)
 
             def isEmpty: Boolean = mempool.requests.isEmpty
@@ -238,7 +238,7 @@ trait BlockWeaver(
     private def receiveTotal(req: Request): IO[Unit] =
         req match {
             case BlockWeaver.PreStart         => preStartLocal
-            case msg: UserRequestWithId[?]    => handleUserRequestWithId(msg)
+            case msg: UserRequestWithId    => handleUserRequestWithId(msg)
             case b: BlockBrief.Next           => handleNewBlock(b)
             case bc: BlockConfirmed           => handleBlockConfirmed(bc)
             case pr: PollResults              => handlePollResults(pr)
@@ -255,7 +255,7 @@ trait BlockWeaver(
     // Mailbox message handlers
     // ===================================
 
-    private def handleUserRequestWithId(event: UserRequestWithId[?]): IO[Unit] = {
+    private def handleUserRequestWithId(event: UserRequestWithId): IO[Unit] = {
         import FeedResult.*
 
         for {
@@ -523,7 +523,7 @@ trait BlockWeaver(
 
     private def continueFeedBlock(
         blockBrief: BlockBrief.Next,
-        request: UserRequestWithId[?],
+        request: UserRequestWithId,
         mempool: Mempool
     ): IO[FeedResult] =
         tryFeedBlock(blockBrief, mempool.add(request), Some(request.requestId))

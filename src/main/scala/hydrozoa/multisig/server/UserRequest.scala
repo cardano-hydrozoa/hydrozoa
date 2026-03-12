@@ -1,7 +1,9 @@
 package hydrozoa.multisig.server
 
+import cats.effect.IO
 import cats.syntax.all.*
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
+import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.server.JsonCodecs.{given_Encoder_UserRequestBody, given_Encoder_UserRequestHeader}
 import hydrozoa.multisig.server.UserRequest.Error.{BodyHashMismatch, SignatureMismatch}
@@ -15,25 +17,25 @@ import scalus.uplc.builtin.JVMPlatformSpecific.verifyEd25519Signature
 import scalus.uplc.builtin.{ByteString, JVMPlatformSpecific}
 import scalus.|>
 
-type DepositRequest = UserRequest[UserRequestBody.DepositRequestBody]
-type TransactionRequest = UserRequest[UserRequestBody.TransactionRequestBody]
-type DepositRequestWithId = UserRequestWithId[UserRequestBody.DepositRequestBody]
-type TransactionRequestWithId = UserRequestWithId[UserRequestBody.TransactionRequestBody]
-
 /** A parsed user request with a valid signature and body hash
   *
   * @param signature
   *   Signature of the header, encoded as the bytestring of the UTF-8 representation of json string,
   *   verifiable by userVK
   */
-case class UserRequest[BodyType <: UserRequestBody] private (
+case class UserRequest private (
     header: UserRequestHeader,
-    body: BodyType,
+    body: UserRequestBody,
     userVk: VerificationKey,
     signature: Signature
-)
+) extends SyncRequest[IO, UserRequest, RequestId] {
+    export UserRequest.Sync
+    def ?: : this.Send = SyncRequest.send(_, this)
+}
 
 object UserRequest {
+    type Sync = SyncRequest.Envelope[IO, UserRequest, RequestId]
+
     object Error {
         trait ValidationError extends Throwable
 
@@ -47,12 +49,12 @@ object UserRequest {
         case object SignatureMismatch extends ValidationError
     }
 
-    def apply[AnyBody <: UserRequestBody](
+    def apply(
         header: UserRequestHeader,
-        body: AnyBody,
+        body: UserRequestBody,
         userVk: VerificationKey,
         signature: Signature
-    ): Either[Error.ValidationError, UserRequest[AnyBody]] =
+    ): Either[Error.ValidationError, UserRequest] =
         for {
             _ <-
                 if body.hash == header.bodyHash
@@ -62,11 +64,11 @@ object UserRequest {
                 if verifyEd25519Signature(userVk, header.byteString, signature)
                 then Right(signature)
                 else Left(SignatureMismatch)
-        } yield new UserRequest[AnyBody](header, body, userVk, signature)
+        } yield new UserRequest(header, body, userVk, signature)
 }
 
 /** @param headId
-  *   The blake2b_224 hash of the cbor-encoded seed [[Utxo]] appended to the CIP-67 prefix HYDR.
+  *   The blake2b_224 hash of the cbor-encoded seed utxo [[TransactionInput]] appended to the CIP-67 prefix HYDR.
   *   This is the asset name of the treasury token
   * @param bodyHash
   *   blake2b_256 hash of the Cbor-encoded
@@ -115,16 +117,16 @@ extension (urb: UserRequestBody) {
             |> Hash.apply
 }
 
-case class UserRequestWithId[BodyType <: UserRequestBody] private (
+case class UserRequestWithId private (
     requestId: RequestId,
-    request: UserRequest[BodyType],
+    request: UserRequest,
 )
 
 object UserRequestWithId {
-    def apply[AnyBody <: UserRequestBody](
-        userRequest: UserRequest[AnyBody],
+    def apply(
+        userRequest: UserRequest,
         requestId: RequestId
-    ): UserRequestWithId[AnyBody] =
+    ): UserRequestWithId =
         UserRequestWithId(requestId, userRequest)
 
 }

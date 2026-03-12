@@ -6,6 +6,7 @@ import hydrozoa.lib.cardano.cip116
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.server.ApiResponse.{Error, HeadInfo, RequestAccepted}
+import hydrozoa.multisig.server.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
 import io.circe.{Decoder, DecodingFailure, Encoder, Json}
@@ -72,30 +73,32 @@ object JsonCodecs {
         } yield UserRequestHeader(headId, validityStart, validityEnd, bodyHash)
 
     // UserRequest codec (generic) - uses "deposit" or "transaction" as field name
-    given [Body <: UserRequestBody: Encoder: Decoder]: Encoder[UserRequest[Body]] with {
-        def apply(req: UserRequest[Body]): Json = {
+    given Encoder[UserRequest] with {
+        def apply(req: UserRequest): Json = {
             val bodyFieldName = req.body match {
                 case _: UserRequestBody.DepositRequestBody     => "deposit"
                 case _: UserRequestBody.TransactionRequestBody => "transaction"
             }
             Json.obj(
               "header" -> summon[Encoder[UserRequestHeader]].apply(req.header),
-              bodyFieldName -> summon[Encoder[Body]].apply(req.body),
+              bodyFieldName -> (if bodyFieldName == "deposit"
+                    then summon[Encoder[DepositRequestBody]].apply(req.body.asInstanceOf[DepositRequestBody])
+                    else summon[Encoder[TransactionRequestBody]].apply(req.body.asInstanceOf[TransactionRequestBody])),
               "userVk" -> summon[Encoder[VerificationKey]].apply(req.userVk),
               "signature" -> summon[Encoder[Signature]].apply(req.signature)
             )
         }
     }
 
-    given [Body <: UserRequestBody: Encoder: Decoder]: Decoder[UserRequest[Body]] with {
-        def apply(c: io.circe.HCursor): Decoder.Result[UserRequest[Body]] =
+    given Decoder[UserRequest] with {
+        def apply(c: io.circe.HCursor): Decoder.Result[UserRequest] =
             for {
                 header <- c.downField("header").as[UserRequestHeader]
                 // Try both "deposit" and "transaction" fields
                 body <- c
                     .downField("deposit")
-                    .as[Body]
-                    .orElse(c.downField("transaction").as[Body])
+                    .as[DepositRequestBody]
+                    .orElse(c.downField("transaction").as[TransactionRequestBody])
                 userVk <- c.downField("userVk").as[VerificationKey]
                 signature <- c.downField("signature").as[Signature]
                 // QUESTION: What exactly are these "ops"?

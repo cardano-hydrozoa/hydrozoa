@@ -15,7 +15,7 @@ import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import hydrozoa.multisig.server.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
-import hydrozoa.multisig.server.{TransactionRequest, UserRequestWithId}
+import hydrozoa.multisig.server.{UserRequest, UserRequestWithId}
 
 /** The first actor responsible for processing events from end-users, as received by the
   * [[HydrozoaServer]]. Only one event sequencer is running per node, specifically to handle _only_
@@ -60,51 +60,23 @@ trait EventSequencer(
 
     override def preStart: IO[Unit] = context.self ! EventSequencer.PreStart
 
-    override def receive: Receive[IO, Request] =
-        PartialFunction.fromFunction {
-            case EventSequencer.PreStart => preStartLocal
-            case req                     => getConnections.flatMap(receiveTotal(req, _))
-        }
-
-    private def receiveTotal(req: Request, conn: Connections): IO[Unit] =
-        req match {
-            case EventSequencer.PreStart =>
-                // Should never reach here since PreStart is handled in receive
-                IO.raiseError(new IllegalStateException("PreStart handled in receive"))
-            case req: SyncRequest.Any =>
-                req.request match {
-                    case r: L2TxRequest =>
-                        r.handleSync(
-                          req,
-                          l2TxReq =>
-                              for {
-                                  newNum <- state.nextLedgerEventNum()
-                                  newId = RequestId(config.ownHeadPeerId.peerNum, newNum)
-                                  newRequestWithId = UserRequestWithId[TransactionRequestBody](
-                                    userRequest = r.req,
-                                    requestId = newId
-                                  )
-                                  _ <- conn.blockWeaver ! newRequestWithId
-                                  _ <- (conn.peerLiaisons ! newRequestWithId).parallel
-                              } yield newId
+    override def receive: Receive[IO, Request] = {
+        case EventSequencer.PreStart => preStartLocal
+        case req: UserRequest.Sync =>
+                     for {
+                        conn <- getConnections
+                        newNum <- state.nextLedgerEventNum()
+                        newId = RequestId(config.ownHeadPeerId.peerNum, newNum)
+                        newRequestWithId = UserRequestWithId(
+                            userRequest = req.request,
+                            requestId = newId
                         )
-                    case r: DepositRequest =>
-                        r.handleSync(
-                          req,
-                          depositReq =>
-                              for {
-                                  newNum <- state.nextLedgerEventNum()
-                                  newId = RequestId(config.ownHeadPeerId.peerNum, newNum)
-                                  newRequestWithId = UserRequestWithId[DepositRequestBody](
-                                    requestId = newId,
-                                    userRequest = r.req
-                                  )
-                                  _ <- conn.blockWeaver ! newRequestWithId
-                                  _ <- (conn.peerLiaisons ! newRequestWithId).parallel
-                              } yield newId
-                        )
-                }
-        }
+                        _ <- conn.blockWeaver ! newRequestWithId
+                        _ <- (conn.peerLiaisons ! newRequestWithId).parallel
+                    } yield newId
+            
+    }
+        
 
     private def preStartLocal: IO[Unit] = initializeConnections
 
@@ -154,36 +126,7 @@ object EventSequencer {
         }
     }
 
-    /** Request to submit an L2 transaction. Can be used synchronously to get the assigned
-      * RequestId.
-      */
-    // TODO: Perhaps we just extend the `TransactionRequest` directly and get rid of the event-sequencer-specific
-    //  types?
-    final case class L2TxRequest(
-        req: TransactionRequest
-    ) extends SyncRequest[IO, L2TxRequest, RequestId] {
-        export L2TxRequest.Sync
-        def ?: : this.Send = SyncRequest.send(_, this)
-    }
-
-    object L2TxRequest {
-        type Sync = SyncRequest.Envelope[IO, L2TxRequest, RequestId]
-    }
-
-    /** Request to register a deposit. Can be used synchronously to get the assigned RequestId.
-      */
-    final case class DepositRequest(
-        req: hydrozoa.multisig.server.DepositRequest
-    ) extends SyncRequest[IO, DepositRequest, RequestId] {
-        export DepositRequest.Sync
-        def ?: : this.Send = SyncRequest.send(_, this)
-    }
-
-    object DepositRequest {
-        type Sync = SyncRequest.Envelope[IO, DepositRequest, RequestId]
-    }
-
     case object PreStart
 
-    type Request = PreStart.type | L2TxRequest.Sync | DepositRequest.Sync
+    type Request = PreStart.type | UserRequest.Sync
 }

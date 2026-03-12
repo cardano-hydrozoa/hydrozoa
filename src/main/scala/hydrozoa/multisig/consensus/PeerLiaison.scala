@@ -113,7 +113,7 @@ trait PeerLiaison(
         private val nEvent = Ref.unsafe[IO, RequestNumber](RequestNumber(0))
         private val qAck = Ref.unsafe[IO, Queue[AckBlock]](Queue())
         private val qBlock = Ref.unsafe[IO, Queue[BlockBrief.Next]](Queue())
-        private val qEvent = Ref.unsafe[IO, Queue[UserRequestWithId[_]]](Queue())
+        private val qEvent = Ref.unsafe[IO, Queue[UserRequestWithId]](Queue())
         private val sendBatchImmediately = Ref.unsafe[IO, Option[GetMsgBatch]](None)
 
         /** Check whether there are no acks, blocks, or events queued-up to be sent out. */
@@ -126,7 +126,7 @@ trait PeerLiaison(
 
         infix def appendToOutbox(x: RemoteBroadcast): IO[Unit] =
             x match {
-                case y: UserRequestWithId[?] =>
+                case y: UserRequestWithId =>
                     for {
                         nEvent <- this.nEvent.get
                         nY = y.requestId.requestNum
@@ -320,7 +320,7 @@ object PeerLiaison {
     case object PreStart
 
     object Request {
-        type RemoteBroadcast = AckBlock | BlockBrief.Next | UserRequestWithId[?]
+        type RemoteBroadcast = AckBlock | BlockBrief.Next | UserRequestWithId
 
         /** Request by a comm actor to its remote comm-actor counterpart for a batch of events,
           * blocks, or block acknowledgements originating from the remote peer.
@@ -369,7 +369,7 @@ object PeerLiaison {
             batchNum: Batch.Number,
             ack: Option[AckBlock],
             blockBrief: Option[BlockBrief.Next],
-            requests: List[UserRequestWithId[_]]
+            requests: List[UserRequestWithId]
         )
     }
 

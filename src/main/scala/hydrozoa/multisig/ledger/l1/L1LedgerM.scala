@@ -16,8 +16,9 @@ import hydrozoa.multisig.ledger.l1.L1LedgerM.Error.{ParseError, SettlementTxSeqB
 import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import hydrozoa.multisig.ledger.l1.txseq.{DepositRefundTxSeq, FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.l1.utxo.{DepositUtxo, MultisigTreasuryUtxo}
-import hydrozoa.multisig.server.DepositRequestWithId
+import hydrozoa.multisig.server.UserRequestBody.DepositRequestBody
 import monocle.syntax.all.*
+
 import scala.collection.immutable.{Queue, TreeMap}
 import scala.math.Ordered.orderingToOrdered
 
@@ -82,16 +83,17 @@ object L1LedgerM {
       * validity period ended prior to the start of the current block.
       */
     def registerDeposit(
-        req: DepositRequestWithId,
-        blockStartTime: QuantizedInstant
+                         body: DepositRequestBody,
+                         requestId: RequestId,
+                         blockStartTime: QuantizedInstant
     ): L1LedgerM[(DepositUtxo, RefundTx.PostDated)] = {
         for {
             config <- ask
             parseRes =
                 DepositRefundTxSeq
                     .Parse(config)(
-                      depositTxBytes = req.request.body.l1Payload,
-                      l2Payload = req.request.body.l2Payload
+                      depositTxBytes = body.l1Payload,
+                      l2Payload = body.l2Payload
                     )
                     .result
                     .left
@@ -118,7 +120,7 @@ object L1LedgerM {
             absorptionStartTime = config.txTiming.depositAbsorptionStartTime(
               depositProduced.submissionDeadline
             )
-            updatedMap <- s.deposits.appended((req.requestId, depositProduced))
+            updatedMap <- s.deposits.appended((requestId, depositProduced))
             newState = s.copy(deposits = updatedMap)
             _ <- set(newState)
         } yield (depositProduced, depositRefundTxSeq.refundTx)
