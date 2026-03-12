@@ -15,6 +15,8 @@ final class HeadPeerWallet(
     verificationKey: walletModule.VerificationKey,
     signingKey: walletModule.SigningKey
 ) {
+    def signMsg(msg: IArray[Byte]): IArray[Byte] = walletModule.signMsg(msg, signingKey)
+
     def getPeerNum: HeadPeerNumber = peerNum
 
     private lazy val verificationKeysBytes =

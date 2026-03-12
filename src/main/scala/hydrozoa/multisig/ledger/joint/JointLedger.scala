@@ -17,6 +17,8 @@ import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag.{Invalid, Valid}
 import hydrozoa.multisig.ledger.joint.EvacuationMap.applyDiffs
+import hydrozoa.multisig.ledger.joint.JointLedger.*
+import hydrozoa.multisig.ledger.joint.JointLedger.Requests.*
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.l1.L1LedgerM
 import hydrozoa.multisig.ledger.l1.L1LedgerM.*
@@ -24,14 +26,11 @@ import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import hydrozoa.multisig.ledger.l1.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerCommand, L2LedgerError, L2LedgerState}
-import hydrozoa.multisig.server.{DepositRequest, TransactionRequest, UserRequestWithId}
+import hydrozoa.multisig.server.{DepositRequestWithId, TransactionRequestWithId, UserRequestWithId}
 import monocle.Focus.focus
 import scala.collection.immutable.Queue
 import scala.math.Ordered.orderingToOrdered
 import scalus.cardano.ledger.TransactionInput
-
-import JointLedger.*
-import JointLedger.Requests.*
 
 // Fields of a work-in-progress block pertaining to user requests, with an additional field for dealing with withdrawn utxos
 private case class UserRequestState(
@@ -181,15 +180,15 @@ final case class JointLedger(
 
     private def applyUserRequestWithId(e: UserRequestWithId[?]): IO[Unit] = {
         e match {
-            case req: UserRequestWithId[DepositRequest]    => registerUserDeposit(req)
-            case tx: UserRequestWithId[TransactionRequest] => applyL2UserRequest(tx)
+            case req: DepositRequestWithId    => registerUserDeposit(req)
+            case tx: TransactionRequestWithId => applyL2UserRequest(tx)
         }
     }
 
     /** Update the JointLedger's state -- the work-in-progress block -- to accept or reject deposits
       * depending on whether the [[dappLedger]] Actor can successfully register the deposit,
       */
-    private def registerUserDeposit(req: UserRequestWithId[DepositRequest]): IO[Unit] = {
+    private def registerUserDeposit(req: DepositRequestWithId): IO[Unit] = {
         import req.*
 
         val rejectEvent = (e: L1LedgerM.Error | L2LedgerError) =>
@@ -228,8 +227,8 @@ final case class JointLedger(
                         blockNumber = oldState.nextBlockNumber,
                         blockCreationStartTime = oldState.startTime.toPosixTime,
                         depositUtxoId = depositProduced.utxoId,
-                        depositFee = req.request.body.l1Payload.depositFee,
-                        depositL2Value = req.request.body.l1Payload.l2Value,
+                        depositFee = depositProduced.depositFee,
+                        depositL2Value = depositProduced.l2Value,
                         l2Payload = req.request.body.l2Payload,
                         refundDestination = refundTx.refundDestination,
                         verifierKey = req.request.userVk
@@ -265,7 +264,7 @@ final case class JointLedger(
       * updating ledgerEventsRequired
       */
     private def applyL2UserRequest(
-        userL2Request: UserRequestWithId[TransactionRequest]
+        userL2Request: TransactionRequestWithId
     ): IO[Unit] = {
         import userL2Request.*
         for {
@@ -468,6 +467,7 @@ final case class JointLedger(
                       previousHeader.nextHeaderIntermediate(
                         txTiming,
                         blockStartTime,
+                        args.blockCreationEndTime,
                         competingFallbackValidityStart,
                         // TODO: We want this to be done in a separate actor in the future
                         // this doesn't include genesis
@@ -478,7 +478,7 @@ final case class JointLedger(
                     val depositEventDecisions: L2LedgerCommand.ApplyDepositDecisions =
                         L2LedgerCommand.ApplyDepositDecisions(
                           blockNumber = p.nextBlockNumber,
-                          blockCreationEndTime = ???,
+                          blockCreationEndTime = blockCreationEndTime.toPosixTime,
                           // Why vector and not Queue?
                           absorbedDeposits = Vector.from(absorbedDeposits.map(_._1)),
                           rejectedDeposits = Vector.from(rejectedDeposits.map(_._1))
@@ -494,6 +494,7 @@ final case class JointLedger(
                         kzgCommitment = newEvacuationMap.kzgCommitment
                         headerIntermediate = previousHeader.nextHeaderMajor(
                           blockStartTime,
+                          args.blockCreationEndTime,
                           kzgCommitment
                         )
                     } yield headerIntermediate
@@ -640,7 +641,8 @@ final case class JointLedger(
 
             block: Block.Unsigned.Final = {
                 import p.userRequestState.*
-                val blockHeader = p.previousBlock.header.nextHeaderFinal(p.startTime)
+                val blockHeader =
+                    p.previousBlock.header.nextHeaderFinal(p.startTime, args.blockCreationEndTime)
 
                 val blockBody = BlockBody.Final(
                   events = requests,
@@ -814,11 +816,13 @@ object JointLedger {
         case class CompleteBlockRegular(
             referenceBlockBrief: Option[BlockBrief.Intermediate],
             pollResults: Set[TransactionInput],
-            finalizationLocallyTriggered: Boolean
+            finalizationLocallyTriggered: Boolean,
+            blockCreationEndTime: QuantizedInstant
         )
 
         case class CompleteBlockFinal(
             referenceBlockBrief: Option[BlockBrief.Final],
+            blockCreationEndTime: QuantizedInstant
         )
 
         case object GetState extends SyncRequest[IO, GetState.type, State] {

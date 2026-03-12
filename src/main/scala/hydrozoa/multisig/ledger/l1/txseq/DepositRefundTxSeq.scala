@@ -1,7 +1,6 @@
 package hydrozoa.multisig.ledger.l1.txseq
 
 import cats.data.NonEmptyList
-import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.config.head.initialization.InitialBlock
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.network.CardanoNetwork
@@ -10,13 +9,10 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuant
 import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.SomeBuildErrorOnly
 import hydrozoa.multisig.ledger.l1.tx.{DepositTx, RefundTx, Tx}
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
-import monocle.*
 import monocle.syntax.all.*
 import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.TransactionWitnessSet.given_Encoder_TransactionWitnessSet
-import scalus.cardano.ledger.{Coin, TaggedSortedSet, Transaction, TransactionWitnessSet, Utxo, Value}
-import scalus.cardano.txbuilder.keepRawL
-import scalus.uplc.builtin.Data
+import scalus.cardano.ledger.{Coin, Utxo, Value}
+import scalus.uplc.builtin.{ByteString, Data}
 
 /** Deposit-[post-dated] refund tx sequence contains a deposit and a refund txs see
   * [[DepositRefundTxSeq.Build]] for details.
@@ -122,7 +118,7 @@ private object DepositRefundTxSeqOps {
       *   Optional datum to add to the refund utxo.
       */
     final case class Build(config: Config)(
-        l2Payload: Array[Byte],
+        l2Payload: ByteString,
         l2Value: Value,
         depositFee: Coin,
         utxosFunding: NonEmptyList[Utxo],
@@ -217,43 +213,23 @@ private object DepositRefundTxSeqOps {
 
         enum Error extends Throwable {
             case Deposit(e: DepositTx.Parse.Error)
-            case Refund(e: RefundTx.Parse.Error)
-            case RefundNotPostDated
-            case RefundTxMismatch(parsed: RefundTx, expected: RefundTx)
-            case ExpectedRefundBuildError(e: (SomeBuildErrorOnly, String))
+            case RefundBuildError(e: (SomeBuildErrorOnly, String))
             case CborToTransactionOutputDecodingFailure(wrapped: Throwable)
-            case TimingIncoherence
 
             override def toString: String = this match {
-                case Deposit(e)         => s"Deposit parse error: $e"
-                case Refund(e)          => s"Refund parse error: $e"
-                case RefundNotPostDated => "Refund transaction is not post-dated"
-                case RefundTxMismatch(parsed, expected) =>
-                    s"Refund transaction mismatch: parsed=$parsed, expected=$expected, " +
-                        s"parsed bytes: ${HexUtil.encodeHexString(parsed.tx.toCbor)}, " +
-                        s"expected bytes: ${expected.tx.toCbor}"
-                case ExpectedRefundBuildError(e) =>
-                    s"Expected refund build error: ${e._2}"
-                case TimingIncoherence =>
-                    "Timing incoherence between deposit and refund transactions"
+                case Deposit(e) => s"Deposit parse error: $e"
+                case RefundBuildError(e) =>
+                    s"Refund build error: ${e._2}"
             }
         }
     }
 
     /** VirtualOutputs are encoded in CBOR as a list of Babbage outputs. Internally, they are
       * represented as a more restrictive type ([[GenesisObligation]]) that ensure L2 conformance
-      *
-      * @param depositTxBytes
-      * @param refundTxBytes
-      * @param l2Payload
-      * @param donationToTreasury
-      * @param config
-      * @return
       */
     final case class Parse(config: Config)(
         depositTxBytes: Tx.Serialized,
-        refundTxBytes: Tx.Serialized,
-        l2Payload: Array[Byte],
+        l2Payload: ByteString,
     ) {
         import Parse.*
 
@@ -264,16 +240,6 @@ private object DepositRefundTxSeqOps {
                     .result
                     .left
                     .map(Parse.Error.Deposit(_))
-
-                refundTxAny <- RefundTx
-                    .Parse(config)(refundTxBytes)
-                    .result
-                    .left
-                    .map(Parse.Error.Refund(_))
-                refundTx <- refundTxAny match {
-                    case tx: RefundTx.PostDated => Right(tx)
-                    case _                      => Left(Parse.Error.RefundNotPostDated)
-                }
 
                 depositUtxo = depositTx.depositProduced
                 depositValue = depositUtxo.value
@@ -287,38 +253,11 @@ private object DepositRefundTxSeqOps {
 
                 depositFee = depositValue - l2Value
 
-                expectedRefundTx <- RefundTx.Build
-                    .PostDated(config)(depositTx.depositProduced, refundInstructions)
+                refundTx <- RefundTx.Build
+                    .PostDated(config)(depositUtxo, refundInstructions)
                     .result
                     .left
-                    .map(Parse.Error.ExpectedRefundBuildError(_))
-
-                _ <- Either.cond(
-                  {
-                      // The transaction we build to check against will not have signatures, but it will have
-                      // the native script witness. Thus, we need to ONLY nullify signatures and not the entire
-                      // witness set.refundInstructions
-                      val actualRefundTxWithNullifiedVKeyWitnesses = refundTx
-                          .focus(_.tx.witnessSetRaw)
-                          .andThen(keepRawL())
-                          .andThen(Focus[TransactionWitnessSet](_.vkeyWitnesses))
-                          .replace(TaggedSortedSet.empty)
-                      actualRefundTxWithNullifiedVKeyWitnesses == expectedRefundTx
-                  },
-                  (),
-                  Parse.Error.RefundTxMismatch(refundTx, expectedRefundTx)
-                )
-
-                _ <- Either
-                    .cond(
-                      depositTx.validityEnd + config.txTiming.depositMaturityDuration + config.txTiming.depositAbsorptionDuration
-                          + config.txTiming.silenceDuration
-                          == refundTx.startTime
-                          && refundTx.startTime == depositTx.depositProduced.datum.refundInstructions.validityStart
-                              .toEpochQuantizedInstant(config.slotConfig),
-                      (),
-                      Parse.Error.TimingIncoherence // we don't return a DepositRefundTxSeq, because it's not valid
-                    )
+                    .map(Parse.Error.RefundBuildError(_))
 
             } yield DepositRefundTxSeq(depositTx, refundTx)
         }

@@ -1,9 +1,10 @@
 package hydrozoa.multisig.server
 
-import hydrozoa.multisig.server.JsonCodecs.{DepositRequest, TransactionRequest}
+import hydrozoa.config.head.initialization.InitializationParameters.HeadId
+import hydrozoa.multisig.server.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import io.circe.syntax.*
-import scalus.cardano.ledger.{AssetName, Blake2b_256, Hash}
-import scalus.crypto.ed25519.{Signature, VerificationKey}
+import scalus.cardano.ledger.AssetName
+import scalus.crypto.ed25519.VerificationKey
 import scalus.uplc.builtin.ByteString
 
 /** Tool to generate JSON examples for API request types.
@@ -11,77 +12,69 @@ import scalus.uplc.builtin.ByteString
   * Usage: Run this object to print example JSON for DepositRequest and TransactionRequest.
   */
 object JsonExampleGenerator {
+    // Generated via https://cyphr.me/ed25519_tool/ed.html
+    private val privateKey =
+        ByteString.fromHex("CECF833065416B2E571B9563F94910C7FCC13D1ACE102843660FA202F8C0D126")
+    private val pubKey =
+        ByteString.fromHex("8A82B1C6792A44BEE2CCF45DB585E250D89D05AF43B75EEC6796749FA29A18DE")
 
-    import JsonCodecs.apiRequest
+    private val userVk: VerificationKey = VerificationKey.unsafeFromByteString(pubKey)
+
     import JsonCodecs.given
 
     /** Generate example bytes of specified length */
-    private def exampleBytes(length: Int, seed: Byte = 0): Array[Byte] =
-        Array.fill(length)((seed + 1).toByte)
+    private def exampleBytes(length: Int, seed: Byte = 0): ByteString =
+        ByteString.fromArray(Array.fill(length)((seed + 1).toByte))
 
     /** Generate example DepositRequest */
-    def exampleDepositRequest: DepositRequest = {
-        val header = apiRequest.UserRequestHeader(
-          headId = AssetName.fromHex("deadbeef"),
-          validityStart = BigInt(1234567890000L), // Example POSIX time
-          validityEnd = BigInt(1234567999999L),
-          bodyHash = Hash[Blake2b_256, Any](
-            ByteString.fromArray(exampleBytes(32, seed = 1))
-          )
-        )
-
-        val body: apiRequest.UserRequestBody.DepositRequestBody =
-            apiRequest.UserRequestBody.DepositRequestBody(
+    private def exampleDepositRequest: UserRequest[DepositRequestBody] = {
+        val body: UserRequestBody.DepositRequestBody =
+            UserRequestBody.DepositRequestBody(
               l1Payload = exampleBytes(100, seed = 2),
               l2Payload = exampleBytes(50, seed = 3)
             )
 
-        val userVk = VerificationKey.unsafeFromByteString(
-          ByteString.fromArray(exampleBytes(32, seed = 4))
+        val header = UserRequestHeader(
+          headId = HeadId(AssetName.fromHex("deadbeef")),
+          validityStart = BigInt(1234567890000L), // Example POSIX time
+          validityEnd = BigInt(1234567999999L),
+          bodyHash = body.hash
         )
 
-        val signature = Signature.unsafeFromByteString(
-          ByteString.fromArray(exampleBytes(64, seed = 5))
-        )
+        val signature = header.signEd25519(privateKey)
 
-        apiRequest.UserRequest[apiRequest.UserRequestBody.DepositRequestBody](
+        val req = UserRequest[UserRequestBody.DepositRequestBody](
           header,
           body,
           userVk,
           signature
         )
+        req.getOrElse(throw new RuntimeException("failed to build DepositRequest"))
     }
 
     /** Generate example TransactionRequest */
-    def exampleTransactionRequest: TransactionRequest = {
-        val header = apiRequest.UserRequestHeader(
-          headId = AssetName.fromHex("cafebabe"),
-          validityStart = BigInt(1234567890000L),
-          validityEnd = BigInt(1234567999999L),
-          bodyHash = Hash[Blake2b_256, Any](
-            ByteString.fromArray(exampleBytes(32, seed = 10))
-          )
-        )
-
-        val body: apiRequest.UserRequestBody.TransactionRequestBody =
-            apiRequest.UserRequestBody.TransactionRequestBody(
+    private def exampleTransactionRequest: UserRequest[TransactionRequestBody] = {
+        val body: UserRequestBody.TransactionRequestBody =
+            UserRequestBody.TransactionRequestBody(
               l2Payload = exampleBytes(75, seed = 11)
             )
 
-        val userVk = VerificationKey.unsafeFromByteString(
-          ByteString.fromArray(exampleBytes(32, seed = 12))
+        val header = UserRequestHeader(
+          headId = HeadId(AssetName.fromHex("cafebabe")),
+          validityStart = BigInt(1234567890000L),
+          validityEnd = BigInt(1234567999999L),
+          bodyHash = body.hash
         )
 
-        val signature = Signature.unsafeFromByteString(
-          ByteString.fromArray(exampleBytes(64, seed = 13))
-        )
+        val signature = header.signEd25519(privateKey)
 
-        apiRequest.UserRequest[apiRequest.UserRequestBody.TransactionRequestBody](
+        val req = UserRequest[UserRequestBody.TransactionRequestBody](
           header,
           body,
           userVk,
           signature
         )
+        req.getOrElse(throw new RuntimeException("failed to build TransactionRequest"))
     }
 
     /** Pretty-print JSON string */

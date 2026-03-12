@@ -1,5 +1,6 @@
 package hydrozoa.multisig.server
 
+import hydrozoa.config.head.initialization.InitializationParameters
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.lib.cardano.cip116
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
@@ -7,10 +8,11 @@ import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.server.ApiResponse.{Error, HeadInfo, RequestAccepted}
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
-import io.circe.{Decoder, Encoder, Json}
+import io.circe.{Decoder, DecodingFailure, Encoder, Json}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.crypto.ed25519.{Signature, VerificationKey}
+import scalus.uplc.builtin.ByteString
 
 /** JSON encoders and decoders for API types */
 object JsonCodecs {
@@ -22,64 +24,62 @@ object JsonCodecs {
     // given Encoder[TransactionInput] = transactionInputEncoder
     // given Decoder[TransactionInput] = transactionInputDecoder
 
-    // Helper for accessing ApiRequest inner types
-    val apiRequest = new ApiRequest()
-
     // UserRequestBody codec (enum) - encoded as plain object without type discriminator
-    given Encoder[apiRequest.UserRequestBody] = {
-        case apiRequest.UserRequestBody.DepositRequestBody(l1Payload, l2Payload) =>
+    given Encoder[UserRequestBody] = {
+        case UserRequestBody.DepositRequestBody(l1Payload, l2Payload) =>
             Json.obj(
-              "l1Payload" -> byteArrayEncoder(l1Payload),
-              "l2Payload" -> byteArrayEncoder(l2Payload)
+              "l1Payload" -> byteStringEncoder(l1Payload),
+              "l2Payload" -> byteStringEncoder(l2Payload)
             )
-        case apiRequest.UserRequestBody.TransactionRequestBody(l2Payload) =>
+        case UserRequestBody.TransactionRequestBody(l2Payload) =>
             Json.obj(
-              "l2Payload" -> byteArrayEncoder(l2Payload)
+              "l2Payload" -> byteStringEncoder(l2Payload)
             )
     }
 
     // Decoder for UserRequestBody - attempts both variants
-    given Decoder[apiRequest.UserRequestBody] = c =>
+    given Decoder[UserRequestBody] = c =>
         // Try deposit first (has both l1Payload and l2Payload)
         (for {
-            l1Payload <- c.downField("l1Payload").as[Array[Byte]](using byteArrayDecoder)
-            l2Payload <- c.downField("l2Payload").as[Array[Byte]](using byteArrayDecoder)
-        } yield apiRequest.UserRequestBody.DepositRequestBody(l1Payload, l2Payload))
+            l1Payload <- c.downField("l1Payload").as[ByteString](using byteStringDecoder)
+            l2Payload <- c.downField("l2Payload").as[ByteString](using byteStringDecoder)
+        } yield UserRequestBody.DepositRequestBody(l1Payload, l2Payload))
             .orElse(
               // Try transaction (only l2Payload)
               for {
-                  l2Payload <- c.downField("l2Payload").as[Array[Byte]](using byteArrayDecoder)
-              } yield apiRequest.UserRequestBody.TransactionRequestBody(l2Payload)
+                  l2Payload <- c.downField("l2Payload").as[ByteString](using byteStringDecoder)
+              } yield UserRequestBody.TransactionRequestBody(l2Payload)
             )
 
     // UserRequestHeader codec
-    given Encoder[apiRequest.UserRequestHeader] =
-        (header: apiRequest.UserRequestHeader) =>
+    given Encoder[UserRequestHeader] =
+        (header: UserRequestHeader) =>
             Json.obj(
-              "headId" -> assetNameValueEncoder(header.headId),
+              "headId" -> InitializationParameters.HeadId.given_Encoder_HeadId(header.headId),
               "validityStart" -> Json.fromBigInt(header.validityStart),
               "validityEnd" -> Json.fromBigInt(header.validityEnd),
               "bodyHash" -> summon[Encoder[Hash32]].apply(header.bodyHash)
             )
 
-    given Decoder[apiRequest.UserRequestHeader] = c =>
+    given Decoder[UserRequestHeader] = c =>
         for {
-            headId <- c.downField("headId").as[AssetName](using assetNameValueDecoder)
+            headId <- c
+                .downField("headId")
+                .as[HeadId](using InitializationParameters.HeadId.given_Decoder_HeadId)
             validityStart <- c.downField("validityStart").as[BigInt]
             validityEnd <- c.downField("validityEnd").as[BigInt]
             bodyHash <- c.downField("bodyHash").as[Hash32]
-        } yield apiRequest.UserRequestHeader(headId, validityStart, validityEnd, bodyHash)
+        } yield UserRequestHeader(headId, validityStart, validityEnd, bodyHash)
 
     // UserRequest codec (generic) - uses "deposit" or "transaction" as field name
-    given [Body <: apiRequest.UserRequestBody: Encoder: Decoder]
-        : Encoder[apiRequest.UserRequest[Body]] with {
-        def apply(req: apiRequest.UserRequest[Body]): Json = {
+    given [Body <: UserRequestBody: Encoder: Decoder]: Encoder[UserRequest[Body]] with {
+        def apply(req: UserRequest[Body]): Json = {
             val bodyFieldName = req.body match {
-                case _: apiRequest.UserRequestBody.DepositRequestBody     => "deposit"
-                case _: apiRequest.UserRequestBody.TransactionRequestBody => "transaction"
+                case _: UserRequestBody.DepositRequestBody     => "deposit"
+                case _: UserRequestBody.TransactionRequestBody => "transaction"
             }
             Json.obj(
-              "header" -> summon[Encoder[apiRequest.UserRequestHeader]].apply(req.header),
+              "header" -> summon[Encoder[UserRequestHeader]].apply(req.header),
               bodyFieldName -> summon[Encoder[Body]].apply(req.body),
               "userVk" -> summon[Encoder[VerificationKey]].apply(req.userVk),
               "signature" -> summon[Encoder[Signature]].apply(req.signature)
@@ -87,11 +87,10 @@ object JsonCodecs {
         }
     }
 
-    given [Body <: apiRequest.UserRequestBody: Encoder: Decoder]
-        : Decoder[apiRequest.UserRequest[Body]] with {
-        def apply(c: io.circe.HCursor): Decoder.Result[apiRequest.UserRequest[Body]] =
+    given [Body <: UserRequestBody: Encoder: Decoder]: Decoder[UserRequest[Body]] with {
+        def apply(c: io.circe.HCursor): Decoder.Result[UserRequest[Body]] =
             for {
-                header <- c.downField("header").as[apiRequest.UserRequestHeader]
+                header <- c.downField("header").as[UserRequestHeader]
                 // Try both "deposit" and "transaction" fields
                 body <- c
                     .downField("deposit")
@@ -99,33 +98,31 @@ object JsonCodecs {
                     .orElse(c.downField("transaction").as[Body])
                 userVk <- c.downField("userVk").as[VerificationKey]
                 signature <- c.downField("signature").as[Signature]
-            } yield apiRequest.UserRequest(header, body, userVk, signature)
+                // QUESTION: What exactly are these "ops"?
+                userRequest <- UserRequest(header, body, userVk, signature).left.map(e =>
+                    DecodingFailure(e.getMessage, ops = List.empty)
+                )
+            } yield userRequest
     }
 
     // Specific body type encoders/decoders
-    given Encoder[apiRequest.UserRequestBody.DepositRequestBody] =
-        summon[Encoder[apiRequest.UserRequestBody]].contramap(identity)
+    given Encoder[UserRequestBody.DepositRequestBody] =
+        summon[Encoder[UserRequestBody]].contramap(identity)
 
-    given Decoder[apiRequest.UserRequestBody.DepositRequestBody] =
-        summon[Decoder[apiRequest.UserRequestBody]].emap {
-            case body: apiRequest.UserRequestBody.DepositRequestBody => Right(body)
-            case _ => Left("Expected DepositRequestBody")
+    given Decoder[UserRequestBody.DepositRequestBody] =
+        summon[Decoder[UserRequestBody]].emap {
+            case body: UserRequestBody.DepositRequestBody => Right(body)
+            case _                                        => Left("Expected DepositRequest")
         }
 
-    given Encoder[apiRequest.UserRequestBody.TransactionRequestBody] =
-        summon[Encoder[apiRequest.UserRequestBody]].contramap(identity)
+    given Encoder[UserRequestBody.TransactionRequestBody] =
+        summon[Encoder[UserRequestBody]].contramap(identity)
 
-    given Decoder[apiRequest.UserRequestBody.TransactionRequestBody] =
-        summon[Decoder[apiRequest.UserRequestBody]].emap {
-            case body: apiRequest.UserRequestBody.TransactionRequestBody => Right(body)
-            case _ => Left("Expected TransactionRequestBody")
+    given Decoder[UserRequestBody.TransactionRequestBody] =
+        summon[Decoder[UserRequestBody]].emap {
+            case body: UserRequestBody.TransactionRequestBody => Right(body)
+            case _                                            => Left("Expected TransactionRequest")
         }
-
-    // Type aliases for specific request types
-    type DepositRequestBody = apiRequest.UserRequestBody.DepositRequestBody
-    type TransactionRequestBody = apiRequest.UserRequestBody.TransactionRequestBody
-    type DepositRequest = apiRequest.DepositRequest
-    type TransactionRequest = apiRequest.TransactionRequest
 
     // RequestNumber codec
     given requestNumberEncoder: Encoder[RequestNumber] =

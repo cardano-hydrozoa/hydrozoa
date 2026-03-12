@@ -7,7 +7,7 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
-import hydrozoa.lib.cardano.scalus.QuantizedTime.toEpochQuantizedInstant
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockHeader, BlockNumber, BlockStatus}
 import hydrozoa.multisig.ledger.event.RequestId
@@ -271,7 +271,7 @@ trait BlockWeaver(
                         conn <- getConnections
                         // Pass-through to the joint ledger
                         _ <- conn.jointLedger ! event
-
+                        now <- realTimeQuantizedInstant(config.slotConfig)
                         // Complete the first block immediately
                         _ <- IO.whenA(leader.isFirstBlock)(for {
                             pollResults <- pollResultsRef.get
@@ -281,7 +281,8 @@ trait BlockWeaver(
                             _ <- conn.jointLedger ! CompleteBlockRegular(
                               None,
                               pollResults.utxos,
-                              finalizationLocallyTriggered
+                              finalizationLocallyTriggered,
+                              now
                             )
                             _ <- switchToIdle(blockNumber.increment, Mempool.empty)
                         } yield ())
@@ -380,14 +381,24 @@ trait BlockWeaver(
         completeBlock <- blockBrief match {
             case x: BlockBrief.Minor =>
                 IO.pure(
-                  CompleteBlockRegular(Some(x), pollResults.utxos, finalizationLocallyTriggered)
+                  CompleteBlockRegular(
+                    Some(x),
+                    pollResults.utxos,
+                    finalizationLocallyTriggered,
+                    blockBrief.endTime
+                  )
                 )
             case x: BlockBrief.Major =>
                 IO.pure(
-                  CompleteBlockRegular(Some(x), pollResults.utxos, finalizationLocallyTriggered)
+                  CompleteBlockRegular(
+                    Some(x),
+                    pollResults.utxos,
+                    finalizationLocallyTriggered,
+                    blockBrief.endTime
+                  )
                 )
             case x: BlockBrief.Final =>
-                IO.pure(CompleteBlockFinal(Some(x)))
+                IO.pure(CompleteBlockFinal(Some(x), blockBrief.endTime))
         }
         conn <- getConnections
         _ <- conn.jointLedger ! completeBlock
@@ -417,16 +428,18 @@ trait BlockWeaver(
                                     finalizationLocallyTriggered <-
                                         finalizationLocallyTriggeredRef.get
                                     conn <- getConnections
+                                    now <- realTimeQuantizedInstant(config.slotConfig)
 
                                     // Finish the current block immediately
                                     _ <- conn.jointLedger !
                                         (if blockIntermediate.finalizationRequested
-                                         then CompleteBlockFinal(None)
+                                         then CompleteBlockFinal(None, now)
                                          else
                                              CompleteBlockRegular(
                                                None,
                                                pollResults.utxos,
-                                               finalizationLocallyTriggered
+                                               finalizationLocallyTriggered,
+                                               now
                                              ))
                                     // Switch to Idle
                                     _ <- switchToIdle(blockNumber.increment, Mempool.empty)
@@ -538,7 +551,7 @@ trait BlockWeaver(
             for {
                 conn <- getConnections
                 _ <- conn.tracer.leaderStarted(nextBlockNum: Int, config.ownHeadPeerId.peerNum: Int)
-                now <- IO.realTime.map(_.toEpochQuantizedInstant(config.slotConfig))
+                now <- realTimeQuantizedInstant(config.slotConfig)
                 _ <- conn.jointLedger ! StartBlock(nextBlockNum, now)
                 _ <- IO.traverse_(mempool.receivingOrder)(event =>
                     conn.jointLedger ! mempool.findById(event).get

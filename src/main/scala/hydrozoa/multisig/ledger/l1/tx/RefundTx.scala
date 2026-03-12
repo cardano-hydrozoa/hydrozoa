@@ -23,7 +23,6 @@ sealed trait RefundTx {
     def tx: Transaction
     def mStartTime: Option[QuantizedInstant] = this match {
         case self: RefundTx.PostDated => Some(self.startTime)
-        case _                        => None
     }
 }
 
@@ -129,10 +128,10 @@ private object RefundTxOps {
 
         def result: ParseErrorOr[RefundTx.PostDated] = {
 
-            given OriginalCborByteArray = OriginalCborByteArray(txBytes)
+            given OriginalCborByteArray = OriginalCborByteArray(txBytes.bytes)
             given ProtocolVersion = config.cardanoProtocolVersion
 
-            io.bullet.borer.Cbor.decode(txBytes).to[Transaction].valueTry match {
+            io.bullet.borer.Cbor.decode(txBytes.bytes).to[Transaction].valueTry match {
                 case Success(tx) =>
                     for {
 

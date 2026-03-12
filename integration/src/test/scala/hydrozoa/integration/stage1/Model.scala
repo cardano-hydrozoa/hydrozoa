@@ -43,58 +43,58 @@ object Model:
       * construction.
       */
     case class State(
-                      // Non-mutable
-                      multiNodeConfig: MultiNodeConfig,
-                      // Initial state of the peer's L1 utxos.
-                      // It's needed since [[peerUtxosL1]] reflects the state after running the initialization tx
-                      // which applies upon initial state generation (is there a better spot to run the init tx?)
-                      peerGenesisUtxosL1: Utxos,
+        // Non-mutable
+        multiNodeConfig: MultiNodeConfig,
+        // Initial state of the peer's L1 utxos.
+        // It's needed since [[peerUtxosL1]] reflects the state after running the initialization tx
+        // which applies upon initial state generation (is there a better spot to run the init tx?)
+        peerGenesisUtxosL1: Utxos,
 
-                      // "Mutable" part
-                      nextRequestNumber: RequestNumber,
-                      currentTime: CurrentTime,
+        // "Mutable" part
+        nextRequestNumber: RequestNumber,
+        currentTime: CurrentTime,
 
-                      // Block producing cycle
-                      blockCycle: BlockCycle,
+        // Block producing cycle
+        blockCycle: BlockCycle,
 
-                      // This is put here to avoid tossing over Done/Ready/InProgress
-                      // NB: for block zero it's more initializationExpirationTime
-                      competingFallbackStartTime: QuantizedInstant,
+        // This is put here to avoid tossing over Done/Ready/InProgress
+        // NB: for block zero it's more initializationExpirationTime
+        competingFallbackStartTime: QuantizedInstant,
 
-                      // Evacuation Map
-                      evacuationMap: EvacuationMap,
-                      // L1 state - the only peer's utxos
-                      peerUtxosL1: Utxos,
+        // Evacuation Map
+        evacuationMap: EvacuationMap,
+        // L1 state - the only peer's utxos
+        peerUtxosL1: Utxos,
 
-                      // Deposits
+        // Deposits
 
-                      // The queue of all generated deposits that Alice intends to register.
-                      // At all times, all deposits in the list are disjoint in terms of their funding utxo.
-                      depositEnqueued: List[RegisterDepositCommand],
-                      // Signed deposit transactions - we need them when we submit deposits.
-                      depositSigned: Map[TransactionHash, Transaction],
-                      // Utxos used in the deposit enqueued as funding utxos.
-                      // We need this not to generate deposits that use the same utxos for funding many times.
-                      utxoLocked: Set[TransactionInput],
+        // The queue of all generated deposits that Alice intends to register.
+        // At all times, all deposits in the list are disjoint in terms of their funding utxo.
+        depositEnqueued: List[RegisterDepositCommand],
+        // Signed deposit transactions - we need them when we submit deposits.
+        depositSigned: Map[TransactionHash, Transaction],
+        // Utxos used in the deposit enqueued as funding utxos.
+        // We need this not to generate deposits that use the same utxos for funding many times.
+        utxoLocked: Set[TransactionInput],
 
-                      // Subset of depositEnqueued which has been registered by Hydrozoa, i.e.
-                      // included in a block brief with positive validity flag.
-                      depositsRegistered: List[RequestId],
+        // Subset of depositEnqueued which has been registered by Hydrozoa, i.e.
+        // included in a block brief with positive validity flag.
+        depositsRegistered: List[RequestId],
 
-                      // After a deposit was registered, we may submit it or cancel it depending on
-                      // how much time is left until its deposit tx's TTL is up - I call it runway.
-                      // Upon generating [[SubmitDepositsCommand]] we assess whether we have enough
-                      // runway to take off the deposit - i.e. how much time we have from now to the
-                      // ttl. This is needed, because the test fails if SUT can't submit deposit tx
-                      // that model expects to see.
-                      //
-                      // So we have two partitions here:
-                      //  - deposits, that have been submitted, so they are expected to appear in the
-                      // very first block that satisfies their absorption window
-                      //  - deposits, that the model decided not to submit - their funding utdxos get
-                      // unlocked so they can be used again
-                      depositSubmitted: List[RequestId],
-                      depositRejected: List[RequestId],
+        // After a deposit was registered, we may submit it or cancel it depending on
+        // how much time is left until its deposit tx's TTL is up - I call it runway.
+        // Upon generating [[SubmitDepositsCommand]] we assess whether we have enough
+        // runway to take off the deposit - i.e. how much time we have from now to the
+        // ttl. This is needed, because the test fails if SUT can't submit deposit tx
+        // that model expects to see.
+        //
+        // So we have two partitions here:
+        //  - deposits, that have been submitted, so they are expected to appear in the
+        // very first block that satisfies their absorption window
+        //  - deposits, that the model decided not to submit - their funding utdxos get
+        // unlocked so they can be used again
+        depositSubmitted: List[RequestId],
+        depositRejected: List[RequestId],
     ) {
         override def toString: String = "<model state (hidden)>"
 
@@ -270,7 +270,7 @@ object Model:
               config = state.multiNodeConfig.headConfig,
               time = state.currentTime.instant,
               state = state.evacuationMap.cooked.map((ek, o) =>
-                  Cbor.decode(ek.bytes).to[TransactionInput].value -> o
+                  Cbor.decode(ek.byteString).to[TransactionInput].value -> o
               ),
               l2Tx = l2Tx
             )

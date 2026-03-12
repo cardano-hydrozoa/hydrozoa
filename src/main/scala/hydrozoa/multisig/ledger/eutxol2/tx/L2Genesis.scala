@@ -55,7 +55,7 @@ object L2Genesis {
         req: L2LedgerCommand.RegisterDepositRequest,
     ): L2Genesis = {
         val genesisObligations = Cbor
-            .decode(req.l2Payload)
+            .decode(req.l2Payload.bytes)
             .to[Queue[GenesisObligation]]
             .value
         val genesisId: TransactionHash =
@@ -146,7 +146,7 @@ object GenesisObligation {
 
     // Recall: users need to submit a NonEmptyList of genesis obligations as the L2 payload, but
     // we also need to be able to serialize an empty list for the "push forward" deposit
-    def serialize(gos: NonEmptyList[GenesisObligation]): Array[Byte] =
-        Cbor.encode(Queue.from(gos.toList)).toByteArray
+    def serialize(gos: NonEmptyList[GenesisObligation]): ByteString =
+        ByteString.fromArray(Cbor.encode(Queue.from(gos.toList)).toByteArray)
 
 }

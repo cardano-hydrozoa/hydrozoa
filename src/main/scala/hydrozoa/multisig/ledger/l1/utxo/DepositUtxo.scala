@@ -13,7 +13,7 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.onchain.plutus.prelude.{Option as ScalusOption, asScalus}
 import scalus.cardano.onchain.plutus.v3.{Address as PlutusAddress, PosixTime}
 import scalus.uplc.builtin.Data.{FromData, ToData, fromData, toData}
-import scalus.uplc.builtin.{Data, FromData, ToData}
+import scalus.uplc.builtin.{ByteString, Data, FromData, ToData}
 
 /** @param l2Payload
   *   The L2 payload associated with the deposit transaction that created this deposit utxo. A hash
@@ -21,13 +21,12 @@ import scalus.uplc.builtin.{Data, FromData, ToData}
   *   ONLY the part relevant to L2, and not the hydrozoa/cardano/L1-specific stuff.
   */
 final case class DepositUtxo(
-    utxoId: TransactionInput,
+    utxoId: Input,
     address: ShelleyAddress,
     datum: DepositUtxo.Datum,
     value: Value,
-    l2Payload: Array[Byte],
+    l2Payload: ByteString,
     depositFee: Coin,
-    // The following fields come from DepositTx, but it's convenient to duplicate it here
     submissionDeadline: QuantizedInstant,
     absorptionStartTime: QuantizedInstant
 ) {
@@ -160,7 +159,7 @@ object DepositUtxo {
     def fromUtxo(
         utxo: Utxo,
         headNativeScriptAddress: ShelleyAddress,
-        l2Payload: Array[Byte],
+        l2Payload: ByteString,
         depositFee: Coin,
         submissionDeadline: QuantizedInstant,
         txTiming: TxTiming

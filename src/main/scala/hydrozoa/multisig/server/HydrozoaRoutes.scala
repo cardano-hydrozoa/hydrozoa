@@ -6,7 +6,7 @@ import hydrozoa.multisig.consensus.EventSequencer
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.server.ApiResponse.{Error, HeadInfo, RequestAccepted}
-import hydrozoa.multisig.server.JsonCodecs.{DepositRequest, TransactionRequest, given}
+import hydrozoa.multisig.server.JsonCodecs.given
 import io.circe.syntax.*
 import org.http4s.circe.*
 import org.http4s.dsl.io.*

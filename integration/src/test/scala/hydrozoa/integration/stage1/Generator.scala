@@ -231,7 +231,7 @@ object CommandGen:
                 o.address.asInstanceOf[ShelleyAddress].payment.asHash == config
                     .addressOf(HeadPeerNumber.zero)
             )
-            .map((ek, to) => Cbor.decode(ek.bytes).to[TransactionInput].value -> to)
+            .map((ek, to) => Cbor.decode(ek.byteString).to[TransactionInput].value -> to)
 
         for {
             // Inputs

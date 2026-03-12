@@ -124,6 +124,7 @@ object InitializationParameters {
 
     opaque type HeadId = AssetName
 
+    // TODO: Must do validation on CIP67 HYDR string for both apply and Decoder
     object HeadId:
         def apply(treasuryBeaconTokenName: AssetName): HeadId = treasuryBeaconTokenName
 

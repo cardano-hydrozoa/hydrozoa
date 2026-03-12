@@ -16,11 +16,14 @@ import io.bullet.borer.Cbor
 import monocle.syntax.all.*
 import scala.util.Try
 import scalus.cardano.ledger.*
+import scalus.uplc.builtin.ByteString
 
 extension (ti: TransactionInput) {
     // Technically, this is partial -- but with the current cbor codec of TransactionInput
     // and invariants enforced on EvacuationKey.apply (36 bytes), this should not throw
-    def toEvacuationKey: EvacuationKey = EvacuationKey(Cbor.encode(ti).toByteArray).get
+    def toEvacuationKey: EvacuationKey = EvacuationKey(
+      ByteString.fromArray(Cbor.encode(ti).toByteArray)
+    ).get
 }
 
 object EutxoL2Ledger {
@@ -30,7 +33,7 @@ object EutxoL2Ledger {
 
     // As above: technically partial, but used in the context of the EutxoL2Ledger, it's not.
     private def toTransactionInput(ek: EvacuationKey): TransactionInput =
-        Cbor.decode(ek.bytes).to[TransactionInput].value
+        Cbor.decode(ek.byteString.bytes).to[TransactionInput].value
 
     def apply(
         config: EutxoL2Ledger.Config,
@@ -61,7 +64,7 @@ case class EutxoL2Ledger private (
         for {
             s <- EitherT.right(state.get)
             l2Tx <- EitherT.fromEither(
-              L2Tx.parse(req.l2Payload)
+              L2Tx.parse(req.l2Payload.bytes)
                   .left
                   .map(error =>
                       L2LedgerError(

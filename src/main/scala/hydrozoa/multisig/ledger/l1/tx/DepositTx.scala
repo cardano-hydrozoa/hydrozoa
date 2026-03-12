@@ -40,7 +40,7 @@ private object DepositTxOps {
 
     final case class Build(config: Config)(
         utxosFunding: NonEmptyList[Utxo],
-        l2Payload: Array[Byte],
+        l2Payload: ByteString,
         l2Value: Value,
         depositFee: Coin,
         changeAddress: ShelleyAddress,
@@ -79,7 +79,7 @@ private object DepositTxOps {
 
             val ttl = ValidityEndSlot(submissionDeadline.toSlot.slot)
 
-            val payloadHash: Hash32 = Hash(blake2b_256(ByteString.fromArray(l2Payload)))
+            val payloadHash: Hash32 = Hash(blake2b_256(l2Payload))
             val metadata = Some(
               MD(
                 MD.Deposit(
@@ -130,7 +130,7 @@ private object DepositTxOps {
                   depositFee = depositFee,
                   submissionDeadline = submissionDeadline,
                   absorptionStartTime =
-                      config.txTiming.depositAbsorptionStartTime(submissionDeadline),
+                      config.txTiming.depositAbsorptionStartTime(submissionDeadline)
                 )
             } yield DepositTx(
               depositProduced,
@@ -147,7 +147,7 @@ private object DepositTxOps {
             case MetadataParseError(e: MD.ParseError)
             case AlienDeposit(headAddress: ShelleyAddress)
             case HashMismatchL2Payload(
-                l2Payload: Array[Byte],
+                l2Payload: ByteString,
                 hash: Hash32
             )
             case MissingDepositOutputAtIndex(e: Int)
@@ -165,17 +165,17 @@ private object DepositTxOps {
       */
     final case class Parse(config: Config)(
         txBytes: Tx.Serialized,
-        l2Payload: Array[Byte]
+        l2Payload: ByteString
     ) {
         import Parse.*
         import Parse.Error.*
 
         def result: ParseErrorOr[DepositTx] = {
 
-            given OriginalCborByteArray = OriginalCborByteArray(txBytes)
+            given OriginalCborByteArray = OriginalCborByteArray(txBytes.bytes)
             given ProtocolVersion = config.cardanoProtocolVersion
 
-            io.bullet.borer.Cbor.decode(txBytes).to[Transaction].valueTry match {
+            io.bullet.borer.Cbor.decode(txBytes.bytes).to[Transaction].valueTry match {
                 case Success(tx) =>
                     for {
                         // Pull metadata
@@ -198,7 +198,7 @@ private object DepositTxOps {
 
                         // Compare hash with virtual outputs
                         calculatedL2PayloadHash: Hash32 = Hash(
-                          blake2b_256(ByteString.fromArray(l2Payload))
+                          blake2b_256(l2Payload)
                         )
                         _ <- Either.cond(
                           l2PayloadHash == calculatedL2PayloadHash,
@@ -251,7 +251,7 @@ private object DepositTxOps {
                               l2Payload = l2Payload,
                               depositFee = depositFee,
                               submissionDeadline = validityEnd,
-                              txTiming = config.txTiming,
+                              txTiming = config.txTiming
                             )
                             .left
                             .map(DepositUtxoError(_))

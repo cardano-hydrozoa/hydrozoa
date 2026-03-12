@@ -13,6 +13,7 @@ import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import monocle.Focus.focus
 import org.scalacheck.Test.Parameters
 import org.scalacheck.{Gen, Prop, Properties}
+import scala.concurrent.duration.DurationInt
 import test.{TestPeers, TestPeersSpec}
 
 def generateInitialBlock(testPeers: TestPeers)(
@@ -77,6 +78,7 @@ def generateInitialBlock(testPeers: TestPeers)(
         blockBrief = BlockBrief.Initial(
           BlockHeader.Initial(
             startTime = initializationParameters.headStartTime,
+            endTime = initializationParameters.headStartTime + 10.seconds,
             kzgCommitment = initializationParameters.initialEvacuationMap.kzgCommitment
           )
         ),

@@ -15,6 +15,7 @@ import scala.concurrent.duration.FiniteDuration
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.{Hash, *}
 import scalus.cardano.onchain.plutus.v3.ArbitraryInstances.*
+import scalus.uplc.builtin.ByteString
 import test.*
 import test.Generators.Hydrozoa.*
 
@@ -119,12 +120,12 @@ object DepositTxTest extends Properties("Deposit Tx Test") {
                     case Right(depositTx) =>
                         DepositTx
                             .Parse(config)(
-                              depositTx.tx.toCbor,
+                              ByteString.fromArray(depositTx.tx.toCbor),
                               depositTx.depositProduced.l2Payload
                             )
                             .result match {
                             case Left(e) =>
-                                "Produced deposit tx deserializes from CBOR: ${e.getCause}"
+                                s"Produced deposit tx deserializes from CBOR: ${e.getMessage}"
                                     |: Prop(false)
 
                             case Right(cborParsed) if cborParsed != depositTx =>

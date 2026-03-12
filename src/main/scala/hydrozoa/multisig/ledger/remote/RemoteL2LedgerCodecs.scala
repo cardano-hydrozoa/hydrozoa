@@ -16,6 +16,7 @@ import io.circe.{Decoder, Encoder}
 import scala.util.Try
 import scalus.cardano.ledger.{Coin, KeepRaw, TransactionInput, TransactionOutput, Value}
 import scalus.crypto.ed25519.VerificationKey
+import scalus.uplc.builtin.ByteString
 import scodec.bits.ByteVector
 
 /** JSON codecs for RemoteL2Ledger WebSocket protocol */
@@ -134,11 +135,11 @@ object RemoteL2LedgerCodecs {
     import hydrozoa.multisig.ledger.joint.EvacuationKey
 
     given Encoder[EvacuationKey] = Encoder.instance { ek =>
-        byteArrayEncoder(ek.bytes)
+        byteStringEncoder(ek.byteString)
     }
 
     given Decoder[EvacuationKey] = Decoder.instance { c =>
-        byteArrayDecoder(c).flatMap { bytes =>
+        byteStringDecoder(c).flatMap { bytes =>
             EvacuationKey(bytes) match {
                 case Some(key) => Right(key)
                 case None      => Left(io.circe.DecodingFailure("Invalid EvacuationKey", c.history))
@@ -148,7 +149,7 @@ object RemoteL2LedgerCodecs {
 
     // KeepRaw[TransactionOutput] codec
     given Encoder[KeepRaw[TransactionOutput]] = Encoder.instance { kr =>
-        io.circe.Json.obj("raw" -> byteArrayEncoder(kr.raw))
+        io.circe.Json.obj("raw" -> byteStringEncoder(ByteString.fromArray(kr.raw)))
     }
 
     given Decoder[KeepRaw[TransactionOutput]] = Decoder.instance { c =>

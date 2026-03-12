@@ -14,7 +14,8 @@ import hydrozoa.multisig.ledger.block.{BlockBody, BlockEffects, BlockStatus}
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.l1.tx.RefundTx
-import hydrozoa.multisig.server.{TransactionRequest, UserRequest, UserRequestWithId}
+import hydrozoa.multisig.server.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
+import hydrozoa.multisig.server.{TransactionRequest, UserRequestWithId}
 
 /** The first actor responsible for processing events from end-users, as received by the
   * [[HydrozoaServer]]. Only one event sequencer is running per node, specifically to handle _only_
@@ -79,7 +80,7 @@ trait EventSequencer(
                               for {
                                   newNum <- state.nextLedgerEventNum()
                                   newId = RequestId(config.ownHeadPeerId.peerNum, newNum)
-                                  newRequestWithId = UserRequestWithId[TransactionRequest](
+                                  newRequestWithId = UserRequestWithId[TransactionRequestBody](
                                     userRequest = r.req,
                                     requestId = newId
                                   )
@@ -94,9 +95,7 @@ trait EventSequencer(
                               for {
                                   newNum <- state.nextLedgerEventNum()
                                   newId = RequestId(config.ownHeadPeerId.peerNum, newNum)
-                                  newRequestWithId = UserRequestWithId[
-                                    hydrozoa.multisig.server.DepositRequest
-                                  ](
+                                  newRequestWithId = UserRequestWithId[DepositRequestBody](
                                     requestId = newId,
                                     userRequest = r.req
                                   )
@@ -158,8 +157,10 @@ object EventSequencer {
     /** Request to submit an L2 transaction. Can be used synchronously to get the assigned
       * RequestId.
       */
+    // TODO: Perhaps we just extend the `TransactionRequest` directly and get rid of the event-sequencer-specific
+    //  types?
     final case class L2TxRequest(
-        req: UserRequest[TransactionRequest]
+        req: TransactionRequest
     ) extends SyncRequest[IO, L2TxRequest, RequestId] {
         export L2TxRequest.Sync
         def ?: : this.Send = SyncRequest.send(_, this)
@@ -172,7 +173,7 @@ object EventSequencer {
     /** Request to register a deposit. Can be used synchronously to get the assigned RequestId.
       */
     final case class DepositRequest(
-        req: UserRequest[hydrozoa.multisig.server.DepositRequest]
+        req: hydrozoa.multisig.server.DepositRequest
     ) extends SyncRequest[IO, DepositRequest, RequestId] {
         export DepositRequest.Sync
         def ?: : this.Send = SyncRequest.send(_, this)

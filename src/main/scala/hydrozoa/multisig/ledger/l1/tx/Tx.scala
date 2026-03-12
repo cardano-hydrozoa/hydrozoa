@@ -9,6 +9,7 @@ import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.rules.{AllInputsMustBeInUtxoValidator, EmptyInputsValidator, FeesOkValidator, InputsAndReferenceInputsDisjointValidator, MissingOrExtraScriptHashesValidator, OutputsHaveNotEnoughCoinsValidator, OutputsHaveTooBigValueStorageSizeValidator, OutsideForecastValidator, OutsideValidityIntervalValidator, TransactionSizeValidator, ValueNotConservedUTxOValidator}
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.{SomeBuildError, TransactionBuilder}
+import scalus.uplc.builtin.ByteString
 import sourcecode.*
 
 trait Tx[Self <: Tx[Self]] extends HasResolvedUtxos { self: Self =>
@@ -62,7 +63,7 @@ object Tx {
             .filterNot(_.isInstanceOf[OutsideValidityIntervalValidator.type])
     }
 
-    type Serialized = Array[Byte]
+    type Serialized = ByteString
 
     /** A result that includes additional information besides the built transaction.
       *

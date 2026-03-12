@@ -10,7 +10,7 @@ import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.actor.{ActorSystem, test as _}
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
+import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.cardano.scalus.QuantizedTime.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.ledger.stripVKeyWitnesses
@@ -27,13 +27,12 @@ import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag.{Invalid, Valid}
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.ledger.joint.JointLedger.{Done, Producing}
-import hydrozoa.multisig.ledger.joint.given
-import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
+import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger, given}
 import hydrozoa.multisig.ledger.l1.L1LedgerM.DepositsMap
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
-import hydrozoa.multisig.server.{DepositRequest, UserRequest, UserRequestHeader, UserRequestWithId}
-import io.bullet.borer.Cbor
+import hydrozoa.multisig.server.*
+import hydrozoa.multisig.server.UserRequestBody.DepositRequestBody
 import java.util.concurrent.TimeUnit
 import monocle.Focus
 import monocle.Focus.focus
@@ -47,7 +46,7 @@ import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scala.util.{Failure, Success, Try}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.{Block as _, BlockHeader as _, Coin, *}
-import scalus.uplc.builtin.Builtins.blake2b_224
+import scalus.crypto.ed25519.Signature
 import scalus.uplc.builtin.ByteString
 import test.*
 import test.Generators.Hydrozoa.*
@@ -55,8 +54,8 @@ import test.Generators.Other.genCoinDistributionWithMinAdaUtxo
 import test.TestM.*
 
 // Pretty Printers for more manageable scalacheck logs
-given ppNodeConfig: (NodeConfig => Pretty) = nodeConfig =>
-    Pretty(_ => "NodeConfig (too long to print)")
+given ppMultiNodeConfig: (MultiNodeConfig => Pretty) = nodeConfig =>
+    Pretty(_ => "MultiNodeConfig (too long to print)")
 
 // TODO: restore? Do we use it?
 //given ppTestPeers: (TestPeers => Pretty) = testPeers =>
@@ -157,7 +156,7 @@ object JointLedgerTestHelpers {
                 state <- lift(env.jointLedger ?: JointLedger.Requests.GetState)
             } yield state
 
-        def registerDeposit(req: UserRequestWithId[DepositRequest]): JLTest[Unit] = {
+        def registerDeposit(req: DepositRequestWithId): JLTest[Unit] = {
             for {
                 jl <- asks[TestR, ActorRef[IO, JointLedger.Requests.Request]](_.jointLedger)
                 _ <- lift(jl ? req)
@@ -185,9 +184,18 @@ object JointLedgerTestHelpers {
             referenceBlock: Option[BlockBrief.Intermediate],
             pollResults: Set[TransactionInput]
         ): JLTest[Unit] =
-            completeBlockRegular(
-              CompleteBlockRegular(referenceBlock, pollResults: Set[TransactionInput], false)
-            )
+            for {
+                env <- ask
+                now <- lift(realTimeQuantizedInstant(env.config.slotConfig))
+                _ <- completeBlockRegular(
+                  CompleteBlockRegular(
+                    referenceBlock,
+                    pollResults: Set[TransactionInput],
+                    false,
+                    now
+                  )
+                )
+            } yield ()
 
         /** WARNING: This method performs pre-and-post condition checks on the joint ledger. This
           * means two things:
@@ -222,9 +230,13 @@ object JointLedgerTestHelpers {
         def completeBlockFinal(
             referenceBlock: Option[BlockBrief.Final],
         ): JLTest[Unit] =
-            completeBlockFinal(
-              CompleteBlockFinal(referenceBlockBrief = referenceBlock)
-            )
+            for {
+                env <- ask
+                now <- lift(realTimeQuantizedInstant(env.config.slotConfig))
+                _ <- completeBlockFinal(
+                  CompleteBlockFinal(referenceBlock, now)
+                )
+            } yield ()
 
         def completeBlockFinal(req: CompleteBlockFinal): JLTest[Unit] =
             for {
@@ -265,7 +277,7 @@ object JointLedgerTestHelpers {
             requestId: RequestId,
             blockStartTime: QuantizedInstant
         ): JLTest[
-          (DepositRefundTxSeq, UserRequestWithId[DepositRequest], NonEmptyList[GenesisObligation])
+          (DepositRefundTxSeq, DepositRequestWithId, NonEmptyList[GenesisObligation])
         ] = {
             import Requests.*
             for {
@@ -331,10 +343,7 @@ object JointLedgerTestHelpers {
                       && Slot(depositRefundTxSeq.refundTx.tx.body.value.validityStartSlot.get)
                           .toQuantizedInstant(env.config.slotConfig)
                           ==
-                          depositRefundTxSeq.depositTx.validityEnd
-                          + env.config.txTiming.depositMaturityDuration
-                          + env.config.txTiming.depositAbsorptionDuration
-                          + env.config.txTiming.silenceDuration
+                          env.config.txTiming.refundValidityStart(submissionDeadline)
                   }
                 )
 
@@ -344,52 +353,41 @@ object JointLedgerTestHelpers {
                 )
 
                 signTx = env.multiNodeConfig.signTxAs(HeadPeerNumber.zero)
-
-                body = DepositRequest(
-                  l1Payload = ???,
-                  l2Payload = ???
+                body = UserRequestBody.DepositRequestBody(
+                  l1Payload = ByteString.fromArray(depositRefundTxSeq.depositTx.tx.toCbor),
+                  l2Payload = GenesisObligation.serialize(l2Outputs)
                 )
 
                 header = UserRequestHeader(
-                  headId = Hash28(
-                    blake2b_224(
-                      ByteString.fromArray(
-                        Cbor.encode(env.config.initialSeedUtxo.input).toByteArray
-                      )
-                    )
-                  ),
-                  validityStart = ???,
+                  headId = env.config.headId,
+                  validityStart = blockStartTime.toPosixTime,
                   validityEnd = depositRefundTxSeq.depositTx.validityEnd.toPosixTime,
-                  bodyHash = ???
+                  bodyHash = body.hash
                 )
 
                 userWallet = env.multiNodeConfig
                     .nodePrivateConfigs(HeadPeerNumber.zero)
                     .ownHeadPeerPrivate
                     .ownHeadWallet
+
                 userVk = userWallet.exportVerificationKey
 
-                // TODO: Add mkMsgSignature method to WalletModule class
-                signature = ??? // userWallet.walletModule.signMsg()
+                signature: Signature =
+                    Signature.unsafeFromArray(
+                      IArray.genericWrapArray(userWallet.signMsg(IArray.from(header.bytes))).toArray
+                    )
 
-                // FIXME: Partial pattern match
-                Right(request: UserRequest[DepositRequest]) = UserRequest(
+                Right(request: DepositRequest) = UserRequest(
                   header = header,
                   body = body,
                   userVk = userVk,
                   signature = signature
-                )
+                ): @unchecked
 
                 req =
-                    UserRequestWithId[DepositRequest](
-                      userRequest = ???,
+                    UserRequestWithId[DepositRequestBody](
+                      userRequest = request,
                       requestId = requestId
-//                      depositTxBytes = signTx(depositRefundTxSeq.depositTx.tx).toCbor,
-//                      refundTxBytes = signTx(depositRefundTxSeq.refundTx.tx).toCbor,
-//                      depositFee = Coin.zero,
-//                      l2Payload = l2OutputsBytes,
-//                      requestId = eventId,
-//                      l2Value = l2OutputsValue
                     )
 
                 _ <- registerDeposit(req)
@@ -429,7 +427,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
             Queue[JLTest[
               (
                   DepositRefundTxSeq,
-                  UserRequestWithId[DepositRequest],
+                  DepositRequestWithId,
                   NonEmptyList[GenesisObligation]
               )
             ]]
@@ -452,7 +450,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                       Queue.empty[JLTest[
                         (
                             DepositRefundTxSeq,
-                            UserRequestWithId[DepositRequest],
+                            DepositRequestWithId,
                             NonEmptyList[GenesisObligation]
                         )
                       ]]
@@ -463,7 +461,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                         actionQueue: Queue[JLTest[
                           (
                               DepositRefundTxSeq,
-                              UserRequestWithId[DepositRequest],
+                              DepositRequestWithId,
                               NonEmptyList[GenesisObligation]
                           )
                         ]]
@@ -476,7 +474,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                               Queue[JLTest[
                                 (
                                     DepositRefundTxSeq,
-                                    UserRequestWithId[DepositRequest],
+                                    DepositRequestWithId,
                                     NonEmptyList[GenesisObligation]
                                 )
                               ]]
@@ -527,7 +525,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                 JLTest[
                   (
                       DepositRefundTxSeq,
-                      UserRequestWithId[DepositRequest],
+                      DepositRequestWithId,
                       NonEmptyList[GenesisObligation]
                   )
                 ]
@@ -554,7 +552,8 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               // Test statistic:  make sure that ties are actually occurring in some samples
               _ <- lift[TestR, Unit](PropertyM.monitor[IO](Prop.collect {
                   val collectionSizes = depositsMap.treeMap.map(_._2.length)
-                  if collectionSizes.isEmpty then "no duplicate start times"
+                  if collectionSizes.forall(_ == 1)
+                  then "no duplicate start times"
                   else "some duplicate start times"
               }))
 

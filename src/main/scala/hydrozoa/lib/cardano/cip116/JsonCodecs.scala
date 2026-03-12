@@ -94,15 +94,12 @@ object JsonCodecs {
                 }
 
             // Encode/decode byte arrays as lowercase hex strings
-            given byteArrayEncoder: Encoder[Array[Byte]] =
-                Encoder.encodeString.contramap(bytes => ByteVector(bytes).toHex)
+            given byteStringEncoder: Encoder[ByteString] =
+                Encoder.encodeString.contramap(_.toHex)
 
-            given byteArrayDecoder: Decoder[Array[Byte]] =
-                Decoder.decodeString.emap { hexStr =>
-                    ByteVector
-                        .fromHex(hexStr)
-                        .map(_.toArray)
-                        .toRight(s"Invalid hex string: $hexStr")
+            given byteStringDecoder: Decoder[ByteString] =
+                Decoder.decodeString.emapTry { hexStr =>
+                    Try(ByteString.fromHex(hexStr))
                 }
 
             // Coin codec

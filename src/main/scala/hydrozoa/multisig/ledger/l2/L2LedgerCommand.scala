@@ -17,7 +17,7 @@ import scalus.uplc.builtin.{ByteString, Data}
 // Temporary type to represent the "Destination" concept. If we want full flexibility, we'd need to
 // allow for the destination to accommodate both hashed and inline datums
 case class Destination(address: Address, datum: Option[Data]) {
-    val toHex: String = ByteString.fromArray(Cbor.encode(this).toByteArray).toHex
+    def toHex: String = ByteString.fromArray(Cbor.encode(this).toByteArray).toHex
 }
 
 given io.bullet.borer.Encoder[Destination] = Encoder.derived
@@ -41,7 +41,7 @@ object L2LedgerCommand {
         blockNumber: BlockNumber,
         blockCreationStartTime: QuantizedInstant,
         verifierKey: VerificationKey,
-        l2Payload: Array[Byte]
+        l2Payload: ByteString
     ) extends L2LedgerCommand
 
     final case class RegisterDepositRequest(
@@ -53,7 +53,7 @@ object L2LedgerCommand {
         depositL2Value: Value,
         refundDestination: Destination,
         verifierKey: VerificationKey,
-        l2Payload: Array[Byte],
+        l2Payload: ByteString,
     ) extends L2LedgerCommand
 
     final case class ApplyDepositDecisions(

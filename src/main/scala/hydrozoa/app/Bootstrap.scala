@@ -19,6 +19,7 @@ import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.config.node.NodeConfig
 import hydrozoa.config.node.operation.liquidation.NodeOperationLiquidationConfig
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import hydrozoa.lib.cardano.scalus.ShelleyAddressExtra
 import hydrozoa.lib.cardano.wallet.WalletModule
@@ -92,7 +93,7 @@ object Bootstrap:
         _ <- IO.pure(())
 
         ownHeadWallet = HeadPeerWallet.scalusWallet(HeadPeerNumber.zero, vKey, sKey)
-        startTime <- IO.realTimeInstant.map(instant => instant.quantize(cardanoNetwork.slotConfig))
+        startTime <- realTimeQuantizedInstant(cardanoNetwork.slotConfig)
 
         headParams = HeadParameters(
           txTiming = TxTiming.demo(cardanoNetwork.slotConfig),
@@ -213,6 +214,8 @@ object Bootstrap:
               },
               x => x
             )
+        endTime <- IO.realTimeInstant.map(instant => instant.quantize(cardanoNetwork.slotConfig))
+
     } yield {
 
         val initialBlock = InitialBlock(
@@ -220,6 +223,7 @@ object Bootstrap:
             blockBrief = BlockBrief.Initial(
               BlockHeader.Initial(
                 startTime = startTime,
+                endTime = endTime,
                 kzgCommitment = evacMap.kzgCommitment
               )
             ),

@@ -71,7 +71,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
             import config.*
 
             // TODO: partial match; see above comment
-            val Right(initializationTxSeq) = res
+            val Right(initializationTxSeq) = res: @unchecked
             val iTx = initializationTxSeq.initializationTx
             val fbTx = initializationTxSeq.fallbackTx
             val fbTxBody = fbTx.tx.body.value
