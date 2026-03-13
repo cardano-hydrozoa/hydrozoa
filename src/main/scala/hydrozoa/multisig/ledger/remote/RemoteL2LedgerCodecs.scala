@@ -44,8 +44,8 @@ object RemoteL2LedgerCodecs {
         Decoder.decodeInt.map(BlockNumber.apply)
 
     // L2LedgerEvent codecs
-    implicit val l2EventEncoder: Encoder[L2LedgerCommand.ApplyTransactionRequest] = deriveEncoder
-    implicit val l2EventDecoder: Decoder[L2LedgerCommand.ApplyTransactionRequest] = deriveDecoder
+    implicit val l2EventEncoder: Encoder[L2LedgerCommand.ApplyTransaction] = deriveEncoder
+    implicit val l2EventDecoder: Decoder[L2LedgerCommand.ApplyTransaction] = deriveDecoder
 
     /** Destination as a cbor-encoded hex-string */
     implicit val destinationEncoder: Encoder[Destination] =
@@ -63,9 +63,9 @@ object RemoteL2LedgerCodecs {
             } yield dest
         )
 
-    implicit val depositRegistrationEncoder: Encoder[L2LedgerCommand.RegisterDepositRequest] =
+    implicit val depositRegistrationEncoder: Encoder[L2LedgerCommand.RegisterDeposit] =
         deriveEncoder
-    implicit val depositRegistrationDecoder: Decoder[L2LedgerCommand.RegisterDepositRequest] =
+    implicit val depositRegistrationDecoder: Decoder[L2LedgerCommand.RegisterDeposit] =
         deriveDecoder
 
     implicit val depositDecisionsEncoder: Encoder[L2LedgerCommand.ApplyDepositDecisions] =
@@ -85,7 +85,7 @@ object RemoteL2LedgerCodecs {
               "type" -> "DepositDecisions".asJson,
               "event" -> event.asJson
             )
-        case Request.L2Event(event) =>
+        case Request.L2Transaction(event) =>
             io.circe.Json.obj(
               "type" -> "L2Event".asJson,
               "event" -> event.asJson
@@ -96,7 +96,7 @@ object RemoteL2LedgerCodecs {
         c.downField("type").as[String].flatMap {
             case "DepositRegistration" =>
                 c.downField("event")
-                    .as[L2LedgerCommand.RegisterDepositRequest]
+                    .as[L2LedgerCommand.RegisterDeposit]
                     .map(Request.DepositRegistration.apply)
             case "DepositDecisions" =>
                 c.downField("event")
@@ -104,8 +104,8 @@ object RemoteL2LedgerCodecs {
                     .map(Request.DepositDecisions.apply)
             case "L2Event" =>
                 c.downField("event")
-                    .as[L2LedgerCommand.ApplyTransactionRequest]
-                    .map(Request.L2Event.apply)
+                    .as[L2LedgerCommand.ApplyTransaction]
+                    .map(Request.L2Transaction.apply)
             case other =>
                 Left(io.circe.DecodingFailure(s"Unknown request type: $other", c.history))
         }

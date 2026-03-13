@@ -31,6 +31,7 @@ import monocle.Focus.focus
 import scala.collection.immutable.Queue
 import scala.math.Ordered.orderingToOrdered
 import scalus.cardano.ledger.TransactionInput
+import scalus.uplc.builtin.ByteString
 
 // Fields of a work-in-progress block pertaining to user requests, with an additional field for dealing with withdrawn utxos
 private case class UserRequestState(
@@ -138,9 +139,42 @@ final case class JointLedger(
             req.request match {
                 case r: GetState.type => r.handleSync(req, _ => state.get)
             }
+        case p: Block.MultiSigned.Next => proxyConfirmation(p)
     }
 
-    private def preStartLocal: IO[Unit] = initializeConnections
+    // QUESTION: This gets sent from the consensus actor, but the consensus actor has the full ability to send it
+    // itself. Should we move this into the consensus actor?
+    private def proxyConfirmation(next: Block.MultiSigned.Next): IO[Unit] =
+        val l2Command = L2LedgerCommand.ProxyBlockConfirmation(
+          next.blockNum,
+          Vector.from(
+            next.postDatedRefundTxs.map(refund =>
+                (refund.requestId, ByteString.fromArray(refund.tx.toCbor))
+            )
+          )
+        )
+        for {
+            // FIXME: Should we retry? Throw an exception?
+            _ <- l2Ledger.L2LedgerAction
+                .fromL2LedgerCommand(l2Command)
+                // bit of a hack, but we don't care about the actual l2 state here.
+                .run(L2LedgerState.empty)
+        } yield ()
+
+    private def preStartLocal: IO[Unit] =
+        for {
+            _ <- initializeConnections
+            l2Command = L2LedgerCommand.Initialize(
+              headId = config.headId,
+              initialL2Value = config.initialL2Value,
+              // TODO: This should ostensibly not be empty in the future
+              l2Payload = ByteString.empty
+            )
+            // FIXME: should we retry?
+            _ <- l2Ledger.L2LedgerAction
+                .fromL2LedgerCommand(l2Command)
+                .run(L2LedgerState.empty)
+        } yield ()
 
     private def applyUserRequestWithId(e: UserRequestWithId): IO[Unit] = {
         // TODO: check that blockStartTime is within the request's validity bounds
@@ -162,7 +196,7 @@ final case class JointLedger(
     private def rejectEvent(
         requestId: RequestId,
         e: JointLedger.UserRequestError | L1LedgerM.Error | L2LedgerError
-    ) =
+    ): IO[Unit] =
         for {
             oldState <- unsafeGetProducing
             currentBlockNum = oldState.nextBlockNumber
@@ -176,6 +210,14 @@ final case class JointLedger(
               currentBlockNum: Int,
               false
             )
+            l2Command = L2LedgerCommand.ProxyHydrozoaRequestError(
+              requestId = requestId,
+              message = e.toString
+            )
+            // FIXME: Should we retry?
+            _ <- l2Ledger.L2LedgerAction
+                .fromL2LedgerCommand(l2Command)
+                .run(newState.l2LedgerState)
         } yield ()
 
     /** Update the JointLedger's state -- the work-in-progress block -- to accept or reject deposits
@@ -201,22 +243,24 @@ final case class JointLedger(
                     L1LedgerM.registerDeposit(req).run(config, p.l1LedgerState) match {
                         case Left(error) => rejectEvent(requestId, error)
                         case Right(newL1State, (depositProduced, refundTx)) => {
-                            val l2Command = L2LedgerCommand.RegisterDepositRequest(
+                            val l2Command = L2LedgerCommand.RegisterDeposit(
                               requestId = requestId,
+                              userVKey = req.request.userVk,
                               blockNumber = currentBlockNum,
                               blockCreationStartTime = p.startTime.toPosixTime,
-                              depositUtxoId = depositProduced.utxoId,
+                              depositId = depositProduced.utxoId,
                               depositFee = depositProduced.depositFee,
                               depositL2Value = depositProduced.l2Value,
-                              l2Payload = l2Payload,
                               refundDestination = refundTx.refundDestination,
-                              verifierKey = req.request.userVk
+                              l2Payload = l2Payload
                             )
                             for {
                                 res <- l2Ledger.L2LedgerAction
                                     .fromL2LedgerCommand(l2Command)
                                     .run(p.l2LedgerState)
                                 _ <- res match {
+                                    // FIXME: Should we distinguish between genuine L2 failures and things like
+                                    // network errors?
                                     case Left(e) => rejectEvent(requestId, e)
                                     case Right(newL2State) =>
                                         for {
@@ -264,13 +308,13 @@ final case class JointLedger(
                       JointLedger.UserRequestError.BlockOutOfRequestValidityInterval(blockStartTime)
                     )
                 else {
-                    val l2Command: L2LedgerCommand.ApplyTransactionRequest = L2LedgerCommand
-                        .ApplyTransactionRequest(
+                    val l2Command: L2LedgerCommand.ApplyTransaction = L2LedgerCommand
+                        .ApplyTransaction(
                           requestId = req.requestId,
+                          userVKey = req.request.userVk,
                           blockNumber = p.nextBlockNumber,
                           blockCreationStartTime = p.startTime,
-                          l2Payload = l2Payload,
-                          verifierKey = req.request.userVk
+                          l2Payload = l2Payload
                         )
 
                     for {
@@ -788,7 +832,7 @@ object JointLedger {
     object Requests {
         type Request =
             PreStart.type | UserRequestWithId | StartBlock | CompleteBlockRegular |
-                CompleteBlockFinal | GetState.Sync
+                CompleteBlockFinal | GetState.Sync | Block.MultiSigned.Next
 
         case object PreStart
 

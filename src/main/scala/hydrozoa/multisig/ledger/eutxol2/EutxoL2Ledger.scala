@@ -5,13 +5,16 @@ import cats.data.*
 import cats.effect.{Async, IO, Ref}
 import cats.syntax.all.*
 import hydrozoa.config.head.initialization.InitializationParameters
+import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.eutxol2.tx.{L2Genesis, L2Tx}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationKey}
+import hydrozoa.multisig.ledger.l1.tx.Tx
 import hydrozoa.multisig.ledger.l2.*
-import hydrozoa.multisig.ledger.l2.L2LedgerCommand.RegisterDepositRequest
+import hydrozoa.multisig.ledger.l2.L2LedgerCommand.RegisterDeposit
 import io.bullet.borer.Cbor
 import monocle.syntax.all.*
 import scala.util.Try
@@ -29,7 +32,13 @@ extension (ti: TransactionInput) {
 object EutxoL2Ledger {
     type Config = CardanoNetwork.Section & InitializationParameters.Section
 
-    case class State(activeUtxos: Utxos, pendingDeposits: Map[RequestId, L2Genesis])
+    case class State(
+        activeUtxos: Utxos,
+        pendingDeposits: Map[RequestId, L2Genesis],
+        errors: Map[RequestId, String],
+        confirmations: Map[BlockNumber, Vector[(RequestId, Tx.Serialized)]],
+        headId: Option[HeadId],
+    )
 
     // As above: technically partial, but used in the context of the EutxoL2Ledger, it's not.
     private def toTransactionInput(ek: EvacuationKey): TransactionInput =
@@ -45,7 +54,10 @@ object EutxoL2Ledger {
                 activeUtxos = config.initialEvacuationMap.cooked.map((ti, to) =>
                     toTransactionInput(ti) -> to
                 ),
-                pendingDeposits = Map.empty
+                pendingDeposits = Map.empty,
+                errors = Map.empty,
+                confirmations = Map.empty,
+                headId = None
               )
             )
         } yield new EutxoL2Ledger(config, ref)
@@ -54,12 +66,55 @@ object EutxoL2Ledger {
 
 case class EutxoL2Ledger private (
     config: EutxoL2Ledger.Config,
+    // Note: For now, I'm going to leave this as a `Ref`. Now that we have an `Initialize` command, it would
+    // _probably_ make more sense to have this be an `Option[Ref[...]]`. But the initialize command will
+    // go away in the future, so...
     private val state: Ref[IO, EutxoL2Ledger.State]
 ) extends L2Ledger[IO] {
     implicit def monadF: Monad[IO] = Async[IO]
 
-    override def sendApplyTransactionRequest(
-        req: L2LedgerCommand.ApplyTransactionRequest
+    // TODO: it should be something like:
+    //   - Deserialize initial L2 UTxO state (which means the L2 Payload needs to include the transaction id for
+    //     the initial state, which should be the hash of the seed utxo TransactionInput)
+    //   - Verify it matches the initial l2 value
+    //   - Set the active utxos to this state
+    //   - Set the head id
+    //   - return the corresponding evac diff
+    override def sendInitialize(
+        req: L2LedgerCommand.Initialize
+    ): EitherT[IO, L2LedgerError, Vector[EvacuationDiff]] = ???
+//      for {
+//        s <- EitherT.right(state.get)
+//        initialUtxos = Cbor
+//          .decode(req.l2Payload.bytes)
+//          .to[Queue[GenesisObligation]]
+//          .value.map(_.toTransactionOutput)
+//        newState = ???
+//        _ <- EitherT.right(state.set(newState))
+//      } yield ()
+
+    override def sendProxyBlockConfirmation(
+        req: L2LedgerCommand.ProxyBlockConfirmation
+    ): EitherT[IO, L2LedgerError, Unit] =
+        EitherT.right(
+          state.update(
+            _.focus(_.confirmations)
+                .modify(c => c.updated(req.blockNumber, req.refundTxs))
+          )
+        )
+
+    override def sendProxyHydrozoaRequestError(
+        req: L2LedgerCommand.ProxyHydrozoaRequestError
+    ): EitherT[IO, L2LedgerError, Unit] =
+        EitherT.right(
+          state.update(
+            _.focus(_.errors)
+                .modify(c => c.updated(req.requestId, req.message))
+          )
+        )
+
+    override def sendApplyTransaction(
+        req: L2LedgerCommand.ApplyTransaction
     ): EitherT[IO, L2LedgerError, (Vector[EvacuationDiff], Vector[Payout.Obligation])] = {
         for {
             s <- EitherT.right(state.get)
@@ -104,8 +159,8 @@ case class EutxoL2Ledger private (
         )
     }
 
-    override def sendRegisterDepositRequest(
-        req: RegisterDepositRequest
+    override def sendRegisterDeposit(
+        req: RegisterDeposit
     ): EitherT[IO, L2LedgerError, Unit] =
         for {
             s <- EitherT.right(state.get)

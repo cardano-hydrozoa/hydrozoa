@@ -8,6 +8,7 @@ import fs2.Stream
 import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerCommand, L2LedgerError}
+import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.Request.{DepositRegistration, L2Transaction}
 import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.{Request, Response}
 import io.circe.Decoder
 import io.circe.parser.*
@@ -32,6 +33,8 @@ class RemoteL2Ledger private (
     sendQueue: Ref[IO, Map[String, WSFrame]],
     pendingRequests: Ref[IO, Map[String, Deferred[IO, Either[L2LedgerError, Response]]]]
 ) extends L2Ledger[IO] {
+
+    import RemoteL2LedgerCodecs.given
 
     private given logger: Logger[IO] = Slf4jLogger.getLogger[IO]
 
@@ -91,26 +94,42 @@ class RemoteL2Ledger private (
         }
     }
 
-    override def sendRegisterDepositRequest(
-        req: L2LedgerCommand.RegisterDepositRequest
+    override def sendInitialize(
+        req: L2LedgerCommand.Initialize
+    ): EitherT[IO, L2LedgerError, Vector[EvacuationDiff]] = {
+        sendRequest[Vector[EvacuationDiff]](Request.Initialize(req))
+    }
+
+    override def sendRegisterDeposit(
+        req: L2LedgerCommand.RegisterDeposit
     ): EitherT[IO, L2LedgerError, Unit] = {
-        import RemoteL2LedgerCodecs.given
         sendRequest[Unit](Request.DepositRegistration(req))
     }
 
     override def sendApplyDepositDecisions(
         req: L2LedgerCommand.ApplyDepositDecisions
     ): EitherT[IO, L2LedgerError, Vector[EvacuationDiff]] = {
-        import RemoteL2LedgerCodecs.given
         sendRequest[Vector[EvacuationDiff]](Request.DepositDecisions(req))
     }
 
-    override def sendApplyTransactionRequest(
-        req: L2LedgerCommand.ApplyTransactionRequest
+    override def sendApplyTransaction(
+        req: L2LedgerCommand.ApplyTransaction
     ): EitherT[IO, L2LedgerError, (Vector[EvacuationDiff], Vector[Payout.Obligation])] = {
-        import RemoteL2LedgerCodecs.given
-        sendRequest[(Vector[EvacuationDiff], Vector[Payout.Obligation])](Request.L2Event(req))
+        sendRequest[(Vector[EvacuationDiff], Vector[Payout.Obligation])](Request.L2Transaction(req))
     }
+
+    override def sendProxyBlockConfirmation(
+        req: L2LedgerCommand.ProxyBlockConfirmation
+    ): EitherT[IO, L2LedgerError, Unit] = {
+        sendRequest[Unit](Request.ProxyBlockConfirmation(req))
+    }
+
+    override def sendProxyHydrozoaRequestError(
+        req: L2LedgerCommand.ProxyHydrozoaRequestError
+    ): EitherT[IO, L2LedgerError, Unit] = {
+        sendRequest[Unit](Request.ProxyHydrozoaRequestError(req))
+    }
+
 }
 
 object RemoteL2Ledger {
@@ -123,11 +142,15 @@ object RemoteL2Ledger {
     object Request {
         final case class Envelope(correlationId: String, request: Request)
 
-        final case class DepositRegistration(event: L2LedgerCommand.RegisterDepositRequest)
-            extends Request
+        final case class Initialize(event: L2LedgerCommand.Initialize) extends Request
+        final case class DepositRegistration(event: L2LedgerCommand.RegisterDeposit) extends Request
         final case class DepositDecisions(event: L2LedgerCommand.ApplyDepositDecisions)
             extends Request
-        final case class L2Event(event: L2LedgerCommand.ApplyTransactionRequest) extends Request
+        final case class L2Transaction(event: L2LedgerCommand.ApplyTransaction) extends Request
+        final case class ProxyBlockConfirmation(event: L2LedgerCommand.ProxyBlockConfirmation)
+            extends Request
+        final case class ProxyHydrozoaRequestError(event: L2LedgerCommand.ProxyHydrozoaRequestError)
+            extends Request
     }
 
     /** Response types received from the remote L2 ledger */

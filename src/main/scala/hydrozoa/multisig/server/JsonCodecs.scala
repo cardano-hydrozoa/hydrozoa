@@ -106,9 +106,19 @@ object JsonCodecs {
                 userVk <- c.downField("userVk").as[VerificationKey]
                 signature <- c.downField("signature").as[Signature]
                 // QUESTION: What exactly are these "ops"?
-                userRequest <- UserRequest(header, body, userVk, signature).left.map(e =>
-                    DecodingFailure(e.getMessage, ops = List.empty)
-                )
+                userRequest <- body match {
+                    case d: DepositRequestBody =>
+                        UserRequest
+                            .DepositRequest(header, d, userVk, signature)
+                            .left
+                            .map(e => DecodingFailure(e.getMessage, ops = List.empty))
+                    case t: TransactionRequestBody =>
+                        UserRequest
+                            .TransactionRequest(header, t, userVk, signature)
+                            .left
+                            .map(e => DecodingFailure(e.getMessage, ops = List.empty))
+                }
+
             } yield userRequest
     }
 

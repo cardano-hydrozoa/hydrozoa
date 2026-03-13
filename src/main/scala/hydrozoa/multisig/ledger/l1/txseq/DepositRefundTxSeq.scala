@@ -6,6 +6,7 @@ import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.SomeBuildErrorOnly
 import hydrozoa.multisig.ledger.l1.tx.{DepositTx, RefundTx, Tx}
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
@@ -16,8 +17,6 @@ import scalus.uplc.builtin.{ByteString, Data}
 
 /** Deposit-[post-dated] refund tx sequence contains a deposit and a refund txs see
   * [[DepositRefundTxSeq.Build]] for details.
-  * @param depositTx
-  * @param refundTx
   *
   * Schema for the sequence building:
   *   - build the deposit tx based on the virtualOutputs and depositFee (see the description down
@@ -125,7 +124,8 @@ private object DepositRefundTxSeqOps {
         changeAddress: ShelleyAddress,
         requestValidityEndTime: QuantizedInstant,
         refundAddress: ShelleyAddress,
-        refundDatum: Option[Data]
+        refundDatum: Option[Data],
+        requestId: RequestId
     ) {
         def result: Either[Build.Error, DepositRefundTxSeq] = {
             val expectedDepositValue = l2Value + Value(depositFee)
@@ -159,7 +159,7 @@ private object DepositRefundTxSeqOps {
                     })
 
                 refundTx <- RefundTx.Build
-                    .PostDated(config)(depositTx.depositProduced, refundInstructions)
+                    .PostDated(config)(depositTx.depositProduced, refundInstructions, requestId)
                     .result
                     .left
                     .map(f => {
@@ -214,6 +214,7 @@ private object DepositRefundTxSeqOps {
     final case class Parse(config: Config)(
         depositTxBytes: Tx.Serialized,
         l2Payload: ByteString,
+        requestId: RequestId
     ) {
         import Parse.*
 
@@ -238,7 +239,7 @@ private object DepositRefundTxSeqOps {
                 depositFee = depositValue - l2Value
 
                 refundTx <- RefundTx.Build
-                    .PostDated(config)(depositUtxo, refundInstructions)
+                    .PostDated(config)(depositUtxo, refundInstructions, requestId)
                     .result
                     .left
                     .map(Parse.Error.RefundBuildError(_))

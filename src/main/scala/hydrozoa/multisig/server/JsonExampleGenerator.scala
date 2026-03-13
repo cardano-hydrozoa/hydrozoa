@@ -42,7 +42,7 @@ object JsonExampleGenerator {
 
         val signature = header.signEd25519(privateKey)
 
-        val req = UserRequest(
+        val req = UserRequest.DepositRequest(
           header,
           body,
           userVk,
@@ -67,7 +67,7 @@ object JsonExampleGenerator {
 
         val signature = header.signEd25519(privateKey)
 
-        val req = UserRequest(
+        val req = UserRequest.TransactionRequest(
           header,
           body,
           userVk,

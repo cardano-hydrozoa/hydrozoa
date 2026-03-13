@@ -88,7 +88,8 @@ object L1LedgerM {
                 DepositRefundTxSeq
                     .Parse(config)(
                       depositTxBytes = body.l1Payload,
-                      l2Payload = body.l2Payload
+                      l2Payload = body.l2Payload,
+                      requestId = requestWithId.requestId
                     )
                     .result
                     .left

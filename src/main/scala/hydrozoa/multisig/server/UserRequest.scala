@@ -7,6 +7,7 @@ import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.server.JsonCodecs.{given_Encoder_UserRequestBody, given_Encoder_UserRequestHeader}
 import hydrozoa.multisig.server.UserRequest.Error.{BodyHashMismatch, SignatureMismatch}
+import hydrozoa.multisig.server.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import io.circe.*
 import io.circe.syntax.*
 import scalus.cardano.ledger.{Hash, Hash32}
@@ -30,14 +31,14 @@ enum UserRequest {
     def userVk: VerificationKey
     def signature: Signature
 
-    case DepositRequest (
+    case DepositRequest private (
         override val header: UserRequestHeader,
         override val body: UserRequestBody.DepositRequestBody,
         override val userVk: VerificationKey,
         override val signature: Signature
     ) extends UserRequest
 
-    case TransactionRequest (
+    case TransactionRequest private (
         override val header: UserRequestHeader,
         override val body: UserRequestBody.TransactionRequestBody,
         override val userVk: VerificationKey,
@@ -51,6 +52,44 @@ enum UserRequest {
 //}
 
 object UserRequest {
+    object DepositRequest {
+        def apply(
+            header: UserRequestHeader,
+            body: DepositRequestBody,
+            userVk: VerificationKey,
+            signature: Signature
+        ): Either[Error.ValidationError, UserRequest] =
+            for {
+                _ <-
+                    if body.hash == header.bodyHash
+                    then Right(header)
+                    else Left(BodyHashMismatch)
+                _ <-
+                    if verifyEd25519Signature(userVk, header.byteString, signature)
+                    then Right(signature)
+                    else Left(SignatureMismatch)
+            } yield new UserRequest.DepositRequest(header, body, userVk, signature)
+    }
+
+    object TransactionRequest {
+        def apply(
+            header: UserRequestHeader,
+            body: TransactionRequestBody,
+            userVk: VerificationKey,
+            signature: Signature
+        ): Either[Error.ValidationError, UserRequest] =
+            for {
+                _ <-
+                    if body.hash == header.bodyHash
+                    then Right(header)
+                    else Left(BodyHashMismatch)
+                _ <-
+                    if verifyEd25519Signature(userVk, header.byteString, signature)
+                    then Right(signature)
+                    else Left(SignatureMismatch)
+            } yield new UserRequest.TransactionRequest(header, body, userVk, signature)
+    }
+
     type Sync = SyncRequest.Envelope[IO, UserRequest, RequestId]
 
     object Error {
@@ -65,28 +104,6 @@ object UserRequest {
           */
         case object SignatureMismatch extends ValidationError
     }
-
-    def apply(
-        header: UserRequestHeader,
-        body: UserRequestBody,
-        userVk: VerificationKey,
-        signature: Signature
-    ): Either[Error.ValidationError, UserRequest] =
-        for {
-            _ <-
-                if body.hash == header.bodyHash
-                then Right(header)
-                else Left(BodyHashMismatch)
-            _ <-
-                if verifyEd25519Signature(userVk, header.byteString, signature)
-                then Right(signature)
-                else Left(SignatureMismatch)
-        } yield body match {
-            case b: UserRequestBody.DepositRequestBody =>
-                new UserRequest.DepositRequest(header, b, userVk, signature)
-            case b: UserRequestBody.TransactionRequestBody =>
-                new UserRequest.TransactionRequest(header, b, userVk, signature)
-        }
 }
 
 /** @param headId

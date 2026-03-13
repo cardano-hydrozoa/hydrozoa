@@ -13,6 +13,7 @@ import hydrozoa.multisig.consensus.ack.{AckBlock, AckId}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockHeader.Minor.HeaderSignature
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader, BlockNumber}
+import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l1.tx.{RefundTx, RolloutTx, Tx, TxSignature}
 import scala.Function.tupled
 import scala.util.control.NonFatal
@@ -211,6 +212,8 @@ sealed trait FinalConsensusCell[T] extends ConsensusCell[T]
   *   - '''Block Weaver''': Notifies when blocks are confirmed with finalization flags
   *   - '''Cardano Liaison''': Provides signed transactions for L1 submission (TODO: refactor)
   *   - '''Event Sequencer''': Reports confirmed blocks with their events (TODO: implement)
+  *   - '''Joint Ledger''': Reports confirmed blocks so that the Joint Ledger can proxy through to
+  *     the L2 database
   *
   * ==Error Handling==
   *
@@ -251,6 +254,7 @@ object ConsensusActor:
         cardanoLiaison: CardanoLiaison.Handle,
         eventSequencer: EventSequencer.Handle,
         peerLiaisons: List[PeerLiaison.Handle],
+        jointLedger: JointLedger.Handle,
         tracer: hydrozoa.lib.tracing.ProtocolTracer = hydrozoa.lib.tracing.ProtocolTracer.noop,
     )
 
@@ -326,6 +330,7 @@ class ConsensusActor(
                       cardanoLiaison = _connections.cardanoLiaison,
                       eventSequencer = _connections.eventSequencer,
                       peerLiaisons = _connections.peerLiaisons,
+                      jointLedger = _connections.jointLedger,
                       tracer = _connections.tracer,
                     )
                   )
@@ -681,6 +686,8 @@ class ConsensusActor(
                     case _ => IO.unit
                 }
                 _ <- (conn.peerLiaisons ! blockConfirmed).parallel
+                // Question: We are fully capable of sending this request directly in this actor. Should we?
+                _ <- conn.jointLedger ! blockConfirmed
                 // Announce the ack if present
                 _ <- mbAck.traverse_(announceAck)
                 // Remove the cell

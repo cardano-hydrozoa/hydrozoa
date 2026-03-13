@@ -4,6 +4,7 @@ import hydrozoa.config.head.initialization.{InitialBlock, InitializationParamete
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toQuantizedInstant}
+import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
 import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.explainConst
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
@@ -32,7 +33,8 @@ object RefundTx {
     final case class PostDated(
         override val tx: Transaction,
         refundStart: QuantizedInstant,
-        refundDestination: Destination
+        refundDestination: Destination,
+        requestId: RequestId
     ) extends RefundTx,
           Tx[PostDated] {
         override val txLens: Lens[PostDated, Transaction] = Focus[PostDated](_.tx)
@@ -48,7 +50,8 @@ private object RefundTxOps {
 
         final case class PostDated(override val config: Config)(
             override val depositUtxo: DepositUtxo,
-            override val refundInstructions: DepositUtxo.Refund.Instructions
+            override val refundInstructions: DepositUtxo.Refund.Instructions,
+            override val requestId: RequestId
         ) extends Build[RefundTx.PostDated] {
 
             override val stepRefundMetadata =
@@ -94,7 +97,8 @@ private object RefundTxOps {
                 } yield RefundTx.PostDated(
                   tx,
                   refundInstructions.validityStart,
-                  Destination(refundInstructions.address, refundInstructions.mbDatum)
+                  Destination(refundInstructions.address, refundInstructions.mbDatum),
+                  requestId
                 )
         }
     }
@@ -103,6 +107,7 @@ private object RefundTxOps {
         def config: Config
         def depositUtxo: DepositUtxo
         def refundInstructions: DepositUtxo.Refund.Instructions
+        def requestId: RequestId
         //
         def stepRefundMetadata: ModifyAuxiliaryData
         def result: Either[(SomeBuildError, String), T]
@@ -121,6 +126,7 @@ private object RefundTxOps {
 
     final case class Parse(config: Config)(
         txBytes: Tx.Serialized,
+        requestId: RequestId
     ) {
         import Parse.*
         import Parse.Error.*
@@ -163,7 +169,8 @@ private object RefundTxOps {
                         refundTx: RefundTx.PostDated = RefundTx.PostDated(
                           tx,
                           startInstant,
-                          destination
+                          destination,
+                          requestId
                         )
 
                     } yield refundTx

@@ -24,9 +24,10 @@ case class L2LedgerError(bytes: Array[Byte]) extends Throwable
   *
   * @param diffs
   *   Evacuation diffs generated from [[L2LedgerCommand.ApplyDepositDecisions]]s and
-  *   [[L2LedgerCommand.ApplyTransactionRequest]]
+  *   [[L2LedgerCommand.ApplyTransaction]]
+  *
   * @param payouts
-  *   Payouts generated from [[L2LedgerCommand.ApplyTransactionRequest]]
+  *   Payouts generated from [[L2LedgerCommand.ApplyTransaction]]
   */
 final case class L2LedgerState private (
     diffs: Vector[EvacuationDiff],
@@ -62,13 +63,17 @@ object L2LedgerState:
 trait L2Ledger[F[_]] {
     implicit def monadF: Monad[F]
 
+    def sendInitialize(
+        req: L2LedgerCommand.Initialize
+    ): EitherT[F, L2LedgerError, Vector[EvacuationDiff]]
+
     /** See:
       * https://gummiwormlabs.github.io/gummiworm-writing-room/gummiworm-poc/sugar-rush-overview/ledger-events#deposit-events
       * @return
       *   Either an error blob if the request could not be applied, or unit on success.
       */
-    def sendRegisterDepositRequest(
-        req: L2LedgerCommand.RegisterDepositRequest
+    def sendRegisterDeposit(
+        req: L2LedgerCommand.RegisterDeposit
     ): EitherT[F, L2LedgerError, Unit]
 
     /** See:
@@ -88,9 +93,17 @@ trait L2Ledger[F[_]] {
       *   Either an error blob if the request could not be applied, or a vector of diffs to apply to
       *   the JointLedger's evacuation map and a vector of payout obligations.
       */
-    def sendApplyTransactionRequest(
-        req: L2LedgerCommand.ApplyTransactionRequest
+    def sendApplyTransaction(
+        req: L2LedgerCommand.ApplyTransaction
     ): EitherT[F, L2LedgerError, (Vector[EvacuationDiff], Vector[Payout.Obligation])]
+
+    def sendProxyBlockConfirmation(
+        req: L2LedgerCommand.ProxyBlockConfirmation
+    ): EitherT[F, L2LedgerError, Unit]
+
+    def sendProxyHydrozoaRequestError(
+        req: L2LedgerCommand.ProxyHydrozoaRequestError
+    ): EitherT[F, L2LedgerError, Unit]
 
     /** Actions (effectful endomorphisms) on the L2Ledger state. They may return an error or a new
       * state, and run effects in the base monad [[F]].
@@ -105,18 +118,44 @@ trait L2Ledger[F[_]] {
     object L2LedgerAction {
 
         def fromL2LedgerCommand(e: L2LedgerCommand): L2LedgerAction = e match {
-            case e: L2LedgerCommand.ApplyDepositDecisions   => fromApplyDepositDecisions(e)
-            case e: L2LedgerCommand.ApplyTransactionRequest => fromApplyTransactionRequest(e)
-            case e: L2LedgerCommand.RegisterDepositRequest  => fromRegisterDepositRequest(e)
+            case e: L2LedgerCommand.Initialize                => fromInitialize(e)
+            case e: L2LedgerCommand.RegisterDeposit           => fromRegisterDepositRequest(e)
+            case e: L2LedgerCommand.ApplyDepositDecisions     => fromApplyDepositDecisions(e)
+            case e: L2LedgerCommand.ApplyTransaction          => fromApplyTransactionRequest(e)
+            case e: L2LedgerCommand.ProxyBlockConfirmation    => fromProxyBlockConfirmation(e)
+            case e: L2LedgerCommand.ProxyHydrozoaRequestError => fromProxyHydrozoaRequestError(e)
         }
 
-        private def fromRegisterDepositRequest(
-            req: L2LedgerCommand.RegisterDepositRequest
+        /** Execute the given EitherT (returning Unit), but return the original state
+          */
+        private def kConst(e: EitherT[F, L2LedgerError, Unit]): L2LedgerAction =
+            L2LedgerAction(
+              Kleisli(ledgerState =>
+                  for {
+                      _ <- e
+                  } yield ledgerState
+              )
+            )
+
+        private def fromInitialize(
+            req: L2LedgerCommand.Initialize
         ): L2LedgerAction =
             L2LedgerAction(
               Kleisli(ledgerState =>
                   for {
-                      _ <- sendRegisterDepositRequest(req)
+                      resDiffs <- sendInitialize(req)
+                      newState = L2LedgerState(ledgerState.diffs ++ resDiffs, ledgerState.payouts)
+                  } yield newState
+              )
+            )
+
+        private def fromRegisterDepositRequest(
+            req: L2LedgerCommand.RegisterDeposit
+        ): L2LedgerAction =
+            L2LedgerAction(
+              Kleisli(ledgerState =>
+                  for {
+                      _ <- sendRegisterDeposit(req)
                   } yield ledgerState
               )
             )
@@ -134,15 +173,26 @@ trait L2Ledger[F[_]] {
             )
 
         private def fromApplyTransactionRequest(
-            req: L2LedgerCommand.ApplyTransactionRequest
+            req: L2LedgerCommand.ApplyTransaction
         ): L2LedgerAction = L2LedgerAction(
           Kleisli(ledgerState =>
               for {
-                  res <- sendApplyTransactionRequest(req)
+                  res <- sendApplyTransaction(req)
                   newState =
                       L2LedgerState(ledgerState.diffs ++ res._1, ledgerState.payouts ++ res._2)
               } yield newState
           )
         )
+
+        private def fromProxyBlockConfirmation(
+            req: L2LedgerCommand.ProxyBlockConfirmation
+        ): L2LedgerAction =
+            kConst(sendProxyBlockConfirmation(req))
+
+        private def fromProxyHydrozoaRequestError(
+            req: L2LedgerCommand.ProxyHydrozoaRequestError
+        ): L2LedgerAction =
+            kConst(sendProxyHydrozoaRequestError(req))
     }
+
 }
