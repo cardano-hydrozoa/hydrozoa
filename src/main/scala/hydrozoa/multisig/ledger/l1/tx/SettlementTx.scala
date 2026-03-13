@@ -2,9 +2,9 @@ package hydrozoa.multisig.ledger.l1.tx
 
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.multisig.settlement.SettlementConfig
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.SettlementTxEndTime
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
-import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toQuantizedInstant}
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.block.BlockVersion.Major.given_Conversion_Major_Int
 import hydrozoa.multisig.ledger.commitment.KzgCommitment
@@ -15,7 +15,7 @@ import hydrozoa.multisig.ledger.l1.utxo.{DepositUtxo, Equity, MultisigTreasuryUt
 import monocle.{Focus, Lens}
 import scala.collection.immutable.Vector
 import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.{Coin, Sized, Slot, Transaction, TransactionInput, TransactionOutput as TxOutput, Utxo, Value}
+import scalus.cardano.ledger.{Coin, Sized, Transaction, TransactionInput, TransactionOutput as TxOutput, Utxo, Value}
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
@@ -32,10 +32,10 @@ sealed trait SettlementTx
       MultisigTreasuryUtxo.Spent,
       MultisigTreasuryUtxo.Produced,
       RolloutUtxo.MbProduced,
-      HasResolvedUtxos,
-      HasValidityEnd {
+      HasResolvedUtxos {
     def tx: Transaction
     def txLens: Lens[SettlementTx, Transaction]
+    def settlementTxEndTime: SettlementTxEndTime
 }
 
 object SettlementTx {
@@ -50,7 +50,7 @@ object SettlementTx {
     sealed trait NoRollouts extends SettlementTx
 
     final case class NoPayouts(
-        override val validityEnd: QuantizedInstant,
+        override val settlementTxEndTime: SettlementTxEndTime,
         override val tx: Transaction,
         override val majorVersionProduced: BlockVersion.Major,
         override val kzgCommitment: KzgCommitment,
@@ -63,7 +63,7 @@ object SettlementTx {
     ) extends NoRollouts
 
     final case class WithOnlyDirectPayouts(
-        override val validityEnd: QuantizedInstant,
+        override val settlementTxEndTime: SettlementTxEndTime,
         override val tx: Transaction,
         override val majorVersionProduced: BlockVersion.Major,
         override val kzgCommitment: KzgCommitment,
@@ -78,7 +78,7 @@ object SettlementTx {
           NoRollouts
 
     final case class WithRollouts(
-        override val validityEnd: QuantizedInstant,
+        override val settlementTxEndTime: SettlementTxEndTime,
         override val tx: Transaction,
         override val majorVersionProduced: BlockVersion.Major,
         override val kzgCommitment: KzgCommitment,
@@ -132,7 +132,7 @@ private object SettlementTxOps {
             override val majorVersionProduced: BlockVersion.Major,
             override val treasuryToSpend: MultisigTreasuryUtxo,
             override val depositsToSpend: Vector[DepositUtxo],
-            override val validityEnd: QuantizedInstant,
+            override val settlementTxEndTime: SettlementTxEndTime,
         ) extends Build[SettlementTx.NoPayouts](
               mbRolloutTxSeqPartial = None
             ) {
@@ -149,7 +149,7 @@ private object SettlementTxOps {
             override val majorVersionProduced: BlockVersion.Major,
             override val treasuryToSpend: MultisigTreasuryUtxo,
             override val depositsToSpend: Vector[DepositUtxo],
-            override val validityEnd: QuantizedInstant,
+            override val settlementTxEndTime: SettlementTxEndTime,
             rolloutTxSeqPartial: RolloutTxSeq.PartialResult
         ) extends Build[SettlementTx.WithPayouts](
               mbRolloutTxSeqPartial = Some(rolloutTxSeqPartial)
@@ -166,12 +166,13 @@ private object SettlementTxOps {
     ) extends BlockVersion.Major.Produced,
           MultisigTreasuryUtxo.ToSpend,
           DepositUtxo.Many.ToSpend,
-          KzgCommitment.Produced,
-          HasValidityEnd {
+          KzgCommitment.Produced {
         import Build.*
         import Error.*
 
         def config: Config
+
+        def settlementTxEndTime: SettlementTxEndTime
 
         def complete(ctx: TransactionBuilder.Context): TxBuilderResult[Result[T]]
 
@@ -224,7 +225,7 @@ private object SettlementTxOps {
             private val referenceMultisigRegime =
                 ReferenceOutput(config.multisigRegimeUtxo.asUtxo)
 
-            private val validityEndSlot = ValidityEndSlot(validityEnd.toSlot.slot)
+            private val validityEndSlot = ValidityEndSlot(settlementTxEndTime.convert.slot)
 
             private val baseSteps =
                 List(modifyAuxiliaryData, referenceMultisigRegime, validityEndSlot)
@@ -337,8 +338,7 @@ private object SettlementTxOps {
                 for {
                     treasuryProduced <- Complete.treasuryProduced(ctx, Coin.zero)
                 } yield SettlementTx.NoPayouts(
-                  validityEnd = Slot(ctx.transaction.body.value.ttl.get)
-                      .toQuantizedInstant(config.cardanoInfo.slotConfig),
+                  settlementTxEndTime = settlementTxEndTime,
                   tx = ctx.transaction,
                   majorVersionProduced = majorVersionProduced,
                   kzgCommitment = kzgCommitment,
@@ -382,8 +382,7 @@ private object SettlementTxOps {
                         treasuryProduced = treasuryProduced,
                         tx = tx,
                         // this is safe since we always set ttl
-                        validityEnd = Slot(tx.body.value.ttl.get)
-                            .toQuantizedInstant(config.cardanoInfo.slotConfig),
+                        settlementTxEndTime = settlementTxEndTime,
                         depositsSpent = depositsToSpend,
                         payoutCount = payoutCount,
                         resolvedUtxos = finished.resolvedUtxos
@@ -405,8 +404,7 @@ private object SettlementTxOps {
                         rolloutProduced = unsafeGetRolloutProduced(finished),
                         tx = tx,
                         // this is safe since we always set ttl
-                        validityEnd = Slot(tx.body.value.ttl.get)
-                            .toQuantizedInstant(config.cardanoInfo.slotConfig),
+                        settlementTxEndTime = settlementTxEndTime,
                         payoutCount = payoutCount,
                         resolvedUtxos = finished.resolvedUtxos
                       ),

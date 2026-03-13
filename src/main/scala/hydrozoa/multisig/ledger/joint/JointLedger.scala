@@ -5,6 +5,7 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
 import hydrozoa.config.head.HeadConfig
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime, FallbackTxStartTime}
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.actor.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime
@@ -354,7 +355,7 @@ final case class JointLedger(
               Producing(
                 previousBlock = d.producedBlock,
                 competingFallbackValidityStart = d.lastFallbackValidityStart,
-                startTime = blockCreationTime,
+                startTime = blockCreationStartTime,
                 userRequestState = UserRequestState(
                   requests = List.empty,
                   postDatedRefundTxs = Vector.empty
@@ -407,15 +408,14 @@ final case class JointLedger(
               )
             ) { case (acc0, (_absorptionStartTime, depositQueue)) =>
                 depositQueue.foldLeft(acc0) { case (acc, event @ (_eventId, deposit)) =>
-                    val depositValidityEnd = deposit.submissionDeadline
                     val depositAbsorptionStart =
-                        txTiming.depositAbsorptionStartTime(depositValidityEnd)
+                        txTiming.depositAbsorptionStartTime(deposit.requestValidityEndTime)
                     val depositAbsorptionEnd =
-                        txTiming.depositAbsorptionEndTime(depositValidityEnd)
+                        txTiming.depositAbsorptionEndTime(deposit.requestValidityEndTime)
 
                     // Maturity. The deposit is mature if its absorption start time is no later
                     // than the block brief’s creation end time.
-                    val isMature = depositAbsorptionStart <= blockCreationEndTime
+                    val isMature = depositAbsorptionStart.convert <= blockCreationEndTime.convert
 
                     // Non-expiry. The deposit is non-expired if its absorption end time is
                     // no earlier than the competing fallback’s validity start time.
@@ -443,7 +443,7 @@ final case class JointLedger(
 
                     logger.trace(
                       s"deposit: ${deposit._1}, " +
-                          s"depositValidityEnd=$depositValidityEnd, " +
+                          s"depositValidityEnd=$deposit.requestValidityEndTime, " +
                           s"depositAbsorptionStart=$depositAbsorptionStart, " +
                           s"depositAbsorptionEnd=$depositAbsorptionEnd, " +
                           s"isMature=$isMature, " +
@@ -770,7 +770,7 @@ final case class JointLedger(
         actualBlock: Block
     ): IO[Unit] = for {
         p <- unsafeGetProducing
-        fallbackValidityStart: QuantizedInstant =
+        fallbackValidityStart: FallbackTxStartTime =
             actualBlock match {
                 case major: Block.Unsigned.Major =>
                     major.effects.fallbackTx.validityStart
@@ -825,7 +825,7 @@ object JointLedger {
     )
 
     enum UserRequestError extends Throwable:
-        case BlockOutOfRequestValidityInterval(blockCreationStartTime: QuantizedInstant)
+        case BlockOutOfRequestValidityInterval(blockCreationStartTime: BlockCreationStartTime)
             extends UserRequestError
 
     object Requests {
@@ -837,7 +837,7 @@ object JointLedger {
 
         case class StartBlock(
             blockNum: BlockNumber,
-            blockCreationTime: QuantizedInstant
+            blockCreationStartTime: BlockCreationStartTime
         )
 
         /** @param referenceBlockBrief
@@ -857,12 +857,12 @@ object JointLedger {
             referenceBlockBrief: Option[BlockBrief.Intermediate],
             pollResults: Set[TransactionInput],
             finalizationLocallyTriggered: Boolean,
-            blockCreationEndTime: QuantizedInstant
+            blockCreationEndTime: BlockCreationEndTime
         )
 
         case class CompleteBlockFinal(
             referenceBlockBrief: Option[BlockBrief.Final],
-            blockCreationEndTime: QuantizedInstant
+            blockCreationEndTime: BlockCreationEndTime
         )
 
         case object GetState extends SyncRequest[IO, GetState.type, State] {
@@ -881,7 +881,7 @@ object JointLedger {
     final case class Done(
         producedBlock: Block,
         // None for the first block
-        lastFallbackValidityStart: QuantizedInstant,
+        lastFallbackValidityStart: FallbackTxStartTime,
         override val l1LedgerState: L1LedgerM.State,
         override val evacuationMap: EvacuationMap
     ) extends State {
@@ -895,8 +895,8 @@ object JointLedger {
         l2LedgerState: L2LedgerState,
         previousBlock: Block,
         // None for the first block
-        competingFallbackValidityStart: QuantizedInstant,
-        startTime: QuantizedInstant,
+        competingFallbackValidityStart: FallbackTxStartTime,
+        startTime: BlockCreationStartTime,
         userRequestState: UserRequestState
     ) extends State {
         val nextBlockNumber: BlockNumber.BlockNumber = previousBlock.blockNum.increment

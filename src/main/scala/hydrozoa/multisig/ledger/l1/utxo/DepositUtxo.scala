@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.l1.utxo
 
 import hydrozoa.config.head.multisig.timing.TxTiming
+import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{DepositAbsorptionStartTime, DepositSubmissionDeadline, RequestValidityEndTime}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant}
 import hydrozoa.lib.cardano.scalus.ledger.plutusAddressToShelley
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo.DepositUtxoConversionError.*
@@ -27,9 +28,9 @@ final case class DepositUtxo(
     value: Value,
     l2Payload: ByteString,
     depositFee: Coin,
-    requestValidityEndTime: QuantizedInstant,
-    submissionDeadline: QuantizedInstant,
-    absorptionStartTime: QuantizedInstant
+    requestValidityEndTime: RequestValidityEndTime,
+    submissionDeadline: DepositSubmissionDeadline,
+    absorptionStartTime: DepositAbsorptionStartTime
 ) {
     def toUtxo: Utxo =
         Utxo(
@@ -162,7 +163,7 @@ object DepositUtxo {
         headNativeScriptAddress: ShelleyAddress,
         l2Payload: ByteString,
         depositFee: Coin,
-        requestValidityEndTime: QuantizedInstant,
+        requestValidityEndTime: RequestValidityEndTime,
         txTiming: TxTiming
     ): Either[DepositUtxoConversionError, DepositUtxo] =
         for {
@@ -188,7 +189,7 @@ object DepositUtxo {
                 case Some(ScriptRef(s)) => Left(RefScriptNotAllowed)
             }
 
-            submissionDeadline = txTiming.depositSubmissionEndTime(requestValidityEndTime)
+            submissionDeadline = txTiming.depositSubmissionDeadline(requestValidityEndTime)
             absorptionStartTime = txTiming.depositAbsorptionStartTime(requestValidityEndTime)
 
         } yield new DepositUtxo(

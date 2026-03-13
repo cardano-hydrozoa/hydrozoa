@@ -4,6 +4,8 @@ import cats.data.*
 import cats.syntax.all.*
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, FallbackTxStartTime}
+import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.RequestValidityEndTime
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant}
 import hydrozoa.multisig.ledger
 import hydrozoa.multisig.ledger.block.BlockVersion
@@ -84,9 +86,11 @@ object L1LedgerM {
         import request.*
         for {
             config <- ask
-            headerValidityEndInstant = header.validityEnd.toEpochQuantizedInstant(config.slotConfig)
-            headerSubmissionDeadline = config.txTiming.depositSubmissionEndTime(
-              headerValidityEndInstant
+            requestValidityEndTime = RequestValidityEndTime(
+              header.validityEnd.toEpochQuantizedInstant(config.slotConfig)
+            )
+            headerSubmissionDeadline = config.txTiming.depositSubmissionDeadline(
+              requestValidityEndTime
             )
 
             parseRes =
@@ -95,7 +99,7 @@ object L1LedgerM {
                       depositTxBytes = body.l1Payload,
                       l2Payload = body.l2Payload,
                       requestId = requestWithId.requestId,
-                      requestValidityEndTime = headerValidityEndInstant
+                      requestValidityEndTime = requestValidityEndTime
                     )
                     .result
                     .left
@@ -125,8 +129,8 @@ object L1LedgerM {
         nextKzg: KzgCommitment,
         absorbedDeposits: Queue[(RequestId, DepositUtxo)],
         payoutObligations: Vector[Payout.Obligation],
-        blockCreationEndTime: QuantizedInstant,
-        competingFallbackValidityStart: QuantizedInstant,
+        blockCreationEndTime: BlockCreationEndTime,
+        competingFallbackValidityStart: FallbackTxStartTime,
     ): L1LedgerM[SettlementTxSeq] = {
 
         for {
@@ -191,7 +195,7 @@ object L1LedgerM {
     // TODO (fund14): add Refund.Immediates to the return type
     def finalizeLedger(
         payoutObligationsRemaining: Vector[Payout.Obligation],
-        competingFallbackValidityStart: QuantizedInstant,
+        competingFallbackValidityStart: FallbackTxStartTime,
     ): L1LedgerM[FinalizationTxSeq] = {
         for {
             s <- get
@@ -239,7 +243,7 @@ object L1LedgerM {
           */
         def appended(event: (RequestId, DepositUtxo), txTiming: TxTiming): DepositsMap = {
             val absorptionStartTime =
-                txTiming.depositAbsorptionStartTime(event._2.submissionDeadline)
+                txTiming.depositAbsorptionStartTime(event._2.requestValidityEndTime)
             DepositsMap(this.treeMap.updatedWith(absorptionStartTime) {
                 case None        => Some(Queue(event))
                 case Some(queue) => Some(queue.appended(event))

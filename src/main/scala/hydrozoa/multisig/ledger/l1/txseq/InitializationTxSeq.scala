@@ -2,7 +2,7 @@ package hydrozoa.multisig.ledger.l1.txseq
 
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming.*
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.SomeBuildErrorOnly
 import hydrozoa.multisig.ledger.l1.tx.{Metadata as _, *}
 import monocle.Focus.focus
@@ -42,7 +42,7 @@ private object InitializationTxSeqOps {
         }
     }
 
-    final case class Build(config: Config)(blockCreationEndTime: QuantizedInstant) {
+    final case class Build(config: Config)(blockCreationEndTime: BlockCreationEndTime) {
         import Build.*
         import Build.Error.*
 
@@ -100,7 +100,7 @@ private object InitializationTxSeqOps {
       * @return
       */
     final case class Parse(config: Config)(
-        blockCreationEndTime: QuantizedInstant,
+        blockCreationEndTime: BlockCreationEndTime,
         transactionSequence: (Transaction, Transaction),
         resolvedUtxos: ResolvedUtxos,
     ) {
@@ -125,8 +125,9 @@ private object InitializationTxSeqOps {
                         .map(InitializationTxParseError(_))
                 }
 
-                expectedFallbackValidityStart: Slot =
-                    (iTx.validityEnd + config.txTiming.silenceDuration).toSlot
+                expectedFallbackValidityStart: Slot = config.txTiming.newFallbackStartTime(
+                  blockCreationEndTime
+                )
 
                 fallbackValidityStartSlot <- fallbackTx.body.value.validityStartSlot
                     .toRight(FallbackTxValidityStartIsMissing)

@@ -12,6 +12,7 @@ import hydrozoa.config.head.initialization.{InitialBlock, InitializationParamete
 import hydrozoa.config.head.multisig.fallback.FallbackContingency.mkFallbackContingencyWithDefaults
 import hydrozoa.config.head.multisig.settlement.SettlementConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.config.head.parameters.HeadParameters
 import hydrozoa.config.head.peers.HeadPeers
@@ -93,7 +94,8 @@ object Bootstrap:
         _ <- IO.pure(())
 
         ownHeadWallet = HeadPeerWallet.scalusWallet(HeadPeerNumber.zero, vKey, sKey)
-        startTime <- realTimeQuantizedInstant(cardanoNetwork.slotConfig)
+        startTimeInstant <- realTimeQuantizedInstant(cardanoNetwork.slotConfig)
+        blockCreationStartTime = BlockCreationStartTime(startTimeInstant)
 
         headParams = HeadParameters(
           txTiming = TxTiming.demo(cardanoNetwork.slotConfig),
@@ -203,10 +205,13 @@ object Bootstrap:
           initializationParams = initializationParameters
         ).get
 
-        endTime <- IO.realTimeInstant.map(instant => instant.quantize(cardanoNetwork.slotConfig))
+        endTimeInstant <- IO.realTimeInstant.map(instant =>
+            instant.quantize(cardanoNetwork.slotConfig)
+        )
+        blockCreationEndTime = BlockCreationEndTime(endTimeInstant)
 
         initTxSeq = InitializationTxSeq
-            .Build(preinit)(endTime)
+            .Build(preinit)(blockCreationEndTime)
             .result
             .fold(
               e => {
@@ -222,8 +227,8 @@ object Bootstrap:
           Block.MultiSigned.Initial(
             blockBrief = BlockBrief.Initial(
               BlockHeader.Initial(
-                startTime = startTime,
-                endTime = endTime,
+                startTime = blockCreationStartTime,
+                endTime = blockCreationEndTime,
                 kzgCommitment = evacMap.kzgCommitment
               )
             ),

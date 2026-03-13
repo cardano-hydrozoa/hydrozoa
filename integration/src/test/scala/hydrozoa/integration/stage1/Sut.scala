@@ -148,7 +148,7 @@ object SutCommands:
             logger.debug(s">> StartBlockCommand(blockNumber=${cmd.blockNumber})") >>
                 (sut.agent ! StartBlock(
                   blockNum = cmd.blockNumber,
-                  blockCreationTime = cmd.creationTime
+                  blockCreationStartTime = cmd.creationTime
                 ))
     }
 

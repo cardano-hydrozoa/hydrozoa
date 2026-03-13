@@ -1,6 +1,5 @@
 package hydrozoa.multisig.ledger.l1.tx
 
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import monocle.Lens
 import scala.Function.const
 import scalus.cardano.ledger.Transaction
@@ -29,13 +28,6 @@ trait Tx[Self <: Tx[Self]] extends HasResolvedUtxos { self: Self =>
         case _ => false
     }
 
-}
-
-trait HasValidityStart:
-    def validityStart: QuantizedInstant
-
-trait HasValidityEnd {
-    def validityEnd: QuantizedInstant
 }
 
 object Tx {

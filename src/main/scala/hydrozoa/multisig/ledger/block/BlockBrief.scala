@@ -1,5 +1,7 @@
 package hydrozoa.multisig.ledger.block
 
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
+
 sealed trait BlockBrief extends BlockBrief.Section {
     def asUnsigned: this.type & BlockStatus.Unsigned =
         this.asInstanceOf[this.type & BlockStatus.Unsigned]
@@ -45,7 +47,6 @@ object BlockBrief {
     type Intermediate = BlockBrief & BlockType.Intermediate
 
     trait Section extends BlockType, BlockHeader.Section, BlockBody.Section {
-        import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
         import hydrozoa.multisig.ledger.event.RequestId
         import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
         import RequestId.ValidityFlag
@@ -54,8 +55,8 @@ object BlockBrief {
 
         override transparent inline def blockNum: BlockNumber = header.blockNum
         override transparent inline def blockVersion: BlockVersion.Full = header.blockVersion
-        override transparent inline def startTime: QuantizedInstant = header.startTime
-        override transparent inline def endTime: QuantizedInstant = header.endTime
+        override transparent inline def startTime: BlockCreationStartTime = header.startTime
+        override transparent inline def endTime: BlockCreationEndTime = header.endTime
         override transparent inline def kzgCommitment: KzgCommitment = header.kzgCommitment
 
         override transparent inline def events: List[(RequestId, ValidityFlag)] = body.events

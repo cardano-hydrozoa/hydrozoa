@@ -3,9 +3,9 @@ package hydrozoa.multisig.ledger.l1.txseq
 import cats.data.NonEmptyList
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.multisig.timing.TxTiming
+import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.RequestValidityEndTime
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.SomeBuildErrorOnly
 import hydrozoa.multisig.ledger.l1.tx.{DepositTx, RefundTx, Tx}
@@ -122,7 +122,7 @@ private object DepositRefundTxSeqOps {
         depositFee: Coin,
         utxosFunding: NonEmptyList[Utxo],
         changeAddress: ShelleyAddress,
-        requestValidityEndTime: QuantizedInstant,
+        requestValidityEndTime: RequestValidityEndTime,
         refundAddress: ShelleyAddress,
         refundDatum: Option[Data],
         requestId: RequestId
@@ -131,7 +131,7 @@ private object DepositRefundTxSeqOps {
             val expectedDepositValue = l2Value + Value(depositFee)
 
             val submissionDeadline =
-                config.txTiming.depositSubmissionEndTime(requestValidityEndTime)
+                config.txTiming.depositSubmissionDeadline(requestValidityEndTime)
 
             val refundInstructions = DepositUtxo.Refund.Instructions(
               address = refundAddress,
@@ -148,7 +148,7 @@ private object DepositRefundTxSeqOps {
                       l2Value,
                       depositFee,
                       changeAddress,
-                      submissionDeadline,
+                      requestValidityEndTime,
                       refundInstructions
                     )
                     .result
@@ -215,7 +215,7 @@ private object DepositRefundTxSeqOps {
         depositTxBytes: Tx.Serialized,
         l2Payload: ByteString,
         requestId: RequestId,
-        requestValidityEndTime: QuantizedInstant
+        requestValidityEndTime: RequestValidityEndTime
     ) {
         import Parse.*
 
