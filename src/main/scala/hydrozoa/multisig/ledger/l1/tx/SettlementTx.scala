@@ -8,7 +8,6 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toQuantizedI
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.block.BlockVersion.Major.given_Conversion_Major_Int
 import hydrozoa.multisig.ledger.commitment.KzgCommitment
-import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
 import hydrozoa.multisig.ledger.l1.tx.Metadata.Settlement
 import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.{BuilderResult, explainConst}
 import hydrozoa.multisig.ledger.l1.txseq.RolloutTxSeq
@@ -219,9 +218,8 @@ private object SettlementTxOps {
 
             /////////////////////////////////////////////////////////
             // Base steps
-            private val modifyAuxiliaryData = ModifyAuxiliaryData(_ =>
-                Some(MD(Settlement(headAddress = config.headMultisigAddress)))
-            )
+            private val modifyAuxiliaryData =
+                ModifyAuxiliaryData(_ => Some(Settlement().asAuxData(config.headId)))
 
             private val referenceMultisigRegime =
                 ReferenceOutput(config.multisigRegimeUtxo.asUtxo)

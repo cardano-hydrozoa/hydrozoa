@@ -1,7 +1,7 @@
 package hydrozoa.multisig.ledger.l1.tx
 
 import cats.data.NonEmptyList
-import hydrozoa.config.head.initialization.InitialBlock
+import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.*
 import hydrozoa.config.head.network.CardanoNetwork
@@ -35,7 +35,7 @@ object DepositTx {
 
 private object DepositTxOps {
     type Config = CardanoNetwork.Section & HeadPeers.Section & InitialBlock.Section &
-        TxTiming.Section
+        TxTiming.Section & InitializationParameters.Section
 
     final case class Build(config: Config)(
         utxosFunding: NonEmptyList[Utxo],
@@ -83,14 +83,11 @@ private object DepositTxOps {
 
             val payloadHash: Hash32 = Hash(blake2b_256(l2Payload))
             val metadata = Some(
-              MD(
-                MD.Deposit(
-                  headAddress = config.headMultisigAddress,
-                  depositUtxoIx = 0, // This builder produces the deposit utxo at index 0
-                  l2PayloadHash = payloadHash,
-                  depositFee = depositFee
-                )
-              )
+              MD.Deposit(
+                depositIx = 0, // This builder produces the deposit utxo at index 0
+                depositFee = depositFee,
+                l2PayloadHash = payloadHash
+              ).asAuxData(config.headId)
             )
             val addRefundMetadata =
                 ModifyAuxiliaryData(_ => metadata)
@@ -181,22 +178,9 @@ private object DepositTxOps {
                 case Success(tx) =>
                     for {
                         // Pull metadata
-                        d <- MD
-                            .parse(tx) match {
-                            case Right(d: Metadata.Deposit) => Right(d)
-                            case Right(o) =>
-                                Left(MetadataParseError(MD.UnexpectedTxType(o, "Deposit")))
-                            case Left(e) => Left(MetadataParseError(e))
-                        }
-                        Metadata.Deposit(headAddress, depositUtxoIx, l2PayloadHash, depositFee) =
-                            d
-
-                        // Check head address
-                        _ <- Either.cond(
-                          headAddress == config.headMultisigAddress,
-                          (),
-                          AlienDeposit(headAddress)
-                        )
+                        mdParseResult <- MD.Deposit.parse(tx).left.map(MetadataParseError(_))
+                        (headId, md) = mdParseResult
+                        Metadata.Deposit(depositUtxoIx, depositFee, l2PayloadHash) = md
 
                         // Compare hash with virtual outputs
                         calculatedL2PayloadHash: Hash32 = Hash(

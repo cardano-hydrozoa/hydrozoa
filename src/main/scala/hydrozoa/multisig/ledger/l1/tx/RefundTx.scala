@@ -1,6 +1,6 @@
 package hydrozoa.multisig.ledger.l1.tx
 
-import hydrozoa.config.head.initialization.InitialBlock
+import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toQuantizedInstant}
@@ -41,7 +41,8 @@ object RefundTx {
 }
 
 private object RefundTxOps {
-    type Config = CardanoNetwork.Section & HeadPeers.Section & InitialBlock.Section
+    type Config = CardanoNetwork.Section & HeadPeers.Section & InitialBlock.Section &
+        InitializationParameters.Section
 
     object Build {
 
@@ -51,9 +52,7 @@ private object RefundTxOps {
         ) extends Build[RefundTx.PostDated] {
 
             override val stepRefundMetadata =
-                ModifyAuxiliaryData(_ =>
-                    Some(MD(MD.Refund(headAddress = config.headMultisigAddress)))
-                )
+                ModifyAuxiliaryData(_ => Some(MD.Refund().asAuxData(config.headId)))
 
             override def result: Either[(SomeBuildError, String), RefundTx.PostDated] =
 
@@ -134,13 +133,9 @@ private object RefundTxOps {
             io.bullet.borer.Cbor.decode(txBytes.bytes).to[Transaction].valueTry match {
                 case Success(tx) =>
                     for {
-
-                        _ <- MD.parse(tx) match {
-                            case Right(md: Metadata.Refund) => Right(md)
-                            case Right(md) =>
-                                Left(MetadataParseError(MD.UnexpectedTxType(md, "Refund")))
-                            case Left(e) => Left(MetadataParseError(e))
-                        }
+                        mdParseResult <- MD.Refund.parse(tx).left.map(MetadataParseError(_))
+                        (head, md) = mdParseResult
+                        Metadata.Refund() = md
 
                         startInstant <- tx.body.value.validityStartSlot match {
                             case Some(startSlot) =>

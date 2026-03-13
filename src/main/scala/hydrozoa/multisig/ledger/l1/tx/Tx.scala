@@ -39,6 +39,9 @@ trait HasValidityEnd {
 }
 
 object Tx {
+    enum Type:
+        case Deposit, Fallback, Finalization, Initialization, Refund, Rollout, Settlement
+
     object Validators {
 
         val nonSigningValidators: Seq[Validator] =

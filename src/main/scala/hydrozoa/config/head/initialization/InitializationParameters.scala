@@ -86,6 +86,9 @@ object InitializationParameters {
 
         final def initialFundingUtxos: Utxos =
             initialAdditionalFundingUtxos + initialSeedUtxo.toTuple
+
+        final def initialSeedIx: Int =
+            initialFundingUtxos.keys.toList.sorted.indexOf(initialSeedUtxo)
     }
 
     extension (config: InitializationParameters.Section & HeadPeers.Section)
@@ -131,4 +134,6 @@ object InitializationParameters {
 
         given Decoder[HeadId] =
             Decoder.decodeString.map(s => AssetName.fromHex(s))
+
+        extension (self: HeadId) def toHex: String = self.bytes.toHex
 }
