@@ -11,7 +11,6 @@ import hydrozoa.config.head.parameters.HeadParameters
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.config.head.rulebased.scripts.RuleBasedScriptAddresses
-import hydrozoa.lib.cardano.scalus.QuantizedTime
 import hydrozoa.lib.logging.Logging
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}

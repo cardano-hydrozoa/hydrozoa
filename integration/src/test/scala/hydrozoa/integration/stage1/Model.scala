@@ -430,7 +430,8 @@ object Model:
                  then depositsToCheck // all known deposits should be refunded
                  else
                      depositsToCheck.filter(cmd =>
-                         val submissionDeadline = cmd.depositRefundTxSeq.depositTx.submissionDeadline
+                         val submissionDeadline =
+                             cmd.depositRefundTxSeq.depositTx.submissionDeadline
                          val depositAbsorptionStart =
                              txTiming.depositAbsorptionStartTime(submissionDeadline)
                          val settlementValidityEnd =
@@ -527,7 +528,10 @@ object Model:
 
             val brief =
                 if isFinal then finalBlock
-                else if txTiming.blockCanStayMinor(blockStartTime, competingFallbackStartTime) // FIXME: blockCreationEndTime
+                else if txTiming.blockCanStayMinor(
+                  blockStartTime,
+                  competingFallbackStartTime
+                ) // FIXME: blockCreationEndTime
                 then {
                     val hasWithdrawals = events.exists(_._2 match {
                         case e: L2Tx => e.l1utxos.nonEmpty

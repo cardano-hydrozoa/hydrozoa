@@ -116,7 +116,8 @@ private object InitializationTxOps {
                         )
                     )
 
-                private[tx] val validityEndTime = config.txTiming.initializationEndTime(blockCreationEndTime)
+                private[tx] val validityEndTime =
+                    config.txTiming.initializationEndTime(blockCreationEndTime)
 
                 private val validityEndSlot = ValidityEndSlot(validityEndTime.toSlot.slot)
             }

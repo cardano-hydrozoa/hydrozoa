@@ -5,7 +5,7 @@ import hydrozoa.config.head.initialization.InitialBlock
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
-import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant}
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.SomeBuildErrorOnly
 import hydrozoa.multisig.ledger.l1.tx.{DepositTx, RefundTx, Tx}
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo

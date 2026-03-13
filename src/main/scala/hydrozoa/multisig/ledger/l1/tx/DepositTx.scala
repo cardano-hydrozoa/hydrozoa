@@ -76,8 +76,9 @@ private object DepositTxOps {
               )
             )
 
-            val submissionDeadline = config.txTiming.depositSubmissionEndTime(requestValidityEndTime)
-            
+            val submissionDeadline =
+                config.txTiming.depositSubmissionEndTime(requestValidityEndTime)
+
             val ttl = ValidityEndSlot(submissionDeadline.toSlot.slot)
 
             val payloadHash: Hash32 = Hash(blake2b_256(l2Payload))

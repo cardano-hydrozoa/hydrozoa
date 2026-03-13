@@ -204,7 +204,7 @@ object Bootstrap:
         ).get
 
         endTime <- IO.realTimeInstant.map(instant => instant.quantize(cardanoNetwork.slotConfig))
-        
+
         initTxSeq = InitializationTxSeq
             .Build(preinit)(endTime)
             .result

@@ -17,7 +17,7 @@ private type KEF[F[_]] = data.Kleisli[[X] =>> EF[F, X], L2LedgerState, L2LedgerS
   *   The parameter is [[Array[Byte]] because Hydrozoa itself does not define a codec (though
   *   frontends may).
   */
-case class L2LedgerError(bytes: Array[Byte])
+case class L2LedgerError(bytes: Array[Byte]) extends Throwable
 
 /** State changes accumulated via interaction with the L2 Ledger (i.e., as seen from the Joint
   * Ledger).

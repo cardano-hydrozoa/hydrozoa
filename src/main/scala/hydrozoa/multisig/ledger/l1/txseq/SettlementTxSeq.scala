@@ -73,7 +73,7 @@ private object SettlementTxSeqOps {
           KzgCommitment.Produced,
           Payout.Obligation.Many.Remaining {
         import Build.*
-        
+
         private val settlementValidityEnd =
             config.txTiming.newSettlementEndTime(competingFallbackValidityStart)
 

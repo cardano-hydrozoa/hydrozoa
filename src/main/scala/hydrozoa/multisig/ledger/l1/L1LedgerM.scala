@@ -1,7 +1,6 @@
 package hydrozoa.multisig.ledger.l1
 
 import cats.data.*
-import cats.effect.IO
 import cats.syntax.all.*
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
@@ -10,18 +9,13 @@ import hydrozoa.multisig.ledger
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.event.RequestId
-import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.l1.L1LedgerM.Error.{DepositTxInvalidTTL, ParseError, SettlementTxSeqBuilderError}
 import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import hydrozoa.multisig.ledger.l1.txseq.{DepositRefundTxSeq, FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.l1.utxo.{DepositUtxo, MultisigTreasuryUtxo}
-import hydrozoa.multisig.server.UserRequestBody.DepositRequestBody
 import hydrozoa.multisig.server.UserRequestWithId
-import monocle.syntax.all.*
-
 import scala.collection.immutable.{Queue, TreeMap}
-import scala.math.Ordered.orderingToOrdered
 
 private type E[A] = Either[L1LedgerM.Error, A]
 private type S[A] = cats.data.StateT[E, L1LedgerM.State, A]
@@ -46,7 +40,7 @@ case class L1LedgerM[A] private (private val unL1LedgerM: RT[A]) {
       *
       * @return
       */
-    private def run(
+    def run(
         config: L1LedgerM.Config,
         initialState: L1LedgerM.State
     ): Either[L1LedgerM.Error, (L1LedgerM.State, A)] =
@@ -292,7 +286,7 @@ object L1LedgerM {
           TreeMap.empty[QuantizedInstant, Queue[(RequestId, DepositUtxo)]]
         )
 
-    sealed trait Error
+    sealed trait Error extends Throwable
     object Error {
 
         sealed trait RegisterDepositError extends L1LedgerM.Error
@@ -317,45 +311,5 @@ object L1LedgerM {
 
         final case class FinalizationTxSeqBuilderError(wrapped: FinalizationTxSeq.Build.Error)
             extends L1LedgerM.Error
-    }
-
-    extension (jl: JointLedger) {
-
-        /** Run a L1LedgerM action within a JointLedger. If the action is successful (returns
-          * `Right`), the state of the JointLedger is (unconditionally) updated. Because the state
-          * update within JointLedger must happen within [[IO]], this takes two continuations (one
-          * for success, one for failure) and returns in [[IO]].
-          *
-          * @param onFailure
-          *   continuation if an error is raised. Defaults to throwing an exception.
-          * @param onSuccess
-          *   continuation if a value is returned.
-          * @return
-          */
-        def runL1LedgerM[A, B](
-            action: L1LedgerM[A],
-            onFailure: L1LedgerM.Error => IO[B] = e =>
-                // FIXME: type the exception better
-                throw new RuntimeException(s"Error running L1LedgerM: $e"),
-            onSuccess: A => IO[B]
-        ): IO[B] = {
-            for {
-                oldState <- jl.state.get
-                res = action.run(jl.config, oldState.l1LedgerState)
-                b <- res match {
-                    case Left(error) => onFailure(error)
-                    case Right(newState, a) =>
-                        for {
-                            _ <- jl.state.set(oldState match {
-                                case d: JointLedger.Done =>
-                                    d.focus(_.l1LedgerState).replace(newState)
-                                case p: JointLedger.Producing =>
-                                    p.focus(_.l1LedgerState).replace(newState)
-                            })
-                            b <- onSuccess(a)
-                        } yield b
-                }
-            } yield b
-        }
     }
 }

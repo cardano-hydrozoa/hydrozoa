@@ -4,7 +4,6 @@ import cats.data.NonEmptyMap
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.peers.HeadPeers
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.number.Distribution
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.joint.EvacuationMap

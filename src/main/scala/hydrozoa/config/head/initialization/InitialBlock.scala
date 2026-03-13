@@ -1,6 +1,5 @@
 package hydrozoa.config.head.initialization
 
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.block.Block
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, InitializationTx}

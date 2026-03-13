@@ -5,8 +5,7 @@ import scala.concurrent.duration.DurationInt
 import scala.math.Ordered.orderingToOrdered
 import scalus.cardano.ledger.SlotConfig
 
-/**
-  * The reason we measure time duration in real units is that slot length is different for different
+/** The reason we measure time duration in real units is that slot length is different for different
   * networks.
   *
   * @param minSettlementDuration
@@ -23,8 +22,8 @@ import scalus.cardano.ledger.SlotConfig
   *   - settlement tx and refund tx that tries to absorb/refund the same deposit
   *
   * @param depositSubmissionDuration
-  *   The fixed amount of time reserved for submitting the deposit txs by users. It's materialized as
-  *   the ttl for deposit txs, which SHOULD be exactly [[UserRequestHeader.validityEnd]] +
+  *   The fixed amount of time reserved for submitting the deposit txs by users. It's materialized
+  *   as the ttl for deposit txs, which SHOULD be exactly [[UserRequestHeader.validityEnd]] +
   *   [[depositSubmissionDurationdefines]].
   *
   * @param depositMaturityDuration
@@ -48,7 +47,7 @@ final case class TxTiming(
 
     val refundValidityStartOffset: QuantizedFiniteDuration =
         depositSubmissionDuration + depositMaturityDuration + depositAbsorptionDuration + silenceDuration
-        
+
     /** A block can stay minor if this predicate is true for its start time, relative to the
       * previous major block's fallback tx start time. Otherwise, it must be upgraded to a major
       * block so that the competing fallback start time is pushed forward for future blocks.
@@ -67,22 +66,22 @@ final case class TxTiming(
 
     def finalizationEndTime(competingFallbackStartTime: QuantizedInstant): QuantizedInstant =
         newSettlementEndTime(competingFallbackStartTime)
-        
+
     /** A major/initial block's fallback tx's start time should be set to this time relative to the
       * block's start time.
       */
     def newFallbackStartTime(blockCreationEndTime: QuantizedInstant): QuantizedInstant =
         blockCreationEndTime + minSettlementDuration + inactivityMarginDuration + silenceDuration
-    
-    def depositSubmissionEndTime(requestValidityEndTime: QuantizedInstant) = 
+
+    def depositSubmissionEndTime(requestValidityEndTime: QuantizedInstant) =
         requestValidityEndTime + depositSubmissionDuration
 
     def depositAbsorptionStartTime(requestValidityEndTime: QuantizedInstant): QuantizedInstant =
         depositSubmissionEndTime(requestValidityEndTime) + depositMaturityDuration
-    
+
     def depositAbsorptionEndTime(requestValidityEndTime: QuantizedInstant): QuantizedInstant =
         depositAbsorptionStartTime(requestValidityEndTime) + depositAbsorptionDuration
-    
+
     def refundValidityStart(requestValidityEndTime: QuantizedInstant): QuantizedInstant =
         depositAbsorptionEndTime(requestValidityEndTime) + silenceDuration
 
