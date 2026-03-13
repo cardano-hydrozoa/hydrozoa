@@ -30,14 +30,14 @@ enum UserRequest {
     def userVk: VerificationKey
     def signature: Signature
 
-    case DepositRequest(
+    case DepositRequest (
         override val header: UserRequestHeader,
         override val body: UserRequestBody.DepositRequestBody,
         override val userVk: VerificationKey,
         override val signature: Signature
     ) extends UserRequest
 
-    case TransactionRequest(
+    case TransactionRequest (
         override val header: UserRequestHeader,
         override val body: UserRequestBody.TransactionRequestBody,
         override val userVk: VerificationKey,
@@ -51,8 +51,6 @@ enum UserRequest {
 //}
 
 object UserRequest {
-    trait Section {}
-
     type Sync = SyncRequest.Envelope[IO, UserRequest, RequestId]
 
     object Error {

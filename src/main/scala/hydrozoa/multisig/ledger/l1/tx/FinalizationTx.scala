@@ -6,7 +6,6 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toQuantizedInstant}
 import hydrozoa.multisig.ledger.block.BlockVersion
-import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
 import hydrozoa.multisig.ledger.l1.tx.Metadata.Finalization
 import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.{BuilderResult, explainConst}
 import hydrozoa.multisig.ledger.l1.txseq.RolloutTxSeq
@@ -205,9 +204,8 @@ private object FinalizationTxOps {
 
             /////////////////////////////////////////////////////////
             // Base steps
-            private val modifyAuxiliaryData = ModifyAuxiliaryData(_ =>
-                Some(MD(Finalization(headAddress = config.headMultisigAddress)))
-            )
+            private val modifyAuxiliaryData =
+                ModifyAuxiliaryData(_ => Some(Finalization().asAuxData(config.headId)))
 
             private val validityEndSlot = ValidityEndSlot(validityEnd.toSlot.slot)
 

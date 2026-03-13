@@ -1,7 +1,7 @@
 package hydrozoa.multisig.ledger.l1.txseq
 
 import cats.data.NonEmptyList
-import hydrozoa.config.head.initialization.InitialBlock
+import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
@@ -76,7 +76,7 @@ object DepositRefundTxSeq {
 private object DepositRefundTxSeqOps {
 
     type Config = CardanoNetwork.Section & HeadPeers.Section & InitialBlock.Section &
-        TxTiming.Section
+        InitializationParameters.Section & TxTiming.Section
 
     object Build {
         sealed trait Error extends Throwable {

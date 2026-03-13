@@ -1,7 +1,7 @@
 package hydrozoa.multisig.ledger.l1.tx
 
 import cats.data.NonEmptyVector
-import hydrozoa.config.head.initialization.InitialBlock
+import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.txbuilder.DiffHandler.{WrappedCoin, prebalancedLovelaceDiffHandler}
@@ -62,7 +62,8 @@ private object RolloutTxOps {
     import Build.*
 
     object Build {
-        type Config = CardanoNetwork.Section & HeadPeers.Section & InitialBlock.Section
+        type Config = CardanoNetwork.Section & HeadPeers.Section & InitialBlock.Section &
+            InitializationParameters.Section
 
         final case class Last(override val config: Config)(
             override val nePayoutObligationsRemaining: NonEmptyVector[Payout.Obligation],
@@ -155,9 +156,7 @@ private object RolloutTxOps {
             /////////////////////////////////////////////////////////
             // Base steps
             private val modifyAuxiliaryData: ModifyAuxiliaryData =
-                ModifyAuxiliaryData(_ =>
-                    Some(MD(MD.Rollout(headAddress = config.headMultisigAddress)))
-                )
+                ModifyAuxiliaryData(_ => Some(MD.Rollout().asAuxData(config.headId)))
 
             private val commonSteps: List[TransactionBuilderStep] =
                 List(modifyAuxiliaryData)

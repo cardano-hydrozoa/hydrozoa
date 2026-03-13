@@ -105,14 +105,11 @@ private object InitializationTxOps {
                 private val modifyAuxiliaryData =
                     ModifyAuxiliaryData(_ =>
                         Some(
-                          MD.apply(
-                            Initialization(
-                              headAddress = config.headMultisigAddress,
-                              treasuryOutputIndex = 0,
-                              multisigRegimeOutputIndex = 1,
-                              seedInput = config.initialSeedUtxo.input
-                            )
-                          )
+                          Initialization(
+                            multisigTreasuryIx = 0,
+                            multisigRegimeIx = 1,
+                            seedIx = config.initialSeedIx
+                          ).asAuxData(config.headId)
                         )
                     )
 
@@ -291,30 +288,13 @@ private object InitializationTxOps {
         import Parse.*
         import Error.*
 
-        private given ProtocolVersion = config.cardanoProtocolVersion
-
         def result: ParseErrorOr[InitializationTx] = for {
             // ===================================
             // Metadata parsing
             // ===================================
-            imd <- MD.parse(tx) match {
-                case Right(md: Initialization) => Right(md)
-                case Right(md) =>
-                    Left(
-                      MetadataParseError(
-                        MD.UnexpectedTxType(actual = md, expected = "Initialization")
-                      )
-                    )
-                case Left(e) =>
-                    Left(
-                      MetadataParseError(
-                        MD.MalformedTxTypeKey(
-                          "Could not find the expected TxTypeKey for Initialization" +
-                              s" transaction. Got: $e"
-                        )
-                      )
-                    )
-            }
+            mdParseResult <- MD.Initialization.parse(tx).left.map(MetadataParseError(_))
+            (head, md) = mdParseResult
+            Metadata.Initialization(depositUtxoIx, depositFee, l2PayloadHash) = md
 
             // ===================================
             // Data Extraction
@@ -332,8 +312,8 @@ private object InitializationTxOps {
 
             actualOutputs = tx.body.value.outputs.map(_.value)
 
-            actualTreasuryOutput = actualOutputs(imd.treasuryOutputIndex)
-            actualMultisigRegimeOutput = actualOutputs(imd.multisigRegimeOutputIndex)
+            actualTreasuryOutput = actualOutputs(md.multisigTreasuryIx)
+            actualMultisigRegimeOutput = actualOutputs(md.multisigRegimeIx)
 
             mbTtl = tx.body.value.ttl
 
@@ -341,16 +321,9 @@ private object InitializationTxOps {
             // Validation
             // ===================================
 
-            ////
-            // Head address is coherent
-            _ <-
-                if expectedHeadAddress == imd.headAddress
-                then Right(())
-                else Left(InvalidTransactionError("Invalid head address"))
-
             // Seed input is coherent
             _ <-
-                if tx.body.value.inputs.toSeq.contains(imd.seedInput)
+                if tx.body.value.inputs.toSeq.contains(md.seedIx)
                 then Right(())
                 else Left(InvalidTransactionError("Seed input missing"))
 
@@ -505,7 +478,7 @@ private object InitializationTxOps {
 
             treasury = MultisigTreasuryUtxo(
               treasuryTokenName = config.headTokenNames.treasuryTokenName,
-              utxoId = TransactionInput(tx.id, imd.treasuryOutputIndex),
+              utxoId = TransactionInput(tx.id, md.multisigTreasuryIx),
               address = expectedHeadAddress,
               datum = expectedTreasuryDatum,
               value = actualTreasuryOutput.value,
@@ -513,7 +486,7 @@ private object InitializationTxOps {
             )
 
             multisigRegimeWitness = Utxo(
-              TransactionInput(tx.id, imd.multisigRegimeOutputIndex),
+              TransactionInput(tx.id, md.multisigRegimeIx),
               actualMultisigRegimeOutput
             )
 
@@ -525,7 +498,7 @@ private object InitializationTxOps {
           treasuryProduced = treasury,
           multisigRegimeProduced = MultisigRegimeUtxo(
             multisigRegimeTokenName = config.headTokenNames.multisigRegimeTokenName,
-            utxoId = TransactionInput(tx.id, imd.multisigRegimeOutputIndex),
+            utxoId = TransactionInput(tx.id, md.multisigRegimeIx),
             address = expectedHeadAddress,
             value = actualMultisigRegimeOutput.value,
             script = expectedHNS
