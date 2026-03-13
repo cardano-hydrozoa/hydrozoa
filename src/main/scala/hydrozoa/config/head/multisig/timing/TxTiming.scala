@@ -84,7 +84,6 @@ final case class TxTiming(
 
     def refundValidityStart(requestValidityEndTime: QuantizedInstant): QuantizedInstant =
         depositAbsorptionEndTime(requestValidityEndTime) + silenceDuration
-
 }
 
 /** TODO: Update/fix comment

@@ -214,14 +214,19 @@ private object DepositRefundTxSeqOps {
     final case class Parse(config: Config)(
         depositTxBytes: Tx.Serialized,
         l2Payload: ByteString,
-        requestId: RequestId
+        requestId: RequestId,
+        requestValidityEndTime: QuantizedInstant
     ) {
         import Parse.*
 
         def result: ParseErrorOr[DepositRefundTxSeq] = {
             for {
                 depositTx <- DepositTx
-                    .Parse(config)(txBytes = depositTxBytes, l2Payload = l2Payload)
+                    .Parse(config)(
+                      txBytes = depositTxBytes,
+                      l2Payload = l2Payload,
+                      requestValidityEndTime = requestValidityEndTime
+                    )
                     .result
                     .left
                     .map(Parse.Error.Deposit(_))

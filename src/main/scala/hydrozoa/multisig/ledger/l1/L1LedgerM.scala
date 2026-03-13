@@ -84,12 +84,18 @@ object L1LedgerM {
         import request.*
         for {
             config <- ask
+            headerValidityEndInstant = header.validityEnd.toEpochQuantizedInstant(config.slotConfig)
+            headerSubmissionDeadline = config.txTiming.depositSubmissionEndTime(
+              headerValidityEndInstant
+            )
+
             parseRes =
                 DepositRefundTxSeq
                     .Parse(config)(
                       depositTxBytes = body.l1Payload,
                       l2Payload = body.l2Payload,
-                      requestId = requestWithId.requestId
+                      requestId = requestWithId.requestId,
+                      requestValidityEndTime = headerValidityEndInstant
                     )
                     .result
                     .left
@@ -97,11 +103,6 @@ object L1LedgerM {
             depositRefundTxSeq <- lift(parseRes)
 
             depositProduced = depositRefundTxSeq.depositTx.depositProduced
-
-            headerValidityEndInstant = header.validityEnd.toEpochQuantizedInstant(config.slotConfig)
-            headerSubmissionDeadline = config.txTiming.depositSubmissionEndTime(
-              headerValidityEndInstant
-            )
 
             depositProduced <- lift(
               if depositRefundTxSeq.depositTx.submissionDeadline == headerSubmissionDeadline

@@ -13,20 +13,19 @@ import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import monocle.Focus.focus
 import org.scalacheck.Test.Parameters
 import org.scalacheck.{Gen, Prop, Properties}
-
 import scala.concurrent.duration.DurationInt
 import test.{TestPeers, TestPeersSpec}
 
 def generateInitialBlock(testPeers: TestPeers)(
-  generateTxTiming: TxTimingGen = generateDefaultTxTiming,
-  generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
-  generateDisputeResolutionConfig: DisputeResolutionConfigGen = generateDisputeResolutionConfig,
-  generateHeadParameters: GenHeadParams = generateHeadParameters,
-  gnerateBlockCreationEndTime: BlockCreationEndTimeGen = currentTimeBlockCreationEndTime,
-  generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
+    generateTxTiming: TxTimingGen = generateDefaultTxTiming,
+    generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
+    generateDisputeResolutionConfig: DisputeResolutionConfigGen = generateDisputeResolutionConfig,
+    generateHeadParameters: GenHeadParams = generateHeadParameters,
+    gnerateBlockCreationEndTime: BlockCreationEndTimeGen = currentTimeBlockCreationEndTime,
+    generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
         InitializationParametersGenTopDown.GenWithDeps | InitializationParameters =
         InitializationParametersGenBottomUp.generateInitializationParameters,
-  generateSettlementConfig: SettlementConfigGen = generateSettlementConfig
+    generateSettlementConfig: SettlementConfigGen = generateSettlementConfig
 ): Gen[InitialBlock] = {
     for {
         cardanoNetwork <- Gen.const(testPeers.network)
@@ -40,9 +39,7 @@ def generateInitialBlock(testPeers: TestPeers)(
 
         initializationParameters <- generateInitializationParameters match {
             case g: InitializationParametersGenBottomUp.GenInitializationParameters =>
-                g(testPeers)(
-                  _ => Gen.const(headParams.fallbackContingency)
-                )
+                g(testPeers)(_ => Gen.const(headParams.fallbackContingency))
             case InitializationParametersGenTopDown.GenWithDeps(
                   generator,
                   generateGenesisUtxosL1,
@@ -66,7 +63,7 @@ def generateInitialBlock(testPeers: TestPeers)(
             .get
 
         blockCreationEndTime <- generateBlockCreationEndTime(config.slotConfig)
-        
+
         initTxSeq =
             InitializationTxSeq.Build(config)(blockCreationEndTime).result match {
                 case Left(e) =>

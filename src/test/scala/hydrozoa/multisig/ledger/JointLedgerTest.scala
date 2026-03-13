@@ -32,7 +32,6 @@ import hydrozoa.multisig.ledger.l1.L1LedgerM.DepositsMap
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import hydrozoa.multisig.server.*
-
 import java.util.concurrent.TimeUnit
 import monocle.Focus
 import monocle.Focus.focus
@@ -41,13 +40,12 @@ import org.scalacheck.Prop.propBoolean
 import org.scalacheck.PropertyM.monadForPropM
 import org.scalacheck.rng.Seed
 import org.scalacheck.util.Pretty
-
 import scala.annotation.tailrec
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scala.util.{Failure, Success, Try}
 import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.{Coin, Block as _, BlockHeader as _, *}
+import scalus.cardano.ledger.{Block as _, BlockHeader as _, Coin, *}
 import scalus.crypto.ed25519.Signature
 import scalus.uplc.builtin.ByteString
 import test.*
@@ -356,7 +354,7 @@ object JointLedgerTestHelpers {
                 )
 
                 signTx = env.multiNodeConfig.signTxAs(HeadPeerNumber.zero)
-                body : UserRequestBody.DepositRequestBody = UserRequestBody.DepositRequestBody(
+                body: UserRequestBody.DepositRequestBody = UserRequestBody.DepositRequestBody(
                   l1Payload = ByteString.fromArray(depositRefundTxSeq.depositTx.tx.toCbor),
                   l2Payload = GenesisObligation.serialize(l2Outputs)
                 )
@@ -408,11 +406,11 @@ implicit val genMonad: Monad[Gen] = new Monad[Gen] {
 
 object JointLedgerTest extends Properties("Joint Ledger Test") {
     override def overrideParameters(p: Test.Parameters): Test.Parameters =
-      p.withInitialSeed(Seed.fromBase64("zeNyOvJsm4OxLrnAPz9TE8ooirzE1AR-Zsof63oHXHB=").get)
+        p.withInitialSeed(Seed.fromBase64("zeNyOvJsm4OxLrnAPz9TE8ooirzE1AR-Zsof63oHXHB=").get)
 
     import TestM.*
 
-     //  We can observe three test statistics:
+    //  We can observe three test statistics:
     //  - Whether ties are occurring
     //  - Whether the sorting is trivial due to events being pre-sorted
     //  - Whether the sorting is trivial due < 2 events
@@ -428,7 +426,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
           def genEventStream(
               config: CardanoNetwork.Section & TxTiming.Section,
               headAddress: ShelleyAddress,
-              blockStartTime : QuantizedInstant      ,
+              blockStartTime: QuantizedInstant,
               blockEndTime: QuantizedInstant
           ): Gen[
             Queue[JLTest[
@@ -488,22 +486,27 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                           )
                         ] =
                             for {
-                              peer <- Gen.oneOf(lastRequestIds.keys)
-                              lastRequestID = lastRequestIds(peer)
-                              newRequestIds = lastRequestIds.updated(
+                                peer <- Gen.oneOf(lastRequestIds.keys)
+                                lastRequestID = lastRequestIds(peer)
+                                newRequestIds = lastRequestIds.updated(
                                   peer,
                                   lastRequestID.increment
                                 )
 
-                              requestValidityEndTimeOffset <- Gen.choose(0,
-                                (blockEndTime - blockStartTime).finiteDuration.toSeconds.toInt).map(_.seconds)
-                                .map(QuantizedFiniteDuration(config.slotConfig, _))
+                                requestValidityEndTimeOffset <- Gen
+                                    .choose(
+                                      0,
+                                      (blockEndTime - blockStartTime).finiteDuration.toSeconds.toInt
+                                    )
+                                    .map(_.seconds)
+                                    .map(QuantizedFiniteDuration(config.slotConfig, _))
 
                             } yield (
                               newRequestIds,
                               actionQueue.appended(
                                 deposit(
-                                  requestValidityEndTime = blockStartTime + requestValidityEndTimeOffset,
+                                  requestValidityEndTime =
+                                      blockStartTime + requestValidityEndTimeOffset,
                                   requestId = RequestId(peer, lastRequestID.increment),
                                   blockStartTime = blockStartTime
                                 )
@@ -540,7 +543,12 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                   )
                 ]
               ]](
-                genEventStream(env.config, env.config.headMultisigAddress, blockStartTime, blockStartTime + 10.seconds)
+                genEventStream(
+                  env.config,
+                  env.config.headMultisigAddress,
+                  blockStartTime,
+                  blockStartTime + 10.seconds
+                )
               )
 
               eventStreamFullResults <- eventStreamActions.sequence
@@ -837,6 +845,5 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
           } yield ()
       } yield true
     )
-
 
 }

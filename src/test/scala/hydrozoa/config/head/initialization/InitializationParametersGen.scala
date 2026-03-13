@@ -40,8 +40,8 @@ import test.{TestPeers, TestPeersSpec}
 object BlockCreationEndTimeGen {
     type BlockCreationEndTimeGen = SlotConfig => Gen[QuantizedInstant]
 
-    /** Generate [[blockCreationEndTime]] between 0 and 10 years from the zero slot time. Good for all
-      * tests but Yaci-based ones.
+    /** Generate [[blockCreationEndTime]] between 0 and 10 years from the zero slot time. Good for
+      * all tests but Yaci-based ones.
       */
     def generateBlockCreationEndTime(slotConfig: SlotConfig): Gen[QuantizedInstant] =
         Gen
@@ -54,8 +54,8 @@ object BlockCreationEndTimeGen {
             )
 
     /** This "generator" checks that [[slotConfig]] is usable right now and returns the current time
-      * as the block creation end time under given slot configuration. This is supposed to be used with
-      * Yaci, when we cannot set the time on L1.
+      * as the block creation end time under given slot configuration. This is supposed to be used
+      * with Yaci, when we cannot set the time on L1.
       */
     final def currentTimeBlockCreationEndTime(slotConfig: SlotConfig): Gen[QuantizedInstant] =
         val now = Instant.now()
@@ -74,19 +74,19 @@ object InitializationParametersGenTopDown {
 
     type GenInitializationParameters =
         (testPeers: TestPeers) => (
-          generateFallbackContingency: FallbackContingencyGen,
-          generateGenesisUtxosL1: GenesisUtxosGen,
-          equityRange: (Coin, Coin)
+            generateFallbackContingency: FallbackContingencyGen,
+            generateGenesisUtxosL1: GenesisUtxosGen,
+            equityRange: (Coin, Coin)
         ) => Gen[
           InitializationParameters
         ]
 
     type GenInitializationParameters2 =
         (
-          generateHeadStartTime: BlockCreationEndTimeGen,
-          generateFallbackContingency: FallbackContingencyGen,
-          generateGenesisUtxosL1: GenesisUtxosGen,
-          equityRange: (Coin, Coin)
+            generateHeadStartTime: BlockCreationEndTimeGen,
+            generateFallbackContingency: FallbackContingencyGen,
+            generateGenesisUtxosL1: GenesisUtxosGen,
+            equityRange: (Coin, Coin)
         ) => Gen[
           InitializationParameters
         ]
@@ -112,9 +112,9 @@ object InitializationParametersGenTopDown {
       * Support multi assets.
       */
     def generateInitializationParameters(testPeers: TestPeers)(
-      generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
-      generateGenesisUtxosL1: GenesisUtxosGen,
-      equityRange: (Coin, Coin) = Coin(5_000_000) -> Coin(500_000_000)
+        generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
+        generateGenesisUtxosL1: GenesisUtxosGen,
+        equityRange: (Coin, Coin) = Coin(5_000_000) -> Coin(500_000_000)
     ): Gen[InitializationParameters] =
         for {
             cardanoNetwork <- Gen.const(testPeers.network)
@@ -393,7 +393,7 @@ object InitializationParametersGenBottomUp {
         ]
 
     def generateInitializationParameters(testPeers: TestPeers)(
-      generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency
+        generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency
     ): Gen[InitializationParameters] =
         for {
             cardanoNetwork <- Gen.const(testPeers.network)

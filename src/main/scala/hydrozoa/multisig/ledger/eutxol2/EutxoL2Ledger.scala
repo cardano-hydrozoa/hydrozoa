@@ -84,17 +84,18 @@ case class EutxoL2Ledger private (
     //   - return the corresponding evac diff
     override def sendInitialize(
         req: L2LedgerCommand.Initialize
-    ): EitherT[IO, L2LedgerError, Vector[EvacuationDiff]] = 
-      for {
-        s <- EitherT.right(state.get)
+    ): EitherT[IO, L2LedgerError, Vector[EvacuationDiff]] =
+        for {
+            s <- EitherT.right(state.get)
 //        initialUtxos = Cbor
 //          .decode(req.l2Payload.bytes)
 //          .to[Queue[GenesisObligation]]
 //          .value.map(_.toTransactionOutput)
-        newState = s
-          .focus(_.headId).set(Some(req.headId))
-        _ <- EitherT.right(state.set(newState))
-      } yield Vector.empty
+            newState = s
+                .focus(_.headId)
+                .set(Some(req.headId))
+            _ <- EitherT.right(state.set(newState))
+        } yield Vector.empty
 
     override def sendProxyBlockConfirmation(
         req: L2LedgerCommand.ProxyBlockConfirmation

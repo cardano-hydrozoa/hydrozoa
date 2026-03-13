@@ -127,6 +127,7 @@ private object DepositTxOps {
                   value = depositValue,
                   l2Payload = l2Payload,
                   depositFee = depositFee,
+                  requestValidityEndTime = requestValidityEndTime,
                   submissionDeadline = submissionDeadline,
                   absorptionStartTime =
                       config.txTiming.depositAbsorptionStartTime(requestValidityEndTime)
@@ -152,7 +153,8 @@ private object DepositTxOps {
             case MissingDepositOutputAtIndex(e: Int)
             case DepositUtxoError(e: DepositUtxo.DepositUtxoConversionError)
             case TxCborDeserializationFailed(e: Throwable)
-            case ValidityEndParseError(e: Throwable)
+            case SubmissionDeadlineParseError(e: Throwable)
+            case IncorrectSubmissionDeadline(actual: QuantizedInstant, expected: QuantizedInstant)
             case MultisigRegimeWitnessUtxoNotReferenced
             case InvalidDatumContent(e: Throwable)
             case InvalidDatumType
@@ -164,7 +166,8 @@ private object DepositTxOps {
       */
     final case class Parse(config: Config)(
         txBytes: Tx.Serialized,
-        l2Payload: ByteString
+        l2Payload: ByteString,
+        requestValidityEndTime: QuantizedInstant
     ) {
         import Parse.*
         import Parse.Error.*
@@ -210,6 +213,10 @@ private object DepositTxOps {
                             case _ => Left(InvalidDatumType)
                         }
 
+                        expectedSubmissionDeadline = config.txTiming.depositSubmissionEndTime(
+                          requestValidityEndTime
+                        )
+
                         // Check that ttl was properly quantized
                         submissionDeadline <- Try {
                             val ttlSlot = tx.body.value.ttl.get
@@ -217,9 +224,19 @@ private object DepositTxOps {
                             val instant = java.time.Instant.ofEpochMilli(ttlPosixMillis)
                             instant.quantizeLosslessUnsafe(config.slotConfig)
                         } match {
-                            case Failure(exception) => Left(ValidityEndParseError(exception))
+                            case Failure(exception) => Left(SubmissionDeadlineParseError(exception))
                             case Success(v)         => Right(v)
                         }
+
+                        // Check that the submission deadline is as expected
+                        _ <- Either.cond(
+                          submissionDeadline == expectedSubmissionDeadline,
+                          (),
+                          IncorrectSubmissionDeadline(
+                            submissionDeadline,
+                            expectedSubmissionDeadline
+                          )
+                        )
 
                         // Check the multisig regime witness utxo was referenced
                         _ <- Either.cond(
@@ -229,19 +246,20 @@ private object DepositTxOps {
                           MultisigRegimeWitnessUtxoNotReferenced
                         )
 
-                        depositUtxo <- DepositUtxo(
+                        depositUtxo <- DepositUtxo
+                            .parseUtxo(
                               utxo =
                                   Utxo(TransactionInput(tx.id, depositUtxoIx), depositOutput.value),
                               headNativeScriptAddress = config.headMultisigAddress,
                               l2Payload = l2Payload,
                               depositFee = depositFee,
-                              submissionDeadline = submissionDeadline,
+                              requestValidityEndTime = requestValidityEndTime,
                               txTiming = config.txTiming
                             )
                             .left
                             .map(DepositUtxoError(_))
 
-                    } yield DepositTx(depositUtxo, validityEnd, tx)
+                    } yield DepositTx(depositUtxo, submissionDeadline, tx)
                 case Failure(e) => Left(TxCborDeserializationFailed(e))
             }
         }

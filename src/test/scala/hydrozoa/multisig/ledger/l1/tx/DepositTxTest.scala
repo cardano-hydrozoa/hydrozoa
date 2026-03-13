@@ -82,7 +82,7 @@ def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = 
       l2Payload = GenesisObligation.serialize(l2Outputs),
       depositFee = depositFee,
       changeAddress = depositorAddress,
-      requestValidityEndTime = submissionDeadline,
+      requestValidityEndTime = requestValidityEndTime,
       refundInstructions = instructions,
       l2Value = l2Value
     )
@@ -100,8 +100,10 @@ object DepositTxTest extends Properties("Deposit Tx Test") {
             } yield (index, Hash[Blake2b_256, Any](hash), fee)
 
             Prop.forAll(gen)((idx, hash, fee) =>
-                val aux : AuxiliaryData.Metadata =
-                  AuxiliaryData.Metadata(MD.Deposit(idx, fee, hash).asAuxData(config.headId).getMetadata)
+                val aux: AuxiliaryData.Metadata =
+                    AuxiliaryData.Metadata(
+                      MD.Deposit(idx, fee, hash).asAuxData(config.headId).getMetadata
+                    )
                 MD.Deposit.parse(aux) match {
                     case Right(headId, x: MD.Deposit) =>
                         "Metadata is as expected" |: (x == MD.Deposit(idx, fee, hash))
@@ -121,7 +123,8 @@ object DepositTxTest extends Properties("Deposit Tx Test") {
                         DepositTx
                             .Parse(config)(
                               ByteString.fromArray(depositTx.tx.toCbor),
-                              depositTx.depositProduced.l2Payload
+                              depositTx.depositProduced.l2Payload,
+                              depositTx.depositProduced.requestValidityEndTime
                             )
                             .result match {
                             case Left(e) =>

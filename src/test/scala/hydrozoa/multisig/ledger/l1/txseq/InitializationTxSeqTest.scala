@@ -4,7 +4,6 @@ import cats.data.NonEmptyList
 import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.multisig.ledger.l1.token.CIP67
-import hydrozoa.multisig.ledger.l1.tx.Metadata.{Fallback, Initialization}
 import hydrozoa.multisig.ledger.l1.tx.{InitializationTx, Metadata as MD}
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.l1.state.VoteDatum
@@ -196,11 +195,11 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
                 val actual = iTx.tx.auxiliaryData.map(_.value)
                 val expected =
                     MD.Initialization(
-                        multisigTreasuryIx = 0,
-                        multisigRegimeIx = 1,
-                        seedIx = iTx.tx.body.value.inputs.toSeq.indexOf(config.initialSeedUtxo.input)
-                      )
-                    
+                      multisigTreasuryIx = 0,
+                      multisigRegimeIx = 1,
+                      seedIx = iTx.tx.body.value.inputs.toSeq.indexOf(config.initialSeedUtxo.input)
+                    )
+
                 s"Unexpected metadata value. Actual: $actual, expected: $expected" |: actual
                     .contains(expected)
             }
@@ -227,15 +226,18 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
             props.append {
                 val expectedMetadata =
                     Right(
-                    MD.Initialization(
-                      multisigTreasuryIx = 0,
-                      multisigRegimeIx = 1,
-                      seedIx = iTx.tx.body.value.inputs.toSeq.indexOf(config.initialSeedUtxo.input)
-                    )
+                      MD.Initialization(
+                        multisigTreasuryIx = 0,
+                        multisigRegimeIx = 1,
+                        seedIx =
+                            iTx.tx.body.value.inputs.toSeq.indexOf(config.initialSeedUtxo.input)
+                      )
                     )
 
                 "Metadata parsing failed" |: (MD.Initialization.parse(
-                  AuxiliaryData.Metadata(iTx.tx.auxiliaryData.get.value.getMetadata) : AuxiliaryData.Metadata
+                  AuxiliaryData.Metadata(
+                    iTx.tx.auxiliaryData.get.value.getMetadata
+                  ): AuxiliaryData.Metadata
                 ) == expectedMetadata)
             }
 
@@ -476,7 +478,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
                 val actual = fbTx.tx.auxiliaryData.map(_.value)
                 val expected =
                     MD.Fallback()
-                    
+
                 s"Unexpected metadata value for fallback tx. Actual: $actual, expected: $expected" |: actual
                     .contains(expected)
             }

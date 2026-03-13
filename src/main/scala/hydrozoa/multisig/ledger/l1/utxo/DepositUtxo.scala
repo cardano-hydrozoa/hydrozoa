@@ -20,13 +20,14 @@ import scalus.uplc.builtin.{ByteString, Data, FromData, ToData}
   *   of this must appear in the metadata of the corresponding deposit transaction. This includes
   *   ONLY the part relevant to L2, and not the hydrozoa/cardano/L1-specific stuff.
   */
-final case class DepositUtxo private (
+final case class DepositUtxo(
     utxoId: Input,
     address: ShelleyAddress,
     datum: DepositUtxo.Datum,
     value: Value,
     l2Payload: ByteString,
     depositFee: Coin,
+    requestValidityEndTime: QuantizedInstant,
     submissionDeadline: QuantizedInstant,
     absorptionStartTime: QuantizedInstant
 ) {
@@ -156,14 +157,13 @@ object DepositUtxo {
         case InvalidDatumType
         case RefScriptNotAllowed
 
-    def apply(
-                  utxo: Utxo,
-                  headNativeScriptAddress: ShelleyAddress,
-                  l2Payload: ByteString,
-                  depositFee: Coin,
-                  absorptionStartTime : QuantizedInstant,
-                  submissionDeadline : QuantizedInstant,
-                  txTiming: TxTiming
+    def parseUtxo(
+        utxo: Utxo,
+        headNativeScriptAddress: ShelleyAddress,
+        l2Payload: ByteString,
+        depositFee: Coin,
+        requestValidityEndTime: QuantizedInstant,
+        txTiming: TxTiming
     ): Either[DepositUtxoConversionError, DepositUtxo] =
         for {
             babbage <- utxo._2 match {
@@ -188,13 +188,17 @@ object DepositUtxo {
                 case Some(ScriptRef(s)) => Left(RefScriptNotAllowed)
             }
 
-        } yield DepositUtxo(
+            submissionDeadline = txTiming.depositSubmissionEndTime(requestValidityEndTime)
+            absorptionStartTime = txTiming.depositAbsorptionStartTime(requestValidityEndTime)
+
+        } yield new DepositUtxo(
           utxoId = utxo._1,
           address = addr,
           datum = datum,
           value = babbage.value,
           l2Payload = l2Payload,
           depositFee = depositFee,
+          requestValidityEndTime = requestValidityEndTime,
           submissionDeadline = submissionDeadline,
           absorptionStartTime = absorptionStartTime
         )

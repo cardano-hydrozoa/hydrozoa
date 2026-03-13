@@ -77,19 +77,20 @@ case class MultiNodeConfig private (
 object MultiNodeConfig {
 
     def generate(spec: TestPeersSpec)(
-      generateHeadConfig: HeadConfigGen = hydrozoa.config.head.generateHeadConfig,
-      generateHeadStartTime: SlotConfig => Gen[QuantizedInstant] = currentTimeBlockCreationEndTime,
-      generateTxTiming: TxTimingGen = generateDefaultTxTiming,
-      generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
-      generateDisputeResolutionConfig: DisputeResolutionConfigGen =
+        generateHeadConfig: HeadConfigGen = hydrozoa.config.head.generateHeadConfig,
+        generateHeadStartTime: SlotConfig => Gen[QuantizedInstant] =
+            currentTimeBlockCreationEndTime,
+        generateTxTiming: TxTimingGen = generateDefaultTxTiming,
+        generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
+        generateDisputeResolutionConfig: DisputeResolutionConfigGen =
             generateDisputeResolutionConfig,
-      generateHeadParameters: GenHeadParams = generateHeadParameters,
-      generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
+        generateHeadParameters: GenHeadParams = generateHeadParameters,
+        generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
             InitializationParametersGenTopDown.GenWithDeps =
             InitializationParametersGenBottomUp.generateInitializationParameters,
-      generateNodeOperationLiquidationConfig: Gen[NodeOperationLiquidationConfig] =
+        generateNodeOperationLiquidationConfig: Gen[NodeOperationLiquidationConfig] =
             generateNodeOperationLiquidationConfig,
-      generateNodeOperationMultisigConfig: Gen[NodeOperationMultisigConfig] =
+        generateNodeOperationMultisigConfig: Gen[NodeOperationMultisigConfig] =
             generateNodeOperationMultisigConfig
     ): Gen[MultiNodeConfig] = for {
         testPeers <- TestPeers.generate(spec)
@@ -107,19 +108,20 @@ object MultiNodeConfig {
     } yield ret
 
     def generateForTestPeers(testPeers: TestPeers)(
-      generateHeadConfig: HeadConfigGen = hydrozoa.config.head.generateHeadConfig,
-      generateBlockCreationEndTime: SlotConfig => Gen[QuantizedInstant] = currentTimeBlockCreationEndTime,
-      generateTxTiming: TxTimingGen = generateDefaultTxTiming,
-      generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
-      generateDisputeResolutionConfig: DisputeResolutionConfigGen =
+        generateHeadConfig: HeadConfigGen = hydrozoa.config.head.generateHeadConfig,
+        generateBlockCreationEndTime: SlotConfig => Gen[QuantizedInstant] =
+            currentTimeBlockCreationEndTime,
+        generateTxTiming: TxTimingGen = generateDefaultTxTiming,
+        generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
+        generateDisputeResolutionConfig: DisputeResolutionConfigGen =
             generateDisputeResolutionConfig,
-      generateHeadParameters: GenHeadParams = generateHeadParameters,
-      generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
+        generateHeadParameters: GenHeadParams = generateHeadParameters,
+        generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
             InitializationParametersGenTopDown.GenWithDeps =
             InitializationParametersGenBottomUp.generateInitializationParameters,
-      generateNodeOperationLiquidationConfig: Gen[NodeOperationLiquidationConfig] =
+        generateNodeOperationLiquidationConfig: Gen[NodeOperationLiquidationConfig] =
             generateNodeOperationLiquidationConfig,
-      generateNodeOperationMultisigConfig: Gen[NodeOperationMultisigConfig] =
+        generateNodeOperationMultisigConfig: Gen[NodeOperationMultisigConfig] =
             generateNodeOperationMultisigConfig
     ): Gen[MultiNodeConfig] =
         for {
