@@ -6,7 +6,7 @@ import com.bloxbean.cardano.client.util.HexUtil
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorSystem
 import com.suprnation.typelevel.actors.syntax.*
-import hydrozoa.config.head.initialization.HeadStartTimeGen.HeadStartTimeGen
+import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.BlockCreationEndTimeGen
 import hydrozoa.config.head.initialization.{CappedValueGen, InitializationParametersGenTopDown}
 import hydrozoa.config.head.multisig.timing.TxTimingGen
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
@@ -299,13 +299,13 @@ case class Suite(
         val testPeerToUtxos = env.genesisUtxo(testPeers)
 
         // Additional generators
-        val generateHeadStartTime: HeadStartTimeGen = slotConfig =>
+        val generateHeadStartTime: BlockCreationEndTimeGen = slotConfig =>
             Gen.const(env.startTime.quantize(slotConfig))
         val generateTxTiming = txTimingGen
 
         for {
             config <- MultiNodeConfig.generateForTestPeers(testPeers)(
-              generateHeadStartTime = generateHeadStartTime,
+              generateBlockCreationEndTime = generateHeadStartTime,
               generateTxTiming = generateTxTiming,
               generateInitializationParameters = InitializationParametersGenTopDown.GenWithDeps(
                 generateGenesisUtxosL1 =

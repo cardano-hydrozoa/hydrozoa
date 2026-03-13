@@ -415,8 +415,7 @@ final case class JointLedger(
 
                     // Maturity. The deposit is mature if its absorption start time is no later
                     // than the block brief’s creation end time.
-                    // TODO: use end time, not start time
-                    val isMature = depositAbsorptionStart <= blockStartTime
+                    val isMature = depositAbsorptionStart <= blockCreationEndTime
 
                     // Non-expiry. The deposit is non-expired if its absorption end time is
                     // no earlier than the competing fallback’s validity start time.

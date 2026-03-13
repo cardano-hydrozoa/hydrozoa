@@ -73,7 +73,7 @@ final case class TxTiming(
     def newFallbackStartTime(blockCreationEndTime: QuantizedInstant): QuantizedInstant =
         blockCreationEndTime + minSettlementDuration + inactivityMarginDuration + silenceDuration
 
-    def depositSubmissionEndTime(requestValidityEndTime: QuantizedInstant) =
+    def depositSubmissionEndTime(requestValidityEndTime: QuantizedInstant): QuantizedInstant =
         requestValidityEndTime + depositSubmissionDuration
 
     def depositAbsorptionStartTime(requestValidityEndTime: QuantizedInstant): QuantizedInstant =

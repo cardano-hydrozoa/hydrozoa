@@ -211,7 +211,7 @@ private object DepositTxOps {
                         }
 
                         // Check that ttl was properly quantized
-                        validityEnd <- Try {
+                        submissionDeadline <- Try {
                             val ttlSlot = tx.body.value.ttl.get
                             val ttlPosixMillis = config.slotConfig.slotToTime(ttlSlot)
                             val instant = java.time.Instant.ofEpochMilli(ttlPosixMillis)
@@ -229,14 +229,13 @@ private object DepositTxOps {
                           MultisigRegimeWitnessUtxoNotReferenced
                         )
 
-                        depositUtxo <- DepositUtxo
-                            .fromUtxo(
+                        depositUtxo <- DepositUtxo(
                               utxo =
                                   Utxo(TransactionInput(tx.id, depositUtxoIx), depositOutput.value),
                               headNativeScriptAddress = config.headMultisigAddress,
                               l2Payload = l2Payload,
                               depositFee = depositFee,
-                              submissionDeadline = validityEnd,
+                              submissionDeadline = submissionDeadline,
                               txTiming = config.txTiming
                             )
                             .left

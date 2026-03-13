@@ -1,7 +1,7 @@
 package hydrozoa.config.head.initialization
 
 import hydrozoa.config.head.HeadConfig
-import hydrozoa.config.head.initialization.HeadStartTimeGen.{HeadStartTimeGen, currentTimeHeadStartTime}
+import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.{BlockCreationEndTimeGen, currentTimeBlockCreationEndTime, generateBlockCreationEndTime}
 import hydrozoa.config.head.multisig.fallback.{FallbackContingencyGen, generateFallbackContingency}
 import hydrozoa.config.head.multisig.settlement.{SettlementConfigGen, generateSettlementConfig}
 import hydrozoa.config.head.multisig.timing.{TxTimingGen, generateDefaultTxTiming}
@@ -13,19 +13,20 @@ import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import monocle.Focus.focus
 import org.scalacheck.Test.Parameters
 import org.scalacheck.{Gen, Prop, Properties}
+
 import scala.concurrent.duration.DurationInt
 import test.{TestPeers, TestPeersSpec}
 
 def generateInitialBlock(testPeers: TestPeers)(
-    generateTxTiming: TxTimingGen = generateDefaultTxTiming,
-    generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
-    generateDisputeResolutionConfig: DisputeResolutionConfigGen = generateDisputeResolutionConfig,
-    generateHeadParameters: GenHeadParams = generateHeadParameters,
-    generateHeadStartTime: HeadStartTimeGen = currentTimeHeadStartTime,
-    generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
+  generateTxTiming: TxTimingGen = generateDefaultTxTiming,
+  generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
+  generateDisputeResolutionConfig: DisputeResolutionConfigGen = generateDisputeResolutionConfig,
+  generateHeadParameters: GenHeadParams = generateHeadParameters,
+  gnerateBlockCreationEndTime: BlockCreationEndTimeGen = currentTimeBlockCreationEndTime,
+  generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
         InitializationParametersGenTopDown.GenWithDeps | InitializationParameters =
         InitializationParametersGenBottomUp.generateInitializationParameters,
-    generateSettlementConfig: SettlementConfigGen = generateSettlementConfig
+  generateSettlementConfig: SettlementConfigGen = generateSettlementConfig
 ): Gen[InitialBlock] = {
     for {
         cardanoNetwork <- Gen.const(testPeers.network)
@@ -40,7 +41,6 @@ def generateInitialBlock(testPeers: TestPeers)(
         initializationParameters <- generateInitializationParameters match {
             case g: InitializationParametersGenBottomUp.GenInitializationParameters =>
                 g(testPeers)(
-                  generateHeadStartTime,
                   _ => Gen.const(headParams.fallbackContingency)
                 )
             case InitializationParametersGenTopDown.GenWithDeps(
@@ -49,7 +49,6 @@ def generateInitialBlock(testPeers: TestPeers)(
                   equityRange
                 ) =>
                 generator(testPeers)(
-                  generateHeadStartTime,
                   generateFallbackContingency,
                   generateGenesisUtxosL1,
                   equityRange
@@ -66,8 +65,10 @@ def generateInitialBlock(testPeers: TestPeers)(
             )
             .get
 
+        blockCreationEndTime <- generateBlockCreationEndTime(config.slotConfig)
+        
         initTxSeq =
-            InitializationTxSeq.Build(config).result match {
+            InitializationTxSeq.Build(config)(blockCreationEndTime).result match {
                 case Left(e) =>
                     throw e
                 case Right(x) => x
@@ -77,8 +78,8 @@ def generateInitialBlock(testPeers: TestPeers)(
       Block.MultiSigned.Initial(
         blockBrief = BlockBrief.Initial(
           BlockHeader.Initial(
-            startTime = initializationParameters.headStartTime,
-            endTime = initializationParameters.headStartTime + 10.seconds,
+            startTime = blockCreationEndTime - 10.seconds,
+            endTime = blockCreationEndTime,
             kzgCommitment = initializationParameters.initialEvacuationMap.kzgCommitment
           )
         ),

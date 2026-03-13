@@ -33,9 +33,9 @@ def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = 
         depositData <- genData
         refundData <- genData
 
-        submissionDeadline <- Gen
+        requestValidityEndTime <- Gen
             .posNum[Long]
-            .map(sec => config.headStartTime + FiniteDuration(sec, TimeUnit.SECONDS))
+            .map(sec => config.initialBlock.endTime + FiniteDuration(sec, TimeUnit.SECONDS))
 
         l2Addr <- genPubkeyAddress(config)
         refundAddr <- genPubkeyAddress(config)
@@ -44,7 +44,7 @@ def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = 
             DepositUtxo.Refund.Instructions(
               address = refundAddr,
               datum = refundData,
-              validityStart = config.txTiming.refundValidityStart(submissionDeadline)
+              validityStart = config.txTiming.refundValidityStart(requestValidityEndTime)
             )
 
         txId <- arbitrary[TransactionInput]
@@ -82,7 +82,7 @@ def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = 
       l2Payload = GenesisObligation.serialize(l2Outputs),
       depositFee = depositFee,
       changeAddress = depositorAddress,
-      submissionDeadline = submissionDeadline,
+      requestValidityEndTime = submissionDeadline,
       refundInstructions = instructions,
       l2Value = l2Value
     )
@@ -94,17 +94,17 @@ object DepositTxTest extends Properties("Deposit Tx Test") {
         Prop.forAll(MultiNodeConfig.generate(TestPeersSpec.default)()) { multiNodeConfig =>
             val config = multiNodeConfig.nodeConfigs(HeadPeerNumber.zero)
             val gen = for {
-                addr <- genScriptAddress(config)
                 hash <- genByteStringOfN(32)
                 index <- Gen.posNum[Int].map(_ - 1)
                 fee <- Arbitrary.arbitrary[Coin]
-            } yield (addr, index, Hash[Blake2b_256, Any](hash), fee)
+            } yield (index, Hash[Blake2b_256, Any](hash), fee)
 
-            Prop.forAll(gen)((addr, idx, hash, fee) =>
-                val aux = MD(MD.Deposit(addr, idx, hash, fee))
-                MD.parse(Some(KeepRaw(aux)))(using config.cardanoProtocolVersion) match {
-                    case Right(x: MD.Deposit) =>
-                        "Metadata is as expected" |: (x == MD.Deposit(addr, idx, hash, fee))
+            Prop.forAll(gen)((idx, hash, fee) =>
+                val aux : AuxiliaryData.Metadata =
+                  AuxiliaryData.Metadata(MD.Deposit(idx, fee, hash).asAuxData(config.headId).getMetadata)
+                MD.Deposit.parse(aux) match {
+                    case Right(headId, x: MD.Deposit) =>
+                        "Metadata is as expected" |: (x == MD.Deposit(idx, fee, hash))
                     case Right(_) => "Metadata is MD.deposit" |: Prop(false)
                     case Left(e)  => "Metadata parsing returns Right" |: Prop(false)
                 }

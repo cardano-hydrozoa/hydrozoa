@@ -1,6 +1,6 @@
 package hydrozoa.config.head
 
-import hydrozoa.config.head.initialization.HeadStartTimeGen.currentTimeHeadStartTime
+import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.currentTimeBlockCreationEndTime
 import hydrozoa.config.head.initialization.{InitializationParametersGenBottomUp, InitializationParametersGenTopDown, generateInitialBlock}
 import hydrozoa.config.head.multisig.fallback.{FallbackContingencyGen, generateFallbackContingency}
 import hydrozoa.config.head.multisig.settlement.{SettlementConfigGen, generateSettlementConfig}
@@ -15,28 +15,27 @@ import test.{TestPeers, TestPeersSpec}
 
 type HeadConfigGen =
     (testPeers: TestPeers) => (
-        generateHeadStartTime: SlotConfig => Gen[QuantizedInstant],
-        generateTxTiming: TxTimingGen,
-        generateFallbackContingency: FallbackContingencyGen,
-        generateDisputeResolutionConfig: DisputeResolutionConfigGen,
-        generateHeadParameters: GenHeadParams,
-        generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
+      generateBlockCreationEndTime: SlotConfig => Gen[QuantizedInstant],
+      generateTxTiming: TxTimingGen,
+      generateFallbackContingency: FallbackContingencyGen,
+      generateDisputeResolutionConfig: DisputeResolutionConfigGen,
+      generateHeadParameters: GenHeadParams,
+      generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
             InitializationParametersGenTopDown.GenWithDeps
     ) => Gen[HeadConfig]
 
 def generateHeadConfig(testPeers: TestPeers)(
-    generateHeadStartTime: SlotConfig => Gen[QuantizedInstant] = currentTimeHeadStartTime,
-    generateTxTiming: TxTimingGen = generateDefaultTxTiming,
-    generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
-    generateDisputeResolutionConfig: DisputeResolutionConfigGen = generateDisputeResolutionConfig,
-    generateHeadParameters: GenHeadParams = generateHeadParameters,
-    generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
+  generateBlockCreationEndTime: SlotConfig => Gen[QuantizedInstant] = currentTimeBlockCreationEndTime,
+  generateTxTiming: TxTimingGen = generateDefaultTxTiming,
+  generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
+  generateDisputeResolutionConfig: DisputeResolutionConfigGen = generateDisputeResolutionConfig,
+  generateHeadParameters: GenHeadParams = generateHeadParameters,
+  generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
         InitializationParametersGenTopDown.GenWithDeps =
         InitializationParametersGenBottomUp.generateInitializationParameters
 ): Gen[HeadConfig] =
     for {
         preinit <- generateHeadConfigPreInit(testPeers)(
-          generateHeadStartTime = generateHeadStartTime,
           generateTxTiming = generateTxTiming,
           generateFallbackContingency = generateFallbackContingency,
           generateDisputeResolutionConfig = generateDisputeResolutionConfig,
@@ -46,7 +45,7 @@ def generateHeadConfig(testPeers: TestPeers)(
         initialBlock <- generateInitialBlock(testPeers)(
           generateTxTiming = _ => Gen.const(preinit.headParams.txTiming),
           generateHeadParameters = _ => (_, _, _, _) => Gen.const(preinit.headParams),
-          generateHeadStartTime = _ => Gen.const(preinit.initializationParams.headStartTime),
+          gnerateBlockCreationEndTime = generateBlockCreationEndTime,
           generateInitializationParameters = preinit.initializationParams
         )
     } yield HeadConfig(
@@ -58,15 +57,15 @@ def generateHeadConfig(testPeers: TestPeers)(
     ).get
 
 def generateHeadConfigPreInit(testPeers: TestPeers)(
-    generateHeadStartTime: SlotConfig => Gen[QuantizedInstant] = currentTimeHeadStartTime,
-    generateTxTiming: TxTimingGen = generateDefaultTxTiming,
-    generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
-    generateDisputeResolutionConfig: DisputeResolutionConfigGen = generateDisputeResolutionConfig,
-    generateHeadParameters: GenHeadParams = generateHeadParameters,
-    generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
+  generateBlockCreationEndTime: SlotConfig => Gen[QuantizedInstant] = currentTimeBlockCreationEndTime,
+  generateTxTiming: TxTimingGen = generateDefaultTxTiming,
+  generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
+  generateDisputeResolutionConfig: DisputeResolutionConfigGen = generateDisputeResolutionConfig,
+  generateHeadParameters: GenHeadParams = generateHeadParameters,
+  generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
         InitializationParametersGenTopDown.GenWithDeps =
         InitializationParametersGenBottomUp.generateInitializationParameters,
-    generateSettlementConfig: SettlementConfigGen = generateSettlementConfig
+  generateSettlementConfig: SettlementConfigGen = generateSettlementConfig
 ): Gen[HeadConfig.Preinit] = for {
     cardanoNetwork <- Gen.const(testPeers.network)
     headParams <- generateHeadParameters(cardanoNetwork)(
@@ -78,7 +77,6 @@ def generateHeadConfigPreInit(testPeers: TestPeers)(
     initializationParams <- generateInitializationParameters match {
         case g: InitializationParametersGenBottomUp.GenInitializationParameters =>
             g(testPeers)(
-              generateHeadStartTime,
               generateFallbackContingency,
             )
         case InitializationParametersGenTopDown.GenWithDeps(
@@ -87,7 +85,6 @@ def generateHeadConfigPreInit(testPeers: TestPeers)(
               equityRange
             ) =>
             generator(testPeers)(
-              generateHeadStartTime,
               generateFallbackContingency,
               generateGenesisUtxosL1,
               equityRange

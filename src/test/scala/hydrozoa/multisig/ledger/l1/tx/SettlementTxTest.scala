@@ -120,15 +120,15 @@ def genDepositUtxo(
 
 /** Generate a "standalone" settlement tx. */
 def genSettlementTxSeqBuilder(config: HeadConfig)(
-    estimatedFee: Coin = Coin(5_000_000L),
-    // If passed, the kzg commitment will be set to the value.
-    // If not, its randomly generated
-    kzgCommitment: Option[KzgCommitment] = None,
-    fallbackValidityStart: QuantizedInstant = java.time.Instant
+  estimatedFee: Coin = Coin(5_000_000L),
+  // If passed, the kzg commitment will be set to the value.
+  // If not, its randomly generated
+  kzgCommitment: Option[KzgCommitment] = None,
+  fallbackValidityStart: QuantizedInstant = java.time.Instant
         .ofEpochMilli(java.time.Instant.now().toEpochMilli + 3_600_000)
         .quantize(config.slotConfig),
-    blockCreatedOn: QuantizedInstant = java.time.Instant.now().quantize(config.slotConfig),
-    txTiming: TxTiming = TxTiming.default(config.slotConfig)
+  blockCreationEndTime: QuantizedInstant = java.time.Instant.now().quantize(config.slotConfig),
+  txTiming: TxTiming = TxTiming.default(config.slotConfig)
 ): Gen[SettlementTxSeq.Build] = {
     // A helper to generator empty, small, medium, large (up to 1000)
     def genHelper[T](gen: Gen[T]): Gen[Vector[T]] = Gen.sized(size =>
@@ -182,7 +182,7 @@ def genSettlementTxSeqBuilder(config: HeadConfig)(
       payoutObligationsRemaining = payouts,
       treasuryToSpend = multisigTreasury,
       competingFallbackValidityStart = fallbackValidityStart,
-      blockCreatedOn = blockCreatedOn
+      blockCreationEndTime = blockCreationEndTime
     )
 }
 
@@ -196,7 +196,7 @@ def genSettlementTxSeqBuilder(config: HeadConfig)(
 def genNextSettlementTxSeqBuilder(config: HeadConfig)(
     treasuryToSpend: MultisigTreasuryUtxo,
     fallbackValidityStart: QuantizedInstant,
-    blockCreatedOn: QuantizedInstant,
+    blockCreationEndTime: QuantizedInstant,
     majorVersion: Int,
     estimatedFee: Coin = Coin(5_000_000L),
     // If passed, the kzg commitment will be set to the value.
@@ -248,7 +248,7 @@ def genNextSettlementTxSeqBuilder(config: HeadConfig)(
         payoutObligationsRemaining = infimum,
         treasuryToSpend = treasuryToSpend,
         competingFallbackValidityStart = fallbackValidityStart,
-        blockCreatedOn = blockCreatedOn
+        blockCreationEndTime = blockCreationEndTime
       ),
     )
 }

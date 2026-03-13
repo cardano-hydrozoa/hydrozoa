@@ -20,7 +20,7 @@ import scalus.uplc.builtin.{ByteString, Data, FromData, ToData}
   *   of this must appear in the metadata of the corresponding deposit transaction. This includes
   *   ONLY the part relevant to L2, and not the hydrozoa/cardano/L1-specific stuff.
   */
-final case class DepositUtxo(
+final case class DepositUtxo private (
     utxoId: Input,
     address: ShelleyAddress,
     datum: DepositUtxo.Datum,
@@ -156,13 +156,14 @@ object DepositUtxo {
         case InvalidDatumType
         case RefScriptNotAllowed
 
-    def fromUtxo(
-        utxo: Utxo,
-        headNativeScriptAddress: ShelleyAddress,
-        l2Payload: ByteString,
-        depositFee: Coin,
-        submissionDeadline: QuantizedInstant,
-        txTiming: TxTiming
+    def apply(
+                  utxo: Utxo,
+                  headNativeScriptAddress: ShelleyAddress,
+                  l2Payload: ByteString,
+                  depositFee: Coin,
+                  absorptionStartTime : QuantizedInstant,
+                  submissionDeadline : QuantizedInstant,
+                  txTiming: TxTiming
     ): Either[DepositUtxoConversionError, DepositUtxo] =
         for {
             babbage <- utxo._2 match {
@@ -195,6 +196,6 @@ object DepositUtxo {
           l2Payload = l2Payload,
           depositFee = depositFee,
           submissionDeadline = submissionDeadline,
-          absorptionStartTime = txTiming.depositAbsorptionStartTime(submissionDeadline)
+          absorptionStartTime = absorptionStartTime
         )
 }
