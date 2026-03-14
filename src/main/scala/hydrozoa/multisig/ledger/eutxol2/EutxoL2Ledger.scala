@@ -108,7 +108,7 @@ case class EutxoL2Ledger private (
         )
 
     override def sendProxyHydrozoaRequestError(
-        req: L2LedgerCommand.ProxyHydrozoaRequestError
+        req: L2LedgerCommand.ProxyRequestError
     ): EitherT[IO, L2LedgerError, Unit] =
         EitherT.right(
           state.update(

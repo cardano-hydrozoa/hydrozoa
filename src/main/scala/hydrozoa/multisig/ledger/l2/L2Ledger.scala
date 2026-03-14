@@ -102,7 +102,7 @@ trait L2Ledger[F[_]] {
     ): EitherT[F, L2LedgerError, Unit]
 
     def sendProxyHydrozoaRequestError(
-        req: L2LedgerCommand.ProxyHydrozoaRequestError
+        req: L2LedgerCommand.ProxyRequestError
     ): EitherT[F, L2LedgerError, Unit]
 
     /** Actions (effectful endomorphisms) on the L2Ledger state. They may return an error or a new
@@ -123,7 +123,7 @@ trait L2Ledger[F[_]] {
             case e: L2LedgerCommand.ApplyDepositDecisions     => fromApplyDepositDecisions(e)
             case e: L2LedgerCommand.ApplyTransaction          => fromApplyTransactionRequest(e)
             case e: L2LedgerCommand.ProxyBlockConfirmation    => fromProxyBlockConfirmation(e)
-            case e: L2LedgerCommand.ProxyHydrozoaRequestError => fromProxyHydrozoaRequestError(e)
+            case e: L2LedgerCommand.ProxyRequestError => fromProxyHydrozoaRequestError(e)
         }
 
         /** Execute the given EitherT (returning Unit), but return the original state
@@ -190,7 +190,7 @@ trait L2Ledger[F[_]] {
             kConst(sendProxyBlockConfirmation(req))
 
         private def fromProxyHydrozoaRequestError(
-            req: L2LedgerCommand.ProxyHydrozoaRequestError
+            req: L2LedgerCommand.ProxyRequestError
         ): L2LedgerAction =
             kConst(sendProxyHydrozoaRequestError(req))
     }

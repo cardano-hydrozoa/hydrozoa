@@ -1,88 +1,112 @@
 package hydrozoa.multisig.server
 
-import cats.effect.{IO, Ref}
+import cats.effect.IO
+import fs2.Stream
 import hydrozoa.config.head.HeadConfig
+import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.consensus.EventSequencer
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
+import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.server.ApiResponse.{Error, HeadInfo, RequestAccepted}
 import hydrozoa.multisig.server.JsonCodecs.given
 import io.circe.syntax.*
 import org.http4s.circe.*
 import org.http4s.dsl.io.*
 import org.http4s.{EntityDecoder, HttpRoutes}
+import org.typelevel.log4cats.Logger
+import org.typelevel.log4cats.slf4j.Slf4jLogger
 
 /** HTTP routes for the Hydrozoa server. These routes are what get called by the frontend (or a
   * proxy -- load-balancer, unified api).
-  *
-  * Note: EventSequencer integration is currently commented out. Requests are accepted but not yet
-  * processed.
   */
 class HydrozoaRoutes(
-    @annotation.unused eventSequencer: EventSequencer.Handle,
-    headConfig: HeadConfig,
-    eventCounter: Ref[IO, Int]
+    eventSequencer: EventSequencer.Handle,
+    headConfig: HeadConfig
 ) {
+
+    private given logger: Logger[IO] = Logging.loggerIO("HydrozoaRoutes")
 
     // Implicit decoders for request bodies
     implicit val depositRequestEntityDecoder: EntityDecoder[IO, UserRequest] =
         jsonOf[IO, UserRequest]
-
-    /** Generate next RequestId for stub responses using incrementing counter */
-    private def nextRequestId: IO[RequestId] =
-        eventCounter.getAndUpdate(_ + 1).map { eventNum =>
-            RequestId(
-              peerNum = HeadPeerNumber.zero,
-              requestNum = RequestNumber(eventNum)
-            )
-        }
 
     val routes: HttpRoutes[IO] = HttpRoutes.of[IO] {
 
         // POST /api/l2/submit - Submit an L2 transaction
         case req @ POST -> Root / "api" / "l2" / "submit" =>
             val result: IO[org.http4s.Response[IO]] = for {
-                transactionRequest <- req.as[UserRequest]
-
-                // TODO: Process TransactionRequest
+                bodyText <- req.bodyText.compile.string
+                _ <- logger.debug(s"POST /api/l2/submit - Headers: ${req.headers}")
+                _ <- logger.debug(s"POST /api/l2/submit - Body: $bodyText")
+                // Try to parse as JSON to get better error messages
+                _ <- io.circe.parser.parse(bodyText) match {
+                    case Left(parseError) =>
+                        logger.error(s"POST /api/l2/submit - JSON parse error: ${parseError.getMessage}")
+                    case Right(json) =>
+                        // Try to decode to UserRequest
+                        io.circe.Decoder[UserRequest].decodeJson(json) match {
+                            case Left(decodeError) =>
+                                logger.error(s"POST /api/l2/submit - JSON decode error: ${decodeError.getMessage}") *>
+                                    logger.error(s"POST /api/l2/submit - Decode error history: ${decodeError.history}")
+                            case Right(_) =>
+                                IO.unit
+                        }
+                }
+                // Re-create request with the body we just read
+                newReq = req.withBodyStream(Stream.emits(bodyText.getBytes))
+                transactionRequest <- newReq.as[UserRequest]
+                _ <- logger.debug(s"POST /api/l2/submit - Decoded: $transactionRequest")
                 // Send synchronous request to EventSequencer and get back RequestId
-                // eventId <- eventSequencer ?: l2TxRequest
-
-                // For now, generate next event ID and return RequestAccepted
-                eventId <- nextRequestId
-                response = RequestAccepted(requestId = eventId)
+                requestId <- eventSequencer ?: transactionRequest
+                response = RequestAccepted(requestId = requestId)
                 resp <- Ok(response.asJson)
             } yield resp
 
             result.handleErrorWith { error =>
-                BadRequest(
-                  Error(
-                    error = error.getMessage
-                  ).asJson
-                )
+                logger.error(error)(s"POST /api/l2/submit - Error: ${error.getMessage}") *>
+                    BadRequest(
+                      Error(
+                        error = error.getMessage
+                      ).asJson
+                    )
             }
 
         // POST /api/deposit/register - Register a deposit
         case req @ POST -> Root / "api" / "deposit" / "register" =>
             val result: IO[org.http4s.Response[IO]] = for {
-                depositRequest <- req.as[UserRequest]
-
-                // TODO: Process DepositRequest
+                bodyText <- req.bodyText.compile.string
+                _ <- logger.debug(s"POST /api/deposit/register - Headers: ${req.headers}")
+                _ <- logger.debug(s"POST /api/deposit/register - Body: $bodyText")
+                // Try to parse as JSON to get better error messages
+                _ <- io.circe.parser.parse(bodyText) match {
+                    case Left(parseError) =>
+                        logger.error(s"POST /api/deposit/register - JSON parse error: ${parseError.getMessage}")
+                    case Right(json) =>
+                        // Try to decode to UserRequest
+                        io.circe.Decoder[UserRequest].decodeJson(json) match {
+                            case Left(decodeError) =>
+                                logger.error(s"POST /api/deposit/register - JSON decode error: ${decodeError.getMessage}") *>
+                                    logger.error(s"POST /api/deposit/register - Decode error history: ${decodeError.history}")
+                            case Right(_) =>
+                                IO.unit
+                        }
+                }
+                // Re-create request with the body we just read
+                newReq = req.withBodyStream(Stream.emits(bodyText.getBytes))
+                depositRequest <- newReq.as[UserRequest]
+                _ <- logger.debug(s"POST /api/deposit/register - Decoded: $depositRequest")
                 // Send synchronous request to EventSequencer and get back RequestId
-                // eventId <- eventSequencer ?: depositRequest
-
-                // For now, generate next event ID and return RequestAccepted
-                requestId <- nextRequestId
+                requestId <- eventSequencer ?: depositRequest
                 response = RequestAccepted(requestId)
                 resp <- Ok(response.asJson)
             } yield resp
 
             result.handleErrorWith { error =>
-                BadRequest(
-                  Error(
-                    error = error.getMessage
-                  ).asJson
-                )
+                logger.error(error)(s"POST /api/deposit/register - Error: ${error.getMessage}") *>
+                    BadRequest(
+                      Error(
+                        error = error.getMessage
+                      ).asJson
+                    )
             }
 
         // GET /api/head-info
@@ -122,8 +146,5 @@ object HydrozoaRoutes {
     def apply(
         eventSequencer: EventSequencer.Handle,
         headConfig: HeadConfig,
-    ): IO[HydrozoaRoutes] =
-        Ref.of[IO, Int](0).map { counter =>
-            new HydrozoaRoutes(eventSequencer, headConfig, counter)
-        }
+    ): IO[HydrozoaRoutes] = IO.pure(new HydrozoaRoutes(eventSequencer, headConfig))
 }

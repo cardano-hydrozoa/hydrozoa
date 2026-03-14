@@ -49,7 +49,8 @@ final case class JointLedger(
 ) extends Actor[IO, Requests.Request] {
     import config.*
 
-    private val logger = Logging.logger("JointLedger")
+    private val logger = Logging.loggerIO("JointLedger")
+    private val logger_ = Logging.logger("JointLedger1")
 
     private val connections = Ref.unsafe[IO, Option[Connections]](None)
 
@@ -204,13 +205,13 @@ final case class JointLedger(
                 .focus(_.userRequestState.requests)
                 .modify(_.appended((requestId, Invalid)))
             _ <- state.set(newState)
-            _ = logger.debug(s"registerDepositRequest failure: $e")
+            _ <- logger.debug(s"registerDepositRequest failure: $e")
             _ <- tracer.eventProcessed(
               s"${requestId.peerNum: Int}:${requestId.requestNum: Int}",
               currentBlockNum: Int,
               false
             )
-            l2Command = L2LedgerCommand.ProxyHydrozoaRequestError(
+            l2Command = L2LedgerCommand.ProxyRequestError(
               requestId = requestId,
               message = e.toString
             )
@@ -349,6 +350,7 @@ final case class JointLedger(
     private def startBlock(args: StartBlock): IO[Unit] = {
         import args.*
         for {
+            _ <- logger.info(s"start block: ${args.blockNum}...")
             d <- unsafeGetDone
             _ <- state.set(
               Producing(
@@ -393,7 +395,7 @@ final case class JointLedger(
         ] = for {
             _ <- IO.pure(())
 
-            _ = logger.trace(
+            _ <- logger.trace(
               s"partitionDeposits: deposits: ${depositsMap.treeMap.values.map(_.map(_._1))}, " +
                   s"blockStartTime=$blockStartTime, " +
                   s"settlementValidityEnd=$settlementValidityEnd"
@@ -441,7 +443,7 @@ final case class JointLedger(
 
                     val isIneligible = !isExpired && (!isMature || !isExistent)
 
-                    logger.trace(
+                    logger_.trace(
                       s"deposit: ${deposit._1}, " +
                           s"depositValidityEnd=$depositValidityEnd, " +
                           s"depositAbsorptionStart=$depositAbsorptionStart, " +
@@ -480,7 +482,7 @@ final case class JointLedger(
             competingFallbackValidityStart = p.competingFallbackValidityStart
             events = p.userRequestState.requests
 
-            _ = logger.trace(
+            _ <- logger.trace(
               s"mkBlockBrief: previousHeader=$previousHeader\n" +
                   s"mkBlockBrief: blockWithdrawnUtxos=$blockWithdrawnUtxos\n" +
                   s"mkBlockBrief: blockStartTime=$blockStartTime\n" +
@@ -599,6 +601,7 @@ final case class JointLedger(
         import config.txTiming
 
         for {
+            _ <- logger.info(s"complete block ${args.referenceBlockBrief}")
             producing <- unsafeGetProducing
 
             ret <- partitionDeposits(
@@ -612,7 +615,7 @@ final case class JointLedger(
 
             (absorbedDeposits, unabsorbedDeposits) = eligible.splitAt(maxDepositsAbsorbedPerBlock)
 
-            _ = logger.trace(
+            _ <- logger.trace(
               s"joint ledger: absorbed=$absorbedDeposits" + "\n" +
                   s"joint ledger: unabsorbed=$unabsorbedDeposits" + "\n" +
                   s"joint ledger: ineligible=$ineligible" + "\n" +

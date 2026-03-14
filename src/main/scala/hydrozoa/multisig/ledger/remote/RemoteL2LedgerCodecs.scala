@@ -43,9 +43,22 @@ object RemoteL2LedgerCodecs {
     implicit val blockNumberDecoder: Decoder[BlockNumber] =
         Decoder.decodeInt.map(BlockNumber.apply)
 
-    // L2LedgerEvent codecs
-    implicit val l2EventEncoder: Encoder[L2LedgerCommand.ApplyTransaction] = deriveEncoder
-    implicit val l2EventDecoder: Decoder[L2LedgerCommand.ApplyTransaction] = deriveDecoder
+    // L2LedgerCommand codecs
+    implicit val initializeEncoder: Encoder[L2LedgerCommand.Initialize] = deriveEncoder
+    implicit val initializeDecoder: Decoder[L2LedgerCommand.Initialize] = deriveDecoder
+
+    implicit val applyTransactionEncoder: Encoder[L2LedgerCommand.ApplyTransaction] = deriveEncoder
+    implicit val applyTransactionDecoder: Decoder[L2LedgerCommand.ApplyTransaction] = deriveDecoder
+
+    implicit val proxyBlockConfirmationEncoder: Encoder[L2LedgerCommand.ProxyBlockConfirmation] =
+        deriveEncoder
+    implicit val proxyBlockConfirmationDecoder: Decoder[L2LedgerCommand.ProxyBlockConfirmation] =
+        deriveDecoder
+
+    implicit val proxyRequestErrorEncoder
+        : Encoder[L2LedgerCommand.ProxyRequestError] = deriveEncoder
+    implicit val proxyRequestErrorDecoder
+        : Decoder[L2LedgerCommand.ProxyRequestError] = deriveDecoder
 
     /** Destination as a cbor-encoded hex-string */
     implicit val destinationEncoder: Encoder[Destination] =
@@ -75,43 +88,51 @@ object RemoteL2LedgerCodecs {
 
     // Request codecs
     implicit val requestEncoder: Encoder[Request] = {
-        case Request.DepositRegistration(event) =>
-            io.circe.Json.obj(
-              "type" -> "DepositRegistration".asJson,
-              "event" -> event.asJson
-            )
-        case Request.DepositDecisions(event) =>
-            io.circe.Json.obj(
-              "type" -> "DepositDecisions".asJson,
-              "event" -> event.asJson
-            )
-        case Request.L2Transaction(event) =>
-            io.circe.Json.obj(
-              "type" -> "L2Event".asJson,
-              "event" -> event.asJson
-            )
+        case Request.Initialize(event) =>
+            io.circe.Json.obj("Initialize" -> event.asJson)
+        case Request.RegisterDeposit(event) =>
+            io.circe.Json.obj("RegisterDepositRequest" -> event.asJson)
+        case Request.ApplyDepositDecisions(event) =>
+            io.circe.Json.obj("ApplyDepositDecisions" -> event.asJson)
+        case Request.ApplyTransaction(event) =>
+            io.circe.Json.obj("ApplyTransaction" -> event.asJson)
+        case Request.ProxyBlockConfirmation(event) =>
+            io.circe.Json.obj("ProxyBlockConfirmation" -> event.asJson)
+        case Request.ProxyRequestError(event) =>
+            io.circe.Json.obj("ProxyRequestError" -> event.asJson)
     }
 
     implicit val requestDecoder: Decoder[Request] = c =>
-        c.downField("type").as[String].flatMap {
-            case "DepositRegistration" =>
-                c.downField("event")
+        c.keys.flatMap(_.headOption).toRight(
+          io.circe.DecodingFailure("Request must have exactly one field", c.history)
+        ).flatMap {
+            case "Initialize" =>
+                c.downField("Initialize")
+                    .as[L2LedgerCommand.Initialize]
+                    .map(Request.Initialize.apply)
+            case "RegisterDepositRequest" =>
+                c.downField("RegisterDepositRequest")
                     .as[L2LedgerCommand.RegisterDeposit]
-                    .map(Request.DepositRegistration.apply)
-            case "DepositDecisions" =>
-                c.downField("event")
+                    .map(Request.RegisterDeposit.apply)
+            case "ApplyDepositDecisions" =>
+                c.downField("ApplyDepositDecisions")
                     .as[L2LedgerCommand.ApplyDepositDecisions]
-                    .map(Request.DepositDecisions.apply)
-            case "L2Event" =>
-                c.downField("event")
+                    .map(Request.ApplyDepositDecisions.apply)
+            case "ApplyTransaction" =>
+                c.downField("ApplyTransaction")
                     .as[L2LedgerCommand.ApplyTransaction]
-                    .map(Request.L2Transaction.apply)
+                    .map(Request.ApplyTransaction.apply)
+            case "ProxyBlockConfirmation" =>
+                c.downField("ProxyBlockConfirmation")
+                    .as[L2LedgerCommand.ProxyBlockConfirmation]
+                    .map(Request.ProxyBlockConfirmation.apply)
+            case "ProxyRequestError" =>
+                c.downField("ProxyRequestError")
+                    .as[L2LedgerCommand.ProxyRequestError]
+                    .map(Request.ProxyRequestError.apply)
             case other =>
                 Left(io.circe.DecodingFailure(s"Unknown request type: $other", c.history))
         }
-
-    implicit val requestEnvelopeEncoder: Encoder[Request.Envelope] = deriveEncoder
-    implicit val requestEnvelopeDecoder: Decoder[Request.Envelope] = deriveDecoder
 
     // Response codecs
     implicit val responseSuccessEncoder: Encoder[Response.Success] = deriveEncoder
@@ -127,9 +148,6 @@ object RemoteL2LedgerCodecs {
 
     implicit val responseDecoder: Decoder[Response] =
         responseSuccessDecoder.map(s => s: Response).or(responseErrorDecoder.map(e => e: Response))
-
-    implicit val responseEnvelopeEncoder: Encoder[Response.Envelope] = deriveEncoder
-    implicit val responseEnvelopeDecoder: Decoder[Response.Envelope] = deriveDecoder
 
     // EvacuationKey codec
     import hydrozoa.multisig.ledger.joint.EvacuationKey

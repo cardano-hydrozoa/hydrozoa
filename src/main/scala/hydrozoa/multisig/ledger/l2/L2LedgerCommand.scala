@@ -77,7 +77,7 @@ object L2LedgerCommand {
         refundTxs: Vector[(RequestId, Tx.Serialized)]
     ) extends L2LedgerCommand
 
-    final case class ProxyHydrozoaRequestError(
+    final case class ProxyRequestError(
         requestId: RequestId,
         message: String
     ) extends L2LedgerCommand
