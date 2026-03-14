@@ -78,6 +78,7 @@ def generateInitialBlock(testPeers: TestPeers)(
           BlockHeader.Initial(
             startTime = BlockCreationStartTime(blockCreationEndTime - 10.seconds),
             endTime = blockCreationEndTime,
+            fallbackTxStartTime = initTxSeq.fallbackTx.fallbackTxStartTime,
             kzgCommitment = initializationParameters.initialEvacuationMap.kzgCommitment
           )
         ),

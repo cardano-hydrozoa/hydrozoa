@@ -58,8 +58,7 @@ final case class JointLedger(
     val state: Ref[IO, JointLedger.State] =
         Ref.unsafe[IO, JointLedger.State](
           Done(
-            producedBlock = config.initialBlock,
-            lastFallbackValidityStart = config.initialFallbackTx.validityStart,
+            previousBlockHeader = config.initialBlock.header,
             l1LedgerState =
                 L1LedgerM.State(config.initializationTx.treasuryProduced, DepositsMap.empty),
             evacuationMap = config.initialEvacuationMap
@@ -355,27 +354,24 @@ final case class JointLedger(
         for {
             _ <- logger.info(s"start block: ${args.blockNum}...")
             d <- unsafeGetDone
-            _ <- state.set(
-              Producing(
-                previousBlock = d.producedBlock,
-                competingFallbackValidityStart = d.lastFallbackValidityStart,
-                startTime = blockCreationStartTime,
-                userRequestState = UserRequestState(
-                  requests = List.empty,
-                  postDatedRefundTxs = Vector.empty
-                ),
-                l1LedgerState = d.l1LedgerState,
-                l2LedgerState = L2LedgerState.empty,
-                evacuationMap = d.evacuationMap
+            newState = d.producing(
+              l2LedgerState = L2LedgerState.empty,
+              startTime = blockCreationStartTime,
+              userRequestState = UserRequestState(
+                requests = List.empty,
+                postDatedRefundTxs = Vector.empty
               )
             )
+            _ <- state.set(newState)
         } yield ()
     }
 
     /** Complete a Minor or Major block If
       * @return
       */
-    private def completeBlockRegular(args: CompleteBlockRegular): IO[Unit] = {
+    private def completeBlockRegular(
+        args: CompleteBlockRegular
+    ): IO[Block.Unsigned.Intermediate] = {
         import args.*
 
         /** @return
@@ -478,17 +474,16 @@ final case class JointLedger(
 
             p <- unsafeGetProducing
 
-            previousHeader = p.previousBlock.header
+            previousHeader = p.previousBlockHeader
             blockWithdrawnUtxos = p.l2LedgerState.payouts
             blockStartTime = p.startTime
-            competingFallbackValidityStart = p.competingFallbackValidityStart
             events = p.userRequestState.requests
 
             _ <- logger.trace(
               s"mkBlockBrief: previousHeader=$previousHeader\n" +
                   s"mkBlockBrief: blockWithdrawnUtxos=$blockWithdrawnUtxos\n" +
                   s"mkBlockBrief: blockStartTime=$blockStartTime\n" +
-                  s"mkBlockBrief: competingFallbackValidityStart=$competingFallbackValidityStart\n" +
+                  s"mkBlockBrief: competingFallbackValidityStart=${p.competingFallbackTxTime}\n" +
                   s"mkBlockBrief: events=$events"
             )
 
@@ -501,7 +496,7 @@ final case class JointLedger(
                         txTiming,
                         blockStartTime,
                         args.blockCreationEndTime,
-                        competingFallbackValidityStart,
+                        p.competingFallbackTxTime,
                         // TODO: We want this to be done in a separate actor in the future
                         // this doesn't include genesis
                         applyDiffs(p.evacuationMap, p.l2LedgerState.diffs).kzgCommitment
@@ -531,6 +526,7 @@ final case class JointLedger(
                         // TODO: We want this to be done in a separate actor in the future
                         kzgCommitment = newEvacuationMap.kzgCommitment
                         headerIntermediate = previousHeader.nextHeaderMajor(
+                          txTiming,
                           blockStartTime,
                           args.blockCreationEndTime,
                           kzgCommitment
@@ -557,7 +553,7 @@ final case class JointLedger(
             next: BlockBrief.Intermediate,
             absorbedDeposits: Queue[(RequestId, DepositUtxo)],
             postDatedRefundTxs: List[RefundTx.PostDated]
-        ): IO[Block.Unsigned.Next] = for {
+        ): IO[Block.Unsigned.Intermediate] = for {
             ret <- next match {
                 case blockBrief @ BlockBrief.Minor(header, _) =>
                     val blockEffects = BlockEffects.Unsigned.Minor(
@@ -578,7 +574,7 @@ final case class JointLedger(
                                 absorbedDeposits = absorbedDeposits,
                                 payoutObligations = payoutObligations,
                                 blockCreationEndTime = header.endTime,
-                                competingFallbackValidityStart = p.competingFallbackValidityStart
+                                competingFallbackValidityStart = p.competingFallbackTxTime
                               )
                               .run(config, p.l1LedgerState)
                         )
@@ -604,13 +600,12 @@ final case class JointLedger(
 
         for {
             _ <- logger.info(s"complete block ${args.referenceBlockBrief}")
-            producing <- unsafeGetProducing
+            p <- unsafeGetProducing
 
             ret <- partitionDeposits(
-              depositsMap = producing.l1LedgerState.deposits,
-              blockStartTime = producing.startTime,
-              settlementValidityEnd =
-                  txTiming.newSettlementEndTime(producing.competingFallbackValidityStart)
+              depositsMap = p.l1LedgerState.deposits,
+              blockStartTime = p.startTime,
+              settlementValidityEnd = txTiming.newSettlementEndTime(p.competingFallbackTxTime)
             )
 
             (eligible, ineligible, rejected) = ret
@@ -632,7 +627,7 @@ final case class JointLedger(
             block <- mkBlockEffects(
               blockBrief,
               Queue.from(absorbedDeposits.flatValues),
-              producing.userRequestState.postDatedRefundTxs.toList
+              p.userRequestState.postDatedRefundTxs.toList
             )
 
             // Block is done
@@ -640,20 +635,20 @@ final case class JointLedger(
             res <- IO.fromEither(
               L1LedgerM
                   .handleBlockBrief(unabsorbedDeposits ++ ineligible)
-                  .run(config, producing.l1LedgerState)
+                  .run(config, p.l1LedgerState)
             )
             (newL1State, ()) = res
-            newJlState = producing.setL1LedgerState(newL1State)
+            newJlState = p.setL1LedgerState(newL1State)
 
             _ <- state.set(newJlState)
 
             _ <- panicOnExpectedBlockMismatch(referenceBlockBrief, block)
 
-            _ <- state.set(newJlState.done(block))
+            _ <- state.set(newJlState.done(block.header))
 
             // Tell others about the block
             _ <- handleBlock(block, finalizationLocallyTriggered)
-        } yield ()
+        } yield block
     }
 
     // Block completion Signal is provided to the joint ledger when the block weaver says it's time.
@@ -666,7 +661,7 @@ final case class JointLedger(
     // If the produced block is NOT equal to a passed reference block, then:
     //   - Consensus is broken
     //   - Send a panic to the multisig regime manager in a suicide note
-    def completeBlockFinal(args: CompleteBlockFinal): IO[Unit] = {
+    def completeBlockFinal(args: CompleteBlockFinal): IO[Block.Unsigned.Final] = {
         import args.*
         import config.txTiming
 
@@ -679,7 +674,7 @@ final case class JointLedger(
                     payoutObligationsRemaining = Vector.from(
                       p.evacuationMap.evacuationMap.map((_, o) => Payout.Obligation(o))
                     ),
-                    competingFallbackValidityStart = p.competingFallbackValidityStart
+                    competingFallbackValidityStart = p.competingFallbackTxTime
                   )
                   .run(config, p.l1LedgerState)
             )
@@ -691,8 +686,11 @@ final case class JointLedger(
             block: Block.Unsigned.Final = {
                 import newJlState.userRequestState.*
                 val blockHeader =
-                    newJlState.previousBlock.header
-                        .nextHeaderFinal(newJlState.startTime, args.blockCreationEndTime)
+                    newJlState.previousBlockHeader
+                        .nextHeaderFinal(
+                          newJlState.startTime,
+                          args.blockCreationEndTime
+                        )
 
                 val blockBody = BlockBody.Final(
                   events = requests,
@@ -712,11 +710,11 @@ final case class JointLedger(
 
             _ <- panicOnExpectedBlockMismatch(referenceBlockBrief, block)
 
-            _ <- state.set(newJlState.done(block))
+            _ <- state.set(newJlState.done(block.header))
 
             _ <- handleBlock(block, false)
 
-        } yield ()
+        } yield block
     }
 
     /** Extract trace metadata from a block for the tracer.
@@ -861,32 +859,53 @@ object JointLedger {
     }
 
     sealed trait State {
+        def previousBlockHeader: BlockHeader
         def l1LedgerState: L1LedgerM.State
         def evacuationMap: EvacuationMap
     }
 
     final case class Done(
-        producedBlock: Block,
-        // None for the first block
-        lastFallbackValidityStart: FallbackTxStartTime,
+        override val previousBlockHeader: BlockHeader,
         override val l1LedgerState: L1LedgerM.State,
         override val evacuationMap: EvacuationMap
     ) extends State {
         def setL1LedgerState(newL1State: L1LedgerM.State): Done =
             this.focus(_.l1LedgerState).replace(newL1State)
+
+        def producing(
+            l2LedgerState: L2LedgerState,
+            startTime: BlockCreationStartTime,
+            userRequestState: UserRequestState
+        ): Producing = previousBlockHeader match {
+            case b: BlockHeader.NonFinal =>
+                Producing(
+                  b,
+                  l1LedgerState,
+                  evacuationMap,
+                  l2LedgerState,
+                  startTime,
+                  userRequestState
+                )
+            case _ =>
+                throw new RuntimeException(
+                  "Impossible: tried to produce next block after final block."
+                )
+        }
+
     }
 
     final case class Producing(
+        override val previousBlockHeader: BlockHeader.NonFinal,
         override val l1LedgerState: L1LedgerM.State,
         override val evacuationMap: EvacuationMap,
         l2LedgerState: L2LedgerState,
-        previousBlock: Block,
-        // None for the first block
-        competingFallbackValidityStart: FallbackTxStartTime,
         startTime: BlockCreationStartTime,
         userRequestState: UserRequestState
     ) extends State {
-        val nextBlockNumber: BlockNumber.BlockNumber = previousBlock.blockNum.increment
+        val nextBlockNumber: BlockNumber.BlockNumber = previousBlockHeader.blockNum.increment
+
+        transparent inline def competingFallbackTxTime: FallbackTxStartTime =
+            previousBlockHeader.fallbackTxStartTime
 
         def setL1LedgerState(newL1State: L1LedgerM.State): Producing =
             this.focus(_.l1LedgerState).replace(newL1State)
@@ -894,18 +913,7 @@ object JointLedger {
         def setL2LedgerState(newL2State: L2LedgerState): Producing =
             this.focus(_.l2LedgerState).replace(newL2State)
 
-        def done(producedBlock: Block): Done = {
-            val newFallbackValidityStart: FallbackTxStartTime = producedBlock match {
-                case major: Block.Unsigned.Major =>
-                    major.effects.fallbackTx.validityStart
-                case _ => this.competingFallbackValidityStart
-            }
-            Done(
-              producedBlock,
-              newFallbackValidityStart,
-              l1LedgerState,
-              evacuationMap
-            )
-        }
+        def done(newBlockHeader: BlockHeader): Done =
+            Done(newBlockHeader, l1LedgerState, evacuationMap)
     }
 }

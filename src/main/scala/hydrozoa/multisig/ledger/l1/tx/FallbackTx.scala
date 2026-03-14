@@ -32,7 +32,7 @@ import scalus.uplc.builtin.Data.toData
   *   - Default Vote Utxo
   */
 final case class FallbackTx(
-    validityStart: FallbackTxStartTime,
+    fallbackTxStartTime: FallbackTxStartTime,
     override val treasurySpent: MultisigTreasuryUtxo,
     override val treasuryProduced: RuleBasedTreasuryUtxo,
     override val multisigRegimeUtxoSpent: MultisigRegimeUtxo,
@@ -250,7 +250,7 @@ private object FallbackTxOps {
                 )
 
                 FallbackTx(
-                  validityStart = validityStartTime,
+                  fallbackTxStartTime = validityStartTime,
                   treasurySpent = treasuryUtxoSpent,
                   treasuryProduced = treasuryProduced,
                   multisigRegimeUtxoSpent = multisigRegimeUtxo,

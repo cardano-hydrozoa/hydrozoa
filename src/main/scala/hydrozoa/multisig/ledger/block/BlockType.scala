@@ -10,4 +10,5 @@ object BlockType {
 
     type Intermediate = BlockType.Minor | BlockType.Major
     type Next = BlockType.Intermediate | BlockType.Final
+    type NonFinal = BlockType.Initial | BlockType.Intermediate
 }

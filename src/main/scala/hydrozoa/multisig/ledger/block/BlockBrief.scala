@@ -43,8 +43,8 @@ object BlockBrief {
     }
 
     type Next = BlockBrief & BlockType.Next
-
     type Intermediate = BlockBrief & BlockType.Intermediate
+    type NonFinal = BlockBrief & BlockType.NonFinal
 
     trait Section extends BlockType, BlockHeader.Section, BlockBody.Section {
         import hydrozoa.multisig.ledger.event.RequestId

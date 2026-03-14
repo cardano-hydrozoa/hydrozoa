@@ -13,11 +13,11 @@ import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEn
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.RequestValidityEndTime
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.MultiNodeConfig
+import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.lib.cardano.scalus.QuantizedTime.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.ledger.stripVKeyWitnesses
 import hydrozoa.multisig.consensus.ConsensusActor
-import hydrozoa.multisig.consensus.ConsensusActor.Request
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.*
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Requests.*
@@ -93,6 +93,32 @@ given ppMultiNodeConfig: (MultiNodeConfig => Pretty) = nodeConfig =>
   */
 object JointLedgerTestHelpers {
 
+    /** An agent of this test, pretending to be a [[ConsensusActor]] for [[JointLedger]]. */
+    final case class ConsensusAgent() extends Actor[IO, ConsensusAgent.Request] {
+        private val blocks = Ref.unsafe[IO, ConsensusAgent.State](Vector.empty)
+
+        override def receive: Receive[IO, ConsensusAgent.Request] = {
+            case block: Block.Unsigned.Next => blocks.update(_ :+ block)
+            case m: ConsensusAgent.GetState.Sync =>
+                for {
+                    response <- blocks.get
+                    _ <- m.dResponse.complete(response)
+                } yield ()
+        }
+    }
+
+    object ConsensusAgent {
+        type State = Vector[Block.Unsigned.Next]
+
+        case object GetState extends SyncRequest[IO, GetState.type, ConsensusAgent.State] {
+            type Sync = SyncRequest.Envelope[IO, GetState.type, ConsensusAgent.State]
+
+            def ?: : this.Send = SyncRequest.send(_, this)
+        }
+
+        type Request = ConsensusActor.Request | GetState.Sync
+    }
+
     type JLTest[A] = TestM[TestR, A]
     val defaultInitializer: PropertyM[IO, TestR] = {
         for {
@@ -111,11 +137,7 @@ object JointLedgerTestHelpers {
 
             system <- PropertyM.run(ActorSystem[IO]("DappLedger").allocated.map(_._1))
 
-            consensusActorStub <- PropertyM.run(
-              system.actorOf(new Actor[IO, ConsensusActor.Request] {
-                  override def receive: Receive[IO, ConsensusActor.Request] = _ => IO.unit
-              })
-            )
+            consensusAgent <- PropertyM.run(system.actorOf(ConsensusAgent()))
 
             eutxoLedger <- PropertyM.run(EutxoL2Ledger(config))
             jointLedger <- PropertyM.run(
@@ -123,7 +145,7 @@ object JointLedgerTestHelpers {
                 JointLedger(
                   config,
                   JointLedger.Connections(
-                    consensusActor = consensusActorStub,
+                    consensusActor = consensusAgent.narrowRequest[ConsensusActor.Request],
                     peerLiaisons = List()
                   ),
                   eutxoLedger,
@@ -135,7 +157,8 @@ object JointLedgerTestHelpers {
           multiNodeConfig = multiNodeConfig,
           config = config,
           actorSystem = system,
-          jointLedger = jointLedger
+          jointLedger = jointLedger,
+          consensusAgent = consensusAgent
         )
     }
 
@@ -145,17 +168,23 @@ object JointLedgerTestHelpers {
         multiNodeConfig: MultiNodeConfig,
         config: JointLedger.Config,
         actorSystem: ActorSystem[IO],
-        jointLedger: ActorRef[IO, JointLedger.Requests.Request]
+        jointLedger: ActorRef[IO, JointLedger.Requests.Request],
+        consensusAgent: ActorRef[IO, ConsensusAgent.Request]
     )
 
     /** Helper utilities to send actor Requests to the JointLedger
       */
     object Requests {
-
-        val getState: JLTest[JointLedger.State] =
+        val getJointLedgerState: JLTest[JointLedger.State] =
             for {
                 env <- ask
                 state <- lift(env.jointLedger ?: JointLedger.Requests.GetState)
+            } yield state
+
+        val getConsensusAgentState: JLTest[ConsensusAgent.State] =
+            for {
+                env <- ask
+                state <- lift(env.consensusAgent ?: ConsensusAgent.GetState)
             } yield state
 
         def registerDeposit(req: UserRequestWithId): JLTest[Unit] = {
@@ -261,7 +290,7 @@ object JointLedgerTestHelpers {
 
         def unsafeGetProducing: JLTest[Producing] =
             for {
-                state <- getState
+                state <- getJointLedgerState
                 p <- state match {
                     case _: Done => throw RuntimeException("Expected a Producing State, got Done")
                     case p: Producing => TestM.pure[TestR, Producing](p)
@@ -270,7 +299,7 @@ object JointLedgerTestHelpers {
 
         def unsafeGetDone: JLTest[Done] =
             for {
-                state <- getState
+                state <- getJointLedgerState
                 d <- state match {
                     case d: Done => TestM.pure[TestR, Done](d)
                     case _: Producing =>
@@ -568,7 +597,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                       (event.requestId, txSeq.depositTx.depositProduced)
               }
 
-              depositsMap <- getState.map(_.l1LedgerState.deposits)
+              depositsMap <- getJointLedgerState.map(_.l1LedgerState.deposits)
 
               // Test statistic:  make sure that ties are actually occurring in some samples
               _ <- lift[TestR, Unit](PropertyM.monitor[IO](Prop.collect {
@@ -646,7 +675,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
           (depositRefundTxSeq, depositReq, genesisObligations) = seqAndReq
 
           _ <- for {
-              jlState <- getState
+              jlState <- getJointLedgerState
               dlState = jlState.l1LedgerState
 
               _ <- assertWith[TestR](
@@ -681,27 +710,27 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
           _ <- completeBlockRegular(None, Set.empty)
           _ <-
               for {
-                  jointLedgerState <- getState
+                  consensusAgentState <- getConsensusAgentState
                   _ <- assertWith[TestR](
-                    msg = "Block with no deposits/withdrawal should be Minor",
-                    condition = jointLedgerState match {
-                        case JointLedger.Done(block: Block.Unsigned.Minor, _, _, _) => true
-                        case _                                                      => false
-                    }
+                    msg = "Joint ledger should only have sent out one block, total.",
+                    condition = consensusAgentState.size == 1
                   )
-                  minorBlock: Block.Unsigned.Minor =
-                      jointLedgerState
-                          .asInstanceOf[JointLedger.Done]
-                          .producedBlock
-                          .asInstanceOf[Block.Unsigned.Minor]
+
+                  block = consensusAgentState(0)
+
+                  _ <- assertWith[TestR](
+                    msg = "First block should be minor -- no deposits/withdrawals.",
+                    condition = block.isInstanceOf[Block.Unsigned.Minor]
+                  )
+
                   _ <- assertWith[TestR](
                     msg = "Block's deposit absorbed and deposits refunded should both be empty",
-                    condition = minorBlock.body.depositsRefunded.isEmpty
-                        && minorBlock.body.depositsAbsorbed.isEmpty
+                    condition = block.body.depositsRefunded.isEmpty
+                        && block.body.depositsAbsorbed.isEmpty
                   )
                   _ <- assertWith[TestR](
                     msg = "Post-dated refund should appear",
-                    condition = minorBlock.effects.postDatedRefundTxs
+                    condition = block.effects.postDatedRefundTxs
                         .map(_.focus(_.tx).modify(_.stripVKeyWitnesses)) == List(
                       depositRefundTxSeq.refundTx
                     )
@@ -715,13 +744,17 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
             Set(depositRefundTxSeq.depositTx.depositProduced.toUtxo.input)
           )
           _ <- for {
-              jointLedgerState <- getState
+              consensusAgentState <- getConsensusAgentState
               _ <- assertWith[TestR](
-                msg = "Finished block should be minor because no deposits were absorbed",
-                condition = jointLedgerState match {
-                    case JointLedger.Done(block: Block.Unsigned.Minor, _, _, _) => true
-                    case _                                                      => false
-                }
+                msg = "Joint ledger should only have sent out two block, total.",
+                condition = consensusAgentState.size == 2
+              )
+
+              block = consensusAgentState(1)
+
+              _ <- assertWith[TestR](
+                msg = "Second block should be minor -- no deposits were absorbed.",
+                condition = block.isInstanceOf[Block.Unsigned.Minor]
               )
           } yield ()
 
@@ -738,12 +771,17 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
           )
 
           _ <- for {
-              jlState <- getState
-              majorBlock <- jlState match {
-                  case JointLedger.Done(block: Block.Unsigned.Major, _, _, _) =>
-                      pure[TestR, Block.Unsigned.Major](block)
-                  case _ =>
-                      fail[TestR, Block.Unsigned.Major]("FAIL: finished block should be major")
+              jlState <- getJointLedgerState
+
+              consensusAgentState <- getConsensusAgentState
+              _ <- assertWith[TestR](
+                msg = "Joint ledger should only have sent out three block, total.",
+                condition = consensusAgentState.size == 3
+              )
+
+              majorBlock <- consensusAgentState(2) match {
+                  case b: Block.Unsigned.Major => pure[TestR, Block.Unsigned.Major](b)
+                  case _ => fail[TestR, Block.Unsigned.Major]("Third block should be major.")
               }
 
               _ <- assertWith[TestR](

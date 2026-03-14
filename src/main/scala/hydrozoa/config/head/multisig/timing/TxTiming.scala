@@ -54,19 +54,6 @@ final case class TxTiming private (
       depositSubmissionDuration + depositMaturityDuration + depositAbsorptionDuration + silenceDuration
     )
 
-//    val refundValidityStartOffset: QuantizedFiniteDuration =
-//        depositSubmissionDuration + depositMaturityDuration + depositAbsorptionDuration + silenceDuration
-
-    /** A block can stay minor if this predicate is true for its start time, relative to the
-      * previous major block's fallback tx start time. Otherwise, it must be upgraded to a major
-      * block so that the competing fallback start time is pushed forward for future blocks.
-      */
-    def blockCanStayMinor(
-        blockCreationEndTime: BlockCreationEndTime,
-        competingFallbackStartTime: FallbackTxStartTime
-    ): Boolean =
-        competingFallbackStartTime - blockCreationEndTime > minSettlementDuration + silenceDuration
-
     def initializationEndTime(blockCreationEndTime: BlockCreationEndTime): InitializationTxEndTime =
         InitializationTxEndTime(
           blockCreationEndTime + minSettlementDuration + inactivityMarginDuration
@@ -87,6 +74,20 @@ final case class TxTiming private (
         FallbackTxStartTime(
           blockCreationEndTime + minSettlementDuration + inactivityMarginDuration + silenceDuration
         )
+
+    def nextBlockTimeout(competingFallbackStartTime: FallbackTxStartTime): NextBlockTimeout =
+        NextBlockTimeout(competingFallbackStartTime - minSettlementDuration - silenceDuration)
+
+    /** A block can stay minor if this predicate is true for its start time, relative to the
+      * previous major block's fallback tx start time. Otherwise, it must be upgraded to a major
+      * block so that the competing fallback start time is pushed forward for future blocks.
+      */
+    def blockCanStayMinor(
+        blockCreationEndTime: BlockCreationEndTime,
+        competingFallbackStartTime: FallbackTxStartTime
+    ): Boolean = {
+        nextBlockTimeout(competingFallbackStartTime).convert > blockCreationEndTime.convert
+    }
 
     def depositSubmissionDeadline(
         requestValidityEndTime: RequestValidityEndTime
@@ -245,6 +246,10 @@ object TxTiming {
         private[timing] def FallbackTxStartTime(x: QuantizedInstant): FallbackTxStartTime = x
         given Conversion[FallbackTxStartTime, QuantizedInstant] = identity
         given Conversion[FallbackTxStartTime, Slot] = _.toSlot
+
+        opaque type NextBlockTimeout = QuantizedInstant
+        private[timing] def NextBlockTimeout(x: QuantizedInstant): NextBlockTimeout = x
+        given Conversion[NextBlockTimeout, QuantizedInstant] = identity
     }
 
     object RequestTimes {
