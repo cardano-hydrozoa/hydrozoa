@@ -370,7 +370,8 @@ object JointLedgerTestHelpers {
                 header = UserRequestHeader(
                   headId = env.config.headId,
                   validityStart = blockCreationStartTime.toPosixTime,
-                  validityEnd = depositRefundTxSeq.depositTx.depositProduced.requestValidityEndTime.convert.toPosixTime,
+                  validityEnd =
+                      depositRefundTxSeq.depositTx.depositProduced.requestValidityEndTime.convert.toPosixTime,
                   bodyHash = body.hash
                 )
 

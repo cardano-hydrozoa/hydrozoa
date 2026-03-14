@@ -3,9 +3,9 @@ package hydrozoa.multisig.ledger.l1
 import cats.data.*
 import cats.syntax.all.*
 import hydrozoa.config.head.HeadConfig
-import hydrozoa.config.head.multisig.timing.{TxTiming, given_Ordering_DepositAbsorptionStartTime}
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, FallbackTxStartTime}
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{DepositAbsorptionStartTime, RequestValidityEndTime}
+import hydrozoa.config.head.multisig.timing.{TxTiming, given_Ordering_DepositAbsorptionStartTime}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.toEpochQuantizedInstant
 import hydrozoa.multisig.ledger
 import hydrozoa.multisig.ledger.block.BlockVersion
@@ -17,7 +17,6 @@ import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import hydrozoa.multisig.ledger.l1.txseq.{DepositRefundTxSeq, FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.l1.utxo.{DepositUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.server.UserRequestWithId
-
 import scala.collection.immutable.{Queue, TreeMap}
 
 private type E[A] = Either[L1LedgerM.Error, A]

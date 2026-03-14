@@ -40,7 +40,7 @@ object RolloutTxTest extends Properties("RolloutTxTest") {
             payouts <- GenOther.nonEmptyVectorOf(
               genPayoutObligation(multiNodeConfig.headConfig.cardanoNetwork)
             )
-            rolloutSpentVal <- Gen.choose(1,100_000_000).map((x: Int) => Value(Coin(x)))
+            rolloutSpentVal <- Gen.choose(1, 100_000_000).map((x: Int) => Value(Coin(x)))
         } yield RolloutTx.Build
             .NotLast(multiNodeConfig.nodeConfigs(HeadPeerNumber.zero))(payouts, rolloutSpentVal)
 

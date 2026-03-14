@@ -1,7 +1,7 @@
 package hydrozoa.multisig.ledger.l1.utxo
 
 import hydrozoa.config.head.multisig.timing.TxTiming
-import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{DepositAbsorptionStartTime, DepositSubmissionDeadline, RequestValidityEndTime}
+import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.RequestValidityEndTime
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant}
 import hydrozoa.lib.cardano.scalus.ledger.plutusAddressToShelley
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo.DepositUtxoConversionError.*
