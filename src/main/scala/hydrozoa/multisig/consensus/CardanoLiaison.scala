@@ -469,7 +469,7 @@ trait CardanoLiaison(
                                 fallbackTx = state.fallbackEffects(maxKey)
                                 if utxoIds.contains(
                                   fallbackTx.treasurySpent.utxoId
-                                ) && fallbackTx.validityStart <= currentTime
+                                ) && fallbackTx.validityStart.convert <= currentTime.toSlot
                             } yield fallbackTx.tx
 
                             lastFallback match {
@@ -477,7 +477,7 @@ trait CardanoLiaison(
                                     IO.pure(Seq(Action.FallbackToRuleBased(fallback)))
                                 case None => {
                                     lazy val initAction = {
-                                        if currentTime < config.initializationTx.validityEnd
+                                        if currentTime < config.initializationTx.initializationTxEndTime.convert
                                         then
                                             Seq(
                                               Action.InitializeHead(
@@ -663,9 +663,19 @@ trait CardanoLiaison(
                     // TODO: ensure this always holds by construction
                     case Some(fallback) =>
                         for {
-                            happyPathTxTtl <- happyPathEffect match {
-                                case tx: SettlementTx   => Right(tx.validityEnd)
-                                case tx: FinalizationTx => Right(tx.validityEnd)
+                            happyPathTxTtl: QuantizedInstant <- happyPathEffect match {
+                                case tx: SettlementTx =>
+                                    Right {
+                                        val quantizedInstant: QuantizedInstant =
+                                            tx.settlementTxEndTime.convert
+                                        quantizedInstant
+                                    }
+                                case tx: FinalizationTx =>
+                                    Right {
+                                        val quantizedInstant: QuantizedInstant =
+                                            tx.finalizationTxEndTime.convert
+                                        quantizedInstant
+                                    }
                                 // TODO: this should never happen
                                 case tx: InitializationTx =>
                                     Left(UnexpectedInitializationEffect(backboneEffectId))

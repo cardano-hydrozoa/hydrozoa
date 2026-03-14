@@ -2,7 +2,7 @@ package hydrozoa.multisig.ledger.l1.txseq
 
 import cats.data.NonEmptyVector
 import hydrozoa.config.head.HeadConfig
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, FallbackTxStartTime}
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.joint.obligation.Payout
@@ -65,8 +65,8 @@ private object SettlementTxSeqOps {
         override val treasuryToSpend: MultisigTreasuryUtxo,
         override val depositsToSpend: Vector[DepositUtxo],
         override val payoutObligationsRemaining: Vector[Payout.Obligation],
-        blockCreationEndTime: QuantizedInstant,
-        competingFallbackValidityStart: QuantizedInstant
+        blockCreationEndTime: BlockCreationEndTime,
+        competingFallbackValidityStart: FallbackTxStartTime
     ) extends BlockVersion.Major.Produced,
           MultisigTreasuryUtxo.ToSpend,
           DepositUtxo.Many.ToSpend,

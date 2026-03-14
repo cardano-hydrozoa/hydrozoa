@@ -5,6 +5,7 @@ import cats.effect.{IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
@@ -282,7 +283,7 @@ trait BlockWeaver(
                               None,
                               pollResults.utxos,
                               finalizationLocallyTriggered,
-                              now
+                              BlockCreationEndTime(now)
                             )
                             _ <- switchToIdle(blockNumber.increment, Mempool.empty)
                         } yield ())
@@ -433,13 +434,13 @@ trait BlockWeaver(
                                     // Finish the current block immediately
                                     _ <- conn.jointLedger !
                                         (if blockIntermediate.finalizationRequested
-                                         then CompleteBlockFinal(None, now)
+                                         then CompleteBlockFinal(None, BlockCreationEndTime(now))
                                          else
                                              CompleteBlockRegular(
                                                None,
                                                pollResults.utxos,
                                                finalizationLocallyTriggered,
-                                               now
+                                               BlockCreationEndTime(now)
                                              ))
                                     // Switch to Idle
                                     _ <- switchToIdle(blockNumber.increment, Mempool.empty)
@@ -552,7 +553,7 @@ trait BlockWeaver(
                 conn <- getConnections
                 _ <- conn.tracer.leaderStarted(nextBlockNum: Int, config.ownHeadPeerId.peerNum: Int)
                 now <- realTimeQuantizedInstant(config.slotConfig)
-                _ <- conn.jointLedger ! StartBlock(nextBlockNum, now)
+                _ <- conn.jointLedger ! StartBlock(nextBlockNum, BlockCreationStartTime(now))
                 _ <- IO.traverse_(mempool.receivingOrder)(event =>
                     conn.jointLedger ! mempool.findById(event).get
                 )

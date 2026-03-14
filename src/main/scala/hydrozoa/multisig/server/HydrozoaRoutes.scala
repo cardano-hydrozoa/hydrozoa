@@ -121,7 +121,7 @@ class HydrozoaRoutes(
                     submissionDurationSeconds =
                         headConfig.txTiming.depositSubmissionDuration.finiteDuration.toSeconds,
                     refundStartOffsetSeconds =
-                        headConfig.txTiming.refundValidityStartOffset.finiteDuration.toSeconds,
+                        headConfig.txTiming.refundStartOffsetDuration.finiteDuration.toSeconds,
                     currentTimePosixSeconds = currentTimePosixSeconds,
                     maxNonPlutusTxFee = headConfig.maxNonPlutusTxFee
                   ).asJson

@@ -3,8 +3,10 @@ package hydrozoa.multisig.ledger.l1
 import cats.data.*
 import cats.syntax.all.*
 import hydrozoa.config.head.HeadConfig
-import hydrozoa.config.head.multisig.timing.TxTiming
-import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant}
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, FallbackTxStartTime}
+import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{DepositAbsorptionStartTime, RequestValidityEndTime}
+import hydrozoa.config.head.multisig.timing.{TxTiming, given_Ordering_DepositAbsorptionStartTime}
+import hydrozoa.lib.cardano.scalus.QuantizedTime.toEpochQuantizedInstant
 import hydrozoa.multisig.ledger
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
@@ -84,9 +86,11 @@ object L1LedgerM {
         import request.*
         for {
             config <- ask
-            headerValidityEndInstant = header.validityEnd.toEpochQuantizedInstant(config.slotConfig)
-            headerSubmissionDeadline = config.txTiming.depositSubmissionEndTime(
-              headerValidityEndInstant
+            requestValidityEndTime = RequestValidityEndTime(
+              header.validityEnd.toEpochQuantizedInstant(config.slotConfig)
+            )
+            headerSubmissionDeadline = config.txTiming.depositSubmissionDeadline(
+              requestValidityEndTime
             )
 
             parseRes =
@@ -95,19 +99,17 @@ object L1LedgerM {
                       depositTxBytes = body.l1Payload,
                       l2Payload = body.l2Payload,
                       requestId = requestWithId.requestId,
-                      requestValidityEndTime = headerValidityEndInstant
+                      requestValidityEndTime = requestValidityEndTime
                     )
                     .result
                     .left
                     .map(ParseError(_))
             depositRefundTxSeq <- lift(parseRes)
 
-            depositProduced = depositRefundTxSeq.depositTx.depositProduced
-
             depositProduced <- lift(
               if depositRefundTxSeq.depositTx.submissionDeadline == headerSubmissionDeadline
-              then Left(DepositTxInvalidTTL)
-              else Right(depositRefundTxSeq.depositTx.depositProduced)
+              then Right(depositRefundTxSeq.depositTx.depositProduced)
+              else Left(DepositTxInvalidTTL)
             )
 
             s <- get
@@ -125,8 +127,8 @@ object L1LedgerM {
         nextKzg: KzgCommitment,
         absorbedDeposits: Queue[(RequestId, DepositUtxo)],
         payoutObligations: Vector[Payout.Obligation],
-        blockCreationEndTime: QuantizedInstant,
-        competingFallbackValidityStart: QuantizedInstant,
+        blockCreationEndTime: BlockCreationEndTime,
+        competingFallbackValidityStart: FallbackTxStartTime,
     ): L1LedgerM[SettlementTxSeq] = {
 
         for {
@@ -191,7 +193,7 @@ object L1LedgerM {
     // TODO (fund14): add Refund.Immediates to the return type
     def finalizeLedger(
         payoutObligationsRemaining: Vector[Payout.Obligation],
-        competingFallbackValidityStart: QuantizedInstant,
+        competingFallbackValidityStart: FallbackTxStartTime,
     ): L1LedgerM[FinalizationTxSeq] = {
         for {
             s <- get
@@ -223,7 +225,7 @@ object L1LedgerM {
       * subsequence of the totally-ordered event stream.
       */
     final case class DepositsMap private (
-        treeMap: TreeMap[QuantizedInstant, Queue[(RequestId, DepositUtxo)]]
+        treeMap: TreeMap[DepositAbsorptionStartTime, Queue[(RequestId, DepositUtxo)]]
     ) {
 
         /** Append an event to the end of the queue of events with the same start time.
@@ -239,7 +241,7 @@ object L1LedgerM {
           */
         def appended(event: (RequestId, DepositUtxo), txTiming: TxTiming): DepositsMap = {
             val absorptionStartTime =
-                txTiming.depositAbsorptionStartTime(event._2.submissionDeadline)
+                txTiming.depositAbsorptionStartTime(event._2.requestValidityEndTime)
             DepositsMap(this.treeMap.updatedWith(absorptionStartTime) {
                 case None        => Some(Queue(event))
                 case Some(queue) => Some(queue.appended(event))
@@ -255,7 +257,7 @@ object L1LedgerM {
         }
 
         def foldLeft[Acc](acc: Acc)(
-            f: (Acc, (QuantizedInstant, Queue[(RequestId, DepositUtxo)])) => Acc
+            f: (Acc, (DepositAbsorptionStartTime, Queue[(RequestId, DepositUtxo)])) => Acc
         ): Acc =
             treeMap.foldLeft(acc)(f)
 
@@ -285,7 +287,7 @@ object L1LedgerM {
     // TODO: Make a constructor method taking variadic args, or _.from method?
     object DepositsMap:
         def empty: DepositsMap = DepositsMap(
-          TreeMap.empty[QuantizedInstant, Queue[(RequestId, DepositUtxo)]]
+          TreeMap.empty[DepositAbsorptionStartTime, Queue[(RequestId, DepositUtxo)]]
         )
 
     sealed trait Error extends Throwable

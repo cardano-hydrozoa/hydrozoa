@@ -4,6 +4,7 @@ import cats.data.NonEmptyList
 import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.currentTimeBlockCreationEndTime
 import hydrozoa.config.head.initialization.{InitializationParametersGenBottomUp, InitializationParametersGenTopDown}
 import hydrozoa.config.head.multisig.fallback.{FallbackContingencyGen, generateFallbackContingency}
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.config.head.multisig.timing.{TxTimingGen, generateDefaultTxTiming}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.{GenHeadParams, generateHeadParameters}
@@ -12,7 +13,6 @@ import hydrozoa.config.head.{HeadConfig, HeadConfigGen}
 import hydrozoa.config.node.operation.liquidation.{NodeOperationLiquidationConfig, generateNodeOperationLiquidationConfig}
 import hydrozoa.config.node.operation.multisig.{NodeOperationMultisigConfig, generateNodeOperationMultisigConfig}
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.cardano.scalus.ShelleyAddressExtra
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
@@ -78,7 +78,7 @@ object MultiNodeConfig {
 
     def generate(spec: TestPeersSpec)(
         generateHeadConfig: HeadConfigGen = hydrozoa.config.head.generateHeadConfig,
-        generateHeadStartTime: SlotConfig => Gen[QuantizedInstant] =
+        generateHeadStartTime: SlotConfig => Gen[BlockCreationEndTime] =
             currentTimeBlockCreationEndTime,
         generateTxTiming: TxTimingGen = generateDefaultTxTiming,
         generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
@@ -109,7 +109,7 @@ object MultiNodeConfig {
 
     def generateForTestPeers(testPeers: TestPeers)(
         generateHeadConfig: HeadConfigGen = hydrozoa.config.head.generateHeadConfig,
-        generateBlockCreationEndTime: SlotConfig => Gen[QuantizedInstant] =
+        generateBlockCreationEndTime: SlotConfig => Gen[BlockCreationEndTime] =
             currentTimeBlockCreationEndTime,
         generateTxTiming: TxTimingGen = generateDefaultTxTiming,
         generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,

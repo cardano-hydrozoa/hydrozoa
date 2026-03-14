@@ -5,6 +5,7 @@ import cats.data.*
 import cats.syntax.semigroup.*
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.multisig.fallback.{FallbackContingency, FallbackContingencyGen, generateFallbackContingency}
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
@@ -38,18 +39,20 @@ import test.{TestPeers, TestPeersSpec}
 //   - parameters -> params (and the same for types)
 
 object BlockCreationEndTimeGen {
-    type BlockCreationEndTimeGen = SlotConfig => Gen[QuantizedInstant]
+    type BlockCreationEndTimeGen = SlotConfig => Gen[BlockCreationEndTime]
 
     /** Generate [[blockCreationEndTime]] between 0 and 10 years from the zero slot time. Good for
       * all tests but Yaci-based ones.
       */
-    def generateBlockCreationEndTime(slotConfig: SlotConfig): Gen[QuantizedInstant] =
+    def generateBlockCreationEndTime(slotConfig: SlotConfig): Gen[BlockCreationEndTime] =
         Gen
             .choose(0L, 10 * 365.days.toSeconds)
             .map(offsetSeconds =>
-                QuantizedInstant(
-                  slotConfig = slotConfig,
-                  instant = Instant.ofEpochMilli(slotConfig.zeroTime + offsetSeconds * 1_000)
+                BlockCreationEndTime(
+                  QuantizedInstant(
+                    slotConfig = slotConfig,
+                    instant = Instant.ofEpochMilli(slotConfig.zeroTime + offsetSeconds * 1_000)
+                  )
                 )
             )
 
@@ -57,13 +60,15 @@ object BlockCreationEndTimeGen {
       * as the block creation end time under given slot configuration. This is supposed to be used
       * with Yaci, when we cannot set the time on L1.
       */
-    final def currentTimeBlockCreationEndTime(slotConfig: SlotConfig): Gen[QuantizedInstant] =
+    final def currentTimeBlockCreationEndTime(slotConfig: SlotConfig): Gen[BlockCreationEndTime] =
         val now = Instant.now()
         require(slotConfig.zeroSlot <= now.toEpochMilli, "zero slot time cannot be in the future")
         Gen.const(
-          QuantizedInstant(
-            slotConfig = slotConfig,
-            instant = now
+          BlockCreationEndTime(
+            QuantizedInstant(
+              slotConfig = slotConfig,
+              instant = now
+            )
           )
         )
 }

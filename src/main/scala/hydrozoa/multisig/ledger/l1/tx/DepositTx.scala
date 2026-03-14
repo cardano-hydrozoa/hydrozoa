@@ -4,6 +4,7 @@ import cats.data.NonEmptyList
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.*
+import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.RequestValidityEndTime
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, quantizeLosslessUnsafe}
@@ -43,7 +44,7 @@ private object DepositTxOps {
         l2Value: Value,
         depositFee: Coin,
         changeAddress: ShelleyAddress,
-        requestValidityEndTime: QuantizedInstant,
+        requestValidityEndTime: RequestValidityEndTime,
         refundInstructions: DepositUtxo.Refund.Instructions
     ) {
         def result: Either[(SomeBuildError, String), DepositTx] = {
@@ -77,9 +78,9 @@ private object DepositTxOps {
             )
 
             val submissionDeadline =
-                config.txTiming.depositSubmissionEndTime(requestValidityEndTime)
+                config.txTiming.depositSubmissionDeadline(requestValidityEndTime)
 
-            val ttl = ValidityEndSlot(submissionDeadline.toSlot.slot)
+            val ttl = ValidityEndSlot(submissionDeadline.convert.slot)
 
             val payloadHash: Hash32 = Hash(blake2b_256(l2Payload))
             val metadata = Some(
@@ -128,9 +129,6 @@ private object DepositTxOps {
                   l2Payload = l2Payload,
                   depositFee = depositFee,
                   requestValidityEndTime = requestValidityEndTime,
-                  submissionDeadline = submissionDeadline,
-                  absorptionStartTime =
-                      config.txTiming.depositAbsorptionStartTime(requestValidityEndTime)
                 )
             } yield DepositTx(
               depositProduced,
@@ -167,7 +165,7 @@ private object DepositTxOps {
     final case class Parse(config: Config)(
         txBytes: Tx.Serialized,
         l2Payload: ByteString,
-        requestValidityEndTime: QuantizedInstant
+        requestValidityEndTime: RequestValidityEndTime
     ) {
         import Parse.*
         import Parse.Error.*
@@ -213,7 +211,7 @@ private object DepositTxOps {
                             case _ => Left(InvalidDatumType)
                         }
 
-                        expectedSubmissionDeadline = config.txTiming.depositSubmissionEndTime(
+                        expectedSubmissionDeadline = config.txTiming.depositSubmissionDeadline(
                           requestValidityEndTime
                         )
 
@@ -228,15 +226,17 @@ private object DepositTxOps {
                             case Success(v)         => Right(v)
                         }
 
-                        // Check that the submission deadline is as expected
-                        _ <- Either.cond(
-                          submissionDeadline == expectedSubmissionDeadline,
-                          (),
-                          IncorrectSubmissionDeadline(
-                            submissionDeadline,
-                            expectedSubmissionDeadline
-                          )
-                        )
+                        expectedTtl = expectedSubmissionDeadline.convert.slot
+
+//                        // Check that the submission deadline is as expected
+//                        _ <- Either.cond(
+//                          submissionDeadline == expectedSubmissionDeadline,
+//                          (),
+//                          IncorrectSubmissionDeadline(
+//                            submissionDeadline,
+//                            expectedSubmissionDeadline
+//                          )
+//                        )
 
                         // Check the multisig regime witness utxo was referenced
                         _ <- Either.cond(

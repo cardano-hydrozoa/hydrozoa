@@ -4,9 +4,9 @@ import hydrozoa.config.head.initialization.InitializationParameters
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.*
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, InitializationTxEndTime}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.token.CIP67.{HasTokenNames, HeadTokenNames}
 import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
@@ -26,7 +26,7 @@ import scalus.uplc.builtin.Data
 import scalus.uplc.builtin.Data.toData
 
 final case class InitializationTx(
-    override val validityEnd: QuantizedInstant,
+    initializationTxEndTime: InitializationTxEndTime,
     override val treasuryProduced: MultisigTreasuryUtxo,
     override val multisigRegimeProduced: MultisigRegimeUtxo,
     override val headTokenNames: HeadTokenNames,
@@ -37,8 +37,7 @@ final case class InitializationTx(
       HasResolvedUtxos,
       MultisigTreasuryUtxo.Produced,
       MultisigRegimeUtxo.Produced,
-      HasTokenNames,
-      HasValidityEnd
+      HasTokenNames
 
 object InitializationTx {
     export InitializationTxOps.{Build, Parse}
@@ -58,7 +57,7 @@ private object InitializationTxOps {
         result
     }
 
-    final case class Build(config: Config)(blockCreationEndTime: QuantizedInstant) {
+    final case class Build(config: Config)(blockCreationEndTime: BlockCreationEndTime) {
         import Build.*
 
         lazy val result: BuilderResultSimple[InitializationTx] = for {
@@ -113,10 +112,10 @@ private object InitializationTxOps {
                         )
                     )
 
-                private[tx] val validityEndTime =
+                private[tx] val initializationTxEndTime: InitializationTxEndTime =
                     config.txTiming.initializationEndTime(blockCreationEndTime)
 
-                private val validityEndSlot = ValidityEndSlot(validityEndTime.toSlot.slot)
+                private val validityEndSlot = ValidityEndSlot(initializationTxEndTime.toSlot.slot)
             }
 
             object Mints {
@@ -238,7 +237,7 @@ private object InitializationTxOps {
                       equity = equity
                     )
                 } yield InitializationTx(
-                  validityEnd = Steps.Base.validityEndTime,
+                  initializationTxEndTime = Steps.Base.initializationTxEndTime,
                   treasuryProduced = treasuryProduced,
                   tx = finalized.transaction,
                   multisigRegimeProduced = multisigRegimeProduced,
@@ -281,7 +280,7 @@ private object InitializationTxOps {
     }
 
     final case class Parse(config: Config)(
-        blockCreationEndTime: QuantizedInstant,
+        blockCreationEndTime: BlockCreationEndTime,
         tx: Transaction,
         resolvedUtxos: ResolvedUtxos
     ) {
@@ -304,7 +303,7 @@ private object InitializationTxOps {
 
             expectedHeadAddress = config.headMultisigAddress
 
-            expectedEndTime = config.txTiming.initializationEndTime(blockCreationEndTime)
+            initializationTxEndTime = config.txTiming.initializationEndTime(blockCreationEndTime)
 
             expectedTreasuryDatum = MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum(
               config.initialEvacuationMap
@@ -446,11 +445,11 @@ private object InitializationTxOps {
                     )
 
             // ttl should be present
-            validityEndSlot <- mbTtl.toRight(TtlIsMissing)
+            ttl <- mbTtl.toRight(TtlIsMissing)
 
             // Should this be in the init tx parser?
             _ <- Either.cond(
-              test = expectedEndTime.toSlot == Slot(validityEndSlot),
+              test = initializationTxEndTime.convert.slot == ttl,
               right = (),
               left = InvalidInitializationTtl
             )
@@ -491,10 +490,7 @@ private object InitializationTxOps {
             )
 
         } yield InitializationTx(
-          validityEnd = QuantizedInstant(
-            config.slotConfig,
-            java.time.Instant.ofEpochMilli(config.slotConfig.slotToTime(validityEndSlot))
-          ),
+          initializationTxEndTime = initializationTxEndTime,
           treasuryProduced = treasury,
           multisigRegimeProduced = MultisigRegimeUtxo(
             multisigRegimeTokenName = config.headTokenNames.multisigRegimeTokenName,

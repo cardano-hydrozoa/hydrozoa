@@ -1,7 +1,7 @@
 package hydrozoa.multisig.ledger.block
 
 import hydrozoa.config.head.multisig.timing.TxTiming
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime, FallbackTxStartTime}
 import hydrozoa.multisig.ledger.commitment.KzgCommitment
 
 import KzgCommitment.KzgCommitment
@@ -16,10 +16,10 @@ sealed trait BlockHeader extends BlockHeader.Section {
 object BlockHeader {
     final case class Initial(
         // Creation start time: when did the peers start negotiating the head config, moderated by peer 0.
-        override val startTime: QuantizedInstant,
+        override val startTime: BlockCreationStartTime,
         // Creation end time: when did the moderator (peer 0) receive all the information
         // to create the head config and broadcast it to the peers.
-        override val endTime: QuantizedInstant,
+        override val endTime: BlockCreationEndTime,
         override val kzgCommitment: KzgCommitment
     ) extends BlockHeader,
           BlockType.Initial {
@@ -31,8 +31,8 @@ object BlockHeader {
     final case class Minor(
         override val blockNum: BlockNumber,
         override val blockVersion: BlockVersion.Full,
-        override val startTime: QuantizedInstant,
-        override val endTime: QuantizedInstant,
+        override val startTime: BlockCreationStartTime,
+        override val endTime: BlockCreationEndTime,
         override val kzgCommitment: KzgCommitment
     ) extends BlockHeader,
           BlockType.Minor {
@@ -46,8 +46,8 @@ object BlockHeader {
     final case class Major(
         override val blockNum: BlockNumber,
         override val blockVersion: BlockVersion.Full,
-        override val startTime: QuantizedInstant,
-        override val endTime: QuantizedInstant,
+        override val startTime: BlockCreationStartTime,
+        override val endTime: BlockCreationEndTime,
         override val kzgCommitment: KzgCommitment
     ) extends BlockHeader,
           BlockType.Major {
@@ -57,8 +57,8 @@ object BlockHeader {
     final case class Final(
         override val blockNum: BlockNumber,
         override val blockVersion: BlockVersion.Full,
-        override val startTime: QuantizedInstant,
-        override val endTime: QuantizedInstant
+        override val startTime: BlockCreationStartTime,
+        override val endTime: BlockCreationEndTime
     ) extends BlockHeader,
           BlockType.Final {
         override transparent inline def header: BlockHeader.Final = this
@@ -80,15 +80,15 @@ object BlockHeader {
         }
 
         trait HasBlockStart {
-            def startTime: QuantizedInstant
+            def startTime: BlockCreationStartTime
+        }
+
+        trait HasBlockEnd {
+            def endTime: BlockCreationEndTime
         }
 
         trait HasKzgCommitment {
             def kzgCommitment: KzgCommitment
-        }
-
-        trait HasBlockEnd {
-            def endTime: QuantizedInstant
         }
     }
 
@@ -104,9 +104,9 @@ object BlockHeader {
         def header: BlockHeader
         final def nextHeaderIntermediate(
             txTiming: TxTiming,
-            newStartTime: QuantizedInstant,
-            newEndTime: QuantizedInstant,
-            competingFallbackStartTime: QuantizedInstant,
+            newStartTime: BlockCreationStartTime,
+            newEndTime: BlockCreationEndTime,
+            competingFallbackStartTime: FallbackTxStartTime,
             newKzgCommitment: KzgCommitment
         ): BlockHeader.Intermediate =
             if txTiming.blockCanStayMinor(newEndTime, competingFallbackStartTime)
@@ -114,8 +114,8 @@ object BlockHeader {
             else nextHeaderMajor(newStartTime, newEndTime, newKzgCommitment)
 
         final def nextHeaderMinor(
-            newStartTime: QuantizedInstant,
-            newEndTime: QuantizedInstant,
+            newStartTime: BlockCreationStartTime,
+            newEndTime: BlockCreationEndTime,
             newKzgCommitment: KzgCommitment
         ): BlockHeader.Minor = BlockHeader.Minor(
           blockNum = blockNum.increment,
@@ -126,8 +126,8 @@ object BlockHeader {
         )
 
         final def nextHeaderMajor(
-            newStartTime: QuantizedInstant,
-            newEndTime: QuantizedInstant,
+            newStartTime: BlockCreationStartTime,
+            newEndTime: BlockCreationEndTime,
             newKzgCommitment: KzgCommitment
         ): BlockHeader.Major = BlockHeader.Major(
           blockNum = blockNum.increment,
@@ -138,8 +138,8 @@ object BlockHeader {
         )
 
         final def nextHeaderFinal(
-            newStartTime: QuantizedInstant,
-            newEndTime: QuantizedInstant
+            newStartTime: BlockCreationStartTime,
+            newEndTime: BlockCreationEndTime
         ): BlockHeader.Final = BlockHeader.Final(
           blockNum = blockNum.increment,
           blockVersion = blockVersion.incrementMajor,

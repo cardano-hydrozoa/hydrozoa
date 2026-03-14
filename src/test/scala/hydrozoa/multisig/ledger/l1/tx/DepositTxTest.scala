@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.l1.tx
 
 import cats.data.NonEmptyList
+import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.RequestValidityEndTime
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.cardano.scalus.given_Choose_Coin
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
@@ -35,7 +36,11 @@ def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = 
 
         requestValidityEndTime <- Gen
             .posNum[Long]
-            .map(sec => config.initialBlock.endTime + FiniteDuration(sec, TimeUnit.SECONDS))
+            .map(sec =>
+                RequestValidityEndTime(
+                  config.initialBlock.endTime + FiniteDuration(sec, TimeUnit.SECONDS)
+                )
+            )
 
         l2Addr <- genPubkeyAddress(config)
         refundAddr <- genPubkeyAddress(config)
@@ -96,7 +101,7 @@ object DepositTxTest extends Properties("Deposit Tx Test") {
             val gen = for {
                 hash <- genByteStringOfN(32)
                 index <- Gen.posNum[Int].map(_ - 1)
-                fee <- Arbitrary.arbitrary[Coin]
+                fee <- Gen.choose(0, 100_000_000).map(Coin(_))
             } yield (index, Hash[Blake2b_256, Any](hash), fee)
 
             Prop.forAll(gen)((idx, hash, fee) =>
@@ -104,9 +109,11 @@ object DepositTxTest extends Properties("Deposit Tx Test") {
                     AuxiliaryData.Metadata(
                       MD.Deposit(idx, fee, hash).asAuxData(config.headId).getMetadata
                     )
+                val expectedX = MD.Deposit(idx, fee, hash)
+
                 MD.Deposit.parse(aux) match {
-                    case Right(headId, x: MD.Deposit) =>
-                        "Metadata is as expected" |: (x == MD.Deposit(idx, fee, hash))
+                    case Right(headId, x) if x.isInstanceOf[MD.Deposit] =>
+                        "Metadata is as expected" |: (x == expectedX)
                     case Right(_) => "Metadata is MD.deposit" |: Prop(false)
                     case Left(e)  => "Metadata parsing returns Right" |: Prop(false)
                 }
