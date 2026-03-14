@@ -6,7 +6,6 @@ import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.server.JsonCodecs.{given_Encoder_UserRequestBody, given_Encoder_UserRequestHeader}
-import hydrozoa.multisig.server.UserRequest.Error.BodyHashMismatch
 import hydrozoa.multisig.server.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import io.circe.*
 import io.circe.syntax.*
@@ -59,7 +58,7 @@ object UserRequest {
         ): Either[Error.ValidationError, UserRequest] =
             for {
                 _ <- Right(())
-                //_ <-
+                // _ <-
                 //    if body.hash == header.bodyHash
                 //    then Right(header)
                 //    else Left(BodyHashMismatch)
@@ -81,7 +80,7 @@ object UserRequest {
         ): Either[Error.ValidationError, UserRequest] =
             for {
                 _ <- Right(())
-                //_ <-
+                // _ <-
                 //    if body.hash == header.bodyHash
                 //    then Right(header)
                 //    else Left(BodyHashMismatch)

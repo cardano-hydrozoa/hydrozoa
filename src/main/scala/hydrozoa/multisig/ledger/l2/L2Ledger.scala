@@ -118,12 +118,12 @@ trait L2Ledger[F[_]] {
     object L2LedgerAction {
 
         def fromL2LedgerCommand(e: L2LedgerCommand): L2LedgerAction = e match {
-            case e: L2LedgerCommand.Initialize                => fromInitialize(e)
-            case e: L2LedgerCommand.RegisterDeposit           => fromRegisterDepositRequest(e)
-            case e: L2LedgerCommand.ApplyDepositDecisions     => fromApplyDepositDecisions(e)
-            case e: L2LedgerCommand.ApplyTransaction          => fromApplyTransactionRequest(e)
-            case e: L2LedgerCommand.ProxyBlockConfirmation    => fromProxyBlockConfirmation(e)
-            case e: L2LedgerCommand.ProxyRequestError => fromProxyHydrozoaRequestError(e)
+            case e: L2LedgerCommand.Initialize             => fromInitialize(e)
+            case e: L2LedgerCommand.RegisterDeposit        => fromRegisterDepositRequest(e)
+            case e: L2LedgerCommand.ApplyDepositDecisions  => fromApplyDepositDecisions(e)
+            case e: L2LedgerCommand.ApplyTransaction       => fromApplyTransactionRequest(e)
+            case e: L2LedgerCommand.ProxyBlockConfirmation => fromProxyBlockConfirmation(e)
+            case e: L2LedgerCommand.ProxyRequestError      => fromProxyHydrozoaRequestError(e)
         }
 
         /** Execute the given EitherT (returning Unit), but return the original state

@@ -193,7 +193,7 @@ final case class JointLedger(
         val header = req.request.header
         val bt = blockCreationStartTime.toPosixTime
 //        header.validityStart <= bt &&
-            bt < header.validityEnd
+        bt < header.validityEnd
     }
 
     private def rejectEvent(

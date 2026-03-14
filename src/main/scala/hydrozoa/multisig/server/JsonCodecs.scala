@@ -8,7 +8,6 @@ import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.server.ApiResponse.{Error, HeadInfo, RequestAccepted}
 import hydrozoa.multisig.server.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import io.circe.generic.semiauto.*
-import io.circe.syntax.*
 import io.circe.{Decoder, DecodingFailure, Encoder, Json}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
@@ -157,21 +156,15 @@ object JsonCodecs {
 
     // RequestId codec
     given requestIdEncoder: Encoder[RequestId] = (requestId: RequestId) =>
-        io.circe.Json.obj(
-          "peerNum" -> requestId.peerNum.asJson,
-          "requestNum" -> requestId.requestNum.asJson
-        )
+        io.circe.Json.fromInt(requestId.asI64)
 
-    given requestIdDecoder: Decoder[RequestId] = c =>
-        for {
-            peerNum <- c.downField("peerNum").as[HeadPeerNumber]
-            requestNum <- c.downField("requestNum").as[RequestNumber]
-        } yield RequestId(peerNum, requestNum)
+    given requestIdDecoder: Decoder[RequestId] =
+        Decoder.decodeInt.map(RequestId.fromI64)
 
     // Response types
     given requestAcceptedEncoder: Encoder[RequestAccepted] = deriveEncoder[RequestAccepted]
 
-    given requestAcceptedDecoder: Decoder[RequestAccepted] = deriveDecoder[RequestAccepted]
+//    given requestAcceptedDecoder: Decoder[RequestAccepted] = deriveDecoder[RequestAccepted]
 
     given errorEncoder: Encoder[Error] = deriveEncoder[Error]
 

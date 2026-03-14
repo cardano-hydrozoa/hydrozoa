@@ -55,10 +55,10 @@ object RemoteL2LedgerCodecs {
     implicit val proxyBlockConfirmationDecoder: Decoder[L2LedgerCommand.ProxyBlockConfirmation] =
         deriveDecoder
 
-    implicit val proxyRequestErrorEncoder
-        : Encoder[L2LedgerCommand.ProxyRequestError] = deriveEncoder
-    implicit val proxyRequestErrorDecoder
-        : Decoder[L2LedgerCommand.ProxyRequestError] = deriveDecoder
+    implicit val proxyRequestErrorEncoder: Encoder[L2LedgerCommand.ProxyRequestError] =
+        deriveEncoder
+    implicit val proxyRequestErrorDecoder: Decoder[L2LedgerCommand.ProxyRequestError] =
+        deriveDecoder
 
     /** Destination as a cbor-encoded hex-string */
     implicit val destinationEncoder: Encoder[Destination] =
@@ -103,36 +103,39 @@ object RemoteL2LedgerCodecs {
     }
 
     implicit val requestDecoder: Decoder[Request] = c =>
-        c.keys.flatMap(_.headOption).toRight(
-          io.circe.DecodingFailure("Request must have exactly one field", c.history)
-        ).flatMap {
-            case "Initialize" =>
-                c.downField("Initialize")
-                    .as[L2LedgerCommand.Initialize]
-                    .map(Request.Initialize.apply)
-            case "RegisterDepositRequest" =>
-                c.downField("RegisterDepositRequest")
-                    .as[L2LedgerCommand.RegisterDeposit]
-                    .map(Request.RegisterDeposit.apply)
-            case "ApplyDepositDecisions" =>
-                c.downField("ApplyDepositDecisions")
-                    .as[L2LedgerCommand.ApplyDepositDecisions]
-                    .map(Request.ApplyDepositDecisions.apply)
-            case "ApplyTransaction" =>
-                c.downField("ApplyTransaction")
-                    .as[L2LedgerCommand.ApplyTransaction]
-                    .map(Request.ApplyTransaction.apply)
-            case "ProxyBlockConfirmation" =>
-                c.downField("ProxyBlockConfirmation")
-                    .as[L2LedgerCommand.ProxyBlockConfirmation]
-                    .map(Request.ProxyBlockConfirmation.apply)
-            case "ProxyRequestError" =>
-                c.downField("ProxyRequestError")
-                    .as[L2LedgerCommand.ProxyRequestError]
-                    .map(Request.ProxyRequestError.apply)
-            case other =>
-                Left(io.circe.DecodingFailure(s"Unknown request type: $other", c.history))
-        }
+        c.keys
+            .flatMap(_.headOption)
+            .toRight(
+              io.circe.DecodingFailure("Request must have exactly one field", c.history)
+            )
+            .flatMap {
+                case "Initialize" =>
+                    c.downField("Initialize")
+                        .as[L2LedgerCommand.Initialize]
+                        .map(Request.Initialize.apply)
+                case "RegisterDepositRequest" =>
+                    c.downField("RegisterDepositRequest")
+                        .as[L2LedgerCommand.RegisterDeposit]
+                        .map(Request.RegisterDeposit.apply)
+                case "ApplyDepositDecisions" =>
+                    c.downField("ApplyDepositDecisions")
+                        .as[L2LedgerCommand.ApplyDepositDecisions]
+                        .map(Request.ApplyDepositDecisions.apply)
+                case "ApplyTransaction" =>
+                    c.downField("ApplyTransaction")
+                        .as[L2LedgerCommand.ApplyTransaction]
+                        .map(Request.ApplyTransaction.apply)
+                case "ProxyBlockConfirmation" =>
+                    c.downField("ProxyBlockConfirmation")
+                        .as[L2LedgerCommand.ProxyBlockConfirmation]
+                        .map(Request.ProxyBlockConfirmation.apply)
+                case "ProxyRequestError" =>
+                    c.downField("ProxyRequestError")
+                        .as[L2LedgerCommand.ProxyRequestError]
+                        .map(Request.ProxyRequestError.apply)
+                case other =>
+                    Left(io.circe.DecodingFailure(s"Unknown request type: $other", c.history))
+            }
 
     // Response codecs
     implicit val responseSuccessEncoder: Encoder[Response.Success] = deriveEncoder

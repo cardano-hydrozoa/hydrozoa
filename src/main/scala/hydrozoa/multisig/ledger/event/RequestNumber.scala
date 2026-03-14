@@ -6,7 +6,7 @@ object RequestNumber {
     opaque type RequestNumber = Int
 
     def apply(i: Int): RequestNumber = {
-        require(i >= 0)
+        require(i >= 0 && i < (1 << 40))
         i
     }
 

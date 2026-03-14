@@ -7,6 +7,11 @@ import scala.annotation.targetName
 type RequestId = RequestId.Id
 
 object RequestId {
+    def fromI64(requestIdI64: Int): RequestId = {
+        val peerNum = requestIdI64 >> 40
+        val requestNum = (requestIdI64 << 8) >> 8
+        apply(HeadPeerNumber(peerNum), RequestNumber(requestNum))
+    }
 
     /** Used in the transient fields to indicate whether an event is valid or invalid. (This type is
       * solely here to avoid boolean blindness)
@@ -34,6 +39,8 @@ object RequestId {
     }
 
     extension (self: Id)
+        def asI64: Int = (self.peerNum << 40) + self.requestNum
+
         def increment: Id = RequestId(self._1, self._2 + 1)
         def peerNum: HeadPeerNumber = HeadPeerNumber(self._1)
         def requestNum: RequestNumber = RequestNumber(self._2)

@@ -81,9 +81,10 @@ class RemoteL2Ledger private (
                                     case Right(value) =>
                                         IO.pure(Right(value))
                                 }
-                            case Response.Error(message) => for {
-                                _ <- logger.warn(s"Error response: $message")
-                            } yield Left(L2LedgerError(message.getBytes))
+                            case Response.Error(message) =>
+                                for {
+                                    _ <- logger.warn(s"Error response: $message")
+                                } yield Left(L2LedgerError(message.getBytes))
                         }
                 }
             } yield decoded
@@ -111,7 +112,9 @@ class RemoteL2Ledger private (
     override def sendApplyTransaction(
         req: L2LedgerCommand.ApplyTransaction
     ): EitherT[IO, L2LedgerError, (Vector[EvacuationDiff], Vector[Payout.Obligation])] = {
-        sendRequest[(Vector[EvacuationDiff], Vector[Payout.Obligation])](Request.ApplyTransaction(req))
+        sendRequest[(Vector[EvacuationDiff], Vector[Payout.Obligation])](
+          Request.ApplyTransaction(req)
+        )
     }
 
     override def sendProxyBlockConfirmation(
@@ -143,8 +146,7 @@ object RemoteL2Ledger {
         final case class ApplyTransaction(event: L2LedgerCommand.ApplyTransaction) extends Request
         final case class ProxyBlockConfirmation(event: L2LedgerCommand.ProxyBlockConfirmation)
             extends Request
-        final case class ProxyRequestError(event: L2LedgerCommand.ProxyRequestError)
-            extends Request
+        final case class ProxyRequestError(event: L2LedgerCommand.ProxyRequestError) extends Request
     }
 
     /** Response types received from the remote L2 ledger */

@@ -9,7 +9,7 @@ object HeadPeerNumber {
     opaque type HeadPeerNumber = Int
 
     def apply(i: Int): HeadPeerNumber = {
-        require(i >= 0)
+        require(i >= 0 && i < (1 << 8))
         i
     }
 

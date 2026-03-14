@@ -13,7 +13,6 @@ import org.http4s.circe.*
 import org.http4s.dsl.io.*
 import org.http4s.{EntityDecoder, HttpRoutes}
 import org.typelevel.log4cats.Logger
-import org.typelevel.log4cats.slf4j.Slf4jLogger
 
 /** HTTP routes for the Hydrozoa server. These routes are what get called by the frontend (or a
   * proxy -- load-balancer, unified api).
@@ -40,13 +39,19 @@ class HydrozoaRoutes(
                 // Try to parse as JSON to get better error messages
                 _ <- io.circe.parser.parse(bodyText) match {
                     case Left(parseError) =>
-                        logger.error(s"POST /api/l2/submit - JSON parse error: ${parseError.getMessage}")
+                        logger.error(
+                          s"POST /api/l2/submit - JSON parse error: ${parseError.getMessage}"
+                        )
                     case Right(json) =>
                         // Try to decode to UserRequest
                         io.circe.Decoder[UserRequest].decodeJson(json) match {
                             case Left(decodeError) =>
-                                logger.error(s"POST /api/l2/submit - JSON decode error: ${decodeError.getMessage}") *>
-                                    logger.error(s"POST /api/l2/submit - Decode error history: ${decodeError.history}")
+                                logger.error(
+                                  s"POST /api/l2/submit - JSON decode error: ${decodeError.getMessage}"
+                                ) *>
+                                    logger.error(
+                                      s"POST /api/l2/submit - Decode error history: ${decodeError.history}"
+                                    )
                             case Right(_) =>
                                 IO.unit
                         }
@@ -79,13 +84,19 @@ class HydrozoaRoutes(
                 // Try to parse as JSON to get better error messages
                 _ <- io.circe.parser.parse(bodyText) match {
                     case Left(parseError) =>
-                        logger.error(s"POST /api/deposit/register - JSON parse error: ${parseError.getMessage}")
+                        logger.error(
+                          s"POST /api/deposit/register - JSON parse error: ${parseError.getMessage}"
+                        )
                     case Right(json) =>
                         // Try to decode to UserRequest
                         io.circe.Decoder[UserRequest].decodeJson(json) match {
                             case Left(decodeError) =>
-                                logger.error(s"POST /api/deposit/register - JSON decode error: ${decodeError.getMessage}") *>
-                                    logger.error(s"POST /api/deposit/register - Decode error history: ${decodeError.history}")
+                                logger.error(
+                                  s"POST /api/deposit/register - JSON decode error: ${decodeError.getMessage}"
+                                ) *>
+                                    logger.error(
+                                      s"POST /api/deposit/register - Decode error history: ${decodeError.history}"
+                                    )
                             case Right(_) =>
                                 IO.unit
                         }
