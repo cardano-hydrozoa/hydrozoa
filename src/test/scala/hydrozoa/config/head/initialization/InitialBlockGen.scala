@@ -1,9 +1,10 @@
 package hydrozoa.config.head.initialization
 
 import hydrozoa.config.head.HeadConfig
-import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.{BlockCreationEndTimeGen, currentTimeBlockCreationEndTime, generateBlockCreationEndTime}
+import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.{BlockCreationEndTimeGen, currentTimeBlockCreationEndTime}
 import hydrozoa.config.head.multisig.fallback.{FallbackContingencyGen, generateFallbackContingency}
 import hydrozoa.config.head.multisig.settlement.{SettlementConfigGen, generateSettlementConfig}
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationStartTime
 import hydrozoa.config.head.multisig.timing.{TxTimingGen, generateDefaultTxTiming}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.{GenHeadParams, generateHeadParameters}
@@ -21,7 +22,7 @@ def generateInitialBlock(testPeers: TestPeers)(
     generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
     generateDisputeResolutionConfig: DisputeResolutionConfigGen = generateDisputeResolutionConfig,
     generateHeadParameters: GenHeadParams = generateHeadParameters,
-    gnerateBlockCreationEndTime: BlockCreationEndTimeGen = currentTimeBlockCreationEndTime,
+    generateBlockCreationEndTime: BlockCreationEndTimeGen = currentTimeBlockCreationEndTime,
     generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
         InitializationParametersGenTopDown.GenWithDeps | InitializationParameters =
         InitializationParametersGenBottomUp.generateInitializationParameters,
@@ -75,7 +76,7 @@ def generateInitialBlock(testPeers: TestPeers)(
       Block.MultiSigned.Initial(
         blockBrief = BlockBrief.Initial(
           BlockHeader.Initial(
-            startTime = blockCreationEndTime - 10.seconds,
+            startTime = BlockCreationStartTime(blockCreationEndTime - 10.seconds),
             endTime = blockCreationEndTime,
             kzgCommitment = initializationParameters.initialEvacuationMap.kzgCommitment
           )

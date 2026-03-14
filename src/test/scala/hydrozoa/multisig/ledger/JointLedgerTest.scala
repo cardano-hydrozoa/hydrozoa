@@ -9,6 +9,8 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.actor.{ActorSystem, test as _}
 import hydrozoa.config.head.multisig.timing.TxTiming
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
+import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.RequestValidityEndTime
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.cardano.scalus.QuantizedTime.*
@@ -164,16 +166,18 @@ object JointLedgerTestHelpers {
         }
 
         /** Start the block at the current real time */
-        def startBlockNow(blockNum: BlockNumber): JLTest[QuantizedInstant] =
+        def startBlockNow(blockNum: BlockNumber): JLTest[BlockCreationStartTime] =
             for {
                 env <- ask
-                startTime <- lift(realTimeQuantizedInstant(env.config.slotConfig))
-                _ <- startBlock(blockNum, startTime)
-            } yield startTime
+                now <- lift(
+                  realTimeQuantizedInstant(env.config.slotConfig).map(BlockCreationStartTime)
+                )
+                _ <- startBlock(blockNum, now)
+            } yield now
 
         def startBlock(
             blockNum: BlockNumber,
-            blockCreationTime: QuantizedInstant,
+            blockCreationTime: BlockCreationStartTime,
         ): JLTest[Unit] =
             startBlock(StartBlock(blockNum, blockCreationTime))
 
@@ -186,7 +190,9 @@ object JointLedgerTestHelpers {
         ): JLTest[Unit] =
             for {
                 env <- ask
-                now <- lift(realTimeQuantizedInstant(env.config.slotConfig))
+                now <- lift(
+                  realTimeQuantizedInstant(env.config.slotConfig).map(BlockCreationEndTime)
+                )
                 _ <- completeBlockRegular(
                   CompleteBlockRegular(
                     referenceBlock,
@@ -232,7 +238,9 @@ object JointLedgerTestHelpers {
         ): JLTest[Unit] =
             for {
                 env <- ask
-                now <- lift(realTimeQuantizedInstant(env.config.slotConfig))
+                now <- lift(
+                  realTimeQuantizedInstant(env.config.slotConfig).map(BlockCreationEndTime)
+                )
                 _ <- completeBlockFinal(
                   CompleteBlockFinal(referenceBlock, now)
                 )
@@ -273,9 +281,9 @@ object JointLedgerTestHelpers {
         /** Generate a random (sensible) deposit from a random peer and send it to the joint ledger
           */
         def deposit(
-            requestValidityEndTime: QuantizedInstant,
+            requestValidityEndTime: RequestValidityEndTime,
             requestId: RequestId,
-            blockStartTime: QuantizedInstant
+            blockCreationStartTime: BlockCreationStartTime
         ): JLTest[
           (DepositRefundTxSeq, UserRequestWithId, NonEmptyList[GenesisObligation])
         ] = {
@@ -361,7 +369,7 @@ object JointLedgerTestHelpers {
 
                 header = UserRequestHeader(
                   headId = env.config.headId,
-                  validityStart = blockStartTime.toPosixTime,
+                  validityStart = blockCreationStartTime.toPosixTime,
                   validityEnd = depositRefundTxSeq.depositTx.submissionDeadline.toPosixTime,
                   bodyHash = body.hash
                 )
@@ -426,8 +434,8 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
           def genEventStream(
               config: CardanoNetwork.Section & TxTiming.Section,
               headAddress: ShelleyAddress,
-              blockStartTime: QuantizedInstant,
-              blockEndTime: QuantizedInstant
+              blockCreationStartTime: BlockCreationStartTime,
+              blockCreationEndTime: BlockCreationEndTime
           ): Gen[
             Queue[JLTest[
               (
@@ -496,7 +504,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                                 requestValidityEndTimeOffset <- Gen
                                     .choose(
                                       0,
-                                      (blockEndTime - blockStartTime).finiteDuration.toSeconds.toInt
+                                      (blockCreationEndTime - blockCreationStartTime).finiteDuration.toSeconds.toInt
                                     )
                                     .map(_.seconds)
                                     .map(QuantizedFiniteDuration(config.slotConfig, _))
@@ -505,10 +513,11 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                               newRequestIds,
                               actionQueue.appended(
                                 deposit(
-                                  requestValidityEndTime =
-                                      blockStartTime + requestValidityEndTimeOffset,
+                                  requestValidityEndTime = RequestValidityEndTime(
+                                    blockCreationStartTime + requestValidityEndTimeOffset
+                                  ),
                                   requestId = RequestId(peer, lastRequestID.increment),
-                                  blockStartTime = blockStartTime
+                                  blockCreationStartTime = blockCreationStartTime
                                 )
                               )
                             )
@@ -547,7 +556,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                   env.config,
                   env.config.headMultisigAddress,
                   blockStartTime,
-                  blockStartTime + 10.seconds
+                  BlockCreationEndTime(blockStartTime + 10.seconds)
                 )
               )
 
@@ -586,9 +595,11 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                 msg = "Deposits are sorted by absorption start time",
                 condition = {
                     val startTimes = depositsMap.flatDeposits.map(deposit =>
-                        env.config.txTiming.depositAbsorptionStartTime(
-                          deposit.submissionDeadline
-                        )
+                        env.config.txTiming
+                            .depositAbsorptionStartTime(
+                              deposit.requestValidityEndTime
+                            )
+                            .convert
                     )
                     startTimes.toList.sorted == startTimes
                 }
@@ -622,14 +633,14 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
           env <- ask[TestR]
 
           // Put the joint ledger in producing mode
-          startTime <- startBlockNow(BlockNumber.zero.increment)
+          blockCreationStartTime <- startBlockNow(BlockNumber.zero.increment)
 
           // Generate a deposit and observe that it appears in the dapp ledger correctly
-          firstDepositValidityEnd = startTime + 10.minutes
+          firstDepositValidityEnd = RequestValidityEndTime(blockCreationStartTime + 10.minutes)
           seqAndReq <- deposit(
             requestValidityEndTime = firstDepositValidityEnd,
             requestId = RequestId(0, 1),
-            blockStartTime = startTime
+            blockCreationStartTime = blockCreationStartTime
           )
           (depositRefundTxSeq, depositReq, genesisObligations) = seqAndReq
 
@@ -716,7 +727,9 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
           // Complete another block, including the deposit in the state.
           _ <- startBlock(
             BlockNumber.zero.increment.increment.increment,
-            firstDepositValidityEnd + env.config.txTiming.depositMaturityDuration
+            BlockCreationStartTime(
+              firstDepositValidityEnd + env.config.txTiming.depositMaturityDuration
+            )
           )
           _ <- completeBlockRegular(
             None,
@@ -781,8 +794,11 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
           _ <- for {
 
               // Sensible stands for the opposite for SubmissionPeriodIsOver error
-              requestValidityEndTime <- pick[TestR, QuantizedInstant](
-                Gen.choose(1, 10).map(s => blockStartTime + FiniteDuration(s, TimeUnit.SECONDS))
+              requestValidityEndTime <- pick[TestR, RequestValidityEndTime](
+                Gen.choose(1, 10)
+                    .map(s =>
+                        RequestValidityEndTime(blockStartTime + FiniteDuration(s, TimeUnit.SECONDS))
+                    )
               )
 
               seqAndReq <- deposit(
@@ -819,8 +835,11 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
           _ <- for {
 
               // Sensible stands for the opposite for SubmissionPeriodIsOver error
-              requestValidityEndTime <- pick[TestR, QuantizedInstant](
-                Gen.choose(0, 10).map(s => blockStartTime - FiniteDuration(s, TimeUnit.SECONDS))
+              requestValidityEndTime <- pick[TestR, RequestValidityEndTime](
+                Gen.choose(0, 10)
+                    .map(s =>
+                        RequestValidityEndTime(blockStartTime - FiniteDuration(s, TimeUnit.SECONDS))
+                    )
               )
 
               seqAndReq <- deposit(
