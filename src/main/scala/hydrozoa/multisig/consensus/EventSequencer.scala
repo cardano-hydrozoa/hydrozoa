@@ -70,6 +70,7 @@ trait EventSequencer(
                   userRequest = req.request,
                   requestId = newId
                 )
+                _ <- req.dResponse.complete(newId)
                 _ <- conn.blockWeaver ! newRequestWithId
                 _ <- (conn.peerLiaisons ! newRequestWithId).parallel
             } yield newId
