@@ -631,8 +631,6 @@ final case class JointLedger(
               producing.userRequestState.postDatedRefundTxs.toList
             )
 
-            _ <- checkReferenceBlock(referenceBlockBrief, block)
-
             // Block is done
 
             res <- IO.fromEither(
@@ -641,7 +639,13 @@ final case class JointLedger(
                   .run(config, producing.l1LedgerState)
             )
             (newL1State, ()) = res
-            _ <- state.set(producing.setL1LedgerState(newL1State))
+            newJlState = producing.setL1LedgerState(newL1State)
+
+            _ <- state.set(newJlState)
+
+            _ <- panicOnExpectedBlockMismatch(referenceBlockBrief, block)
+
+            _ <- state.set(newJlState.done(block))
 
             // Tell others about the block
             _ <- handleBlock(block, finalizationLocallyTriggered)
@@ -676,17 +680,20 @@ final case class JointLedger(
                   .run(config, p.l1LedgerState)
             )
             (newL1State, finalizationTxSeq) = res
-            _ <- state.set(p.setL1LedgerState(newL1State))
+            newJlState = p.setL1LedgerState(newL1State)
+
+            _ <- state.set(newJlState)
 
             block: Block.Unsigned.Final = {
-                import p.userRequestState.*
+                import newJlState.userRequestState.*
                 val blockHeader =
-                    p.previousBlock.header.nextHeaderFinal(p.startTime, args.blockCreationEndTime)
+                    newJlState.previousBlock.header
+                        .nextHeaderFinal(newJlState.startTime, args.blockCreationEndTime)
 
                 val blockBody = BlockBody.Final(
                   events = requests,
                   // Final block should reject all the deposits known.
-                  depositsRefunded = p.l1LedgerState.deposits.flatEvents.toList
+                  depositsRefunded = newJlState.l1LedgerState.deposits.flatEvents.toList
                 )
 
                 val blockBrief = BlockBrief.Final(blockHeader, blockBody)
@@ -699,7 +706,10 @@ final case class JointLedger(
                 Block.Unsigned.Final(blockBrief, blockEffects)
             }
 
-            _ <- checkReferenceBlock(referenceBlockBrief, block)
+            _ <- panicOnExpectedBlockMismatch(referenceBlockBrief, block)
+
+            _ <- state.set(newJlState.done(block))
+
             _ <- handleBlock(block, false)
 
         } yield ()
@@ -766,43 +776,15 @@ final case class JointLedger(
             _ <- IO.traverse_(acks)(ack => conn.consensusActor ! ack)
         } yield ()
 
-    private def checkReferenceBlock(
+    private def panicOnExpectedBlockMismatch(
         expectedBlockBrief: Option[BlockBrief],
         actualBlock: Block
-    ): IO[Unit] = for {
-        p <- unsafeGetProducing
-        fallbackValidityStart: FallbackTxStartTime =
-            actualBlock match {
-                case major: Block.Unsigned.Major =>
-                    major.effects.fallbackTx.validityStart
-                case _ => p.competingFallbackValidityStart
-            }
-
-        _ <- expectedBlockBrief match {
-            case Some(refBlock) if refBlock == actualBlock =>
-                state.set(
-                  Done(
-                    actualBlock.block,
-                    fallbackValidityStart,
-                    p.l1LedgerState,
-                    p.evacuationMap
-                  )
-                )
-            case Some(_) =>
-                panic(
-                  "Reference block didn't match actual block; consensus is broken."
-                ) >> context.self.stop
-            case None =>
-                state.set(
-                  Done(
-                    actualBlock.block,
-                    fallbackValidityStart,
-                    p.l1LedgerState,
-                    p.evacuationMap
-                  )
-                )
-        }
-    } yield ()
+    ): IO[Unit] =
+        IO.unlessA(expectedBlockBrief.fold(true)(_ == actualBlock))(
+          panic(
+            "Reference block didn't match actual block; consensus is broken."
+          ) >> context.self.stop
+        )
 
     // Sends a panic to the multisig regime manager, indicating that the node cannot proceed any more
     // TODO: Implement better, it should be typed and the multisig regime manager should be able to pattern match
@@ -907,5 +889,19 @@ object JointLedger {
 
         def setL2LedgerState(newL2State: L2LedgerState): Producing =
             this.focus(_.l2LedgerState).replace(newL2State)
+
+        def done(producedBlock: Block): Done = {
+            val newFallbackValidityStart: FallbackTxStartTime = producedBlock match {
+                case major: Block.Unsigned.Major =>
+                    major.effects.fallbackTx.validityStart
+                case _ => this.competingFallbackValidityStart
+            }
+            Done(
+              producedBlock,
+              newFallbackValidityStart,
+              l1LedgerState,
+              evacuationMap
+            )
+        }
     }
 }
