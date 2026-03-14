@@ -117,8 +117,6 @@ def genDepositUtxo(
       l2Payload = GenesisObligation.serialize(l2Outputs),
       depositFee = Coin.zero,
       requestValidityEndTime = requestValidityEndTime,
-      submissionDeadline = config.txTiming.depositSubmissionDeadline(requestValidityEndTime),
-      absorptionStartTime = config.txTiming.depositAbsorptionStartTime(requestValidityEndTime)
     )
 
 /** Generate a "standalone" settlement tx. */

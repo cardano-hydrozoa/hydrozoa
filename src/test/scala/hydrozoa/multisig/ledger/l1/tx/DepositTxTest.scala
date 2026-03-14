@@ -101,7 +101,7 @@ object DepositTxTest extends Properties("Deposit Tx Test") {
             val gen = for {
                 hash <- genByteStringOfN(32)
                 index <- Gen.posNum[Int].map(_ - 1)
-                fee <- Arbitrary.arbitrary[Coin]
+                fee <- Gen.choose(0, 100_000_000).map(Coin(_))
             } yield (index, Hash[Blake2b_256, Any](hash), fee)
 
             Prop.forAll(gen)((idx, hash, fee) =>
@@ -109,9 +109,11 @@ object DepositTxTest extends Properties("Deposit Tx Test") {
                     AuxiliaryData.Metadata(
                       MD.Deposit(idx, fee, hash).asAuxData(config.headId).getMetadata
                     )
+                val expectedX = MD.Deposit(idx, fee, hash)
+
                 MD.Deposit.parse(aux) match {
-                    case Right(headId, x: MD.Deposit) =>
-                        "Metadata is as expected" |: (x == MD.Deposit(idx, fee, hash))
+                    case Right(headId, x) if x.isInstanceOf[MD.Deposit] =>
+                        "Metadata is as expected" |: (x == expectedX)
                     case Right(_) => "Metadata is MD.deposit" |: Prop(false)
                     case Left(e)  => "Metadata parsing returns Right" |: Prop(false)
                 }

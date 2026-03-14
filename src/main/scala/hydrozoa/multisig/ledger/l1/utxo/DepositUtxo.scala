@@ -29,8 +29,6 @@ final case class DepositUtxo(
     l2Payload: ByteString,
     depositFee: Coin,
     requestValidityEndTime: RequestValidityEndTime,
-    submissionDeadline: DepositSubmissionDeadline,
-    absorptionStartTime: DepositAbsorptionStartTime
 ) {
     def toUtxo: Utxo =
         Utxo(
@@ -199,8 +197,6 @@ object DepositUtxo {
           value = babbage.value,
           l2Payload = l2Payload,
           depositFee = depositFee,
-          requestValidityEndTime = requestValidityEndTime,
-          submissionDeadline = submissionDeadline,
-          absorptionStartTime = absorptionStartTime
+          requestValidityEndTime = requestValidityEndTime
         )
 }

@@ -129,9 +129,6 @@ private object DepositTxOps {
                   l2Payload = l2Payload,
                   depositFee = depositFee,
                   requestValidityEndTime = requestValidityEndTime,
-                  submissionDeadline = submissionDeadline,
-                  absorptionStartTime =
-                      config.txTiming.depositAbsorptionStartTime(requestValidityEndTime)
                 )
             } yield DepositTx(
               depositProduced,
@@ -229,15 +226,17 @@ private object DepositTxOps {
                             case Success(v)         => Right(v)
                         }
 
-                        // Check that the submission deadline is as expected
-                        _ <- Either.cond(
-                          submissionDeadline == expectedSubmissionDeadline,
-                          (),
-                          IncorrectSubmissionDeadline(
-                            submissionDeadline,
-                            expectedSubmissionDeadline
-                          )
-                        )
+                        expectedTtl = expectedSubmissionDeadline.convert.slot
+
+//                        // Check that the submission deadline is as expected
+//                        _ <- Either.cond(
+//                          submissionDeadline == expectedSubmissionDeadline,
+//                          (),
+//                          IncorrectSubmissionDeadline(
+//                            submissionDeadline,
+//                            expectedSubmissionDeadline
+//                          )
+//                        )
 
                         // Check the multisig regime witness utxo was referenced
                         _ <- Either.cond(

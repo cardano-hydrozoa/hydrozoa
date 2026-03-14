@@ -241,7 +241,8 @@ final case class JointLedger(
                       JointLedger.UserRequestError.BlockOutOfRequestValidityInterval(blockStartTime)
                     )
                 else {
-                    L1LedgerM.registerDeposit(req).run(config, p.l1LedgerState) match {
+                    val l1Res = L1LedgerM.registerDeposit(req).run(config, p.l1LedgerState)
+                    l1Res match {
                         case Left(error) => rejectEvent(requestId, error)
                         case Right(newL1State, (depositProduced, refundTx)) => {
                             val l2Command = L2LedgerCommand.RegisterDeposit(

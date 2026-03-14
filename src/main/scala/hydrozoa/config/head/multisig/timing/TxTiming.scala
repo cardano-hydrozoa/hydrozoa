@@ -40,7 +40,7 @@ import RequestTimes.*
   *   After a deposit utxo is mature, the head has until this duration elapses to attempt to absorb
   *   it. Defines _depositAbsorptionEnd_ point.
   */
-final case class TxTiming(
+final case class TxTiming private (
     override val minSettlementDuration: MinSettlementDuration,
     override val inactivityMarginDuration: InactivityMarginDuration,
     override val silenceDuration: SilenceDuration,
@@ -279,5 +279,14 @@ object TxTiming {
         opaque type RefundStartTime = QuantizedInstant
         private[timing] def RefundStartTime(x: QuantizedInstant): RefundStartTime = x
         given Conversion[RefundStartTime, QuantizedInstant] = identity
+    }
+}
+
+given Ordering[DepositAbsorptionStartTime] with {
+    override def compare(
+        self: DepositAbsorptionStartTime,
+        other: DepositAbsorptionStartTime
+    ): Int = {
+        self.convert.compare(other.convert)
     }
 }

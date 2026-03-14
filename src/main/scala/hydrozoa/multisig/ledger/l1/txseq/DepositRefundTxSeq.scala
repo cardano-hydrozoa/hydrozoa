@@ -130,9 +130,6 @@ private object DepositRefundTxSeqOps {
         def result: Either[Build.Error, DepositRefundTxSeq] = {
             val expectedDepositValue = l2Value + Value(depositFee)
 
-            val submissionDeadline =
-                config.txTiming.depositSubmissionDeadline(requestValidityEndTime)
-
             val refundInstructions = DepositUtxo.Refund.Instructions(
               address = refundAddress,
               datum = refundDatum,
