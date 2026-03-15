@@ -1,208 +1,208 @@
-package hydrozoa.integration.stage1
-
-import cats.effect.{Deferred, IO, Ref}
-import cats.syntax.all.catsSyntaxFlatMapOps
-import com.bloxbean.cardano.client.util.HexUtil
-import com.suprnation.actor.Actor.{Actor, Receive}
-import com.suprnation.actor.ActorRef.ActorRef
-import com.suprnation.actor.ActorSystem
-import hydrozoa.integration.stage1
-import hydrozoa.integration.stage1.AgentActor.CompleteBlock
-import hydrozoa.integration.stage1.Commands.*
-import hydrozoa.lib.actor.SyncRequest
-import hydrozoa.lib.logging.Logging
-import hydrozoa.multisig.backend.cardano.CardanoBackend
-import hydrozoa.multisig.consensus.CardanoLiaison.Timeout
-import hydrozoa.multisig.consensus.ack.AckBlock
-import hydrozoa.multisig.consensus.{CardanoLiaison, ConsensusActor}
-import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockNumber}
-import hydrozoa.multisig.ledger.event.UserRequest
-import hydrozoa.multisig.ledger.joint.JointLedger
-import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
-import org.scalacheck.commands.SutCommand
-import org.typelevel.log4cats.Logger
-import scala.concurrent.duration.DurationInt
-import scalus.cardano.address.ShelleyAddress
-
-// ===================================
-// Stage 1 SUT
-// ===================================
-
-case class Stage1Sut(
-    headAddress: ShelleyAddress,
-    system: ActorSystem[IO],
-    cardanoBackend: CardanoBackend[IO],
-    agent: AgentActor.Handle,
-    effectsAcc: Ref[IO, List[BlockEffects.Unsigned]] = Ref.unsafe(List.empty),
-    runId: String = "",
-    traceRef: Ref[IO, List[String]] = Ref.unsafe(List.empty)
-)
-
-// ===================================
-// Agent Actor
-// ===================================
-
-object AgentActor:
-
-    /** Synchronous complete block msg that returns unsigned block. This is needed for at least one
-      * command should return a meaningful result - the block brief. Additionally, the Stage 1 test
-      * suite saves all block L1 effects in [[Stage1Sut.effectsAcc]] to verify that all needed were
-      * submitted to L1.
-      *
-      * @param block
-      * @param blockNumber
-      */
-    case class CompleteBlock(
-        block: CompleteBlockRegular | CompleteBlockFinal,
-        blockNumber: BlockNumber
-    ) extends SyncRequest[IO, CompleteBlock, Block.Unsigned.Next] {
-        export CompleteBlock.Sync
-        def ?: : this.Send = SyncRequest.send(_, this)
-    }
-
-    object CompleteBlock:
-        type Sync = SyncRequest.Envelope[IO, CompleteBlock, Block.Unsigned.Next]
-
-    type Request =
-        UserRequest | StartBlock | CompleteBlock.Sync | ConsensusActor.Request |
-            CardanoLiaison.Timeout.type | Unit
-
-    type Handle = ActorRef[IO, Request]
-
-case class AgentActor(
-    jointLedgerD: Deferred[IO, JointLedger.Handle],
-    consensusActor: ConsensusActor.Handle,
-    cardanoLiaison: CardanoLiaison.Handle
-) extends Actor[IO, AgentActor.Request]:
-
-    private val jointLedgerRef = Ref.unsafe[IO, Option[JointLedger.Handle]](None)
-
-    private def jointLedger: IO[JointLedger.Handle] = jointLedgerRef.get.map(_.get)
-
-    override def preStart: IO[Unit] = for {
-        // Message to itself to get the jointLedger actor
-        _ <- context.self ! ()
-    } yield ()
-
-    override def receive: Receive[IO, AgentActor.Request] = {
-        case _: Unit =>
-            for {
-                jointLedger <- jointLedgerD.get
-                _ <- jointLedgerRef.set(Some(jointLedger))
-            } yield ()
-
-        case t: CardanoLiaison.Timeout.type => cardanoLiaison ! t
-
-        // Sync SUT commands
-        case req: CompleteBlock.Sync =>
-            for {
-                _ <- ref.update(_ + (req.request.blockNumber -> req))
-                _ <- jointLedger >>= (_ ! req.request.block)
-            } yield ()
-
-        // Joint ledger - proxying
-        case x: UserRequest => jointLedger >>= (_ ! x)
-        case x: StartBlock  => jointLedger >>= (_ ! x)
-
-        // Consensus actor
-        // Intercepting unsigned blocks
-        case x: Block.Unsigned.Next => proxyBlockUnsigned(x)
-        // Direct proxying
-        case x: AckBlock => consensusActor ! x
-    }
-
-    private val ref = Ref.unsafe[IO, Map[BlockNumber, CompleteBlock.Sync]](Map.empty)
-
-    def proxyBlockUnsigned(block: Block.Unsigned.Next): IO[Unit] = for {
-        _ <- consensusActor ! block
-        envelope <- ref.modify { map =>
-            val blockNum = block.blockNum
-            val v = map(blockNum)
-            val newMap = map - blockNum
-            (newMap, v)
-        }
-        _ <- envelope.dResponse.complete(block)
-    } yield ()
-
-end AgentActor
-
-// ===================================
-// SutCommand instances
-// ===================================
-
-object SutCommands:
-
-    val logger: Logger[IO] = Logging.loggerIO("Stage1.Sut")
-
-    implicit given SutCommand[DelayCommand, Unit, Stage1Sut] with {
-        override def run(cmd: DelayCommand, sut: Stage1Sut): IO[Unit] = for {
-            _ <- logger.debug(s">> DelayCommand(delay=${cmd.delaySpec})")
-            now <- IO.realTimeInstant
-            _ <- logger.debug(s"Current time: $now")
-            _ <- sut.agent ! Timeout
-        } yield ()
-    }
-
-    implicit given SutCommand[StartBlockCommand, Unit, Stage1Sut] with {
-        override def run(cmd: StartBlockCommand, sut: Stage1Sut): IO[Unit] =
-            logger.debug(s">> StartBlockCommand(blockNumber=${cmd.blockNumber})") >>
-                (sut.agent ! StartBlock(
-                  blockNum = cmd.blockNumber,
-                  blockCreationStartTime = cmd.creationTime
-                ))
-    }
-
-    implicit given SutCommand[L2TxCommand, Unit, Stage1Sut] with {
-        override def run(cmd: L2TxCommand, sut: Stage1Sut): IO[Unit] =
-            logger.debug(">> LedgerEventCommand") >>
-                (sut.agent ! cmd.event)
-    }
-
-    implicit given SutCommand[CompleteBlockCommand, BlockBrief, Stage1Sut] with {
-        override def run(cmd: CompleteBlockCommand, sut: Stage1Sut): IO[BlockBrief] = for {
-            _ <- logger.debug(
-              s">> CompleteBlockCommand(blockNumber=${cmd.blockNumber}, isFinal=${cmd.isFinal})"
-            )
-            headUtxosRet <- sut.cardanoBackend
-                .utxosAt(sut.headAddress)
-                .map(_.fold(err => throw RuntimeException(err.toString), _.keySet))
-            block <- IO.pure(
-              if cmd.isFinal
-              then CompleteBlockFinal(None)
-              // TODO: use mock state, not cmd.pollResults
-              else CompleteBlockRegular(None, headUtxosRet, false)
-            )
-            // All sync commands should be timed out since the system may terminate
-            d <- (sut.agent ?: AgentActor.CompleteBlock(block, cmd.blockNumber)).timeout(10.seconds)
-            // Save unsigned block effects
-            _ <- sut.effectsAcc.update(_ :+ d.effects.asInstanceOf[BlockEffects.Unsigned])
-        } yield d.blockBrief
-    }
-
-    given SutCommand[RegisterDepositCommand, Unit, Stage1Sut] with {
-        override def run(cmd: RegisterDepositCommand, sut: Stage1Sut): IO[Unit] =
-            logger.debug(">> RegisterDepositCommand") >>
-                (sut.agent ! cmd.registerDeposit)
-    }
-
-    given SutCommand[SubmitDepositsCommand, Unit, Stage1Sut] with {
-
-        // This uses only depositsForSubmission and ignores rejected deposits
-        override def run(cmd: SubmitDepositsCommand, sut: Stage1Sut): IO[Unit] = for {
-            _ <- logger.debug(s">> SubmitDepositCommand (${cmd.depositsForSubmission.map(_._1)})")
-            ret <- IO.traverse(cmd.depositsForSubmission)((id, tx) =>
-                sut.cardanoBackend.submitTx(tx) >>= (ret => IO.pure((id, tx) -> ret))
-            )
-
-            submissionErrors = ret.filter(_._2.isLeft)
-            _ <- IO.whenA(submissionErrors.nonEmpty)(
-              logger.info(
-                "Submit deposit errors:" + submissionErrors
-                    .map(a =>
-                        s"\n\t- ${a._1._1}, error: ${a._2.left}, cbor: ${HexUtil.encodeHexString(a._1._2.toCbor)}"
-                    )
-                    .mkString
-              )
-            )
-        } yield ()
-    }
+//package hydrozoa.integration.stage1
+//
+//import cats.effect.{Deferred, IO, Ref}
+//import cats.syntax.all.catsSyntaxFlatMapOps
+//import com.bloxbean.cardano.client.util.HexUtil
+//import com.suprnation.actor.Actor.{Actor, Receive}
+//import com.suprnation.actor.ActorRef.ActorRef
+//import com.suprnation.actor.ActorSystem
+//import hydrozoa.integration.stage1
+//import hydrozoa.integration.stage1.AgentActor.CompleteBlock
+//import hydrozoa.integration.stage1.Commands.*
+//import hydrozoa.lib.actor.SyncRequest
+//import hydrozoa.lib.logging.Logging
+//import hydrozoa.multisig.backend.cardano.CardanoBackend
+//import hydrozoa.multisig.consensus.CardanoLiaison.Timeout
+//import hydrozoa.multisig.consensus.ack.AckBlock
+//import hydrozoa.multisig.consensus.{CardanoLiaison, ConsensusActor}
+//import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockNumber}
+//import hydrozoa.multisig.ledger.event.UserRequest
+//import hydrozoa.multisig.ledger.joint.JointLedger
+//import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
+//import org.scalacheck.commands.SutCommand
+//import org.typelevel.log4cats.Logger
+//import scala.concurrent.duration.DurationInt
+//import scalus.cardano.address.ShelleyAddress
+//
+//// ===================================
+//// Stage 1 SUT
+//// ===================================
+//
+//case class Stage1Sut(
+//    headAddress: ShelleyAddress,
+//    system: ActorSystem[IO],
+//    cardanoBackend: CardanoBackend[IO],
+//    agent: AgentActor.Handle,
+//    effectsAcc: Ref[IO, List[BlockEffects.Unsigned]] = Ref.unsafe(List.empty),
+//    runId: String = "",
+//    traceRef: Ref[IO, List[String]] = Ref.unsafe(List.empty)
+//)
+//
+//// ===================================
+//// Agent Actor
+//// ===================================
+//
+//object AgentActor:
+//
+//    /** Synchronous complete block msg that returns unsigned block. This is needed for at least one
+//      * command should return a meaningful result - the block brief. Additionally, the Stage 1 test
+//      * suite saves all block L1 effects in [[Stage1Sut.effectsAcc]] to verify that all needed were
+//      * submitted to L1.
+//      *
+//      * @param block
+//      * @param blockNumber
+//      */
+//    case class CompleteBlock(
+//        block: CompleteBlockRegular | CompleteBlockFinal,
+//        blockNumber: BlockNumber
+//    ) extends SyncRequest[IO, CompleteBlock, Block.Unsigned.Next] {
+//        export CompleteBlock.Sync
+//        def ?: : this.Send = SyncRequest.send(_, this)
+//    }
+//
+//    object CompleteBlock:
+//        type Sync = SyncRequest.Envelope[IO, CompleteBlock, Block.Unsigned.Next]
+//
+//    type Request =
+//        UserRequest | StartBlock | CompleteBlock.Sync | ConsensusActor.Request |
+//            CardanoLiaison.Timeout.type | Unit
+//
+//    type Handle = ActorRef[IO, Request]
+//
+//case class AgentActor(
+//    jointLedgerD: Deferred[IO, JointLedger.Handle],
+//    consensusActor: ConsensusActor.Handle,
+//    cardanoLiaison: CardanoLiaison.Handle
+//) extends Actor[IO, AgentActor.Request]:
+//
+//    private val jointLedgerRef = Ref.unsafe[IO, Option[JointLedger.Handle]](None)
+//
+//    private def jointLedger: IO[JointLedger.Handle] = jointLedgerRef.get.map(_.get)
+//
+//    override def preStart: IO[Unit] = for {
+//        // Message to itself to get the jointLedger actor
+//        _ <- context.self ! ()
+//    } yield ()
+//
+//    override def receive: Receive[IO, AgentActor.Request] = {
+//        case _: Unit =>
+//            for {
+//                jointLedger <- jointLedgerD.get
+//                _ <- jointLedgerRef.set(Some(jointLedger))
+//            } yield ()
+//
+//        case t: CardanoLiaison.Timeout.type => cardanoLiaison ! t
+//
+//        // Sync SUT commands
+//        case req: CompleteBlock.Sync =>
+//            for {
+//                _ <- ref.update(_ + (req.request.blockNumber -> req))
+//                _ <- jointLedger >>= (_ ! req.request.block)
+//            } yield ()
+//
+//        // Joint ledger - proxying
+//        case x: UserRequest => jointLedger >>= (_ ! x)
+//        case x: StartBlock  => jointLedger >>= (_ ! x)
+//
+//        // Consensus actor
+//        // Intercepting unsigned blocks
+//        case x: Block.Unsigned.Next => proxyBlockUnsigned(x)
+//        // Direct proxying
+//        case x: AckBlock => consensusActor ! x
+//    }
+//
+//    private val ref = Ref.unsafe[IO, Map[BlockNumber, CompleteBlock.Sync]](Map.empty)
+//
+//    def proxyBlockUnsigned(block: Block.Unsigned.Next): IO[Unit] = for {
+//        _ <- consensusActor ! block
+//        envelope <- ref.modify { map =>
+//            val blockNum = block.blockNum
+//            val v = map(blockNum)
+//            val newMap = map - blockNum
+//            (newMap, v)
+//        }
+//        _ <- envelope.dResponse.complete(block)
+//    } yield ()
+//
+//end AgentActor
+//
+//// ===================================
+//// SutCommand instances
+//// ===================================
+//
+//object SutCommands:
+//
+//    val logger: Logger[IO] = Logging.loggerIO("Stage1.Sut")
+//
+//    implicit given SutCommand[DelayCommand, Unit, Stage1Sut] with {
+//        override def run(cmd: DelayCommand, sut: Stage1Sut): IO[Unit] = for {
+//            _ <- logger.debug(s">> DelayCommand(delay=${cmd.delaySpec})")
+//            now <- IO.realTimeInstant
+//            _ <- logger.debug(s"Current time: $now")
+//            _ <- sut.agent ! Timeout
+//        } yield ()
+//    }
+//
+//    implicit given SutCommand[StartBlockCommand, Unit, Stage1Sut] with {
+//        override def run(cmd: StartBlockCommand, sut: Stage1Sut): IO[Unit] =
+//            logger.debug(s">> StartBlockCommand(blockNumber=${cmd.blockNumber})") >>
+//                (sut.agent ! StartBlock(
+//                  blockNum = cmd.blockNumber,
+//                  blockCreationStartTime = cmd.creationTime
+//                ))
+//    }
+//
+//    implicit given SutCommand[L2TxCommand, Unit, Stage1Sut] with {
+//        override def run(cmd: L2TxCommand, sut: Stage1Sut): IO[Unit] =
+//            logger.debug(">> LedgerEventCommand") >>
+//                (sut.agent ! cmd.event)
+//    }
+//
+//    implicit given SutCommand[CompleteBlockCommand, BlockBrief, Stage1Sut] with {
+//        override def run(cmd: CompleteBlockCommand, sut: Stage1Sut): IO[BlockBrief] = for {
+//            _ <- logger.debug(
+//              s">> CompleteBlockCommand(blockNumber=${cmd.blockNumber}, isFinal=${cmd.isFinal})"
+//            )
+//            headUtxosRet <- sut.cardanoBackend
+//                .utxosAt(sut.headAddress)
+//                .map(_.fold(err => throw RuntimeException(err.toString), _.keySet))
+//            block <- IO.pure(
+//              if cmd.isFinal
+//              then CompleteBlockFinal(None)
+//              // TODO: use mock state, not cmd.pollResults
+//              else CompleteBlockRegular(None, headUtxosRet, false)
+//            )
+//            // All sync commands should be timed out since the system may terminate
+//            d <- (sut.agent ?: AgentActor.CompleteBlock(block, cmd.blockNumber)).timeout(10.seconds)
+//            // Save unsigned block effects
+//            _ <- sut.effectsAcc.update(_ :+ d.effects.asInstanceOf[BlockEffects.Unsigned])
+//        } yield d.blockBrief
+//    }
+//
+//    given SutCommand[RegisterDepositCommand, Unit, Stage1Sut] with {
+//        override def run(cmd: RegisterDepositCommand, sut: Stage1Sut): IO[Unit] =
+//            logger.debug(">> RegisterDepositCommand") >>
+//                (sut.agent ! cmd.registerDeposit)
+//    }
+//
+//    given SutCommand[SubmitDepositsCommand, Unit, Stage1Sut] with {
+//
+//        // This uses only depositsForSubmission and ignores rejected deposits
+//        override def run(cmd: SubmitDepositsCommand, sut: Stage1Sut): IO[Unit] = for {
+//            _ <- logger.debug(s">> SubmitDepositCommand (${cmd.depositsForSubmission.map(_._1)})")
+//            ret <- IO.traverse(cmd.depositsForSubmission)((id, tx) =>
+//                sut.cardanoBackend.submitTx(tx) >>= (ret => IO.pure((id, tx) -> ret))
+//            )
+//
+//            submissionErrors = ret.filter(_._2.isLeft)
+//            _ <- IO.whenA(submissionErrors.nonEmpty)(
+//              logger.info(
+//                "Submit deposit errors:" + submissionErrors
+//                    .map(a =>
+//                        s"\n\t- ${a._1._1}, error: ${a._2.left}, cbor: ${HexUtil.encodeHexString(a._1._2.toCbor)}"
+//                    )
+//                    .mkString
+//              )
+//            )
+//        } yield ()
+//    }
