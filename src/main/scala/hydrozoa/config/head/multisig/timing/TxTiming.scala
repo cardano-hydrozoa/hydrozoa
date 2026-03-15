@@ -184,8 +184,8 @@ object TxTiming {
       MinSettlementDuration(1.hour.quantize(slotConfig)),
       InactivityMarginDuration(1.minute.quantize(slotConfig)),
       SilenceDuration(5.minute.quantize(slotConfig)),
-      DepositSubmissionDuration(5.minutes.quantize(slotConfig)),
-      DepositMaturityDuration(5.minute.quantize(slotConfig)),
+      DepositSubmissionDuration(1.minutes.quantize(slotConfig)),
+      DepositMaturityDuration(1.minute.quantize(slotConfig)),
       DepositAbsorptionDuration(2.hours.quantize(slotConfig)),
     )
 

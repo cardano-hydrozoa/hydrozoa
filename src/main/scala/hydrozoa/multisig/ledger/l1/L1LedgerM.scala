@@ -213,8 +213,13 @@ object L1LedgerM {
 
         sealed trait RegisterDepositError extends L1LedgerM.Error
 
+//        final case class ParseError(wrapped: txseq.DepositRefundTxSeq.Parse.Error)
+//            extends RegisterDepositError
+
         final case class ParseError(wrapped: txseq.DepositRefundTxSeq.Parse.Error)
-            extends RegisterDepositError
+            extends RegisterDepositError {
+            override def toString: String = s"ParseError: $wrapped"
+        }
 
         case object DepositTxInvalidTTL extends RegisterDepositError
 
