@@ -13,7 +13,6 @@ import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.{BuilderResult, explainConst}
 import hydrozoa.multisig.ledger.l1.txseq.RolloutTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.{DepositUtxo, Equity, MultisigTreasuryUtxo, RolloutUtxo}
 import monocle.{Focus, Lens}
-import scala.collection.immutable.Vector
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.{Coin, Sized, Transaction, TransactionInput, TransactionOutput as TxOutput, Utxo, Value}
 import scalus.cardano.txbuilder.*
@@ -56,7 +55,7 @@ object SettlementTx {
         override val kzgCommitment: KzgCommitment,
         override val treasurySpent: MultisigTreasuryUtxo,
         override val treasuryProduced: MultisigTreasuryUtxo,
-        override val depositsSpent: Vector[DepositUtxo],
+        override val depositsSpent: List[DepositUtxo],
         override val resolvedUtxos: ResolvedUtxos,
         override val txLens: Lens[SettlementTx, Transaction] =
             Focus[NoPayouts](_.tx).asInstanceOf[Lens[SettlementTx, Transaction]]
@@ -69,7 +68,7 @@ object SettlementTx {
         override val kzgCommitment: KzgCommitment,
         override val treasurySpent: MultisigTreasuryUtxo,
         override val treasuryProduced: MultisigTreasuryUtxo,
-        override val depositsSpent: Vector[DepositUtxo],
+        override val depositsSpent: List[DepositUtxo],
         override val payoutCount: Int,
         override val resolvedUtxos: ResolvedUtxos,
         override val txLens: Lens[SettlementTx, Transaction] =
@@ -84,7 +83,7 @@ object SettlementTx {
         override val kzgCommitment: KzgCommitment,
         override val treasurySpent: MultisigTreasuryUtxo,
         override val treasuryProduced: MultisigTreasuryUtxo,
-        override val depositsSpent: Vector[DepositUtxo],
+        override val depositsSpent: List[DepositUtxo],
         override val rolloutProduced: RolloutUtxo,
         override val payoutCount: Int,
         override val resolvedUtxos: ResolvedUtxos,
@@ -131,7 +130,7 @@ private object SettlementTxOps {
             override val kzgCommitment: KzgCommitment,
             override val majorVersionProduced: BlockVersion.Major,
             override val treasuryToSpend: MultisigTreasuryUtxo,
-            override val depositsToSpend: Vector[DepositUtxo],
+            override val depositsToSpend: List[DepositUtxo],
             override val settlementTxEndTime: SettlementTxEndTime,
         ) extends Build[SettlementTx.NoPayouts](
               mbRolloutTxSeqPartial = None
@@ -148,7 +147,7 @@ private object SettlementTxOps {
             override val kzgCommitment: KzgCommitment,
             override val majorVersionProduced: BlockVersion.Major,
             override val treasuryToSpend: MultisigTreasuryUtxo,
-            override val depositsToSpend: Vector[DepositUtxo],
+            override val depositsToSpend: List[DepositUtxo],
             override val settlementTxEndTime: SettlementTxEndTime,
             rolloutTxSeqPartial: RolloutTxSeq.PartialResult
         ) extends Build[SettlementTx.WithPayouts](
@@ -225,7 +224,7 @@ private object SettlementTxOps {
             private val referenceMultisigRegime =
                 ReferenceOutput(config.multisigRegimeUtxo.asUtxo)
 
-            private val validityEndSlot = ValidityEndSlot(settlementTxEndTime.convert.slot)
+            private val validityEndSlot = ValidityEndSlot(settlementTxEndTime.toSlot.slot)
 
             private val baseSteps =
                 List(modifyAuxiliaryData, referenceMultisigRegime, validityEndSlot)

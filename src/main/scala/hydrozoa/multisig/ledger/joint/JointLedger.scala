@@ -5,11 +5,10 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
 import hydrozoa.config.head.HeadConfig
+import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime, FallbackTxStartTime}
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.actor.*
-import hydrozoa.lib.cardano.scalus.QuantizedTime
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.{ConsensusActor, PeerLiaison}
@@ -23,14 +22,13 @@ import hydrozoa.multisig.ledger.joint.JointLedger.Requests.*
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.l1.L1LedgerM
 import hydrozoa.multisig.ledger.l1.L1LedgerM.*
+import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import hydrozoa.multisig.ledger.l1.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerCommand, L2LedgerError, L2LedgerState}
 import hydrozoa.multisig.server.UserRequestWithId
 import monocle.Focus.focus
-import scala.collection.immutable.Queue
-import scala.math.Ordered.orderingToOrdered
 import scalus.cardano.ledger.TransactionInput
 import scalus.uplc.builtin.ByteString
 
@@ -187,12 +185,14 @@ final case class JointLedger(
 
     private def checkRequestValidityInterval(
         req: UserRequestWithId,
-        blockCreationStartTime: QuantizedInstant
+        blockCreationStartTime: BlockCreationStartTime
     ): Boolean = {
         val header = req.request.header
-        val bt = blockCreationStartTime.toPosixTime
-//        header.validityStart <= bt &&
-        bt < header.validityEnd
+        TxTiming.checkRequestValidityInterval(
+          blockCreationStartTime,
+          header.validityStart,
+          header.validityEnd
+        )
     }
 
     private def rejectEvent(
@@ -374,103 +374,9 @@ final case class JointLedger(
     ): IO[Block.Unsigned.Intermediate] = {
         import args.*
 
-        /** @return
-          *   Queue order:
-          *   - eligible for absorption
-          *   - ineligible for absorption - (immature + mature but non-existent)
-          *   - rejected
-          */
-
-        def partitionDeposits(
-            depositsMap: DepositsMap,
-            blockStartTime: QuantizedInstant,
-            settlementValidityEnd: QuantizedInstant
-        ): IO[
-          (
-              DepositsMap,
-              DepositsMap,
-              DepositsMap
-          )
-        ] = for {
-            _ <- IO.pure(())
-
-            _ <- logger.trace(
-              s"partitionDeposits: deposits: ${depositsMap.treeMap.values.map(_.map(_._1))}, " +
-                  s"blockStartTime=$blockStartTime, " +
-                  s"settlementValidityEnd=$settlementValidityEnd"
-            )
-
-            ret = depositsMap.foldLeft(
-              (
-                DepositsMap.empty,
-                DepositsMap.empty,
-                DepositsMap.empty
-              )
-            ) { case (acc0, (_absorptionStartTime, depositQueue)) =>
-                depositQueue.foldLeft(acc0) { case (acc, event @ (_eventId, deposit)) =>
-                    val depositAbsorptionStart =
-                        txTiming.depositAbsorptionStartTime(deposit.requestValidityEndTime)
-                    val depositAbsorptionEnd =
-                        txTiming.depositAbsorptionEndTime(deposit.requestValidityEndTime)
-
-                    // Maturity. The deposit is mature if its absorption start time is no later
-                    // than the block brief’s creation end time.
-                    val isMature = depositAbsorptionStart.convert <= blockCreationEndTime.convert
-
-                    // Non-expiry. The deposit is non-expired if its absorption end time is
-                    // no earlier than the competing fallback’s validity start time.
-
-                    // NB: Here, we can't use submission deadline, which is currently the same thing as deposit tx
-                    // ttl to decide whether we should reject a deposit - even if the submission time is over,
-                    // the state we observe may fall behind for any reason (network congestion, fork).
-                    // So we can only use absorption end time to decide it's time to reject a deposit.
-                    val isExpired = settlementValidityEnd > depositAbsorptionEnd
-
-                    // TODO: The fast-consensus leader sees the deposit on the L1 blockchain when he ends his leadership term.
-                    // If a follower is reproducing the block brief, replace this condition with:
-                    // the follower sees the deposit on the L1 blockchain when he finishes verifying
-                    // the block brief’s events.
-                    val isExistent = pollResults.contains(deposit.toUtxo.input)
-
-                    val isEligible = !isExpired && isMature && isExistent
-
-                    // A deposit is ineligible and must be rejected if
-                    // - the deposit is expired, or
-                    // - if it’s mature and non-expired but doesn’t exist on L1.
-                    val isRejected = isExpired || (isMature && !isExistent)
-
-                    val isIneligible = !isExpired && (!isMature || !isExistent)
-
-                    logger_.trace(
-                      s"deposit: ${deposit._1}, " +
-                          s"depositValidityEnd=$deposit.requestValidityEndTime, " +
-                          s"depositAbsorptionStart=$depositAbsorptionStart, " +
-                          s"depositAbsorptionEnd=$depositAbsorptionEnd, " +
-                          s"isMature=$isMature, " +
-                          s"isExpired=$isExpired, " +
-                          s"isExistent=$isExistent, " +
-                          s"isEligible=$isEligible, " +
-                          s"isRejected=$isRejected, " +
-                          s"isIneligible=$isIneligible"
-                    )
-
-                    if isEligible
-                    then acc.focus(_._1).modify(_.appended(event, config.txTiming))
-                    else if isIneligible
-                    then acc.focus(_._2).modify(_.appended(event, config.txTiming))
-                    else if isExpired
-                    then acc.focus(_._3).modify(_.appended(event, config.txTiming))
-                    else throw RuntimeException("Deposit decision function is not total")
-                }
-            }
-        } yield (ret._1, ret._2, ret._3)
-
         /** KZG commitment + block brief (which is a bit strange)
           */
-        def mkBlockBrief(
-            absorbedDeposits: Queue[(RequestId, DepositUtxo)],
-            rejectedDeposits: Queue[(RequestId, DepositUtxo)],
-        ): IO[BlockBrief.Intermediate] = for {
+        def mkBlockBrief(decisions: DepositsMap.Decisions): IO[BlockBrief.Intermediate] = for {
 
             p <- unsafeGetProducing
 
@@ -489,7 +395,7 @@ final case class JointLedger(
 
             // Block header
             headerIntermediate: BlockHeader.Intermediate <-
-                if absorbedDeposits.isEmpty && blockWithdrawnUtxos.isEmpty
+                if decisions.absorbed.isEmpty && blockWithdrawnUtxos.isEmpty
                 then
                     IO.pure(
                       previousHeader.nextHeaderIntermediate(
@@ -507,9 +413,8 @@ final case class JointLedger(
                         L2LedgerCommand.ApplyDepositDecisions(
                           blockNumber = p.nextBlockNumber,
                           blockCreationEndTime = blockCreationEndTime.toPosixTime,
-                          // Why vector and not Queue?
-                          absorbedDeposits = Vector.from(absorbedDeposits.map(_._1)),
-                          rejectedDeposits = Vector.from(rejectedDeposits.map(_._1))
+                          absorbedDeposits = decisions.absorbed.requestIds,
+                          rejectedDeposits = decisions.rejected.requestIds
                         )
                     for {
                         res <- this.l2Ledger.L2LedgerAction
@@ -537,13 +442,13 @@ final case class JointLedger(
             // Block brief
             blockBrief: BlockBrief.Intermediate = headerIntermediate match {
                 case header: BlockHeader.Minor =>
-                    val blockBody = BlockBody.Minor(events, rejectedDeposits.map(_._1).toList)
+                    val blockBody = BlockBody.Minor(events, decisions.rejected.requestIds)
                     BlockBrief.Minor(header, blockBody)
                 case header: BlockHeader.Major =>
                     val blockBody = BlockBody.Major(
                       events,
-                      absorbedDeposits.map(_._1).toList,
-                      rejectedDeposits.map(_._1).toList
+                      decisions.absorbed.requestIds,
+                      decisions.rejected.requestIds
                     )
                     BlockBrief.Major(header, blockBody)
             }
@@ -551,7 +456,7 @@ final case class JointLedger(
 
         def mkBlockEffects(
             next: BlockBrief.Intermediate,
-            absorbedDeposits: Queue[(RequestId, DepositUtxo)],
+            absorbedDeposits: DepositsMap.Unzip,
             postDatedRefundTxs: List[RefundTx.PostDated]
         ): IO[Block.Unsigned.Intermediate] = for {
             ret <- next match {
@@ -571,7 +476,7 @@ final case class JointLedger(
                           L1LedgerM
                               .mkSettlementTxSeq(
                                 nextKzg = header.kzgCommitment,
-                                absorbedDeposits = absorbedDeposits,
+                                absorbedDeposits = absorbedDeposits.depositUtxos,
                                 payoutObligations = payoutObligations,
                                 blockCreationEndTime = header.endTime,
                                 competingFallbackValidityStart = p.competingFallbackTxTime
@@ -602,44 +507,39 @@ final case class JointLedger(
             _ <- logger.info(s"complete block ${args.referenceBlockBrief}")
             p <- unsafeGetProducing
 
-            ret <- partitionDeposits(
-              depositsMap = p.l1LedgerState.deposits,
-              blockStartTime = p.startTime,
-              settlementValidityEnd = txTiming.newSettlementEndTime(p.competingFallbackTxTime)
+            partition = p.l1LedgerState.deposits.partition(
+              blockCreationEndTime = blockCreationEndTime,
+              settlementTxEndTime = config.txTiming.newSettlementEndTime(p.competingFallbackTxTime),
+              pollResults = pollResults
             )
 
-            (eligible, ineligible, rejected) = ret
-
-            (absorbedDeposits, unabsorbedDeposits) = eligible.splitAt(maxDepositsAbsorbedPerBlock)
+            split = partition.split(maxDepositsAbsorbedPerBlock)
 
             _ <- logger.trace(
-              s"joint ledger: absorbed=$absorbedDeposits" + "\n" +
-                  s"joint ledger: unabsorbed=$unabsorbedDeposits" + "\n" +
-                  s"joint ledger: ineligible=$ineligible" + "\n" +
-                  s"joint ledger: rejected=$rejected" + "\n"
+              s"joint ledger: immature=${partition.immature}" + "\n" +
+                  s"joint ledger: absorbed=${split.absorbed}" + "\n" +
+                  s"joint ledger: unabsorbed=${split.unabsorbed}" + "\n" +
+                  s"joint ledger: rejected=${partition.rejected}" + "\n"
             )
 
-            blockBrief <- mkBlockBrief(
-              absorbedDeposits = Queue.from(absorbedDeposits.flatValues),
-              rejectedDeposits = Queue.from(rejected.flatValues)
-            )
+            blockBrief <- mkBlockBrief(split.decisions)
 
             block <- mkBlockEffects(
               blockBrief,
-              Queue.from(absorbedDeposits.flatValues),
+              split.absorbed.unzip,
               p.userRequestState.postDatedRefundTxs.toList
             )
 
             // Block is done
-
             res <- IO.fromEither(
               L1LedgerM
-                  .handleBlockBrief(unabsorbedDeposits ++ ineligible)
+                  .handleBlockBrief(split.surviving)
                   .run(config, p.l1LedgerState)
             )
             (newL1State, ()) = res
-            newJlState = p.setL1LedgerState(newL1State)
 
+            newJlState = p.setL1LedgerState(newL1State)
+            p2 <- state.get
             _ <- state.set(newJlState)
 
             _ <- panicOnExpectedBlockMismatch(referenceBlockBrief, block)
@@ -679,6 +579,7 @@ final case class JointLedger(
                   .run(config, p.l1LedgerState)
             )
             (newL1State, finalizationTxSeq) = res
+
             newJlState = p.setL1LedgerState(newL1State)
 
             _ <- state.set(newJlState)
@@ -695,7 +596,7 @@ final case class JointLedger(
                 val blockBody = BlockBody.Final(
                   events = requests,
                   // Final block should reject all the deposits known.
-                  depositsRefunded = newJlState.l1LedgerState.deposits.flatEvents.toList
+                  depositsRefunded = newJlState.l1LedgerState.deposits.requestIds
                 )
 
                 val blockBrief = BlockBrief.Final(blockHeader, blockBody)

@@ -208,7 +208,7 @@ private object FinalizationTxOps {
             private val modifyAuxiliaryData =
                 ModifyAuxiliaryData(_ => Some(Finalization().asAuxData(config.headId)))
 
-            private val validityEndSlot = ValidityEndSlot(finalizationTxEndTime.convert.slot)
+            private val validityEndSlot = ValidityEndSlot(finalizationTxEndTime.toSlot.slot)
 
             private val baseSteps = List(modifyAuxiliaryData, validityEndSlot)
 

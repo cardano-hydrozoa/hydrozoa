@@ -117,6 +117,8 @@ def genDepositUtxo(
       l2Payload = GenesisObligation.serialize(l2Outputs),
       depositFee = Coin.zero,
       requestValidityEndTime = requestValidityEndTime,
+      absorptionStartTime = config.txTiming.depositAbsorptionStartTime(requestValidityEndTime),
+      absorptionEndTime = config.txTiming.depositAbsorptionEndTime(requestValidityEndTime)
     )
 
 /** Generate a "standalone" settlement tx. */
@@ -187,7 +189,7 @@ def genSettlementTxSeqBuilder(config: HeadConfig)(
     } yield SettlementTxSeq.Build(config)(
       kzgCommitment = kzg,
       majorVersionProduced = BlockVersion.Major(majorVersion),
-      depositsToSpend = deposits,
+      depositsToSpend = deposits.toList,
       payoutObligationsRemaining = payouts,
       treasuryToSpend = multisigTreasury,
       competingFallbackValidityStart = fallbackTxStartTime,
@@ -253,7 +255,7 @@ def genNextSettlementTxSeqBuilder(config: HeadConfig)(
       SettlementTxSeq.Build(config)(
         kzgCommitment = kzg,
         majorVersionProduced = BlockVersion.Major(majorVersion),
-        depositsToSpend = deposits,
+        depositsToSpend = deposits.toList,
         payoutObligationsRemaining = infimum,
         treasuryToSpend = treasuryToSpend,
         competingFallbackValidityStart = fallbackValidityStart,

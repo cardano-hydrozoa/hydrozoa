@@ -449,7 +449,7 @@ private object InitializationTxOps {
 
             // Should this be in the init tx parser?
             _ <- Either.cond(
-              test = initializationTxEndTime.convert.slot == ttl,
+              test = initializationTxEndTime.toSlot.slot == ttl,
               right = (),
               left = InvalidInitializationTtl
             )

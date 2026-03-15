@@ -56,8 +56,8 @@ object JsonCodecs {
         (header: UserRequestHeader) =>
             Json.obj(
               "headId" -> InitializationParameters.HeadId.given_Encoder_HeadId(header.headId),
-              "validityStart" -> Json.fromBigInt(header.validityStart),
-              "validityEnd" -> Json.fromBigInt(header.validityEnd),
+              "validityStart" -> Json.fromBigInt(header.validityStart.convert.toPosixTime),
+              "validityEnd" -> Json.fromBigInt(header.validityEnd.convert.toPosixTime),
               "bodyHash" -> summon[Encoder[Hash32]].apply(header.bodyHash)
             )
 
@@ -69,7 +69,7 @@ object JsonCodecs {
             validityStart <- c.downField("validityStart").as[BigInt]
             validityEnd <- c.downField("validityEnd").as[BigInt]
             bodyHash <- c.downField("bodyHash").as[Hash32]
-        } yield UserRequestHeader(headId, validityStart, validityEnd, bodyHash)
+        } yield UserRequestHeader(headId, ???, ???, bodyHash)
 
     // UserRequest codec (generic) - uses "deposit" or "transaction" as field name
     given Encoder[UserRequest] with {

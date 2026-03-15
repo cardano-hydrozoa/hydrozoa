@@ -471,7 +471,7 @@ trait CardanoLiaison(
                                 fallbackTx = state.fallbackEffects(maxKey)
                                 if utxoIds.contains(
                                   fallbackTx.treasurySpent.utxoId
-                                ) && fallbackTx.fallbackTxStartTime.convert <= currentTime.toSlot
+                                ) && fallbackTx.fallbackTxStartTime.convert <= currentTime
                             } yield fallbackTx.tx
 
                             lastFallback match {

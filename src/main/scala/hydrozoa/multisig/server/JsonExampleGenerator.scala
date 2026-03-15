@@ -35,8 +35,8 @@ object JsonExampleGenerator {
 
         val header = UserRequestHeader(
           headId = HeadId(AssetName.fromHex("deadbeef")),
-          validityStart = BigInt(1234567890000L), // Example POSIX time
-          validityEnd = BigInt(1234567999999L),
+          validityStart = ???, // BigInt(1234567890000L), // Example POSIX time
+          validityEnd = ???, // BigInt(1234567999999L),
           bodyHash = body.hash
         )
 
@@ -60,8 +60,8 @@ object JsonExampleGenerator {
 
         val header = UserRequestHeader(
           headId = HeadId(AssetName.fromHex("cafebabe")),
-          validityStart = BigInt(1234567890000L),
-          validityEnd = BigInt(1234567999999L),
+          validityStart = ???, // BigInt(1234567890000L),
+          validityEnd = ???, // BigInt(1234567999999L),
           bodyHash = body.hash
         )
 

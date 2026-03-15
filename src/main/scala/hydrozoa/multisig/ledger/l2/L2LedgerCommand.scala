@@ -55,8 +55,8 @@ object L2LedgerCommand {
     final case class ApplyDepositDecisions(
         blockNumber: BlockNumber,
         blockCreationEndTime: PosixTime,
-        absorbedDeposits: Vector[RequestId],
-        rejectedDeposits: Vector[RequestId]
+        absorbedDeposits: List[RequestId],
+        rejectedDeposits: List[RequestId]
     ) extends L2LedgerCommand
 
     /** An L2Event, as forwarded to black-box L2 ledger. It can only be constructed with respect to

@@ -3,6 +3,7 @@ package hydrozoa.multisig.server
 import cats.effect.IO
 import cats.syntax.all.*
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
+import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
 import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.server.JsonCodecs.{given_Encoder_UserRequestBody, given_Encoder_UserRequestHeader}
@@ -10,7 +11,6 @@ import hydrozoa.multisig.server.UserRequestBody.{DepositRequestBody, Transaction
 import io.circe.*
 import io.circe.syntax.*
 import scalus.cardano.ledger.{Hash, Hash32}
-import scalus.cardano.onchain.plutus.v3.PosixTime
 import scalus.crypto.ed25519.{Signature, VerificationKey}
 import scalus.uplc.builtin.Builtins.blake2b_256
 import scalus.uplc.builtin.{ByteString, JVMPlatformSpecific}
@@ -121,8 +121,8 @@ object UserRequest {
   */
 case class UserRequestHeader(
     headId: HeadId,
-    validityStart: PosixTime,
-    validityEnd: PosixTime,
+    validityStart: RequestValidityStartTime,
+    validityEnd: RequestValidityEndTime,
     bodyHash: Hash32
 )
 

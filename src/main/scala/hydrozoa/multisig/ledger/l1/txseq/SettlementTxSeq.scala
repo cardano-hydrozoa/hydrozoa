@@ -63,7 +63,7 @@ private object SettlementTxSeqOps {
         override val kzgCommitment: KzgCommitment,
         override val majorVersionProduced: BlockVersion.Major,
         override val treasuryToSpend: MultisigTreasuryUtxo,
-        override val depositsToSpend: Vector[DepositUtxo],
+        override val depositsToSpend: List[DepositUtxo],
         override val payoutObligationsRemaining: Vector[Payout.Obligation],
         blockCreationEndTime: BlockCreationEndTime,
         competingFallbackValidityStart: FallbackTxStartTime
