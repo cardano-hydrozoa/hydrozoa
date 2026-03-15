@@ -73,30 +73,6 @@ case class EutxoL2Ledger private (
 ) extends L2Ledger[IO] {
     implicit def monadF: Monad[IO] = Async[IO]
 
-    // TODO:
-    //  Right now this is a no-op, similar to Sundae
-    //  it should be something like:
-    //   - Deserialize initial L2 UTxO state (which means the L2 Payload needs to include the transaction id for
-    //     the initial state, which should be the hash of the seed utxo TransactionInput)
-    //   - Verify it matches the initial l2 value
-    //   - Set the active utxos to this state
-    //   - Set the head id
-    //   - return the corresponding evac diff
-    override def sendInitialize(
-        req: L2LedgerCommand.Initialize
-    ): EitherT[IO, L2LedgerError, Vector[EvacuationDiff]] =
-        for {
-            s <- EitherT.right(state.get)
-//        initialUtxos = Cbor
-//          .decode(req.l2Payload.bytes)
-//          .to[Queue[GenesisObligation]]
-//          .value.map(_.toTransactionOutput)
-            newState = s
-                .focus(_.headId)
-                .set(Some(req.headId))
-            _ <- EitherT.right(state.set(newState))
-        } yield Vector.empty
-
     override def sendProxyBlockConfirmation(
         req: L2LedgerCommand.ProxyBlockConfirmation
     ): EitherT[IO, L2LedgerError, Unit] =

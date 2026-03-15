@@ -49,19 +49,38 @@ final case class JointLedger(
     import config.*
 
     private val logger = Logging.loggerIO("JointLedger")
-    private val logger_ = Logging.logger("JointLedger1")
 
     private val connections = Ref.unsafe[IO, Option[Connections]](None)
 
     val state: Ref[IO, JointLedger.State] =
-        Ref.unsafe[IO, JointLedger.State](
-          Done(
-            previousBlockHeader = config.initialBlock.header,
-            l1LedgerState =
-                L1LedgerM.State(config.initializationTx.treasuryProduced, DepositsMap.empty),
-            evacuationMap = config.initialEvacuationMap
-          )
-        )
+        Ref.unsafe[IO, JointLedger.State](JointLedger.State.initialize(config))
+
+    def executeL1Action[T](
+        state: JointLedger.Producing,
+        action: L1LedgerM[T]
+    ): IO[(L1LedgerM.State, T)] = IO.fromEither(runL1Action[T](state, action))
+
+    def executeL2Command(
+        state: JointLedger.Producing,
+        command: L2LedgerCommand.Real
+    ): IO[L2LedgerState] =
+        runL2Command(state, command).rethrow
+
+    def executeL2ProxyCommand(
+        command: L2LedgerCommand.Proxy
+    ): IO[Unit] = L2LedgerState.executeProxyCommand(l2Ledger, command)
+
+    def runL1Action[T](
+        state: JointLedger.Producing,
+        action: L1LedgerM[T]
+    ): Either[L1LedgerM.Error, (L1LedgerM.State, T)] =
+        state.runL1Action[T](config, action)
+
+    def runL2Command(
+        state: JointLedger.Producing,
+        command: L2LedgerCommand.Real
+    ): IO[Either[L2LedgerError, L2LedgerState]] =
+        state.runL2CommandReal(l2Ledger, command)
 
     private def getConnections: IO[Connections] = for {
         mConn <- this.connections.get
@@ -143,7 +162,7 @@ final case class JointLedger(
 
     // QUESTION: This gets sent from the consensus actor, but the consensus actor has the full ability to send it
     // itself. Should we move this into the consensus actor?
-    private def proxyConfirmation(next: Block.MultiSigned.Next): IO[Unit] =
+    private def proxyConfirmation(next: Block.MultiSigned.Next): IO[Unit] = {
         val l2Command = L2LedgerCommand.ProxyBlockConfirmation(
           next.blockNum,
           Vector.from(
@@ -152,27 +171,12 @@ final case class JointLedger(
             )
           )
         )
-        for {
-            // FIXME: Should we retry? Throw an exception?
-            _ <- l2Ledger.L2LedgerAction
-                .fromL2LedgerCommand(l2Command)
-                // bit of a hack, but we don't care about the actual l2 state here.
-                .run(L2LedgerState.empty)
-        } yield ()
+        executeL2ProxyCommand(l2Command)
+    }
 
     private def preStartLocal: IO[Unit] =
         for {
             _ <- initializeConnections
-            l2Command = L2LedgerCommand.Initialize(
-              headId = config.headId,
-              initialL2Value = config.initialL2Value,
-              // TODO: This should ostensibly not be empty in the future
-              l2Payload = ByteString.empty
-            )
-            // FIXME: should we retry?
-            _ <- l2Ledger.L2LedgerAction
-                .fromL2LedgerCommand(l2Command)
-                .run(L2LedgerState.empty)
         } yield ()
 
     private def applyUserRequestWithId(e: UserRequestWithId): IO[Unit] = {
@@ -217,9 +221,7 @@ final case class JointLedger(
               message = e.toString
             )
             // FIXME: Should we retry?
-            _ <- l2Ledger.L2LedgerAction
-                .fromL2LedgerCommand(l2Command)
-                .run(newState.l2LedgerState)
+            _ <- executeL2ProxyCommand(l2Command)
         } yield ()
 
     /** Update the JointLedger's state -- the work-in-progress block -- to accept or reject deposits
@@ -232,7 +234,7 @@ final case class JointLedger(
 
         for {
             p <- unsafeGetProducing
-            blockStartTime = p.startTime
+            blockStartTime = p.BlockCreationStartTime
             currentBlockNum = p.nextBlockNumber
 
             _ <-
@@ -250,7 +252,7 @@ final case class JointLedger(
                               requestId = requestId,
                               userVKey = req.request.userVk,
                               blockNumber = currentBlockNum,
-                              blockCreationStartTime = p.startTime.toPosixTime,
+                              blockCreationStartTime = p.BlockCreationStartTime.toPosixTime,
                               depositId = depositProduced.utxoId,
                               depositFee = depositProduced.depositFee,
                               depositL2Value = depositProduced.l2Value,
@@ -258,9 +260,7 @@ final case class JointLedger(
                               l2Payload = l2Payload
                             )
                             for {
-                                res <- l2Ledger.L2LedgerAction
-                                    .fromL2LedgerCommand(l2Command)
-                                    .run(p.l2LedgerState)
+                                res <- runL2Command(p, l2Command)
                                 _ <- res match {
                                     // FIXME: Should we distinguish between genuine L2 failures and things like
                                     // network errors?
@@ -301,7 +301,7 @@ final case class JointLedger(
 
         for {
             p <- unsafeGetProducing
-            blockStartTime = p.startTime
+            blockStartTime = p.BlockCreationStartTime
             currentBlockNum = p.nextBlockNumber
 
             _ <-
@@ -316,14 +316,12 @@ final case class JointLedger(
                           requestId = req.requestId,
                           userVKey = req.request.userVk,
                           blockNumber = p.nextBlockNumber,
-                          blockCreationStartTime = p.startTime,
+                          blockCreationStartTime = p.BlockCreationStartTime,
                           l2Payload = l2Payload
                         )
 
                     for {
-                        res <- this.l2Ledger.L2LedgerAction
-                            .fromL2LedgerCommand(l2Command)
-                            .run(p.l2LedgerState)
+                        res <- runL2Command(p, l2Command)
                         _ <- res match {
                             case Left(e) => rejectEvent(requestId, e)
                             case Right(newL2State) =>
@@ -373,134 +371,6 @@ final case class JointLedger(
         args: CompleteBlockRegular
     ): IO[Block.Unsigned.Intermediate] = {
         import args.*
-
-        /** KZG commitment + block brief (which is a bit strange)
-          */
-        def mkBlockBrief(decisions: DepositsMap.Decisions): IO[BlockBrief.Intermediate] = for {
-
-            p <- unsafeGetProducing
-
-            previousHeader = p.previousBlockHeader
-            blockWithdrawnUtxos = p.l2LedgerState.payouts
-            blockStartTime = p.startTime
-            events = p.userRequestState.requests
-
-            _ <- logger.trace(
-              s"mkBlockBrief: previousHeader=$previousHeader\n" +
-                  s"mkBlockBrief: blockWithdrawnUtxos=$blockWithdrawnUtxos\n" +
-                  s"mkBlockBrief: blockStartTime=$blockStartTime\n" +
-                  s"mkBlockBrief: competingFallbackValidityStart=${p.competingFallbackTxTime}\n" +
-                  s"mkBlockBrief: events=$events"
-            )
-
-            // Block header
-            headerIntermediate: BlockHeader.Intermediate <-
-                if decisions.absorbed.isEmpty && blockWithdrawnUtxos.isEmpty
-                then
-                    IO.pure(
-                      previousHeader.nextHeaderIntermediate(
-                        txTiming,
-                        blockStartTime,
-                        args.blockCreationEndTime,
-                        p.competingFallbackTxTime,
-                        // TODO: We want this to be done in a separate actor in the future
-                        // this doesn't include genesis
-                        applyDiffs(p.evacuationMap, p.l2LedgerState.diffs).kzgCommitment
-                      )
-                    )
-                else {
-                    val depositEventDecisions: L2LedgerCommand.ApplyDepositDecisions =
-                        L2LedgerCommand.ApplyDepositDecisions(
-                          blockNumber = p.nextBlockNumber,
-                          blockCreationEndTime = blockCreationEndTime.toPosixTime,
-                          absorbedDeposits = decisions.absorbed.requestIds,
-                          rejectedDeposits = decisions.rejected.requestIds
-                        )
-                    for {
-                        res <- this.l2Ledger.L2LedgerAction
-                            .fromL2LedgerCommand(depositEventDecisions)
-                            .run(p.l2LedgerState)
-                        newL2State <- IO.fromEither(res)
-                        newEvacuationMap = applyDiffs(p.evacuationMap, newL2State.diffs)
-                        newJLState = p
-                            .setL2LedgerState(newL2State)
-                            .focus(_.evacuationMap)
-                            .replace(newEvacuationMap)
-                        _ <- state.set(newJLState)
-
-                        // TODO: We want this to be done in a separate actor in the future
-                        kzgCommitment = newEvacuationMap.kzgCommitment
-                        headerIntermediate = previousHeader.nextHeaderMajor(
-                          txTiming,
-                          blockStartTime,
-                          args.blockCreationEndTime,
-                          kzgCommitment
-                        )
-                    } yield headerIntermediate
-                }
-
-            // Block brief
-            blockBrief: BlockBrief.Intermediate = headerIntermediate match {
-                case header: BlockHeader.Minor =>
-                    val blockBody = BlockBody.Minor(events, decisions.rejected.requestIds)
-                    BlockBrief.Minor(header, blockBody)
-                case header: BlockHeader.Major =>
-                    val blockBody = BlockBody.Major(
-                      events,
-                      decisions.absorbed.requestIds,
-                      decisions.rejected.requestIds
-                    )
-                    BlockBrief.Major(header, blockBody)
-            }
-        } yield blockBrief
-
-        def mkBlockEffects(
-            next: BlockBrief.Intermediate,
-            absorbedDeposits: DepositsMap.Unzip,
-            postDatedRefundTxs: List[RefundTx.PostDated]
-        ): IO[Block.Unsigned.Intermediate] = for {
-            ret <- next match {
-                case blockBrief @ BlockBrief.Minor(header, _) =>
-                    val blockEffects = BlockEffects.Unsigned.Minor(
-                      headerSerialized = header.onchainMsg,
-                      postDatedRefundTxs = postDatedRefundTxs
-                    )
-                    IO.pure(Block.Unsigned.Minor(blockBrief, blockEffects))
-                case blockBrief @ BlockBrief.Major(header, _) =>
-                    for {
-                        p <- unsafeGetProducing
-
-                        payoutObligations = p.l2LedgerState.payouts
-
-                        res <- IO.fromEither(
-                          L1LedgerM
-                              .mkSettlementTxSeq(
-                                nextKzg = header.kzgCommitment,
-                                absorbedDeposits = absorbedDeposits.depositUtxos,
-                                payoutObligations = payoutObligations,
-                                blockCreationEndTime = header.endTime,
-                                competingFallbackValidityStart = p.competingFallbackTxTime
-                              )
-                              .run(config, p.l1LedgerState)
-                        )
-
-                        (newL1State, settlementTxSeq) = res
-                        _ <- state.set(p.setL1LedgerState(newL1State))
-
-                        blockEffects = BlockEffects.Unsigned.Major(
-                          settlementTx = settlementTxSeq.settlementTx,
-                          fallbackTx = settlementTxSeq.fallbackTx,
-                          rolloutTxs = settlementTxSeq.rolloutTxs,
-                          postDatedRefundTxs = postDatedRefundTxs
-                        )
-                    } yield Block.Unsigned.Major(blockBrief, blockEffects)
-            }
-        } yield ret
-
-        // ===================================
-        // Finally, the body of completeBlockRegular
-        // ===================================
-
         import config.txTiming
 
         for {
@@ -522,33 +392,151 @@ final case class JointLedger(
                   s"joint ledger: rejected=${partition.rejected}" + "\n"
             )
 
-            blockBrief <- mkBlockBrief(split.decisions)
+            blockBriefRes <- mkBlockBriefIntermediate(p, blockCreationEndTime, split.decisions)
+            (pBlockBrief, blockBrief) = blockBriefRes
 
-            block <- mkBlockEffects(
+            blockRes <- mkBlockEffectsIntermediate(
+              pBlockBrief,
               blockBrief,
               split.absorbed.unzip,
-              p.userRequestState.postDatedRefundTxs.toList
+              pBlockBrief.userRequestState.postDatedRefundTxs.toList
             )
+            (pBlock, block) = blockRes
+
+            // Verify the block against the reference block
+            _ <- panicOnMismatchWithExpectedBlock(referenceBlockBrief, block)
 
             // Block is done
-            res <- IO.fromEither(
-              L1LedgerM
-                  .handleBlockBrief(split.surviving)
-                  .run(config, p.l1LedgerState)
-            )
+            res <- executeL1Action(pBlock, L1LedgerM.handleBlockBrief(split.surviving))
             (newL1State, ()) = res
 
-            newJlState = p.setL1LedgerState(newL1State)
-            p2 <- state.get
-            _ <- state.set(newJlState)
-
-            _ <- panicOnExpectedBlockMismatch(referenceBlockBrief, block)
+            newJlState = pBlock.setL1LedgerState(newL1State)
 
             _ <- state.set(newJlState.done(block.header))
 
             // Tell others about the block
             _ <- handleBlock(block, finalizationLocallyTriggered)
         } yield block
+    }
+
+    /** KZG commitment + block brief (which is a bit strange)
+      */
+    def mkBlockBriefIntermediate(
+        p: JointLedger.Producing,
+        blockCreationEndTime: BlockCreationEndTime,
+        decisions: DepositsMap.Decisions
+    ): IO[(JointLedger.Producing, BlockBrief.Intermediate)] = {
+        val blockCreationStartTime = p.BlockCreationStartTime
+        val previousHeader = p.previousBlockHeader
+        val blockWithdrawnUtxos = p.l2LedgerState.payouts
+        val events = p.userRequestState.requests
+        for {
+            _ <- logger.trace(
+              s"mkBlockBrief: previousHeader=$previousHeader\n" +
+                  s"mkBlockBrief: blockWithdrawnUtxos=$blockWithdrawnUtxos\n" +
+                  s"mkBlockBrief: blockStartTime=$blockCreationStartTime\n" +
+                  s"mkBlockBrief: competingFallbackValidityStart=${p.competingFallbackTxTime}\n" +
+                  s"mkBlockBrief: events=$events"
+            )
+
+            // Block header
+            headerRes <-
+                if decisions.absorbed.isEmpty && blockWithdrawnUtxos.isEmpty
+                then
+                    IO.pure(
+                      (
+                        p,
+                        previousHeader.nextHeaderIntermediate(
+                          txTiming,
+                          blockCreationStartTime,
+                          blockCreationEndTime,
+                          p.competingFallbackTxTime,
+                          // TODO: We want this to be done in a separate actor in the future
+                          // this doesn't include genesis
+                          applyDiffs(p.evacuationMap, p.l2LedgerState.diffs).kzgCommitment
+                        )
+                      )
+                    )
+                else {
+                    val depositEventDecisions: L2LedgerCommand.ApplyDepositDecisions =
+                        L2LedgerCommand.ApplyDepositDecisions(
+                          blockNumber = p.nextBlockNumber,
+                          blockCreationEndTime = blockCreationEndTime.toPosixTime,
+                          absorbedDeposits = decisions.absorbed.requestIds,
+                          rejectedDeposits = decisions.rejected.requestIds
+                        )
+                    for {
+                        newL2State <- executeL2Command(p, depositEventDecisions)
+                        newEvacuationMap = applyDiffs(p.evacuationMap, newL2State.diffs)
+                        newJLState = p
+                            .setL2LedgerState(newL2State)
+                            .focus(_.evacuationMap)
+                            .replace(newEvacuationMap)
+
+                        // TODO: We want this to be done in a separate actor in the future
+                        kzgCommitment = newEvacuationMap.kzgCommitment
+                        headerIntermediate = previousHeader.nextHeaderMajor(
+                          txTiming,
+                          blockCreationStartTime,
+                          blockCreationEndTime,
+                          kzgCommitment
+                        )
+                    } yield (newJLState, headerIntermediate)
+                }
+            (newJlState, headerIntermediate) = headerRes
+
+            // Block brief
+            blockBrief: BlockBrief.Intermediate = headerIntermediate match {
+                case header: BlockHeader.Minor =>
+                    val blockBody = BlockBody.Minor(events, decisions.rejected.requestIds)
+                    BlockBrief.Minor(header, blockBody)
+                case header: BlockHeader.Major =>
+                    val blockBody = BlockBody.Major(
+                      events,
+                      decisions.absorbed.requestIds,
+                      decisions.rejected.requestIds
+                    )
+                    BlockBrief.Major(header, blockBody)
+            }
+        } yield (newJlState, blockBrief)
+    }
+
+    def mkBlockEffectsIntermediate(
+        p: JointLedger.Producing,
+        next: BlockBrief.Intermediate,
+        absorbedDeposits: DepositsMap.Unzip,
+        postDatedRefundTxs: List[RefundTx.PostDated]
+    ): IO[(JointLedger.Producing, Block.Unsigned.Intermediate)] = next match {
+        case blockBrief @ BlockBrief.Minor(header, _) =>
+            val blockEffects = BlockEffects.Unsigned.Minor(
+              headerSerialized = header.onchainMsg,
+              postDatedRefundTxs = postDatedRefundTxs
+            )
+            IO.pure((p, Block.Unsigned.Minor(blockBrief, blockEffects)))
+        case blockBrief @ BlockBrief.Major(header, _) =>
+            for {
+                payoutObligations <- IO.pure(p.l2LedgerState.payouts)
+
+                res <- executeL1Action(
+                  p,
+                  L1LedgerM.mkSettlementTxSeq(
+                    nextKzg = header.kzgCommitment,
+                    absorbedDeposits = absorbedDeposits.depositUtxos,
+                    payoutObligations = payoutObligations,
+                    blockCreationEndTime = header.endTime,
+                    competingFallbackValidityStart = p.competingFallbackTxTime
+                  )
+                )
+                (newL1State, settlementTxSeq) = res
+                newJlState = p.setL1LedgerState(newL1State)
+
+                blockEffects = BlockEffects.Unsigned.Major(
+                  settlementTx = settlementTxSeq.settlementTx,
+                  fallbackTx = settlementTxSeq.fallbackTx,
+                  rolloutTxs = settlementTxSeq.rolloutTxs,
+                  postDatedRefundTxs = postDatedRefundTxs
+                )
+            } yield (newJlState, Block.Unsigned.Major(blockBrief, blockEffects))
     }
 
     // Block completion Signal is provided to the joint ledger when the block weaver says it's time.
@@ -568,15 +556,14 @@ final case class JointLedger(
         for {
             p <- unsafeGetProducing
 
-            res <- IO.fromEither(
-              L1LedgerM
-                  .finalizeLedger(
-                    payoutObligationsRemaining = Vector.from(
-                      p.evacuationMap.evacuationMap.map((_, o) => Payout.Obligation(o))
-                    ),
-                    competingFallbackValidityStart = p.competingFallbackTxTime
-                  )
-                  .run(config, p.l1LedgerState)
+            res <- executeL1Action(
+              p,
+              L1LedgerM.finalizeLedger(
+                payoutObligationsRemaining = Vector.from(
+                  p.evacuationMap.evacuationMap.map((_, o) => Payout.Obligation(o))
+                ),
+                competingFallbackValidityStart = p.competingFallbackTxTime
+              )
             )
             (newL1State, finalizationTxSeq) = res
 
@@ -589,7 +576,7 @@ final case class JointLedger(
                 val blockHeader =
                     newJlState.previousBlockHeader
                         .nextHeaderFinal(
-                          newJlState.startTime,
+                          newJlState.BlockCreationStartTime,
                           args.blockCreationEndTime
                         )
 
@@ -609,7 +596,7 @@ final case class JointLedger(
                 Block.Unsigned.Final(blockBrief, blockEffects)
             }
 
-            _ <- panicOnExpectedBlockMismatch(referenceBlockBrief, block)
+            _ <- panicOnMismatchWithExpectedBlock(referenceBlockBrief, block)
 
             _ <- state.set(newJlState.done(block.header))
 
@@ -679,7 +666,7 @@ final case class JointLedger(
             _ <- IO.traverse_(acks)(ack => conn.consensusActor ! ack)
         } yield ()
 
-    private def panicOnExpectedBlockMismatch(
+    private def panicOnMismatchWithExpectedBlock(
         expectedBlockBrief: Option[BlockBrief],
         actualBlock: Block
     ): IO[Unit] =
@@ -765,7 +752,16 @@ object JointLedger {
         def evacuationMap: EvacuationMap
     }
 
-    final case class Done(
+    object State {
+        def initialize(config: Config): Done = Done(
+          previousBlockHeader = config.initialBlock.header,
+          l1LedgerState =
+              L1LedgerM.State(config.initializationTx.treasuryProduced, DepositsMap.empty),
+          evacuationMap = config.initialEvacuationMap
+        )
+    }
+
+    final case class Done private[JointLedger] (
         override val previousBlockHeader: BlockHeader,
         override val l1LedgerState: L1LedgerM.State,
         override val evacuationMap: EvacuationMap
@@ -795,18 +791,32 @@ object JointLedger {
 
     }
 
-    final case class Producing(
+    final case class Producing private[JointLedger] (
         override val previousBlockHeader: BlockHeader.NonFinal,
         override val l1LedgerState: L1LedgerM.State,
         override val evacuationMap: EvacuationMap,
         l2LedgerState: L2LedgerState,
-        startTime: BlockCreationStartTime,
+        BlockCreationStartTime: BlockCreationStartTime,
         userRequestState: UserRequestState
     ) extends State {
         val nextBlockNumber: BlockNumber.BlockNumber = previousBlockHeader.blockNum.increment
 
         transparent inline def competingFallbackTxTime: FallbackTxStartTime =
             previousBlockHeader.fallbackTxStartTime
+
+        def runL1Action[T](
+            config: Config,
+            action: L1LedgerM[T]
+        ): Either[L1LedgerM.Error, (L1LedgerM.State, T)] =
+            action.run(config, l1LedgerState)
+
+        def runL2CommandReal[F[_], T](
+            l2Ledger: L2Ledger[F],
+            command: L2LedgerCommand.Real
+        ): F[Either[L2LedgerError, L2LedgerState]] = {
+            val action = l2Ledger.L2LedgerAction.fromL2LedgerCommandReal(command)
+            action.run(l2LedgerState)
+        }
 
         def setL1LedgerState(newL1State: L1LedgerM.State): Producing =
             this.focus(_.l1LedgerState).replace(newL1State)

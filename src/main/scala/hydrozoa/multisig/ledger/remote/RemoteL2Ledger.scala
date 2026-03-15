@@ -91,12 +91,6 @@ class RemoteL2Ledger private (
         }
     }
 
-    override def sendInitialize(
-        req: L2LedgerCommand.Initialize
-    ): EitherT[IO, L2LedgerError, Vector[EvacuationDiff]] = {
-        sendRequest[Vector[EvacuationDiff]](Request.Initialize(req))
-    }
-
     override def sendRegisterDeposit(
         req: L2LedgerCommand.RegisterDeposit
     ): EitherT[IO, L2LedgerError, Unit] = {
@@ -139,7 +133,6 @@ object RemoteL2Ledger {
     sealed trait Request
 
     object Request {
-        final case class Initialize(command: L2LedgerCommand.Initialize) extends Request
         final case class RegisterDeposit(command: L2LedgerCommand.RegisterDeposit) extends Request
         final case class ApplyDepositDecisions(command: L2LedgerCommand.ApplyDepositDecisions)
             extends Request
