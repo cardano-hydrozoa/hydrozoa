@@ -32,7 +32,6 @@ import hydrozoa.multisig.ledger.joint.JointLedger.{Done, Producing}
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger, given}
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
-import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import hydrozoa.multisig.server.*
 import java.util.concurrent.TimeUnit
 import monocle.Focus
@@ -40,12 +39,9 @@ import monocle.Focus.focus
 import org.scalacheck.*
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.PropertyM.monadForPropM
-import org.scalacheck.rng.Seed
 import org.scalacheck.util.Pretty
-import scala.annotation.tailrec
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
-import scala.util.{Failure, Success, Try}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.{Block as _, BlockHeader as _, Coin, *}
 import scalus.crypto.ed25519.Signature
@@ -441,8 +437,9 @@ implicit val genMonad: Monad[Gen] = new Monad[Gen] {
 }
 
 object JointLedgerTest extends Properties("Joint Ledger Test") {
-    override def overrideParameters(p: Test.Parameters): Test.Parameters =
-        p.withInitialSeed(Seed.fromBase64("zeNyOvJsm4OxLrnAPz9TE8ooirzE1AR-Zsof63oHXHB=").get)
+//    import org.scalacheck.rng.Seed
+//    override def overrideParameters(p: Test.Parameters): Test.Parameters =
+//        p.withInitialSeed(Seed.fromBase64("zeNyOvJsm4OxLrnAPz9TE8ooirzE1AR-Zsof63oHXHB=").get)
 
     import TestM.*
 
@@ -556,16 +553,23 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                   )
               } yield events
 
-          // order-preserving, non-contiguous matching;
-          // isSubsequenceOf( List(1, 2, 3), List(1, 6, 3, 2, 3, 7, 1)) == true
-          @tailrec
-          def isSubsequenceOf[A](sub: Seq[A], seq: Seq[A]): Boolean = {
-              if sub.isEmpty then true
-              else
-                  Try(seq.dropWhile(_ != sub.head).tail) match {
-                      case Success(nextSeq) => isSubsequenceOf(sub.tail, nextSeq)
-                      case Failure(_)       => false
-                  }
+//          @tailrec
+//          def isSubsequenceOf[A](sub: Seq[A], seq: Seq[A]): Boolean = {
+//              if sub.isEmpty then true
+//              else
+//                  Try(seq.dropWhile(_ != sub.head).tail) match {
+//                      case Success(nextSeq) => isSubsequenceOf(sub.tail, nextSeq)
+//                      case Failure(_)       => false
+//                  }
+//          }
+          /** order-preserving, non-contiguous matching
+            * {{{
+            * isSubsequenceOf( List(1, 2, 3), List(1, 6, 3, 2, 3, 7, 1)) == true
+            * }}}
+            */
+          def isSubsequenceOf[A](sub: Seq[A], seq: Seq[A]) = {
+              val filtered = seq.filter(sub.contains(_))
+              filtered == sub
           }
 
           for {
@@ -590,9 +594,9 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
               eventStreamFullResults <- eventStreamActions.sequence
               // This is the format we actually care about; it's commensurate with the DappLedgerState
-              eventStream: Queue[(RequestId, DepositUtxo)] = eventStreamFullResults.map {
+              eventStream: Queue[DepositsMap.Entry] = eventStreamFullResults.map {
                   case (txSeq, event, obligations) =>
-                      (event.requestId, txSeq.depositTx.depositProduced)
+                      DepositsMap.Entry(event.requestId, txSeq.depositTx.depositProduced)
               }
 
               depositsMap <- getJointLedgerState.map(_.l1LedgerState.deposits)
