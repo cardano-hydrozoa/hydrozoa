@@ -4,7 +4,7 @@ import cats.data.*
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, FallbackTxStartTime}
-import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.RequestValidityEndTime
+import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.unsafeRequestValidityEndTime
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, quantize}
 import hydrozoa.multisig.ledger.block.BlockVersion
@@ -107,7 +107,9 @@ def genDepositUtxo(
         offsetFromZero <- Gen.posNum[Long]
 
         requestValidityEndTime =
-            RequestValidityEndTime(zeroTime + FiniteDuration(offsetFromZero, TimeUnit.SECONDS))
+            unsafeRequestValidityEndTime(
+              zeroTime + FiniteDuration(offsetFromZero, TimeUnit.SECONDS)
+            )
 
     } yield DepositUtxo(
       utxoId = utxoId,

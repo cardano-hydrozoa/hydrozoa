@@ -14,7 +14,6 @@ import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockHeader, BlockNumb
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
-import hydrozoa.multisig.server.UserRequestWithId
 import scalus.cardano.ledger.TransactionInput
 
 /** Block weaver actor.

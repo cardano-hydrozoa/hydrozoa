@@ -1,13 +1,12 @@
-package hydrozoa.multisig.server
+package hydrozoa.multisig.consensus
 
 import cats.effect.IO
 import cats.syntax.all.*
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
-import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
 import hydrozoa.lib.actor.SyncRequest
+import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.server.JsonCodecs.{given_Encoder_UserRequestBody, given_Encoder_UserRequestHeader}
-import hydrozoa.multisig.server.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import io.circe.*
 import io.circe.syntax.*
 import scalus.cardano.ledger.{Hash, Hash32}
@@ -58,6 +57,7 @@ object UserRequest {
         ): Either[Error.ValidationError, UserRequest] =
             for {
                 _ <- Right(())
+                // TODO: commenting out since the hash is differently computed on the frontend
                 // _ <-
                 //    if body.hash == header.bodyHash
                 //    then Right(header)
@@ -108,30 +108,41 @@ object UserRequest {
     }
 }
 
+opaque type RequestValidityStartTimeRaw = Long
+
+object RequestValidityStartTimeRaw:
+    def apply(bi: Long): RequestValidityStartTimeRaw = bi
+    extension (self: RequestValidityStartTimeRaw) def toLong: Long = self
+
+opaque type RequestValidityEndTimeRaw = Long
+
+object RequestValidityEndTimeRaw:
+    def apply(bi: Long): RequestValidityEndTimeRaw = bi
+    extension (self: RequestValidityEndTimeRaw) def toLong: Long = self
+
 /** @param headId
   *   The blake2b_224 hash of the cbor-encoded seed utxo [[TransactionInput]] appended to the CIP-67
   *   prefix HYDR. This is the asset name of the treasury token
   * @param bodyHash
   *   blake2b_256 hash of the Cbor-encoded
   * @param validityStart
-  *   Block creation start time must be no earlier than this time in order for the request to be
-  *   actionable
+  *   Epoch time in seconds, block creation start time must be no earlier than this time in order
+  *   for the request to be actionable
   * @param validityEnd
-  *   Block creation start time must be before this time in order for the request to be actionable
+  *   Epoch time in seconds, block creation start time must be before this time in order for the
+  *   request to be actionable
   */
 case class UserRequestHeader(
     headId: HeadId,
-    validityStart: RequestValidityStartTime,
-    validityEnd: RequestValidityEndTime,
+    validityStart: RequestValidityStartTimeRaw,
+    validityEnd: RequestValidityEndTimeRaw,
     bodyHash: Hash32
-)
-
-// Note: extension method because it complains about uninitialized value if I do it as a method(?)
-extension (urh: UserRequestHeader) {
-    def bytes: Array[Byte] = urh.asJson(given_Encoder_UserRequestHeader).toString.getBytes("UTF-8")
-    def byteString: ByteString = ByteString.fromArray(urh.bytes)
+) {
     def signEd25519(privateKey: ByteString): Signature =
-        Signature.unsafeFromByteString(JVMPlatformSpecific.signEd25519(privateKey, urh.byteString))
+        Signature.unsafeFromByteString(JVMPlatformSpecific.signEd25519(privateKey, this.byteString))
+    // TODO: do we want to remove it finally?
+    def bytes: Array[Byte] = this.asJson(given_Encoder_UserRequestHeader).toString.getBytes("UTF-8")
+    private def byteString: ByteString = ByteString.fromArray(this.bytes)
 }
 
 enum UserRequestBody {
@@ -148,11 +159,9 @@ enum UserRequestBody {
     case TransactionRequestBody(
         l2Payload: ByteString
     )
-}
 
-extension (urb: UserRequestBody) {
     def hash: Hash32 =
-        urb.asJson(given_Encoder_UserRequestBody).toString.getBytes("UTF-8")
+        this.asJson(given_Encoder_UserRequestBody).toString.getBytes("UTF-8")
             |> ByteString.fromArray
             |> blake2b_256
             |> Hash.apply

@@ -5,6 +5,8 @@ import cats.syntax.all.*
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, FallbackTxStartTime}
+import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.RequestValidityEndTime
+import hydrozoa.multisig.consensus.UserRequestWithId
 import hydrozoa.multisig.ledger
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
@@ -14,7 +16,6 @@ import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import hydrozoa.multisig.ledger.l1.txseq.{DepositRefundTxSeq, FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.l1.utxo.{DepositUtxo, MultisigTreasuryUtxo}
-import hydrozoa.multisig.server.UserRequestWithId
 
 private type E[A] = Either[L1LedgerM.Error, A]
 private type S[A] = cats.data.StateT[E, L1LedgerM.State, A]
@@ -83,7 +84,8 @@ object L1LedgerM {
         import request.*
         for {
             config <- ask
-            headerSubmissionDeadline = config.txTiming.depositSubmissionDeadline(header.validityEnd)
+            validityEndTime = RequestValidityEndTime(config.slotConfig, header.validityEnd)
+            headerSubmissionDeadline = config.txTiming.depositSubmissionDeadline(validityEndTime)
 
             parseRes =
                 DepositRefundTxSeq
@@ -91,7 +93,7 @@ object L1LedgerM {
                       depositTxBytes = body.l1Payload,
                       l2Payload = body.l2Payload,
                       requestId = requestWithId.requestId,
-                      requestValidityEndTime = header.validityEnd
+                      requestValidityEndTime = validityEndTime
                     )
                     .result
                     .left

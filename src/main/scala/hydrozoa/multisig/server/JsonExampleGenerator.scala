@@ -1,7 +1,9 @@
 package hydrozoa.multisig.server
 
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
+import hydrozoa.multisig.consensus.{RequestValidityEndTimeRaw, RequestValidityStartTimeRaw, UserRequest, UserRequestBody, UserRequestHeader}
 import io.circe.syntax.*
+import java.time.Instant
 import scalus.cardano.ledger.AssetName
 import scalus.crypto.ed25519.VerificationKey
 import scalus.uplc.builtin.ByteString
@@ -35,8 +37,8 @@ object JsonExampleGenerator {
 
         val header = UserRequestHeader(
           headId = HeadId(AssetName.fromHex("deadbeef")),
-          validityStart = ???, // BigInt(1234567890000L), // Example POSIX time
-          validityEnd = ???, // BigInt(1234567999999L),
+          validityStart = RequestValidityStartTimeRaw.apply(Instant.now().getEpochSecond - 10),
+          validityEnd = RequestValidityEndTimeRaw.apply(Instant.now().getEpochSecond + 600),
           bodyHash = body.hash
         )
 
@@ -60,8 +62,8 @@ object JsonExampleGenerator {
 
         val header = UserRequestHeader(
           headId = HeadId(AssetName.fromHex("cafebabe")),
-          validityStart = ???, // BigInt(1234567890000L),
-          validityEnd = ???, // BigInt(1234567999999L),
+          validityStart = RequestValidityStartTimeRaw.apply(Instant.now().getEpochSecond - 10),
+          validityEnd = RequestValidityEndTimeRaw.apply(Instant.now().getEpochSecond + 600),
           bodyHash = body.hash
         )
 

@@ -10,15 +10,15 @@ import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.actor.{ActorSystem, test as _}
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
-import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
+import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, unsafeRequestValidityEndTime}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.lib.cardano.scalus.QuantizedTime.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.ledger.stripVKeyWitnesses
-import hydrozoa.multisig.consensus.ConsensusActor
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.{ConsensusActor, RequestValidityEndTimeRaw, RequestValidityStartTimeRaw, UserRequest, UserRequestBody, UserRequestHeader, UserRequestWithId}
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.*
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Requests.*
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Scenarios.*
@@ -32,7 +32,7 @@ import hydrozoa.multisig.ledger.joint.JointLedger.{Done, Producing}
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger, given}
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
-import hydrozoa.multisig.server.*
+import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import java.util.concurrent.TimeUnit
 import monocle.Focus
 import monocle.Focus.focus
@@ -393,8 +393,11 @@ object JointLedgerTestHelpers {
 
                 header = UserRequestHeader(
                   headId = env.config.headId,
-                  validityStart = RequestValidityStartTime(blockCreationStartTime.convert),
-                  validityEnd = depositRefundTxSeq.depositTx.depositProduced.requestValidityEndTime,
+                  validityStart =
+                      RequestValidityStartTimeRaw(blockCreationStartTime.getEpochSecond),
+                  validityEnd = RequestValidityEndTimeRaw(
+                    depositRefundTxSeq.depositTx.depositProduced.requestValidityEndTime.getEpochSecond
+                  ),
                   bodyHash = body.hash
                 )
 
@@ -538,7 +541,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                               newRequestIds,
                               actionQueue.appended(
                                 deposit(
-                                  requestValidityEndTime = RequestValidityEndTime(
+                                  requestValidityEndTime = unsafeRequestValidityEndTime(
                                     blockCreationStartTime + requestValidityEndTimeOffset
                                   ),
                                   requestId = RequestId(peer, lastRequestID.increment),
@@ -668,9 +671,10 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
           firstBlockNumber = BlockNumber.zero.increment
           firstBlockCreationStartTime <- startBlockNow(firstBlockNumber)
           firstBlockCreationEndTime = BlockCreationEndTime(firstBlockCreationStartTime + 20.seconds)
-
           // Generate a deposit and observe that it appears in the dapp ledger correctly
-          firstDepositValidityEnd = RequestValidityEndTime(firstBlockCreationEndTime + 10.minutes)
+          firstDepositValidityEnd = unsafeRequestValidityEndTime(
+            firstBlockCreationEndTime + 10.minutes
+          )
           seqAndReq <- deposit(
             requestValidityEndTime = firstDepositValidityEnd,
             requestId = RequestId(0, 1),
@@ -855,7 +859,9 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               requestValidityEndTime <- pick[TestR, RequestValidityEndTime](
                 Gen.choose(1, 10)
                     .map(s =>
-                        RequestValidityEndTime(blockStartTime + FiniteDuration(s, TimeUnit.SECONDS))
+                        unsafeRequestValidityEndTime(
+                          blockStartTime + FiniteDuration(s, TimeUnit.SECONDS)
+                        )
                     )
               )
 
@@ -898,7 +904,9 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               requestValidityEndTime <- pick[TestR, RequestValidityEndTime](
                 Gen.choose(0, 10)
                     .map(s =>
-                        RequestValidityEndTime(blockStartTime - FiniteDuration(s, TimeUnit.SECONDS))
+                        unsafeRequestValidityEndTime(
+                          blockStartTime - FiniteDuration(s, TimeUnit.SECONDS)
+                        )
                     )
               )
 
