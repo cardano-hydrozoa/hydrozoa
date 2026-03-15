@@ -3,11 +3,11 @@ package hydrozoa.multisig.ledger.l2
 // see: https://gummiwormlabs.github.io/gummiworm-writing-room/gummiworm-poc/sugar-rush-overview/ledger-events
 
 import cats.syntax.all.*
-import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l1.tx.Tx
+import hydrozoa.multisig.ledger.l2
 import io.bullet.borer.derivation.CompactMapBasedCodecs.derived
 import io.bullet.borer.{Cbor, Decoder, Encoder}
 import scalus.cardano.address.Address
@@ -34,11 +34,8 @@ sealed trait L2LedgerCommand
 // TODO: We probably want to name these "commands" instead, but I'm
 // going to wait for a spec change before doing so.
 object L2LedgerCommand {
-    final case class Initialize(
-        headId: HeadId,
-        initialL2Value: Value,
-        l2Payload: ByteString
-    ) extends L2LedgerCommand
+    sealed trait Real extends L2LedgerCommand
+    sealed trait Proxy extends L2LedgerCommand
 
     final case class RegisterDeposit(
         requestId: RequestId,
@@ -50,14 +47,14 @@ object L2LedgerCommand {
         depositL2Value: Value,
         refundDestination: Destination,
         l2Payload: ByteString
-    ) extends L2LedgerCommand
+    ) extends L2LedgerCommand.Real
 
     final case class ApplyDepositDecisions(
         blockNumber: BlockNumber,
         blockCreationEndTime: PosixTime,
         absorbedDeposits: List[RequestId],
         rejectedDeposits: List[RequestId]
-    ) extends L2LedgerCommand
+    ) extends L2LedgerCommand.Real
 
     /** An L2Event, as forwarded to black-box L2 ledger. It can only be constructed with respect to
       * a user-submitted event and a JointLedger.Producing state.
@@ -70,16 +67,16 @@ object L2LedgerCommand {
         // complicate things for the eutxo l2, so I'm leaving it for now.
         blockCreationStartTime: QuantizedInstant,
         l2Payload: ByteString
-    ) extends L2LedgerCommand
+    ) extends L2LedgerCommand.Real
 
     final case class ProxyBlockConfirmation(
         blockNumber: BlockNumber,
         refundTxs: Vector[(RequestId, Tx.Serialized)]
-    ) extends L2LedgerCommand
+    ) extends L2LedgerCommand.Proxy
 
     final case class ProxyRequestError(
         requestId: RequestId,
         message: String
-    ) extends L2LedgerCommand
+    ) extends L2LedgerCommand.Proxy
 
 }

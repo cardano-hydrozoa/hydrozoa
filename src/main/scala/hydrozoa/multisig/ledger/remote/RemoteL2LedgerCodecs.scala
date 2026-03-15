@@ -43,10 +43,6 @@ object RemoteL2LedgerCodecs {
     implicit val blockNumberDecoder: Decoder[BlockNumber] =
         Decoder.decodeInt.map(BlockNumber.apply)
 
-    // L2LedgerCommand codecs
-    implicit val initializeEncoder: Encoder[L2LedgerCommand.Initialize] = deriveEncoder
-    implicit val initializeDecoder: Decoder[L2LedgerCommand.Initialize] = deriveDecoder
-
     implicit val applyTransactionEncoder: Encoder[L2LedgerCommand.ApplyTransaction] = deriveEncoder
     implicit val applyTransactionDecoder: Decoder[L2LedgerCommand.ApplyTransaction] = deriveDecoder
 
@@ -88,8 +84,6 @@ object RemoteL2LedgerCodecs {
 
     // Request codecs
     implicit val requestEncoder: Encoder[Request] = {
-        case Request.Initialize(event) =>
-            io.circe.Json.obj("Initialize" -> event.asJson)
         case Request.RegisterDeposit(event) =>
             io.circe.Json.obj("RegisterDepositRequest" -> event.asJson)
         case Request.ApplyDepositDecisions(event) =>
@@ -109,10 +103,6 @@ object RemoteL2LedgerCodecs {
               io.circe.DecodingFailure("Request must have exactly one field", c.history)
             )
             .flatMap {
-                case "Initialize" =>
-                    c.downField("Initialize")
-                        .as[L2LedgerCommand.Initialize]
-                        .map(Request.Initialize.apply)
                 case "RegisterDepositRequest" =>
                     c.downField("RegisterDepositRequest")
                         .as[L2LedgerCommand.RegisterDeposit]
