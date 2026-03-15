@@ -3,10 +3,11 @@ package hydrozoa.multisig.server
 import hydrozoa.config.head.initialization.InitializationParameters
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.lib.cardano.cip116
+import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.{RequestValidityEndTimeRaw, RequestValidityStartTimeRaw, UserRequest, UserRequestBody, UserRequestHeader}
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.server.ApiResponse.{Error, HeadInfo, RequestAccepted}
-import hydrozoa.multisig.server.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import io.circe.generic.semiauto.*
 import io.circe.{Decoder, DecodingFailure, Encoder, Json}
 import scalus.cardano.address.ShelleyAddress
@@ -56,8 +57,8 @@ object JsonCodecs {
         (header: UserRequestHeader) =>
             Json.obj(
               "headId" -> InitializationParameters.HeadId.given_Encoder_HeadId(header.headId),
-              "validityStart" -> Json.fromBigInt(header.validityStart.convert.toPosixTime),
-              "validityEnd" -> Json.fromBigInt(header.validityEnd.convert.toPosixTime),
+              "validityStart" -> Json.fromBigInt(header.validityStart.toBigInt),
+              "validityEnd" -> Json.fromBigInt(header.validityEnd.toBigInt),
               "bodyHash" -> summon[Encoder[Hash32]].apply(header.bodyHash)
             )
 
@@ -69,7 +70,12 @@ object JsonCodecs {
             validityStart <- c.downField("validityStart").as[BigInt]
             validityEnd <- c.downField("validityEnd").as[BigInt]
             bodyHash <- c.downField("bodyHash").as[Hash32]
-        } yield UserRequestHeader(headId, ???, ???, bodyHash)
+        } yield UserRequestHeader(
+          headId,
+          RequestValidityStartTimeRaw(validityStart),
+          RequestValidityEndTimeRaw(validityEnd),
+          bodyHash
+        )
 
     // UserRequest codec (generic) - uses "deposit" or "transaction" as field name
     given Encoder[UserRequest] with {

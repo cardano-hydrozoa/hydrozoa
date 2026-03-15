@@ -4,7 +4,7 @@ import cats.effect.IO
 import fs2.Stream
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.lib.logging.Logging
-import hydrozoa.multisig.consensus.EventSequencer
+import hydrozoa.multisig.consensus.{EventSequencer, UserRequest}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.server.ApiResponse.{Error, HeadInfo, RequestAccepted}
 import hydrozoa.multisig.server.JsonCodecs.given

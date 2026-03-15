@@ -59,8 +59,11 @@ object QuantizedTime {
     }
 
     case class QuantizedInstant private (instant: java.time.Instant, slotConfig: SlotConfig) {
+
         def toPosixTime: PosixTime =
             BigInt(instant.toEpochMilli)
+
+        def getEpochSecond: Long = instant.getEpochSecond
 
         /** WARNING: Will throw if the slot configuration is such that the instant is before the
           * zero slot
@@ -182,6 +185,9 @@ object QuantizedTime {
                 slotConfig.slotToTime(slotConfig.timeToSlot(instant.toEpochMilli))
               )
             )
+
+        def ofEpochSeconds(slotConfig: SlotConfig, posixSeconds: Long): QuantizedInstant =
+            apply(slotConfig, Instant.ofEpochSecond(posixSeconds))
 
         def realTimeQuantizedInstant(slotConfig: SlotConfig): IO[QuantizedInstant] =
             IO.realTimeInstant.map(_.quantize(slotConfig))
