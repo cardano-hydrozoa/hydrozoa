@@ -3,8 +3,10 @@ package hydrozoa.multisig.ledger.l1.tx
 import cats.data.*
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, FallbackTxStartTime}
+import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.RequestValidityEndTime
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, quantize}
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, quantize}
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.eutxol2.tx.GenesisObligation
@@ -13,7 +15,7 @@ import hydrozoa.multisig.ledger.l1.utxo.{DepositUtxo, Equity, MultisigTreasuryUt
 import java.util.concurrent.TimeUnit
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
-import scala.concurrent.duration.FiniteDuration
+import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
@@ -51,7 +53,7 @@ def genDepositDatum(network: CardanoNetwork.Section): Gen[DepositUtxo.Datum] = {
       DepositUtxo.Refund.Instructions.Onchain(
         address = refundAddress,
         datum = refundDatum,
-        validityStart = QuantizedInstant(
+        refundStart = QuantizedInstant(
           network.slotConfig,
           java.time.Instant.ofEpochMilli(deadline.toLong)
         ).instant.toEpochMilli
@@ -104,8 +106,8 @@ def genDepositUtxo(
         // Generate some offset to the "zero slot" time.
         offsetFromZero <- Gen.posNum[Long]
 
-        submissionDeadline =
-            zeroTime + FiniteDuration(offsetFromZero, TimeUnit.SECONDS)
+        requestValidityEndTime =
+            RequestValidityEndTime(zeroTime + FiniteDuration(offsetFromZero, TimeUnit.SECONDS))
 
     } yield DepositUtxo(
       utxoId = utxoId,
@@ -114,8 +116,9 @@ def genDepositUtxo(
       value = depositAmount,
       l2Payload = GenesisObligation.serialize(l2Outputs),
       depositFee = Coin.zero,
-      submissionDeadline = submissionDeadline,
-      absorptionStartTime = config.txTiming.depositAbsorptionStartTime(submissionDeadline)
+      requestValidityEndTime = requestValidityEndTime,
+      absorptionStartTime = config.txTiming.depositAbsorptionStartTime(requestValidityEndTime),
+      absorptionEndTime = config.txTiming.depositAbsorptionEndTime(requestValidityEndTime)
     )
 
 /** Generate a "standalone" settlement tx. */
@@ -124,12 +127,20 @@ def genSettlementTxSeqBuilder(config: HeadConfig)(
     // If passed, the kzg commitment will be set to the value.
     // If not, its randomly generated
     kzgCommitment: Option[KzgCommitment] = None,
-    fallbackValidityStart: QuantizedInstant = java.time.Instant
-        .ofEpochMilli(java.time.Instant.now().toEpochMilli + 3_600_000)
-        .quantize(config.slotConfig),
-    blockCreatedOn: QuantizedInstant = java.time.Instant.now().quantize(config.slotConfig),
+    previousMajorBlockCreationEndTime: BlockCreationEndTime = BlockCreationEndTime(
+      java.time.Instant.now().quantize(config.slotConfig)
+    ),
+    currentMajorBlockOffsetDuration: QuantizedFiniteDuration =
+        10.seconds.quantize(config.slotConfig),
     txTiming: TxTiming = TxTiming.default(config.slotConfig)
 ): Gen[SettlementTxSeq.Build] = {
+    val fallbackTxStartTime =
+        config.txTiming.newFallbackStartTime(previousMajorBlockCreationEndTime)
+
+    val blockCreationEndTime = BlockCreationEndTime(
+      previousMajorBlockCreationEndTime + currentMajorBlockOffsetDuration
+    )
+
     // A helper to generator empty, small, medium, large (up to 1000)
     def genHelper[T](gen: Gen[T]): Gen[Vector[T]] = Gen.sized(size =>
         Gen.frequency(
@@ -178,11 +189,11 @@ def genSettlementTxSeqBuilder(config: HeadConfig)(
     } yield SettlementTxSeq.Build(config)(
       kzgCommitment = kzg,
       majorVersionProduced = BlockVersion.Major(majorVersion),
-      depositsToSpend = deposits,
+      depositsToSpend = deposits.toList,
       payoutObligationsRemaining = payouts,
       treasuryToSpend = multisigTreasury,
-      competingFallbackValidityStart = fallbackValidityStart,
-      blockCreatedOn = blockCreatedOn
+      competingFallbackValidityStart = fallbackTxStartTime,
+      blockCreationEndTime = blockCreationEndTime
     )
 }
 
@@ -195,8 +206,8 @@ def genSettlementTxSeqBuilder(config: HeadConfig)(
   */
 def genNextSettlementTxSeqBuilder(config: HeadConfig)(
     treasuryToSpend: MultisigTreasuryUtxo,
-    fallbackValidityStart: QuantizedInstant,
-    blockCreatedOn: QuantizedInstant,
+    fallbackValidityStart: FallbackTxStartTime,
+    blockCreationEndTime: BlockCreationEndTime,
     majorVersion: Int,
     estimatedFee: Coin = Coin(5_000_000L),
     // If passed, the kzg commitment will be set to the value.
@@ -244,11 +255,11 @@ def genNextSettlementTxSeqBuilder(config: HeadConfig)(
       SettlementTxSeq.Build(config)(
         kzgCommitment = kzg,
         majorVersionProduced = BlockVersion.Major(majorVersion),
-        depositsToSpend = deposits,
+        depositsToSpend = deposits.toList,
         payoutObligationsRemaining = infimum,
         treasuryToSpend = treasuryToSpend,
         competingFallbackValidityStart = fallbackValidityStart,
-        blockCreatedOn = blockCreatedOn
+        blockCreationEndTime = blockCreationEndTime
       ),
     )
 }

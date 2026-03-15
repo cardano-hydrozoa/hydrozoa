@@ -4,9 +4,9 @@ import hydrozoa.config.head.initialization.InitializationParameters
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.*
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, InitializationTxEndTime}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.token.CIP67.{HasTokenNames, HeadTokenNames}
 import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
@@ -26,7 +26,7 @@ import scalus.uplc.builtin.Data
 import scalus.uplc.builtin.Data.toData
 
 final case class InitializationTx(
-    override val validityEnd: QuantizedInstant,
+    initializationTxEndTime: InitializationTxEndTime,
     override val treasuryProduced: MultisigTreasuryUtxo,
     override val multisigRegimeProduced: MultisigRegimeUtxo,
     override val headTokenNames: HeadTokenNames,
@@ -37,8 +37,7 @@ final case class InitializationTx(
       HasResolvedUtxos,
       MultisigTreasuryUtxo.Produced,
       MultisigRegimeUtxo.Produced,
-      HasTokenNames,
-      HasValidityEnd
+      HasTokenNames
 
 object InitializationTx {
     export InitializationTxOps.{Build, Parse}
@@ -58,7 +57,7 @@ private object InitializationTxOps {
         result
     }
 
-    final case class Build(config: Config) {
+    final case class Build(config: Config)(blockCreationEndTime: BlockCreationEndTime) {
         import Build.*
 
         lazy val result: BuilderResultSimple[InitializationTx] = for {
@@ -105,21 +104,18 @@ private object InitializationTxOps {
                 private val modifyAuxiliaryData =
                     ModifyAuxiliaryData(_ =>
                         Some(
-                          MD.apply(
-                            Initialization(
-                              headAddress = config.headMultisigAddress,
-                              treasuryOutputIndex = 0,
-                              multisigRegimeOutputIndex = 1,
-                              seedInput = config.initialSeedUtxo.input
-                            )
-                          )
+                          Initialization(
+                            multisigTreasuryIx = 0,
+                            multisigRegimeIx = 1,
+                            seedIx = config.initialSeedIx
+                          ).asAuxData(config.headId)
                         )
                     )
 
-                private[tx] val validityEndTime =
-                    config.txTiming.initializationEndTime(config.headStartTime)
+                private[tx] val initializationTxEndTime: InitializationTxEndTime =
+                    config.txTiming.initializationEndTime(blockCreationEndTime)
 
-                private val validityEndSlot = ValidityEndSlot(validityEndTime.toSlot.slot)
+                private val validityEndSlot = ValidityEndSlot(initializationTxEndTime.toSlot.slot)
             }
 
             object Mints {
@@ -241,7 +237,7 @@ private object InitializationTxOps {
                       equity = equity
                     )
                 } yield InitializationTx(
-                  validityEnd = Steps.Base.validityEndTime,
+                  initializationTxEndTime = Steps.Base.initializationTxEndTime,
                   treasuryProduced = treasuryProduced,
                   tx = finalized.transaction,
                   multisigRegimeProduced = multisigRegimeProduced,
@@ -284,36 +280,20 @@ private object InitializationTxOps {
     }
 
     final case class Parse(config: Config)(
+        blockCreationEndTime: BlockCreationEndTime,
         tx: Transaction,
         resolvedUtxos: ResolvedUtxos
     ) {
         import Parse.*
         import Error.*
 
-        private given ProtocolVersion = config.cardanoProtocolVersion
-
         def result: ParseErrorOr[InitializationTx] = for {
             // ===================================
             // Metadata parsing
             // ===================================
-            imd <- MD.parse(tx) match {
-                case Right(md: Initialization) => Right(md)
-                case Right(md) =>
-                    Left(
-                      MetadataParseError(
-                        MD.UnexpectedTxType(actual = md, expected = "Initialization")
-                      )
-                    )
-                case Left(e) =>
-                    Left(
-                      MetadataParseError(
-                        MD.MalformedTxTypeKey(
-                          "Could not find the expected TxTypeKey for Initialization" +
-                              s" transaction. Got: $e"
-                        )
-                      )
-                    )
-            }
+            mdParseResult <- MD.Initialization.parse(tx).left.map(MetadataParseError(_))
+            (head, md) = mdParseResult
+            Metadata.Initialization(depositUtxoIx, depositFee, l2PayloadHash) = md
 
             // ===================================
             // Data Extraction
@@ -323,7 +303,7 @@ private object InitializationTxOps {
 
             expectedHeadAddress = config.headMultisigAddress
 
-            expectedEndTime = config.txTiming.initializationEndTime(config.headStartTime)
+            initializationTxEndTime = config.txTiming.initializationEndTime(blockCreationEndTime)
 
             expectedTreasuryDatum = MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum(
               config.initialEvacuationMap
@@ -331,8 +311,8 @@ private object InitializationTxOps {
 
             actualOutputs = tx.body.value.outputs.map(_.value)
 
-            actualTreasuryOutput = actualOutputs(imd.treasuryOutputIndex)
-            actualMultisigRegimeOutput = actualOutputs(imd.multisigRegimeOutputIndex)
+            actualTreasuryOutput = actualOutputs(md.multisigTreasuryIx)
+            actualMultisigRegimeOutput = actualOutputs(md.multisigRegimeIx)
 
             mbTtl = tx.body.value.ttl
 
@@ -340,16 +320,9 @@ private object InitializationTxOps {
             // Validation
             // ===================================
 
-            ////
-            // Head address is coherent
-            _ <-
-                if expectedHeadAddress == imd.headAddress
-                then Right(())
-                else Left(InvalidTransactionError("Invalid head address"))
-
             // Seed input is coherent
             _ <-
-                if tx.body.value.inputs.toSeq.contains(imd.seedInput)
+                if tx.body.value.inputs.toSeq.contains(md.seedIx)
                 then Right(())
                 else Left(InvalidTransactionError("Seed input missing"))
 
@@ -472,11 +445,11 @@ private object InitializationTxOps {
                     )
 
             // ttl should be present
-            validityEndSlot <- mbTtl.toRight(TtlIsMissing)
+            ttl <- mbTtl.toRight(TtlIsMissing)
 
             // Should this be in the init tx parser?
             _ <- Either.cond(
-              test = expectedEndTime.toSlot == Slot(validityEndSlot),
+              test = initializationTxEndTime.toSlot.slot == ttl,
               right = (),
               left = InvalidInitializationTtl
             )
@@ -504,7 +477,7 @@ private object InitializationTxOps {
 
             treasury = MultisigTreasuryUtxo(
               treasuryTokenName = config.headTokenNames.treasuryTokenName,
-              utxoId = TransactionInput(tx.id, imd.treasuryOutputIndex),
+              utxoId = TransactionInput(tx.id, md.multisigTreasuryIx),
               address = expectedHeadAddress,
               datum = expectedTreasuryDatum,
               value = actualTreasuryOutput.value,
@@ -512,19 +485,16 @@ private object InitializationTxOps {
             )
 
             multisigRegimeWitness = Utxo(
-              TransactionInput(tx.id, imd.multisigRegimeOutputIndex),
+              TransactionInput(tx.id, md.multisigRegimeIx),
               actualMultisigRegimeOutput
             )
 
         } yield InitializationTx(
-          validityEnd = QuantizedInstant(
-            config.slotConfig,
-            java.time.Instant.ofEpochMilli(config.slotConfig.slotToTime(validityEndSlot))
-          ),
+          initializationTxEndTime = initializationTxEndTime,
           treasuryProduced = treasury,
           multisigRegimeProduced = MultisigRegimeUtxo(
             multisigRegimeTokenName = config.headTokenNames.multisigRegimeTokenName,
-            utxoId = TransactionInput(tx.id, imd.multisigRegimeOutputIndex),
+            utxoId = TransactionInput(tx.id, md.multisigRegimeIx),
             address = expectedHeadAddress,
             value = actualMultisigRegimeOutput.value,
             script = expectedHNS

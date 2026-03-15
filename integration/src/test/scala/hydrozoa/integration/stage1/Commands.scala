@@ -4,8 +4,9 @@ import hydrozoa.integration.stage1.CommandGen.{TxMutator, TxStrategy}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
-import hydrozoa.multisig.ledger.event.{LedgerEventId, UserEvent}
+import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
+import hydrozoa.multisig.server.UserRequest
 import org.scalacheck.Prop
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.commands.{CommandLabel, CommandProp}
@@ -75,12 +76,12 @@ object Commands:
 
     /** Feed a single L2 transaction into the current block. */
     final case class L2TxCommand(
-        event: UserEvent.L2Event,
+        event: UserRequest.L2Event,
         txStrategy: TxStrategy,
         txMutator: TxMutator
     ) {
         override def toString: String =
-            s"L2TxCommand(eventId=${event.eventId}, strategy=$txStrategy, mutator=$txMutator)"
+            s"L2TxCommand(eventId=${event.requestId}, strategy=$txStrategy, mutator=$txMutator)"
     }
 
     implicit given CommandProp[L2TxCommand, Unit, Model.State] with {}
@@ -153,12 +154,12 @@ object Commands:
     /** The command corresponds to the register deposit action with the event id known upfront.
       */
     final case class RegisterDepositCommand(
-        registerDeposit: UserEvent.DepositEvent,
+        registerDeposit: UserRequest.DepositEvent,
         depositRefundTxSeq: DepositRefundTxSeq,
         depositTxBytesSigned: Transaction
     ) {
         override def toString: String =
-            s"RegisterDepositCommand(eventId=${registerDeposit.eventId}, " +
+            s"RegisterDepositCommand(eventId=${registerDeposit.requestId}, " +
                 s"ada=${depositRefundTxSeq.depositTx.depositProduced.value.coin})"
     }
 
@@ -174,8 +175,8 @@ object Commands:
     /** The command submits the deposit transaction from the corresponding register deposit event.
       */
     final case class SubmitDepositsCommand(
-        depositsForSubmission: List[(LedgerEventId, Transaction)],
-        depositsForRejection: List[LedgerEventId]
+        depositsForSubmission: List[(RequestId, Transaction)],
+        depositsForRejection: List[RequestId]
     ) {
         override def toString: String =
             s"SubmitDepositsCommand(for submission=${depositsForSubmission.map(_._1).mkString("[", ", ", "]")}, " +

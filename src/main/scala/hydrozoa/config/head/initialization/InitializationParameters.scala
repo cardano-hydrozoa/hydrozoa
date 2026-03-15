@@ -4,7 +4,6 @@ import cats.data.NonEmptyMap
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.peers.HeadPeers
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.number.Distribution
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.joint.EvacuationMap
@@ -37,7 +36,6 @@ export hydrozoa.config.head.initialization.InitializationParameters.isBalancedIn
   *   excess of the unbalanced treasury value ([[initialEquityContributed]] + [[initialL2Value]]).
   */
 final case class InitializationParameters(
-    override val headStartTime: QuantizedInstant,
     override val initialEvacuationMap: EvacuationMap,
     override val initialEquityContributions: NonEmptyMap[HeadPeerNumber, Coin],
     // TODO: just seedUtxo?
@@ -73,8 +71,6 @@ object InitializationParameters {
     trait Section extends HasTokenNames {
         def initializationParams: InitializationParameters
 
-        def headStartTime: QuantizedInstant
-
         def initialEvacuationMap: EvacuationMap
         def initialEquityContributions: NonEmptyMap[HeadPeerNumber, Coin]
         def initialSeedUtxo: Utxo
@@ -90,6 +86,9 @@ object InitializationParameters {
 
         final def initialFundingUtxos: Utxos =
             initialAdditionalFundingUtxos + initialSeedUtxo.toTuple
+
+        final def initialSeedIx: Int =
+            initialFundingUtxos.keys.toList.sorted.indexOf(initialSeedUtxo)
     }
 
     extension (config: InitializationParameters.Section & HeadPeers.Section)
@@ -124,6 +123,7 @@ object InitializationParameters {
 
     opaque type HeadId = AssetName
 
+    // TODO: Must do validation on CIP67 HYDR string for both apply and Decoder
     object HeadId:
         def apply(treasuryBeaconTokenName: AssetName): HeadId = treasuryBeaconTokenName
 
@@ -134,4 +134,6 @@ object InitializationParameters {
 
         given Decoder[HeadId] =
             Decoder.decodeString.map(s => AssetName.fromHex(s))
+
+        extension (self: HeadId) def toHex: String = self.bytes.toHex
 }

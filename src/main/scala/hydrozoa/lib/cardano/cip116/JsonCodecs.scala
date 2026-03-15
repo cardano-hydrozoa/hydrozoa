@@ -3,22 +3,103 @@ package hydrozoa.lib.cardano.cip116
 import io.circe.syntax.*
 import io.circe.{Decoder, Encoder, KeyDecoder, KeyEncoder}
 import scala.util.Try
+import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
+import scalus.crypto.ed25519.{Signature, VerificationKey}
+import scalus.uplc.builtin.ByteString
 import scodec.bits.ByteVector
 
 object JsonCodecs {
     object CIP0116 {
         object Conway {
-            // Encode/decode byte arrays as lowercase hex strings
-            given byteArrayEncoder: Encoder[Array[Byte]] =
-                Encoder.encodeString.contramap(bytes => ByteVector(bytes).toHex)
+            // Scalus VerificationKey codec (32 bytes as hex)
+            given Encoder[VerificationKey] =
+                Encoder.encodeString.contramap(vk => ByteVector(vk.bytes.toArray).toHex)
 
-            given byteArrayDecoder: Decoder[Array[Byte]] =
+            given Decoder[VerificationKey] =
                 Decoder.decodeString.emap { hexStr =>
                     ByteVector
                         .fromHex(hexStr)
-                        .map(_.toArray)
-                        .toRight(s"Invalid hex string: $hexStr")
+                        .toRight(s"Invalid hex string for verification key: $hexStr")
+                        .flatMap { bv =>
+                            if bv.size == 32 then
+                                Right(
+                                  VerificationKey
+                                      .unsafeFromByteString(ByteString.fromArray(bv.toArray))
+                                )
+                            else Left(s"Verification key must be 32 bytes, got ${bv.size}")
+                        }
+                }
+
+            // Scalus Signature codec (64 bytes as hex)
+            given Encoder[Signature] =
+                Encoder.encodeString.contramap(sig => ByteVector(sig.bytes.toArray).toHex)
+
+            given Decoder[Signature] =
+                Decoder.decodeString.emap { hexStr =>
+                    ByteVector
+                        .fromHex(hexStr)
+                        .toRight(s"Invalid hex string for signature: $hexStr")
+                        .flatMap { bv =>
+                            if bv.size == 64 then
+                                Right(
+                                  Signature.unsafeFromByteString(ByteString.fromArray(bv.toArray))
+                                )
+                            else Left(s"Signature must be 64 bytes, got ${bv.size}")
+                        }
+                }
+
+            // Hash32 codec (32 bytes as hex) - Hash32 is Hash[Blake2b_256, Any]
+            given Encoder[Hash32] =
+                Encoder.encodeString.contramap(hash => ByteVector(hash.bytes.toArray).toHex)
+
+            given Decoder[Hash32] =
+                Decoder.decodeString.emap { hexStr =>
+                    ByteVector
+                        .fromHex(hexStr)
+                        .toRight(s"Invalid hex string for hash: $hexStr")
+                        .flatMap { bv =>
+                            if bv.size == 32 then
+                                import scalus.cardano.ledger.{Blake2b_256, Hash}
+                                Right(Hash[Blake2b_256, Any](ByteString.fromArray(bv.toArray)))
+                            else Left(s"Hash32 must be 32 bytes, got ${bv.size}")
+                        }
+                }
+
+            // AssetName codec (as plain value, not key)
+            given assetNameValueEncoder: Encoder[AssetName] =
+                Encoder.encodeString.contramap(assetName => assetName.bytes.toHex)
+
+            given assetNameValueDecoder: Decoder[AssetName] =
+                Decoder.decodeString.map(s => AssetName.fromHex(s))
+
+            // TODO: this is not nice
+            // ShelleyAddress codec (as bech32 string)
+            given shelleyAddressEncoder: Encoder[ShelleyAddress] =
+                Encoder.encodeString.contramap(addr => addr.toBech32.get)
+
+            given shelleyAddressDecoder: Decoder[ShelleyAddress] =
+                Decoder.decodeString.emap { str =>
+                    scala.util
+                        .Try {
+                            scalus.cardano.address.Address.fromBech32(str) match {
+                                case shelley: ShelleyAddress => shelley
+                                case _ =>
+                                    throw new Exception(s"Address is not a Shelley address: $str")
+                            }
+                        }
+                        .toEither
+                        .left
+                        .map(_.getMessage)
+                }
+
+            // Encode/decode byte arrays as lowercase hex strings
+            given byteStringEncoder: Encoder[ByteString] =
+                Encoder.encodeString.contramap(_.toHex)
+
+            given byteStringDecoder: Decoder[ByteString] =
+                Decoder.decodeString.emapTry { hexStr =>
+                    Try(ByteString.fromHex(hexStr))
                 }
 
             // Coin codec
@@ -109,10 +190,11 @@ object JsonCodecs {
             implicit val transactionInputEncoder: Encoder[TransactionInput] =
                 (ti: TransactionInput) =>
                     io.circe.Json.obj(
-                      "transaction_id" -> ti.transactionId.bytes.asJson,
+                      "transaction_id" -> ti.transactionId.toHex.asJson,
                       // N.B.: CIP-0116 defines this a UInt32; scalus defines it as signed.
                       "index" -> ti.index.toInt.asJson
                     )
+
             implicit val transactionInputDecoder: Decoder[TransactionInput] = c =>
                 for {
                     txIdBytes <- c.downField("transaction_id").as[Array[Byte]]

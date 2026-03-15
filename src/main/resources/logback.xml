@@ -17,7 +17,9 @@
         <appender-ref ref="STDOUT"/>
     </root>
     <logger name="CardanoLiaison" level="warn"/>
-    <logger name="JointLedger" level="warn"/>
+    <logger name="JointLedger" level="debug"/>
+    <logger name="RemoteL2Ledger" level="debug"/>
+    <logger name="HydrozoaRoutes" level="debug"/>
     <logger name="hydrozoa" level="info"/>
     <logger name="scalus" level="info"/>
 </configuration>

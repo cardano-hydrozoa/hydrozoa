@@ -78,6 +78,7 @@ object Block {
 
         type Next = Block.Unsigned & BlockType.Next
         type Intermediate = Block.Unsigned & BlockType.Intermediate
+        type NonFinal = Block.MultiSigned & BlockType.NonFinal
 
         extension (self: Next)
             transparent inline def blockBriefNext: BlockBrief.Next =
@@ -162,8 +163,8 @@ object Block {
         }
 
         type Next = Block.MultiSigned & BlockType.Next
-
         type Intermediate = Block.MultiSigned & BlockType.Intermediate
+        type NonFinal = Block.MultiSigned & BlockType.NonFinal
     }
 
     object Fields {

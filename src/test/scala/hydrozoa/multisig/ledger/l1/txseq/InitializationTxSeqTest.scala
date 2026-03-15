@@ -4,7 +4,6 @@ import cats.data.NonEmptyList
 import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.multisig.ledger.l1.token.CIP67
-import hydrozoa.multisig.ledger.l1.tx.Metadata.{Fallback, Initialization}
 import hydrozoa.multisig.ledger.l1.tx.{InitializationTx, Metadata as MD}
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.l1.state.VoteDatum
@@ -62,7 +61,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
 
             // Collect all the props in a mutable buffer, and then combine them at the end
             val props = mutable.Buffer.empty[Prop]
-            val res = InitializationTxSeq.Build(config).result
+            val res = InitializationTxSeq.Build(config)(config.initialBlock.endTime).result
             props.append(s"Expected successful build, but got $res" |: res.isRight)
 
             // ===================================
@@ -71,7 +70,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
             import config.*
 
             // TODO: partial match; see above comment
-            val Right(initializationTxSeq) = res
+            val Right(initializationTxSeq) = res: @unchecked
             val iTx = initializationTxSeq.initializationTx
             val fbTx = initializationTxSeq.fallbackTx
             val fbTxBody = fbTx.tx.body.value
@@ -195,14 +194,12 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
             props.append {
                 val actual = iTx.tx.auxiliaryData.map(_.value)
                 val expected =
-                    MD.apply(
-                      Initialization(
-                        headAddress = iTx.treasuryProduced.address,
-                        treasuryOutputIndex = 0,
-                        multisigRegimeOutputIndex = 1,
-                        seedInput = config.initialSeedUtxo.input
-                      )
+                    MD.Initialization(
+                      multisigTreasuryIx = 0,
+                      multisigRegimeIx = 1,
+                      seedIx = iTx.tx.body.value.inputs.toSeq.indexOf(config.initialSeedUtxo.input)
                     )
+
                 s"Unexpected metadata value. Actual: $actual, expected: $expected" |: actual
                     .contains(expected)
             }
@@ -230,15 +227,17 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
                 val expectedMetadata =
                     Right(
                       MD.Initialization(
-                        headAddress = expectedHeadNativeScript.mkAddress(config.network),
-                        seedInput = config.initialSeedUtxo.input,
-                        treasuryOutputIndex = 0,
-                        multisigRegimeOutputIndex = 1
+                        multisigTreasuryIx = 0,
+                        multisigRegimeIx = 1,
+                        seedIx =
+                            iTx.tx.body.value.inputs.toSeq.indexOf(config.initialSeedUtxo.input)
                       )
                     )
 
-                "Metadata parsing failed" |: (MD.parse(
-                  iTx.tx.auxiliaryData
+                "Metadata parsing failed" |: (MD.Initialization.parse(
+                  AuxiliaryData.Metadata(
+                    iTx.tx.auxiliaryData.get.value.getMetadata
+                  ): AuxiliaryData.Metadata
                 ) == expectedMetadata)
             }
 
@@ -478,11 +477,8 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
             props.append {
                 val actual = fbTx.tx.auxiliaryData.map(_.value)
                 val expected =
-                    MD.apply(
-                      Fallback(
-                        fbTx.treasuryProduced.output.address.asInstanceOf[ShelleyAddress]
-                      )
-                    )
+                    MD.Fallback()
+
                 s"Unexpected metadata value for fallback tx. Actual: $actual, expected: $expected" |: actual
                     .contains(expected)
             }
@@ -528,7 +524,8 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
 
                 val parseRes = InitializationTxSeq
                     .Parse(config)(
-                      txSeq,
+                      blockCreationEndTime = config.initialBlock.endTime,
+                      transactionSequence = txSeq,
                       resolvedUtxos = iTx.resolvedUtxos,
                     )
                     .result

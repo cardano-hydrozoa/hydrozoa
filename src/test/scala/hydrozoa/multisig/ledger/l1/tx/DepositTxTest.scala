@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.l1.tx
 
 import cats.data.NonEmptyList
+import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.RequestValidityEndTime
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.cardano.scalus.given_Choose_Coin
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
@@ -15,6 +16,7 @@ import scala.concurrent.duration.FiniteDuration
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.{Hash, *}
 import scalus.cardano.onchain.plutus.v3.ArbitraryInstances.*
+import scalus.uplc.builtin.ByteString
 import test.*
 import test.Generators.Hydrozoa.*
 
@@ -32,9 +34,13 @@ def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = 
         depositData <- genData
         refundData <- genData
 
-        submissionDeadline <- Gen
+        requestValidityEndTime <- Gen
             .posNum[Long]
-            .map(sec => config.headStartTime + FiniteDuration(sec, TimeUnit.SECONDS))
+            .map(sec =>
+                RequestValidityEndTime(
+                  config.initialBlock.endTime + FiniteDuration(sec, TimeUnit.SECONDS)
+                )
+            )
 
         l2Addr <- genPubkeyAddress(config)
         refundAddr <- genPubkeyAddress(config)
@@ -43,7 +49,7 @@ def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = 
             DepositUtxo.Refund.Instructions(
               address = refundAddr,
               datum = refundData,
-              validityStart = config.txTiming.refundValidityStart(submissionDeadline)
+              validityStart = config.txTiming.refundValidityStart(requestValidityEndTime)
             )
 
         txId <- arbitrary[TransactionInput]
@@ -81,7 +87,7 @@ def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = 
       l2Payload = GenesisObligation.serialize(l2Outputs),
       depositFee = depositFee,
       changeAddress = depositorAddress,
-      submissionDeadline = submissionDeadline,
+      requestValidityEndTime = requestValidityEndTime,
       refundInstructions = instructions,
       l2Value = l2Value
     )
@@ -93,17 +99,21 @@ object DepositTxTest extends Properties("Deposit Tx Test") {
         Prop.forAll(MultiNodeConfig.generate(TestPeersSpec.default)()) { multiNodeConfig =>
             val config = multiNodeConfig.nodeConfigs(HeadPeerNumber.zero)
             val gen = for {
-                addr <- genScriptAddress(config)
                 hash <- genByteStringOfN(32)
                 index <- Gen.posNum[Int].map(_ - 1)
-                fee <- Arbitrary.arbitrary[Coin]
-            } yield (addr, index, Hash[Blake2b_256, Any](hash), fee)
+                fee <- Gen.choose(0, 100_000_000).map(Coin(_))
+            } yield (index, Hash[Blake2b_256, Any](hash), fee)
 
-            Prop.forAll(gen)((addr, idx, hash, fee) =>
-                val aux = MD(MD.Deposit(addr, idx, hash, fee))
-                MD.parse(Some(KeepRaw(aux)))(using config.cardanoProtocolVersion) match {
-                    case Right(x: MD.Deposit) =>
-                        "Metadata is as expected" |: (x == MD.Deposit(addr, idx, hash, fee))
+            Prop.forAll(gen)((idx, hash, fee) =>
+                val aux: AuxiliaryData.Metadata =
+                    AuxiliaryData.Metadata(
+                      MD.Deposit(idx, fee, hash).asAuxData(config.headId).getMetadata
+                    )
+                val expectedX = MD.Deposit(idx, fee, hash)
+
+                MD.Deposit.parse(aux) match {
+                    case Right(headId, x) if x.isInstanceOf[MD.Deposit] =>
+                        "Metadata is as expected" |: (x == expectedX)
                     case Right(_) => "Metadata is MD.deposit" |: Prop(false)
                     case Left(e)  => "Metadata parsing returns Right" |: Prop(false)
                 }
@@ -119,12 +129,13 @@ object DepositTxTest extends Properties("Deposit Tx Test") {
                     case Right(depositTx) =>
                         DepositTx
                             .Parse(config)(
-                              depositTx.tx.toCbor,
-                              depositTx.depositProduced.l2Payload
+                              ByteString.fromArray(depositTx.tx.toCbor),
+                              depositTx.depositProduced.l2Payload,
+                              depositTx.depositProduced.requestValidityEndTime
                             )
                             .result match {
                             case Left(e) =>
-                                "Produced deposit tx deserializes from CBOR: ${e.getCause}"
+                                s"Produced deposit tx deserializes from CBOR: ${e.getMessage}"
                                     |: Prop(false)
 
                             case Right(cborParsed) if cborParsed != depositTx =>

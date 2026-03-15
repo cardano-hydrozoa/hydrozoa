@@ -1,6 +1,5 @@
 package hydrozoa.config.head.initialization
 
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.block.Block
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, InitializationTx}
@@ -16,8 +15,6 @@ object InitialBlock {
     trait Section {
         def initialBlockSection: InitialBlock
         def initialBlock: Block.MultiSigned.Initial
-
-        def headStartTime: QuantizedInstant = initialBlock.startTime
 
         def initialKzgCommitment: KzgCommitment = initialBlock.kzgCommitment
 

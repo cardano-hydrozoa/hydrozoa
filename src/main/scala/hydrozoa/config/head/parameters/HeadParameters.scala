@@ -3,6 +3,7 @@ package hydrozoa.config.head.parameters
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.multisig.settlement.SettlementConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
+import hydrozoa.config.head.multisig.timing.TxTiming.Durations.{DepositAbsorptionDuration, DepositMaturityDuration, DepositSubmissionDuration, InactivityMarginDuration, MinSettlementDuration, SilenceDuration}
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedFiniteDuration
 import hydrozoa.lib.number.PositiveInt
@@ -37,22 +38,22 @@ object HeadParameters {
         override transparent inline def maxDepositsAbsorbedPerBlock: PositiveInt =
             settlementConfig.maxDepositsAbsorbedPerBlock
 
-        override transparent inline def minSettlementDuration: QuantizedFiniteDuration =
+        override transparent inline def minSettlementDuration: MinSettlementDuration =
             txTiming.minSettlementDuration
 
-        override transparent inline def inactivityMarginDuration: QuantizedFiniteDuration =
+        override transparent inline def inactivityMarginDuration: InactivityMarginDuration =
             txTiming.inactivityMarginDuration
 
-        override transparent inline def silenceDuration: QuantizedFiniteDuration =
+        override transparent inline def silenceDuration: SilenceDuration =
             txTiming.silenceDuration
 
-        override transparent inline def depositSubmissionDuration: QuantizedFiniteDuration =
+        override transparent inline def depositSubmissionDuration: DepositSubmissionDuration =
             txTiming.depositSubmissionDuration
 
-        override transparent inline def depositMaturityDuration: QuantizedFiniteDuration =
+        override transparent inline def depositMaturityDuration: DepositMaturityDuration =
             txTiming.depositMaturityDuration
 
-        override transparent inline def depositAbsorptionDuration: QuantizedFiniteDuration =
+        override transparent inline def depositAbsorptionDuration: DepositAbsorptionDuration =
             txTiming.depositAbsorptionDuration
 
         override transparent inline def collectiveContingency: FallbackContingency.Collective =

@@ -24,7 +24,7 @@ object Genesis {
           * the L2 ledger state.
           */
         final case class Discharged(
-            l1UtxoId: TransactionInput, // (LedgerEventId, OutputIndex)
+            l1UtxoId: TransactionInput, // (RequestId, OutputIndex)
             l2UtxoId: TransactionInput, // (BlockEffectId, OutputIndex)
         )
     }

@@ -9,7 +9,7 @@ import hydrozoa.lib.cardano.scalus.ShelleyAddressExtra
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost
-import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
+import hydrozoa.multisig.ledger.remote.RemoteL2Ledger
 import hydrozoa.multisig.server.HydrozoaServer
 import io.github.cdimascio.dotenv.Dotenv
 import scalus.cardano.ledger.Coin
@@ -130,6 +130,11 @@ object Main extends IOApp {
         val resource = for {
             result <- Resource.eval(setupIO)
             (env, backend, nodeConfig) = result
+
+            // TODO: make an option?
+            // l2Ledger <- EutxoL2Ledger(nodeConfig)
+            remoteL2Ledger <- RemoteL2Ledger.create("ws://localhost:3001/ws")
+
             // Attach cleanup to ActorSystem resource - env, backend, nodeConfig are in scope here
             system <- ActorSystem[IO]("Hydrozoa Demo").onFinalize(
               logger.info("Hydrozoa node shut down, running janitor...") *>
@@ -143,12 +148,11 @@ object Main extends IOApp {
                     )
                   )
             )
-        } yield (env, backend, nodeConfig, system)
+        } yield (env, backend, nodeConfig, remoteL2Ledger, system)
 
-        resource.use { case (env, backend, nodeConfig, system) =>
+        resource.use { case (env, backend, nodeConfig, remoteL2Ledger, system) =>
             for {
-                l2Ledger <- EutxoL2Ledger(nodeConfig)
-                mrm <- MultisigRegimeManager.apply(nodeConfig, backend, l2Ledger)
+                mrm <- MultisigRegimeManager.apply(nodeConfig, backend, remoteL2Ledger)
                 _ <- system.actorOf(mrm, "MultisigRegimeManager")
                 _ <- logger.info("Hydrozoa node started successfully")
 

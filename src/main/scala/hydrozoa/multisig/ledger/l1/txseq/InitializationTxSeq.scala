@@ -2,6 +2,7 @@ package hydrozoa.multisig.ledger.l1.txseq
 
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming.*
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.SomeBuildErrorOnly
 import hydrozoa.multisig.ledger.l1.tx.{Metadata as _, *}
 import monocle.Focus.focus
@@ -41,20 +42,20 @@ private object InitializationTxSeqOps {
         }
     }
 
-    final case class Build(config: Config) {
+    final case class Build(config: Config)(blockCreationEndTime: BlockCreationEndTime) {
         import Build.*
         import Build.Error.*
 
         def result: Either[Error, InitializationTxSeq] = for {
             initializationTx <- InitializationTx
-                .Build(config)
+                .Build(config)(blockCreationEndTime)
                 .result
                 .left
                 .map(InitializationTxError(_))
 
             fallbackTx <- FallbackTx
                 .Build(config)(
-                  config.txTiming.newFallbackStartTime(config.headStartTime),
+                  config.txTiming.newFallbackStartTime(blockCreationEndTime),
                   initializationTx.treasuryProduced,
                   initializationTx.multisigRegimeProduced,
                 )
@@ -99,8 +100,9 @@ private object InitializationTxSeqOps {
       * @return
       */
     final case class Parse(config: Config)(
+        blockCreationEndTime: BlockCreationEndTime,
         transactionSequence: (Transaction, Transaction),
-        resolvedUtxos: ResolvedUtxos
+        resolvedUtxos: ResolvedUtxos,
     ) {
         import Parse.*
         import Parse.Error.*
@@ -114,6 +116,7 @@ private object InitializationTxSeqOps {
                 iTx <- time("InitializationTx.build") {
                     InitializationTx
                         .Parse(config)(
+                          blockCreationEndTime = blockCreationEndTime,
                           tx = initializationTx,
                           resolvedUtxos = resolvedUtxos
                         )
@@ -122,8 +125,9 @@ private object InitializationTxSeqOps {
                         .map(InitializationTxParseError(_))
                 }
 
-                expectedFallbackValidityStart: Slot =
-                    (iTx.validityEnd + config.txTiming.silenceDuration).toSlot
+                expectedFallbackValidityStart = config.txTiming.newFallbackStartTime(
+                  blockCreationEndTime
+                )
 
                 fallbackValidityStartSlot <- fallbackTx.body.value.validityStartSlot
                     .toRight(FallbackTxValidityStartIsMissing)
@@ -135,7 +139,7 @@ private object InitializationTxSeqOps {
                     else
                         Left(
                           TTLValidityStartGapError(
-                            expectedFallbackValidityStart,
+                            expectedFallbackValidityStart.toSlot,
                             fallbackValidityStartSlot
                           )
                         )
@@ -143,7 +147,7 @@ private object InitializationTxSeqOps {
                 expectedFallbackTx <- time("FallbackTx.build") {
                     FallbackTx
                         .Build(config)(
-                          config.txTiming.newFallbackStartTime(config.headStartTime),
+                          config.txTiming.newFallbackStartTime(blockCreationEndTime),
                           iTx.treasuryProduced,
                           iTx.multisigRegimeProduced
                         )

@@ -1,9 +1,10 @@
 package hydrozoa.multisig.ledger.l1.tx
 
 import cats.data.NonEmptyList
-import hydrozoa.config.head.initialization.InitialBlock
+import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.*
+import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.RequestValidityEndTime
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, quantizeLosslessUnsafe}
@@ -21,10 +22,9 @@ import scalus.uplc.builtin.Builtins.blake2b_256
 import scalus.uplc.builtin.ByteString
 import scalus.uplc.builtin.Data.{fromData, toData}
 
-// TODO: George: add funding utxos?
 final case class DepositTx(
     depositProduced: DepositUtxo,
-    validityEnd: QuantizedInstant,
+    submissionDeadline: QuantizedInstant,
     override val tx: Transaction,
     override val txLens: Lens[DepositTx, Transaction] = Focus[DepositTx](_.tx),
     override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
@@ -36,15 +36,15 @@ object DepositTx {
 
 private object DepositTxOps {
     type Config = CardanoNetwork.Section & HeadPeers.Section & InitialBlock.Section &
-        TxTiming.Section
+        TxTiming.Section & InitializationParameters.Section
 
     final case class Build(config: Config)(
         utxosFunding: NonEmptyList[Utxo],
-        l2Payload: Array[Byte],
+        l2Payload: ByteString,
         l2Value: Value,
         depositFee: Coin,
         changeAddress: ShelleyAddress,
-        submissionDeadline: QuantizedInstant,
+        requestValidityEndTime: RequestValidityEndTime,
         refundInstructions: DepositUtxo.Refund.Instructions
     ) {
         def result: Either[(SomeBuildError, String), DepositTx] = {
@@ -77,18 +77,18 @@ private object DepositTxOps {
               )
             )
 
+            val submissionDeadline =
+                config.txTiming.depositSubmissionDeadline(requestValidityEndTime)
+
             val ttl = ValidityEndSlot(submissionDeadline.toSlot.slot)
 
-            val payloadHash: Hash32 = Hash(blake2b_256(ByteString.fromArray(l2Payload)))
+            val payloadHash: Hash32 = Hash(blake2b_256(l2Payload))
             val metadata = Some(
-              MD(
-                MD.Deposit(
-                  headAddress = config.headMultisigAddress,
-                  depositUtxoIx = 0, // This builder produces the deposit utxo at index 0
-                  l2PayloadHash = payloadHash,
-                  depositFee = depositFee
-                )
-              )
+              MD.Deposit(
+                depositIx = 0, // This builder produces the deposit utxo at index 0
+                depositFee = depositFee,
+                l2PayloadHash = payloadHash
+              ).asAuxData(config.headId)
             )
             val addRefundMetadata =
                 ModifyAuxiliaryData(_ => metadata)
@@ -128,9 +128,11 @@ private object DepositTxOps {
                   value = depositValue,
                   l2Payload = l2Payload,
                   depositFee = depositFee,
-                  submissionDeadline = submissionDeadline,
+                  requestValidityEndTime = requestValidityEndTime,
                   absorptionStartTime =
-                      config.txTiming.depositAbsorptionStartTime(submissionDeadline),
+                      config.txTiming.depositAbsorptionStartTime(requestValidityEndTime),
+                  absorptionEndTime =
+                      config.txTiming.depositAbsorptionEndTime(requestValidityEndTime)
                 )
             } yield DepositTx(
               depositProduced,
@@ -147,13 +149,14 @@ private object DepositTxOps {
             case MetadataParseError(e: MD.ParseError)
             case AlienDeposit(headAddress: ShelleyAddress)
             case HashMismatchL2Payload(
-                l2Payload: Array[Byte],
+                l2Payload: ByteString,
                 hash: Hash32
             )
             case MissingDepositOutputAtIndex(e: Int)
             case DepositUtxoError(e: DepositUtxo.DepositUtxoConversionError)
             case TxCborDeserializationFailed(e: Throwable)
-            case ValidityEndParseError(e: Throwable)
+            case SubmissionDeadlineParseError(e: Throwable)
+            case IncorrectSubmissionDeadline(actual: QuantizedInstant, expected: QuantizedInstant)
             case MultisigRegimeWitnessUtxoNotReferenced
             case InvalidDatumContent(e: Throwable)
             case InvalidDatumType
@@ -165,40 +168,28 @@ private object DepositTxOps {
       */
     final case class Parse(config: Config)(
         txBytes: Tx.Serialized,
-        l2Payload: Array[Byte]
+        l2Payload: ByteString,
+        requestValidityEndTime: RequestValidityEndTime
     ) {
         import Parse.*
         import Parse.Error.*
 
         def result: ParseErrorOr[DepositTx] = {
 
-            given OriginalCborByteArray = OriginalCborByteArray(txBytes)
+            given OriginalCborByteArray = OriginalCborByteArray(txBytes.bytes)
             given ProtocolVersion = config.cardanoProtocolVersion
 
-            io.bullet.borer.Cbor.decode(txBytes).to[Transaction].valueTry match {
+            io.bullet.borer.Cbor.decode(txBytes.bytes).to[Transaction].valueTry match {
                 case Success(tx) =>
                     for {
                         // Pull metadata
-                        d <- MD
-                            .parse(tx) match {
-                            case Right(d: Metadata.Deposit) => Right(d)
-                            case Right(o) =>
-                                Left(MetadataParseError(MD.UnexpectedTxType(o, "Deposit")))
-                            case Left(e) => Left(MetadataParseError(e))
-                        }
-                        Metadata.Deposit(headAddress, depositUtxoIx, l2PayloadHash, depositFee) =
-                            d
-
-                        // Check head address
-                        _ <- Either.cond(
-                          headAddress == config.headMultisigAddress,
-                          (),
-                          AlienDeposit(headAddress)
-                        )
+                        mdParseResult <- MD.Deposit.parse(tx).left.map(MetadataParseError(_))
+                        (headId, md) = mdParseResult
+                        Metadata.Deposit(depositUtxoIx, depositFee, l2PayloadHash) = md
 
                         // Compare hash with virtual outputs
                         calculatedL2PayloadHash: Hash32 = Hash(
-                          blake2b_256(ByteString.fromArray(l2Payload))
+                          blake2b_256(l2Payload)
                         )
                         _ <- Either.cond(
                           l2PayloadHash == calculatedL2PayloadHash,
@@ -224,16 +215,32 @@ private object DepositTxOps {
                             case _ => Left(InvalidDatumType)
                         }
 
+                        expectedSubmissionDeadline = config.txTiming.depositSubmissionDeadline(
+                          requestValidityEndTime
+                        )
+
                         // Check that ttl was properly quantized
-                        validityEnd <- Try {
+                        submissionDeadline <- Try {
                             val ttlSlot = tx.body.value.ttl.get
                             val ttlPosixMillis = config.slotConfig.slotToTime(ttlSlot)
                             val instant = java.time.Instant.ofEpochMilli(ttlPosixMillis)
                             instant.quantizeLosslessUnsafe(config.slotConfig)
                         } match {
-                            case Failure(exception) => Left(ValidityEndParseError(exception))
+                            case Failure(exception) => Left(SubmissionDeadlineParseError(exception))
                             case Success(v)         => Right(v)
                         }
+
+                        expectedTtl = expectedSubmissionDeadline.toSlot.slot
+
+//                        // Check that the submission deadline is as expected
+//                        _ <- Either.cond(
+//                          submissionDeadline == expectedSubmissionDeadline,
+//                          (),
+//                          IncorrectSubmissionDeadline(
+//                            submissionDeadline,
+//                            expectedSubmissionDeadline
+//                          )
+//                        )
 
                         // Check the multisig regime witness utxo was referenced
                         _ <- Either.cond(
@@ -244,19 +251,19 @@ private object DepositTxOps {
                         )
 
                         depositUtxo <- DepositUtxo
-                            .fromUtxo(
+                            .parseUtxo(
                               utxo =
                                   Utxo(TransactionInput(tx.id, depositUtxoIx), depositOutput.value),
                               headNativeScriptAddress = config.headMultisigAddress,
                               l2Payload = l2Payload,
                               depositFee = depositFee,
-                              submissionDeadline = validityEnd,
-                              txTiming = config.txTiming,
+                              requestValidityEndTime = requestValidityEndTime,
+                              txTiming = config.txTiming
                             )
                             .left
                             .map(DepositUtxoError(_))
 
-                    } yield DepositTx(depositUtxo, validityEnd, tx)
+                    } yield DepositTx(depositUtxo, submissionDeadline, tx)
                 case Failure(e) => Left(TxCborDeserializationFailed(e))
             }
         }

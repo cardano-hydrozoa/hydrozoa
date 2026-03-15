@@ -12,7 +12,8 @@ import hydrozoa.multisig.consensus.PeerLiaison.Request.*
 import hydrozoa.multisig.consensus.ack.{AckBlock, AckId, AckNumber}
 import hydrozoa.multisig.consensus.peer.HeadPeerId
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber, BlockStatus, BlockType}
-import hydrozoa.multisig.ledger.event.{LedgerEventId, LedgerEventNumber, UserEvent}
+import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
+import hydrozoa.multisig.server.UserRequestWithId
 import scala.collection.immutable.Queue
 
 trait PeerLiaison(
@@ -92,7 +93,7 @@ trait PeerLiaison(
                     _ <- conn.remotePeerLiaison ! next
                     _ <- x.ack.traverse_(conn.consensusActor ! _)
                     _ <- x.blockBrief.traverse_(conn.blockWeaver ! _)
-                    _ <- x.events.traverse_(conn.blockWeaver ! _)
+                    _ <- x.requests.traverse_(conn.blockWeaver ! _)
                 } yield ()
 
             // TODO: when the final block is confirmed, inform the counterpart that
@@ -109,10 +110,10 @@ trait PeerLiaison(
             Ref.unsafe[IO, GetMsgBatch](GetMsgBatch.initial)
         private val nAck = Ref.unsafe[IO, AckNumber](AckNumber(0))
         private val nBlock = Ref.unsafe[IO, BlockNumber](BlockNumber(0))
-        private val nEvent = Ref.unsafe[IO, LedgerEventNumber](LedgerEventNumber(0))
+        private val nEvent = Ref.unsafe[IO, RequestNumber](RequestNumber(0))
         private val qAck = Ref.unsafe[IO, Queue[AckBlock]](Queue())
         private val qBlock = Ref.unsafe[IO, Queue[BlockBrief.Next]](Queue())
-        private val qEvent = Ref.unsafe[IO, Queue[UserEvent]](Queue())
+        private val qEvent = Ref.unsafe[IO, Queue[UserRequestWithId]](Queue())
         private val sendBatchImmediately = Ref.unsafe[IO, Option[GetMsgBatch]](None)
 
         /** Check whether there are no acks, blocks, or events queued-up to be sent out. */
@@ -125,10 +126,10 @@ trait PeerLiaison(
 
         infix def appendToOutbox(x: RemoteBroadcast): IO[Unit] =
             x match {
-                case y: UserEvent =>
+                case y: UserRequestWithId =>
                     for {
                         nEvent <- this.nEvent.get
-                        nY = y.eventNum
+                        nY = y.requestId.requestNum
                         _ <- IO.raiseWhen(nEvent.increment != nY)(
                           Error("Bad LedgerEvent increment.")
                         )
@@ -175,13 +176,13 @@ trait PeerLiaison(
 
         case object OutOfBoundsGetMsgBatch extends ExtractNewMsgBatchError
 
-        /** Construct a [[NewMsgBatch]] containing acks, blocks, and events starting '''after''' the
-          * numbers indicated in a [[GetMsgBatch]] request, up to the configured limits.
+        /** Construct a [[NewMsgBatch]] containing acks, blocks, and requests starting '''after'''
+          * the numbers indicated in a [[GetMsgBatch]] request, up to the configured limits.
           *
           * @param batchReq
           *   the [[GetMsgBatch]] request
-          * @param maxEvents
-          *   the maximum number of ledger events to include in the [[NewMsgBatch]].
+          * @param maxRequests
+          *   the maximum number of user requests to include in the [[NewMsgBatch]].
           *
           * Note: if the [[GetMsgBatch]] bounds are lower than the queued messages, then the comm
           * actor would need to query the database to properly respond. Currently, we just respond
@@ -193,7 +194,7 @@ trait PeerLiaison(
 
         def buildNewMsgBatch(
             batchReq: GetMsgBatch,
-            maxEvents: Int
+            maxRequests: Int
         ): IO[Either[ExtractNewMsgBatchError, NewMsgBatch]] =
             (for {
                 nAck <- this.nAck.get
@@ -203,7 +204,7 @@ trait PeerLiaison(
                 _ <- IO.raiseWhen(
                   nAck < batchReq.ackNum ||
                       nBlock < batchReq.blockNum ||
-                      nEvents < batchReq.eventNum
+                      nEvents < batchReq.requestNum
                 )(OutOfBoundsGetMsgBatch)
 
                 _ <- this.queuesAreEmpty.ifM(IO.raiseError(EmptyNewMsgBatch), IO.unit)
@@ -213,36 +214,36 @@ trait PeerLiaison(
                   _.dropWhile(_.blockNum <= batchReq.blockNum).headOption
                 )
                 events <- this.qEvent.get.map(
-                  _.dropWhile(_.eventId._2 <= batchReq.eventNum).take(maxEvents)
+                  _.dropWhile(_.requestId._2 <= batchReq.requestNum).take(maxRequests)
                 )
             } yield NewMsgBatch(
               batchNum = batchReq.batchNum,
               ack = mAck,
               blockBrief = mBlock,
-              events = events.toList
+              requests = events.toList
             )).attemptNarrow
 
         def dequeueConfirmed(x: BlockConfirmed): IO[Unit] = {
             import x.*
             val ackNum: AckNumber = AckNumber.neededToConfirm(header)
-            val eventNum: LedgerEventNumber = events.collect {
-                case x if x._1.peerNum == config.ownHeadPeerId.peerNum => x._1.eventNum
+            val requestNum: RequestNumber = events.collect {
+                case x if x._1.peerNum == config.ownHeadPeerId.peerNum => x._1.requestNum
             }.max
             for {
                 _ <- this.qAck.update(q => q.dropWhile(_.ackId._2 <= ackNum))
                 _ <- this.qBlock.update(q => q.dropWhile(_.blockNum <= blockNum))
-                _ <- this.qEvent.update(q => q.dropWhile(_.eventNum <= eventNum))
+                _ <- this.qEvent.update(q => q.dropWhile(_.requestId.requestNum <= requestNum))
             } yield ()
         }
 
         def verifyBatchAndGetNext(receivedBatch: NewMsgBatch): IO[GetMsgBatch] = {
-            import receivedBatch.{ack, blockBrief, events}
+            import receivedBatch.{ack, blockBrief, requests}
             for {
                 current <- this.currentlyRequesting.get
                 nextBatchNum = current.batchNum.increment
                 nextAckNum = current.ackNum.increment
                 nextBlockNum = remotePeerId.nextLeaderBlock(current.blockNum)
-                nextEventNum = current.eventNum.increment
+                nextRequestNum = current.requestNum.increment
 
                 correctBatchNum = current.batchNum == receivedBatch.batchNum
 
@@ -258,22 +259,23 @@ trait PeerLiaison(
 
                 // First received event ID is the increment of the requested event ID
                 // and all subsequent received event IDs are consecutive from it.
-                correctReceivedEventIds =
-                    events.headOption.forall(_.eventNum == nextEventNum) &&
-                        events
-                            .map(_.eventId)
+                correctReceivedRequestIds =
+                    requests.headOption.forall(_.requestId.requestNum == nextRequestNum) &&
+                        requests
+                            .map(_.requestId)
                             .iterator
                             .sliding(2)
                             .withPartial(false)
                             .forall(x => x.head.precedes(x(1)))
             } yield
-                if correctBatchNum && correctAckNum && correctBlockNum && correctReceivedEventIds
+                if correctBatchNum && correctAckNum && correctBlockNum && correctReceivedRequestIds
                 then
                     GetMsgBatch(
                       batchNum = nextBatchNum,
                       ackNum = ack.fold(current.ackNum)(_.ackNum),
                       blockNum = blockBrief.fold(current.blockNum)(_.blockNum),
-                      eventNum = events.lastOption.fold(current.eventNum)(_.eventNum)
+                      requestNum =
+                          requests.lastOption.fold(current.requestNum)(_.requestId.requestNum)
                     )
                 else current
         }
@@ -318,7 +320,7 @@ object PeerLiaison {
     case object PreStart
 
     object Request {
-        type RemoteBroadcast = AckBlock | BlockBrief.Next | UserEvent
+        type RemoteBroadcast = AckBlock | BlockBrief.Next | UserRequestWithId
 
         /** Request by a comm actor to its remote comm-actor counterpart for a batch of events,
           * blocks, or block acknowledgements originating from the remote peer.
@@ -329,14 +331,14 @@ object PeerLiaison {
           *   The requester's last seen block acknowledgement from the remote peer.
           * @param blockNum
           *   The requester's last seen block from the remote peer.
-          * @param eventNum
+          * @param requestNum
           *   The requester's last seen event number from the remote peer.
           */
         final case class GetMsgBatch(
             batchNum: Batch.Number,
             ackNum: AckNumber,
             blockNum: BlockNumber,
-            eventNum: LedgerEventNumber
+            requestNum: RequestNumber
         )
 
         object GetMsgBatch {
@@ -344,7 +346,7 @@ object PeerLiaison {
               batchNum = Batch.Number(0),
               ackNum = AckNumber(0),
               blockNum = BlockNumber(0),
-              eventNum = LedgerEventNumber(0)
+              requestNum = RequestNumber(0)
             )
         }
 
@@ -359,7 +361,7 @@ object PeerLiaison {
           *   If provided, a block originating from the responder after the requested [[Number]].
           *   The initial block is never sent in a message batch because it's already pre-confirmed
           *   in the head config, which every peer already has locally.
-          * @param events
+          * @param requests
           *   A possibly empty list of events originating from the responder after the requested
           *   [[LedgerEventNum]].
           */
@@ -367,7 +369,7 @@ object PeerLiaison {
             batchNum: Batch.Number,
             ack: Option[AckBlock],
             blockBrief: Option[BlockBrief.Next],
-            events: List[UserEvent]
+            requests: List[UserRequestWithId]
         )
     }
 

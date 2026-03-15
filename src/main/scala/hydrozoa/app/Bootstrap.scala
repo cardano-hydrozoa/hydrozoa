@@ -12,6 +12,7 @@ import hydrozoa.config.head.initialization.{InitialBlock, InitializationParamete
 import hydrozoa.config.head.multisig.fallback.FallbackContingency.mkFallbackContingencyWithDefaults
 import hydrozoa.config.head.multisig.settlement.SettlementConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.config.head.parameters.HeadParameters
 import hydrozoa.config.head.peers.HeadPeers
@@ -19,6 +20,7 @@ import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.config.node.NodeConfig
 import hydrozoa.config.node.operation.liquidation.NodeOperationLiquidationConfig
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import hydrozoa.lib.cardano.scalus.ShelleyAddressExtra
 import hydrozoa.lib.cardano.wallet.WalletModule
@@ -92,7 +94,8 @@ object Bootstrap:
         _ <- IO.pure(())
 
         ownHeadWallet = HeadPeerWallet.scalusWallet(HeadPeerNumber.zero, vKey, sKey)
-        startTime <- IO.realTimeInstant.map(instant => instant.quantize(cardanoNetwork.slotConfig))
+        startTimeInstant <- realTimeQuantizedInstant(cardanoNetwork.slotConfig)
+        blockCreationStartTime = BlockCreationStartTime(startTimeInstant)
 
         headParams = HeadParameters(
           txTiming = TxTiming.demo(cardanoNetwork.slotConfig),
@@ -178,7 +181,6 @@ object Bootstrap:
         valueSelected = Value.combine(utxosSelected.map(_.output.value).toList)
 
         initializationParameters = InitializationParameters(
-          headStartTime = startTime,
           initialEvacuationMap = evacMap,
           initialEquityContributions =
               NonEmptyMap(HeadPeerNumber.zero -> minEquity, SortedMap.empty),
@@ -203,8 +205,13 @@ object Bootstrap:
           initializationParams = initializationParameters
         ).get
 
+        endTimeInstant <- IO.realTimeInstant.map(instant =>
+            instant.quantize(cardanoNetwork.slotConfig)
+        )
+        blockCreationEndTime = BlockCreationEndTime(endTimeInstant)
+
         initTxSeq = InitializationTxSeq
-            .Build(preinit)
+            .Build(preinit)(blockCreationEndTime)
             .result
             .fold(
               e => {
@@ -213,13 +220,16 @@ object Bootstrap:
               },
               x => x
             )
+
     } yield {
 
         val initialBlock = InitialBlock(
           Block.MultiSigned.Initial(
             blockBrief = BlockBrief.Initial(
               BlockHeader.Initial(
-                startTime = startTime,
+                startTime = blockCreationStartTime,
+                endTime = blockCreationEndTime,
+                fallbackTxStartTime = initTxSeq.fallbackTx.fallbackTxStartTime,
                 kzgCommitment = evacMap.kzgCommitment
               )
             ),

@@ -1,12 +1,14 @@
 package hydrozoa.multisig.ledger.l1.tx
 
-import hydrozoa.config.head.initialization.InitialBlock
+import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toQuantizedInstant}
+import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
 import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.explainConst
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
+import hydrozoa.multisig.ledger.l2.Destination
 import monocle.{Focus, Lens}
 import scala.util.{Failure, Success}
 import scalus.cardano.ledger.*
@@ -21,16 +23,19 @@ import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Sen
 sealed trait RefundTx {
     def tx: Transaction
     def mStartTime: Option[QuantizedInstant] = this match {
-        case self: RefundTx.PostDated => Some(self.startTime)
-        case _                        => None
+        case self: RefundTx.PostDated => Some(self.refundStart)
     }
 }
 
 object RefundTx {
     export RefundTxOps.{Build, Parse}
 
-    final case class PostDated(override val tx: Transaction, startTime: QuantizedInstant)
-        extends RefundTx,
+    final case class PostDated(
+        override val tx: Transaction,
+        refundStart: QuantizedInstant,
+        refundDestination: Destination,
+        requestId: RequestId
+    ) extends RefundTx,
           Tx[PostDated] {
         override val txLens: Lens[PostDated, Transaction] = Focus[PostDated](_.tx)
         override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
@@ -38,19 +43,19 @@ object RefundTx {
 }
 
 private object RefundTxOps {
-    type Config = CardanoNetwork.Section & HeadPeers.Section & InitialBlock.Section
+    type Config = CardanoNetwork.Section & HeadPeers.Section & InitialBlock.Section &
+        InitializationParameters.Section
 
     object Build {
 
         final case class PostDated(override val config: Config)(
             override val depositUtxo: DepositUtxo,
-            override val refundInstructions: DepositUtxo.Refund.Instructions
+            override val refundInstructions: DepositUtxo.Refund.Instructions,
+            override val requestId: RequestId
         ) extends Build[RefundTx.PostDated] {
 
             override val stepRefundMetadata =
-                ModifyAuxiliaryData(_ =>
-                    Some(MD(MD.Refund(headAddress = config.headMultisigAddress)))
-                )
+                ModifyAuxiliaryData(_ => Some(MD.Refund().asAuxData(config.headId)))
 
             override def result: Either[(SomeBuildError, String), RefundTx.PostDated] =
 
@@ -91,7 +96,9 @@ private object RefundTxOps {
                     tx = finalized.transaction
                 } yield RefundTx.PostDated(
                   tx,
-                  refundInstructions.validityStart
+                  refundInstructions.validityStart,
+                  Destination(refundInstructions.address, refundInstructions.mbDatum),
+                  requestId
                 )
         }
     }
@@ -100,6 +107,7 @@ private object RefundTxOps {
         def config: Config
         def depositUtxo: DepositUtxo
         def refundInstructions: DepositUtxo.Refund.Instructions
+        def requestId: RequestId
         //
         def stepRefundMetadata: ModifyAuxiliaryData
         def result: Either[(SomeBuildError, String), T]
@@ -112,41 +120,59 @@ private object RefundTxOps {
             case MetadataParseError(wrapped: MD.ParseError)
             case TxCborDeserializationFailed(e: Throwable)
             case ValidityStartIsMissing
+            case InvalidRefundDestination
         }
     }
 
     final case class Parse(config: Config)(
         txBytes: Tx.Serialized,
+        requestId: RequestId
     ) {
         import Parse.*
         import Parse.Error.*
 
         def result: ParseErrorOr[RefundTx.PostDated] = {
 
-            given OriginalCborByteArray = OriginalCborByteArray(txBytes)
+            given OriginalCborByteArray = OriginalCborByteArray(txBytes.bytes)
             given ProtocolVersion = config.cardanoProtocolVersion
 
-            io.bullet.borer.Cbor.decode(txBytes).to[Transaction].valueTry match {
+            io.bullet.borer.Cbor.decode(txBytes.bytes).to[Transaction].valueTry match {
                 case Success(tx) =>
                     for {
+                        mdParseResult <- MD.Refund.parse(tx).left.map(MetadataParseError(_))
+                        (head, md) = mdParseResult
+                        Metadata.Refund() = md
 
-                        _ <- MD.parse(tx) match {
-                            case Right(md: Metadata.Refund) => Right(md)
-                            case Right(md) =>
-                                Left(MetadataParseError(MD.UnexpectedTxType(md, "Refund")))
-                            case Left(e) => Left(MetadataParseError(e))
-                        }
-
-                        refundTx: RefundTx.PostDated <- tx.body.value.validityStartSlot match {
+                        startInstant <- tx.body.value.validityStartSlot match {
                             case Some(startSlot) =>
                                 Right(
-                                  RefundTx.PostDated(
-                                    tx,
-                                    Slot(startSlot).toQuantizedInstant(config.slotConfig)
-                                  )
+                                  Slot(startSlot).toQuantizedInstant(config.slotConfig)
                                 )
                             case None => Left(ValidityStartIsMissing)
                         }
+
+                        destination: Destination <- tx.body.value.outputs match {
+                            case IndexedSeq(
+                                  Sized(
+                                    TransactionOutput.Babbage(address, _, Some(Inline(d)), None),
+                                    _
+                                  )
+                                ) =>
+                                Right(Destination(address, Some(d)))
+                            case IndexedSeq(
+                                  Sized(TransactionOutput.Babbage(address, _, None, None), _)
+                                ) =>
+                                Right(Destination(address, None))
+                            case _ => Left(InvalidRefundDestination)
+                        }
+
+                        refundTx: RefundTx.PostDated = RefundTx.PostDated(
+                          tx,
+                          startInstant,
+                          destination,
+                          requestId
+                        )
+
                     } yield refundTx
                 case Failure(e) => Left(TxCborDeserializationFailed(e))
             }

@@ -11,7 +11,6 @@ import hydrozoa.config.head.parameters.HeadParameters
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.config.head.rulebased.scripts.RuleBasedScriptAddresses
-import hydrozoa.lib.cardano.scalus.QuantizedTime
 import hydrozoa.lib.logging.Logging
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
@@ -47,14 +46,6 @@ object HeadConfig {
         initialBlock: Block.MultiSigned.Initial,
         initializationParams: InitializationParameters,
     ): Option[HeadConfig] = {
-        val startTimesMatch = initialBlock.startTime == initializationParams.headStartTime
-
-        if !startTimesMatch then {
-            logger.error(
-              "Start times don't match between initial block and initialization parameters."
-            )
-        }
-
         for {
             headConfigPreinit <- HeadConfig.Preinit(
               cardanoNetwork,
@@ -62,7 +53,7 @@ object HeadConfig {
               headPeers,
               initializationParams
             )
-            result <- Option.when(startTimesMatch)(new HeadConfig(headConfigPreinit, initialBlock))
+            result <- Some(new HeadConfig(headConfigPreinit, initialBlock))
         } yield result
 
     }
@@ -80,9 +71,6 @@ object HeadConfig {
         override def headPeers: HeadPeers = headConfigPreinit.headPeers
         override def initializationParams: InitializationParameters =
             headConfigPreinit.initializationParams
-
-        override transparent inline def headStartTime: QuantizedTime.QuantizedInstant =
-            initialBlockSection.headStartTime
     }
 
     final case class Preinit private[head] (
@@ -161,9 +149,6 @@ object HeadConfig {
                 headPeers.nHeadPeers
             override transparent inline def headMultisigScript: HeadMultisigScript =
                 headPeers.headMultisigScript
-
-            override def headStartTime: QuantizedTime.QuantizedInstant =
-                initializationParams.headStartTime
 
             // TODO: this type allows non-babbage outputs
             override transparent inline def initialEvacuationMap: EvacuationMap =

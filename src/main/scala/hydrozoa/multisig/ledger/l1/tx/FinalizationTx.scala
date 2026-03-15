@@ -2,18 +2,17 @@ package hydrozoa.multisig.ledger.l1.tx
 
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.FinalizationTxEndTime
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
-import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toQuantizedInstant}
 import hydrozoa.multisig.ledger.block.BlockVersion
-import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
 import hydrozoa.multisig.ledger.l1.tx.Metadata.Finalization
 import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.{BuilderResult, explainConst}
 import hydrozoa.multisig.ledger.l1.txseq.RolloutTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo, RolloutUtxo}
 import monocle.{Focus, Lens}
 import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.{Coin, Sized, Slot, Transaction, TransactionInput, TransactionOutput, Utxo, Value}
+import scalus.cardano.ledger.{Coin, Sized, Transaction, TransactionInput, TransactionOutput, Utxo, Value}
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
@@ -25,10 +24,10 @@ sealed trait FinalizationTx
       MultisigTreasuryUtxo.Spent,
       MultisigRegimeUtxo.Spent,
       RolloutUtxo.MbProduced,
-      HasResolvedUtxos,
-      HasValidityEnd {
+      HasResolvedUtxos {
     def tx: Transaction
     def txLens: Lens[FinalizationTx, Transaction]
+    def finalizationTxEndTime: FinalizationTxEndTime
 }
 
 object FinalizationTx {
@@ -43,7 +42,7 @@ object FinalizationTx {
     sealed trait NoRollouts extends FinalizationTx
 
     case class NoPayouts(
-        override val validityEnd: QuantizedInstant,
+        override val finalizationTxEndTime: FinalizationTxEndTime,
         override val tx: Transaction,
         override val majorVersionProduced: BlockVersion.Major,
         override val treasurySpent: MultisigTreasuryUtxo,
@@ -54,7 +53,7 @@ object FinalizationTx {
     ) extends NoRollouts
 
     case class WithOnlyDirectPayouts(
-        override val validityEnd: QuantizedInstant,
+        override val finalizationTxEndTime: FinalizationTxEndTime,
         override val tx: Transaction,
         override val majorVersionProduced: BlockVersion.Major,
         override val treasurySpent: MultisigTreasuryUtxo,
@@ -67,7 +66,7 @@ object FinalizationTx {
           NoRollouts
 
     case class WithRollouts(
-        override val validityEnd: QuantizedInstant,
+        override val finalizationTxEndTime: FinalizationTxEndTime,
         override val tx: Transaction,
         override val majorVersionProduced: BlockVersion.Major,
         override val treasurySpent: MultisigTreasuryUtxo,
@@ -124,9 +123,9 @@ private object FinalizationTxOps {
         case class NoPayouts(override val config: Config)(
             override val majorVersionProduced: BlockVersion.Major,
             override val treasuryToSpend: MultisigTreasuryUtxo,
-            override val validityEnd: QuantizedInstant,
+            override val finalizationTxEndTime: FinalizationTxEndTime,
         ) extends Build[FinalizationTx.NoPayouts](
-              mbRolloutTxSeqPartial = None
+              mbRolloutTxSeqPartial = None,
             ) {
             override def complete(
                 state: State
@@ -137,7 +136,7 @@ private object FinalizationTxOps {
         case class WithPayouts(override val config: Config)(
             override val majorVersionProduced: BlockVersion.Major,
             override val treasuryToSpend: MultisigTreasuryUtxo,
-            override val validityEnd: QuantizedInstant,
+            override val finalizationTxEndTime: FinalizationTxEndTime,
             rolloutTxSeqPartial: RolloutTxSeq.PartialResult
         ) extends Build[FinalizationTx.WithPayouts](
               mbRolloutTxSeqPartial = Some(rolloutTxSeqPartial)
@@ -152,13 +151,14 @@ private object FinalizationTxOps {
     sealed trait Build[T <: FinalizationTx](
         mbRolloutTxSeqPartial: Option[RolloutTxSeq.PartialResult]
     ) extends BlockVersion.Major.Produced,
-          MultisigTreasuryUtxo.ToSpend,
-          HasValidityEnd {
+          MultisigTreasuryUtxo.ToSpend {
 
         import Build.*
         import Error.*
 
         def config: Config
+
+        def finalizationTxEndTime: FinalizationTxEndTime
 
         def complete(state: State): TxBuilderResult[ResultFor[T]]
 
@@ -205,11 +205,10 @@ private object FinalizationTxOps {
 
             /////////////////////////////////////////////////////////
             // Base steps
-            private val modifyAuxiliaryData = ModifyAuxiliaryData(_ =>
-                Some(MD(Finalization(headAddress = config.headMultisigAddress)))
-            )
+            private val modifyAuxiliaryData =
+                ModifyAuxiliaryData(_ => Some(Finalization().asAuxData(config.headId)))
 
-            private val validityEndSlot = ValidityEndSlot(validityEnd.toSlot.slot)
+            private val validityEndSlot = ValidityEndSlot(finalizationTxEndTime.toSlot.slot)
 
             private val baseSteps = List(modifyAuxiliaryData, validityEndSlot)
 
@@ -317,8 +316,7 @@ private object FinalizationTxOps {
         private[tx] object CompleteNoPayouts {
             def apply(state: State): Result.NoPayouts = {
                 val finalizationTx: FinalizationTx.NoPayouts = FinalizationTx.NoPayouts(
-                  validityEnd = Slot(state.ctx.transaction.body.value.ttl.get)
-                      .toQuantizedInstant(config.cardanoInfo.slotConfig),
+                  finalizationTxEndTime = finalizationTxEndTime,
                   tx = state.ctx.transaction,
                   majorVersionProduced = majorVersionProduced,
                   treasurySpent = treasuryToSpend,
@@ -357,9 +355,7 @@ private object FinalizationTxOps {
                         treasurySpent = treasuryToSpend,
                         multisigRegimeUtxoSpent = config.multisigRegimeUtxo,
                         tx = tx,
-                        // this is safe since we always set ttl
-                        validityEnd = Slot(tx.body.value.ttl.get)
-                            .toQuantizedInstant(config.cardanoInfo.slotConfig),
+                        finalizationTxEndTime = finalizationTxEndTime,
                         payoutCount = payoutCount,
                         resolvedUtxos = finished.ctx.resolvedUtxos
                       )
@@ -395,8 +391,7 @@ private object FinalizationTxOps {
                               rolloutProduced = unsafeGetRolloutProduced(finished.ctx),
                               tx = tx,
                               // this is safe since we always set ttl
-                              validityEnd = Slot(tx.body.value.ttl.get)
-                                  .toQuantizedInstant(config.cardanoInfo.slotConfig),
+                              finalizationTxEndTime = finalizationTxEndTime,
                               payoutCount = payoutCount,
                               resolvedUtxos = finished.ctx.resolvedUtxos
                             ),

@@ -2,9 +2,9 @@ package hydrozoa.multisig.ledger.l1.tx
 
 import cats.data.NonEmptyList
 import hydrozoa.config.head.HeadConfig
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.config.head.initialization.InitializationParameters
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.FallbackTxStartTime
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
 import hydrozoa.multisig.ledger.l1.tx.Metadata.Fallback
 import hydrozoa.multisig.ledger.l1.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.{RuleBasedTreasuryDatum, UnresolvedDatum}
@@ -32,7 +32,7 @@ import scalus.uplc.builtin.Data.toData
   *   - Default Vote Utxo
   */
 final case class FallbackTx(
-    override val validityStart: QuantizedInstant,
+    fallbackTxStartTime: FallbackTxStartTime,
     override val treasurySpent: MultisigTreasuryUtxo,
     override val treasuryProduced: RuleBasedTreasuryUtxo,
     override val multisigRegimeUtxoSpent: MultisigRegimeUtxo,
@@ -41,8 +41,7 @@ final case class FallbackTx(
     override val resolvedUtxos: ResolvedUtxos,
     // TODO type better
     peerVoteUtxosProduced: NonEmptyList[Utxo]
-) extends HasValidityStart,
-      MultisigTreasuryUtxo.Spent,
+) extends MultisigTreasuryUtxo.Spent,
       MultisigRegimeUtxo.Spent,
       RuleBasedTreasuryUtxo.Produced,
       Tx[FallbackTx] {}
@@ -52,7 +51,7 @@ object FallbackTx {
 }
 
 private object FallbackTxOps {
-    type Config = HeadConfig.Preinit.Section
+    type Config = HeadConfig.Preinit.Section & InitializationParameters.Section
 
     private val logger = org.slf4j.LoggerFactory.getLogger("FallbackTx")
 
@@ -66,7 +65,7 @@ private object FallbackTxOps {
 
     // TODO: Distribute equity
     final case class Build(config: Config)(
-        validityStartTime: QuantizedInstant,
+        validityStartTime: FallbackTxStartTime,
         treasuryUtxoSpent: MultisigTreasuryUtxo,
         multisigRegimeUtxo: MultisigRegimeUtxo,
     ) {
@@ -87,9 +86,8 @@ private object FallbackTxOps {
                 def apply(): List[TransactionBuilderStep] =
                     List(modifyAuxiliaryData, validityStartSlot)
 
-                val modifyAuxiliaryData = ModifyAuxiliaryData(_ =>
-                    Some(MD.apply(Fallback(config.ruleBasedTreasuryAddress)))
-                )
+                val modifyAuxiliaryData =
+                    ModifyAuxiliaryData(_ => Some(Fallback().asAuxData(config.headId)))
 
                 val validityStartSlot = ValidityStartSlot(validityStartTime.toSlot.slot)
             }
@@ -252,7 +250,7 @@ private object FallbackTxOps {
                 )
 
                 FallbackTx(
-                  validityStart = validityStartTime,
+                  fallbackTxStartTime = validityStartTime,
                   treasurySpent = treasuryUtxoSpent,
                   treasuryProduced = treasuryProduced,
                   multisigRegimeUtxoSpent = multisigRegimeUtxo,

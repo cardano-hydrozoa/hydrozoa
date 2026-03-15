@@ -1,26 +1,20 @@
 package hydrozoa.multisig.ledger.l1
 
 import cats.data.*
-import cats.effect.IO
 import cats.syntax.all.*
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, FallbackTxStartTime}
 import hydrozoa.multisig.ledger
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
-import hydrozoa.multisig.ledger.event.LedgerEventId
-import hydrozoa.multisig.ledger.event.UserEvent.DepositEvent
-import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.obligation.Payout
+import hydrozoa.multisig.ledger.l1.L1LedgerM.Error.{DepositTxInvalidTTL, ParseError, SettlementTxSeqBuilderError}
+import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import hydrozoa.multisig.ledger.l1.txseq.{DepositRefundTxSeq, FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.l1.utxo.{DepositUtxo, MultisigTreasuryUtxo}
-import monocle.syntax.all.*
-import scala.collection.immutable.{Queue, TreeMap}
-import scala.math.Ordered.orderingToOrdered
-
-import L1LedgerM.Error.{ParseError, SettlementTxSeqBuilderError, SubmissionPeriodIsOver}
+import hydrozoa.multisig.server.UserRequestWithId
 
 private type E[A] = Either[L1LedgerM.Error, A]
 private type S[A] = cats.data.StateT[E, L1LedgerM.State, A]
@@ -45,7 +39,7 @@ case class L1LedgerM[A] private (private val unL1LedgerM: RT[A]) {
       *
       * @return
       */
-    private def run(
+    def run(
         config: L1LedgerM.Config,
         initialState: L1LedgerM.State
     ): Either[L1LedgerM.Error, (L1LedgerM.State, A)] =
@@ -83,18 +77,21 @@ object L1LedgerM {
       * validity period ended prior to the start of the current block.
       */
     def registerDeposit(
-        req: DepositEvent,
-        blockStartTime: QuantizedInstant
+        requestWithId: UserRequestWithId.DepositRequest
     ): L1LedgerM[(DepositUtxo, RefundTx.PostDated)] = {
-        import req.*
+        import requestWithId.*
+        import request.*
         for {
             config <- ask
+            headerSubmissionDeadline = config.txTiming.depositSubmissionDeadline(header.validityEnd)
+
             parseRes =
                 DepositRefundTxSeq
                     .Parse(config)(
-                      depositTxBytes = depositTxBytes,
-                      refundTxBytes = refundTxBytes,
-                      l2Payload = l2Payload
+                      depositTxBytes = body.l1Payload,
+                      l2Payload = body.l2Payload,
+                      requestId = requestWithId.requestId,
+                      requestValidityEndTime = header.validityEnd
                     )
                     .result
                     .left
@@ -102,26 +99,13 @@ object L1LedgerM {
             depositRefundTxSeq <- lift(parseRes)
 
             depositProduced <- lift(
-              // TODO: add explicit vals to cope boolean blindness
-              // Check that submission is still possible and if not - reject
-              if depositRefundTxSeq.depositTx.validityEnd <= blockStartTime
-              then Left(SubmissionPeriodIsOver)
-
-              // TODO: I believe we should remove it
-              // Check absorption is still possible
-              // The previous check is stronger I think
-              // else if config.txTiming.depositAbsorptionEndTime(
-              //      depositRefundTxSeq.depositTx.validityEnd
-              //    ) < blockStartTime
-              // then Left(AbsorptionPeriodExpired(depositRefundTxSeq))
-              else Right(depositRefundTxSeq.depositTx.depositProduced)
+              if depositRefundTxSeq.depositTx.submissionDeadline == headerSubmissionDeadline
+              then Right(depositRefundTxSeq.depositTx.depositProduced)
+              else Left(DepositTxInvalidTTL)
             )
 
             s <- get
-            absorptionStartTime = config.txTiming.depositAbsorptionStartTime(
-              depositProduced.submissionDeadline
-            )
-            updatedMap <- s.deposits.appended((eventId, depositProduced))
+            updatedMap = s.deposits.append(DepositsMap.Entry(requestId, depositProduced))
             newState = s.copy(deposits = updatedMap)
             _ <- set(newState)
         } yield (depositProduced, depositRefundTxSeq.refundTx)
@@ -133,10 +117,10 @@ object L1LedgerM {
       */
     def mkSettlementTxSeq(
         nextKzg: KzgCommitment,
-        absorbedDeposits: Queue[(LedgerEventId, DepositUtxo)],
+        absorbedDeposits: List[DepositUtxo],
         payoutObligations: Vector[Payout.Obligation],
-        blockCreatedOn: QuantizedInstant,
-        competingFallbackValidityStart: QuantizedInstant,
+        blockCreationEndTime: BlockCreationEndTime,
+        competingFallbackValidityStart: FallbackTxStartTime,
     ): L1LedgerM[SettlementTxSeq] = {
 
         for {
@@ -157,10 +141,10 @@ object L1LedgerM {
                     kzgCommitment = nextKzg,
                     majorVersionProduced = majorVersionProduced,
                     treasuryToSpend = state.treasury,
-                    depositsToSpend = Vector.from(absorbedDeposits.map(_._2).toList),
+                    depositsToSpend = absorbedDeposits,
                     payoutObligationsRemaining = payoutObligations,
                     competingFallbackValidityStart = competingFallbackValidityStart,
-                    blockCreatedOn = blockCreatedOn
+                    blockCreationEndTime = blockCreationEndTime
                   )
                   .result
                   .left
@@ -180,14 +164,9 @@ object L1LedgerM {
       * when the block weaver sends the single to close the block in leader mode.
       * @return
       */
-    def handleBlockBrief(
-        ineligibleDeposits: DepositsMap,
-    ): L1LedgerM[Unit] = for {
+    def handleBlockBrief(survivingDeposits: DepositsMap): L1LedgerM[Unit] = for {
         state <- get
-
-        newState = state.copy(
-          deposits = ineligibleDeposits
-        )
+        newState = state.copy(deposits = survivingDeposits)
         _ <- set(newState)
     } yield ()
 
@@ -201,8 +180,7 @@ object L1LedgerM {
     // TODO (fund14): add Refund.Immediates to the return type
     def finalizeLedger(
         payoutObligationsRemaining: Vector[Payout.Obligation],
-        blockCreatedOn: QuantizedInstant,
-        competingFallbackValidityStart: QuantizedInstant,
+        competingFallbackValidityStart: FallbackTxStartTime,
     ): L1LedgerM[FinalizationTxSeq] = {
         for {
             s <- get
@@ -214,8 +192,7 @@ object L1LedgerM {
                         BlockVersion.Major(s.treasury.datum.versionMajor.toInt).increment,
                     treasuryToSpend = s.treasury,
                     payoutObligationsRemaining = payoutObligationsRemaining,
-                    competingFallbackValidityStart = competingFallbackValidityStart,
-                    blockCreatedOn = blockCreatedOn,
+                    competingFallbackValidityStart = competingFallbackValidityStart
                   )
                   .result
                   .left
@@ -229,78 +206,7 @@ object L1LedgerM {
         deposits: DepositsMap
     )
 
-    /** deposits in a TreeMap according to their absorption start time. The Tree map ensures that
-      * the traversal order is according to the absorption start time, with ties being broken
-      * according to the total ordering of the ledger events, such that each queue in this map is a
-      * subsequence of the totally-ordered event stream.
-      */
-    final case class DepositsMap private (
-        treeMap: TreeMap[QuantizedInstant, Queue[(LedgerEventId, DepositUtxo)]]
-    ) {
-
-        /** Append an event to the end of the queue of events with the same start time.
-          */
-        def appended(event: (LedgerEventId, DepositUtxo)): L1LedgerM[DepositsMap] = {
-            for {
-                config <- ask
-                res = this.appended(event, config.txTiming)
-            } yield res
-        }
-
-        /** Append an event to the end of the queue of events with the same start time.
-          */
-        def appended(event: (LedgerEventId, DepositUtxo), txTiming: TxTiming): DepositsMap = {
-            val absorptionStartTime =
-                txTiming.depositAbsorptionStartTime(event._2.submissionDeadline)
-            DepositsMap(this.treeMap.updatedWith(absorptionStartTime) {
-                case None        => Some(Queue(event))
-                case Some(queue) => Some(queue.appended(event))
-            })
-        }
-
-        def ++(otherMap: DepositsMap): DepositsMap =
-            DepositsMap(this.treeMap ++ otherMap.treeMap)
-
-        def splitAt(n: Int): (DepositsMap, DepositsMap) = {
-            val (p1, p2) = this.treeMap.splitAt(n)
-            (DepositsMap(p1), DepositsMap(p2))
-        }
-
-        def foldLeft[Acc](acc: Acc)(
-            f: (Acc, (QuantizedInstant, Queue[(LedgerEventId, DepositUtxo)])) => Acc
-        ): Acc =
-            treeMap.foldLeft(acc)(f)
-
-        lazy val isEmpty: Boolean = numberOfDeposits == 0
-
-        lazy val numberOfDeposits: Int = flatValues.size
-
-        /** Event-deposit tuples traversed in order of absorption start time, with ties broken
-          * according to the order in which they were added to the DepositsMap (which should
-          * correspond to the total order of the event stream)
-          */
-        lazy val flatValues: Iterable[(LedgerEventId, DepositUtxo)] = treeMap.values.flatten
-
-        /** Event IDs traversed in order of the absorption start time associated with the
-          * corresponding ddeposit, with ties broken according to the order in which they were added
-          * to the DepositsMap (which should correspond to the total order of the event stream)
-          */
-        lazy val flatEvents: Iterable[LedgerEventId] = flatValues.map(_._1)
-
-        /** Deposits traversed in order of absorption start time, with ties broken according to the
-          * order in which they were added to the DepositsMap (which should correspond to the total
-          * order of the event stream)
-          */
-        lazy val flatDeposits: Iterable[DepositUtxo] = flatValues.map(_._2)
-    }
-
-    // TODO: Make a constructor method taking variadic args, or _.from method?
-    object DepositsMap:
-        def empty: DepositsMap = DepositsMap(
-          TreeMap.empty[QuantizedInstant, Queue[(LedgerEventId, DepositUtxo)]]
-        )
-
-    sealed trait Error
+    sealed trait Error extends Throwable
     object Error {
 
         sealed trait RegisterDepositError extends L1LedgerM.Error
@@ -308,7 +214,7 @@ object L1LedgerM {
         final case class ParseError(wrapped: txseq.DepositRefundTxSeq.Parse.Error)
             extends RegisterDepositError
 
-        case object SubmissionPeriodIsOver extends RegisterDepositError
+        case object DepositTxInvalidTTL extends RegisterDepositError
 
         /** This is raised during a call to `RegisterDeposit` if the deposit parses successfully,
           * but reveals an absorption window that is already prior to the block's start time. In
@@ -325,45 +231,5 @@ object L1LedgerM {
 
         final case class FinalizationTxSeqBuilderError(wrapped: FinalizationTxSeq.Build.Error)
             extends L1LedgerM.Error
-    }
-
-    extension (jl: JointLedger) {
-
-        /** Run a L1LedgerM action within a JointLedger. If the action is successful (returns
-          * `Right`), the state of the JointLedger is (unconditionally) updated. Because the state
-          * update within JointLedger must happen within [[IO]], this takes two continuations (one
-          * for success, one for failure) and returns in [[IO]].
-          *
-          * @param onFailure
-          *   continuation if an error is raised. Defaults to throwing an exception.
-          * @param onSuccess
-          *   continuation if a value is returned.
-          * @return
-          */
-        def runL1LedgerM[A, B](
-            action: L1LedgerM[A],
-            onFailure: L1LedgerM.Error => IO[B] = e =>
-                // FIXME: type the exception better
-                throw new RuntimeException(s"Error running L1LedgerM: $e"),
-            onSuccess: A => IO[B]
-        ): IO[B] = {
-            for {
-                oldState <- jl.state.get
-                res = action.run(jl.config, oldState.l1LedgerState)
-                b <- res match {
-                    case Left(error) => onFailure(error)
-                    case Right(newState, a) =>
-                        for {
-                            _ <- jl.state.set(oldState match {
-                                case d: JointLedger.Done =>
-                                    d.focus(_.l1LedgerState).replace(newState)
-                                case p: JointLedger.Producing =>
-                                    p.focus(_.l1LedgerState).replace(newState)
-                            })
-                            b <- onSuccess(a)
-                        } yield b
-                }
-            } yield b
-        }
     }
 }

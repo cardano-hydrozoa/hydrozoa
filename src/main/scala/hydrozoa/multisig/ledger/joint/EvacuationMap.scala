@@ -3,7 +3,6 @@ package hydrozoa.multisig.ledger.joint
 import cats.implicits.*
 import hydrozoa.multisig.ledger.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
-import java.util
 import scala.collection.immutable.TreeMap
 import scalus.cardano.ledger.*
 import scalus.cardano.onchain.plutus.prelude.List as SList
@@ -20,17 +19,17 @@ given toDataTransactionInput: ToData[TransactionInput] with {
 
 given evacuationKeyOrdering: Ordering[EvacuationKey] with {
     override def compare(x: EvacuationKey, y: EvacuationKey): Int =
-        util.Arrays.compare(x.bytes, y.bytes)
+        summon[Ordering[ByteString]].compare(x.byteString, y.byteString)
 }
 
 given evacuationKeyToData: ToData[EvacuationKey] with {
-    override def apply(v1: EvacuationKey): Data = toData(ByteString.fromArray(v1.bytes))
+    override def apply(v1: EvacuationKey): Data = toData(v1.byteString)
 }
 
-final case class EvacuationKey private (bytes: Array[Byte])
+final case class EvacuationKey private (byteString: ByteString)
 
 object EvacuationKey:
-    def apply(bytes: Array[Byte]): Option[EvacuationKey] = Some(new EvacuationKey(bytes))
+    def apply(bytes: ByteString): Option[EvacuationKey] = Some(new EvacuationKey(bytes))
     // if bytes.length == 32 then Some(new EvacuationKey(bytes)) else None
 
 final case class EvacuationMap(

@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.l1.utxo
 
 import hydrozoa.config.head.multisig.timing.TxTiming
+import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{DepositAbsorptionEndTime, DepositAbsorptionStartTime, RequestValidityEndTime}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant}
 import hydrozoa.lib.cardano.scalus.ledger.plutusAddressToShelley
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo.DepositUtxoConversionError.*
@@ -13,7 +14,7 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.onchain.plutus.prelude.{Option as ScalusOption, asScalus}
 import scalus.cardano.onchain.plutus.v3.{Address as PlutusAddress, PosixTime}
 import scalus.uplc.builtin.Data.{FromData, ToData, fromData, toData}
-import scalus.uplc.builtin.{Data, FromData, ToData}
+import scalus.uplc.builtin.{ByteString, Data, FromData, ToData}
 
 /** @param l2Payload
   *   The L2 payload associated with the deposit transaction that created this deposit utxo. A hash
@@ -21,15 +22,15 @@ import scalus.uplc.builtin.{Data, FromData, ToData}
   *   ONLY the part relevant to L2, and not the hydrozoa/cardano/L1-specific stuff.
   */
 final case class DepositUtxo(
-    utxoId: TransactionInput,
+    utxoId: Input,
     address: ShelleyAddress,
     datum: DepositUtxo.Datum,
     value: Value,
-    l2Payload: Array[Byte],
+    l2Payload: ByteString,
     depositFee: Coin,
-    // The following fields come from DepositTx, but it's convenient to duplicate it here
-    submissionDeadline: QuantizedInstant,
-    absorptionStartTime: QuantizedInstant
+    requestValidityEndTime: RequestValidityEndTime,
+    absorptionStartTime: DepositAbsorptionStartTime,
+    absorptionEndTime: DepositAbsorptionEndTime
 ) {
     def toUtxo: Utxo =
         Utxo(
@@ -90,14 +91,14 @@ object DepositUtxo {
                 Instructions(
                   address = plutusAddressToShelley(onchain.address, network),
                   datum = onchain.datum.asScala,
-                  validityStart = onchain.validityStart.toEpochQuantizedInstant(slotConfig),
+                  validityStart = onchain.refundStart.toEpochQuantizedInstant(slotConfig),
                 )
             }
 
             final case class Onchain(
                 address: PlutusAddress,
                 datum: ScalusOption[Data],
-                validityStart: PosixTime
+                refundStart: PosixTime
             ) derives FromData,
                   ToData
 
@@ -108,7 +109,7 @@ object DepositUtxo {
                     Onchain(
                       address = LedgerToPlutusTranslation.getAddress(address),
                       datum = mbDatum.asScalus,
-                      validityStart = validityStart.instant.toEpochMilli
+                      refundStart = validityStart.instant.toEpochMilli
                     )
                 }
             }
@@ -126,11 +127,11 @@ object DepositUtxo {
 
     object Many {
         trait Spent {
-            def depositsSpent: Vector[DepositUtxo]
+            def depositsSpent: List[DepositUtxo]
         }
 
         trait ToSpend {
-            def depositsToSpend: Vector[DepositUtxo]
+            def depositsToSpend: List[DepositUtxo]
         }
 
         object Spent {
@@ -138,11 +139,11 @@ object DepositUtxo {
         }
 
         trait Produced {
-            def depositsProduced: Vector[DepositUtxo]
+            def depositsProduced: List[DepositUtxo]
         }
 
         trait ToProduce {
-            def depositsToProduce: Vector[DepositUtxo]
+            def depositsToProduce: List[DepositUtxo]
         }
 
         object Produced {
@@ -157,12 +158,12 @@ object DepositUtxo {
         case InvalidDatumType
         case RefScriptNotAllowed
 
-    def fromUtxo(
+    def parseUtxo(
         utxo: Utxo,
         headNativeScriptAddress: ShelleyAddress,
-        l2Payload: Array[Byte],
+        l2Payload: ByteString,
         depositFee: Coin,
-        submissionDeadline: QuantizedInstant,
+        requestValidityEndTime: RequestValidityEndTime,
         txTiming: TxTiming
     ): Either[DepositUtxoConversionError, DepositUtxo] =
         for {
@@ -188,14 +189,18 @@ object DepositUtxo {
                 case Some(ScriptRef(s)) => Left(RefScriptNotAllowed)
             }
 
-        } yield DepositUtxo(
+            submissionDeadline = txTiming.depositSubmissionDeadline(requestValidityEndTime)
+            absorptionStartTime = txTiming.depositAbsorptionStartTime(requestValidityEndTime)
+
+        } yield new DepositUtxo(
           utxoId = utxo._1,
           address = addr,
           datum = datum,
           value = babbage.value,
           l2Payload = l2Payload,
           depositFee = depositFee,
-          submissionDeadline = submissionDeadline,
-          absorptionStartTime = txTiming.depositAbsorptionStartTime(submissionDeadline)
+          requestValidityEndTime = requestValidityEndTime,
+          absorptionStartTime = txTiming.depositAbsorptionStartTime(requestValidityEndTime),
+          absorptionEndTime = txTiming.depositAbsorptionEndTime(requestValidityEndTime)
         )
 }

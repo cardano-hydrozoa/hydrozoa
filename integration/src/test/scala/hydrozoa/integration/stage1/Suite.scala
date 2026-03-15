@@ -6,7 +6,7 @@ import com.bloxbean.cardano.client.util.HexUtil
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorSystem
 import com.suprnation.typelevel.actors.syntax.*
-import hydrozoa.config.head.initialization.HeadStartTimeGen.HeadStartTimeGen
+import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.BlockCreationEndTimeGen
 import hydrozoa.config.head.initialization.{CappedValueGen, InitializationParametersGenTopDown}
 import hydrozoa.config.head.multisig.timing.TxTimingGen
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
@@ -27,7 +27,7 @@ import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, ConsensusActor, EventSequencer}
 import hydrozoa.multisig.ledger.block.{BlockEffects, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
-import hydrozoa.multisig.ledger.event.LedgerEventNumber
+import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l1.tx.{FinalizationTx, SettlementTx}
 import java.util.concurrent.TimeUnit
@@ -299,13 +299,13 @@ case class Suite(
         val testPeerToUtxos = env.genesisUtxo(testPeers)
 
         // Additional generators
-        val generateHeadStartTime: HeadStartTimeGen = slotConfig =>
+        val generateHeadStartTime: BlockCreationEndTimeGen = slotConfig =>
             Gen.const(env.startTime.quantize(slotConfig))
         val generateTxTiming = txTimingGen
 
         for {
             config <- MultiNodeConfig.generateForTestPeers(testPeers)(
-              generateHeadStartTime = generateHeadStartTime,
+              generateBlockCreationEndTime = generateHeadStartTime,
               generateTxTiming = generateTxTiming,
               generateInitializationParameters = InitializationParametersGenTopDown.GenWithDeps(
                 generateGenesisUtxosL1 =
@@ -326,7 +326,7 @@ case class Suite(
         } yield Model
             .State(
               multiNodeConfig = config,
-              nextLedgerEventNumber = LedgerEventNumber(0),
+              nextRequestNumber = LedgerEventNumber(0),
               currentTime = BeforeHappyPathExpiration(config.headConfig.headStartTime),
               blockCycle = BlockCycle.Done(BlockNumber.zero, BlockVersion.Full.zero),
               competingFallbackStartTime =

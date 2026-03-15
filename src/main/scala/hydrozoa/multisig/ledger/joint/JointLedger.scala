@@ -5,37 +5,36 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
 import hydrozoa.config.head.HeadConfig
+import hydrozoa.config.head.multisig.timing.TxTiming
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime, FallbackTxStartTime}
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.actor.*
-import hydrozoa.lib.cardano.scalus.QuantizedTime
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.{ConsensusActor, PeerLiaison}
 import hydrozoa.multisig.ledger.block.*
-import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag
-import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag.{Invalid, Valid}
-import hydrozoa.multisig.ledger.event.UserEvent.*
-import hydrozoa.multisig.ledger.event.{LedgerEventId, UserEvent}
+import hydrozoa.multisig.ledger.event.RequestId
+import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
+import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag.{Invalid, Valid}
 import hydrozoa.multisig.ledger.joint.EvacuationMap.applyDiffs
+import hydrozoa.multisig.ledger.joint.JointLedger.*
+import hydrozoa.multisig.ledger.joint.JointLedger.Requests.*
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.l1.L1LedgerM
 import hydrozoa.multisig.ledger.l1.L1LedgerM.*
+import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import hydrozoa.multisig.ledger.l1.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
-import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerError, L2LedgerEvent, L2LedgerState}
+import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerCommand, L2LedgerError, L2LedgerState}
+import hydrozoa.multisig.server.UserRequestWithId
 import monocle.Focus.focus
-import scala.collection.immutable.Queue
-import scala.math.Ordered.orderingToOrdered
 import scalus.cardano.ledger.TransactionInput
+import scalus.uplc.builtin.ByteString
 
-import JointLedger.*
-import JointLedger.Requests.*
-
-// Fields of a work-in-progress block pertaining to user events, with an additional field for dealing with withdrawn utxos
-private case class UserEventState(
-    events: List[(LedgerEventId, ValidityFlag)],
+// Fields of a work-in-progress block pertaining to user requests, with an additional field for dealing with withdrawn utxos
+private case class UserRequestState(
+    requests: List[(RequestId, ValidityFlag)],
     postDatedRefundTxs: Vector[RefundTx.PostDated]
 )
 
@@ -49,15 +48,15 @@ final case class JointLedger(
 ) extends Actor[IO, Requests.Request] {
     import config.*
 
-    private val logger = Logging.logger("JointLedger")
+    private val logger = Logging.loggerIO("JointLedger")
+    private val logger_ = Logging.logger("JointLedger1")
 
     private val connections = Ref.unsafe[IO, Option[Connections]](None)
 
     val state: Ref[IO, JointLedger.State] =
         Ref.unsafe[IO, JointLedger.State](
           Done(
-            producedBlock = config.initialBlock,
-            lastFallbackValidityStart = config.initialFallbackTx.validityStart,
+            previousBlockHeader = config.initialBlock.header,
             l1LedgerState =
                 L1LedgerM.State(config.initializationTx.treasuryProduced, DepositsMap.empty),
             evacuationMap = config.initialEvacuationMap
@@ -131,7 +130,7 @@ final case class JointLedger(
     // TODO: PartialFunction.fromFunction is a noop here
     override def receive: Receive[IO, Requests.Request] = PartialFunction.fromFunction {
         case Requests.PreStart       => preStartLocal
-        case e: UserEvent            => applyUserEvent(e)
+        case e: UserRequestWithId    => applyUserRequestWithId(e)
         case s: StartBlock           => startBlock(s)
         case c: CompleteBlockRegular => completeBlockRegular(c)
         case f: CompleteBlockFinal   => completeBlockFinal(f)
@@ -139,173 +138,210 @@ final case class JointLedger(
             req.request match {
                 case r: GetState.type => r.handleSync(req, _ => state.get)
             }
+        case p: Block.MultiSigned.Next => proxyConfirmation(p)
     }
 
-    private def preStartLocal: IO[Unit] = initializeConnections
-
-    /** Run an [[l2ledger.L2LedgerAction]] within a JointLedger. If the action is successful
-      * (returns `Right`), the state of the JointLedger is updated. Because the state update within
-      * JointLedger must happen within [[IO]], this takes two continuations (one for success, one
-      * for failure) and returns in [[IO]].
-      *
-      * @param onFailure
-      *   continuation if an error is raised. Defaults to throwing an exception.
-      * @param onSuccess
-      *   continuation if a value is returned. Defaults to IO.pure
-      * @return
-      */
-    private def runL2LedgerAction[A, B](
-        action: l2Ledger.L2LedgerAction,
-        onFailure: L2LedgerError => IO[B] = e =>
-            // FIXME: Type the exception better
-            throw new RuntimeException(s"Error running L2LedgerAction: $e"),
-        onSuccess: L2LedgerState => IO[B] = ls => IO.pure(ls)
-    ): IO[B] = {
-        for {
-            oldState <- unsafeGetProducing
-            res <- action.run(
-              oldState.l2LedgerState
+    // QUESTION: This gets sent from the consensus actor, but the consensus actor has the full ability to send it
+    // itself. Should we move this into the consensus actor?
+    private def proxyConfirmation(next: Block.MultiSigned.Next): IO[Unit] =
+        val l2Command = L2LedgerCommand.ProxyBlockConfirmation(
+          next.blockNum,
+          Vector.from(
+            next.postDatedRefundTxs.map(refund =>
+                (refund.requestId, ByteString.fromArray(refund.tx.toCbor))
             )
-            b <- res match {
-                case Left(error) => onFailure(error)
-                case Right(newState) =>
-                    for {
-                        // WARNING: This is _effectful_. If the `onSuccess` action throws an exception, this
-                        // state update will still take effect.
-                        _ <- this.state.set(oldState.focus(_.l2LedgerState).replace(newState))
-                        b <- onSuccess(newState)
-                    } yield b
-            }
-        } yield b
-    }
+          )
+        )
+        for {
+            // FIXME: Should we retry? Throw an exception?
+            _ <- l2Ledger.L2LedgerAction
+                .fromL2LedgerCommand(l2Command)
+                // bit of a hack, but we don't care about the actual l2 state here.
+                .run(L2LedgerState.empty)
+        } yield ()
 
-    private def applyUserEvent(e: UserEvent): IO[Unit] = {
+    private def preStartLocal: IO[Unit] =
+        for {
+            _ <- initializeConnections
+            l2Command = L2LedgerCommand.Initialize(
+              headId = config.headId,
+              initialL2Value = config.initialL2Value,
+              // TODO: This should ostensibly not be empty in the future
+              l2Payload = ByteString.empty
+            )
+            // FIXME: should we retry?
+            _ <- l2Ledger.L2LedgerAction
+                .fromL2LedgerCommand(l2Command)
+                .run(L2LedgerState.empty)
+        } yield ()
+
+    private def applyUserRequestWithId(e: UserRequestWithId): IO[Unit] = {
+        // TODO: check that blockStartTime is within the request's validity bounds
         e match {
-            case req: DepositEvent => registerUserDeposit(req)
-            case tx: L2Event       => applyL2UserEvent(tx)
+            case req: UserRequestWithId.DepositRequest     => registerDepositRequest(req)
+            case req: UserRequestWithId.TransactionRequest => applyTransactionRequest(req)
         }
     }
+
+    private def checkRequestValidityInterval(
+        req: UserRequestWithId,
+        blockCreationStartTime: BlockCreationStartTime
+    ): Boolean = {
+        val header = req.request.header
+        TxTiming.checkRequestValidityInterval(
+          blockCreationStartTime,
+          header.validityStart,
+          header.validityEnd
+        )
+    }
+
+    private def rejectEvent(
+        requestId: RequestId,
+        e: JointLedger.UserRequestError | L1LedgerM.Error | L2LedgerError
+    ): IO[Unit] =
+        for {
+            oldState <- unsafeGetProducing
+            currentBlockNum = oldState.nextBlockNumber
+            newState = oldState
+                .focus(_.userRequestState.requests)
+                .modify(_.appended((requestId, Invalid)))
+            _ <- state.set(newState)
+            _ <- logger.debug(s"registerDepositRequest failure: $e")
+            _ <- tracer.eventProcessed(
+              s"${requestId.peerNum: Int}:${requestId.requestNum: Int}",
+              currentBlockNum: Int,
+              false
+            )
+            l2Command = L2LedgerCommand.ProxyRequestError(
+              requestId = requestId,
+              message = e.toString
+            )
+            // FIXME: Should we retry?
+            _ <- l2Ledger.L2LedgerAction
+                .fromL2LedgerCommand(l2Command)
+                .run(newState.l2LedgerState)
+        } yield ()
 
     /** Update the JointLedger's state -- the work-in-progress block -- to accept or reject deposits
       * depending on whether the [[dappLedger]] Actor can successfully register the deposit,
       */
-    private def registerUserDeposit(req: UserEvent.DepositEvent): IO[Unit] = {
+    private def registerDepositRequest(req: UserRequestWithId.DepositRequest): IO[Unit] = {
         import req.*
-
-        val rejectEvent = (e: L1LedgerM.Error | L2LedgerError) =>
-            for {
-                oldState <- unsafeGetProducing
-                currentBlockNum = oldState.nextBlockNumber
-                newState = oldState
-                    .focus(_.userEventState.events)
-                    .modify(_.appended((eventId, Invalid)))
-                _ <- state.set(newState)
-                _ = logger.debug(s"registerUserDeposit failure: $e")
-                _ <- tracer.eventProcessed(
-                  s"${eventId.peerNum: Int}:${eventId.eventNum: Int}",
-                  currentBlockNum: Int,
-                  false
-                )
-            } yield ()
+        import request.*
+        import body.*
 
         for {
-            blockStartTime <- unsafeGetProducing.map(_.startTime)
-            _ <- this.runL1LedgerM(
-              action = L1LedgerM.registerDeposit(req, blockStartTime),
-              // Left == deposit rejected
-              // FIXME: This should probably be returned as sum type in the Right
-              onFailure = rejectEvent,
-              onSuccess = (depositProduced: DepositUtxo, refundTx: RefundTx.PostDated) =>
-                  for {
-                      oldState <- unsafeGetProducing
+            p <- unsafeGetProducing
+            blockStartTime = p.startTime
+            currentBlockNum = p.nextBlockNumber
 
-                      // Create the L2 Ledger Action for deposit registration from
-                      // - The user event
-                      // - The current state
-                      // - The parse result of the deposit tx
-                      l2LedgerEvent = L2LedgerEvent.DepositEventRegistration(
-                        eventId = eventId,
-                        blockNumber = oldState.nextBlockNumber,
-                        blockCreationStartTime = oldState.startTime,
-                        depositUtxoId = depositProduced.utxoId,
-                        depositFee = req.depositFee,
-                        depositL2Value = req.l2Value,
-                        l2Payload = req.l2Payload
-                      )
-
-                      _ <- this.runL2LedgerAction(
-                        action = l2Ledger.L2LedgerAction.fromL2LedgerEvent(l2LedgerEvent),
-                        onFailure = rejectEvent,
-                        onSuccess = _ =>
+            _ <-
+                if !checkRequestValidityInterval(req, blockStartTime) then
+                    rejectEvent(
+                      requestId,
+                      JointLedger.UserRequestError.BlockOutOfRequestValidityInterval(blockStartTime)
+                    )
+                else {
+                    val l1Res = L1LedgerM.registerDeposit(req).run(config, p.l1LedgerState)
+                    l1Res match {
+                        case Left(error) => rejectEvent(requestId, error)
+                        case Right(newL1State, (depositProduced, refundTx)) => {
+                            val l2Command = L2LedgerCommand.RegisterDeposit(
+                              requestId = requestId,
+                              userVKey = req.request.userVk,
+                              blockNumber = currentBlockNum,
+                              blockCreationStartTime = p.startTime.toPosixTime,
+                              depositId = depositProduced.utxoId,
+                              depositFee = depositProduced.depositFee,
+                              depositL2Value = depositProduced.l2Value,
+                              refundDestination = refundTx.refundDestination,
+                              l2Payload = l2Payload
+                            )
                             for {
-                                oldState <- unsafeGetProducing
-                                currentBlockNum = oldState.nextBlockNumber
-                                newState = oldState
-                                    .focus(_.userEventState.events)
-                                    .modify(_.appended((eventId, Valid)))
-                                    .focus(_.userEventState.postDatedRefundTxs)
-                                    .modify(_.appended(refundTx))
-                                _ <- state.set(newState)
-                                _ <- tracer.eventProcessed(
-                                  s"${eventId.peerNum: Int}:${eventId.eventNum: Int}",
-                                  currentBlockNum: Int,
-                                  true
-                                )
+                                res <- l2Ledger.L2LedgerAction
+                                    .fromL2LedgerCommand(l2Command)
+                                    .run(p.l2LedgerState)
+                                _ <- res match {
+                                    // FIXME: Should we distinguish between genuine L2 failures and things like
+                                    // network errors?
+                                    case Left(e) => rejectEvent(requestId, e)
+                                    case Right(newL2State) =>
+                                        for {
+                                            _ <- state.set(
+                                              p.setL1LedgerState(newL1State)
+                                                  .setL2LedgerState(newL2State)
+                                                  .focus(_.userRequestState.requests)
+                                                  .modify(_.appended((requestId, Valid)))
+                                                  .focus(_.userRequestState.postDatedRefundTxs)
+                                                  .modify(_.appended(refundTx))
+                                            )
+                                            _ <- tracer.eventProcessed(
+                                              s"${requestId.peerNum: Int}:${requestId.requestNum: Int}",
+                                              currentBlockNum: Int,
+                                              true
+                                            )
+                                        } yield ()
+                                }
                             } yield ()
-                      )
-
-                  } yield ()
-            )
+                        }
+                    }
+                }
         } yield ()
     }
 
     /** Update the current block with the result of passing the tx to the virtual ledger, as well as
       * updating ledgerEventsRequired
       */
-    private def applyL2UserEvent(
-        userL2Event: UserEvent.L2Event
+    private def applyTransactionRequest(
+        req: UserRequestWithId.TransactionRequest
     ): IO[Unit] = {
-        import userL2Event.*
+        import req.*
+        import request.*
+        import body.*
+
         for {
             p <- unsafeGetProducing
+            blockStartTime = p.startTime
             currentBlockNum = p.nextBlockNumber
-            l2Event: L2LedgerEvent.L2Event = L2LedgerEvent.L2Event(
-              eventId = userL2Event.eventId,
-              blockNumber = p.nextBlockNumber,
-              blockCreationStartTime = p.startTime,
-              l2Payload = userL2Event.l2Payload
-            )
-            _ <- runL2LedgerAction(
-              action = this.l2Ledger.L2LedgerAction.fromL2LedgerEvent(l2Event),
-              // Invalid transaction continuation
-              onFailure = _ =>
-                  for {
-                      p <- unsafeGetProducing
-                      newState = p
-                          .focus(_.userEventState.events)
-                          .modify(_.appended((eventId, Invalid)))
-                      _ <- state.set(newState)
-                      _ <- tracer.eventProcessed(
-                        s"${eventId.peerNum: Int}:${eventId.eventNum: Int}",
-                        currentBlockNum: Int,
-                        false
-                      )
-                  } yield (),
-              // Valid transaction continuation
-              onSuccess = payoutObligations =>
-                  for {
-                      p <- unsafeGetProducing
-                      newState = p
-                          .focus(_.userEventState.events)
-                          .modify(_.appended((eventId, Valid)))
-                      _ <- state.set(newState)
-                      _ <- tracer.eventProcessed(
-                        s"${eventId.peerNum: Int}:${eventId.eventNum: Int}",
-                        currentBlockNum: Int,
-                        true
-                      )
-                  } yield ()
-            )
+
+            _ <-
+                if !checkRequestValidityInterval(req, blockStartTime) then
+                    rejectEvent(
+                      requestId,
+                      JointLedger.UserRequestError.BlockOutOfRequestValidityInterval(blockStartTime)
+                    )
+                else {
+                    val l2Command: L2LedgerCommand.ApplyTransaction = L2LedgerCommand
+                        .ApplyTransaction(
+                          requestId = req.requestId,
+                          userVKey = req.request.userVk,
+                          blockNumber = p.nextBlockNumber,
+                          blockCreationStartTime = p.startTime,
+                          l2Payload = l2Payload
+                        )
+
+                    for {
+                        res <- this.l2Ledger.L2LedgerAction
+                            .fromL2LedgerCommand(l2Command)
+                            .run(p.l2LedgerState)
+                        _ <- res match {
+                            case Left(e) => rejectEvent(requestId, e)
+                            case Right(newL2State) =>
+                                for {
+                                    _ <- state.set(
+                                      p.setL2LedgerState(newL2State)
+                                          .focus(_.userRequestState.requests)
+                                          .modify(_.appended((requestId, Valid)))
+                                    )
+                                    _ <- tracer.eventProcessed(
+                                      s"${requestId.peerNum: Int}:${requestId.requestNum: Int}",
+                                      currentBlockNum: Int,
+                                      true
+                                    )
+                                } yield ()
+                        }
+                    } yield ()
+                }
         } yield ()
     }
 
@@ -316,179 +352,88 @@ final case class JointLedger(
     private def startBlock(args: StartBlock): IO[Unit] = {
         import args.*
         for {
+            _ <- logger.info(s"start block: ${args.blockNum}...")
             d <- unsafeGetDone
-            _ <- state.set(
-              Producing(
-                previousBlock = d.producedBlock,
-                competingFallbackValidityStart = d.lastFallbackValidityStart,
-                startTime = blockCreationTime,
-                userEventState = UserEventState(
-                  events = List.empty,
-                  postDatedRefundTxs = Vector.empty
-                ),
-                l1LedgerState = d.l1LedgerState,
-                l2LedgerState = L2LedgerState.empty,
-                evacuationMap = d.evacuationMap
+            newState = d.producing(
+              l2LedgerState = L2LedgerState.empty,
+              startTime = blockCreationStartTime,
+              userRequestState = UserRequestState(
+                requests = List.empty,
+                postDatedRefundTxs = Vector.empty
               )
             )
+            _ <- state.set(newState)
         } yield ()
     }
 
     /** Complete a Minor or Major block If
       * @return
       */
-    private def completeBlockRegular(args: CompleteBlockRegular): IO[Unit] = {
+    private def completeBlockRegular(
+        args: CompleteBlockRegular
+    ): IO[Block.Unsigned.Intermediate] = {
         import args.*
-
-        /** @return
-          *   Queue order:
-          *   - eligible for absorption
-          *   - ineligible for absorption - (immature + mature but non-existent)
-          *   - rejected
-          */
-
-        def partitionDeposits(
-            depositsMap: DepositsMap,
-            blockStartTime: QuantizedInstant,
-            settlementValidityEnd: QuantizedInstant
-        ): IO[
-          (
-              DepositsMap,
-              DepositsMap,
-              DepositsMap
-          )
-        ] = for {
-            _ <- IO.pure(())
-
-            _ = logger.trace(
-              s"partitionDeposits: deposits: ${depositsMap.treeMap.values.map(_.map(_._1))}, " +
-                  s"blockStartTime=$blockStartTime, " +
-                  s"settlementValidityEnd=$settlementValidityEnd"
-            )
-
-            ret = depositsMap.foldLeft(
-              (
-                DepositsMap.empty,
-                DepositsMap.empty,
-                DepositsMap.empty
-              )
-            ) { case (acc0, (_absorptionStartTime, depositQueue)) =>
-                depositQueue.foldLeft(acc0) { case (acc, event @ (_eventId, deposit)) =>
-                    val depositValidityEnd = deposit.submissionDeadline
-                    val depositAbsorptionStart =
-                        txTiming.depositAbsorptionStartTime(depositValidityEnd)
-                    val depositAbsorptionEnd =
-                        txTiming.depositAbsorptionEndTime(depositValidityEnd)
-
-                    // Maturity. The deposit is mature if its absorption start time is no later
-                    // than the block brief’s creation end time.
-                    // TODO: use end time, not start time
-                    val isMature = depositAbsorptionStart <= blockStartTime
-
-                    // Non-expiry. The deposit is non-expired if its absorption end time is
-                    // no earlier than the competing fallback’s validity start time.
-
-                    // NB: Here, we can't use submission deadline, which is currently the same thing as deposit tx
-                    // ttl to decide whether we should reject a deposit - even if the submission time is over,
-                    // the state we observe may fall behind for any reason (network congestion, fork).
-                    // So we can only use absorption end time to decide it's time to reject a deposit.
-                    val isExpired = settlementValidityEnd > depositAbsorptionEnd
-
-                    // TODO: The fast-consensus leader sees the deposit on the L1 blockchain when he ends his leadership term.
-                    // If a follower is reproducing the block brief, replace this condition with:
-                    // the follower sees the deposit on the L1 blockchain when he finishes verifying
-                    // the block brief’s events.
-                    val isExistent = pollResults.contains(deposit.toUtxo.input)
-
-                    val isEligible = !isExpired && isMature && isExistent
-
-                    // A deposit is ineligible and must be rejected if
-                    // - the deposit is expired, or
-                    // - if it’s mature and non-expired but doesn’t exist on L1.
-                    val isRejected = isExpired || (isMature && !isExistent)
-
-                    val isIneligible = !isExpired && (!isMature || !isExistent)
-
-                    logger.trace(
-                      s"deposit: ${deposit._1}, " +
-                          s"depositValidityEnd=$depositValidityEnd, " +
-                          s"depositAbsorptionStart=$depositAbsorptionStart, " +
-                          s"depositAbsorptionEnd=$depositAbsorptionEnd, " +
-                          s"isMature=$isMature, " +
-                          s"isExpired=$isExpired, " +
-                          s"isExistent=$isExistent, " +
-                          s"isEligible=$isEligible, " +
-                          s"isRejected=$isRejected, " +
-                          s"isIneligible=$isIneligible"
-                    )
-
-                    if isEligible
-                    then acc.focus(_._1).modify(_.appended(event, config.txTiming))
-                    else if isIneligible
-                    then acc.focus(_._2).modify(_.appended(event, config.txTiming))
-                    else if isExpired
-                    then acc.focus(_._3).modify(_.appended(event, config.txTiming))
-                    else throw RuntimeException("Deposit decision function is not total")
-                }
-            }
-        } yield (ret._1, ret._2, ret._3)
 
         /** KZG commitment + block brief (which is a bit strange)
           */
-        def mkBlockBrief(
-            absorbedDeposits: Queue[(LedgerEventId, DepositUtxo)],
-            rejectedDeposits: Queue[(LedgerEventId, DepositUtxo)],
-        ): IO[BlockBrief.Intermediate] = for {
+        def mkBlockBrief(decisions: DepositsMap.Decisions): IO[BlockBrief.Intermediate] = for {
 
             p <- unsafeGetProducing
 
-            previousHeader = p.previousBlock.header
+            previousHeader = p.previousBlockHeader
             blockWithdrawnUtxos = p.l2LedgerState.payouts
             blockStartTime = p.startTime
-            competingFallbackValidityStart = p.competingFallbackValidityStart
-            events = p.userEventState.events
+            events = p.userRequestState.requests
 
-            _ = logger.trace(
+            _ <- logger.trace(
               s"mkBlockBrief: previousHeader=$previousHeader\n" +
                   s"mkBlockBrief: blockWithdrawnUtxos=$blockWithdrawnUtxos\n" +
                   s"mkBlockBrief: blockStartTime=$blockStartTime\n" +
-                  s"mkBlockBrief: competingFallbackValidityStart=$competingFallbackValidityStart\n" +
+                  s"mkBlockBrief: competingFallbackValidityStart=${p.competingFallbackTxTime}\n" +
                   s"mkBlockBrief: events=$events"
             )
 
             // Block header
             headerIntermediate: BlockHeader.Intermediate <-
-                if absorbedDeposits.isEmpty && blockWithdrawnUtxos.isEmpty
+                if decisions.absorbed.isEmpty && blockWithdrawnUtxos.isEmpty
                 then
                     IO.pure(
                       previousHeader.nextHeaderIntermediate(
                         txTiming,
                         blockStartTime,
-                        competingFallbackValidityStart,
+                        args.blockCreationEndTime,
+                        p.competingFallbackTxTime,
                         // TODO: We want this to be done in a separate actor in the future
                         // this doesn't include genesis
                         applyDiffs(p.evacuationMap, p.l2LedgerState.diffs).kzgCommitment
                       )
                     )
                 else {
-                    val depositEventDecisions: L2LedgerEvent.DepositEventDecisions =
-                        L2LedgerEvent.DepositEventDecisions(
-                          p.nextBlockNumber,
-                          // Why vector and not Queue?
-                          Vector.from(absorbedDeposits.map(_._1)),
-                          Vector.from(rejectedDeposits.map(_._1))
+                    val depositEventDecisions: L2LedgerCommand.ApplyDepositDecisions =
+                        L2LedgerCommand.ApplyDepositDecisions(
+                          blockNumber = p.nextBlockNumber,
+                          blockCreationEndTime = blockCreationEndTime.toPosixTime,
+                          absorbedDeposits = decisions.absorbed.requestIds,
+                          rejectedDeposits = decisions.rejected.requestIds
                         )
                     for {
-                        newL2State <- runL2LedgerAction(
-                          this.l2Ledger.L2LedgerAction.fromL2LedgerEvent(depositEventDecisions)
-                        )
-                        p <- unsafeGetProducing
+                        res <- this.l2Ledger.L2LedgerAction
+                            .fromL2LedgerCommand(depositEventDecisions)
+                            .run(p.l2LedgerState)
+                        newL2State <- IO.fromEither(res)
                         newEvacuationMap = applyDiffs(p.evacuationMap, newL2State.diffs)
-                        _ <- state.set(p.focus(_.evacuationMap).replace(newEvacuationMap))
+                        newJLState = p
+                            .setL2LedgerState(newL2State)
+                            .focus(_.evacuationMap)
+                            .replace(newEvacuationMap)
+                        _ <- state.set(newJLState)
+
                         // TODO: We want this to be done in a separate actor in the future
                         kzgCommitment = newEvacuationMap.kzgCommitment
                         headerIntermediate = previousHeader.nextHeaderMajor(
+                          txTiming,
                           blockStartTime,
+                          args.blockCreationEndTime,
                           kzgCommitment
                         )
                     } yield headerIntermediate
@@ -497,13 +442,13 @@ final case class JointLedger(
             // Block brief
             blockBrief: BlockBrief.Intermediate = headerIntermediate match {
                 case header: BlockHeader.Minor =>
-                    val blockBody = BlockBody.Minor(events, rejectedDeposits.map(_._1).toList)
+                    val blockBody = BlockBody.Minor(events, decisions.rejected.requestIds)
                     BlockBrief.Minor(header, blockBody)
                 case header: BlockHeader.Major =>
                     val blockBody = BlockBody.Major(
                       events,
-                      absorbedDeposits.map(_._1).toList,
-                      rejectedDeposits.map(_._1).toList
+                      decisions.absorbed.requestIds,
+                      decisions.rejected.requestIds
                     )
                     BlockBrief.Major(header, blockBody)
             }
@@ -511,9 +456,9 @@ final case class JointLedger(
 
         def mkBlockEffects(
             next: BlockBrief.Intermediate,
-            absorbedDeposits: Queue[(LedgerEventId, DepositUtxo)],
+            absorbedDeposits: DepositsMap.Unzip,
             postDatedRefundTxs: List[RefundTx.PostDated]
-        ): IO[Block.Unsigned.Next] = for {
+        ): IO[Block.Unsigned.Intermediate] = for {
             ret <- next match {
                 case blockBrief @ BlockBrief.Minor(header, _) =>
                     val blockEffects = BlockEffects.Unsigned.Minor(
@@ -527,17 +472,20 @@ final case class JointLedger(
 
                         payoutObligations = p.l2LedgerState.payouts
 
-                        settlementTxSeq <- this.runL1LedgerM(
-                          L1LedgerM.mkSettlementTxSeq(
-                            nextKzg = header.kzgCommitment,
-                            absorbedDeposits = absorbedDeposits,
-                            payoutObligations = payoutObligations,
-                            blockCreatedOn = header.startTime,
-                            competingFallbackValidityStart =
-                                txTiming.newFallbackStartTime(header.startTime)
-                          ),
-                          onSuccess = IO.pure
+                        res <- IO.fromEither(
+                          L1LedgerM
+                              .mkSettlementTxSeq(
+                                nextKzg = header.kzgCommitment,
+                                absorbedDeposits = absorbedDeposits.depositUtxos,
+                                payoutObligations = payoutObligations,
+                                blockCreationEndTime = header.endTime,
+                                competingFallbackValidityStart = p.competingFallbackTxTime
+                              )
+                              .run(config, p.l1LedgerState)
                         )
+
+                        (newL1State, settlementTxSeq) = res
+                        _ <- state.set(p.setL1LedgerState(newL1State))
 
                         blockEffects = BlockEffects.Unsigned.Major(
                           settlementTx = settlementTxSeq.settlementTx,
@@ -556,50 +504,51 @@ final case class JointLedger(
         import config.txTiming
 
         for {
-            producing <- unsafeGetProducing
+            _ <- logger.info(s"complete block ${args.referenceBlockBrief}")
+            p <- unsafeGetProducing
 
-            ret <- partitionDeposits(
-              depositsMap = producing.l1LedgerState.deposits,
-              blockStartTime = producing.startTime,
-              settlementValidityEnd =
-                  txTiming.newSettlementEndTime(producing.competingFallbackValidityStart)
+            partition = p.l1LedgerState.deposits.partition(
+              blockCreationEndTime = blockCreationEndTime,
+              settlementTxEndTime = config.txTiming.newSettlementEndTime(p.competingFallbackTxTime),
+              pollResults = pollResults
             )
 
-            (eligible, ineligible, rejected) = ret
+            split = partition.split(maxDepositsAbsorbedPerBlock)
 
-            (absorbedDeposits, unabsorbedDeposits) = eligible.splitAt(maxDepositsAbsorbedPerBlock)
-
-            _ = logger.trace(
-              s"joint ledger: absorbed=$absorbedDeposits" + "\n" +
-                  s"joint ledger: unabsorbed=$unabsorbedDeposits" + "\n" +
-                  s"joint ledger: ineligible=$ineligible" + "\n" +
-                  s"joint ledger: rejected=$rejected" + "\n"
+            _ <- logger.trace(
+              s"joint ledger: immature=${partition.immature}" + "\n" +
+                  s"joint ledger: absorbed=${split.absorbed}" + "\n" +
+                  s"joint ledger: unabsorbed=${split.unabsorbed}" + "\n" +
+                  s"joint ledger: rejected=${partition.rejected}" + "\n"
             )
 
-            blockBrief <- mkBlockBrief(
-              absorbedDeposits = Queue.from(absorbedDeposits.flatValues),
-              rejectedDeposits = Queue.from(rejected.flatValues)
-            )
+            blockBrief <- mkBlockBrief(split.decisions)
 
             block <- mkBlockEffects(
               blockBrief,
-              Queue.from(absorbedDeposits.flatValues),
-              producing.userEventState.postDatedRefundTxs.toList
+              split.absorbed.unzip,
+              p.userRequestState.postDatedRefundTxs.toList
             )
-
-            _ <- checkReferenceBlock(referenceBlockBrief, block)
 
             // Block is done
-
-            // This is also sort of "handling", but internal  to ledgers
-            _ <- this.runL1LedgerM(
-              L1LedgerM.handleBlockBrief(unabsorbedDeposits ++ ineligible),
-              onSuccess = IO.pure
+            res <- IO.fromEither(
+              L1LedgerM
+                  .handleBlockBrief(split.surviving)
+                  .run(config, p.l1LedgerState)
             )
+            (newL1State, ()) = res
+
+            newJlState = p.setL1LedgerState(newL1State)
+            p2 <- state.get
+            _ <- state.set(newJlState)
+
+            _ <- panicOnExpectedBlockMismatch(referenceBlockBrief, block)
+
+            _ <- state.set(newJlState.done(block.header))
 
             // Tell others about the block
             _ <- handleBlock(block, finalizationLocallyTriggered)
-        } yield ()
+        } yield block
     }
 
     // Block completion Signal is provided to the joint ledger when the block weaver says it's time.
@@ -612,35 +561,42 @@ final case class JointLedger(
     // If the produced block is NOT equal to a passed reference block, then:
     //   - Consensus is broken
     //   - Send a panic to the multisig regime manager in a suicide note
-    def completeBlockFinal(args: CompleteBlockFinal): IO[Unit] = {
+    def completeBlockFinal(args: CompleteBlockFinal): IO[Block.Unsigned.Final] = {
         import args.*
         import config.txTiming
 
         for {
             p <- unsafeGetProducing
 
-            finalizationTxSeq <- this.runL1LedgerM(
-              L1LedgerM.finalizeLedger(
-                payoutObligationsRemaining = Vector.from(
-                  p.evacuationMap.evacuationMap.map((_, o) => Payout.Obligation(o))
-                ),
-                blockCreatedOn = p.startTime,
-                competingFallbackValidityStart = p.startTime
-                    + txTiming.minSettlementDuration
-                    + txTiming.inactivityMarginDuration
-                    + txTiming.silenceDuration,
-              ),
-              onSuccess = IO.pure
+            res <- IO.fromEither(
+              L1LedgerM
+                  .finalizeLedger(
+                    payoutObligationsRemaining = Vector.from(
+                      p.evacuationMap.evacuationMap.map((_, o) => Payout.Obligation(o))
+                    ),
+                    competingFallbackValidityStart = p.competingFallbackTxTime
+                  )
+                  .run(config, p.l1LedgerState)
             )
+            (newL1State, finalizationTxSeq) = res
+
+            newJlState = p.setL1LedgerState(newL1State)
+
+            _ <- state.set(newJlState)
 
             block: Block.Unsigned.Final = {
-                import p.userEventState.*
-                val blockHeader = p.previousBlock.header.nextHeaderFinal(p.startTime)
+                import newJlState.userRequestState.*
+                val blockHeader =
+                    newJlState.previousBlockHeader
+                        .nextHeaderFinal(
+                          newJlState.startTime,
+                          args.blockCreationEndTime
+                        )
 
                 val blockBody = BlockBody.Final(
-                  events = events,
+                  events = requests,
                   // Final block should reject all the deposits known.
-                  depositsRefunded = p.l1LedgerState.deposits.flatEvents.toList
+                  depositsRefunded = newJlState.l1LedgerState.deposits.requestIds
                 )
 
                 val blockBrief = BlockBrief.Final(blockHeader, blockBody)
@@ -653,10 +609,13 @@ final case class JointLedger(
                 Block.Unsigned.Final(blockBrief, blockEffects)
             }
 
-            _ <- checkReferenceBlock(referenceBlockBrief, block)
+            _ <- panicOnExpectedBlockMismatch(referenceBlockBrief, block)
+
+            _ <- state.set(newJlState.done(block.header))
+
             _ <- handleBlock(block, false)
 
-        } yield ()
+        } yield block
     }
 
     /** Extract trace metadata from a block for the tracer.
@@ -720,43 +679,15 @@ final case class JointLedger(
             _ <- IO.traverse_(acks)(ack => conn.consensusActor ! ack)
         } yield ()
 
-    private def checkReferenceBlock(
+    private def panicOnExpectedBlockMismatch(
         expectedBlockBrief: Option[BlockBrief],
         actualBlock: Block
-    ): IO[Unit] = for {
-        p <- unsafeGetProducing
-        fallbackValidityStart: QuantizedInstant =
-            actualBlock match {
-                case major: Block.Unsigned.Major =>
-                    major.effects.fallbackTx.validityStart
-                case _ => p.competingFallbackValidityStart
-            }
-
-        _ <- expectedBlockBrief match {
-            case Some(refBlock) if refBlock == actualBlock =>
-                state.set(
-                  Done(
-                    actualBlock.block,
-                    fallbackValidityStart,
-                    p.l1LedgerState,
-                    p.evacuationMap
-                  )
-                )
-            case Some(_) =>
-                panic(
-                  "Reference block didn't match actual block; consensus is broken."
-                ) >> context.self.stop
-            case None =>
-                state.set(
-                  Done(
-                    actualBlock.block,
-                    fallbackValidityStart,
-                    p.l1LedgerState,
-                    p.evacuationMap
-                  )
-                )
-        }
-    } yield ()
+    ): IO[Unit] =
+        IO.unlessA(expectedBlockBrief.fold(true)(_ == actualBlock))(
+          panic(
+            "Reference block didn't match actual block; consensus is broken."
+          ) >> context.self.stop
+        )
 
     // Sends a panic to the multisig regime manager, indicating that the node cannot proceed any more
     // TODO: Implement better, it should be typed and the multisig regime manager should be able to pattern match
@@ -779,18 +710,20 @@ object JointLedger {
         peerLiaisons: List[PeerLiaison.Handle]
     )
 
-    final case class CompleteBlockError() extends Throwable
+    enum UserRequestError extends Throwable:
+        case BlockOutOfRequestValidityInterval(blockCreationStartTime: BlockCreationStartTime)
+            extends UserRequestError
 
     object Requests {
         type Request =
-            PreStart.type | UserEvent | StartBlock | CompleteBlockRegular | CompleteBlockFinal |
-                GetState.Sync
+            PreStart.type | UserRequestWithId | StartBlock | CompleteBlockRegular |
+                CompleteBlockFinal | GetState.Sync | Block.MultiSigned.Next
 
         case object PreStart
 
         case class StartBlock(
             blockNum: BlockNumber,
-            blockCreationTime: QuantizedInstant
+            blockCreationStartTime: BlockCreationStartTime
         )
 
         /** @param referenceBlockBrief
@@ -809,11 +742,13 @@ object JointLedger {
         case class CompleteBlockRegular(
             referenceBlockBrief: Option[BlockBrief.Intermediate],
             pollResults: Set[TransactionInput],
-            finalizationLocallyTriggered: Boolean
+            finalizationLocallyTriggered: Boolean,
+            blockCreationEndTime: BlockCreationEndTime
         )
 
         case class CompleteBlockFinal(
             referenceBlockBrief: Option[BlockBrief.Final],
+            blockCreationEndTime: BlockCreationEndTime
         )
 
         case object GetState extends SyncRequest[IO, GetState.type, State] {
@@ -825,28 +760,61 @@ object JointLedger {
     }
 
     sealed trait State {
-        val l1LedgerState: L1LedgerM.State
-        val evacuationMap: EvacuationMap
+        def previousBlockHeader: BlockHeader
+        def l1LedgerState: L1LedgerM.State
+        def evacuationMap: EvacuationMap
     }
 
     final case class Done(
-        producedBlock: Block,
-        // None for the first block
-        lastFallbackValidityStart: QuantizedInstant,
+        override val previousBlockHeader: BlockHeader,
         override val l1LedgerState: L1LedgerM.State,
         override val evacuationMap: EvacuationMap
-    ) extends State
+    ) extends State {
+        def setL1LedgerState(newL1State: L1LedgerM.State): Done =
+            this.focus(_.l1LedgerState).replace(newL1State)
+
+        def producing(
+            l2LedgerState: L2LedgerState,
+            startTime: BlockCreationStartTime,
+            userRequestState: UserRequestState
+        ): Producing = previousBlockHeader match {
+            case b: BlockHeader.NonFinal =>
+                Producing(
+                  b,
+                  l1LedgerState,
+                  evacuationMap,
+                  l2LedgerState,
+                  startTime,
+                  userRequestState
+                )
+            case _ =>
+                throw new RuntimeException(
+                  "Impossible: tried to produce next block after final block."
+                )
+        }
+
+    }
 
     final case class Producing(
+        override val previousBlockHeader: BlockHeader.NonFinal,
         override val l1LedgerState: L1LedgerM.State,
         override val evacuationMap: EvacuationMap,
         l2LedgerState: L2LedgerState,
-        previousBlock: Block,
-        // None for the first block
-        competingFallbackValidityStart: QuantizedInstant,
-        startTime: QuantizedInstant,
-        userEventState: UserEventState
+        startTime: BlockCreationStartTime,
+        userRequestState: UserRequestState
     ) extends State {
-        val nextBlockNumber: BlockNumber.BlockNumber = previousBlock.blockNum.increment
+        val nextBlockNumber: BlockNumber.BlockNumber = previousBlockHeader.blockNum.increment
+
+        transparent inline def competingFallbackTxTime: FallbackTxStartTime =
+            previousBlockHeader.fallbackTxStartTime
+
+        def setL1LedgerState(newL1State: L1LedgerM.State): Producing =
+            this.focus(_.l1LedgerState).replace(newL1State)
+
+        def setL2LedgerState(newL2State: L2LedgerState): Producing =
+            this.focus(_.l2LedgerState).replace(newL2State)
+
+        def done(newBlockHeader: BlockHeader): Done =
+            Done(newBlockHeader, l1LedgerState, evacuationMap)
     }
 }

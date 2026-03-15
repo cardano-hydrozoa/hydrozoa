@@ -73,7 +73,7 @@ object SettlementTxSeqBuilderTest extends Properties("SettlementTxSeq") {
                               s"SettlementTxSeq observation should be successful: ${eRes}" |: eRes.isRight
                             )
                             // TODO: rewrite this in Either/PropertyM[Either,_]
-                            val Right(res) = eRes
+                            val Right(res) = eRes: @unchecked
 
                             // Inspecting the final two states of the chain
                             val afterFallback: State = res.last._1

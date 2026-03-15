@@ -22,7 +22,8 @@ import scalus.cardano.onchain.plutus.prelude.List as SList
 import scalus.cardano.onchain.plutus.v1.ArbitraryInstances.genByteStringOfN
 import scalus.cardano.onchain.plutus.v3.TokenName
 import scalus.crypto.ed25519.VerificationKey
-import scalus.uplc.builtin.{BLS12_381_G2_Element, ByteString}
+import scalus.uplc.builtin.ByteString
+import scalus.uplc.builtin.bls12_381.G2Element
 import test.*
 import test.Generators.Hydrozoa.genPubkeyAddress
 
@@ -77,7 +78,7 @@ object CommonGenerators {
                 .map(System.currentTimeMillis() + _.abs)
             setup = TrustedSetup
                 .takeSrsG2(10)
-                .map(p2 => BLS12_381_G2_Element(p2).toCompressedByteString)
+                .map(p2 => G2Element(p2).toCompressedByteString)
         } yield UnresolvedDatum(
           headMp = config.headMultisigScript.policyId,
           disputeId = disputeId,

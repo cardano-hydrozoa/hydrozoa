@@ -1,9 +1,10 @@
 package hydrozoa.config.head.initialization
 
 import hydrozoa.config.head.HeadConfig
-import hydrozoa.config.head.initialization.HeadStartTimeGen.{HeadStartTimeGen, currentTimeHeadStartTime}
+import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.{BlockCreationEndTimeGen, currentTimeBlockCreationEndTime}
 import hydrozoa.config.head.multisig.fallback.{FallbackContingencyGen, generateFallbackContingency}
 import hydrozoa.config.head.multisig.settlement.{SettlementConfigGen, generateSettlementConfig}
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationStartTime
 import hydrozoa.config.head.multisig.timing.{TxTimingGen, generateDefaultTxTiming}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.{GenHeadParams, generateHeadParameters}
@@ -13,6 +14,7 @@ import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import monocle.Focus.focus
 import org.scalacheck.Test.Parameters
 import org.scalacheck.{Gen, Prop, Properties}
+import scala.concurrent.duration.DurationInt
 import test.{TestPeers, TestPeersSpec}
 
 def generateInitialBlock(testPeers: TestPeers)(
@@ -20,7 +22,7 @@ def generateInitialBlock(testPeers: TestPeers)(
     generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
     generateDisputeResolutionConfig: DisputeResolutionConfigGen = generateDisputeResolutionConfig,
     generateHeadParameters: GenHeadParams = generateHeadParameters,
-    generateHeadStartTime: HeadStartTimeGen = currentTimeHeadStartTime,
+    generateBlockCreationEndTime: BlockCreationEndTimeGen = currentTimeBlockCreationEndTime,
     generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
         InitializationParametersGenTopDown.GenWithDeps | InitializationParameters =
         InitializationParametersGenBottomUp.generateInitializationParameters,
@@ -38,17 +40,13 @@ def generateInitialBlock(testPeers: TestPeers)(
 
         initializationParameters <- generateInitializationParameters match {
             case g: InitializationParametersGenBottomUp.GenInitializationParameters =>
-                g(testPeers)(
-                  generateHeadStartTime,
-                  _ => Gen.const(headParams.fallbackContingency)
-                )
+                g(testPeers)(_ => Gen.const(headParams.fallbackContingency))
             case InitializationParametersGenTopDown.GenWithDeps(
                   generator,
                   generateGenesisUtxosL1,
                   equityRange
                 ) =>
                 generator(testPeers)(
-                  generateHeadStartTime,
                   generateFallbackContingency,
                   generateGenesisUtxosL1,
                   equityRange
@@ -65,8 +63,10 @@ def generateInitialBlock(testPeers: TestPeers)(
             )
             .get
 
+        blockCreationEndTime <- generateBlockCreationEndTime(config.slotConfig)
+
         initTxSeq =
-            InitializationTxSeq.Build(config).result match {
+            InitializationTxSeq.Build(config)(blockCreationEndTime).result match {
                 case Left(e) =>
                     throw e
                 case Right(x) => x
@@ -76,7 +76,9 @@ def generateInitialBlock(testPeers: TestPeers)(
       Block.MultiSigned.Initial(
         blockBrief = BlockBrief.Initial(
           BlockHeader.Initial(
-            startTime = initializationParameters.headStartTime,
+            startTime = BlockCreationStartTime(blockCreationEndTime - 10.seconds),
+            endTime = blockCreationEndTime,
+            fallbackTxStartTime = initTxSeq.fallbackTx.fallbackTxStartTime,
             kzgCommitment = initializationParameters.initialEvacuationMap.kzgCommitment
           )
         ),

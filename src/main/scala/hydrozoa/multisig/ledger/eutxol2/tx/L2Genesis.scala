@@ -4,7 +4,7 @@ import cats.data.NonEmptyList
 import cats.syntax.all.*
 import hydrozoa.*
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
-import hydrozoa.multisig.ledger.l2.L2LedgerEvent
+import hydrozoa.multisig.ledger.l2.L2LedgerCommand
 import io.bullet.borer.derivation.MapBasedCodecs.derived
 import io.bullet.borer.{Cbor, Decoder, Encoder, Writer}
 import scala.collection.immutable.{Queue, TreeMap}
@@ -52,14 +52,14 @@ object L2Genesis {
     /** Warning: this is partial, but I'm keeping with the conventions of the CBOR decoder.
       */
     def fromDepositEventRegistration(
-        req: L2LedgerEvent.DepositEventRegistration,
+        req: L2LedgerCommand.RegisterDeposit,
     ): L2Genesis = {
         val genesisObligations = Cbor
-            .decode(req.l2Payload)
+            .decode(req.l2Payload.bytes)
             .to[Queue[GenesisObligation]]
             .value
         val genesisId: TransactionHash =
-            mkGenesisId(req.depositUtxoId)
+            mkGenesisId(req.depositId)
         L2Genesis(genesisObligations, genesisId)
     }
 
@@ -146,7 +146,7 @@ object GenesisObligation {
 
     // Recall: users need to submit a NonEmptyList of genesis obligations as the L2 payload, but
     // we also need to be able to serialize an empty list for the "push forward" deposit
-    def serialize(gos: NonEmptyList[GenesisObligation]): Array[Byte] =
-        Cbor.encode(Queue.from(gos.toList)).toByteArray
+    def serialize(gos: NonEmptyList[GenesisObligation]): ByteString =
+        ByteString.fromArray(Cbor.encode(Queue.from(gos.toList)).toByteArray)
 
 }
