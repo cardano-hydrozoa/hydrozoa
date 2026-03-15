@@ -57,8 +57,8 @@ object JsonCodecs {
         (header: UserRequestHeader) =>
             Json.obj(
               "headId" -> InitializationParameters.HeadId.given_Encoder_HeadId(header.headId),
-              "validityStart" -> Json.fromBigInt(header.validityStart.toBigInt),
-              "validityEnd" -> Json.fromBigInt(header.validityEnd.toBigInt),
+              "validityStart" -> Json.fromLong(header.validityStart.toLong),
+              "validityEnd" -> Json.fromLong(header.validityEnd.toLong),
               "bodyHash" -> summon[Encoder[Hash32]].apply(header.bodyHash)
             )
 
@@ -67,8 +67,8 @@ object JsonCodecs {
             headId <- c
                 .downField("headId")
                 .as[HeadId](using InitializationParameters.HeadId.given_Decoder_HeadId)
-            validityStart <- c.downField("validityStart").as[BigInt]
-            validityEnd <- c.downField("validityEnd").as[BigInt]
+            validityStart <- c.downField("validityStart").as[Long]
+            validityEnd <- c.downField("validityEnd").as[Long]
             bodyHash <- c.downField("bodyHash").as[Hash32]
         } yield UserRequestHeader(
           headId,

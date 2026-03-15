@@ -281,7 +281,7 @@ object TxTiming {
             slotConfig: SlotConfig,
             x: RequestValidityStartTimeRaw
         ): RequestValidityStartTime =
-            QuantizedInstant.ofEpochSeconds(slotConfig, x.toBigInt.longValue)
+            QuantizedInstant.ofEpochSeconds(slotConfig, x.toLong)
         given Conversion[RequestValidityStartTime, QuantizedInstant] = identity
 
         opaque type RequestValidityEndTime = QuantizedInstant
@@ -289,7 +289,7 @@ object TxTiming {
             slotConfig: SlotConfig,
             x: RequestValidityEndTimeRaw
         ): RequestValidityEndTime =
-            QuantizedInstant.ofEpochSeconds(slotConfig, x.toBigInt.longValue)
+            QuantizedInstant.ofEpochSeconds(slotConfig, x.toLong)
         // Used in tests
         def unsafeRequestValidityEndTime(x: QuantizedInstant): RequestValidityEndTime = x
         given Conversion[RequestValidityEndTime, QuantizedInstant] = identity

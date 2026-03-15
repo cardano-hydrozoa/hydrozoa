@@ -108,17 +108,17 @@ object UserRequest {
     }
 }
 
-opaque type RequestValidityStartTimeRaw = BigInt
+opaque type RequestValidityStartTimeRaw = Long
 
 object RequestValidityStartTimeRaw:
-    def apply(bi: BigInt): RequestValidityStartTimeRaw = bi
-    extension (self: RequestValidityStartTimeRaw) def toBigInt: BigInt = self
+    def apply(bi: Long): RequestValidityStartTimeRaw = bi
+    extension (self: RequestValidityStartTimeRaw) def toLong: Long = self
 
-opaque type RequestValidityEndTimeRaw = BigInt
+opaque type RequestValidityEndTimeRaw = Long
 
 object RequestValidityEndTimeRaw:
-    def apply(bi: BigInt): RequestValidityEndTimeRaw = bi
-    extension (self: RequestValidityEndTimeRaw) def toBigInt: BigInt = self
+    def apply(bi: Long): RequestValidityEndTimeRaw = bi
+    extension (self: RequestValidityEndTimeRaw) def toLong: Long = self
 
 /** @param headId
   *   The blake2b_224 hash of the cbor-encoded seed utxo [[TransactionInput]] appended to the CIP-67
