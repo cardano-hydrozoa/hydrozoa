@@ -229,6 +229,7 @@ object Bootstrap:
               BlockHeader.Initial(
                 startTime = blockCreationStartTime,
                 endTime = blockCreationEndTime,
+                fallbackTxStartTime = initTxSeq.fallbackTx.fallbackTxStartTime,
                 kzgCommitment = evacMap.kzgCommitment
               )
             ),

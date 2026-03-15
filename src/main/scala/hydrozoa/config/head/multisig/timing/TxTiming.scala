@@ -3,7 +3,7 @@ package hydrozoa.config.head.multisig.timing
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, quantize}
 import scala.concurrent.duration.DurationInt
 import scala.math.Ordered.orderingToOrdered
-import scalus.cardano.ledger.{Slot, SlotConfig}
+import scalus.cardano.ledger.SlotConfig
 
 import TxTiming.*
 import Durations.*
@@ -54,19 +54,6 @@ final case class TxTiming private (
       depositSubmissionDuration + depositMaturityDuration + depositAbsorptionDuration + silenceDuration
     )
 
-//    val refundValidityStartOffset: QuantizedFiniteDuration =
-//        depositSubmissionDuration + depositMaturityDuration + depositAbsorptionDuration + silenceDuration
-
-    /** A block can stay minor if this predicate is true for its start time, relative to the
-      * previous major block's fallback tx start time. Otherwise, it must be upgraded to a major
-      * block so that the competing fallback start time is pushed forward for future blocks.
-      */
-    def blockCanStayMinor(
-        blockCreationEndTime: BlockCreationEndTime,
-        competingFallbackStartTime: FallbackTxStartTime
-    ): Boolean =
-        competingFallbackStartTime - blockCreationEndTime > minSettlementDuration + silenceDuration
-
     def initializationEndTime(blockCreationEndTime: BlockCreationEndTime): InitializationTxEndTime =
         InitializationTxEndTime(
           blockCreationEndTime + minSettlementDuration + inactivityMarginDuration
@@ -87,6 +74,20 @@ final case class TxTiming private (
         FallbackTxStartTime(
           blockCreationEndTime + minSettlementDuration + inactivityMarginDuration + silenceDuration
         )
+
+    def nextBlockTimeout(competingFallbackStartTime: FallbackTxStartTime): NextBlockTimeout =
+        NextBlockTimeout(competingFallbackStartTime - minSettlementDuration - silenceDuration)
+
+    /** A block can stay minor if this predicate is true for its start time, relative to the
+      * previous major block's fallback tx start time. Otherwise, it must be upgraded to a major
+      * block so that the competing fallback start time is pushed forward for future blocks.
+      */
+    def blockCanStayMinor(
+        blockCreationEndTime: BlockCreationEndTime,
+        competingFallbackStartTime: FallbackTxStartTime
+    ): Boolean = {
+        nextBlockTimeout(competingFallbackStartTime).convert > blockCreationEndTime.convert
+    }
 
     def depositSubmissionDeadline(
         requestValidityEndTime: RequestValidityEndTime
@@ -133,6 +134,32 @@ final case class TxTiming private (
   * For now, we just have to be careful to ensure that we're using millisecond precision everywhere
   */
 object TxTiming {
+    def checkRequestValidityInterval(
+        blockCreationStartTime: BlockCreationStartTime,
+        requestValidityStartTime: RequestValidityStartTime,
+        requestValidityEndTime: RequestValidityEndTime
+    ): Boolean =
+        //        requestValidityStartTime.convert <= blockCreationStartTime.convert &&
+        blockCreationStartTime.convert < requestValidityEndTime.convert
+
+    /** Maturity. The deposit is immature if its absorption start time is later than the block
+      * brief’s creation end time.
+      */
+    def depositIsImmature(
+        depositAbsorptionStartTime: DepositAbsorptionStartTime,
+        blockCreationEndTime: BlockCreationEndTime
+    ): Boolean =
+        blockCreationEndTime.convert < depositAbsorptionStartTime.convert
+
+    /** The deposit is expired if its absorption end time is earlier than the notional settlement
+      * effect's end time.
+      */
+    def depositIsExpired(
+        settlementTxEndTime: SettlementTxEndTime,
+        depositAbsorptionEndTime: DepositAbsorptionEndTime
+    ): Boolean =
+        depositAbsorptionEndTime.convert < settlementTxEndTime.convert
+
     def default(slotConfig: SlotConfig): TxTiming = TxTiming(
       MinSettlementDuration(12.hours.quantize(slotConfig)),
       InactivityMarginDuration(24.hours.quantize(slotConfig)),
@@ -229,22 +256,22 @@ object TxTiming {
         private[timing] def InitializationTxEndTime(x: QuantizedInstant): InitializationTxEndTime =
             x
         given Conversion[InitializationTxEndTime, QuantizedInstant] = identity
-        given Conversion[InitializationTxEndTime, Slot] = _.toSlot
 
         opaque type SettlementTxEndTime = QuantizedInstant
         private[timing] def SettlementTxEndTime(x: QuantizedInstant): SettlementTxEndTime = x
         given Conversion[SettlementTxEndTime, QuantizedInstant] = identity
-        given Conversion[SettlementTxEndTime, Slot] = _.toSlot
 
         opaque type FinalizationTxEndTime = QuantizedInstant
         private[timing] def FinalizationTxEndTime(x: QuantizedInstant): FinalizationTxEndTime = x
         given Conversion[FinalizationTxEndTime, QuantizedInstant] = identity
-        given Conversion[FinalizationTxEndTime, Slot] = _.toSlot
 
         opaque type FallbackTxStartTime = QuantizedInstant
         private[timing] def FallbackTxStartTime(x: QuantizedInstant): FallbackTxStartTime = x
         given Conversion[FallbackTxStartTime, QuantizedInstant] = identity
-        given Conversion[FallbackTxStartTime, Slot] = _.toSlot
+
+        opaque type NextBlockTimeout = QuantizedInstant
+        private[timing] def NextBlockTimeout(x: QuantizedInstant): NextBlockTimeout = x
+        given Conversion[NextBlockTimeout, QuantizedInstant] = identity
     }
 
     object RequestTimes {
@@ -262,7 +289,6 @@ object TxTiming {
         ): DepositSubmissionDeadline =
             x
         given Conversion[DepositSubmissionDeadline, QuantizedInstant] = identity
-        given Conversion[DepositSubmissionDeadline, Slot] = _.toSlot
 
         opaque type DepositAbsorptionStartTime = QuantizedInstant
         private[timing] def DepositAbsorptionStartTime(

@@ -125,7 +125,7 @@ private object InitializationTxSeqOps {
                         .map(InitializationTxParseError(_))
                 }
 
-                expectedFallbackValidityStart: Slot = config.txTiming.newFallbackStartTime(
+                expectedFallbackValidityStart = config.txTiming.newFallbackStartTime(
                   blockCreationEndTime
                 )
 
@@ -139,7 +139,7 @@ private object InitializationTxSeqOps {
                     else
                         Left(
                           TTLValidityStartGapError(
-                            expectedFallbackValidityStart,
+                            expectedFallbackValidityStart.toSlot,
                             fallbackValidityStartSlot
                           )
                         )

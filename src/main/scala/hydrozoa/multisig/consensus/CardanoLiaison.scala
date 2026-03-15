@@ -303,7 +303,9 @@ trait CardanoLiaison(
               "settlementTx majorVersionProduced: " +
                   s"${block.settlementTx.majorVersionProduced}"
             )
-            _ <- loggerIO.trace(s"fallback tx validity start: ${block.fallbackTx.validityStart}")
+            _ <- loggerIO.trace(
+              s"fallback tx validity start: ${block.fallbackTx.fallbackTxStartTime}"
+            )
 
             _ <- stateRef.update(s => {
                 logger.trace(s"state before update: ${s.prettyDump}")
@@ -469,7 +471,7 @@ trait CardanoLiaison(
                                 fallbackTx = state.fallbackEffects(maxKey)
                                 if utxoIds.contains(
                                   fallbackTx.treasurySpent.utxoId
-                                ) && fallbackTx.validityStart.convert <= currentTime.toSlot
+                                ) && fallbackTx.fallbackTxStartTime.convert <= currentTime
                             } yield fallbackTx.tx
 
                             lastFallback match {
@@ -682,7 +684,7 @@ trait CardanoLiaison(
                                 case _: RolloutTx => Left(UnexpectedRolloutEffect(backboneEffectId))
                             }
 
-                            fallbackValidityStart = fallback.validityStart
+                            fallbackValidityStart = fallback.fallbackTxStartTime
 
                             // _ = println(
                             //  s"currentTime: $currentTime, happyPathTxTtl: $happyPathTxTtl, fallbackValidityStart: $fallbackValidityStart"

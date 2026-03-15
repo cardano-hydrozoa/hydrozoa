@@ -80,7 +80,7 @@ private object DepositTxOps {
             val submissionDeadline =
                 config.txTiming.depositSubmissionDeadline(requestValidityEndTime)
 
-            val ttl = ValidityEndSlot(submissionDeadline.convert.slot)
+            val ttl = ValidityEndSlot(submissionDeadline.toSlot.slot)
 
             val payloadHash: Hash32 = Hash(blake2b_256(l2Payload))
             val metadata = Some(
@@ -129,6 +129,10 @@ private object DepositTxOps {
                   l2Payload = l2Payload,
                   depositFee = depositFee,
                   requestValidityEndTime = requestValidityEndTime,
+                  absorptionStartTime =
+                      config.txTiming.depositAbsorptionStartTime(requestValidityEndTime),
+                  absorptionEndTime =
+                      config.txTiming.depositAbsorptionEndTime(requestValidityEndTime)
                 )
             } yield DepositTx(
               depositProduced,
@@ -226,7 +230,7 @@ private object DepositTxOps {
                             case Success(v)         => Right(v)
                         }
 
-                        expectedTtl = expectedSubmissionDeadline.convert.slot
+                        expectedTtl = expectedSubmissionDeadline.toSlot.slot
 
 //                        // Check that the submission deadline is as expected
 //                        _ <- Either.cond(

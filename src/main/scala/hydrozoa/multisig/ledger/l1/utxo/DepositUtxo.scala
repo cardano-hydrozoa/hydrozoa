@@ -1,7 +1,7 @@
 package hydrozoa.multisig.ledger.l1.utxo
 
 import hydrozoa.config.head.multisig.timing.TxTiming
-import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.RequestValidityEndTime
+import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{DepositAbsorptionEndTime, DepositAbsorptionStartTime, RequestValidityEndTime}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant}
 import hydrozoa.lib.cardano.scalus.ledger.plutusAddressToShelley
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo.DepositUtxoConversionError.*
@@ -29,6 +29,8 @@ final case class DepositUtxo(
     l2Payload: ByteString,
     depositFee: Coin,
     requestValidityEndTime: RequestValidityEndTime,
+    absorptionStartTime: DepositAbsorptionStartTime,
+    absorptionEndTime: DepositAbsorptionEndTime
 ) {
     def toUtxo: Utxo =
         Utxo(
@@ -125,11 +127,11 @@ object DepositUtxo {
 
     object Many {
         trait Spent {
-            def depositsSpent: Vector[DepositUtxo]
+            def depositsSpent: List[DepositUtxo]
         }
 
         trait ToSpend {
-            def depositsToSpend: Vector[DepositUtxo]
+            def depositsToSpend: List[DepositUtxo]
         }
 
         object Spent {
@@ -137,11 +139,11 @@ object DepositUtxo {
         }
 
         trait Produced {
-            def depositsProduced: Vector[DepositUtxo]
+            def depositsProduced: List[DepositUtxo]
         }
 
         trait ToProduce {
-            def depositsToProduce: Vector[DepositUtxo]
+            def depositsToProduce: List[DepositUtxo]
         }
 
         object Produced {
@@ -197,6 +199,8 @@ object DepositUtxo {
           value = babbage.value,
           l2Payload = l2Payload,
           depositFee = depositFee,
-          requestValidityEndTime = requestValidityEndTime
+          requestValidityEndTime = requestValidityEndTime,
+          absorptionStartTime = txTiming.depositAbsorptionStartTime(requestValidityEndTime),
+          absorptionEndTime = txTiming.depositAbsorptionEndTime(requestValidityEndTime)
         )
 }
