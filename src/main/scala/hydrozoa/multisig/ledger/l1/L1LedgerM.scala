@@ -6,6 +6,7 @@ import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, FallbackTxStartTime}
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.RequestValidityEndTime
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.consensus.UserRequestWithId
 import hydrozoa.multisig.ledger
 import hydrozoa.multisig.ledger.block.BlockVersion
@@ -85,7 +86,6 @@ object L1LedgerM {
         for {
             config <- ask
             validityEndTime = RequestValidityEndTime(config.slotConfig, header.validityEnd)
-            headerSubmissionDeadline = config.txTiming.depositSubmissionDeadline(validityEndTime)
 
             parseRes =
                 DepositRefundTxSeq
@@ -100,10 +100,18 @@ object L1LedgerM {
                     .map(ParseError(_))
             depositRefundTxSeq <- lift(parseRes)
 
+            expectedSubmissionDeadline = config.txTiming.depositSubmissionDeadline(validityEndTime)
+
             depositProduced <- lift(
-              if depositRefundTxSeq.depositTx.submissionDeadline == headerSubmissionDeadline
+              if depositRefundTxSeq.depositTx.submissionDeadline == expectedSubmissionDeadline
               then Right(depositRefundTxSeq.depositTx.depositProduced)
-              else Left(DepositTxInvalidTTL)
+              else
+                  Left(
+                    DepositTxInvalidTTL(
+                      expectedSubmissionDeadline,
+                      depositRefundTxSeq.depositTx.submissionDeadline
+                    )
+                  )
             )
 
             s <- get
@@ -213,10 +221,21 @@ object L1LedgerM {
 
         sealed trait RegisterDepositError extends L1LedgerM.Error
 
-        final case class ParseError(wrapped: txseq.DepositRefundTxSeq.Parse.Error)
-            extends RegisterDepositError
+//        final case class ParseError(wrapped: txseq.DepositRefundTxSeq.Parse.Error)
+//            extends RegisterDepositError
 
-        case object DepositTxInvalidTTL extends RegisterDepositError
+        final case class ParseError(wrapped: txseq.DepositRefundTxSeq.Parse.Error)
+            extends RegisterDepositError {
+            override def toString: String = s"ParseError: $wrapped"
+        }
+
+        case class DepositTxInvalidTTL(
+            expectedSubmissionDeadline: QuantizedInstant,
+            actualSubmissionDeadline: QuantizedInstant
+        ) extends RegisterDepositError {
+            override def toString: String =
+                s"DepositTxInvalidTTL: expected submission deadline $expectedSubmissionDeadline, but got $actualSubmissionDeadline"
+        }
 
         /** This is raised during a call to `RegisterDeposit` if the deposit parses successfully,
           * but reveals an absorption window that is already prior to the block's start time. In

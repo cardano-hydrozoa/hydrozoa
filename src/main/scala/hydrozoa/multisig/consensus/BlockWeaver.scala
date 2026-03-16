@@ -16,6 +16,8 @@ import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import scalus.cardano.ledger.TransactionInput
 
+import scala.concurrent.duration.DurationInt
+
 /** Block weaver actor.
   *   - When the node is leading a block, the weaver packages all known unprocessed (by the time
   *     block is stared) and continue streaming all incoming events (until the block is completed)
@@ -549,6 +551,8 @@ trait BlockWeaver(
         if config.ownHeadPeerId.isLeader(nextBlockNum)
         then
             for {
+                // Delay empty blocks to prevent spin loop, but still create them for deposit lifecycle
+                _ <- IO.whenA(mempool.receivingOrder.isEmpty)(IO.sleep(5.seconds))
                 conn <- getConnections
                 _ <- conn.tracer.leaderStarted(nextBlockNum: Int, config.ownHeadPeerId.peerNum: Int)
                 now <- realTimeQuantizedInstant(config.slotConfig)

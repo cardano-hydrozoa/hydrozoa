@@ -232,9 +232,7 @@ trait CardanoLiaison(
     private def getConnections: IO[Connections] = this.connections.get.flatMap(
       _.fold(
         IO.raiseError(
-          java.lang.Error(
-            "Consensus Actor is missing its connections to other actors."
-          )
+          RuntimeException("Consensus Actor is missing its connections to other actors.")
         )
       )(IO.pure)
     )
@@ -283,14 +281,13 @@ trait CardanoLiaison(
       *   - saves the effects in the internal actor's state
       */
     protected[consensus] def handleMajorBlockL1Effects(block: BlockConfirmed.Major): IO[Unit] =
-
-        // TODO: George: this is an important invariant we may went to enforce
-        require(
-          block.blockVersion.major == block.settlementTx.majorVersionProduced,
-          "Settlement tx doesn't match block"
-        )
-
         for {
+            _ <- IO.whenA(block.blockVersion.major == block.settlementTx.majorVersionProduced) {
+                val msg =
+                    s"Block major version (${block.blockVersion.major}) doesn't match" +
+                        s" settlement tx major version produced (${block.settlementTx.majorVersionProduced})"
+                loggerIO.error(msg) >> IO.raiseError(RuntimeException(msg))
+            }
 
             _ <- loggerIO.info(s"handleMajorBlockL1Effects for block ${block.blockVersion}")
 
@@ -447,11 +444,17 @@ trait CardanoLiaison(
                     _ <- loggerIO.trace(s"state is ${state.prettyDump}")
 
                     // (i.e. those that are directly caused by effect inputs in L1 response).
-                    dueActions: Seq[DirectAction] = mkDirectActions(
+                    dueActions: Seq[DirectAction] <- mkDirectActions(
                       state,
                       utxoIds,
                       currentTime
-                    ).fold(e => throw RuntimeException(e.msg), x => x)
+                    ).fold(
+                      e =>
+                          loggerIO.error(s"Critical error: ${e.msg}") >>
+                              IO.raiseError(RuntimeException(e.msg)),
+                      IO.pure
+                    )
+                    // .fold(e => {throw RuntimeException(e.msg)}, x => x)
 
                     actionsToSubmit <-
                         if dueActions.nonEmpty

@@ -166,37 +166,37 @@ object TxTiming {
       InactivityMarginDuration(24.hours.quantize(slotConfig)),
       SilenceDuration(5.minutes.quantize(slotConfig)),
       DepositSubmissionDuration(5.minutes.quantize(slotConfig)),
-      DepositMaturityDuration(1.hours.quantize(slotConfig)),
+      DepositMaturityDuration(1.hour.quantize(slotConfig)),
       DepositAbsorptionDuration(48.hours.quantize(slotConfig)),
     )
 
     // TODO: move to integration
     def yaci(slotConfig: SlotConfig) = TxTiming(
-      MinSettlementDuration(60.seconds.quantize(slotConfig)),
-      InactivityMarginDuration(20.seconds.quantize(slotConfig)),
+      MinSettlementDuration(30.seconds.quantize(slotConfig)),
+      InactivityMarginDuration(60.seconds.quantize(slotConfig)),
       SilenceDuration(1.minute.quantize(slotConfig)),
-      DepositSubmissionDuration(5.minutes.quantize(slotConfig)),
+      DepositSubmissionDuration(1.second.quantize(slotConfig)),
       DepositMaturityDuration(1.second.quantize(slotConfig)),
-      DepositAbsorptionDuration(1.hours.quantize(slotConfig)),
+      DepositAbsorptionDuration(2.minutes.quantize(slotConfig)),
     )
 
     def demo(slotConfig: SlotConfig) = TxTiming(
       MinSettlementDuration(1.hour.quantize(slotConfig)),
-      InactivityMarginDuration(1.minute.quantize(slotConfig)),
-      SilenceDuration(5.minute.quantize(slotConfig)),
-      DepositSubmissionDuration(5.minutes.quantize(slotConfig)),
-      DepositMaturityDuration(5.minute.quantize(slotConfig)),
-      DepositAbsorptionDuration(2.hours.quantize(slotConfig)),
+      InactivityMarginDuration(2.hours.quantize(slotConfig)),
+      SilenceDuration(2.minutes.quantize(slotConfig)),
+      DepositSubmissionDuration(2.minutes.quantize(slotConfig)),
+      DepositMaturityDuration(3.minutes.quantize(slotConfig)),
+      DepositAbsorptionDuration(4.hours.quantize(slotConfig)),
     )
 
     // TODO: move to integration
     def testnet(slotConfig: SlotConfig) = TxTiming(
       MinSettlementDuration(1.hour.quantize(slotConfig)),
-      InactivityMarginDuration(20.seconds.quantize(slotConfig)),
-      SilenceDuration(5.minute.quantize(slotConfig)),
-      DepositSubmissionDuration(5.minutes.quantize(slotConfig)),
-      DepositMaturityDuration(10.second.quantize(slotConfig)),
-      DepositAbsorptionDuration(2.hours.quantize(slotConfig)),
+      InactivityMarginDuration(2.hours.quantize(slotConfig)),
+      SilenceDuration(2.minutes.quantize(slotConfig)),
+      DepositSubmissionDuration(30.seconds.quantize(slotConfig)),
+      DepositMaturityDuration(30.seconds.quantize(slotConfig)),
+      DepositAbsorptionDuration(4.hours.quantize(slotConfig)),
     )
 
     trait Section {

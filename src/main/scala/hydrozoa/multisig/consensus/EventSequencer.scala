@@ -61,19 +61,22 @@ trait EventSequencer(
     override def receive: Receive[IO, Request] = {
         case EventSequencer.PreStart => preStartLocal
         case req: UserRequest.Sync =>
-            for {
-                conn <- getConnections
-                newNum <- state.nextLedgerEventNum()
-                newId = RequestId(config.ownHeadPeerId.peerNum, newNum)
-                newRequestWithId = UserRequestWithId(
-                  userRequest = req.request,
-                  requestId = newId
-                )
-                _ <- req.dResponse.complete(newId)
-                _ <- conn.blockWeaver ! newRequestWithId
-                _ <- (conn.peerLiaisons ! newRequestWithId).parallel
-            } yield newId
-
+            req.request.handleSync(
+              req,
+              (userRequest: UserRequest) =>
+                  for {
+                      conn <- getConnections
+                      newNum <- state.nextLedgerEventNum()
+                      newId = RequestId(config.ownHeadPeerId.peerNum, newNum)
+                      newRequestWithId = UserRequestWithId(
+                        userRequest = userRequest,
+                        requestId = newId
+                      )
+                      _ <- req.dResponse.complete(newId)
+                      _ <- conn.blockWeaver ! newRequestWithId
+                      _ <- (conn.peerLiaisons ! newRequestWithId).parallel
+                  } yield newId
+            )
     }
 
     private def preStartLocal: IO[Unit] = initializeConnections

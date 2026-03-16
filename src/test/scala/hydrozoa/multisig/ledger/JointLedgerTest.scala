@@ -32,7 +32,6 @@ import hydrozoa.multisig.ledger.joint.JointLedger.{Done, Producing}
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger, given}
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
-import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import java.util.concurrent.TimeUnit
 import monocle.Focus
 import monocle.Focus.focus
