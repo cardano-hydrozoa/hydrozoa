@@ -17,6 +17,9 @@ dockerExposedPorts ++= Seq(8080)
 Compile / packageDoc / mappings := Seq()
 Compile / doc / sources := Seq()
 
+Global / excludeLintKeys += Docker / dockerLabels
+Global / excludeLintKeys += Docker / dockerEnvVars
+
 Docker / dockerLabels := Map(
   "org.opencontainers.image.title" -> "Hydrozoa",
   "org.opencontainers.image.description" -> "Cardano Hydrozoa L2 State Channel",

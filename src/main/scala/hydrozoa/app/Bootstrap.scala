@@ -298,8 +298,8 @@ object Migrate extends IOApp:
 
     private val logger = Logging.loggerIO("hydrozoa.app.Migrate")
 
-    /** Load environment configuration from .env file (copied from Main). */
-    private lazy val dotenv = io.github.cdimascio.dotenv.Dotenv.configure().ignoreIfMissing().load()
+//    /** Load environment configuration from .env file (copied from Main). */
+//    private lazy val dotenv = io.github.cdimascio.dotenv.Dotenv.configure().ignoreIfMissing().load()
 
     override def run(args: List[String]): IO[ExitCode] =
         if args.isEmpty then
