@@ -131,6 +131,8 @@ class HydrozoaRoutes(
                     multisigRegimeUtxo = headConfig.multisigRegimeUtxo.utxoId,
                     submissionDurationSeconds =
                         headConfig.txTiming.depositSubmissionDuration.finiteDuration.toSeconds,
+                    absorptionStartOffsetSeconds =
+                        (headConfig.txTiming.depositSubmissionDuration + headConfig.txTiming.depositMaturityDuration).finiteDuration.toSeconds,
                     refundStartOffsetSeconds =
                         headConfig.txTiming.refundStartOffsetDuration.finiteDuration.toSeconds,
                     currentTimePosixSeconds = currentTimePosixSeconds,

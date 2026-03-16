@@ -28,7 +28,11 @@ object ApiResponse {
       *   to calculate ttl of the deposit tx: deposit_tx.ttl = request.validity_end +
       *   submission_duration (ttl is mandatory)
       *
-      * @param refundStartSffsetSeconds
+      * @param absorptionStartOffsetSeconds
+      *   offset from request.validity_end to when the head will begin attempting to absorb the
+      *   deposit: absorption_start = request.validity_end + absorption_start_offset
+      *
+      * @param refundStartOffsetSeconds
       *   to calculate the validity start of the post-dated refund (it's needed in the deposit utxo
       *   datum): deposit_utxo.datum.refund_instructions.refund_start = request.validity_end +
       *   refund_start_offset
@@ -46,6 +50,7 @@ object ApiResponse {
         headAddress: ShelleyAddress,
         multisigRegimeUtxo: TransactionInput,
         submissionDurationSeconds: Long,
+        absorptionStartOffsetSeconds: Long,
         refundStartOffsetSeconds: Long,
         currentTimePosixSeconds: Long,
         maxNonPlutusTxFee: Coin
