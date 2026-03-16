@@ -105,7 +105,13 @@ object L1LedgerM {
             depositProduced <- lift(
               if depositRefundTxSeq.depositTx.submissionDeadline == expectedSubmissionDeadline
               then Right(depositRefundTxSeq.depositTx.depositProduced)
-              else Left(DepositTxInvalidTTL(expectedSubmissionDeadline, depositRefundTxSeq.depositTx.submissionDeadline))
+              else
+                  Left(
+                    DepositTxInvalidTTL(
+                      expectedSubmissionDeadline,
+                      depositRefundTxSeq.depositTx.submissionDeadline
+                    )
+                  )
             )
 
             s <- get
