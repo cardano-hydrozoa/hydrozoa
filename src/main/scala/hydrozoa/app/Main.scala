@@ -37,26 +37,31 @@ object Main extends IOApp {
         verificationKey: VerificationKey,
         signingKey: SigningKey,
         minEquity: Coin,
-        blockfrostApiKey: String
-    )
+        blockfrostApiKey: String,
+        sugarRushHost: String,
+        sugarRushPort: String
+    ) {
+        val sugarRushUri: String = s"ws://$sugarRushHost:$sugarRushPort/ws"
+    }
 
     private val logger = Logging.loggerIO("hydrozoa.app.Main")
 
     // Load .env file (if present) at startup
     private lazy val dotenv: Dotenv = Dotenv.configure().ignoreIfMissing().load()
 
-    /** Read a required environment variable, checking .env file first, then system environment.
+    /** Read a required environment variable, checking .env file first, then system environment. Use
+      * a default value if not found.
+      * @param name
+      *   variable name
+      * @param default
+      *   default value for the variable, if not found.
       */
-    def getEnv(name: String): IO[String] =
-        IO {
-            Option(dotenv.get(name))
-                .orElse(sys.env.get(name))
-                .getOrElse(
-                  throw new IllegalStateException(
-                    s"Required environment variable not set: $name (checked .env file and system environment)"
-                  )
-                )
-        }
+    private def getOptionalEnvVar(name: String, default: => String): IO[String] =
+        IO(Option(dotenv.get(name)).orElse(sys.env.get(name)).getOrElse(default))
+
+    private def throwMissingEnvVarError(name: String): String = throw new IllegalStateException(
+      s"Required environment variable not set: $name (checked .env file and system environment)"
+    )
 
     /** Parse hex string to ByteString. */
     private def parseHex(hex: String, expectedBytes: Int, name: String): IO[ByteString] =
@@ -71,23 +76,32 @@ object Main extends IOApp {
             ByteString.fromArray(bytes)
         }
 
+    /** Read a required environment variable, checking .env file first, then system environment.
+      * Throw an error if not found.
+      *
+      * @param name
+      *   variable name
+      */
+    private def getMandatoryEnvVar(name: String): IO[String] =
+        getOptionalEnvVar(name, throwMissingEnvVarError(name))
+
     /** Load configuration from environment variables. */
     def loadEnv: IO[EnvConfig] =
         for {
-            blockfrostKey <- getEnv("BLOCKFROST_API_KEY")
+            blockfrostKey <- getMandatoryEnvVar("BLOCKFROST_API_KEY")
             _ <- logger.info(s"Loaded Blockfrost API key: ${blockfrostKey.take(8)}...")
 
-            vKeyHex <- getEnv("CARDANO_VERIFICATION_KEY")
+            vKeyHex <- getMandatoryEnvVar("CARDANO_VERIFICATION_KEY")
             vKeyBs <- parseHex(vKeyHex, 32, "CARDANO_VERIFICATION_KEY")
             vKey = VerificationKey.unsafeFromByteString(vKeyBs)
             _ <- logger.info(s"Loaded verification key: ${vKeyHex.take(16)}...")
 
-            sKeyHex <- getEnv("CARDANO_SIGNING_KEY")
+            sKeyHex <- getMandatoryEnvVar("CARDANO_SIGNING_KEY")
             sKeyBs <- parseHex(sKeyHex, 32, "CARDANO_SIGNING_KEY")
             sKey = SigningKey.unsafeFromByteString(sKeyBs)
             _ <- logger.info("Loaded signing key")
 
-            minEquityStr <- getEnv("EQUITY")
+            minEquityStr <- getMandatoryEnvVar("EQUITY")
             minEquity <- IO.fromEither(
               minEquityStr.toLongOption
                   .toRight(
@@ -97,12 +111,18 @@ object Main extends IOApp {
                   )
                   .map(Coin.apply)
             )
+
+            sugarRushHost <- getOptionalEnvVar("SUGAR_RUSH_HOST", "localhost")
+            sugarRushPort <- getOptionalEnvVar("SUGAR_RUSH_PORT", "3001")
+
             _ <- logger.info(s"Minimum equity: $minEquity lovelace")
         } yield EnvConfig(
           verificationKey = vKey,
           signingKey = sKey,
           minEquity = minEquity,
-          blockfrostApiKey = blockfrostKey
+          blockfrostApiKey = blockfrostKey,
+          sugarRushHost = sugarRushHost,
+          sugarRushPort = sugarRushPort
         )
 
     val cardanoNetwork: StandardCardanoNetwork = CardanoNetwork.Preview
@@ -131,9 +151,10 @@ object Main extends IOApp {
             result <- Resource.eval(setupIO)
             (env, backend, nodeConfig) = result
 
-            // TODO: make an option?
-            // l2Ledger <- EutxoL2Ledger(nodeConfig)
-            remoteL2Ledger <- RemoteL2Ledger.create("ws://localhost:3001/ws")
+            _ <- Resource.eval(
+              logger.info(s"Connecting to L2 ledger at ${env.sugarRushUri}")
+            )
+            remoteL2Ledger <- RemoteL2Ledger.create(env.sugarRushUri)
 
             // Attach cleanup to ActorSystem resource - env, backend, nodeConfig are in scope here
             system <- ActorSystem[IO]("Hydrozoa Demo").onFinalize(
