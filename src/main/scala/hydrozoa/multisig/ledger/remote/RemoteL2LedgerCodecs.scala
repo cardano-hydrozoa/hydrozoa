@@ -22,9 +22,45 @@ import scodec.bits.ByteVector
 /** JSON codecs for RemoteL2Ledger WebSocket protocol */
 object RemoteL2LedgerCodecs {
 
-    // Reuse codecs from the HTTP server
-    import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
+    // Reuse codecs from the HTTP server, excluding types we override for sugar-rush-ledger compatibility
+    // @Peter: We exclude certain codecs here to provide sugar-rush-ledger compatible format
+    import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{
+        coinEncoder as _,
+        coinDecoder as _,
+        valueEncoder as _,
+        valueDecoder as _,
+        given
+    }
     import hydrozoa.multisig.server.JsonCodecs.{requestIdEncoder, requestIdDecoder}
+
+    // @Peter: Coin as raw number (sugar-rush-ledger expects u64, not string)
+    given Encoder[Coin] = Encoder.encodeLong.contramap(_.value)
+    given Decoder[Coin] = Decoder.decodeLong.map(Coin.apply)
+
+    // @Peter: Value codec for sugar-rush-ledger format: {"assets": [{"asset": {"tag": "Ada"}, "value": N}]}
+    // The old CIP-116 compatible codec is commented out below - we will need it in the future
+    given Encoder[Value] = (v: Value) => {
+        val adaEntry = io.circe.Json.obj(
+          "asset" -> io.circe.Json.obj("tag" -> io.circe.Json.fromString("Ada")),
+          "value" -> io.circe.Json.fromLong(v.coin.value)
+        )
+        // For now, only ADA is supported
+        io.circe.Json.obj("assets" -> io.circe.Json.arr(adaEntry))
+    }
+
+    given Decoder[Value] = Decoder.instance { c =>
+        // Minimal: just extract ADA from the assets array
+        Right(Value(Coin(0))) // TODO: implement if needed
+    }
+
+    /* @Peter: Original CIP-116 Value codec - keep for future use
+     * This codec will be needed when we support the full CIP-116 protocol
+     * To re-enable: uncomment these and remove the sugar-rush-ledger specific codecs above
+     *
+     * import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{
+     *     valueEncoder, valueDecoder
+     * }
+     */
 
     // QuantizedInstant codec (simplified - loses SlotConfig context)
     // TODO: Include SlotConfig in serialization for proper reconstruction
@@ -56,9 +92,18 @@ object RemoteL2LedgerCodecs {
     implicit val proxyRequestErrorDecoder: Decoder[L2LedgerCommand.ProxyRequestError] =
         deriveDecoder
 
-    /** Destination as a cbor-encoded hex-string */
+    /** @Peter: Destination as JSON object matching sugar-rush-ledger format */
     implicit val destinationEncoder: Encoder[Destination] =
-        Encoder.encodeString.contramap(destination => destination.toHex)
+        (dest: Destination) => {
+            val addressBech32 = dest.address match {
+                case s: scalus.cardano.address.ShelleyAddress => s.toBech32.get
+                case other => other.toString
+            }
+            io.circe.Json.obj(
+              "address" -> io.circe.Json.fromString(addressBech32),
+              "datum" -> io.circe.Json.Null
+            )
+        }
     implicit val destinationDecoder: Decoder[Destination] =
         Decoder.decodeString.emap(hexStr =>
             for {
@@ -72,8 +117,21 @@ object RemoteL2LedgerCodecs {
             } yield dest
         )
 
+    // @Peter: Explicit encoder for RegisterDeposit to ensure sugar-rush-ledger compatibility
     implicit val depositRegistrationEncoder: Encoder[L2LedgerCommand.RegisterDeposit] =
-        deriveEncoder
+        (r: L2LedgerCommand.RegisterDeposit) =>
+            io.circe.Json.obj(
+              "requestId" -> r.requestId.asJson,
+              // TODO: was userVkey before
+              "userVk" -> summon[Encoder[VerificationKey]].apply(r.userVKey),
+              "blockNumber" -> r.blockNumber.asJson,
+              "blockCreationStartTime" -> r.blockCreationStartTime.asJson,
+              "depositId" -> r.depositId.asJson,
+              "depositFee" -> r.depositFee.asJson,
+              "depositL2Value" -> r.depositL2Value.asJson,
+              "refundDestination" -> r.refundDestination.asJson,
+              "l2Payload" -> summon[Encoder[ByteString]].apply(r.l2Payload)
+            )
     implicit val depositRegistrationDecoder: Decoder[L2LedgerCommand.RegisterDeposit] =
         deriveDecoder
 
@@ -139,8 +197,19 @@ object RemoteL2LedgerCodecs {
         case e: Response.Error   => e.asJson
     }
 
-    implicit val responseDecoder: Decoder[Response] =
-        responseSuccessDecoder.map(s => s: Response).or(responseErrorDecoder.map(e => e: Response))
+    // @Peter: Response decoder for sugar-rush-ledger format with type field
+    implicit val responseDecoder: Decoder[Response] = Decoder.instance { c =>
+        c.downField("type").as[String].flatMap {
+            case "Valid" =>
+                // Data may or may not be present
+                val data = c.downField("data").as[io.circe.Json].getOrElse(io.circe.Json.arr())
+                Right(Response.Success(data))
+            case "Error" =>
+                c.downField("message").as[String].map(Response.Error.apply)
+            case other =>
+                Left(io.circe.DecodingFailure(s"Unknown response type: $other", c.history))
+        }
+    }
 
     // EvacuationKey codec
     import hydrozoa.multisig.ledger.joint.EvacuationKey
