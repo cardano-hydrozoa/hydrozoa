@@ -7,9 +7,9 @@ import scala.annotation.targetName
 type RequestId = RequestId.Id
 
 object RequestId {
-    def fromI64(requestIdI64: Int): RequestId = {
-        val peerNum = requestIdI64 >> 40
-        val requestNum = (requestIdI64 << 8) >> 8
+    def fromI64(requestIdI64: Long): RequestId = {
+        val peerNum = ??? // requestIdI64 >> 40
+        val requestNum = ??? // (requestIdI64 << 8) >> 8
         apply(HeadPeerNumber(peerNum), RequestNumber(requestNum))
     }
 

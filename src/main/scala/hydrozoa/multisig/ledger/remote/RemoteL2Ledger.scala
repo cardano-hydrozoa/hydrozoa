@@ -9,7 +9,6 @@ import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerCommand, L2LedgerError}
 import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.{Request, Response}
-import io.circe.Decoder
 import io.circe.parser.*
 import io.circe.syntax.*
 import org.http4s.client.websocket.{WSConnectionHighLevel, WSFrame, WSRequest}
@@ -29,16 +28,14 @@ class RemoteL2Ledger private (
     conn: WSConnectionHighLevel[IO]
 ) extends L2Ledger[IO] {
 
-    import RemoteL2LedgerCodecs.given
-
     private given logger: Logger[IO] = Logging.loggerIO("RemoteL2Ledger")
 
     override implicit def monadF: Monad[IO] = Async[IO]
 
     /** Send a request to the remote ledger and wait for the synchronous response */
-    private def sendRequest[A](
+    private def sendRequest(
         request: Request
-    )(using decoder: Decoder[A]): EitherT[IO, L2LedgerError, A] = {
+    ): EitherT[IO, L2LedgerError, Response.Success] = {
         import RemoteL2LedgerCodecs.given
         EitherT {
             for {
@@ -57,72 +54,55 @@ class RemoteL2Ledger private (
                 _ <- logger.debug(s"Received response: $responseText")
 
                 // Decode response
-                decoded <- decode[Response](responseText) match {
+                ret <- decode[Response](responseText) match {
                     case Left(err) =>
                         IO.pure(
                           Left(
                             L2LedgerError(
-                              s"Failed to decode response: ${err.getMessage}".getBytes
+                              s"Failed to decode response: ${err.getMessage}"
                             )
                           )
                         )
                     case Right(response) =>
                         response match {
-                            case Response.Success(data) =>
-                                decode[A](data.noSpaces) match {
-                                    case Left(err) =>
-                                        IO.pure(
-                                          Left(
-                                            L2LedgerError(
-                                              s"Failed to decode response data: ${err.getMessage}".getBytes
-                                            )
-                                          )
-                                        )
-                                    case Right(value) =>
-                                        IO.pure(Right(value))
-                                }
-                            case Response.Error(message) =>
-                                for {
-                                    _ <- logger.warn(s"Error response: $message")
-                                } yield Left(L2LedgerError(message.getBytes))
+                            case s: Response.Success => IO.pure(Right(s))
+                            case f: Response.Failure =>
+                                IO.pure(Left(L2LedgerError(s"Internal L2 failure: ${f.message}")))
                         }
                 }
-            } yield decoded
+            } yield ret
         }
     }
 
     override def sendRegisterDeposit(
-        req: L2LedgerCommand.RegisterDeposit
+        req: L2LedgerCommand.RegisterDepositRequest
     ): EitherT[IO, L2LedgerError, Unit] = {
-        sendRequest[Unit](Request.RegisterDeposit(req))
+        sendRequest(Request.RegisterDepositRequest(req)).map(_ => ())
     }
 
     override def sendApplyDepositDecisions(
         req: L2LedgerCommand.ApplyDepositDecisions
     ): EitherT[IO, L2LedgerError, Vector[EvacuationDiff]] = {
-        sendRequest[Vector[EvacuationDiff]](Request.ApplyDepositDecisions(req))
+        sendRequest(Request.ApplyDepositDecisions(req)).map(s => s.evacuationDiffs)
     }
 
     override def sendApplyTransaction(
         req: L2LedgerCommand.ApplyTransaction
     ): EitherT[IO, L2LedgerError, (Vector[EvacuationDiff], Vector[Payout.Obligation])] = {
-        sendRequest[(Vector[EvacuationDiff], Vector[Payout.Obligation])](
-          Request.ApplyTransaction(req)
-        )
+        sendRequest(Request.ApplyTransaction(req)).map(s => (s.evacuationDiffs, s.payouts))
     }
 
     override def sendProxyBlockConfirmation(
         req: L2LedgerCommand.ProxyBlockConfirmation
     ): EitherT[IO, L2LedgerError, Unit] = {
-        sendRequest[Unit](Request.ProxyBlockConfirmation(req))
+        sendRequest(Request.ProxyBlockConfirmation(req)).map(_ => ())
     }
 
     override def sendProxyHydrozoaRequestError(
         req: L2LedgerCommand.ProxyRequestError
     ): EitherT[IO, L2LedgerError, Unit] = {
-        sendRequest[Unit](Request.ProxyRequestError(req))
+        sendRequest(Request.ProxyRequestError(req)).map(_ => ())
     }
-
 }
 
 object RemoteL2Ledger {
@@ -133,7 +113,8 @@ object RemoteL2Ledger {
     sealed trait Request
 
     object Request {
-        final case class RegisterDeposit(command: L2LedgerCommand.RegisterDeposit) extends Request
+        final case class RegisterDepositRequest(command: L2LedgerCommand.RegisterDepositRequest)
+            extends Request
         final case class ApplyDepositDecisions(command: L2LedgerCommand.ApplyDepositDecisions)
             extends Request
         final case class ApplyTransaction(event: L2LedgerCommand.ApplyTransaction) extends Request
@@ -146,8 +127,13 @@ object RemoteL2Ledger {
     sealed trait Response
 
     object Response {
-        final case class Success(data: io.circe.Json) extends Response
-        final case class Error(message: String) extends Response
+
+        final case class Success(
+            evacuationDiffs: Vector[EvacuationDiff],
+            payouts: Vector[Payout.Obligation]
+        ) extends Response
+
+        final case class Failure(message: String) extends Response
     }
 
     /** Create a RemoteL2Ledger with a managed WebSocket connection

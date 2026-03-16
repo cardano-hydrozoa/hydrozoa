@@ -7,6 +7,7 @@ import cats.syntax.all.*
 import hydrozoa.config.head.initialization.InitializationParameters
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.eutxol2.tx.{L2Genesis, L2Tx}
 import hydrozoa.multisig.ledger.event.RequestId
@@ -14,7 +15,7 @@ import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationKey}
 import hydrozoa.multisig.ledger.l1.tx.Tx
 import hydrozoa.multisig.ledger.l2.*
-import hydrozoa.multisig.ledger.l2.L2LedgerCommand.RegisterDeposit
+import hydrozoa.multisig.ledger.l2.L2LedgerCommand.RegisterDepositRequest
 import io.bullet.borer.Cbor
 import monocle.syntax.all.*
 import scala.util.Try
@@ -101,23 +102,20 @@ case class EutxoL2Ledger private (
             l2Tx <- EitherT.fromEither(
               L2Tx.parse(req.l2Payload.bytes)
                   .left
-                  .map(error =>
-                      L2LedgerError(
-                        error.getBytes
-                      )
-                  )
+                  .map(error => L2LedgerError(error))
             )
 
             newActiveUtxos <- EitherT.fromEither(
               HydrozoaTransactionMutator
                   .transit(
                     config = config,
-                    time = req.blockCreationStartTime,
+                    time = QuantizedInstant
+                        .fromPlutusPosixTime(config.slotConfig, req.blockCreationStartTime),
                     state = s.activeUtxos,
                     l2Tx = l2Tx
                   )
                   .left
-                  .map(error => L2LedgerError(error.toString.getBytes))
+                  .map(error => L2LedgerError(error.toString))
             )
 
             adds =
@@ -140,14 +138,14 @@ case class EutxoL2Ledger private (
     }
 
     override def sendRegisterDeposit(
-        req: RegisterDeposit
+        req: RegisterDepositRequest
     ): EitherT[IO, L2LedgerError, Unit] =
         for {
             s <- EitherT.right(state.get)
             l2Genesis <-
                 EitherT.fromEither(
                   Try(L2Genesis.fromDepositEventRegistration(req)).toEither.left
-                      .map(e => L2LedgerError(s"Invalid deposit transaction payload $e".getBytes))
+                      .map(e => L2LedgerError(s"Invalid deposit transaction payload $e"))
                 )
             newState = s
                 .focus(_.pendingDeposits)

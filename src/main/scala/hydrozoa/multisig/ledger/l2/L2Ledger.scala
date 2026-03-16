@@ -11,13 +11,11 @@ private type EF[F[_], A] = EitherT[F, L2LedgerError, A]
 // See: "Kendo" from the test library
 private type KEF[F[_]] = data.Kleisli[[X] =>> EF[F, X], L2LedgerState, L2LedgerState]
 
-/** Errors occurring from interaction with the L2 Ledger (i.e., as seen from the Joint Ledger).
-  *
-  * @param bytes
-  *   The parameter is [[Array[Byte]] because Hydrozoa itself does not define a codec (though
-  *   frontends may).
+/** Errors occurring from interaction with the L2 Ledger (i.e., as seen from the Joint Ledger)
   */
-case class L2LedgerError(bytes: Array[Byte]) extends Throwable
+case class L2LedgerError(message: String) extends Throwable {
+    override def toString: String = s"L2 ledger error: $message"
+}
 
 /** State changes accumulated via interaction with the L2 Ledger (i.e., as seen from the Joint
   * Ledger).
@@ -77,7 +75,7 @@ trait L2Ledger[F[_]] {
       *   Either an error blob if the request could not be applied, or unit on success.
       */
     def sendRegisterDeposit(
-        req: L2LedgerCommand.RegisterDeposit
+        req: L2LedgerCommand.RegisterDepositRequest
     ): EitherT[F, L2LedgerError, Unit]
 
     /** See:
@@ -129,9 +127,9 @@ trait L2Ledger[F[_]] {
         }
 
         def fromL2LedgerCommandReal(e: L2LedgerCommand.Real): L2LedgerAction.Real = e match {
-            case e: L2LedgerCommand.RegisterDeposit       => fromRegisterDepositRequest(e)
-            case e: L2LedgerCommand.ApplyDepositDecisions => fromApplyDepositDecisions(e)
-            case e: L2LedgerCommand.ApplyTransaction      => fromApplyTransactionRequest(e)
+            case e: L2LedgerCommand.RegisterDepositRequest => fromRegisterDepositRequest(e)
+            case e: L2LedgerCommand.ApplyDepositDecisions  => fromApplyDepositDecisions(e)
+            case e: L2LedgerCommand.ApplyTransaction       => fromApplyTransactionRequest(e)
         }
 
         def fromL2LedgerCommandProxy(e: L2LedgerCommand.Proxy): L2LedgerAction.Proxy = e match {
@@ -151,7 +149,7 @@ trait L2Ledger[F[_]] {
             )
 
         private def fromRegisterDepositRequest(
-            req: L2LedgerCommand.RegisterDeposit
+            req: L2LedgerCommand.RegisterDepositRequest
         ): L2LedgerAction.Real =
             L2LedgerAction.Real(
               Kleisli(ledgerState =>

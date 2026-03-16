@@ -52,7 +52,7 @@ object L2Genesis {
     /** Warning: this is partial, but I'm keeping with the conventions of the CBOR decoder.
       */
     def fromDepositEventRegistration(
-        req: L2LedgerCommand.RegisterDeposit,
+        req: L2LedgerCommand.RegisterDepositRequest,
     ): L2Genesis = {
         val genesisObligations = Cbor
             .decode(req.l2Payload.bytes)

@@ -24,13 +24,7 @@ object RemoteL2LedgerCodecs {
 
     // Reuse codecs from the HTTP server, excluding types we override for sugar-rush-ledger compatibility
     // @Peter: We exclude certain codecs here to provide sugar-rush-ledger compatible format
-    import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{
-        coinEncoder as _,
-        coinDecoder as _,
-        valueEncoder as _,
-        valueDecoder as _,
-        given
-    }
+    import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{coinEncoder as _, coinDecoder as _, valueEncoder as _, valueDecoder as _, given}
     import hydrozoa.multisig.server.JsonCodecs.{requestIdEncoder, requestIdDecoder}
 
     // @Peter: Coin as raw number (sugar-rush-ledger expects u64, not string)
@@ -91,13 +85,12 @@ object RemoteL2LedgerCodecs {
         deriveEncoder
     implicit val proxyRequestErrorDecoder: Decoder[L2LedgerCommand.ProxyRequestError] =
         deriveDecoder
-
-    /** @Peter: Destination as JSON object matching sugar-rush-ledger format */
+    
     implicit val destinationEncoder: Encoder[Destination] =
         (dest: Destination) => {
             val addressBech32 = dest.address match {
                 case s: scalus.cardano.address.ShelleyAddress => s.toBech32.get
-                case other => other.toString
+                case other                                    => other.toString
             }
             io.circe.Json.obj(
               "address" -> io.circe.Json.fromString(addressBech32),
@@ -116,13 +109,11 @@ object RemoteL2LedgerCodecs {
                 )
             } yield dest
         )
-
-    // @Peter: Explicit encoder for RegisterDeposit to ensure sugar-rush-ledger compatibility
-    implicit val depositRegistrationEncoder: Encoder[L2LedgerCommand.RegisterDeposit] =
-        (r: L2LedgerCommand.RegisterDeposit) =>
+    
+    implicit val depositRegistrationEncoder: Encoder[L2LedgerCommand.RegisterDepositRequest] =
+        (r: L2LedgerCommand.RegisterDepositRequest) =>
             io.circe.Json.obj(
               "requestId" -> r.requestId.asJson,
-              // TODO: was userVkey before
               "userVk" -> summon[Encoder[VerificationKey]].apply(r.userVKey),
               "blockNumber" -> r.blockNumber.asJson,
               "blockCreationStartTime" -> r.blockCreationStartTime.asJson,
@@ -132,7 +123,7 @@ object RemoteL2LedgerCodecs {
               "refundDestination" -> r.refundDestination.asJson,
               "l2Payload" -> summon[Encoder[ByteString]].apply(r.l2Payload)
             )
-    implicit val depositRegistrationDecoder: Decoder[L2LedgerCommand.RegisterDeposit] =
+    implicit val depositRegistrationDecoder: Decoder[L2LedgerCommand.RegisterDepositRequest] =
         deriveDecoder
 
     implicit val depositDecisionsEncoder: Encoder[L2LedgerCommand.ApplyDepositDecisions] =
@@ -142,7 +133,7 @@ object RemoteL2LedgerCodecs {
 
     // Request codecs
     implicit val requestEncoder: Encoder[Request] = {
-        case Request.RegisterDeposit(event) =>
+        case Request.RegisterDepositRequest(event) =>
             io.circe.Json.obj("RegisterDepositRequest" -> event.asJson)
         case Request.ApplyDepositDecisions(event) =>
             io.circe.Json.obj("ApplyDepositDecisions" -> event.asJson)
@@ -163,8 +154,8 @@ object RemoteL2LedgerCodecs {
             .flatMap {
                 case "RegisterDepositRequest" =>
                     c.downField("RegisterDepositRequest")
-                        .as[L2LedgerCommand.RegisterDeposit]
-                        .map(Request.RegisterDeposit.apply)
+                        .as[L2LedgerCommand.RegisterDepositRequest]
+                        .map(Request.RegisterDepositRequest.apply)
                 case "ApplyDepositDecisions" =>
                     c.downField("ApplyDepositDecisions")
                         .as[L2LedgerCommand.ApplyDepositDecisions]
@@ -189,26 +180,28 @@ object RemoteL2LedgerCodecs {
     implicit val responseSuccessEncoder: Encoder[Response.Success] = deriveEncoder
     implicit val responseSuccessDecoder: Decoder[Response.Success] = deriveDecoder
 
-    implicit val responseErrorEncoder: Encoder[Response.Error] = deriveEncoder
-    implicit val responseErrorDecoder: Decoder[Response.Error] = deriveDecoder
+    implicit val responseFailureEncoder: Encoder[Response.Failure] = deriveEncoder
+    implicit val responseFailureDecoder: Decoder[Response.Failure] = deriveDecoder
 
     implicit val responseEncoder: Encoder[Response] = {
         case s: Response.Success => s.asJson
-        case e: Response.Error   => e.asJson
+        case e: Response.Failure => e.asJson
     }
-
-    // @Peter: Response decoder for sugar-rush-ledger format with type field
+    
     implicit val responseDecoder: Decoder[Response] = Decoder.instance { c =>
-        c.downField("type").as[String].flatMap {
-            case "Valid" =>
-                // Data may or may not be present
-                val data = c.downField("data").as[io.circe.Json].getOrElse(io.circe.Json.arr())
-                Right(Response.Success(data))
-            case "Error" =>
-                c.downField("message").as[String].map(Response.Error.apply)
-            case other =>
-                Left(io.circe.DecodingFailure(s"Unknown response type: $other", c.history))
-        }
+        c.keys
+            .flatMap(_.headOption)
+            .toRight(
+              io.circe.DecodingFailure("Response must have exactly one field", c.history)
+            )
+            .flatMap {
+                case "Success" =>
+                    c.downField("Success").as[Response.Success]
+                case "Failure" =>
+                    c.downField("Failure").as[Response.Failure]
+                case other =>
+                    Left(io.circe.DecodingFailure(s"Unknown response type: $other", c.history))
+            }
     }
 
     // EvacuationKey codec

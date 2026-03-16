@@ -88,7 +88,6 @@ object EvacuationMap:
             }
             .foldLeft(identity: EvacuationMap => EvacuationMap)(_.andThen(_))
 
-// TODO: Turn into a Map (for Add) and a Set (for delete)
 enum EvacuationDiff:
     case Update(key: EvacuationKey, value: KeepRaw[TransactionOutput])
     case Delete(key: EvacuationKey)

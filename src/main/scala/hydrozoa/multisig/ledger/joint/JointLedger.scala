@@ -249,7 +249,7 @@ final case class JointLedger(
                     l1Res match {
                         case Left(error) => rejectEvent(requestId, error)
                         case Right(newL1State, (depositProduced, refundTx)) => {
-                            val l2Command = L2LedgerCommand.RegisterDeposit(
+                            val l2Command = L2LedgerCommand.RegisterDepositRequest(
                               requestId = requestId,
                               userVKey = req.request.userVk,
                               blockNumber = currentBlockNum,
@@ -317,7 +317,7 @@ final case class JointLedger(
                           requestId = req.requestId,
                           userVKey = req.request.userVk,
                           blockNumber = p.nextBlockNumber,
-                          blockCreationStartTime = p.BlockCreationStartTime,
+                          blockCreationStartTime = p.BlockCreationStartTime.toPosixTime,
                           l2Payload = l2Payload
                         )
 

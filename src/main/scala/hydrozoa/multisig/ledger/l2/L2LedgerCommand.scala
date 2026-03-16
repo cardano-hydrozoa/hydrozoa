@@ -3,7 +3,6 @@ package hydrozoa.multisig.ledger.l2
 // see: https://gummiwormlabs.github.io/gummiworm-writing-room/gummiworm-poc/sugar-rush-overview/ledger-events
 
 import cats.syntax.all.*
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l1.tx.Tx
@@ -37,7 +36,7 @@ object L2LedgerCommand {
     sealed trait Real extends L2LedgerCommand
     sealed trait Proxy extends L2LedgerCommand
 
-    final case class RegisterDeposit(
+    final case class RegisterDepositRequest(
         requestId: RequestId,
         userVKey: VerificationKey,
         blockNumber: BlockNumber,
@@ -63,9 +62,7 @@ object L2LedgerCommand {
         requestId: RequestId,
         userVKey: VerificationKey,
         blockNumber: BlockNumber,
-        // FIXME: This is specified as PosixTime in the spec, but this would
-        // complicate things for the eutxo l2, so I'm leaving it for now.
-        blockCreationStartTime: QuantizedInstant,
+        blockCreationStartTime: PosixTime,
         l2Payload: ByteString
     ) extends L2LedgerCommand.Real
 

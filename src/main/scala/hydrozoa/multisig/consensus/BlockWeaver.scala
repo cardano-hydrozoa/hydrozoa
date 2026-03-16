@@ -14,9 +14,8 @@ import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockHeader, BlockNumb
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
-import scalus.cardano.ledger.TransactionInput
-
 import scala.concurrent.duration.DurationInt
+import scalus.cardano.ledger.TransactionInput
 
 /** Block weaver actor.
   *   - When the node is leading a block, the weaver packages all known unprocessed (by the time

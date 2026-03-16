@@ -189,6 +189,11 @@ object QuantizedTime {
         def ofEpochSeconds(slotConfig: SlotConfig, posixSeconds: Long): QuantizedInstant =
             apply(slotConfig, Instant.ofEpochSecond(posixSeconds))
 
+        def fromPlutusPosixTime(slotConfig: SlotConfig, posixTime: PosixTime): QuantizedInstant = {
+            // TODO: potential truncation from BigInt
+            apply(slotConfig, Instant.ofEpochMilli(posixTime.longValue))
+        }
+
         def realTimeQuantizedInstant(slotConfig: SlotConfig): IO[QuantizedInstant] =
             IO.realTimeInstant.map(_.quantize(slotConfig))
     }
