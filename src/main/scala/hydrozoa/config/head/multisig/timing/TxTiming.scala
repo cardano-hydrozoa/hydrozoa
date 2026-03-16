@@ -51,8 +51,13 @@ final case class TxTiming private (
 ) extends TxTiming.Section {
     override transparent inline def txTiming: TxTiming = this
 
+    val absorptionStartOffsetDuration: AbsorptionStartOffsetDuration =
+        AbsorptionStartOffsetDuration(
+          depositSubmissionDuration + depositMaturityDuration
+        )
+
     val refundStartOffsetDuration: RefundStartOffsetDuration = RefundStartOffsetDuration(
-      depositSubmissionDuration + depositMaturityDuration + depositAbsorptionDuration + silenceDuration
+      absorptionStartOffsetDuration + depositAbsorptionDuration + silenceDuration
     )
 
     def initializationEndTime(blockCreationEndTime: BlockCreationEndTime): InitializationTxEndTime =
@@ -238,6 +243,12 @@ object TxTiming {
         opaque type DepositAbsorptionDuration = QuantizedFiniteDuration
         def DepositAbsorptionDuration(x: QuantizedFiniteDuration): DepositAbsorptionDuration = x
         given Conversion[DepositAbsorptionDuration, QuantizedFiniteDuration] = identity
+
+        opaque type AbsorptionStartOffsetDuration = QuantizedFiniteDuration
+        def AbsorptionStartOffsetDuration(
+            x: QuantizedFiniteDuration
+        ): AbsorptionStartOffsetDuration = x
+        given Conversion[AbsorptionStartOffsetDuration, QuantizedFiniteDuration] = identity
 
         opaque type RefundStartOffsetDuration = QuantizedFiniteDuration
         def RefundStartOffsetDuration(x: QuantizedFiniteDuration): RefundStartOffsetDuration = x
