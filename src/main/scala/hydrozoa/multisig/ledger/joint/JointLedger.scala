@@ -32,14 +32,11 @@ import monocle.Focus.focus
 import scalus.cardano.ledger.{SlotConfig, TransactionInput}
 import scalus.uplc.builtin.ByteString
 
-// Fields of a work-in-progress block pertaining to user requests, with an additional field for dealing with withdrawn utxos
 private case class UserRequestState(
     requests: List[(RequestId, ValidityFlag)],
     postDatedRefundTxs: Vector[RefundTx.PostDated]
 )
 
-// NOTE: Joint ledger is created by the MultisigManager.
-// NOTE: As of 2025-11-16, George says BlockWeaver should be the ONLY actor calling the joint ledger
 final case class JointLedger(
     config: JointLedger.Config,
     pendingConnections: MultisigRegimeManager.PendingConnections | JointLedger.Connections,
