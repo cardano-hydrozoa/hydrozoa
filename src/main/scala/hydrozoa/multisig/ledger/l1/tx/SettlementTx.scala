@@ -240,8 +240,9 @@ private object SettlementTxOps {
                 Spend(deposit.toUtxo, config.headMultisigScript.witnessAttached)
 
             private val spendDeposits: List[Spend] = depositsToSpend.toList.map(mkDepositStep)
-            
-            private val valueAbsorbed: Value = depositsToSpend.map(_.l2Value).foldLeft(Value.zero)(_ + _)
+
+            private val valueAbsorbed: Value =
+                depositsToSpend.map(_.l2Value).foldLeft(Value.zero)(_ + _)
 
             /////////////////////////////////////////////////////////
             // Send rollout (maybe)
@@ -271,7 +272,9 @@ private object SettlementTxOps {
             /////////////////////////////////////////////////////////
             // Send treasury
             private val treasuryOutputValue: Value =
-                valueAbsorbed + mbRolloutValue.fold(treasuryToSpend.value)(treasuryToSpend.value - _)
+                valueAbsorbed + mbRolloutValue.fold(treasuryToSpend.value)(
+                  treasuryToSpend.value - _
+                )
 
             private val treasuryOutput: TxOutput.Babbage = {
                 TxOutput.Babbage(

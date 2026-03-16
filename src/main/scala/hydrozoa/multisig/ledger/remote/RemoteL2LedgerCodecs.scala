@@ -85,7 +85,7 @@ object RemoteL2LedgerCodecs {
         deriveEncoder
     implicit val proxyRequestErrorDecoder: Decoder[L2LedgerCommand.ProxyRequestError] =
         deriveDecoder
-    
+
     implicit val destinationEncoder: Encoder[Destination] =
         (dest: Destination) => {
             val addressBech32 = dest.address match {
@@ -109,7 +109,7 @@ object RemoteL2LedgerCodecs {
                 )
             } yield dest
         )
-    
+
     implicit val depositRegistrationEncoder: Encoder[L2LedgerCommand.RegisterDepositRequest] =
         (r: L2LedgerCommand.RegisterDepositRequest) =>
             io.circe.Json.obj(
@@ -187,7 +187,7 @@ object RemoteL2LedgerCodecs {
         case s: Response.Success => s.asJson
         case e: Response.Failure => e.asJson
     }
-    
+
     implicit val responseDecoder: Decoder[Response] = Decoder.instance { c =>
         c.keys
             .flatMap(_.headOption)
@@ -233,10 +233,12 @@ object RemoteL2LedgerCodecs {
                     Try(Cbor.decode(bs.bytes).to[TransactionOutput].value).toEither match {
                         case Right(txOut) => Right(KeepRaw(txOut))
                         case Left(e) =>
-                            Left(io.circe.DecodingFailure(
-                              s"Failed to decode TransactionOutput from CBOR: ${e.getMessage}",
-                              c.history
-                            ))
+                            Left(
+                              io.circe.DecodingFailure(
+                                s"Failed to decode TransactionOutput from CBOR: ${e.getMessage}",
+                                c.history
+                              )
+                            )
                     }
             }
         }
