@@ -283,7 +283,7 @@ trait CardanoLiaison(
       */
     protected[consensus] def handleMajorBlockL1Effects(block: BlockConfirmed.Major): IO[Unit] =
         for {
-            _ <- IO.whenA(block.blockVersion.major.convert == block.settlementTx.majorVersionProduced.convert) {
+            _ <- IO.whenA(block.blockVersion.major != block.settlementTx.majorVersionProduced) {
                 val msg =
                     s"Block major version (${block.blockVersion.major}) doesn't match" +
                         s" settlement tx major version produced (${block.settlementTx.majorVersionProduced})"
