@@ -132,7 +132,7 @@ class HydrozoaRoutes(
                     submissionDurationSeconds =
                         headConfig.txTiming.depositSubmissionDuration.finiteDuration.toSeconds,
                     absorptionStartOffsetSeconds =
-                        (headConfig.txTiming.depositSubmissionDuration + headConfig.txTiming.depositMaturityDuration).finiteDuration.toSeconds,
+                        headConfig.txTiming.absorptionStartOffsetDuration.finiteDuration.toSeconds,
                     refundStartOffsetSeconds =
                         headConfig.txTiming.refundStartOffsetDuration.finiteDuration.toSeconds,
                     currentTimePosixSeconds = currentTimePosixSeconds,
