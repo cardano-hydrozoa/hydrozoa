@@ -220,39 +220,45 @@ object RemoteL2LedgerCodecs {
         }
     }
 
-    // KeepRaw[TransactionOutput] codec
+    // @Peter: KeepRaw[TransactionOutput] codec as hex string for sugar-rush-ledger
     given Encoder[KeepRaw[TransactionOutput]] = Encoder.instance { kr =>
-        io.circe.Json.obj("raw" -> byteStringEncoder(ByteString.fromArray(kr.raw)))
+        io.circe.Json.fromString(ByteString.fromArray(kr.raw).toHex)
     }
 
     given Decoder[KeepRaw[TransactionOutput]] = Decoder.instance { c =>
-        // TODO: Implement proper KeepRaw[TransactionOutput] decoding
-        // This requires CBOR decoding of TransactionOutput from raw bytes
-        Left(
-          io.circe.DecodingFailure(
-            "KeepRaw[TransactionOutput] decoding not implemented - requires CBOR deserialization",
-            c.history
-          )
-        )
+        c.as[String].flatMap { hexStr =>
+            ByteString.fromHex(hexStr) match {
+                case bs =>
+                    // Decode CBOR bytes to TransactionOutput
+                    Try(Cbor.decode(bs.bytes).to[TransactionOutput].value).toEither match {
+                        case Right(txOut) => Right(KeepRaw(txOut))
+                        case Left(e) =>
+                            Left(io.circe.DecodingFailure(
+                              s"Failed to decode TransactionOutput from CBOR: ${e.getMessage}",
+                              c.history
+                            ))
+                    }
+            }
+        }
     }
 
-    // EvacuationDiff codec
+    // @Peter: EvacuationDiff codec using "tag" field for sugar-rush-ledger compatibility
     given Encoder[EvacuationDiff] = Encoder.instance {
         case EvacuationDiff.Update(key, value) =>
             io.circe.Json.obj(
-              "type" -> io.circe.Json.fromString("Update"),
+              "tag" -> io.circe.Json.fromString("Update"),
               "key" -> key.asJson,
               "value" -> value.asJson
             )
         case EvacuationDiff.Delete(key) =>
             io.circe.Json.obj(
-              "type" -> io.circe.Json.fromString("Delete"),
+              "tag" -> io.circe.Json.fromString("Delete"),
               "key" -> key.asJson
             )
     }
 
     given Decoder[EvacuationDiff] = Decoder.instance { c =>
-        c.downField("type").as[String].flatMap {
+        c.downField("tag").as[String].flatMap {
             case "Update" =>
                 for {
                     key <- c.downField("key").as[EvacuationKey]
@@ -261,7 +267,7 @@ object RemoteL2LedgerCodecs {
             case "Delete" =>
                 c.downField("key").as[EvacuationKey].map(EvacuationDiff.Delete.apply)
             case other =>
-                Left(io.circe.DecodingFailure(s"Unknown EvacuationDiff type: $other", c.history))
+                Left(io.circe.DecodingFailure(s"Unknown EvacuationDiff tag: $other", c.history))
         }
     }
 
