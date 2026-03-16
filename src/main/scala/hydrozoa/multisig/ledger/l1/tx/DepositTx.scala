@@ -155,7 +155,7 @@ private object DepositTxOps {
             case MissingDepositOutputAtIndex(e: Int)
             case DepositUtxoError(e: DepositUtxo.DepositUtxoConversionError)
             case TxCborDeserializationFailed(e: Throwable)
-            case SubmissionDeadlineParseError(e: Throwable)
+            case DepositTxTTLParseError(e: Throwable)
             case IncorrectSubmissionDeadline(actual: QuantizedInstant, expected: QuantizedInstant)
             case MultisigRegimeWitnessUtxoNotReferenced
             case InvalidDatumContent(e: Throwable)
@@ -226,21 +226,11 @@ private object DepositTxOps {
                             val instant = java.time.Instant.ofEpochMilli(ttlPosixMillis)
                             instant.quantizeLosslessUnsafe(config.slotConfig)
                         } match {
-                            case Failure(exception) => Left(SubmissionDeadlineParseError(exception))
+                            case Failure(exception) => Left(DepositTxTTLParseError(exception))
                             case Success(v)         => Right(v)
                         }
 
                         expectedTtl = expectedSubmissionDeadline.toSlot.slot
-
-//                        // Check that the submission deadline is as expected
-//                        _ <- Either.cond(
-//                          submissionDeadline == expectedSubmissionDeadline,
-//                          (),
-//                          IncorrectSubmissionDeadline(
-//                            submissionDeadline,
-//                            expectedSubmissionDeadline
-//                          )
-//                        )
 
                         // Check the multisig regime witness utxo was referenced
                         _ <- Either.cond(

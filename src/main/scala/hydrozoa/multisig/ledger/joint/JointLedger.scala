@@ -211,7 +211,7 @@ final case class JointLedger(
                 .focus(_.userRequestState.requests)
                 .modify(_.appended((requestId, Invalid)))
             _ <- state.set(newState)
-            _ <- logger.debug(s"registerDepositRequest failure: $e")
+            _ <- logger.warn(s"Request rejected ($requestId): $e")
             _ <- tracer.eventProcessed(
               s"${requestId.peerNum: Int}:${requestId.requestNum: Int}",
               currentBlockNum: Int,
