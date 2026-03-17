@@ -3,7 +3,7 @@ package hydrozoa.multisig.server
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.multisig.ledger.event.RequestId
 import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.{Coin, TransactionInput}
+import scalus.cardano.ledger.{AssetName, Coin, PolicyId, TransactionInput}
 
 /** Response types for the HTTP API */
 object ApiResponse {
@@ -49,10 +49,17 @@ object ApiResponse {
         headId: HeadId,
         headAddress: ShelleyAddress,
         multisigRegimeUtxo: TransactionInput,
+        treasuryBeaconToken: CardanoNativeToken,
         submissionDurationSeconds: Long,
         absorptionStartOffsetSeconds: Long,
         refundStartOffsetSeconds: Long,
         currentTimePosixSeconds: Long,
         maxNonPlutusTxFee: Coin
+    )
+
+    // Serialized as string: {policyIdHex}.{assetNameHex}
+    final case class CardanoNativeToken(
+        policyId: PolicyId,
+        tokenName: AssetName
     )
 }
