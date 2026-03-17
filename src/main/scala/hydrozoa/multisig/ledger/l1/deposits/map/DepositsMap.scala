@@ -116,30 +116,34 @@ object DepositsMap {
     )
 
     final case class Partition private[map] (
-        immature: DepositsMap,
+        rejected: DepositsMap,
         eligible: DepositsMap,
-        rejected: DepositsMap
+        immature: DepositsMap,
     ) {
         def append(compartment: Compartment, x: Entry): Partition =
             compartment match {
-                case Compartment.Immature => copy(immature = immature.append(x))
-                case Compartment.Eligible => copy(eligible = eligible.append(x))
                 case Compartment.Rejected => copy(rejected = rejected.append(x))
+                case Compartment.Eligible => copy(eligible = eligible.append(x))
+                case Compartment.Immature => copy(immature = immature.append(x))
             }
 
         def split(n: Int): Split = {
             val (tmAbsorbed, tmUnabsorbed) = eligible.treeMap.splitAt(n)
             val absorbed = DepositsMap(tmAbsorbed)
             val unabsorbed = DepositsMap(tmUnabsorbed)
-            val surviving = unabsorbed.concat(immature)
-            val decisions = Decisions(absorbed = absorbed.unzip, rejected = rejected.unzip)
             Split(
               absorbed = absorbed,
+              rejected = rejected,
               unabsorbed = unabsorbed,
-              surviving = surviving,
-              decisions = decisions
+              immature = immature
             )
         }
+
+        override def toString: String =
+            "Deposits partitioned:" + "\n\t" +
+                s"|- Rejected: ${rejected.requestIdsLong}" + "\n\t" +
+                s"|- Eligible: ${eligible.requestIdsLong}" + "\n\t" +
+                s"|- Immature: ${immature.requestIdsLong}"
     }
 
     object Partition {
@@ -151,10 +155,24 @@ object DepositsMap {
 
     final case class Split private[map] (
         absorbed: DepositsMap,
+        rejected: DepositsMap,
         unabsorbed: DepositsMap,
-        surviving: DepositsMap,
-        decisions: Decisions
-    )
+        immature: DepositsMap,
+    ) {
+        lazy val eligible = absorbed.concat(unabsorbed)
+        val surviving = unabsorbed.concat(immature)
+        val decisions = Decisions(absorbed = absorbed.unzip, rejected = rejected.unzip)
+
+        override def toString: String =
+            "Deposits partitioned and split:" + "\n" +
+                "|- " + s"Rejected: ${rejected.requestIdsLong}" + "\n" +
+                "|- " + s"Eligible: ${eligible.requestIdsLong}" + "\n" +
+                "|--- " + s"Absorbed: ${absorbed.requestIdsLong}" + "\n" +
+                "|--- " + s"Unabsorbed: ${unabsorbed.requestIdsLong}" + "\n" +
+                "|- " + s"Surviving: ${surviving.requestIdsLong}" + "\n" +
+                "|--- " + s"Unabsorbed: ${unabsorbed.requestIdsLong}" + "\n" +
+                "|--- " + s"Immature: ${immature.requestIdsLong}"
+    }
 
     final case class Decisions private[map] (
         absorbed: Unzip,
