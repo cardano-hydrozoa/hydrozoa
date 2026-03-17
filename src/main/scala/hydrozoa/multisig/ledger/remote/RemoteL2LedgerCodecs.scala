@@ -65,9 +65,6 @@ object RemoteL2LedgerCodecs {
     implicit val blockNumberDecoder: Decoder[BlockNumber] =
         Decoder.decodeInt.map(BlockNumber.apply)
 
-    implicit val applyTransactionEncoder: Encoder[L2LedgerCommand.ApplyTransaction] = deriveEncoder
-    implicit val applyTransactionDecoder: Decoder[L2LedgerCommand.ApplyTransaction] = deriveDecoder
-
     implicit val proxyBlockConfirmationEncoder: Encoder[L2LedgerCommand.ProxyBlockConfirmation] =
         deriveEncoder
     implicit val proxyBlockConfirmationDecoder: Decoder[L2LedgerCommand.ProxyBlockConfirmation] =
@@ -102,6 +99,7 @@ object RemoteL2LedgerCodecs {
             } yield dest
         )
 
+    // TODO: can be removed if we just rename the userVk field?
     implicit val depositRegistrationEncoder: Encoder[L2LedgerCommand.RegisterDeposit] =
         (r: L2LedgerCommand.RegisterDeposit) =>
             io.circe.Json.obj(
@@ -121,6 +119,20 @@ object RemoteL2LedgerCodecs {
     implicit val depositDecisionsEncoder: Encoder[L2LedgerCommand.ApplyDepositDecisions] =
         deriveEncoder
     implicit val depositDecisionsDecoder: Decoder[L2LedgerCommand.ApplyDepositDecisions] =
+        deriveDecoder
+
+    // TODO: can be removed if we just rename the userVk field?
+    implicit val applyTransactionEncoder: Encoder[L2LedgerCommand.ApplyTransaction] =
+        (r: L2LedgerCommand.ApplyTransaction) =>
+            io.circe.Json.obj(
+              "requestId" -> r.requestId.asJson,
+              "userVk" -> summon[Encoder[VerificationKey]].apply(r.userVKey),
+              "blockNumber" -> r.blockNumber.asJson,
+              "blockCreationStartTime" -> r.blockCreationStartTime.asJson,
+              "l2Payload" -> summon[Encoder[ByteString]].apply(r.l2Payload)
+            )
+
+    implicit val applyTransactionDecoder: Decoder[L2LedgerCommand.ApplyTransaction] =
         deriveDecoder
 
     // Request codecs
