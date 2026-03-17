@@ -176,6 +176,36 @@ object JsonCodecs {
 
     given errorDecoder: Decoder[Error] = deriveDecoder[Error]
 
+    // CardanoNativeToken codec - serialized as "{policyIdHex}.{assetNameHex}"
+    given cardanoNativeTokenEncoder: Encoder[ApiResponse.CardanoNativeToken] =
+        (token: ApiResponse.CardanoNativeToken) => {
+            val policyIdHex = token.policyId.toHex
+            val assetNameHex = token.tokenName.bytes.toHex
+            Json.fromString(s"$policyIdHex.$assetNameHex")
+        }
+
+    given cardanoNativeTokenDecoder: Decoder[ApiResponse.CardanoNativeToken] =
+        Decoder.decodeString.emap { str =>
+            str.split('.') match {
+                case Array(policyIdHex, assetNameHex) =>
+                    scala.util
+                        .Try {
+                            val policyIdBytes = ByteString.fromHex(policyIdHex)
+                            val assetNameBytes = ByteString.fromHex(assetNameHex)
+                            val policyId = ScriptHash.fromByteString(policyIdBytes)
+                            val assetName = AssetName(assetNameBytes)
+                            ApiResponse.CardanoNativeToken(policyId, assetName)
+                        }
+                        .toEither
+                        .left
+                        .map(e => s"Failed to decode CardanoNativeToken: ${e.getMessage}")
+                case _ =>
+                    Left(
+                      s"Invalid CardanoNativeToken format, expected '{policyIdHex}.{assetNameHex}', got: $str"
+                    )
+            }
+        }
+
     given headInfoEncoder: Encoder[HeadInfo] = deriveEncoder[HeadInfo]
 
     given headInfoDecoder: Decoder[HeadInfo] = deriveDecoder[HeadInfo]
