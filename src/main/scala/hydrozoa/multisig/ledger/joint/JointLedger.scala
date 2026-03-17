@@ -389,12 +389,11 @@ final case class JointLedger(
 
             split = partition.split(maxDepositsAbsorbedPerBlock)
 
-            _ <- logger.trace(
-              s"joint ledger: immature=${partition.immature}" + "\n" +
-                  s"joint ledger: absorbed=${split.absorbed}" + "\n" +
-                  s"joint ledger: unabsorbed=${split.unabsorbed}" + "\n" +
-                  s"joint ledger: rejected=${partition.rejected}" + "\n"
-            )
+            // We don't need to trace this if we're tracing the `split`
+            // Because `split` is a refinement of `partition`.
+            // _ <- logger.trace(partition.toString)
+
+            _ <- logger.trace(split.toString)
 
             blockBriefRes <- mkBlockBriefIntermediate(p, blockCreationEndTime, split.decisions)
             (pBlockBrief, blockBrief) = blockBriefRes
