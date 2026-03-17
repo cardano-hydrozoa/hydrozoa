@@ -180,10 +180,9 @@ final case class JointLedger(
         } yield ()
 
     private def applyUserRequestWithId(e: UserRequestWithId): IO[Unit] = {
-        // TODO: check that blockStartTime is within the request's validity bounds
         e match {
-            case req: UserRequestWithId.DepositRequest     => registerDepositRequest(req)
-            case req: UserRequestWithId.TransactionRequest => applyTransactionRequest(req)
+            case req: UserRequestWithId.DepositRequest     => registerDeposit(req)
+            case req: UserRequestWithId.TransactionRequest => applyTransaction(req)
         }
     }
 
@@ -228,7 +227,7 @@ final case class JointLedger(
     /** Update the JointLedger's state -- the work-in-progress block -- to accept or reject deposits
       * depending on whether the [[dappLedger]] Actor can successfully register the deposit,
       */
-    private def registerDepositRequest(req: UserRequestWithId.DepositRequest): IO[Unit] = {
+    private def registerDeposit(req: UserRequestWithId.DepositRequest): IO[Unit] = {
         import req.*
         import request.*
         import body.*
@@ -293,7 +292,7 @@ final case class JointLedger(
     /** Update the current block with the result of passing the tx to the virtual ledger, as well as
       * updating ledgerEventsRequired
       */
-    private def applyTransactionRequest(
+    private def applyTransaction(
         req: UserRequestWithId.TransactionRequest
     ): IO[Unit] = {
         import req.*
@@ -317,7 +316,7 @@ final case class JointLedger(
                           requestId = req.requestId,
                           userVKey = req.request.userVk,
                           blockNumber = p.nextBlockNumber,
-                          blockCreationStartTime = p.BlockCreationStartTime,
+                          blockCreationStartTime = p.BlockCreationStartTime.toPosixTime,
                           l2Payload = l2Payload
                         )
 

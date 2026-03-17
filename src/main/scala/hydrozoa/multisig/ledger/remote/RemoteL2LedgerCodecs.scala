@@ -22,9 +22,31 @@ import scodec.bits.ByteVector
 /** JSON codecs for RemoteL2Ledger WebSocket protocol */
 object RemoteL2LedgerCodecs {
 
-    // Reuse codecs from the HTTP server
-    import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
+    // Reuse codecs from the HTTP server, excluding types we override for sugar-rush-ledger compatibility
+    // We exclude certain codecs here to provide sugar-rush-ledger compatible format
+    import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{coinEncoder as _, coinDecoder as _, valueEncoder as _, valueDecoder as _, given}
     import hydrozoa.multisig.server.JsonCodecs.{requestIdEncoder, requestIdDecoder}
+
+    // Coin as raw number (sugar-rush-ledger expects u64, not string)
+    given Encoder[Coin] = Encoder.encodeLong.contramap(_.value)
+    given Decoder[Coin] = Decoder.decodeLong.map(Coin.apply)
+
+    // Value codec for sugar-rush-ledger format: {"assets": [{"asset": {"tag": "Ada"}, "value": N}]}
+    // The old CIP-116 compatible codec is commented out below - we will need it in the future
+    given Encoder[Value] = (v: Value) => {
+        val adaEntry = io.circe.Json.obj(
+          "asset" -> io.circe.Json.obj("tag" -> io.circe.Json.fromString("Ada")),
+          "value" -> io.circe.Json.fromLong(v.coin.value)
+        )
+        // For now, only ADA is supported
+        io.circe.Json.obj("assets" -> io.circe.Json.arr(adaEntry))
+    }
+
+    // @Peter: this is just missing
+    given Decoder[Value] = Decoder.instance { c =>
+        // Minimal: just extract ADA from the assets array
+        Right(Value(Coin(0))) // TODO: implement if needed
+    }
 
     // QuantizedInstant codec (simplified - loses SlotConfig context)
     // TODO: Include SlotConfig in serialization for proper reconstruction
@@ -56,9 +78,17 @@ object RemoteL2LedgerCodecs {
     implicit val proxyRequestErrorDecoder: Decoder[L2LedgerCommand.ProxyRequestError] =
         deriveDecoder
 
-    /** Destination as a cbor-encoded hex-string */
     implicit val destinationEncoder: Encoder[Destination] =
-        Encoder.encodeString.contramap(destination => destination.toHex)
+        (dest: Destination) => {
+            val addressBech32 = dest.address match {
+                case s: scalus.cardano.address.ShelleyAddress => s.toBech32.get
+                case other                                    => other.toString
+            }
+            io.circe.Json.obj(
+              "address" -> io.circe.Json.fromString(addressBech32),
+              "datum" -> io.circe.Json.Null
+            )
+        }
     implicit val destinationDecoder: Decoder[Destination] =
         Decoder.decodeString.emap(hexStr =>
             for {
@@ -73,7 +103,18 @@ object RemoteL2LedgerCodecs {
         )
 
     implicit val depositRegistrationEncoder: Encoder[L2LedgerCommand.RegisterDeposit] =
-        deriveEncoder
+        (r: L2LedgerCommand.RegisterDeposit) =>
+            io.circe.Json.obj(
+              "requestId" -> r.requestId.asJson,
+              "userVk" -> summon[Encoder[VerificationKey]].apply(r.userVKey),
+              "blockNumber" -> r.blockNumber.asJson,
+              "blockCreationStartTime" -> r.blockCreationStartTime.asJson,
+              "depositId" -> r.depositId.asJson,
+              "depositFee" -> r.depositFee.asJson,
+              "depositL2Value" -> r.depositL2Value.asJson,
+              "refundDestination" -> r.refundDestination.asJson,
+              "l2Payload" -> summon[Encoder[ByteString]].apply(r.l2Payload)
+            )
     implicit val depositRegistrationDecoder: Decoder[L2LedgerCommand.RegisterDeposit] =
         deriveDecoder
 
@@ -85,7 +126,7 @@ object RemoteL2LedgerCodecs {
     // Request codecs
     implicit val requestEncoder: Encoder[Request] = {
         case Request.RegisterDeposit(event) =>
-            io.circe.Json.obj("RegisterDepositRequest" -> event.asJson)
+            io.circe.Json.obj("RegisterDeposit" -> event.asJson)
         case Request.ApplyDepositDecisions(event) =>
             io.circe.Json.obj("ApplyDepositDecisions" -> event.asJson)
         case Request.ApplyTransaction(event) =>
@@ -131,16 +172,29 @@ object RemoteL2LedgerCodecs {
     implicit val responseSuccessEncoder: Encoder[Response.Success] = deriveEncoder
     implicit val responseSuccessDecoder: Decoder[Response.Success] = deriveDecoder
 
-    implicit val responseErrorEncoder: Encoder[Response.Error] = deriveEncoder
-    implicit val responseErrorDecoder: Decoder[Response.Error] = deriveDecoder
+    implicit val responseFailureEncoder: Encoder[Response.Failure] = deriveEncoder
+    implicit val responseFailureDecoder: Decoder[Response.Failure] = deriveDecoder
 
     implicit val responseEncoder: Encoder[Response] = {
         case s: Response.Success => s.asJson
-        case e: Response.Error   => e.asJson
+        case e: Response.Failure => e.asJson
     }
 
-    implicit val responseDecoder: Decoder[Response] =
-        responseSuccessDecoder.map(s => s: Response).or(responseErrorDecoder.map(e => e: Response))
+    implicit val responseDecoder: Decoder[Response] = Decoder.instance { c =>
+        c.keys
+            .flatMap(_.headOption)
+            .toRight(
+              io.circe.DecodingFailure("Response must have exactly one field", c.history)
+            )
+            .flatMap {
+                case "Success" =>
+                    c.downField("Success").as[Response.Success]
+                case "Failure" =>
+                    c.downField("Failure").as[Response.Failure]
+                case other =>
+                    Left(io.circe.DecodingFailure(s"Unknown response type: $other", c.history))
+            }
+    }
 
     // EvacuationKey codec
     import hydrozoa.multisig.ledger.joint.EvacuationKey
@@ -158,39 +212,45 @@ object RemoteL2LedgerCodecs {
         }
     }
 
-    // KeepRaw[TransactionOutput] codec
     given Encoder[KeepRaw[TransactionOutput]] = Encoder.instance { kr =>
-        io.circe.Json.obj("raw" -> byteStringEncoder(ByteString.fromArray(kr.raw)))
+        io.circe.Json.fromString(ByteString.fromArray(kr.raw).toHex)
     }
 
     given Decoder[KeepRaw[TransactionOutput]] = Decoder.instance { c =>
-        // TODO: Implement proper KeepRaw[TransactionOutput] decoding
-        // This requires CBOR decoding of TransactionOutput from raw bytes
-        Left(
-          io.circe.DecodingFailure(
-            "KeepRaw[TransactionOutput] decoding not implemented - requires CBOR deserialization",
-            c.history
-          )
-        )
+        c.as[String].flatMap { hexStr =>
+            ByteString.fromHex(hexStr) match {
+                case bs =>
+                    // Decode CBOR bytes to TransactionOutput
+                    Try(Cbor.decode(bs.bytes).to[TransactionOutput].value).toEither match {
+                        case Right(txOut) => Right(KeepRaw(txOut))
+                        case Left(e) =>
+                            Left(
+                              io.circe.DecodingFailure(
+                                s"Failed to decode TransactionOutput from CBOR: ${e.getMessage}",
+                                c.history
+                              )
+                            )
+                    }
+            }
+        }
     }
 
-    // EvacuationDiff codec
     given Encoder[EvacuationDiff] = Encoder.instance {
         case EvacuationDiff.Update(key, value) =>
             io.circe.Json.obj(
-              "type" -> io.circe.Json.fromString("Update"),
+              "tag" -> io.circe.Json.fromString("Update"),
               "key" -> key.asJson,
               "value" -> value.asJson
             )
         case EvacuationDiff.Delete(key) =>
             io.circe.Json.obj(
-              "type" -> io.circe.Json.fromString("Delete"),
+              "tag" -> io.circe.Json.fromString("Delete"),
               "key" -> key.asJson
             )
     }
 
     given Decoder[EvacuationDiff] = Decoder.instance { c =>
-        c.downField("type").as[String].flatMap {
+        c.downField("tag").as[String].flatMap {
             case "Update" =>
                 for {
                     key <- c.downField("key").as[EvacuationKey]
@@ -199,7 +259,7 @@ object RemoteL2LedgerCodecs {
             case "Delete" =>
                 c.downField("key").as[EvacuationKey].map(EvacuationDiff.Delete.apply)
             case other =>
-                Left(io.circe.DecodingFailure(s"Unknown EvacuationDiff type: $other", c.history))
+                Left(io.circe.DecodingFailure(s"Unknown EvacuationDiff tag: $other", c.history))
         }
     }
 
