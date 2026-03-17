@@ -30,13 +30,11 @@ given io.bullet.borer.Decoder[Destination] = Decoder.derived
   */
 sealed trait L2LedgerCommand
 
-// TODO: We probably want to name these "commands" instead, but I'm
-// going to wait for a spec change before doing so.
 object L2LedgerCommand {
     sealed trait Real extends L2LedgerCommand
     sealed trait Proxy extends L2LedgerCommand
 
-    final case class RegisterDepositRequest(
+    final case class RegisterDeposit(
         requestId: RequestId,
         userVKey: VerificationKey,
         blockNumber: BlockNumber,

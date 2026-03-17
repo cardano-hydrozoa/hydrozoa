@@ -75,7 +75,7 @@ trait L2Ledger[F[_]] {
       *   Either an error blob if the request could not be applied, or unit on success.
       */
     def sendRegisterDeposit(
-        req: L2LedgerCommand.RegisterDepositRequest
+        req: L2LedgerCommand.RegisterDeposit
     ): EitherT[F, L2LedgerError, Unit]
 
     /** See:
@@ -127,9 +127,9 @@ trait L2Ledger[F[_]] {
         }
 
         def fromL2LedgerCommandReal(e: L2LedgerCommand.Real): L2LedgerAction.Real = e match {
-            case e: L2LedgerCommand.RegisterDepositRequest => fromRegisterDepositRequest(e)
-            case e: L2LedgerCommand.ApplyDepositDecisions  => fromApplyDepositDecisions(e)
-            case e: L2LedgerCommand.ApplyTransaction       => fromApplyTransactionRequest(e)
+            case e: L2LedgerCommand.RegisterDeposit       => fromRegisterDeposit(e)
+            case e: L2LedgerCommand.ApplyDepositDecisions => fromApplyDepositDecisions(e)
+            case e: L2LedgerCommand.ApplyTransaction      => fromApplyTransaction(e)
         }
 
         def fromL2LedgerCommandProxy(e: L2LedgerCommand.Proxy): L2LedgerAction.Proxy = e match {
@@ -148,8 +148,8 @@ trait L2Ledger[F[_]] {
               )
             )
 
-        private def fromRegisterDepositRequest(
-            req: L2LedgerCommand.RegisterDepositRequest
+        private def fromRegisterDeposit(
+            req: L2LedgerCommand.RegisterDeposit
         ): L2LedgerAction.Real =
             L2LedgerAction.Real(
               Kleisli(ledgerState =>
@@ -171,7 +171,7 @@ trait L2Ledger[F[_]] {
               )
             )
 
-        private def fromApplyTransactionRequest(
+        private def fromApplyTransaction(
             req: L2LedgerCommand.ApplyTransaction
         ): L2LedgerAction.Real = L2LedgerAction.Real(
           Kleisli(ledgerState =>

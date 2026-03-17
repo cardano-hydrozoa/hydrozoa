@@ -23,15 +23,15 @@ import scodec.bits.ByteVector
 object RemoteL2LedgerCodecs {
 
     // Reuse codecs from the HTTP server, excluding types we override for sugar-rush-ledger compatibility
-    // @Peter: We exclude certain codecs here to provide sugar-rush-ledger compatible format
+    // We exclude certain codecs here to provide sugar-rush-ledger compatible format
     import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{coinEncoder as _, coinDecoder as _, valueEncoder as _, valueDecoder as _, given}
     import hydrozoa.multisig.server.JsonCodecs.{requestIdEncoder, requestIdDecoder}
 
-    // @Peter: Coin as raw number (sugar-rush-ledger expects u64, not string)
+    // Coin as raw number (sugar-rush-ledger expects u64, not string)
     given Encoder[Coin] = Encoder.encodeLong.contramap(_.value)
     given Decoder[Coin] = Decoder.decodeLong.map(Coin.apply)
 
-    // @Peter: Value codec for sugar-rush-ledger format: {"assets": [{"asset": {"tag": "Ada"}, "value": N}]}
+    // Value codec for sugar-rush-ledger format: {"assets": [{"asset": {"tag": "Ada"}, "value": N}]}
     // The old CIP-116 compatible codec is commented out below - we will need it in the future
     given Encoder[Value] = (v: Value) => {
         val adaEntry = io.circe.Json.obj(
@@ -42,19 +42,11 @@ object RemoteL2LedgerCodecs {
         io.circe.Json.obj("assets" -> io.circe.Json.arr(adaEntry))
     }
 
+    // @Peter: this is just missing
     given Decoder[Value] = Decoder.instance { c =>
         // Minimal: just extract ADA from the assets array
         Right(Value(Coin(0))) // TODO: implement if needed
     }
-
-    /* @Peter: Original CIP-116 Value codec - keep for future use
-     * This codec will be needed when we support the full CIP-116 protocol
-     * To re-enable: uncomment these and remove the sugar-rush-ledger specific codecs above
-     *
-     * import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{
-     *     valueEncoder, valueDecoder
-     * }
-     */
 
     // QuantizedInstant codec (simplified - loses SlotConfig context)
     // TODO: Include SlotConfig in serialization for proper reconstruction
@@ -85,7 +77,7 @@ object RemoteL2LedgerCodecs {
         deriveEncoder
     implicit val proxyRequestErrorDecoder: Decoder[L2LedgerCommand.ProxyRequestError] =
         deriveDecoder
-    
+
     implicit val destinationEncoder: Encoder[Destination] =
         (dest: Destination) => {
             val addressBech32 = dest.address match {
@@ -109,9 +101,9 @@ object RemoteL2LedgerCodecs {
                 )
             } yield dest
         )
-    
-    implicit val depositRegistrationEncoder: Encoder[L2LedgerCommand.RegisterDepositRequest] =
-        (r: L2LedgerCommand.RegisterDepositRequest) =>
+
+    implicit val depositRegistrationEncoder: Encoder[L2LedgerCommand.RegisterDeposit] =
+        (r: L2LedgerCommand.RegisterDeposit) =>
             io.circe.Json.obj(
               "requestId" -> r.requestId.asJson,
               "userVk" -> summon[Encoder[VerificationKey]].apply(r.userVKey),
@@ -123,7 +115,7 @@ object RemoteL2LedgerCodecs {
               "refundDestination" -> r.refundDestination.asJson,
               "l2Payload" -> summon[Encoder[ByteString]].apply(r.l2Payload)
             )
-    implicit val depositRegistrationDecoder: Decoder[L2LedgerCommand.RegisterDepositRequest] =
+    implicit val depositRegistrationDecoder: Decoder[L2LedgerCommand.RegisterDeposit] =
         deriveDecoder
 
     implicit val depositDecisionsEncoder: Encoder[L2LedgerCommand.ApplyDepositDecisions] =
@@ -133,8 +125,8 @@ object RemoteL2LedgerCodecs {
 
     // Request codecs
     implicit val requestEncoder: Encoder[Request] = {
-        case Request.RegisterDepositRequest(event) =>
-            io.circe.Json.obj("RegisterDepositRequest" -> event.asJson)
+        case Request.RegisterDeposit(event) =>
+            io.circe.Json.obj("RegisterDeposit" -> event.asJson)
         case Request.ApplyDepositDecisions(event) =>
             io.circe.Json.obj("ApplyDepositDecisions" -> event.asJson)
         case Request.ApplyTransaction(event) =>
@@ -154,8 +146,8 @@ object RemoteL2LedgerCodecs {
             .flatMap {
                 case "RegisterDepositRequest" =>
                     c.downField("RegisterDepositRequest")
-                        .as[L2LedgerCommand.RegisterDepositRequest]
-                        .map(Request.RegisterDepositRequest.apply)
+                        .as[L2LedgerCommand.RegisterDeposit]
+                        .map(Request.RegisterDeposit.apply)
                 case "ApplyDepositDecisions" =>
                     c.downField("ApplyDepositDecisions")
                         .as[L2LedgerCommand.ApplyDepositDecisions]
@@ -187,7 +179,7 @@ object RemoteL2LedgerCodecs {
         case s: Response.Success => s.asJson
         case e: Response.Failure => e.asJson
     }
-    
+
     implicit val responseDecoder: Decoder[Response] = Decoder.instance { c =>
         c.keys
             .flatMap(_.headOption)
@@ -220,7 +212,6 @@ object RemoteL2LedgerCodecs {
         }
     }
 
-    // @Peter: KeepRaw[TransactionOutput] codec as hex string for sugar-rush-ledger
     given Encoder[KeepRaw[TransactionOutput]] = Encoder.instance { kr =>
         io.circe.Json.fromString(ByteString.fromArray(kr.raw).toHex)
     }
@@ -233,16 +224,17 @@ object RemoteL2LedgerCodecs {
                     Try(Cbor.decode(bs.bytes).to[TransactionOutput].value).toEither match {
                         case Right(txOut) => Right(KeepRaw(txOut))
                         case Left(e) =>
-                            Left(io.circe.DecodingFailure(
-                              s"Failed to decode TransactionOutput from CBOR: ${e.getMessage}",
-                              c.history
-                            ))
+                            Left(
+                              io.circe.DecodingFailure(
+                                s"Failed to decode TransactionOutput from CBOR: ${e.getMessage}",
+                                c.history
+                              )
+                            )
                     }
             }
         }
     }
 
-    // @Peter: EvacuationDiff codec using "tag" field for sugar-rush-ledger compatibility
     given Encoder[EvacuationDiff] = Encoder.instance {
         case EvacuationDiff.Update(key, value) =>
             io.circe.Json.obj(

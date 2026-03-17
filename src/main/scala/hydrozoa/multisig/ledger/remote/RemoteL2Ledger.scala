@@ -75,9 +75,9 @@ class RemoteL2Ledger private (
     }
 
     override def sendRegisterDeposit(
-        req: L2LedgerCommand.RegisterDepositRequest
+        req: L2LedgerCommand.RegisterDeposit
     ): EitherT[IO, L2LedgerError, Unit] = {
-        sendRequest(Request.RegisterDepositRequest(req)).map(_ => ())
+        sendRequest(Request.RegisterDeposit(req)).map(_ => ())
     }
 
     override def sendApplyDepositDecisions(
@@ -113,14 +113,14 @@ object RemoteL2Ledger {
     sealed trait Request
 
     object Request {
-        final case class RegisterDepositRequest(command: L2LedgerCommand.RegisterDepositRequest)
-            extends Request
+        final case class RegisterDeposit(command: L2LedgerCommand.RegisterDeposit) extends Request
         final case class ApplyDepositDecisions(command: L2LedgerCommand.ApplyDepositDecisions)
             extends Request
-        final case class ApplyTransaction(event: L2LedgerCommand.ApplyTransaction) extends Request
-        final case class ProxyBlockConfirmation(event: L2LedgerCommand.ProxyBlockConfirmation)
+        final case class ApplyTransaction(command: L2LedgerCommand.ApplyTransaction) extends Request
+        final case class ProxyBlockConfirmation(command: L2LedgerCommand.ProxyBlockConfirmation)
             extends Request
-        final case class ProxyRequestError(event: L2LedgerCommand.ProxyRequestError) extends Request
+        final case class ProxyRequestError(command: L2LedgerCommand.ProxyRequestError)
+            extends Request
     }
 
     /** Response types received from the remote L2 ledger */
