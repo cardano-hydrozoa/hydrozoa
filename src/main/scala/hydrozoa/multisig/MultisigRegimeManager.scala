@@ -43,33 +43,34 @@ trait MultisigRegimeManager(
         context.self ! PreStart
     }
 
-    override def receive: Receive[IO, Request] =
-        PartialFunction.fromFunction {
-            case PreStart => preStartLocal
-            case TerminatedChild(childType, _) =>
-                childType match {
-                    case Actors.BlockWeaver =>
-                        logger.warn("Terminated block weaver actor")
-                    case Actors.CardanoLiaison =>
-                        logger.warn("Terminated Cardano liaison actor")
-                    case Actors.Consensus =>
-                        logger.warn("Terminated consensus actor")
-                    case Actors.JointLedger =>
-                        logger.warn("Terminated joint ledger actor")
-                    case Actors.PeerLiaison =>
-                        logger.warn("Terminated peer liaison actor")
-                    case Actors.EventSequencer =>
-                        logger.warn("Terminated event sequencer actor")
-                }
-            case TerminatedDependency(dependencyType, _) =>
-                dependencyType match {
-                    case Dependencies.CardanoBackend =>
-                        logger.warn("Terminated cardano backend")
-                    case Dependencies.Persistence =>
-                        logger.warn("Terminated persistence")
-                }
-            // TODO: Implement a way to receive a remote comm actor and connect it to its corresponding local comm actor
-        }
+    override def receive: Receive[IO, Request] = PartialFunction.fromFunction(receiveTotal)
+
+    private def receiveTotal(req: Request): IO[Unit] = req match {
+        case PreStart => preStartLocal
+        case TerminatedChild(childType, _) =>
+            childType match {
+                case Actors.BlockWeaver =>
+                    logger.warn("Terminated block weaver actor")
+                case Actors.CardanoLiaison =>
+                    logger.warn("Terminated Cardano liaison actor")
+                case Actors.Consensus =>
+                    logger.warn("Terminated consensus actor")
+                case Actors.JointLedger =>
+                    logger.warn("Terminated joint ledger actor")
+                case Actors.PeerLiaison =>
+                    logger.warn("Terminated peer liaison actor")
+                case Actors.EventSequencer =>
+                    logger.warn("Terminated event sequencer actor")
+            }
+        case TerminatedDependency(dependencyType, _) =>
+            dependencyType match {
+                case Dependencies.CardanoBackend =>
+                    logger.warn("Terminated cardano backend")
+                case Dependencies.Persistence =>
+                    logger.warn("Terminated persistence")
+            }
+        // TODO: Implement a way to receive a remote comm actor and connect it to its corresponding local comm actor
+    }
 
     def preStartLocal: IO[Unit] =
         for {

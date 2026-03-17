@@ -14,7 +14,9 @@ case class WaitAndPrint(delay: FiniteDuration) extends TimeMsg
 // Actor that uses IO.realTime
 class TimeActor extends Actor[IO, TimeMsg] {
 
-    override def receive: Receive[IO, TimeMsg] = {
+    override def receive: Receive[IO, TimeMsg] = PartialFunction.fromFunction(receiveTotal)
+
+    private def receiveTotal(req: TimeMsg) = req match {
         case GetTime(replyTo) =>
             for {
                 now <- IO.realTimeInstant
