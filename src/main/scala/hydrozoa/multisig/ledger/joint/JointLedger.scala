@@ -233,6 +233,8 @@ final case class JointLedger(
         import body.*
 
         for {
+            _ <- logger.info(s"register new deposit, request id: $requestId)")
+
             p <- unsafeGetProducing
             blockStartTime = p.BlockCreationStartTime
             currentBlockNum = p.nextBlockNumber
@@ -300,6 +302,8 @@ final case class JointLedger(
         import body.*
 
         for {
+            _ <- logger.info(s"applying transaction, request id: $requestId)")
+
             p <- unsafeGetProducing
             blockStartTime = p.BlockCreationStartTime
             currentBlockNum = p.nextBlockNumber
