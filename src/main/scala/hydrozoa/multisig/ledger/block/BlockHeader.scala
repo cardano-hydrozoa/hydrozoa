@@ -26,7 +26,7 @@ object BlockHeader {
         override val kzgCommitment: KzgCommitment
     ) extends BlockHeader,
           BlockType.Initial,
-          NonFinal.NextHeader {
+          NonFinal.Section {
         override transparent inline def blockNum: BlockNumber = Initial.blockNum
         override transparent inline def blockVersion: BlockVersion.Full = Initial.blockVersion
         override transparent inline def header: BlockHeader.Initial = this
@@ -42,7 +42,7 @@ object BlockHeader {
         override val kzgCommitment: KzgCommitment
     ) extends BlockHeader,
           BlockType.Minor,
-          NonFinal.NextHeader {
+          NonFinal.Section {
         override transparent inline def header: BlockHeader.Minor = this
 
         inline transparent def onchain: Minor.Onchain = Minor.Onchain(this)
@@ -60,7 +60,7 @@ object BlockHeader {
         override val kzgCommitment: KzgCommitment
     ) extends BlockHeader,
           BlockType.Major,
-          NonFinal.NextHeader {
+          NonFinal.Section {
         override transparent inline def header: BlockHeader.Major = this
     }
 
@@ -78,7 +78,7 @@ object BlockHeader {
 
     type Next = BlockHeader & BlockType.Next
     type Intermediate = BlockHeader & BlockType.Intermediate
-    type NonFinal = BlockHeader & BlockType.NonFinal & NonFinal.NextHeader
+    type NonFinal = BlockHeader & BlockType.NonFinal & NonFinal.Section
 
     object Fields {
         trait HasBlockNum {
@@ -130,7 +130,7 @@ object BlockHeader {
     }
 
     object NonFinal {
-        trait NextHeader extends BlockHeader.Section, Fields.NonFinal {
+        trait Section extends BlockHeader.Section, Fields.NonFinal {
             final def nextHeaderIntermediate(
                 txTiming: TxTiming,
                 newStartTime: BlockCreationStartTime,
