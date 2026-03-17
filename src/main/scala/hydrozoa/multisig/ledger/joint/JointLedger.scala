@@ -386,10 +386,17 @@ final case class JointLedger(
             split = partition.split(maxDepositsAbsorbedPerBlock)
 
             _ <- logger.trace(
-              s"joint ledger: immature=${partition.immature}" + "\n" +
-                  s"joint ledger: absorbed=${split.absorbed}" + "\n" +
-                  s"joint ledger: unabsorbed=${split.unabsorbed}" + "\n" +
-                  s"joint ledger: rejected=${partition.rejected}" + "\n"
+              "Partioning result:" + "\n" +
+                  s"immature=${partition.immature.requestIdsLong}" + "\n" +
+                  s"elibible=${partition.eligible.requestIdsLong}" + "\n" +
+                  s"rejected=${partition.rejected.requestIdsLong}"
+            )
+
+            _ <- logger.trace(
+              "Split result:" + "\n" +
+                  s"absorbed=${split.absorbed.requestIdsLong}" + "\n" +
+                  s"unabsorbed=${split.unabsorbed.requestIdsLong}" + "\n" +
+                  s"surviving=${split.unabsorbed.requestIdsLong}"
             )
 
             blockBriefRes <- mkBlockBriefIntermediate(p, blockCreationEndTime, split.decisions)

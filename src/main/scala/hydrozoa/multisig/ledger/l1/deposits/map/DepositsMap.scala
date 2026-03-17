@@ -45,6 +45,10 @@ final case class DepositsMap private[map] (
 
     lazy val requestIds: List[RequestId] =
         treeMap.values.flatten.iterator.map(_.requestId).toList
+
+    lazy val requestIdsLong: List[Long] =
+        requestIds.map(_.asI64)
+
     lazy val depositUtxos: List[DepositUtxo] =
         treeMap.values.flatten.iterator.map(_.depositUtxo).toList
 
