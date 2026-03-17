@@ -396,7 +396,7 @@ final case class JointLedger(
               "Split result:" + "\n" +
                   s"absorbed=${split.absorbed.requestIdsLong}" + "\n" +
                   s"unabsorbed=${split.unabsorbed.requestIdsLong}" + "\n" +
-                  s"surviving=${split.unabsorbed.requestIdsLong}"
+                  s"surviving=${split.surviving.requestIdsLong}"
             )
 
             blockBriefRes <- mkBlockBriefIntermediate(p, blockCreationEndTime, split.decisions)

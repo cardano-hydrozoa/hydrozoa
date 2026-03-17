@@ -12,30 +12,42 @@ import scalus.cardano.ledger.TransactionInput
 
 /** deposits in a TreeMap according to their absorption start time. The Tree map ensures that the
   * traversal order is according to the absorption start time, with ties being broken according to
-  * the total ordering of the ledger events, such that each queue in this map is a subsequence of
-  * the totally-ordered event stream.
+  * the total ordering of the requests, such that each queue in this map is a subsequence of the
+  * totally-ordered request stream.
   */
 final case class DepositsMap private[map] (
     treeMap: TreeMap[DepositAbsorptionStartTime, Queue[Entry]]
 ) {
 
-    /** Append an event to the end of the queue of events with the same start time.
+    /** Append a request to the end of the queue of requests with the same start time.
       */
-    def append(event: Entry): DepositsMap = {
-        val absorptionStartTime = event._2.absorptionStartTime
+    def append(entry: Entry): DepositsMap = {
+        val absorptionStartTime = entry._2.absorptionStartTime
         DepositsMap(treeMap.updatedWith(absorptionStartTime) {
-            case None        => Some(Queue(event))
-            case Some(queue) => Some(queue.appended(event))
+            case None        => Some(Queue(entry))
+            case Some(queue) => Some(queue.appended(entry))
         })
     }
+
+    /** Append a queue of requests sharing the same deposit absorption time to the end of the map's
+      * corresponding queue.
+      */
+    def append(entries: (DepositAbsorptionStartTime, Queue[Entry])): DepositsMap =
+        DepositsMap(treeMap.updatedWith(entries._1) {
+            case None        => Some(entries._2)
+            case Some(queue) => Some(queue ++ entries._2)
+        })
+
+    def concat(other: DepositsMap): DepositsMap =
+        other.treeMap.foldLeft(this)((acc, entries) => acc.append(entries))
 
     lazy val isEmpty: Boolean = treeMap.isEmpty
 
     lazy val numberOfDeposits = treeMap.values.map(_.size).sum
 
-    /** Event-deposit tuples traversed in order of absorption start time, with ties broken according
-      * to the order in which they were added to the DepositsMap (which should correspond to the
-      * total order of the event stream)
+    /** Request-deposit tuples traversed in order of absorption start time, with ties broken
+      * according to the order in which they were added to the DepositsMap (which should correspond
+      * to the total order of the request stream)
       */
     lazy val flatten: Iterable[Entry] = treeMap.values.flatten
 
@@ -119,7 +131,7 @@ object DepositsMap {
             val (tmAbsorbed, tmUnabsorbed) = eligible.treeMap.splitAt(n)
             val absorbed = DepositsMap(tmAbsorbed)
             val unabsorbed = DepositsMap(tmUnabsorbed)
-            val surviving = DepositsMap(unabsorbed.treeMap ++ immature.treeMap)
+            val surviving = unabsorbed.concat(immature)
             val decisions = Decisions(absorbed.unzip, rejected.unzip)
             Split(absorbed, unabsorbed, surviving, decisions)
         }
