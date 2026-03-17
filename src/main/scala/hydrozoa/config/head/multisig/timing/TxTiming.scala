@@ -2,6 +2,7 @@ package hydrozoa.config.head.multisig.timing
 
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, quantize}
 import hydrozoa.multisig.consensus.{RequestValidityEndTimeRaw, RequestValidityStartTimeRaw}
+import scala.annotation.targetName
 import scala.concurrent.duration.DurationInt
 import scala.math.Ordered.orderingToOrdered
 import scalus.cardano.ledger.SlotConfig
@@ -81,8 +82,13 @@ final case class TxTiming private (
           blockCreationEndTime + minSettlementDuration + inactivityMarginDuration + silenceDuration
         )
 
-    def nextBlockTimeout(competingFallbackStartTime: FallbackTxStartTime): NextBlockTimeout =
-        NextBlockTimeout(competingFallbackStartTime - minSettlementDuration - silenceDuration)
+    /** At this time, the latest competing fallback tx needs to be replaced with a new fallback tx,
+      * by creating a new major block.
+      */
+    def forcedMajorBlockTime(
+        competingFallbackStartTime: FallbackTxStartTime
+    ): ForcedMajorBlockTime =
+        ForcedMajorBlockTime(competingFallbackStartTime - minSettlementDuration - silenceDuration)
 
     /** A block can stay minor if this predicate is true for its start time, relative to the
       * previous major block's fallback tx start time. Otherwise, it must be upgraded to a major
@@ -92,7 +98,7 @@ final case class TxTiming private (
         blockCreationEndTime: BlockCreationEndTime,
         competingFallbackStartTime: FallbackTxStartTime
     ): Boolean = {
-        nextBlockTimeout(competingFallbackStartTime).convert > blockCreationEndTime.convert
+        forcedMajorBlockTime(competingFallbackStartTime).convert > blockCreationEndTime.convert
     }
 
     def depositSubmissionDeadline(
@@ -165,6 +171,40 @@ object TxTiming {
         depositAbsorptionEndTime: DepositAbsorptionEndTime
     ): Boolean =
         depositAbsorptionEndTime.convert < settlementTxEndTime.convert
+
+    /** At this time, if the block weaver is in the LeaderAwaiting state and has not received any
+      * new requests, it must wake up and create the next block, which must be major.
+      *
+      * The major block is being created because either the earliest still-pending deposit has
+      * matured, or because the competing fallback tx needs to be replaced by a new fallback tx.
+      */
+    def majorBlockWakeupTime(
+        forcedMajorTime: ForcedMajorBlockTime,
+        mAbsorptionStartTime: Option[DepositAbsorptionStartTime]
+    ): MajorBlockWakeupTime = {
+        MajorBlockWakeupTime(
+          mAbsorptionStartTime.fold(forcedMajorTime.convert)(absorptionStartTime =>
+              if forcedMajorTime.convert < absorptionStartTime.convert
+              then forcedMajorTime
+              else absorptionStartTime
+          )
+        )
+    }
+
+    @targetName("majorBlockWakeupTime_update")
+    def majorBlockWakeupTime(
+        previousMajorBlockWakeupTime: MajorBlockWakeupTime,
+        mAbsorptionStartTime: Option[DepositAbsorptionStartTime]
+    ): MajorBlockWakeupTime = {
+        mAbsorptionStartTime.fold(previousMajorBlockWakeupTime)(absorptionStartTime =>
+            MajorBlockWakeupTime(
+              if previousMajorBlockWakeupTime.convert < absorptionStartTime.convert
+              then previousMajorBlockWakeupTime
+              else absorptionStartTime
+            )
+        )
+
+    }
 
     def default(slotConfig: SlotConfig): TxTiming = TxTiming(
       MinSettlementDuration(12.hours.quantize(slotConfig)),
@@ -281,9 +321,13 @@ object TxTiming {
         private[timing] def FallbackTxStartTime(x: QuantizedInstant): FallbackTxStartTime = x
         given Conversion[FallbackTxStartTime, QuantizedInstant] = identity
 
-        opaque type NextBlockTimeout = QuantizedInstant
-        private[timing] def NextBlockTimeout(x: QuantizedInstant): NextBlockTimeout = x
-        given Conversion[NextBlockTimeout, QuantizedInstant] = identity
+        opaque type ForcedMajorBlockTime = QuantizedInstant
+        private[timing] def ForcedMajorBlockTime(x: QuantizedInstant): ForcedMajorBlockTime = x
+        given Conversion[ForcedMajorBlockTime, QuantizedInstant] = identity
+
+        opaque type MajorBlockWakeupTime = QuantizedInstant
+        private[timing] def MajorBlockWakeupTime(x: QuantizedInstant): MajorBlockWakeupTime = x
+        given Conversion[MajorBlockWakeupTime, QuantizedInstant] = identity
     }
 
     object RequestTimes {

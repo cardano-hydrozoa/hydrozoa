@@ -115,8 +115,13 @@ object DepositsMap {
             val (tmAbsorbed, tmUnabsorbed) = eligible.treeMap.splitAt(n)
             val absorbed = DepositsMap(tmAbsorbed)
             val unabsorbed = DepositsMap(tmUnabsorbed)
+
             val surviving = DepositsMap(unabsorbed.treeMap ++ immature.treeMap)
-            val decisions = Decisions(absorbed.unzip, rejected.unzip)
+
+            val mNextAbsorptionStartTime = surviving.treeMap.keys.minOption
+
+            val decisions = Decisions(absorbed.unzip, rejected.unzip, mNextAbsorptionStartTime)
+
             Split(absorbed, unabsorbed, surviving, decisions)
         }
     }
@@ -137,7 +142,8 @@ object DepositsMap {
 
     final case class Decisions private[map] (
         absorbed: Unzip,
-        rejected: Unzip
+        rejected: Unzip,
+        mNextAbsorptionStartTime: Option[DepositAbsorptionStartTime]
     )
 
     final case class Unzip private[map] (

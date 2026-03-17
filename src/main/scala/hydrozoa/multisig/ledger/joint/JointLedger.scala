@@ -450,7 +450,7 @@ final case class JointLedger(
                           txTiming,
                           blockCreationStartTime,
                           blockCreationEndTime,
-                          p.competingFallbackTxTime,
+                          decisions.mNextAbsorptionStartTime,
                           // TODO: We want this to be done in a separate actor in the future
                           // this doesn't include genesis
                           applyDiffs(p.evacuationMap, p.l2LedgerState.diffs).kzgCommitment
@@ -479,6 +479,7 @@ final case class JointLedger(
                           txTiming,
                           blockCreationStartTime,
                           blockCreationEndTime,
+                          decisions.mNextAbsorptionStartTime,
                           kzgCommitment
                         )
                     } yield (newJLState, headerIntermediate)
