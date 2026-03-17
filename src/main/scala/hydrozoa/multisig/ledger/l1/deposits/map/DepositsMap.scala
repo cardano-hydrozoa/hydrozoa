@@ -132,8 +132,13 @@ object DepositsMap {
             val absorbed = DepositsMap(tmAbsorbed)
             val unabsorbed = DepositsMap(tmUnabsorbed)
             val surviving = unabsorbed.concat(immature)
-            val decisions = Decisions(absorbed.unzip, rejected.unzip)
-            Split(absorbed, unabsorbed, surviving, decisions)
+            val decisions = Decisions(absorbed = absorbed.unzip, rejected = rejected.unzip)
+            Split(
+              absorbed = absorbed,
+              unabsorbed = unabsorbed,
+              surviving = surviving,
+              decisions = decisions
+            )
         }
     }
 
