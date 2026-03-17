@@ -1,5 +1,6 @@
 package hydrozoa.multisig.ledger.remote
 
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.event.RequestId
@@ -20,7 +21,7 @@ import scalus.uplc.builtin.ByteString
 import scodec.bits.ByteVector
 
 /** JSON codecs for RemoteL2Ledger WebSocket protocol */
-object RemoteL2LedgerCodecs {
+case class RemoteL2LedgerCodecs(config: CardanoNetwork.Section) {
 
     // Reuse codecs from the HTTP server, excluding types we override for sugar-rush-ledger compatibility
     // @Peter: We exclude certain codecs here to provide sugar-rush-ledger compatible format
@@ -259,12 +260,12 @@ object RemoteL2LedgerCodecs {
             )
     }
 
-    given Decoder[EvacuationDiff] = Decoder.instance { c =>
+    given evacuationDiffDecoder: Decoder[EvacuationDiff] = Decoder.instance { c =>
         c.downField("tag").as[String].flatMap {
             case "Update" =>
                 for {
                     key <- c.downField("key").as[EvacuationKey]
-                    value <- c.downField("value").as[KeepRaw[TransactionOutput]]
+                    value <- c.downField("value").as[Payout.Obligation]
                 } yield EvacuationDiff.Update(key, value)
             case "Delete" =>
                 c.downField("key").as[EvacuationKey].map(EvacuationDiff.Delete.apply)
@@ -277,9 +278,14 @@ object RemoteL2LedgerCodecs {
     given Encoder[Payout.Obligation] = Encoder.instance { po =>
         io.circe.Json.obj("utxo" -> po.utxo.asJson)
     }
-
-    given Decoder[Payout.Obligation] = Decoder.instance { c =>
-        c.downField("utxo").as[KeepRaw[TransactionOutput]].map(Payout.Obligation.apply)
+    given payoutObligationDecoder: Decoder[Payout.Obligation] = Decoder.instance { c =>
+        for {
+            unvalidated <- c.downField("utxo").as[KeepRaw[TransactionOutput]]
+            value <- Payout
+                .Obligation(unvalidated, config)
+                .left
+                .map(e => io.circe.DecodingFailure(e.toString, c.history))
+        } yield value
     }
 
     // Unit codec

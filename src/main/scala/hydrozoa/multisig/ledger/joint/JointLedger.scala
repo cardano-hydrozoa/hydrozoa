@@ -20,7 +20,6 @@ import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag.{Invalid, Valid}
 import hydrozoa.multisig.ledger.joint.EvacuationMap.applyDiffs
 import hydrozoa.multisig.ledger.joint.JointLedger.*
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.*
-import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.l1.L1LedgerM
 import hydrozoa.multisig.ledger.l1.L1LedgerM.*
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
@@ -558,7 +557,7 @@ final case class JointLedger(
               p,
               L1LedgerM.finalizeLedger(
                 payoutObligationsRemaining = Vector.from(
-                  p.evacuationMap.evacuationMap.map((_, o) => Payout.Obligation(o))
+                  p.evacuationMap.evacuationMap.values
                 ),
                 competingFallbackValidityStart = p.competingFallbackTxTime
               )

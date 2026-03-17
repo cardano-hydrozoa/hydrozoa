@@ -3,6 +3,7 @@ package hydrozoa.multisig.ledger.joint
 import cats.implicits.*
 import hydrozoa.multisig.ledger.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
+import hydrozoa.multisig.ledger.joint.obligation.Payout
 import scala.collection.immutable.TreeMap
 import scalus.cardano.ledger.*
 import scalus.cardano.onchain.plutus.prelude.List as SList
@@ -33,25 +34,25 @@ object EvacuationKey:
     // if bytes.length == 32 then Some(new EvacuationKey(bytes)) else None
 
 final case class EvacuationMap(
-    evacuationMap: TreeMap[EvacuationKey, KeepRaw[TransactionOutput]]
+    evacuationMap: TreeMap[EvacuationKey, Payout.Obligation]
 )(using Ordering[EvacuationKey], ToData[EvacuationKey]) {
     val isEmpty: Boolean = evacuationMap.isEmpty
     val nonEmpty: Boolean = evacuationMap.nonEmpty
     val size: Int = evacuationMap.size
 
-    /** The evac map, where we threw away the "KeepRaw".
+    /** The evac map, where we threw away the "KeepRaw"
       */
     // Its a silly name, but we use the term "value" too much
     val cooked: TreeMap[EvacuationKey, TransactionOutput] =
-        evacuationMap.map((i, kr) => (i, kr.value))
-    val outputs: Iterable[KeepRaw[TransactionOutput]] = evacuationMap.values
+        evacuationMap.map((i, obligation) => (i, obligation.utxo.value))
+    val outputs: Iterable[Payout.Obligation] = evacuationMap.values
 
     /** The outputs of the evac map, where we threw away the "KeepRaw"
       */
-    val outputsCooked: Iterable[TransactionOutput] = evacuationMap.values.map(_.value)
+    val outputsCooked: Iterable[TransactionOutput] = evacuationMap.values.map(_.utxo.value)
 
     def appended(
-        otherMap: TreeMap[EvacuationKey, KeepRaw[TransactionOutput]]
+        otherMap: TreeMap[EvacuationKey, Payout.Obligation]
     ): EvacuationMap =
         EvacuationMap(evacuationMap ++ otherMap)
 
@@ -64,7 +65,7 @@ final case class EvacuationMap(
         SList.from(
           evacuationMap.toList.map(e =>
               // FIXME: redundant CBOR encoding with `Sized`, since we're keeping the original serialization anyways
-              (e._1, LedgerToPlutusTranslation.getTxOutV2(Sized(e._2.value)))
+              (e._1, LedgerToPlutusTranslation.getTxOutV2(Sized(e._2.utxo.value)))
                   |> ToData.tupleToData
                   |> serialiseData
                   |> blake2b_224
@@ -89,5 +90,5 @@ object EvacuationMap:
             .foldLeft(identity: EvacuationMap => EvacuationMap)(_.andThen(_))
 
 enum EvacuationDiff:
-    case Update(key: EvacuationKey, value: KeepRaw[TransactionOutput])
+    case Update(key: EvacuationKey, value: Payout.Obligation)
     case Delete(key: EvacuationKey)

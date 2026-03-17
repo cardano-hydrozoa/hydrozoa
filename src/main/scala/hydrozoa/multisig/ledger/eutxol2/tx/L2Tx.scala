@@ -1,5 +1,7 @@
 package hydrozoa.multisig.ledger.eutxol2.tx
 
+import cats.Traverse.nonInheritedOps.toTraverseOps
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.l1.token.CIP67
 import scala.util.Try
@@ -17,15 +19,21 @@ final case class L2Tx(
     l1utxos: List[(TransactionInput, TransactionOutput)],
     l2utxos: List[(TransactionInput, Babbage)],
     // TODO: do we need it?
-    resolvedUtxos: ResolvedUtxos
+    resolvedUtxos: ResolvedUtxos,
 ) {
     // TODO: do we need it? tokens?
     def volume: Long = tx.body.value.outputs.map(sto => sto.value.value.coin.value).sum
 
-    def payoutObligations: Vector[Payout.Obligation] =
-        Vector.from(
-          l1utxos.map(utxo => Payout.Obligation(KeepRaw(utxo._2.asInstanceOf[TransactionOutput])))
-        )
+    def payoutObligations(
+        network: CardanoNetwork.Section
+    ): Either[Payout.Obligation.MinAdaViolation, Vector[Payout.Obligation]] =
+        Vector
+            .from(
+              l1utxos.map(utxo =>
+                  Payout.Obligation(KeepRaw(utxo._2.asInstanceOf[TransactionOutput]), network)
+              )
+            )
+            .sequence
 }
 
 object L2Tx:
@@ -39,7 +47,7 @@ private object L2TxOps:
     def build: Void = ???
 
     // TODO: use Either
-    def parse(bs: Array[Byte]): Either[String, L2Tx] = for {
+    def parse(bs: Array[Byte], network: CardanoNetwork.Section): Either[String, L2Tx] = for {
         tx <- Try(Transaction.fromCbor(bs)).toEither.left.map(_.toString)
         up <- utxoPartition(tx)
     } yield L2Tx(
@@ -47,7 +55,7 @@ private object L2TxOps:
       l1utxos = up.l1Utxos,
       l2utxos = up.l2Utxos,
       // TODO:
-      resolvedUtxos = ResolvedUtxos.empty
+      resolvedUtxos = ResolvedUtxos.empty,
     )
 
     final case class UtxoPartition(

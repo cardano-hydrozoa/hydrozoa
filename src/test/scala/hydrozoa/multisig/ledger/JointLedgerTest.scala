@@ -29,6 +29,7 @@ import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag.{Invalid, Valid}
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.ledger.joint.JointLedger.{Done, Producing}
+import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger, given}
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
@@ -42,13 +43,13 @@ import org.scalacheck.util.Pretty
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scalus.cardano.address.ShelleyAddress
+import scalus.cardano.ledger.TransactionOutput.valueLens
 import scalus.cardano.ledger.{Block as _, BlockHeader as _, Coin, *}
 import scalus.crypto.ed25519.Signature
 import scalus.uplc.builtin.ByteString
-import test.*
 import test.Generators.Hydrozoa.*
-import test.Generators.Other.genCoinDistributionWithMinAdaUtxo
 import test.TestM.*
+import test.{*, given}
 
 // Pretty Printers for more manageable scalacheck logs
 given ppMultiNodeConfig: (MultiNodeConfig => Pretty) = nodeConfig =>
@@ -320,35 +321,55 @@ object JointLedgerTestHelpers {
                     pick[TestR, NonEmptyList[GenesisObligation]](
                       (
                         for {
-                            numL2Outputs <- Gen.choose(1, 100)
-                            res <- Gen.listOfN(
-                              numL2Outputs,
-                              genGenesisObligation(env.config, address, minimumCoin = Coin.ada(5))
+                            maxL2Outputs <- Gen.choose(1, 100)
+                            res <- Generators.Other.genSequencedValueDistribution(
+                              maxL2Outputs,
+                              v =>
+                                  genGenesisObligation(
+                                    env.config,
+                                    address,
+                                    genCoin = Gen.const(v.coin),
+                                    genMultiAsset = Gen.const(v.assets)
+                                  ),
+                              minCoin = Coin.ada(3)
                             )
+
                         } yield res
-                      ).map(NonEmptyList.fromListUnsafe)
-                          .label(s"L2 Outputs for deposit $requestId")
+                      ).label(s"L2 Outputs for deposit $requestId")
                     )
 
                 l2OutputsBytes = GenesisObligation.serialize(l2Outputs)
 
                 l2OutputsValue = Value.combine(
-                  l2Outputs.map(vo => Value(vo.l2OutputValue)).toList
+                  l2Outputs.map(_.l2OutputValue).toList
                 )
 
                 utxosFunding <- pick[TestR, NonEmptyList[Utxo]]((for {
-                    numUtxos <- Gen.choose(1, 100)
-                    utxosWith0Coin <- Gen
-                        .listOfN(
-                          numUtxos,
-                          genAdaOnlyPubKeyUtxo(env.config, address, minimumCoin = Coin.ada(3))
-                        )
-                    utxoDist <- genCoinDistributionWithMinAdaUtxo(
-                      l2OutputsValue.coin,
-                      NonEmptyList.fromListUnsafe(utxosWith0Coin),
-                      env.config.cardanoProtocolParams
+                    nUtxos <- Gen.choose(1, 100)
+
+                    // TODO: A more realistic generator would generate extraneous assets besides
+                    // those strictly neceesary to achieve the aggregate L2 value
+                    utxosWithZeroAssets <- Gen.listOfN(
+                      nUtxos,
+                      genPubKeyUtxo(
+                        env.config,
+                        address,
+                        genCoin = Gen.const(Coin.ada(3)),
+                        genMultiAsset = Gen.const(MultiAsset.zero)
+                      )
                     )
-                } yield utxoDist).label("Funding Utxos"))
+
+                    valueDist <- Generators.Other.genValueDistribution(
+                      l2OutputsValue,
+                      nUtxos
+                    )
+                    utxos = utxosWithZeroAssets
+                        .zip(valueDist.toList)
+                        .map((utxo, additionalValue) =>
+                            utxo.focus(_.output).andThen(valueLens).modify(_ + additionalValue)
+                        )
+
+                } yield NonEmptyList.fromListUnsafe(utxos)).label("Funding Utxos"))
 
                 utxosFundingValue = Value.combine(utxosFunding.toList.map(_._2.value))
 
@@ -431,17 +452,10 @@ object JointLedgerTestHelpers {
     }
 }
 
-// Annoyingly, `Gen` doesn't have `Monad[Gen]` already. But I want to use `traverse` below, so I'm vendoring it here
-implicit val genMonad: Monad[Gen] = new Monad[Gen] {
-    def pure[A](a: A): Gen[A] = Gen.const(a)
-    def flatMap[A, B](fa: Gen[A])(f: A => Gen[B]): Gen[B] = fa.flatMap(f)
-    def tailRecM[A, B](a: A)(f: A => Gen[Either[A, B]]): Gen[B] = Gen.tailRecM(a)(f)
-}
-
 object JointLedgerTest extends Properties("Joint Ledger Test") {
-//    import org.scalacheck.rng.Seed
-//    override def overrideParameters(p: Test.Parameters): Test.Parameters =
-//        p.withInitialSeed(Seed.fromBase64("zeNyOvJsm4OxLrnAPz9TE8ooirzE1AR-Zsof63oHXHB=").get)
+    import org.scalacheck.rng.Seed
+    override def overrideParameters(p: Test.Parameters): Test.Parameters =
+        p.withInitialSeed(Seed.fromBase64("rlrErmmUkV4avV8rFPceGSpj7WfLT74OCWSLXGU6oJL=").get)
 
     import TestM.*
 
@@ -555,15 +569,6 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                   )
               } yield events
 
-//          @tailrec
-//          def isSubsequenceOf[A](sub: Seq[A], seq: Seq[A]): Boolean = {
-//              if sub.isEmpty then true
-//              else
-//                  Try(seq.dropWhile(_ != sub.head).tail) match {
-//                      case Success(nextSeq) => isSubsequenceOf(sub.tail, nextSeq)
-//                      case Failure(_)       => false
-//                  }
-//          }
           /** order-preserving, non-contiguous matching
             * {{{
             * isSubsequenceOf( List(1, 2, 3), List(1, 6, 3, 2, 3, 7, 1)) == true
@@ -819,7 +824,9 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                 genesisId = L2Genesis.mkGenesisId(
                   depositRefundTxSeq.depositTx.depositProduced.utxoId
                 )
-              ).asUtxos.map((ti, krto) => (ti.toEvacuationKey, krto))
+              ).asUtxos.map((ti, krto) =>
+                  (ti.toEvacuationKey, Payout.Obligation(krto, env.config).toOption.get)
+              )
 
               expectedEvacMap = EvacuationMap(initialEvacMap ++ depositEvacMap)
 

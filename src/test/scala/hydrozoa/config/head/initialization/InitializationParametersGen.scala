@@ -17,21 +17,23 @@ import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.eutxol2.toEvacuationKey
 import hydrozoa.multisig.ledger.eutxol2.tx.L2Genesis
 import hydrozoa.multisig.ledger.joint.given
+import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap}
 import hydrozoa.multisig.ledger.l1.token.CIP67
 import java.time.Instant
-import monocle.syntax.all.*
-import org.scalacheck.{Gen, Prop, Properties}
+import org.scalacheck.{Arbitrary, Gen, Prop, Properties}
 import scala.collection.immutable.{SortedMap, TreeMap}
 import scala.concurrent.duration.DurationInt
 import scalus.cardano.address.Address
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.TransactionOutput.{Babbage, valueLens}
+import scalus.cardano.ledger.ArbitraryInstances.given
+import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.|>
 import spire.math.{Rational, SafeLong}
 import test.Generators.Hydrozoa.*
-import test.Generators.Other.genCoinDistributionWithMinAdaUtxo
+import test.Generators.Other.genValueDistributionWithMinAdaUtxo
 import test.Generators.loggerGenerators
-import test.{TestPeers, TestPeersSpec}
+import test.{Generators, TestPeers, TestPeersSpec}
 
 // TODO: George: what do you think of expanding our shortening citizenship?
 //   - generate -> gen
@@ -166,12 +168,16 @@ object InitializationParametersGenTopDown {
                   TreeMap.from(
                     total.l2transactionOutput.zipWithIndex
                         .map((o, ix) => {
-                            val evacuationKey: EvacuationKey =
+                            val evacuationKey: EvacuationKey = {
                                 TransactionInput(
                                   transactionId = genesisId,
                                   index = ix
                                 ).toEvacuationKey
-                            evacuationKey -> KeepRaw(o)
+                            }
+                            evacuationKey -> Payout
+                                .Obligation(KeepRaw(o), cardanoNetwork)
+                                .toOption
+                                .get // technically partial)
                         })
                   )
                 )
@@ -225,6 +231,11 @@ object InitializationParametersGenTopDown {
 
             fundingUtxos <- Gen
                 .pick(1, peerUtxos.asUtxoList)
+                // FIXME: Avoid "such that" whenever possible. It does the generation and throws out the result
+                // if it doesn't match the criteria, and I don't believe it caches failed attempts.
+                // The tests are currently failing so I don't want to make the change now, but perhaps a better
+                // option is a recursive generator that repeatedly selects utxos from the collection until the minimum
+                // is satisfied?
                 .suchThat(ret => {
                     val selectedValue = Value.combine(ret.map(_.output.value))
                     loggerGenerators.debug(s"selectedValue=$selectedValue")
@@ -406,30 +417,37 @@ object InitializationParametersGenBottomUp {
 
             fallbackContingency <- generateFallbackContingency(cardanoNetwork)
 
-            // Helper generator for l2 utxos and seed utxo
-            genUtxoFromKnownPeer: Gen[Utxo] =
-                for {
-                    peer <- Gen.oneOf(testPeers.headPeerNums.toList)
-                    utxo <- genAdaOnlyPubKeyUtxo(
-                      config = cardanoNetwork,
-                      address = testPeers.addressFor(peer)
+            // Pubkey utxos (at least one) at some peer address(es), with at least 3 ada
+            // We generate these up front so that we know they have the same multiassets
+            utxos: Utxos <-
+                Generators.Other
+                    .genSequencedValueDistribution(
+                      maxNumValues = 20,
+                      minCoin = Coin.ada(5),
+                      mapping = v =>
+                          for {
+                              peer <- Gen.oneOf(testPeers.headPeerNums.toList)
+                              utxo <- genPubKeyUtxo(
+                                config = cardanoNetwork,
+                                address = testPeers.addressFor(peer),
+                                genCoin = Gen.const(v.coin),
+                                genMultiAsset = Gen.const(v.assets)
+                              )
+                          } yield utxo
                     )
-                } yield utxo
+                    .map(nel => Map.from(nel.toList.map(_.toTuple)))
 
-            l2Utxos <- {
-                Gen
-                    .listOf(genUtxoFromKnownPeer)
-                    .map(list => Map.from(list.map(_.toTuple)))
-            }
+            // Results in at least on change utxo and zero or more l2 utxos
+            (changeUtxos, l2Utxos) <- Gen
+                .choose(1, utxos.size)
+                .map(index => utxos.splitAt(index))
+
             l2Value = l2Utxos.values.map(_.value).fold(Value.zero)(_ + _)
 
             equityContributions <- generateEquityContributions(testPeers.nHeadPeers)
-            equity = equityContributions.toSortedMap.values.map(Value(_)).fold(Value.zero)(_ + _)
+            equity = equityContributions.toSortedMap.values.map(Value(_)) |> Value.combine
 
-            // Need to limit the number so that we don't exceed tx size limits
-            nChangeUtxos <- Gen.choose(1, 50)
-            changeUtxos <- Gen.listOfN(nChangeUtxos, genUtxoFromKnownPeer)
-            changeAmount = changeUtxos.map(_.output.value).fold(Value.zero)(_ + _)
+            changeAmount = changeUtxos.map(_._2.value) |> Value.combine
 
             grossFundingAmount = equity
                 + l2Value
@@ -439,33 +457,49 @@ object InitializationParametersGenBottomUp {
                 )
                 + changeAmount
 
+            // Value(6539178648.698244 ADA, {7f80f19201ff9ad634ff8301ff7f83f7407fff8004016fb392017fff: {518e: 5476341470864080722, d4c4e67f667f0113011555ae01ff9fe5d03f01: 5279809259309764983}, 7fa04e808000006ccaab007f953e7d5c30d2ff8809e838017fe200ff: {: 2961540588816059486, 3bff16003ed5fc6a01ffff7f002e0001ff8a: 658423930486596063}, e5e84eff016fc9267fd84980b57f1d7f4b7f7fc498003080c38d7f33: {4775005012807f008046f810: 3870036807752689121, 8b2c019035ff01adf8c77f017ff8f9801c00c0ff800fff00aa0179008a: 5099933941332916247, af80807f7f7f006a: 423372931136323332}, fc006c00a201981cff7f7f4e7fbd807b5435ff80ff0107f969011e8f: {690001000180001d81: 4437470893348464070, 7f7f008080808080caff9fffffff6a: 5445762065838186398, 8bffe5ba99c701ee80391400: 841334933323165240}})
+
+            // Helper generator for l2 utxos and seed utxo
+            genUtxoFromKnownPeer: Gen[Utxo] =
+                for {
+                    peer <- Gen.oneOf(testPeers.headPeerNums.toList)
+                    utxo <- genPubKeyUtxo(
+                      config = cardanoNetwork,
+                      address = testPeers.addressFor(peer),
+                      genCoin = Gen.const(Coin.zero),
+                      genMultiAsset = Gen.const(MultiAsset.empty)
+                    )
+                } yield utxo
+
             fundingUtxosList <-
                 for {
-                    nFundingUtxos <- Gen.choose(1, 100)
+                    nFundingUtxos <- Gen.choose(1, 20)
                     utxos <- Gen.listOfN(nFundingUtxos, genUtxoFromKnownPeer)
-                    utxosWithZeroValue = utxos.map(
-                      _.focus(_.output).andThen(valueLens).replace(Value.zero)
-                    )
-                    distributed <- genCoinDistributionWithMinAdaUtxo(
-                      coin = grossFundingAmount.coin,
-                      utxoList = NonEmptyList.fromListUnsafe(utxosWithZeroValue),
+                    distributed <- genValueDistributionWithMinAdaUtxo(
+                      value = grossFundingAmount,
+                      utxoList = NonEmptyList.fromListUnsafe(utxos),
                       params = cardanoNetwork.cardanoProtocolParams
                     )
                 } yield distributed
 
             seedUtxo = fundingUtxosList.head
             additionalFundingUtxos: Utxos = Map.from(
-              fundingUtxosList.toList.map(_.toTuple)
-            ) - seedUtxo.input
+              fundingUtxosList.tail.map(_.toTuple)
+            )
 
         } yield InitializationParameters(
-          initialEvacuationMap =
-              EvacuationMap(TreeMap.from(l2Utxos.map((i, o) => (i.toEvacuationKey, KeepRaw(o))))),
+          initialEvacuationMap = EvacuationMap(
+            TreeMap.from(
+              l2Utxos.map((i, o) =>
+                  (i.toEvacuationKey, Payout.Obligation(KeepRaw(o), cardanoNetwork).toOption.get)
+              )
+            )
+          ),
           initialEquityContributions = equityContributions,
           initialSeedUtxo = seedUtxo,
           headId = HeadId(CIP67.HeadTokenNames(seedUtxo.input).treasuryTokenName),
           initialAdditionalFundingUtxos = additionalFundingUtxos,
-          initialChangeOutputs = changeUtxos.map(_.output)
+          initialChangeOutputs = changeUtxos.values.toList
         )
 
     // TODO: improve?
@@ -480,9 +514,11 @@ object InitializationParametersGenBottomUp {
         } yield peerShares
 
     def arbitraryHeadPeerUtxo(cardanoNetwork: CardanoNetwork, address: Address): Gen[Utxo] =
-        genAdaOnlyPubKeyUtxo(
+        genPubKeyUtxo(
           config = cardanoNetwork,
-          address = address
+          address = address,
+          genCoin = Arbitrary.arbitrary[Coin].map(_ + Coin.ada(3)),
+          genMultiAsset = Gen.const(MultiAsset.empty)
         )
 }
 
@@ -500,7 +536,7 @@ object InitializationParametersTest extends Properties("Initialization Parameter
           )
     )(_ => true)
 
-    val _ = property("Bottom Up generates") = Prop.forAll(
+    val _ = property("Bottom Up generates and is balanced") = Prop.forAll(
       TestPeersSpec
           .generate()
           .flatMap(TestPeers.generate)

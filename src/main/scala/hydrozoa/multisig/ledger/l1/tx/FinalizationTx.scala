@@ -367,7 +367,7 @@ private object FinalizationTxOps {
                 ) =>
                     val totalFee = rolloutTxSeqPartial.totalFee
                     val equity = treasuryToSpend.equity.coin
-                    if totalFee < equity
+                    if totalFee > equity
                     then
                         Left(
                           SomeBuildError.BalancingError(

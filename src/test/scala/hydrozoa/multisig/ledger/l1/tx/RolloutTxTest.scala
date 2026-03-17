@@ -1,5 +1,8 @@
 package hydrozoa.multisig.ledger.l1.tx
 
+import cats.*
+import cats.data.*
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.l1.utxo.RolloutUtxo
@@ -15,21 +18,21 @@ import test.Generators.Other as GenOther
 
 // TODO: All of these tests can be written in PropertyM[Either, _], or a shrinking variant
 object RolloutTxTest extends Properties("RolloutTxTest") {
-
     given ppLastBuilder: (RolloutTx.Build.Last => Pretty) = builder =>
         Pretty(_ => builder.config.headMultisigScript.policyId.toString)
+
+    private def genPayouts(network: CardanoNetwork.Section) =
+        GenOther
+            .genSequencedValueDistribution(
+              500,
+              v => genKnownValuePayoutObligationWithMinAdaEnsured(network, v)
+            )
+            .map(nel => NonEmptyVector.fromVectorUnsafe(Vector.from(nel.toList)))
 
     val genLastBuilder: Gen[RolloutTx.Build.Last] =
         for {
             multiNodeConfig <- MultiNodeConfig.generate(TestPeersSpec.default)()
-            genPayouts = genPayoutObligation(multiNodeConfig.headConfig.cardanoNetwork)
-            // We want to test small, medium, and large, so we do it with frequency
-            payouts <-
-                Gen.frequency(
-                  (1, GenOther.nonEmptyVectorOf(genPayouts)),
-                  (7, Gen.sized(size => GenOther.nonEmptyVectorOfN(size * 3 + 1, genPayouts))),
-                  (2, Gen.sized(size => GenOther.nonEmptyVectorOfN(size * 6 + 1, genPayouts)))
-                )
+            payouts <- genPayouts(multiNodeConfig.headConfig)
         } yield RolloutTx.Build.Last(multiNodeConfig.nodeConfigs(HeadPeerNumber.zero))(payouts)
 
     given ppNotLastBuilder: (RolloutTx.Build.NotLast => Pretty) = builder =>
@@ -37,9 +40,7 @@ object RolloutTxTest extends Properties("RolloutTxTest") {
     val genNotLastBuilder: Gen[RolloutTx.Build.NotLast] =
         for {
             multiNodeConfig <- MultiNodeConfig.generate(TestPeersSpec.default)()
-            payouts <- GenOther.nonEmptyVectorOf(
-              genPayoutObligation(multiNodeConfig.headConfig.cardanoNetwork)
-            )
+            payouts <- genPayouts(multiNodeConfig.headConfig)
             rolloutSpentVal <- Gen.choose(1, 100_000_000).map((x: Int) => Value(Coin(x)))
         } yield RolloutTx.Build
             .NotLast(multiNodeConfig.nodeConfigs(HeadPeerNumber.zero))(payouts, rolloutSpentVal)
@@ -82,12 +83,11 @@ object RolloutTxTest extends Properties("RolloutTxTest") {
     }
 
     val _ = property("Complete Last Partial Result") = {
-        Prop.forAll(genLastBuilder)(builder => {
+        Prop.forAll(genLastBuilder, Arbitrary.arbitrary[TransactionHash])((builder, txId) => {
             val res = for {
                 pr <- builder.partialResult.left.map(e =>
                     s"Build failed with error ${e}" |: Prop(false)
                 )
-                txId = Arbitrary.arbitrary[TransactionHash].sample.get
                 input = TransactionInput(txId, 0)
                 output = Babbage(
                   address = builder.config.headMultisigAddress,

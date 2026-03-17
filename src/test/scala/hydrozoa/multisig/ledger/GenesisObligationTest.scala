@@ -9,7 +9,8 @@ import org.scalacheck.*
 import org.scalacheck.Arbitrary.arbitrary
 import scalus.cardano.address.ArbitraryInstances.given_Arbitrary_ShelleyAddress
 import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.{Coin, OriginalCborByteArray, TransactionOutput}
+import scalus.cardano.ledger.ArbitraryInstances.given
+import scalus.cardano.ledger.{Coin, MultiAsset, OriginalCborByteArray, TransactionOutput}
 import test.Generators.Hydrozoa.genGenesisObligation
 
 object GenesisObligationTest extends Properties("Genesis Obligation Properties"):
@@ -19,7 +20,12 @@ object GenesisObligationTest extends Properties("Genesis Obligation Properties")
           .flatMap(cardanoNetwork => arbitrary[ShelleyAddress].map(cardanoNetwork -> _))
           .flatMap((cardanoNetwork, address) =>
               Gen.nonEmptyListOf(
-                genGenesisObligation(cardanoNetwork, address, minimumCoin = Coin.ada(5))
+                genGenesisObligation(
+                  cardanoNetwork,
+                  address,
+                  genCoin = Arbitrary.arbitrary[Coin].map(_ + Coin.ada(5)),
+                  genMultiAsset = Arbitrary.arbitrary[MultiAsset].map(_.onlyPositive)
+                )
               ).map(NonEmptyList.fromListUnsafe)
           )
     )(genesisObligations =>

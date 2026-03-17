@@ -68,7 +68,7 @@ def generateInitialBlock(testPeers: TestPeers)(
         initTxSeq =
             InitializationTxSeq.Build(config)(blockCreationEndTime).result match {
                 case Left(e) =>
-                    throw e
+                    throw new RuntimeException(e.toString, e)
                 case Right(x) => x
             }
 

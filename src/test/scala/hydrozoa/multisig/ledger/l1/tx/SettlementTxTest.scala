@@ -1,5 +1,6 @@
 package hydrozoa.multisig.ledger.l1.tx
 
+import cats.*
 import cats.data.*
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
@@ -10,6 +11,7 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, Quant
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.eutxol2.tx.GenesisObligation
+import hydrozoa.multisig.ledger.joint.obligation.Payout.Obligation
 import hydrozoa.multisig.ledger.l1.txseq.SettlementTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.{DepositUtxo, Equity, MultisigTreasuryUtxo}
 import java.util.concurrent.TimeUnit
@@ -26,7 +28,6 @@ import scalus.cardano.onchain.plutus.prelude.Ord.<=
 import scalus.cardano.onchain.plutus.prelude.{Option as SOption, Ord}
 import scalus.cardano.onchain.plutus.v1
 import scalus.cardano.onchain.plutus.v1.Value.valueOrd
-import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
 import scalus.uplc.builtin.ByteString
 import scalus.uplc.builtin.Data.toData
 import test.*
@@ -61,18 +62,10 @@ def genDepositDatum(network: CardanoNetwork.Section): Gen[DepositUtxo.Datum] = {
     )
 }
 
-// FIXME: This way of generating deposit Utxos was fine for earlier iterations of hydrozoa.
-// As we get closer to a real implementation, it needs to be revised to catch more corner cases.
-// In particular, with the introduction of "Virtual Utxos" in the deposit utxo, and with the deposit amount
-// set deterministically from the sum of the virtual utxos + fees necessary for refund, this
-// generator DOES NOT produce actual semantically valid deposit utxos
-//
-/** @param zeroTime
-  *   generates deposits at some random offset (in the future) from a "zero time"
-  */
 def genDepositUtxo(
     config: CardanoNetwork.Section & TxTiming.Section,
     headAddress: Option[ShelleyAddress] = None,
+    genDepositAmount: Gen[Value]
 )(
     zeroTime: QuantizedInstant = QuantizedInstant(
       config.slotConfig,
@@ -92,15 +85,14 @@ def genDepositUtxo(
           scriptRef = None
         )
 
-        depositMinAda = ensureMinAda(mockUtxo, config.cardanoProtocolParams).value.coin
-
-        depositAmount <- arbitrary[Coin].map(_ + depositMinAda).map(Value(_))
+        depositAmount <- genDepositAmount
 
         // NOTE: these genesis obligations are completely arbitrary and WILL NOT be coherent with the
         // deposit amount
         address <- arbitrary[ShelleyAddress]
+        nL2Outputs <- Gen.choose(1, 6)
         l2Outputs <- Gen
-            .nonEmptyListOf(genGenesisObligation(config, address))
+            .listOfN(nL2Outputs, genGenesisObligation(config, address))
             .map(NonEmptyList.fromListUnsafe)
 
         // Generate some offset to the "zero slot" time.
@@ -143,29 +135,17 @@ def genSettlementTxSeqBuilder(config: HeadConfig)(
       previousMajorBlockCreationEndTime + currentMajorBlockOffsetDuration
     )
 
-    // A helper to generator empty, small, medium, large (up to 1000)
-    def genHelper[T](gen: Gen[T]): Gen[Vector[T]] = Gen.sized(size =>
-        Gen.frequency(
-          (1, Gen.const(Vector.empty)),
-          (2, Other.vectorOfN(size, gen)),
-          (5, Other.vectorOfN(size * 5, gen)),
-          (1, Other.vectorOfN(1, gen))
-        ).map(_.take(1000))
-    )
-
     for {
         majorVersion <- Gen.posNum[Int]
-
-        genDeposit = genDepositUtxo(
-          config = config,
-          headAddress = Some(config.headMultisigAddress)
-        )()
-        deposits <- genHelper(genDeposit).map(_.take(config.maxDepositsAbsorbedPerBlock))
-
-        payouts <- genHelper(genPayoutObligation(config.cardanoNetwork))
-        payoutAda = payouts
-            .map(_.utxo.value.value.coin)
-            .fold(Coin.zero)(_ + _)
+        deposits <- Other.genSequencedValueDistribution(
+          config.maxDepositsAbsorbedPerBlock,
+          value => genDepositUtxo(config, Some(config.headMultisigAddress), Gen.const(value))()
+        )
+        payouts <- Other.genSequencedValueDistribution(
+          100,
+          value => genKnownValuePayoutObligationWithMinAdaEnsured(config, value)
+        )
+        totalPayoutValue = payouts.foldLeft(Value.zero)((v, payout) => v + payout.utxo.value.value)
 
         kzg: KzgCommitment <- kzgCommitment match {
             case None =>
@@ -178,13 +158,14 @@ def genSettlementTxSeqBuilder(config: HeadConfig)(
             utxoId <- Arbitrary.arbitrary[TransactionInput]
 
             equity <- Gen.choose(100_000_000L, 10_000_000_000L).map(l => Equity(Coin(l)).get)
-            treasuryValue = payoutAda + equity.coin
+            // NOTE: We're paying out the entire liabilities
+            treasuryValue = totalPayoutValue + Value(equity.coin)
         } yield MultisigTreasuryUtxo(
           treasuryTokenName = config.headTokenNames.treasuryTokenName,
           utxoId = utxoId,
           address = config.headMultisigAddress,
           datum = MultisigTreasuryUtxo.Datum(kzg, majorVersion),
-          value = Value(treasuryValue),
+          value = treasuryValue,
           equity = equity
         )
 
@@ -192,7 +173,7 @@ def genSettlementTxSeqBuilder(config: HeadConfig)(
       kzgCommitment = kzg,
       majorVersionProduced = BlockVersion.Major(majorVersion),
       depositsToSpend = deposits.toList,
-      payoutObligationsRemaining = payouts,
+      payoutObligationsRemaining = Vector.from(payouts.toList),
       treasuryToSpend = multisigTreasury,
       competingFallbackValidityStart = fallbackTxStartTime,
       blockCreationEndTime = blockCreationEndTime
@@ -216,26 +197,20 @@ def genNextSettlementTxSeqBuilder(config: HeadConfig)(
     // If not, its randomly generated
     kzgCommitment: Option[KzgCommitment] = None
 ): Gen[SettlementTxSeq.Build] = {
-    // A helper to generator empty, small, medium, large (up to 1000)
-    def genHelper[T](gen: Gen[T]): Gen[Vector[T]] = Gen.sized(size =>
-        Gen.frequency(
-          (1, Gen.const(Vector.empty)),
-          (2, Other.vectorOfN(size, gen)),
-          (5, Other.vectorOfN(size * 5, gen)),
-          (1, Other.vectorOfN(1, gen))
-        ).map(_.take(1000))
-    )
-
-    val genDeposit = genDepositUtxo(
-      config,
-      headAddress = Some(config.headMultisigAddress)
-    )()
 
     given Ord[v1.Value] = valueOrd
 
     for {
-        deposits <- genHelper(genDeposit)
-        payouts <- genHelper(genPayoutObligation(config.cardanoNetwork))
+        deposits <- Other.genSequencedValueDistribution(
+          config.maxDepositsAbsorbedPerBlock,
+          value => genDepositUtxo(config, Some(config.headMultisigAddress), Gen.const(value))()
+        )
+        payouts <- Other
+            .genSequencedValueDistribution(
+              100,
+              value => genKnownValuePayoutObligationWithMinAdaEnsured(config, value)
+            )
+            .map(nel => Vector.from(nel.toList))
         prefixes = (payouts.length to 0 by -1).map(payouts.take)
         infimum = prefixes
             .find(prefix =>

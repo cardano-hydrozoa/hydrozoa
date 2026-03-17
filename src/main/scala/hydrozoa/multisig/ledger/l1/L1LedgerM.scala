@@ -251,6 +251,8 @@ object L1LedgerM {
             extends L1LedgerM.Error
 
         final case class FinalizationTxSeqBuilderError(wrapped: FinalizationTxSeq.Build.Error)
-            extends L1LedgerM.Error
+            extends L1LedgerM.Error {
+            override def toString: String = wrapped.toString
+        }
     }
 }

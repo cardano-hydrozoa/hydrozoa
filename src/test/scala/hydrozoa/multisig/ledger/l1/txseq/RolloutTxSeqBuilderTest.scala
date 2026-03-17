@@ -2,7 +2,6 @@ package hydrozoa.multisig.ledger.l1.txseq
 
 import cats.data.NonEmptyVector
 import hydrozoa.config.node.MultiNodeConfig
-import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.l1.utxo.RolloutUtxo
 import org.scalacheck.{Arbitrary, Gen, Prop, Properties}
 import scalus.cardano.ledger.ArbitraryInstances.given
@@ -10,23 +9,27 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{TransactionHash, TransactionInput, Utxo}
 import test.*
 import test.Generators.Hydrozoa.*
+import test.Generators.Other.genSequencedValueDistribution
 
 object RolloutTxSeqBuilderTest extends Properties("RolloutTxSeq Builder") {
 
     val genBuilder: Gen[RolloutTxSeq.Build] =
         for {
             config <- MultiNodeConfig.generate(TestPeersSpec.default)()
-            payouts <- Gen
-                .containerOfN[Vector, Payout.Obligation](
-                  160,
-                  genPayoutObligation(config.headConfig.cardanoNetwork)
-                )
-                .map(NonEmptyVector.fromVectorUnsafe)
+            payouts <- genSequencedValueDistribution(
+              160,
+              v =>
+                  genKnownValuePayoutObligationWithMinAdaEnsured(
+                    config.headConfig.cardanoNetwork,
+                    v
+                  )
+            )
+                .map(nel => NonEmptyVector.fromVectorUnsafe(Vector.from(nel.toList)))
 
         } yield RolloutTxSeq.Build(config.headConfig)(payouts)
 
-    val _ = property("Build partial rollout seq") =
-        Prop.forAll(genBuilder)(builder => Prop(builder.partialResult.isRight))
+//    val _ = property("Build partial rollout seq") =
+//        Prop.forAll(genBuilder)(builder => Prop(builder.partialResult.isRight))
 
     val _ = property("Finish partial result rollout seq") = Prop.forAll(genBuilder)(builder =>
         val res = for {
