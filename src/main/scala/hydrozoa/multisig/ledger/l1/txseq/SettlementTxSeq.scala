@@ -68,7 +68,6 @@ private object SettlementTxSeqOps {
                             case SomeRedeemerIndexingError(e, ctx) =>
                                 "Transaction builder redeemer indexing error."
                             case BalancingError(e, ctx) =>
-                                ???
                                 "Transaction builder balancing error:\n\t" + (e match {
                                     case TxBalancingError.EvaluationFailed(c) =>
                                         s"Plutus evaluation failed. Cause: ${c.toString}"
@@ -110,7 +109,6 @@ private object SettlementTxSeqOps {
                             case SomeRedeemerIndexingError(e, ctx) =>
                                 "Transaction builder redeemer indexing error."
                             case BalancingError(e, ctx) =>
-                                ???
                                 "Transaction builder balancing error:\n\t" + (e match {
                                     case TxBalancingError.EvaluationFailed(c) =>
                                         s"Plutus evaluation failed. Cause: ${c.toString}"
@@ -148,7 +146,6 @@ private object SettlementTxSeqOps {
                             case SomeRedeemerIndexingError(e, ctx) =>
                                 "Transaction builder redeemer indexing error."
                             case BalancingError(e, ctx) =>
-                                ???
                                 "Transaction builder balancing error:\n\t" + (e match {
                                     case TxBalancingError.EvaluationFailed(c) =>
                                         s"Plutus evaluation failed. Cause: ${c.toString}"
