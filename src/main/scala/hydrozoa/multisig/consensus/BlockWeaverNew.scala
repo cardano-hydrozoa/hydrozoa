@@ -1,24 +1,17 @@
 package hydrozoa.multisig.consensus
 
-import cats.Monad
-import cats.effect.{IO, Ref}
+import cats.effect.IO
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
-import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
-import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockHeader, BlockNumber, BlockStatus, BlockType, BlockVersion}
-import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
+import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockHeader, BlockNumber, BlockStatus, BlockType}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.JointLedger
-import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import org.typelevel.log4cats.Logger
-
-import scala.concurrent.duration.DurationInt
 import scalus.cardano.ledger.TransactionInput
 
 final case class BlockWeaverNew(
@@ -84,23 +77,29 @@ object BlockWeaverNew {
     type Handle = ActorRef[IO, Request]
 
     type Request = PreStart.type | UserRequestWithId | BlockBrief.Next | BlockConfirmed |
-        PollResults | FinalizationLocallyTriggered.type
+        PollResults | LocalFinalizationTrigger.Triggered.type
 
     type BlockConfirmed = BlockHeader.Section & Block.Fields.HasFinalizationRequested &
         BlockStatus.MultiSigned & BlockType.Next
 
     case object PreStart
 
-    case object FinalizationLocallyTriggered {
-        trait HasFinalizationLocallyTriggered {
-            def finalizationLocallyTriggered: this.type
-        }
+    sealed trait LocalFinalizationTrigger
+
+    object LocalFinalizationTrigger {
+        case object Triggered extends LocalFinalizationTrigger
+        case object NotTriggered extends LocalFinalizationTrigger
     }
 
     sealed trait State {
+
+        /** See [[State.Active]] and [[State.Reactive]]. */
+        type NextState <: State.Reactive
+
         def connections: Connections
         def logger: Logger[IO]
         def pollResults: PollResults
+        def finalizationLocallyTriggered: LocalFinalizationTrigger
     }
 
     object State {
@@ -116,6 +115,7 @@ object BlockWeaverNew {
                   connections = connections,
                   logger = logger,
                   pollResults = PollResults.empty,
+                  finalizationLocallyTriggered = LocalFinalizationTrigger.NotTriggered,
                   mempool = Mempool.empty
                 ).act(config)
             } yield state.get
@@ -123,7 +123,8 @@ object BlockWeaverNew {
         private def continue[S <: State.Reactive](state: S): IO[Some[S]] =
             IO.pure(Some(state))
 
-        private def stop(): IO[None.type] = IO.pure(None)
+        // TODO: implement state machine termination.
+        // private def stop(): IO[None.type] = IO.pure(None)
 
         /** A caching state can store requests in its mempool. */
         sealed trait Caching extends State {
@@ -141,7 +142,7 @@ object BlockWeaverNew {
           * terminates in a reactive state.
           */
         sealed trait Active extends State {
-            def act(config: Config): IO[Option[State.Reactive]]
+            def act(config: Config): IO[Option[NextState]]
         }
 
         /** A reactive state can receive a message, reacting by transitioning to another state.
@@ -154,7 +155,18 @@ object BlockWeaverNew {
           * calls terminates in a reactive * state.
           */
         sealed trait Reactive extends State {
-            def react(config: Config)(req: Request): IO[Option[State.Reactive]]
+            type Unexpected <: Request
+
+            def react(config: Config)(req: Request): IO[Option[NextState]]
+
+            final def panicUnexpectedRequest(
+                state: State.Reactive,
+                unexpected: Unexpected
+            ): IO[None.type] =
+                val msg =
+                    s"Unexpectedly received in ${state.toString} state: ${unexpected.toString}"
+                logger.error(msg) >>
+                    IO.raiseError(RuntimeException(msg))
         }
 
         sealed trait Idle
@@ -164,54 +176,93 @@ object BlockWeaverNew {
                 override val connections: Connections,
                 override val logger: Logger[IO],
                 override val pollResults: PollResults,
+                override val finalizationLocallyTriggered: LocalFinalizationTrigger,
                 override val mempool: Mempool,
             ) extends Active,
                   Caching {
+                override type NextState = IdleReactive | Leader
+
                 private def idleReactive(newMempool: Mempool): IdleReactive =
                     IdleReactive(this, newMempool)
 
                 private def leader(blockNumber: BlockNumber, startedBlock: Leader.StartedBlock) =
                     Leader(this, blockNumber, startedBlock)
 
-                override def act(config: Config): IO[Some[IdleReactive | Leader]] =
+                override def act(config: Config): IO[Some[NextState]] =
                     if config.ownHeadPeerId.isLeader(BlockNumber.zero)
-                    then continue(leader(BlockNumber.zero, Leader.StartedBlock.NotStarted))
-                    else continue(idleReactive(mempool))
+                    then {
+                        logger.info("Starting as Leader.") >>
+                            continue(leader(BlockNumber.zero, Leader.StartedBlock.NotStarted))
+                    } else {
+                        logger.info("Starting as Idle.") >>
+                            continue(idleReactive(mempool))
+                    }
             }
 
             object IdleActive {
                 private[State] def apply(state: State, mempool: Mempool): IdleActive =
                     import state.*
-                    IdleActive(connections, logger, pollResults, mempool)
+                    IdleActive(
+                      connections,
+                      logger,
+                      pollResults,
+                      finalizationLocallyTriggered,
+                      mempool
+                    )
             }
 
             final case class IdleReactive private[State] (
                 override val connections: Connections,
                 override val logger: Logger[IO],
                 override val pollResults: PollResults,
+                override val finalizationLocallyTriggered: LocalFinalizationTrigger,
                 override val mempool: Mempool,
             ) extends Caching,
                   Reactive {
+                override type NextState = IdleReactive | FollowerAwaiting
+
+                override type Unexpected = PreStart.type | BlockConfirmed
+
                 private def idleReactive(newMempool: Mempool): IdleReactive =
                     IdleReactive(this, newMempool)
 
-                private def follower(newMempool: Mempool): Follower =
-                    Follower(this, newMempool)
+                private def follower(
+                    newMempool: Mempool,
+                    reproducingBlockBrief: BlockBrief.Next
+                ): Follower =
+                    Follower(this, newMempool, reproducingBlockBrief)
 
                 override def react(
                     config: Config
-                )(req: Request): IO[Option[IdleReactive | FollowerAwaiting]] =
+                )(req: Request): IO[Option[NextState]] =
                     req match {
                         case ur: UserRequestWithId =>
-                            continue(idleReactive(mempool.add(ur)))
-
+                            logger.trace(s"Adding ${ur.requestId} to mempool.") >>
+                                continue(idleReactive(mempool.add(ur)))
+                        case bb: BlockBrief.Next =>
+                            logger.trace(s"New block brief ${bb.blockNum}.") >>
+                                follower(mempool, bb).act(config)
+                        case pr: PollResults =>
+                            logger.trace("New poll results.") >>
+                                continue(copy(pollResults = pr))
+                        case ft: LocalFinalizationTrigger.Triggered.type =>
+                            logger.trace("Finalization was locally triggered.") >>
+                                continue(copy(finalizationLocallyTriggered = ft))
+                        case m: Unexpected =>
+                            panicUnexpectedRequest(this, m)
                     }
             }
 
             object IdleReactive {
                 private[Idle] def apply(state: State, mempool: Mempool): IdleReactive =
                     import state.*
-                    IdleReactive(connections, logger, pollResults, mempool)
+                    IdleReactive(
+                      connections,
+                      logger,
+                      pollResults,
+                      finalizationLocallyTriggered,
+                      mempool
+                    )
             }
         }
 
@@ -219,47 +270,59 @@ object BlockWeaverNew {
             override val connections: Connections,
             override val logger: Logger[IO],
             override val pollResults: PollResults,
+            override val finalizationLocallyTriggered: LocalFinalizationTrigger,
             override val mempool: Mempool,
+            reproducingBlockBrief: BlockBrief.Next,
         ) extends Active,
               Caching {
-            def act(config: Config): IO[Some[IdleReactive | FollowerAwaiting]] = ???
+            override type NextState = IdleReactive | FollowerAwaiting
+
+            def act(config: Config): IO[Some[NextState]] = ???
+        }
+
+        object Follower {
+            private[State] def apply(
+                state: State,
+                mempool: Mempool,
+                reproducingBlockBrief: BlockBrief.Next
+            ): Follower =
+                import state.*
+                Follower(
+                  connections,
+                  logger,
+                  pollResults,
+                  finalizationLocallyTriggered,
+                  mempool,
+                  reproducingBlockBrief
+                )
         }
 
         final case class FollowerAwaiting private (
             override val connections: Connections,
             override val logger: Logger[IO],
             override val pollResults: PollResults,
+            override val finalizationLocallyTriggered: LocalFinalizationTrigger,
             override val mempool: Mempool,
             reproducingBlockBrief: BlockBrief.Next,
             awaitingRequestId: RequestId,
         ) extends Caching,
               Reactive {
-            override def react(config: Config)(req: Request): IO[Option[State.Reactive]] = ???
-        }
+            override type NextState = IdleReactive | FollowerAwaiting
 
-        final case class Leader private (
-            override val connections: Connections,
-            override val logger: Logger[IO],
-            override val pollResults: PollResults,
-            leadingBlockNumber: BlockNumber,
-            startedBlock: Leader.StartedBlock
-        ) extends Reactive {
-            override def react(config: Config)(req: Request): IO[Option[State.Reactive]] = ???
-        }
+            override type Unexpected = PreStart.type | BlockBrief.Next | BlockConfirmed
 
-        final case class LeaderAwaiting private (
-            override val connections: Connections,
-            override val logger: Logger[IO],
-            override val pollResults: PollResults,
-            previousBlockBriefConfirmed: BlockBrief.NonFinal
-        ) extends Reactive {
-            override def react(config: Config)(req: Request): IO[Option[State.Reactive]] = ???
-        }
-
-        object Follower {
-            private[State] def apply(state: State, mempool: Mempool): Follower =
-                import state.*
-                Follower(connections, logger, pollResults, mempool)
+            override def react(config: Config)(req: Request): IO[Option[NextState]] =
+                req match {
+                    case ur: UserRequestWithId => ???
+                    case pr: PollResults =>
+                        logger.trace("New poll results.") >>
+                            continue(copy(pollResults = pr))
+                    case ft: LocalFinalizationTrigger.Triggered.type =>
+                        logger.trace("Finalization was locally triggered.") >>
+                            continue(copy(finalizationLocallyTriggered = ft))
+                    case unexpected: Unexpected =>
+                        panicUnexpectedRequest(this, unexpected)
+                }
         }
 
         object FollowerAwaiting {
@@ -274,10 +337,38 @@ object BlockWeaverNew {
                   connections,
                   logger,
                   pollResults,
+                  finalizationLocallyTriggered,
                   mempool,
                   reproducingBlockBrief,
                   awaitingRequestId
                 )
+        }
+
+        final case class Leader private (
+            override val connections: Connections,
+            override val logger: Logger[IO],
+            override val pollResults: PollResults,
+            override val finalizationLocallyTriggered: LocalFinalizationTrigger,
+            leadingBlockNumber: BlockNumber,
+            startedBlock: Leader.StartedBlock
+        ) extends Reactive {
+            override type NextState = IdleReactive | Leader | LeaderAwaiting
+
+            override type Unexpected = PreStart.type | BlockBrief.Next
+
+            override def react(config: Config)(req: Request): IO[Option[NextState]] =
+                req match {
+                    case ur: UserRequestWithId => ???
+                    case bc: BlockConfirmed    => ???
+                    case pr: PollResults =>
+                        logger.trace("New poll results.") >>
+                            continue(copy(pollResults = pr))
+                    case ft: LocalFinalizationTrigger.Triggered.type =>
+                        logger.trace("Finalization was locally triggered.") >>
+                            continue(copy(finalizationLocallyTriggered = ft))
+                    case unexpected: Unexpected =>
+                        panicUnexpectedRequest(this, unexpected)
+                }
         }
 
         object Leader {
@@ -287,10 +378,42 @@ object BlockWeaverNew {
                 startedBlock: StartedBlock
             ): Leader =
                 import state.*
-                Leader(connections, logger, pollResults, blockNumber, startedBlock)
+                Leader(
+                  connections,
+                  logger,
+                  pollResults,
+                  finalizationLocallyTriggered,
+                  blockNumber,
+                  startedBlock
+                )
 
             enum StartedBlock:
                 case Started, NotStarted
+        }
+
+        final case class LeaderAwaiting private (
+            override val connections: Connections,
+            override val logger: Logger[IO],
+            override val pollResults: PollResults,
+            override val finalizationLocallyTriggered: LocalFinalizationTrigger,
+            previousBlockBriefConfirmed: BlockBrief.NonFinal
+        ) extends Reactive {
+            override type NextState = IdleReactive | LeaderAwaiting
+
+            override type Unexpected = PreStart.type | BlockBrief.Next | BlockConfirmed
+
+            override def react(config: Config)(req: Request): IO[Option[NextState]] =
+                req match {
+                    case ur: UserRequestWithId => ???
+                    case pr: PollResults =>
+                        logger.trace("New poll results.") >>
+                            continue(copy(pollResults = pr))
+                    case ft: LocalFinalizationTrigger.Triggered.type =>
+                        logger.trace("Finalization was locally triggered.") >>
+                            continue(copy(finalizationLocallyTriggered = ft))
+                    case unexpected: Unexpected =>
+                        panicUnexpectedRequest(this, unexpected)
+                }
         }
 
         object LeaderAwaiting {
@@ -299,7 +422,13 @@ object BlockWeaverNew {
                 previousBlockBriefConfirmed: BlockBrief.NonFinal
             ): LeaderAwaiting =
                 import state.*
-                LeaderAwaiting(connections, logger, pollResults, previousBlockBriefConfirmed)
+                LeaderAwaiting(
+                  connections,
+                  logger,
+                  pollResults,
+                  finalizationLocallyTriggered,
+                  previousBlockBriefConfirmed
+                )
         }
 
     }
