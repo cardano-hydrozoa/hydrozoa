@@ -57,8 +57,7 @@ final case class BlockWeaverNew(
             for {
                 c <- pc.get
             } yield BlockWeaverNew.Connections(
-              jointLedger = c.jointLedger,
-              tracer = c.tracer,
+              jointLedger = c.jointLedger
             )
         case c: BlockWeaverNew.Connections => IO.pure(c)
     }
@@ -70,8 +69,7 @@ object BlockWeaverNew {
     type Config = CardanoNetwork.Section & OwnHeadPeerPublic.Section
 
     final case class Connections(
-        jointLedger: JointLedger.Handle,
-        tracer: hydrozoa.lib.tracing.ProtocolTracer = hydrozoa.lib.tracing.ProtocolTracer.noop,
+        jointLedger: JointLedger.Handle
     )
 
     type Handle = ActorRef[IO, Request]
@@ -240,13 +238,13 @@ object BlockWeaverNew {
                             logger.trace(s"Adding ${ur.requestId} to mempool.") >>
                                 continue(idleReactive(mempool.add(ur)))
                         case bb: BlockBrief.Next =>
-                            logger.trace(s"New block brief ${bb.blockNum}.") >>
+                            logger.info(s"New block brief ${bb.blockNum}.") >>
                                 follower(mempool, bb).act(config)
                         case pr: PollResults =>
                             logger.trace("New poll results.") >>
                                 continue(copy(pollResults = pr))
                         case ft: LocalFinalizationTrigger.Triggered.type =>
-                            logger.trace("Finalization was locally triggered.") >>
+                            logger.info("Finalization was locally triggered.") >>
                                 continue(copy(finalizationLocallyTriggered = ft))
                         case m: Unexpected =>
                             panicUnexpectedRequest(this, m)
@@ -318,7 +316,7 @@ object BlockWeaverNew {
                         logger.trace("New poll results.") >>
                             continue(copy(pollResults = pr))
                     case ft: LocalFinalizationTrigger.Triggered.type =>
-                        logger.trace("Finalization was locally triggered.") >>
+                        logger.info("Finalization was locally triggered.") >>
                             continue(copy(finalizationLocallyTriggered = ft))
                     case unexpected: Unexpected =>
                         panicUnexpectedRequest(this, unexpected)
@@ -364,7 +362,7 @@ object BlockWeaverNew {
                         logger.trace("New poll results.") >>
                             continue(copy(pollResults = pr))
                     case ft: LocalFinalizationTrigger.Triggered.type =>
-                        logger.trace("Finalization was locally triggered.") >>
+                        logger.info("Finalization was locally triggered.") >>
                             continue(copy(finalizationLocallyTriggered = ft))
                     case unexpected: Unexpected =>
                         panicUnexpectedRequest(this, unexpected)
@@ -409,7 +407,7 @@ object BlockWeaverNew {
                         logger.trace("New poll results.") >>
                             continue(copy(pollResults = pr))
                     case ft: LocalFinalizationTrigger.Triggered.type =>
-                        logger.trace("Finalization was locally triggered.") >>
+                        logger.info("Finalization was locally triggered.") >>
                             continue(copy(finalizationLocallyTriggered = ft))
                     case unexpected: Unexpected =>
                         panicUnexpectedRequest(this, unexpected)
