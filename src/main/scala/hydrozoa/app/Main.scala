@@ -154,7 +154,12 @@ object Main extends IOApp {
             _ <- Resource.eval(
               logger.info(s"Connecting to L2 ledger at ${env.sugarRushUri}")
             )
-            remoteL2Ledger <- RemoteL2Ledger.create(env.sugarRushUri, cardanoNetwork)
+            remoteL2Ledger <- Resource.eval(
+              RemoteL2Ledger.create(
+                wsUri = env.sugarRushUri,
+                config = cardanoNetwork
+              )
+            )
 
             // Attach cleanup to ActorSystem resource - env, backend, nodeConfig are in scope here
             system <- ActorSystem[IO]("Hydrozoa Demo").onFinalize(

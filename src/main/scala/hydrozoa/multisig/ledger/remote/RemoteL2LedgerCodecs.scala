@@ -24,15 +24,15 @@ import scodec.bits.ByteVector
 case class RemoteL2LedgerCodecs(config: CardanoNetwork.Section) {
 
     // Reuse codecs from the HTTP server, excluding types we override for sugar-rush-ledger compatibility
-    // @Peter: We exclude certain codecs here to provide sugar-rush-ledger compatible format
+    // We exclude certain codecs here to provide sugar-rush-ledger compatible format
     import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{coinEncoder as _, coinDecoder as _, valueEncoder as _, valueDecoder as _, given}
     import hydrozoa.multisig.server.JsonCodecs.{requestIdEncoder, requestIdDecoder}
 
-    // @Peter: Coin as raw number (sugar-rush-ledger expects u64, not string)
+    // Coin as raw number (sugar-rush-ledger expects u64, not string)
     given Encoder[Coin] = Encoder.encodeLong.contramap(_.value)
     given Decoder[Coin] = Decoder.decodeLong.map(Coin.apply)
 
-    // @Peter: Value codec for sugar-rush-ledger format: {"assets": [{"asset": {"tag": "Ada"}, "value": N}]}
+    // Value codec for sugar-rush-ledger format: {"assets": [{"asset": {"tag": "Ada"}, "value": N}]}
     // The old CIP-116 compatible codec is commented out below - we will need it in the future
     given Encoder[Value] = (v: Value) => {
         val adaEntry = io.circe.Json.obj(
@@ -43,19 +43,11 @@ case class RemoteL2LedgerCodecs(config: CardanoNetwork.Section) {
         io.circe.Json.obj("assets" -> io.circe.Json.arr(adaEntry))
     }
 
+    // @Peter: this is just missing
     given Decoder[Value] = Decoder.instance { c =>
         // Minimal: just extract ADA from the assets array
         Right(Value(Coin(0))) // TODO: implement if needed
     }
-
-    /* @Peter: Original CIP-116 Value codec - keep for future use
-     * This codec will be needed when we support the full CIP-116 protocol
-     * To re-enable: uncomment these and remove the sugar-rush-ledger specific codecs above
-     *
-     * import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{
-     *     valueEncoder, valueDecoder
-     * }
-     */
 
     // QuantizedInstant codec (simplified - loses SlotConfig context)
     // TODO: Include SlotConfig in serialization for proper reconstruction
@@ -73,9 +65,6 @@ case class RemoteL2LedgerCodecs(config: CardanoNetwork.Section) {
 
     implicit val blockNumberDecoder: Decoder[BlockNumber] =
         Decoder.decodeInt.map(BlockNumber.apply)
-
-    implicit val applyTransactionEncoder: Encoder[L2LedgerCommand.ApplyTransaction] = deriveEncoder
-    implicit val applyTransactionDecoder: Decoder[L2LedgerCommand.ApplyTransaction] = deriveDecoder
 
     implicit val proxyBlockConfirmationEncoder: Encoder[L2LedgerCommand.ProxyBlockConfirmation] =
         deriveEncoder
@@ -110,9 +99,9 @@ case class RemoteL2LedgerCodecs(config: CardanoNetwork.Section) {
                 )
             } yield dest
         )
-
-    implicit val depositRegistrationEncoder: Encoder[L2LedgerCommand.RegisterDepositRequest] =
-        (r: L2LedgerCommand.RegisterDepositRequest) =>
+// TODO: can be removed if we just rename the userVk field?
+    implicit val depositRegistrationEncoder: Encoder[L2LedgerCommand.RegisterDeposit] =
+        (r: L2LedgerCommand.RegisterDeposit) =>
             io.circe.Json.obj(
               "requestId" -> r.requestId.asJson,
               "userVk" -> summon[Encoder[VerificationKey]].apply(r.userVKey),
@@ -124,7 +113,7 @@ case class RemoteL2LedgerCodecs(config: CardanoNetwork.Section) {
               "refundDestination" -> r.refundDestination.asJson,
               "l2Payload" -> summon[Encoder[ByteString]].apply(r.l2Payload)
             )
-    implicit val depositRegistrationDecoder: Decoder[L2LedgerCommand.RegisterDepositRequest] =
+    implicit val depositRegistrationDecoder: Decoder[L2LedgerCommand.RegisterDeposit] =
         deriveDecoder
 
     implicit val depositDecisionsEncoder: Encoder[L2LedgerCommand.ApplyDepositDecisions] =
@@ -132,10 +121,24 @@ case class RemoteL2LedgerCodecs(config: CardanoNetwork.Section) {
     implicit val depositDecisionsDecoder: Decoder[L2LedgerCommand.ApplyDepositDecisions] =
         deriveDecoder
 
+    // TODO: can be removed if we just rename the userVk field?
+    implicit val applyTransactionEncoder: Encoder[L2LedgerCommand.ApplyTransaction] =
+        (r: L2LedgerCommand.ApplyTransaction) =>
+            io.circe.Json.obj(
+              "requestId" -> r.requestId.asJson,
+              "userVk" -> summon[Encoder[VerificationKey]].apply(r.userVKey),
+              "blockNumber" -> r.blockNumber.asJson,
+              "blockCreationStartTime" -> r.blockCreationStartTime.asJson,
+              "l2Payload" -> summon[Encoder[ByteString]].apply(r.l2Payload)
+            )
+
+    implicit val applyTransactionDecoder: Decoder[L2LedgerCommand.ApplyTransaction] =
+        deriveDecoder
+
     // Request codecs
     implicit val requestEncoder: Encoder[Request] = {
-        case Request.RegisterDepositRequest(event) =>
-            io.circe.Json.obj("RegisterDepositRequest" -> event.asJson)
+        case Request.RegisterDeposit(event) =>
+            io.circe.Json.obj("RegisterDeposit" -> event.asJson)
         case Request.ApplyDepositDecisions(event) =>
             io.circe.Json.obj("ApplyDepositDecisions" -> event.asJson)
         case Request.ApplyTransaction(event) =>
@@ -155,8 +158,8 @@ case class RemoteL2LedgerCodecs(config: CardanoNetwork.Section) {
             .flatMap {
                 case "RegisterDepositRequest" =>
                     c.downField("RegisterDepositRequest")
-                        .as[L2LedgerCommand.RegisterDepositRequest]
-                        .map(Request.RegisterDepositRequest.apply)
+                        .as[L2LedgerCommand.RegisterDeposit]
+                        .map(Request.RegisterDeposit.apply)
                 case "ApplyDepositDecisions" =>
                     c.downField("ApplyDepositDecisions")
                         .as[L2LedgerCommand.ApplyDepositDecisions]
@@ -221,7 +224,6 @@ case class RemoteL2LedgerCodecs(config: CardanoNetwork.Section) {
         }
     }
 
-    // @Peter: KeepRaw[TransactionOutput] codec as hex string for sugar-rush-ledger
     given Encoder[KeepRaw[TransactionOutput]] = Encoder.instance { kr =>
         io.circe.Json.fromString(ByteString.fromArray(kr.raw).toHex)
     }
@@ -245,7 +247,6 @@ case class RemoteL2LedgerCodecs(config: CardanoNetwork.Section) {
         }
     }
 
-    // @Peter: EvacuationDiff codec using "tag" field for sugar-rush-ledger compatibility
     given Encoder[EvacuationDiff] = Encoder.instance {
         case EvacuationDiff.Update(key, value) =>
             io.circe.Json.obj(

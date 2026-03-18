@@ -237,22 +237,18 @@ object L1LedgerM {
                 s"DepositTxInvalidTTL: expected submission deadline $expectedSubmissionDeadline, but got $actualSubmissionDeadline"
         }
 
-        /** This is raised during a call to `RegisterDeposit` if the deposit parses successfully,
-          * but reveals an absorption window that is already prior to the block's start time. In
-          * this case, the deposit will NOT be added to the dapp ledger's state.
-          */
-        // NOTE: I'm still returning the successfully-parsed TxSeq, but hesitantly... I'd usually prefer to not
-        // have such a value in scope, but it seems like it might be important to error handling.
-        // Don't do something dumb like pull this error from a Left and use the TxSeq as if it was valid
-        final case class AbsorptionPeriodExpired(depositRefundTxSeq: DepositRefundTxSeq)
-            extends RegisterDepositError
-
         final case class SettlementTxSeqBuilderError(wrapped: SettlementTxSeq.Build.Error)
-            extends L1LedgerM.Error
+            extends L1LedgerM.Error {
+            override def toString: String =
+                "Settlement tx-seq error:" + "\n" +
+                    s"${wrapped.toString}"
+        }
 
         final case class FinalizationTxSeqBuilderError(wrapped: FinalizationTxSeq.Build.Error)
             extends L1LedgerM.Error {
-            override def toString: String = wrapped.toString
+            override def toString: String =
+                "Finalization tx-seq error:" + "\n" +
+                    s"${wrapped.toString}"
         }
     }
 }

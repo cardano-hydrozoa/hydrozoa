@@ -15,7 +15,7 @@ import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationKey}
 import hydrozoa.multisig.ledger.l1.tx.Tx
 import hydrozoa.multisig.ledger.l2.*
-import hydrozoa.multisig.ledger.l2.L2LedgerCommand.RegisterDepositRequest
+import hydrozoa.multisig.ledger.l2.L2LedgerCommand.RegisterDeposit
 import io.bullet.borer.Cbor
 import monocle.syntax.all.*
 import scala.util.Try
@@ -159,7 +159,7 @@ case class EutxoL2Ledger private (
     }
 
     override def sendRegisterDeposit(
-        req: RegisterDepositRequest
+        req: RegisterDeposit
     ): EitherT[IO, L2LedgerError, Unit] =
         for {
             s <- EitherT.right(state.get)

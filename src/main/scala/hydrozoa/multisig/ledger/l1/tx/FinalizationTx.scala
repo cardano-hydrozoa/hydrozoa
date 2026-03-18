@@ -103,9 +103,16 @@ private object FinalizationTxOps {
         ) extends WithPayouts
     }
 
+    // TODO: ResidualTreasuryContainsTokens seems suspect as an error.
+    //  We don't have a residual treasury anymore coming out of finalization tx.
     enum Error:
         case TreasuryIncorrectAddress
         case ResidualTreasuryContainsTokens
+
+        override def toString: String = this match {
+            case Error.TreasuryIncorrectAddress       => "Unexpected treasury address"
+            case Error.ResidualTreasuryContainsTokens => "Residual treasury contains tokens"
+        }
 
     type TxBuilderResult[Result] = BuilderResult[Result, Error]
 

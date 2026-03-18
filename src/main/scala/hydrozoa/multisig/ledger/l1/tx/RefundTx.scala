@@ -3,14 +3,13 @@ package hydrozoa.multisig.ledger.l1.tx
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
-import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toQuantizedInstant}
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
 import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.explainConst
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.l2.Destination
 import monocle.{Focus, Lens}
-import scala.util.{Failure, Success}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.txbuilder.*
@@ -28,7 +27,7 @@ sealed trait RefundTx {
 }
 
 object RefundTx {
-    export RefundTxOps.{Build, Parse}
+    export RefundTxOps.Build
 
     final case class PostDated(
         override val tx: Transaction,
@@ -113,69 +112,4 @@ private object RefundTxOps {
         def result: Either[(SomeBuildError, String), T]
     }
 
-    object Parse {
-        type ParseErrorOr[A] = Either[Error, A]
-
-        enum Error extends Throwable {
-            case MetadataParseError(wrapped: MD.ParseError)
-            case TxCborDeserializationFailed(e: Throwable)
-            case ValidityStartIsMissing
-            case InvalidRefundDestination
-        }
-    }
-
-    final case class Parse(config: Config)(
-        txBytes: Tx.Serialized,
-        requestId: RequestId
-    ) {
-        import Parse.*
-        import Parse.Error.*
-
-        def result: ParseErrorOr[RefundTx.PostDated] = {
-
-            given OriginalCborByteArray = OriginalCborByteArray(txBytes.bytes)
-            given ProtocolVersion = config.cardanoProtocolVersion
-
-            io.bullet.borer.Cbor.decode(txBytes.bytes).to[Transaction].valueTry match {
-                case Success(tx) =>
-                    for {
-                        mdParseResult <- MD.Refund.parse(tx).left.map(MetadataParseError(_))
-                        (head, md) = mdParseResult
-                        Metadata.Refund() = md
-
-                        startInstant <- tx.body.value.validityStartSlot match {
-                            case Some(startSlot) =>
-                                Right(
-                                  Slot(startSlot).toQuantizedInstant(config.slotConfig)
-                                )
-                            case None => Left(ValidityStartIsMissing)
-                        }
-
-                        destination: Destination <- tx.body.value.outputs match {
-                            case IndexedSeq(
-                                  Sized(
-                                    TransactionOutput.Babbage(address, _, Some(Inline(d)), None),
-                                    _
-                                  )
-                                ) =>
-                                Right(Destination(address, Some(d)))
-                            case IndexedSeq(
-                                  Sized(TransactionOutput.Babbage(address, _, None, None), _)
-                                ) =>
-                                Right(Destination(address, None))
-                            case _ => Left(InvalidRefundDestination)
-                        }
-
-                        refundTx: RefundTx.PostDated = RefundTx.PostDated(
-                          tx,
-                          startInstant,
-                          destination,
-                          requestId
-                        )
-
-                    } yield refundTx
-                case Failure(e) => Left(TxCborDeserializationFailed(e))
-            }
-        }
-    }
 }

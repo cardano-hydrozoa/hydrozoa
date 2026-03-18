@@ -6,7 +6,7 @@ import hydrozoa.config.head.HeadConfig
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.consensus.{EventSequencer, UserRequest}
 import hydrozoa.multisig.ledger.event.RequestId
-import hydrozoa.multisig.server.ApiResponse.{Error, HeadInfo, RequestAccepted}
+import hydrozoa.multisig.server.ApiResponse.{CardanoNativeToken, Error, HeadInfo, RequestAccepted}
 import hydrozoa.multisig.server.JsonCodecs.given
 import io.circe.syntax.*
 import org.http4s.circe.*
@@ -129,6 +129,10 @@ class HydrozoaRoutes(
                     headId = headConfig.headId,
                     headAddress = headConfig.headMultisigAddress,
                     multisigRegimeUtxo = headConfig.multisigRegimeUtxo.utxoId,
+                    treasuryBeaconToken = CardanoNativeToken(
+                      headConfig.headMultisigScript.policyId,
+                      headConfig.headTokenNames.treasuryTokenName
+                    ),
                     submissionDurationSeconds =
                         headConfig.txTiming.depositSubmissionDuration.finiteDuration.toSeconds,
                     absorptionStartOffsetSeconds =

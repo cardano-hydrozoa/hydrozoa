@@ -551,7 +551,7 @@ object Generators {
             )
             val genCoinDist: Gen[NonEmptyList[Value]] =
                 genCoinDistribution(value.coin, n).map(_.map(Value(_)))
-                
+
             val flat: Iterable[(PolicyId, AssetName, Long)] =
                 value.assets.assets.flatMap((policyId, innerMap) =>
                     innerMap.map((assetName, amount) => (policyId, assetName, amount))
