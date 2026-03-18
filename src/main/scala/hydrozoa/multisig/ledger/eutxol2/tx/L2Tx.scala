@@ -1,5 +1,6 @@
 package hydrozoa.multisig.ledger.eutxol2.tx
 
+import cats.syntax.all.*
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.l1.token.CIP67
 import scala.util.Try

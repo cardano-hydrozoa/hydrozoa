@@ -57,6 +57,16 @@ private object SettlementTxSeqOps {
             case SettlementError(e: (SomeBuildError | SettlementTx.Error, String))
             case RolloutSeqError(e: (SomeBuildErrorOnly, String))
             case FallbackError(e: SomeBuildError)
+
+            override def toString: String = this match {
+                case SettlementError((err, msg)) =>
+                    s"SettlementError: $err${if msg.nonEmpty then s" - $msg" else ""}"
+                case RolloutSeqError((err, msg)) =>
+                    s"RolloutSeqError: $err${if msg.nonEmpty then s" - $msg" else ""}"
+                case FallbackError(err) =>
+                    s"FallbackError: $err"
+            }
+
     }
 
     final case class Build(config: Config)(
