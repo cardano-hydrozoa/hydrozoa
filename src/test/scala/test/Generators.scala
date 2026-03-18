@@ -551,6 +551,7 @@ object Generators {
             )
             val genCoinDist: Gen[NonEmptyList[Value]] =
                 genCoinDistribution(value.coin, n).map(_.map(Value(_)))
+                
             val flat: Iterable[(PolicyId, AssetName, Long)] =
                 value.assets.assets.flatMap((policyId, innerMap) =>
                     innerMap.map((assetName, amount) => (policyId, assetName, amount))
@@ -562,7 +563,7 @@ object Generators {
             //     - Do a single (scalar) distribution of the amount
             //     - convert it to a multiasset distribution
             //     - map over the accumulator generator, zip the generator distribution with the
-            //       multiasset distribtution and sum element-wise (can these be fused?)
+            //       multiasset distribution and sum element-wise (can these be fused?)
             flat.foldLeft(genCoinDist) { case (genDist, (policyId, assetName, amount)) =>
                 for {
                     singleAssetDist <- genDistribution(SafeLong(amount), n)

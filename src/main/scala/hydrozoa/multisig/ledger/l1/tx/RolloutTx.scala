@@ -193,16 +193,17 @@ private object RolloutTxOps {
                 val maxSize = config.cardanoProtocolParams.maxTxSize
                 val dummySignaturesSize = config.headMultisigScript.numSigners * (32 + 64)
                 val nativeScriptSize = config.headMultisigScript.script.script.toCbor.length
+                val rolloutSize = mbRolloutOutput.map((o: TxOutput) => Sized(o).size).getOrElse(0)
 
-                // includes the base size of the transaction, spent rollout input, possible rollout output, metadata,
+                // includes the base size of the transaction, spent rollout input, metadata,
                 // and all the other structural fields of a cardano transaction
-                val margin = 500 + mbRolloutOutput.map((o: TxOutput) => Sized(o).size).getOrElse(0)
-
+                val margin = 500
                 // The total maximum size of all the payout obligations we can add to this transaction
                 val obligationAggregateSizeLimit =
                     maxSize
                         - dummySignaturesSize
                         - nativeScriptSize
+                        - rolloutSize
                         - margin
 
                 @tailrec
