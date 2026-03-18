@@ -120,6 +120,11 @@ private object SettlementTxOps {
         case TreasuryIncorrectAddress
         case TooManyDeposits
 
+        override def toString: String = this match {
+            case Error.TreasuryIncorrectAddress => "Unexpected treasury address"
+            case Error.TooManyDeposits          => "Too many deposits"
+        }
+
     type TxBuilderResult[Result] = BuilderResult[Result, Error]
 
     object Build {

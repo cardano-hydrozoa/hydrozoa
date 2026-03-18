@@ -43,6 +43,13 @@ private object FinalizationTxSeqOps {
         enum Error:
             case FinalizationError(e: (SomeBuildError | FinalizationTx.Error, String))
             case RolloutSeqError(e: (SomeBuildErrorOnly, String))
+
+            override def toString: String = this match {
+                case FinalizationError((err, msg)) =>
+                    s"FinalizationError: $err${if msg.nonEmpty then s" - $msg" else ""}"
+                case RolloutSeqError((err, msg)) =>
+                    s"RolloutSeqError: $err${if msg.nonEmpty then s" - $msg" else ""}"
+            }
     }
 
     final case class Build(config: Config)(

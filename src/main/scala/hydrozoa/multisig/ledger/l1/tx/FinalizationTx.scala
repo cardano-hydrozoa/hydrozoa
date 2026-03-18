@@ -107,6 +107,11 @@ private object FinalizationTxOps {
         case TreasuryIncorrectAddress
         case ResidualTreasuryContainsTokens
 
+        override def toString: String = this match {
+            case Error.TreasuryIncorrectAddress       => "Unexpected treasury address"
+            case Error.ResidualTreasuryContainsTokens => "Residual treasury contains tokens"
+        }
+
     type TxBuilderResult[Result] = BuilderResult[Result, Error]
 
     type ResultFor[T <: FinalizationTx] <: Result[?] = T match {
