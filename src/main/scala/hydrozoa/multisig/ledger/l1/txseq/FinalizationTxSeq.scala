@@ -10,7 +10,8 @@ import hydrozoa.multisig.ledger.l1.tx
 import hydrozoa.multisig.ledger.l1.tx.*
 import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.SomeBuildErrorOnly
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
-import scalus.cardano.txbuilder.SomeBuildError
+import scalus.cardano.txbuilder.SomeBuildError.{BalancingError, SomeRedeemerIndexingError, SomeStepError, ValidationError}
+import scalus.cardano.txbuilder.{SomeBuildError, TxBalancingError}
 
 enum FinalizationTxSeq {
     def finalizationTx: FinalizationTx
@@ -46,9 +47,86 @@ private object FinalizationTxSeqOps {
 
             override def toString: String = this match {
                 case FinalizationError((err, msg)) =>
-                    s"FinalizationError: $err${if msg.nonEmpty then s" - $msg" else ""}"
+                    s"SettlementError: ${if msg.nonEmpty then s" - $msg" else ""}." + "\n" +
+                        (err match {
+                            case SomeStepError(e, ctx) =>
+                                s"Transaction builder step error:\n\t${e.explain}"
+                            case SomeRedeemerIndexingError(e, ctx) =>
+                                "Transaction builder redeemer indexing error."
+                            case BalancingError(e, ctx) =>
+                                ???
+                                "Transaction builder balancing error:\n\t" + (e match {
+                                    case TxBalancingError.EvaluationFailed(c) =>
+                                        s"Plutus evaluation failed. Cause: ${c.toString}"
+                                    case TxBalancingError.Failed(c) =>
+                                        s"Generic tx balancing error. Cause: ${c.toString}"
+                                    case TxBalancingError.BalanceDidNotConverge(i) =>
+                                        s"Balance did not converge after $i iterations."
+                                    case TxBalancingError.InsufficientFunds(
+                                          valueDiff,
+                                          minRequired
+                                        ) =>
+                                        "Insufficient funds:" + "\n\t\t" +
+                                            s"consumed - produced = ${valueDiff.toString}" + "\n\t\t" +
+                                            s"more lovelace required: ${minRequired.toString}"
+                                    case TxBalancingError.InsufficientCollateralForReturn(
+                                          totalCollateralAda,
+                                          requiredCollateral,
+                                          minAdaForReturn
+                                        ) =>
+                                        "Insufficient collateral for return:" + "\n\t\t" +
+                                            s"Total collateral (lovelace): ${totalCollateralAda.toString}" + "\n\t\t" +
+                                            s"Required collateral (lovelace): ${requiredCollateral.toString}" + "\n\t\t" +
+                                            s"Min collateral return (lovelace): ${minAdaForReturn.toString}"
+                                })
+                            case ValidationError(e, ctx) =>
+                                s"Validation error: ${e.toString}"
+                            case FinalizationTx.Error.TreasuryIncorrectAddress =>
+                                "Head treasury is at an incorrect address."
+                            case FinalizationTx.Error.ResidualTreasuryContainsTokens =>
+                                ???
+                                "Residual treasury contains tokens."
+                        })
                 case RolloutSeqError((err, msg)) =>
-                    s"RolloutSeqError: $err${if msg.nonEmpty then s" - $msg" else ""}"
+                    s"Rollout tx sequence error: ${
+                            if msg.nonEmpty then s" - $msg" else ""
+                        }." + "\n" +
+                        (err match {
+                            case SomeStepError(e, ctx) =>
+                                s"Transaction builder step error:\n\t${e.explain}"
+                            case SomeRedeemerIndexingError(e, ctx) =>
+                                "Transaction builder redeemer indexing error."
+                            case BalancingError(e, ctx) =>
+                                ???
+                                "Transaction builder balancing error:\n\t" + (e match {
+                                    case TxBalancingError.EvaluationFailed(c) =>
+                                        s"Plutus evaluation failed. Cause: ${c.toString}"
+                                    case TxBalancingError.Failed(c) =>
+                                        s"Generic tx balancing error. Cause: ${c.toString}"
+                                    case TxBalancingError.BalanceDidNotConverge(i) =>
+                                        s"Balance did not converge after $i iterations."
+                                    case TxBalancingError.InsufficientFunds(
+                                          valueDiff,
+                                          minRequired
+                                        ) =>
+                                        "Insufficient funds:" + "\n\t\t" +
+                                            s"consumed - produced = ${valueDiff.toString}" + "\n\t\t" +
+                                            s"more lovelace required: ${minRequired.toString}"
+                                    case TxBalancingError.InsufficientCollateralForReturn(
+                                          totalCollateralAda,
+                                          requiredCollateral,
+                                          minAdaForReturn
+                                        ) =>
+                                        "Insufficient collateral for return:" + "\n\t\t" +
+                                            s"Total collateral (lovelace): ${totalCollateralAda.toString}" + "\n\t\t" +
+                                            s"Required collateral (lovelace): ${requiredCollateral.toString}" + "\n\t\t" +
+                                            s"Min collateral return (lovelace): ${minAdaForReturn.toString}"
+                                })
+                            case ValidationError(e, ctx) =>
+                                s"Validation error: ${e.toString}"
+                            case _: Void =>
+                                "RolloutSeqError: Void, which is impossible."
+                        })
             }
     }
 

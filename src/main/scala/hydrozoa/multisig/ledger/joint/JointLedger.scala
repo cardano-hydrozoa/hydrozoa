@@ -463,12 +463,23 @@ final case class JointLedger(
                   s"mkBlockBrief: decisions.rejected=${decisions.rejected.requestIds}"
             )
 
+            depositEventDecisions: L2LedgerCommand.ApplyDepositDecisions =
+                L2LedgerCommand.ApplyDepositDecisions(
+                  blockNumber = p.nextBlockNumber,
+                  blockCreationEndTime = blockCreationEndTime.toPosixTime,
+                  absorbedDeposits = decisions.absorbed.requestIds,
+                  rejectedDeposits = decisions.rejected.requestIds
+                )
+
             // Block header
             headerRes <-
                 if decisions.absorbed.isEmpty && blockWithdrawnUtxos.isEmpty
                 then
                     val newEvacuationMap = applyDiffs(p.evacuationMap, p.l2LedgerState.diffs)
                     for {
+                        newL2State <-
+                            if decisions.rejected.isEmpty then IO.pure(p.l2LedgerState)
+                            else executeL2Command(p, depositEventDecisions)
                         _ <- logger.trace(s"New evacuation map: ${newEvacuationMap.evacuationMap}")
                     } yield (
                       p,
@@ -483,13 +494,6 @@ final case class JointLedger(
                       )
                     )
                 else {
-                    val depositEventDecisions: L2LedgerCommand.ApplyDepositDecisions =
-                        L2LedgerCommand.ApplyDepositDecisions(
-                          blockNumber = p.nextBlockNumber,
-                          blockCreationEndTime = blockCreationEndTime.toPosixTime,
-                          absorbedDeposits = decisions.absorbed.requestIds,
-                          rejectedDeposits = decisions.rejected.requestIds
-                        )
                     for {
                         newL2State <- executeL2Command(p, depositEventDecisions)
                         newEvacuationMap = applyDiffs(p.evacuationMap, newL2State.diffs)
