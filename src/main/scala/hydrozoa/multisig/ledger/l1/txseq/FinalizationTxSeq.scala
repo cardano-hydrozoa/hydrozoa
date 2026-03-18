@@ -47,7 +47,7 @@ private object FinalizationTxSeqOps {
 
             override def toString: String = this match {
                 case FinalizationError((err, msg)) =>
-                    s"SettlementError: ${if msg.nonEmpty then s" - $msg" else ""}." + "\n" +
+                    s"Finalization tx error: ${if msg.nonEmpty then s" - $msg" else ""}." + "\n" +
                         (err match {
                             case SomeStepError(e, ctx) =>
                                 s"Transaction builder step error:\n\t${e.explain}"
