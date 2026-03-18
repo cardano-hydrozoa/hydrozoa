@@ -17,14 +17,14 @@
     <logger name="hydrozoa.trace" level="info" additivity="false">
         <appender-ref ref="TRACE_FILE"/>
     </logger>
-    <root level="info">
+    <root level="trace">
         <appender-ref ref="STDOUT"/>
         <appender-ref ref="LOG_FILE"/>
     </root>
-    <logger name="CardanoLiaison" level="warn"/>
+    <logger name="CardanoLiaison" level="trace"/>
     <logger name="JointLedger" level="trace"/>
-    <logger name="RemoteL2Ledger" level="debug"/>
-    <logger name="HydrozoaRoutes" level="debug"/>
-    <logger name="hydrozoa" level="info"/>
-    <logger name="scalus" level="info"/>
+    <logger name="RemoteL2Ledger" level="trace"/>
+    <logger name="HydrozoaRoutes" level="trace"/>
+    <logger name="hydrozoa" level="trace"/>
+    <logger name="scalus" level="trace"/>
 </configuration>

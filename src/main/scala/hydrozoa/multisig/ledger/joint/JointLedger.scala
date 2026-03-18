@@ -277,6 +277,7 @@ final case class JointLedger(
                                                   .focus(_.userRequestState.postDatedRefundTxs)
                                                   .modify(_.appended(refundTx))
                                             )
+                                            _ <- logger.debug(s"Request processed ($requestId)")
                                             _ <- tracer.eventProcessed(
                                               s"${requestId.peerNum: Int}:${requestId.requestNum: Int}",
                                               currentBlockNum: Int,
@@ -378,8 +379,8 @@ final case class JointLedger(
         import config.txTiming
 
         for {
-            _ <- logger.info(s"complete block ${args.referenceBlockBrief}")
             p <- unsafeGetProducing
+            _ <- logger.info(s"completing block ${p.nextBlockNumber}")
 
             partition = p.l1LedgerState.deposits.partition(
               blockCreationEndTime = blockCreationEndTime,
