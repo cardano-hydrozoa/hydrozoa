@@ -108,13 +108,29 @@ object Metadata {
             for {
                 depositIxRaw <- innerMapEntries
                     .get(Metadatum.Text("depositIx"))
-                    .toRight(MissingMetadataKey("depositIx"))
+                    .toRight(
+                      MissingMetadataKeyForTransactionType(
+                        "depositIx",
+                        innerMapEntries.keys.map(_.toString).toList
+                      )
+                    )
+
                 depositFeeRaw <- innerMapEntries
                     .get(Metadatum.Text("depositFee"))
-                    .toRight(MissingMetadataKey("depositFee"))
+                    .toRight(
+                      MissingMetadataKeyForTransactionType(
+                        "depositFee",
+                        innerMapEntries.keys.map(_.toString).toList
+                      )
+                    )
                 l2PayloadHashRaw <- innerMapEntries
                     .get(Metadatum.Text("l2PayloadHash"))
-                    .toRight(MissingMetadataKey("l2PayloadHash"))
+                    .toRight(
+                      MissingMetadataKeyForTransactionType(
+                        "l2PayloadHash",
+                        innerMapEntries.keys.map(_.toString).toList
+                      )
+                    )
 
                 depositIx <- depositIxRaw match {
                     case i: Metadatum.Int => Right(i.value.intValue)
@@ -172,13 +188,28 @@ object Metadata {
             for {
                 multisigTreasuryIxRaw <- innerMapEntries
                     .get(Metadatum.Text("multisigTreasuryIx"))
-                    .toRight(MissingMetadataKey("multisigTreasuryIx"))
+                    .toRight(
+                      MissingMetadataKeyForTransactionType(
+                        "multisigTreasuryIx",
+                        innerMap.entries.keys.map(_.toString).toList
+                      )
+                    )
                 multisigRegimeIxRaw <- innerMapEntries
                     .get(Metadatum.Text("multisigRegimeIx"))
-                    .toRight(MissingMetadataKey("multisigRegimeIx"))
+                    .toRight(
+                      MissingMetadataKeyForTransactionType(
+                        "multisigRegimeIx",
+                        innerMap.entries.keys.map(_.toString).toList
+                      )
+                    )
                 seedIxRaw <- innerMapEntries
                     .get(Metadatum.Text("seedIx"))
-                    .toRight(MissingMetadataKey("seedIx"))
+                    .toRight(
+                      MissingMetadataKeyForTransactionType(
+                        "seedIx",
+                        innerMapEntries.keys.map(_.toString).toList
+                      )
+                    )
 
                 multisigTreasuryIx <- multisigTreasuryIxRaw match {
                     case i: Metadatum.Int => Right(i.value.intValue)
@@ -257,7 +288,12 @@ object Metadata {
     ): Either[ParseError, Metadatum.Map] = for {
         roleEntry <- hydrMap.entries
             .get(Metadatum.Text(txType.toString))
-            .toRight(MissingMetadataKey(txType.toString))
+            .toRight(
+              MissingMetadataKeyForTransactionType(
+                txType.toString,
+                hydrMap.entries.keys.toList.map(_.toString)
+              )
+            )
         roleMap <- roleEntry match {
             case m: Metadatum.Map => Right(m)
             case _                => Left(MetadataValueIsNotMap)
@@ -287,18 +323,40 @@ object Metadata {
     }
 
     sealed trait ParseError extends Throwable
-    case class CborDecodingError(wrapped: Throwable) extends ParseError
-    case object MissingAuxData extends ParseError
-    case object AuxDataIsNotMetadata extends ParseError
-    case object MissingCIP67Tag extends ParseError
-    case object MetadataValueIsNotMap extends ParseError
+    case class CborDecodingError(wrapped: Throwable) extends ParseError {
+        override def toString: String = s"CBOR Decoding failed during metadata parsing $wrapped"
+    }
+    case object MissingAuxData extends ParseError {
+        override def toString: String = "Auxiliary Data is missing from the transaction"
+    }
+    case object AuxDataIsNotMetadata extends ParseError {
+        override def toString: String = "Auxiliary data is not metadata"
+    }
+    case object MissingCIP67Tag extends ParseError {
+        override def toString: String =
+            s"HYDR (${CIP67.Tags.head}) top level CIP67 missing from metadata"
+    }
+    case object MetadataValueIsNotMap extends ParseError {
+        override def toString: String = "Metadata value is not map"
+    }
 
-    case class MalformedTxTypeKey(msg: String) extends ParseError
-    case class UnexpectedTxType(actual: Metadata, expected: String) extends ParseError
+    case class TooManyHeadIDs(numHeads: Int) extends ParseError {
+        override def toString: String =
+            s"Too many HeadIds in metadata. Got: $numHeads. Currently we only support 1."
+    }
+    case class MalformedHeadId(actual: Metadatum) extends ParseError {
+        override def toString: String = s"Head ID is malformed. Got: $actual"
+    }
 
-    case class TooManyHeadIDs(numHeads: Int) extends ParseError
-    case class MalformedHeadId(actual: Metadatum) extends ParseError
-
-    case class MissingMetadataKey(expectedKey: String) extends ParseError
-    case class WrongMetadataValue(key: String, value: Metadatum) extends ParseError
+    case class MissingMetadataKeyForTransactionType(
+        expectedKey: String,
+        availableKeys: List[String]
+    ) extends ParseError {
+        override def toString: String = "Missing metadata key for this transaction type." +
+            s" Expected $expectedKey." +
+            s" Found: $availableKeys"
+    }
+    case class WrongMetadataValue(key: String, value: Metadatum) extends ParseError {
+        override def toString: String = s"Wrong metadata value. Key: $key, Value: $value"
+    }
 }
