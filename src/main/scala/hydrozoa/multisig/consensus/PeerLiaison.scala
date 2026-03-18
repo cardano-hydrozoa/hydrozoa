@@ -95,11 +95,13 @@ trait PeerLiaison(
                     _ <- x.requests.traverse_(conn.blockWeaver ! _)
                 } yield ()
 
+            case x: (BlockConfirmed & BlockType.NonFinal) => state.dequeueConfirmed(x)
+
             // TODO: when the final block is confirmed, inform the counterpart that
             //   we no longer need to receive any blocks, acks, or events from them.
             //   When both sides have received the final confirmed block, the connection can be closed and
             //   the peer liaison can terminate.
-            case x: BlockConfirmed => state.dequeueConfirmed(x)
+            case x: (BlockConfirmed & BlockType.Final) => state.dequeueConfirmed(x)
         }
 
     private def preStartLocal: IO[Unit] = initializeConnections

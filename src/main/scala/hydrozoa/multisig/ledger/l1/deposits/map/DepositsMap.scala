@@ -161,7 +161,11 @@ object DepositsMap {
     ) {
         lazy val eligible = absorbed.concat(unabsorbed)
         val surviving = unabsorbed.concat(immature)
-        val decisions = Decisions(absorbed = absorbed.unzip, rejected = rejected.unzip)
+        val decisions = Decisions(
+          absorbed = absorbed.unzip,
+          rejected = rejected.unzip,
+          mNextAbsorptionStartTime = surviving.treeMap.keys.minOption
+        )
 
         override def toString: String =
             "Deposits partitioned and split:" + "\n" +
@@ -176,7 +180,8 @@ object DepositsMap {
 
     final case class Decisions private[map] (
         absorbed: Unzip,
-        rejected: Unzip
+        rejected: Unzip,
+        mNextAbsorptionStartTime: Option[DepositAbsorptionStartTime]
     )
 
     final case class Unzip private[map] (

@@ -250,7 +250,9 @@ trait CardanoLiaison(
 
     override def preStart: IO[Unit] = context.self ! CardanoLiaison.PreStart
 
-    override def receive: Receive[IO, Request] = {
+    override def receive: Receive[IO, Request] = PartialFunction.fromFunction(receiveTotal)
+
+    private def receiveTotal(req: Request): IO[Unit] = req match {
         case CardanoLiaison.PreStart =>
             preStartLocal
         case block: BlockConfirmed.Major =>

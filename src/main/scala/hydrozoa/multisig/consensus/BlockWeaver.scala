@@ -10,7 +10,8 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.multisig.MultisigRegimeManager
-import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockHeader, BlockNumber, BlockStatus}
+import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockHeader, BlockNumber, BlockStatus, BlockType, BlockVersion}
+import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
@@ -53,16 +54,18 @@ object BlockWeaver:
     ) extends State
 
     final case class Leader(
-        blockNumber: BlockNumber
-        // TODO
-        // creationTime: QuantizedInstant
-        // hasAtLeastOneEvent: Boolean
-        // completeBlockCondition: previousBlockConfirmed && (hasAtLeastOneEvent || timeIsUp)
+        blockNumber: BlockNumber,
+//        blockStarted: Boolean
     ) extends State {
+        // TODO: Remove
         def isFirstBlock: Boolean = blockNumber == BlockNumber.zero.increment
     }
 
-    final case class Awaiting(
+    final case class LeaderAwaiting(
+        previousBlockHeaderConfirmed: BlockHeader.NonFinal
+    )
+
+    final case class FollowerAwaiting(
         blockBrief: BlockBrief.Next,
         eventIdAwaited: RequestId,
         mempool: Mempool
@@ -87,18 +90,24 @@ object BlockWeaver:
 
     object FinalizationLocallyTriggered
 
-    type BlockConfirmed = BlockHeader.Fields.HasBlockNum & Block.Fields.HasFinalizationRequested &
-        BlockStatus.MultiSigned
+    type BlockConfirmed = BlockHeader.Section & Block.Fields.HasFinalizationRequested &
+        BlockStatus.MultiSigned & BlockType.Next
 
     object BlockConfirmed {
 
         /** For unit/property testing. */
         final case class Minimal(
-            override val blockNum: BlockNumber,
+            override val header: BlockHeader,
             override val finalizationRequested: Boolean,
-        ) extends BlockHeader.Fields.HasBlockNum,
+        ) extends BlockHeader.Section,
               Block.Fields.HasFinalizationRequested,
-              BlockStatus.MultiSigned
+              BlockStatus.MultiSigned {
+            override transparent inline def blockNum: BlockNumber = header.blockNum
+            override transparent inline def blockVersion: BlockVersion.Full = header.blockVersion
+            override transparent inline def startTime: BlockCreationStartTime = header.startTime
+            override transparent inline def endTime: BlockCreationEndTime = header.endTime
+            override transparent inline def kzgCommitment: KzgCommitment = header.kzgCommitment
+        }
     }
 
     type Handle = ActorRef[IO, Request]
@@ -289,7 +298,7 @@ trait BlockWeaver(
                         } yield ())
                     } yield ()
 
-                case awaiting @ Awaiting(block, eventIdAwaited, mempool) =>
+                case awaiting @ FollowerAwaiting(block, eventIdAwaited, mempool) =>
                     if event.requestId == eventIdAwaited
                     then {
                         // We got the event we waited for, try to finish the block
@@ -357,7 +366,7 @@ trait BlockWeaver(
                                 for {
                                     // _ <- IO.println(s"EventMissing: ${eventIdAwaited}")
                                     _ <- stateRef.set(
-                                      Awaiting(blockBrief, eventIdAwaited, residualMempool)
+                                      FollowerAwaiting(blockBrief, eventIdAwaited, residualMempool)
                                     )
                                 } yield ()
                         }
@@ -417,7 +426,7 @@ trait BlockWeaver(
         for {
             // _ <- IO.println("handleBlockConfirmed")
             _ <- blockConfirmed match {
-                case blockIntermediate: Block.MultiSigned.Intermediate =>
+                case blockIntermediate: (BlockConfirmed & BlockType.Intermediate) =>
                     for {
                         state <- stateRef.get
                         _ <- state match {
@@ -451,7 +460,7 @@ trait BlockWeaver(
                                 IO.unit
                         }
                     } yield ()
-                case _: Block.MultiSigned.Final =>
+                case _: (BlockConfirmed & BlockType.Final) =>
                     // FIXME: Job done. Time for graceful shutdown?
                     IO.unit
             }

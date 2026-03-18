@@ -146,8 +146,9 @@ final case class JointLedger(
 
     override def preStart: IO[Unit] = context.self ! Requests.PreStart
 
-    // TODO: PartialFunction.fromFunction is a noop here
-    override def receive: Receive[IO, Requests.Request] = PartialFunction.fromFunction {
+    override def receive: Receive[IO, Requests.Request] = PartialFunction.fromFunction(receiveTotal)
+
+    private def receiveTotal(req: Requests.Request): IO[Unit] = req match {
         case Requests.PreStart       => preStartLocal
         case e: UserRequestWithId    => applyUserRequestWithId(e)
         case s: StartBlock           => startBlock(s)
@@ -373,7 +374,7 @@ final case class JointLedger(
       */
     private def completeBlockRegular(
         args: CompleteBlockRegular
-    ): IO[Block.Unsigned.Intermediate] = {
+    ): IO[Unit] = {
         import args.*
         import config.txTiming
 
@@ -419,7 +420,7 @@ final case class JointLedger(
 
             // Tell others about the block
             _ <- handleBlock(block, finalizationLocallyTriggered)
-        } yield block
+        } yield ()
     }
 
     /** KZG commitment + block brief (which is a bit strange)
@@ -453,7 +454,7 @@ final case class JointLedger(
                           txTiming,
                           blockCreationStartTime,
                           blockCreationEndTime,
-                          p.competingFallbackTxTime,
+                          decisions.mNextAbsorptionStartTime,
                           // TODO: We want this to be done in a separate actor in the future
                           // this doesn't include genesis
                           applyDiffs(p.evacuationMap, p.l2LedgerState.diffs).kzgCommitment
@@ -482,6 +483,7 @@ final case class JointLedger(
                           txTiming,
                           blockCreationStartTime,
                           blockCreationEndTime,
+                          decisions.mNextAbsorptionStartTime,
                           kzgCommitment
                         )
                     } yield (newJLState, headerIntermediate)
@@ -552,7 +554,7 @@ final case class JointLedger(
     // If the produced block is NOT equal to a passed reference block, then:
     //   - Consensus is broken
     //   - Send a panic to the multisig regime manager in a suicide note
-    def completeBlockFinal(args: CompleteBlockFinal): IO[Block.Unsigned.Final] = {
+    def completeBlockFinal(args: CompleteBlockFinal): IO[Unit] = {
         import args.*
         import config.txTiming
 
@@ -605,7 +607,7 @@ final case class JointLedger(
 
             _ <- handleBlock(block, false)
 
-        } yield block
+        } yield ()
     }
 
     /** Extract trace metadata from a block for the tracer.

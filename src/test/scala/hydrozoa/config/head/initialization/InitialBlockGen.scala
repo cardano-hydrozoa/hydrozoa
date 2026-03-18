@@ -5,7 +5,7 @@ import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.{BlockCreatio
 import hydrozoa.config.head.multisig.fallback.{FallbackContingencyGen, generateFallbackContingency}
 import hydrozoa.config.head.multisig.settlement.{SettlementConfigGen, generateSettlementConfig}
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationStartTime
-import hydrozoa.config.head.multisig.timing.{TxTimingGen, generateDefaultTxTiming}
+import hydrozoa.config.head.multisig.timing.{TxTiming, TxTimingGen, generateDefaultTxTiming}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.{GenHeadParams, generateHeadParameters}
 import hydrozoa.config.head.rulebased.{DisputeResolutionConfigGen, generateDisputeResolutionConfig}
@@ -72,6 +72,10 @@ def generateInitialBlock(testPeers: TestPeers)(
                 case Right(x) => x
             }
 
+        fallbackTxStartTime = initTxSeq.fallbackTx.fallbackTxStartTime
+        forcedMajorBlockTime = headParams.txTiming.forcedMajorBlockTime(fallbackTxStartTime)
+        majorBlockWakeupTime = TxTiming.majorBlockWakeupTime(forcedMajorBlockTime, None)
+
     } yield InitialBlock(
       Block.MultiSigned.Initial(
         blockBrief = BlockBrief.Initial(
@@ -79,6 +83,7 @@ def generateInitialBlock(testPeers: TestPeers)(
             startTime = BlockCreationStartTime(blockCreationEndTime - 10.seconds),
             endTime = blockCreationEndTime,
             fallbackTxStartTime = initTxSeq.fallbackTx.fallbackTxStartTime,
+            majorBlockWakeupTime = majorBlockWakeupTime,
             kzgCommitment = initializationParameters.initialEvacuationMap.kzgCommitment
           )
         ),

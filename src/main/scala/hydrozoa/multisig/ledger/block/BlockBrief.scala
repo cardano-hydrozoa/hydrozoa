@@ -69,6 +69,6 @@ object BlockBrief {
     object Section {
         type Next = Section & BlockType.Next
         type Intermediate = Section & BlockType.Intermediate
+        type NonFinal = Section & BlockType.NonFinal
     }
-
 }
