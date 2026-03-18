@@ -195,7 +195,6 @@ private object DepositRefundTxSeqOps {
         enum Error extends Throwable {
             case Deposit(e: DepositTx.Parse.Error)
             case RefundBuildError(e: (SomeBuildErrorOnly, String))
-            case CborToTransactionOutputDecodingFailure(wrapped: Throwable)
 
             override def toString: String = this match {
                 case Deposit(e) => s"Deposit parse error: $e"
