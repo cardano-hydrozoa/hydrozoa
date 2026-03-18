@@ -58,17 +58,34 @@ final case class JointLedger(
     def executeL1Action[T](
         state: JointLedger.Producing,
         action: L1LedgerM[T]
-    ): IO[(L1LedgerM.State, T)] = IO.fromEither(runL1Action[T](state, action))
+    ): IO[(L1LedgerM.State, T)] = for {
+        either <- IO.pure(runL1Action[T](state, action))
+        ret <- either match {
+            case Left(err) =>
+                logger.error(s"L1 action failed: $err") *> IO.raiseError(err)
+            case Right(ret) => IO.pure(ret)
+        }
+    } yield ret
 
     def executeL2Command(
         state: JointLedger.Producing,
         command: L2LedgerCommand.Real
-    ): IO[L2LedgerState] =
-        runL2Command(state, command).rethrow
+    ): IO[L2LedgerState] = for {
+        either <- runL2Command(state, command)
+        ret <- either match {
+            case Left(err) =>
+                logger.error(s"L2 command failed: $err") *> IO.raiseError(err)
+            case Right(ret) => IO.pure(ret)
+        }
+    } yield ret
 
     def executeL2ProxyCommand(
         command: L2LedgerCommand.Proxy
-    ): IO[Unit] = L2LedgerState.executeProxyCommand(l2Ledger, command)
+    ): IO[Unit] = L2LedgerState
+        .executeProxyCommand(l2Ledger, command)
+        .handleErrorWith { err =>
+            logger.error(s"L2 proxy command failed: $err") *> IO.raiseError(err)
+        }
 
     def runL1Action[T](
         state: JointLedger.Producing,
