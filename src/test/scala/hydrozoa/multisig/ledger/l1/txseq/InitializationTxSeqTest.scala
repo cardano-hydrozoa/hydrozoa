@@ -140,15 +140,9 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
             )
 
             props.append(
-              "treasury utxo only contains head token in multiassets" |:
-                  (iTx.treasuryProduced.asUtxo.output.value.assets ==
-                      MultiAsset(
-                        SortedMap(
-                          expectedHeadNativeScript.policyId -> SortedMap(
-                            expectedHeadTokenName -> 1L
-                          )
-                        )
-                      ))
+              "treasury utxo contains head token" |:
+                  (iTx.treasuryProduced.asUtxo.output.value.assets
+                      .assets(expectedHeadNativeScript.policyId)(expectedHeadTokenName) == 1)
             )
 
             // FIXME (2025-02-16): Prior to refacotring the configuration, we used to
@@ -198,9 +192,9 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
                       multisigTreasuryIx = 0,
                       multisigRegimeIx = 1,
                       seedIx = iTx.tx.body.value.inputs.toSeq.indexOf(config.initialSeedUtxo.input)
-                    )
+                    ).asAuxData(config.headId)
 
-                s"Unexpected metadata value. Actual: $actual, expected: $expected" |: actual
+                s"Unexpected metadata value.\n\tActual: $actual\n\tExpected: $expected" |: actual
                     .contains(expected)
             }
 
@@ -226,6 +220,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
             props.append {
                 val expectedMetadata =
                     Right(
+                      headId,
                       MD.Initialization(
                         multisigTreasuryIx = 0,
                         multisigRegimeIx = 1,
@@ -233,12 +228,14 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
                             iTx.tx.body.value.inputs.toSeq.indexOf(config.initialSeedUtxo.input)
                       )
                     )
-
-                "Metadata parsing failed" |: (MD.Initialization.parse(
+                val parsedMetadata = MD.Initialization.parse(
                   AuxiliaryData.Metadata(
                     iTx.tx.auxiliaryData.get.value.getMetadata
                   ): AuxiliaryData.Metadata
-                ) == expectedMetadata)
+                )
+
+                s"Metadata parsing failed: $parsedMetadata" |:
+                    (parsedMetadata == expectedMetadata)
             }
 
             // FIXME (2026-02-16): after the configuration rework, the initialization tx fee is
@@ -477,7 +474,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
             props.append {
                 val actual = fbTx.tx.auxiliaryData.map(_.value)
                 val expected =
-                    MD.Fallback()
+                    MD.Fallback().asAuxData(headId)
 
                 s"Unexpected metadata value for fallback tx. Actual: $actual, expected: $expected" |: actual
                     .contains(expected)

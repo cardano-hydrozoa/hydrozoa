@@ -293,7 +293,6 @@ private object InitializationTxOps {
             // ===================================
             mdParseResult <- MD.Initialization.parse(tx).left.map(MetadataParseError(_))
             (head, md) = mdParseResult
-            Metadata.Initialization(depositUtxoIx, depositFee, l2PayloadHash) = md
 
             // ===================================
             // Data Extraction
@@ -311,8 +310,19 @@ private object InitializationTxOps {
 
             actualOutputs = tx.body.value.outputs.map(_.value)
 
-            actualTreasuryOutput = actualOutputs(md.multisigTreasuryIx)
-            actualMultisigRegimeOutput = actualOutputs(md.multisigRegimeIx)
+            actualTreasuryOutput <- Try(actualOutputs(md.multisigTreasuryIx)).toEither.left.map(_ =>
+                InvalidTransactionError(
+                  "Multisig treasury index given as" +
+                      s" ${md.multisigTreasuryIx}, but there are only ${actualOutputs.length} outputs"
+                )
+            )
+            actualMultisigRegimeOutput <- Try(actualOutputs(md.multisigRegimeIx)).toEither.left.map(
+              _ =>
+                  InvalidTransactionError(
+                    "Multisig regime index given as" +
+                        s" ${md.multisigTreasuryIx}, but there are only ${actualOutputs.length} outputs"
+                  )
+            )
 
             mbTtl = tx.body.value.ttl
 
@@ -321,10 +331,12 @@ private object InitializationTxOps {
             // ===================================
 
             // Seed input is coherent
-            _ <-
-                if tx.body.value.inputs.toSeq.contains(md.seedIx)
-                then Right(())
-                else Left(InvalidTransactionError("Seed input missing"))
+            seedInput <- Try(tx.body.value.inputs).toEither.left.map(_ =>
+                InvalidTransactionError(
+                  s"Seed index given as ${md.seedIx}, " +
+                      s"but there are only ${tx.body.value.inputs.toSeq.size} inputs"
+                )
+            )
 
             /////
             // Treasury is coherent: address matches, contains head token, datum is initial treasury datum,
@@ -355,7 +367,7 @@ private object InitializationTxOps {
                     Left(
                       InvalidTransactionError(
                         "Multiple tokens matching the head token asset" +
-                            " name found in the treasury ouptu"
+                            " name found in the treasury output"
                       )
                     )
             }
@@ -398,30 +410,18 @@ private object InitializationTxOps {
                 else Left(InvalidTransactionError("Multisig regime output has the wrong address"))
 
             // value
-            mrValueOuter <- actualMultisigRegimeOutput.value.assets.assets
-                .get(expectedHNS.policyId)
-                .toRight(
-                  InvalidTransactionError(
-                    "value of the multisig regime output" +
-                        "does not contain the head native script policyId"
-                  )
-                )
-            _ <- mrValueOuter.get(config.headTokenNames.multisigRegimeTokenName) match {
-                case None =>
-                    Left(
-                      InvalidTransactionError(
-                        "No tokens found matching the multisig regime token name"
-                      )
-                    )
-                case Some(1L) => Right(())
-                case Some(_) =>
-                    Left(
-                      InvalidTransactionError(
-                        "Multiple tokens found matching the" +
-                            " multisig regime token name"
-                      )
-                    )
-            }
+            _ <-
+                if actualMultisigRegimeOutput.value ==
+                        Value(
+                          config.totalFallbackContingency,
+                          MultiAsset.asset(
+                            expectedHNS.policyId,
+                            config.headTokenNames.multisigRegimeTokenName,
+                            1
+                          )
+                        )
+                then Right(())
+                else Left(InvalidTransactionError("multisig regime output has wrong value"))
 
             // datum
             _ <-

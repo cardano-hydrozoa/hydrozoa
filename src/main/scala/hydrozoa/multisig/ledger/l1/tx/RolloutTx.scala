@@ -13,7 +13,7 @@ import monocle.{Focus, Lens}
 import scala.Function.const
 import scala.annotation.tailrec
 import scalus.cardano.ledger.utils.TxBalance
-import scalus.cardano.ledger.{Coin, ProtocolParams, Transaction, TransactionHash, TransactionInput, TransactionOutput as TxOutput, Utxo, Value}
+import scalus.cardano.ledger.{Coin, ProtocolParams, Sized, Transaction, TransactionHash, TransactionInput, TransactionOutput as TxOutput, Utxo, Value}
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend}
 import scalus.cardano.txbuilder.{SomeBuildError, TransactionBuilder, TransactionBuilderStep, TxBalancingError}
@@ -120,6 +120,15 @@ private object RolloutTxOps {
         import Build.*
         def config: Build.Config
 
+        private val mbRolloutOutput = mbRolloutOutputValue.map(v =>
+            TxOutput.Babbage(
+              address = config.headMultisigAddress,
+              value = v,
+              datumOption = None,
+              scriptRef = None
+            )
+        )
+
         /** After the [[Build]] has finished building the transaction, apply post-processing to the
           * transaction builder context to get a [[RolloutTx]].
           *
@@ -169,16 +178,7 @@ private object RolloutTxOps {
             /////////////////////////////////////////////////////////
             // Send rollout (maybe)
             private val mbSendRollout: Option[Send] =
-                mbRolloutOutputValue.map(rolloutOutputValue =>
-                    Send(
-                      TxOutput.Babbage(
-                        address = config.headMultisigAddress,
-                        value = rolloutOutputValue,
-                        datumOption = None,
-                        scriptRef = None
-                      )
-                    )
-                )
+                mbRolloutOutput.map(Send(_))
 
             /////////////////////////////////////////////////////////
             // Definite steps
@@ -193,16 +193,17 @@ private object RolloutTxOps {
                 val maxSize = config.cardanoProtocolParams.maxTxSize
                 val dummySignaturesSize = config.headMultisigScript.numSigners * (32 + 64)
                 val nativeScriptSize = config.headMultisigScript.script.script.toCbor.length
+                val rolloutSize = mbRolloutOutput.map((o: TxOutput) => Sized(o).size).getOrElse(0)
 
-                // includes the base size of the transaction, spent rollout input, possible rollout output, metadata,
+                // includes the base size of the transaction, spent rollout input, metadata,
                 // and all the other structural fields of a cardano transaction
                 val margin = 500
-
                 // The total maximum size of all the payout obligations we can add to this transaction
                 val obligationAggregateSizeLimit =
                     maxSize
                         - dummySignaturesSize
                         - nativeScriptSize
+                        - rolloutSize
                         - margin
 
                 @tailrec

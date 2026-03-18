@@ -4,10 +4,12 @@ import cats.Monad
 import cats.data.EitherT
 import cats.effect.{Async, IO, Resource}
 import cats.syntax.all.*
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerCommand, L2LedgerError}
+import hydrozoa.multisig.ledger.remote
 import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.{Request, Response}
 import io.circe.parser.*
 import io.circe.syntax.*
@@ -25,18 +27,21 @@ import org.typelevel.log4cats.slf4j.Slf4jLogger
   *   The WebSocket connection
   */
 class RemoteL2Ledger private (
-    conn: WSConnectionHighLevel[IO]
+    conn: WSConnectionHighLevel[IO],
+    config: RemoteL2Ledger.Config
 ) extends L2Ledger[IO] {
 
     private given logger: Logger[IO] = Logging.loggerIO("RemoteL2Ledger")
 
     override implicit def monadF: Monad[IO] = Async[IO]
 
+    private val codecs = RemoteL2LedgerCodecs(config)
+    import codecs.*
+
     /** Send a request to the remote ledger and wait for the synchronous response */
     private def sendRequest(
         request: Request
     ): EitherT[IO, L2LedgerError, Response.Success] = {
-        import RemoteL2LedgerCodecs.given
         EitherT {
             for {
                 // Send request
@@ -106,6 +111,7 @@ class RemoteL2Ledger private (
 }
 
 object RemoteL2Ledger {
+    type Config = CardanoNetwork.Section
 
     private given logger: Logger[IO] = Slf4jLogger.getLogger[IO]
 
@@ -143,7 +149,7 @@ object RemoteL2Ledger {
       * @return
       *   A Resource managing the WebSocket connection and RemoteL2Ledger instance
       */
-    def create(wsUri: String): Resource[IO, RemoteL2Ledger] = {
+    def create(wsUri: String, config: Config): Resource[IO, RemoteL2Ledger] = {
         import org.http4s.Uri
 
         for {
@@ -151,6 +157,6 @@ object RemoteL2Ledger {
             uri <- Resource.eval(IO.fromEither(Uri.fromString(wsUri)))
             conn <- wsClient.connectHighLevel(WSRequest(uri))
             _ <- Resource.eval(logger.info(s"Connected to WebSocket at $wsUri"))
-        } yield new RemoteL2Ledger(conn)
+        } yield new RemoteL2Ledger(conn, config)
     }
 }
