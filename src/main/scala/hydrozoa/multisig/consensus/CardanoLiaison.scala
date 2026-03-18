@@ -437,7 +437,7 @@ trait CardanoLiaison(
                     // 2. Based on the local state, find all due actions
                     state <- stateRef.get
 
-                    currentTime <- IO.realTime.map(_.toEpochQuantizedInstant(config.slotConfig))
+                    currentTime <- realTimeQuantizedInstant(config.slotConfig).flatMap(IO.fromEither)
 
                     _ <- loggerIO.trace(s"current time is $currentTime")
                     _ <- loggerIO.trace(s"utxoIds are $utxoIds")

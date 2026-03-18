@@ -1,7 +1,9 @@
 package hydrozoa.lib.cardano.scalus
 
 import cats.effect.*
-import cats.effect.IO.*
+import cats.effect.IO.{Error, *}
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.{NotPastZeroTime, NotQuantized}
+
 import java.time.Instant
 import scala.concurrent.duration.{FiniteDuration, MILLISECONDS}
 import scala.math.Ordered.orderingToOrdered
@@ -38,7 +40,7 @@ TODO:
     and couldn't quite figure out how to make things unify correctly.
     - This would potentially move the runtime [[require]] to a compile time check.
   - These could probably also be made sub-types of Instant/FiniteDuration, and potentially opaque type aliases?
-  - Ensure soundnes of algebraic operations when combining quantized and unquantized values
+  - Ensure soundness of algebraic operations when combining quantized and unquantized values
     - i.e., is quantizedInstant + finiteDuration.quantize(quantizedInstant.slotConfig)
       always equal to QuantizedInstant(quantizedInstant.instant + finiteDuration, quantizedInstant.slotConfig) ?
  */
@@ -178,23 +180,34 @@ object QuantizedTime {
     }
 
     object QuantizedInstant {
-        def apply(slotConfig: SlotConfig, instant: java.time.Instant): QuantizedInstant =
+        sealed trait Error extends Throwable
+        case class NotPastZeroTime(slotConfig: SlotConfig, instant: Instant) extends Error {
+            override def toString: String = s"Given instant $instant is not past zero time ${slotConfig.zeroTime}"
+        }
+        case class NotQuantized(slotConfig: SlotConfig, instant: Instant) extends Error {
+            override def toString: String =  s"Given instant $instant is not quantized to ${slotConfig.zeroTime}"
+        }
+        def apply(slotConfig: SlotConfig, instant: java.time.Instant): Either[NotPastZeroTime, QuantizedInstant] = {
+            if instant < java.time.Instant.ofEpochMilli(slotConfig.zeroTime)
+            then Left(NotPastZeroTime(slotConfig, instant))
+            else Right(
             new QuantizedInstant(
               slotConfig = slotConfig,
               instant = Instant.ofEpochMilli(
                 slotConfig.slotToTime(slotConfig.timeToSlot(instant.toEpochMilli))
               )
-            )
+            ))
+        }
 
-        def ofEpochSeconds(slotConfig: SlotConfig, posixSeconds: Long): QuantizedInstant =
+        def ofEpochSeconds(slotConfig: SlotConfig, posixSeconds: Long):  Either[NotPastZeroTime, QuantizedInstant] =
             apply(slotConfig, Instant.ofEpochSecond(posixSeconds))
 
-        def fromPlutusPosixTime(slotConfig: SlotConfig, posixTime: PosixTime): QuantizedInstant = {
+        def fromPlutusPosixTime(slotConfig: SlotConfig, posixTime: PosixTime): Either[NotPastZeroTime, QuantizedInstant]= {
             // TODO: potential truncation from BigInt
             apply(slotConfig, Instant.ofEpochMilli(posixTime.longValue))
         }
 
-        def realTimeQuantizedInstant(slotConfig: SlotConfig): IO[QuantizedInstant] =
+        def realTimeQuantizedInstant(slotConfig: SlotConfig): IO[Either[NotPastZeroTime, QuantizedInstant]] =
             IO.realTimeInstant.map(_.quantize(slotConfig))
     }
 
@@ -211,36 +224,43 @@ object QuantizedTime {
 
     extension (instant: java.time.Instant) {
 
-        def quantize(slotConfig: SlotConfig): QuantizedInstant =
+        def quantize(slotConfig: SlotConfig):  Either[NotPastZeroTime, QuantizedInstant] =
             QuantizedInstant(slotConfig, instant)
 
         /** A quantization method that REQUIRES that the time comes pre-quantized, otherwise it
           * throws an exception.
           *
           * This is used in places where we MUST have a pre-quantized time, such as in the refund
-          * validity start in the the deposit datum
+          * validity start in the deposit datum
           *
           * @param slotConfig
           * @return
           */
-        def quantizeLosslessUnsafe(slotConfig: SlotConfig): QuantizedInstant = {
-            val q = instant.quantize(slotConfig)
-            require(q.instant == instant, s"Instant was not pre-quantized according to $slotConfig")
-            q
-        }
+        def quantizeLossless(slotConfig: SlotConfig):  Either[QuantizedInstant.Error, QuantizedInstant] =
+        for {
+            q0 <-  instant.quantize(slotConfig)
+            q <- if q0.instant == instant
+                 then Right(q0)
+                else Left(NotQuantized(slotConfig, instant))
+        } yield q
 
     }
 
     extension (s: Slot) {
-        def toQuantizedInstant(slotConfig: SlotConfig): QuantizedInstant =
-            java.time.Instant.ofEpochMilli(slotConfig.slotToTime(s.slot)).quantize(slotConfig)
+        def toQuantizedInstant(slotConfig: SlotConfig): QuantizedInstant = {
+            java.time.Instant.ofEpochMilli(slotConfig.slotToTime(s.slot)).quantize(slotConfig) match {
+                case Right(q) => q
+                case Left(_) => throw new RuntimeException("The impossible happened: turning a slot into a quantized" +
+                    " instant should never be able to fail.")
+            }
+        }
     }
 
     extension (fd: FiniteDuration) {
         def quantize(slotConfig: SlotConfig): QuantizedFiniteDuration =
             QuantizedFiniteDuration(slotConfig, fd)
 
-        def toEpochQuantizedInstant(slotConfig: SlotConfig): QuantizedInstant = {
+        def toEpochQuantizedInstant(slotConfig: SlotConfig): Either[QuantizedInstant.Error, QuantizedInstant] = {
             // See "java.time.instant.ofEpochMilli"
             val epochNano = fd.toNanos
             val secs = Math.floorDiv(epochNano, 1_000_000_000)
@@ -250,7 +270,7 @@ object QuantizedTime {
     }
 
     extension (p: PosixTime) {
-        def toEpochQuantizedInstant(slotConfig: SlotConfig): QuantizedInstant = {
+        def toEpochQuantizedInstant(slotConfig: SlotConfig): Either[QuantizedInstant.Error, QuantizedInstant] = {
             java.time.Instant.ofEpochMilli(p.toLong).quantize(slotConfig)
         }
     }

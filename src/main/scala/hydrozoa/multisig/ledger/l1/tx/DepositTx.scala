@@ -7,7 +7,7 @@ import hydrozoa.config.head.multisig.timing.TxTiming.*
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.RequestValidityEndTime
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
-import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, quantizeLosslessUnsafe}
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, quantizeLossless}
 import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
 import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.explainConst
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
@@ -223,12 +223,14 @@ private object DepositTxOps {
                         submissionDeadline <- Try {
                             val ttlSlot = tx.body.value.ttl.get
                             val ttlPosixMillis = config.slotConfig.slotToTime(ttlSlot)
-                            val instant = java.time.Instant.ofEpochMilli(ttlPosixMillis)
-                            instant.quantizeLosslessUnsafe(config.slotConfig)
+                            java.time.Instant.ofEpochMilli(ttlPosixMillis)
+                           
                         } match {
                             case Failure(exception) => Left(DepositTxTTLParseError(exception))
-                            case Success(v)         => Right(v)
-                        }
+                            case Success(instant)         => instant.quantizeLossless(config.slotConfig)
+                                .left.map(DepositTxTTLParseError(_))
+                            } 
+                        
 
                         expectedTtl = expectedSubmissionDeadline.toSlot.slot
 

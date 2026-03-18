@@ -1,6 +1,7 @@
 package hydrozoa.app
 
 import cats.data.{NonEmptyList, NonEmptyMap}
+import cats.syntax.all.*
 import cats.effect.unsafe.implicits.global
 import cats.effect.{ExitCode, IO, IOApp}
 import com.bloxbean.cardano.client.util.HexUtil
@@ -94,7 +95,8 @@ object Bootstrap:
         _ <- IO.pure(())
 
         ownHeadWallet = HeadPeerWallet.scalusWallet(HeadPeerNumber.zero, vKey, sKey)
-        startTimeInstant <- realTimeQuantizedInstant(cardanoNetwork.slotConfig)
+        // NOTE: we still throw here, because we can't make the config.
+        startTimeInstant <- realTimeQuantizedInstant(cardanoNetwork.slotConfig).flatMap(IO.fromEither)
         blockCreationStartTime = BlockCreationStartTime(startTimeInstant)
 
         headParams = HeadParameters(
@@ -205,9 +207,10 @@ object Bootstrap:
           initializationParams = initializationParameters
         ).get
 
+        // NOTE: We still throw here because we can't make the config.
         endTimeInstant <- IO.realTimeInstant.map(instant =>
             instant.quantize(cardanoNetwork.slotConfig)
-        )
+        ).flatMap(IO.fromEither)
         blockCreationEndTime = BlockCreationEndTime(endTimeInstant)
 
         initTxSeq = InitializationTxSeq

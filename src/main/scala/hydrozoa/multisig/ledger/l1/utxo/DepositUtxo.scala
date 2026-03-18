@@ -87,13 +87,21 @@ object DepositUtxo {
             ): Instructions =
                 new Instructions(address, datum, validityStart)
 
-            def apply(onchain: Onchain, network: Network, slotConfig: SlotConfig): Instructions = {
-                Instructions(
-                  address = plutusAddressToShelley(onchain.address, network),
-                  datum = onchain.datum.asScala,
-                  validityStart = onchain.refundStart.toEpochQuantizedInstant(slotConfig),
+            def apply(
+                onchain: Onchain,
+                network: Network,
+                slotConfig: SlotConfig
+            ): Either[QuantizedInstant.Error, Instructions] = onchain.refundStart
+                .toEpochQuantizedInstant(slotConfig)
+                .flatMap(start =>
+                    Right(
+                      Instructions(
+                        address = plutusAddressToShelley(onchain.address, network),
+                        datum = onchain.datum.asScala,
+                        validityStart = start
+                      )
+                    )
                 )
-            }
 
             final case class Onchain(
                 address: PlutusAddress,

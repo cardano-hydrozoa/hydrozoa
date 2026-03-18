@@ -272,7 +272,7 @@ trait BlockWeaver(
                         conn <- getConnections
                         // Pass-through to the joint ledger
                         _ <- conn.jointLedger ! event
-                        now <- realTimeQuantizedInstant(config.slotConfig)
+                        now <- realTimeQuantizedInstant(config.slotConfig).flatMap(IO.fromEither)
                         // Complete the first block immediately
                         _ <- IO.whenA(leader.isFirstBlock)(for {
                             pollResults <- pollResultsRef.get
@@ -429,7 +429,9 @@ trait BlockWeaver(
                                     finalizationLocallyTriggered <-
                                         finalizationLocallyTriggeredRef.get
                                     conn <- getConnections
-                                    now <- realTimeQuantizedInstant(config.slotConfig)
+                                    
+                                    // If this fails, we can't recover.
+                                    now <- realTimeQuantizedInstant(config.slotConfig).flatMap(IO.fromEither)
 
                                     // Finish the current block immediately
                                     _ <- conn.jointLedger !
@@ -554,7 +556,9 @@ trait BlockWeaver(
                 _ <- IO.whenA(mempool.receivingOrder.isEmpty)(IO.sleep(5.seconds))
                 conn <- getConnections
                 _ <- conn.tracer.leaderStarted(nextBlockNum: Int, config.ownHeadPeerId.peerNum: Int)
-                now <- realTimeQuantizedInstant(config.slotConfig)
+                // If the slot config isn't compatible with the current time, there's really nothing we can do.
+                // Just throw an exception
+                now <- realTimeQuantizedInstant(config.slotConfig).flatMap(IO.fromEither)
                 _ <- conn.jointLedger ! StartBlock(nextBlockNum, BlockCreationStartTime(now))
                 _ <- IO.traverse_(mempool.receivingOrder)(event =>
                     conn.jointLedger ! mempool.findById(event).get

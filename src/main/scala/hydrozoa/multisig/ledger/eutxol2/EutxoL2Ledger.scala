@@ -104,13 +104,16 @@ case class EutxoL2Ledger private (
                   .left
                   .map(error => L2LedgerError(error))
             )
+            
+            time <- EitherT.fromEither(QuantizedInstant
+                .fromPlutusPosixTime(config.slotConfig, req.blockCreationStartTime)        
+                .left.map(error => L2LedgerError(error.toString)))
 
             newActiveUtxos <- EitherT.fromEither(
               HydrozoaTransactionMutator
                   .transit(
                     config = config,
-                    time = QuantizedInstant
-                        .fromPlutusPosixTime(config.slotConfig, req.blockCreationStartTime),
+                    time = time,
                     state = s.activeUtxos,
                     l2Tx = l2Tx
                   )

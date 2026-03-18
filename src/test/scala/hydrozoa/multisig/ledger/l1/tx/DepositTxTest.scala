@@ -94,6 +94,7 @@ def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = 
 }
 
 object DepositTxTest extends Properties("Deposit Tx Test") {
+    
 
     val _ = property("Metadata can be parsed") =
         Prop.forAll(MultiNodeConfig.generate(TestPeersSpec.default)()) { multiNodeConfig =>
