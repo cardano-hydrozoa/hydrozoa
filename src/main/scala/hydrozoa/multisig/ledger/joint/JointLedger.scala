@@ -457,7 +457,9 @@ final case class JointLedger(
                   s"mkBlockBrief: blockWithdrawnUtxos=$blockWithdrawnUtxos\n" +
                   s"mkBlockBrief: blockStartTime=$blockCreationStartTime\n" +
                   s"mkBlockBrief: competingFallbackValidityStart=${p.competingFallbackTxTime}\n" +
-                  s"mkBlockBrief: events=$events"
+                  s"mkBlockBrief: events=$events\n" +
+                  s"mkBlockBrief: decisions.absorbed=${decisions.absorbed.requestIds}\n" +
+                  s"mkBlockBrief: decisions.rejected=${decisions.rejected.requestIds}"
             )
 
             // Block header
@@ -519,6 +521,15 @@ final case class JointLedger(
                     )
                     BlockBrief.Major(header, blockBody)
             }
+
+            _ <- logger.trace(
+              "mkBlockBriefIntermediate result:\n" +
+                  s"  Block type: ${blockBrief match {
+                          case _: BlockBrief.Minor => "Minor"; case _: BlockBrief.Major => "Major"
+                      }}\n" +
+                  s"  Block number: ${headerIntermediate.blockNum}\n" +
+                  s"  Block brief: $blockBrief"
+            )
         } yield (newJlState, blockBrief)
     }
 
@@ -527,38 +538,60 @@ final case class JointLedger(
         next: BlockBrief.Intermediate,
         absorbedDeposits: DepositsMap.Unzip,
         postDatedRefundTxs: List[RefundTx.PostDated]
-    ): IO[(JointLedger.Producing, Block.Unsigned.Intermediate)] = next match {
-        case blockBrief @ BlockBrief.Minor(header, _) =>
-            val blockEffects = BlockEffects.Unsigned.Minor(
-              headerSerialized = header.onchainMsg,
-              postDatedRefundTxs = postDatedRefundTxs
-            )
-            IO.pure((p, Block.Unsigned.Minor(blockBrief, blockEffects)))
-        case blockBrief @ BlockBrief.Major(header, _) =>
-            for {
-                payoutObligations <- IO.pure(p.l2LedgerState.payouts)
+    ): IO[(JointLedger.Producing, Block.Unsigned.Intermediate)] = for {
+        _ <- logger.trace(
+          "mkBlockEffectsIntermediate:\n" +
+              s"  Block type: ${next match {
+                      case _: BlockBrief.Minor => "Minor"; case _: BlockBrief.Major => "Major"
+                  }}\n" +
+              s"  Block number: ${next.header.blockNum}\n" +
+              s"  Absorbed deposits: ${absorbedDeposits.requestIds}\n" +
+              s"  Post-dated refund txs: ${postDatedRefundTxs.size}\n" +
+              s"  L2 payouts: ${p.l2LedgerState.payouts.size}"
+        )
 
-                res <- executeL1Action(
-                  p,
-                  L1LedgerM.mkSettlementTxSeq(
-                    nextKzg = header.kzgCommitment,
-                    absorbedDeposits = absorbedDeposits.depositUtxos,
-                    payoutObligations = payoutObligations,
-                    blockCreationEndTime = header.endTime,
-                    competingFallbackValidityStart = p.competingFallbackTxTime
-                  )
-                )
-                (newL1State, settlementTxSeq) = res
-                newJlState = p.setL1LedgerState(newL1State)
-
-                blockEffects = BlockEffects.Unsigned.Major(
-                  settlementTx = settlementTxSeq.settlementTx,
-                  fallbackTx = settlementTxSeq.fallbackTx,
-                  rolloutTxs = settlementTxSeq.rolloutTxs,
+        result <- next match {
+            case blockBrief @ BlockBrief.Minor(header, _) =>
+                val blockEffects = BlockEffects.Unsigned.Minor(
+                  headerSerialized = header.onchainMsg,
                   postDatedRefundTxs = postDatedRefundTxs
                 )
-            } yield (newJlState, Block.Unsigned.Major(blockBrief, blockEffects))
-    }
+                logger.trace("mkBlockEffectsIntermediate: Minor block effects created") *>
+                    IO.pure((p, Block.Unsigned.Minor(blockBrief, blockEffects)))
+            case blockBrief @ BlockBrief.Major(header, _) =>
+                for {
+                    // TODO: pass in args: should not access the state directly
+                    payoutObligations <- IO.pure(p.l2LedgerState.payouts)
+
+                    res <- executeL1Action(
+                      p,
+                      L1LedgerM.mkSettlementTxSeq(
+                        nextKzg = header.kzgCommitment,
+                        absorbedDeposits = absorbedDeposits.depositUtxos,
+                        payoutObligations = payoutObligations,
+                        blockCreationEndTime = header.endTime,
+                        competingFallbackValidityStart = p.competingFallbackTxTime
+                      )
+                    )
+                    (newL1State, settlementTxSeq) = res
+                    newJlState = p.setL1LedgerState(newL1State)
+
+                    blockEffects = BlockEffects.Unsigned.Major(
+                      settlementTx = settlementTxSeq.settlementTx,
+                      fallbackTx = settlementTxSeq.fallbackTx,
+                      rolloutTxs = settlementTxSeq.rolloutTxs,
+                      postDatedRefundTxs = postDatedRefundTxs
+                    )
+
+                    _ <- logger.trace(
+                      "mkBlockEffectsIntermediate: Major block effects created\n" +
+                          s"  Settlement tx: ${settlementTxSeq.settlementTx}\n" +
+                          s"  Rollout txs count: ${settlementTxSeq.rolloutTxs.size}\n" +
+                          s"  Post-dated refund txs count: ${postDatedRefundTxs.size}"
+                    )
+                } yield (newJlState, Block.Unsigned.Major(blockBrief, blockEffects))
+        }
+    } yield result
 
     // Block completion Signal is provided to the joint ledger when the block weaver says it's time.
     // If it's a final block, we don't pass poll results from the cardano liaison. Otherwise, we do.
