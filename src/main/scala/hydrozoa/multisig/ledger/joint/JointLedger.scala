@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.joint
 
 import cats.effect.{IO, Ref}
+import com.bloxbean.cardano.client.util.HexUtil
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
@@ -55,28 +56,28 @@ final case class JointLedger(
     val state: Ref[IO, JointLedger.State] =
         Ref.unsafe[IO, JointLedger.State](JointLedger.State.initialize(config))
 
-    def executeL1Action[T](
+    private def executeL1Action[T](
         state: JointLedger.Producing,
         action: L1LedgerM[T]
     ): IO[(L1LedgerM.State, T)] = IO.fromEither(runL1Action[T](state, action))
 
-    def executeL2Command(
+    private def executeL2Command(
         state: JointLedger.Producing,
         command: L2LedgerCommand.Real
     ): IO[L2LedgerState] =
         runL2Command(state, command).rethrow
 
-    def executeL2ProxyCommand(
+    private def executeL2ProxyCommand(
         command: L2LedgerCommand.Proxy
     ): IO[Unit] = L2LedgerState.executeProxyCommand(l2Ledger, command)
 
-    def runL1Action[T](
+    private def runL1Action[T](
         state: JointLedger.Producing,
         action: L1LedgerM[T]
     ): Either[L1LedgerM.Error, (L1LedgerM.State, T)] =
         state.runL1Action[T](config, action)
 
-    def runL2Command(
+    private def runL2Command(
         state: JointLedger.Producing,
         command: L2LedgerCommand.Real
     ): IO[Either[L2LedgerError, L2LedgerState]] =
@@ -447,18 +448,19 @@ final case class JointLedger(
             headerRes <-
                 if decisions.absorbed.isEmpty && blockWithdrawnUtxos.isEmpty
                 then
-                    IO.pure(
-                      (
-                        p,
-                        previousHeader.nextHeaderIntermediate(
-                          txTiming,
-                          blockCreationStartTime,
-                          blockCreationEndTime,
-                          p.competingFallbackTxTime,
-                          // TODO: We want this to be done in a separate actor in the future
-                          // this doesn't include genesis
-                          applyDiffs(p.evacuationMap, p.l2LedgerState.diffs).kzgCommitment
-                        )
+                    val newEvacuationMap = applyDiffs(p.evacuationMap, p.l2LedgerState.diffs)
+                    for {
+                        _ <- logger.trace(s"New evacuation map: ${newEvacuationMap.evacuationMap}")
+                    } yield (
+                      p,
+                      previousHeader.nextHeaderIntermediate(
+                        txTiming,
+                        blockCreationStartTime,
+                        blockCreationEndTime,
+                        p.competingFallbackTxTime,
+                        // TODO: We want this to be done in a separate actor in the future
+                        // this doesn't include genesis
+                        newEvacuationMap.kzgCommitment
                       )
                     )
                 else {
@@ -472,6 +474,7 @@ final case class JointLedger(
                     for {
                         newL2State <- executeL2Command(p, depositEventDecisions)
                         newEvacuationMap = applyDiffs(p.evacuationMap, newL2State.diffs)
+                        _ <- logger.trace(s"New evacuation map: ${newEvacuationMap.evacuationMap}")
                         newJLState = p
                             .setL2LedgerState(newL2State)
                             .focus(_.evacuationMap)
@@ -516,10 +519,21 @@ final case class JointLedger(
               headerSerialized = header.onchainMsg,
               postDatedRefundTxs = postDatedRefundTxs
             )
-            IO.pure((p, Block.Unsigned.Minor(blockBrief, blockEffects)))
+            for {
+                _ <- logger.trace(
+                  s"Building effects for minor block ${next.blockNum} with version ${next.blockVersion}." + "\n" +
+                      s"Previous block (${p.previousBlockHeader.blockNum}) had version ${p.previousBlockHeader.blockVersion}."
+                )
+            } yield (p, Block.Unsigned.Minor(blockBrief, blockEffects))
         case blockBrief @ BlockBrief.Major(header, _) =>
             for {
+                _ <- logger.trace(
+                  s"Building effects for major block ${next.blockNum} with version ${next.blockVersion}." + "\n" +
+                      s"Previous block (${p.previousBlockHeader.blockNum}) had version ${p.previousBlockHeader.blockVersion}."
+                )
                 payoutObligations <- IO.pure(p.l2LedgerState.payouts)
+                _ <- logger.trace(s"Remitting payouts: ${payoutObligations
+                        .map(x => (x.utxo.value.address, x.utxo.value.value))}")
 
                 res <- executeL1Action(
                   p,
@@ -539,6 +553,23 @@ final case class JointLedger(
                   fallbackTx = settlementTxSeq.fallbackTx,
                   rolloutTxs = settlementTxSeq.rolloutTxs,
                   postDatedRefundTxs = postDatedRefundTxs
+                )
+
+                _ <- logger.trace(
+                  s"Settlement tx (${blockEffects.settlementTx.tx.id}): ${HexUtil.encodeHexString(blockEffects.settlementTx.tx.toCbor)}"
+                )
+                _ <- logger.trace(
+                  s"Fallback tx (${blockEffects.fallbackTx.tx.id}): ${HexUtil.encodeHexString(blockEffects.fallbackTx.tx.toCbor)}"
+                )
+                _ <- IO.traverse_(blockEffects.rolloutTxs)(rolloutTx =>
+                    logger.trace(
+                      s"Rollout tx (${rolloutTx.tx.id}): ${HexUtil.encodeHexString(rolloutTx.tx.toCbor)}"
+                    )
+                )
+                _ <- IO.traverse_(blockEffects.postDatedRefundTxs)(refundTx =>
+                    logger.trace(
+                      s"Post-dated refund tx (${refundTx.tx.id}): ${HexUtil.encodeHexString(refundTx.tx.toCbor)}"
+                    )
                 )
             } yield (newJlState, Block.Unsigned.Major(blockBrief, blockEffects))
     }
