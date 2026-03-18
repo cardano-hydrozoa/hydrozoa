@@ -182,12 +182,14 @@ object Metadata {
                     .toRight(MissingMetadataKey("seedIx"))
 
                 multisigTreasuryIx <- multisigTreasuryIxRaw match {
-                    case i: Metadatum.Int => Right(i.value.intValue)
+                    case i: Metadatum.Int if i.value >= 0L => Right(i.value.intValue)
                     case _ => Left(WrongMetadataValue("multisigTreasuryIx", multisigTreasuryIxRaw))
                 }
 
                 multisigRegimeIx <- multisigRegimeIxRaw match {
-                    case i: Metadatum.Int => Right(i.value.intValue)
+                    case i: Metadatum.Int
+                        if i.value >= 0L && i.value.intValue() != multisigTreasuryIx =>
+                        Right(i.value.intValue)
                     case _ => Left(WrongMetadataValue("multisigRegimeIx", multisigRegimeIxRaw))
                 }
 

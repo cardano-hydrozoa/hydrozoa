@@ -145,10 +145,9 @@ case class EutxoL2Ledger private (
 
             obligations <- EitherT.fromEither(
               l2Tx.l1utxos
-                  .map((utxo: (TransactionInput, TransactionOutput)) =>
+                  .traverse((utxo: (TransactionInput, TransactionOutput)) =>
                       Payout.Obligation(KeepRaw(utxo._2), config)
                   )
-                  .sequence
                   .left
                   .map(error => L2LedgerError(error.toString))
             )

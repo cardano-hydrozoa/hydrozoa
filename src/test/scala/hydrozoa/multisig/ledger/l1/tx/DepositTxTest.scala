@@ -13,8 +13,7 @@ import monocle.*
 import monocle.syntax.all.*
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Prop.propBoolean
-import org.scalacheck.rng.Seed
-import org.scalacheck.{Arbitrary, Gen, Prop, Properties, Test}
+import org.scalacheck.{Arbitrary, Gen, Prop, Properties}
 import scala.concurrent.duration.FiniteDuration
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.TransactionOutput.valueLens
@@ -68,8 +67,7 @@ def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = 
               genGenesisObligation(
                 config,
                 depositorAddress,
-                genCoin = Arbitrary.arbitrary[Coin].map(_ + Coin.ada(2)),
-                genMultiAsset = Arbitrary.arbitrary[MultiAsset].map(_.onlyPositive)
+                genValue = genPositiveValue
               )
             )
             .map(NonEmptyList.fromListUnsafe)
@@ -91,12 +89,7 @@ def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = 
                 minFunding <- Gen
                     .listOfN(
                       nFunding,
-                      genPubKeyUtxo(
-                        config,
-                        depositorAddress,
-                        Gen.const(Coin.ada(5)),
-                        genMultiAsset = Arbitrary.arbitrary[MultiAsset].map(_.onlyPositive)
-                      )
+                      genPubKeyUtxo(config, depositorAddress, Gen.const(Value.ada(5)))
                     )
                     .map(l => NonEmptyList.fromListUnsafe(l.take(3)))
                 distribution <- genValueDistribution(depositValue, minFunding.length)
@@ -119,8 +112,8 @@ def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = 
 }
 
 object DepositTxTest extends Properties("Deposit Tx Test") {
-    override def overrideParameters(p: Test.Parameters): Test.Parameters =
-        p.withInitialSeed(Seed.fromBase64("acCC2RZZ0k_j5emHOUqcuSC0RUDo1QkzDWHURe4HRjD=").get)
+//    override def overrideParameters(p: Test.Parameters): Test.Parameters =
+//        p.withInitialSeed(Seed.fromBase64("acCC2RZZ0k_j5emHOUqcuSC0RUDo1QkzDWHURe4HRjD=").get)
 
     val _ = property("Metadata can be parsed") =
         Prop.forAll(MultiNodeConfig.generate(TestPeersSpec.default)()) { multiNodeConfig =>

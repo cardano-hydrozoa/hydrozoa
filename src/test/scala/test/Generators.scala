@@ -1,7 +1,7 @@
 package test
 
-import cats.Traverse.ops.toAllTraverseOps
 import cats.data.{NonEmptyList, NonEmptyVector}
+import cats.syntax.all.toTraverseOps
 import cats.{Hash as _, *}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.value.coin.Distribution
@@ -35,7 +35,7 @@ import scalus.uplc.builtin.Data.toData
 import scalus.uplc.builtin.{ByteString, Data}
 import scalus.|>
 import spire.math.{Rational, SafeLong}
-import test.Generators.Hydrozoa.{genPubKeyUtxo, genValue}
+import test.Generators.Hydrozoa.{genPositiveValue, genPubKeyUtxo}
 
 // Annoyingly, `Gen` doesn't have `Monad[Gen]` already. But I want to use `traverse`, so I'm vendoring it here
 given genMonad: Monad[Gen] = new Monad[Gen] {
@@ -100,11 +100,19 @@ object Generators {
         }
 
         /** Generate a value */
-        def genValue(genMultiAsset: Gen[MultiAsset], genCoin: Gen[Coin]): Gen[Value] =
+        def genValue(genCoin: Gen[Coin], genMultiAsset: Gen[MultiAsset]): Gen[Value] =
             for {
                 coin <- genCoin
                 ma <- genMultiAsset
             } yield Value(coin, ma)
+
+        /** Helper generator with sensible defaults. The value will have at least 5 ada and may
+          * contain multiassets.
+          */
+        val genPositiveValue: Gen[Value] = genValue(
+          genCoin = Arbitrary.arbitrary[Coin].map(_ + Coin.ada(5)),
+          genMultiAsset = Arbitrary.arbitrary[MultiAsset].map(_.onlyPositive)
+        )
 
         val genAddrKeyHash: Gen[AddrKeyHash] =
             genByteStringOfN(28).map(AddrKeyHash.fromByteString)
@@ -174,10 +182,7 @@ object Generators {
 
         def genPayoutObligation(
             network: CardanoNetwork.Section,
-            genValue: Gen[Value] = genValue(
-              genCoin = arbitrary[Coin].map(_ + Coin.ada(3)),
-              genMultiAsset = arbitrary[MultiAsset].map(_.onlyPositive)
-            )
+            genValue: Gen[Value] = Hydrozoa.genPositiveValue
         ): Gen[Payout.Obligation] =
             for {
                 value <- genValue
@@ -213,37 +218,30 @@ object Generators {
         def genPubKeyUtxo(
             config: CardanoNetwork.Section,
             address: Address,
-            genCoin: Gen[Coin],
+            genValue: Gen[Value],
             datumGenerator: Option[Gen[Option[DatumOption]]] = None,
-            genMultiAsset: Gen[MultiAsset],
+            ensureMinAda: Boolean = false
         ): Gen[Utxo] =
             for {
                 txId <- arbitrary[TransactionInput]
                 txOutput <- genBabbageOutput(
                   address,
                   config,
-                  genCoin,
+                  genValue,
                   datumGenerator,
-                  genMultiAsset
+                  ensureMinAda
                 )
             } yield Utxo(txId, txOutput)
 
-        /** @param peer
-          *   The test peer who's PKH this output will be at
-          * @param datumGenerator
-          *   an Optional datum generator. Will generate an empty datum if not passed
-          * @return
-          */
         def genBabbageOutput(
             address: Address,
             config: CardanoNetwork.Section,
-            genCoin: Gen[Coin],
+            genValue: Gen[Value],
             datumGenerator: Option[Gen[Option[DatumOption]]] = None,
-            genMultiAsset: Gen[MultiAsset],
             ensureMinAda: Boolean = false
         ): Gen[Babbage] =
             for {
-                value <- genValue(genMultiAsset, genCoin)
+                value <- genValue
                 datum <- datumGenerator match {
                     case None      => Gen.const(None)
                     case Some(gen) => gen
@@ -267,11 +265,10 @@ object Generators {
             config: CardanoNetwork.Section,
             address: ShelleyAddress,
             datumGenerator: Option[Gen[Option[Inline]]] = None,
-            genMultiAsset: Gen[MultiAsset] = Gen.const(MultiAsset.empty),
-            genCoin: Gen[Coin] = Arbitrary.arbitrary[Coin]
+            genValue: Gen[Value]
         ): Gen[GenesisObligation] =
             for {
-                value <- genValue(genMultiAsset, genCoin)
+                value <- genValue
 
                 datum <- datumGenerator match {
                     case None      => Gen.const(None)
@@ -364,7 +361,7 @@ object Generators {
             // Violates "AllInputsMustBeInUtxoValidator" ledger rule
             def inputsNotInUtxoAttack: (EutxoL2Ledger.Config, EutxoL2Ledger.State, L2Tx) => (
                 L2Tx,
-                (String | TransactionException)
+                String | TransactionException
             ) =
                 (context, state, transaction) => {
                     // Generate a random TxId that is _not_ present in the state
@@ -541,7 +538,7 @@ object Generators {
             require(
               n > 0,
               "`genCoinDistribution(coin: Coin, n : Int) : Gen[NonEmptyList[Coin]]` requires a positive `n`, but it " +
-                  s"received ${n}"
+                  s"received $n"
             )
             genDistribution(SafeLong(coin.value), n).map(nel => nel.map(sl => Coin(sl.toLong)))
         }
@@ -650,10 +647,7 @@ object Generators {
             minCoin: Coin = Coin.zero
         ): Gen[NonEmptyList[A]] =
             for {
-                totalValue <- genValue(
-                  genCoin = Arbitrary.arbitrary[Coin].map(_ + Coin.ada(3)),
-                  genMultiAsset = Arbitrary.arbitrary[MultiAsset].map(_.onlyPositive)
-                )
+                totalValue <- genPositiveValue
                 nValues <- Gen.choose(1, maxNumValues)
                 valueDist <- genValueDistribution(totalValue, nValues)
                 valueDistWithMinAda = valueDist.map(_.focus(_.coin).modify(_ + minCoin))
@@ -679,34 +673,30 @@ object GeneratorTests extends Properties("Generator Tests") {
             )
         )
 
-    val _ = property("genValueDistributionWithMinAda sums to original amount") =
-        Prop.forAll(arbitrary[ShelleyAddress])(address =>
+    val _ = property("genValueDistributionWithMinAda sums to original amount") = Prop.forAll(
+      arbitrary[ShelleyAddress]
+    )(address =>
+        Prop.forAll(
+          Arbitrary.arbitrary[Value],
+          Gen.posNum[Int],
+          Gen.nonEmptyListOf(
+            genPubKeyUtxo(CardanoNetwork.Mainnet, address, genValue = Arbitrary.arbitrary[Value])
+          )
+        )((amount, n, utxos) =>
             Prop.forAll(
-              Arbitrary.arbitrary[Value],
-              Gen.posNum[Int],
-              Gen.nonEmptyListOf(
-                genPubKeyUtxo(
-                  CardanoNetwork.Mainnet,
-                  address,
-                  genCoin = Arbitrary.arbitrary[Coin],
-                  genMultiAsset = Arbitrary.arbitrary[MultiAsset]
-                )
+              Generators.Other.genValueDistributionWithMinAdaUtxo(
+                value = amount,
+                utxoList = NonEmptyList.fromListUnsafe(utxos),
+                params = CardanoNetwork.Mainnet.cardanoProtocolParams
               )
-            )((amount, n, utxos) =>
-                Prop.forAll(
-                  Generators.Other.genValueDistributionWithMinAdaUtxo(
-                    value = amount,
-                    utxoList = NonEmptyList.fromListUnsafe(utxos),
-                    params = CardanoNetwork.Mainnet.cardanoProtocolParams
-                  )
-                )(distribution =>
-                    val expectedAmount =
-                        distribution.toList.map(_.output.value).foldLeft(Value.zero)(_ + _)
-                    expectedAmount == amount + utxos.toList
-                        .map(_.output.value)
-                        .foldLeft(Value.zero)(_ + _)
-                )
+            )(distribution =>
+                val expectedAmount =
+                    distribution.toList.map(_.output.value).foldLeft(Value.zero)(_ + _)
+                expectedAmount == amount + utxos
+                    .map(_.output.value)
+                    .foldLeft(Value.zero)(_ + _)
             )
         )
+    )
 
 }

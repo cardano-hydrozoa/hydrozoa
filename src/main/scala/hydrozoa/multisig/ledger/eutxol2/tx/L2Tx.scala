@@ -19,7 +19,7 @@ final case class L2Tx(
     l1utxos: List[(TransactionInput, TransactionOutput)],
     l2utxos: List[(TransactionInput, Babbage)],
     // TODO: do we need it?
-    resolvedUtxos: ResolvedUtxos,
+    resolvedUtxos: ResolvedUtxos
 ) {
     // TODO: do we need it? tokens?
     def volume: Long = tx.body.value.outputs.map(sto => sto.value.value.coin.value).sum
@@ -55,7 +55,7 @@ private object L2TxOps:
       l1utxos = up.l1Utxos,
       l2utxos = up.l2Utxos,
       // TODO:
-      resolvedUtxos = ResolvedUtxos.empty,
+      resolvedUtxos = ResolvedUtxos.empty
     )
 
     final case class UtxoPartition(

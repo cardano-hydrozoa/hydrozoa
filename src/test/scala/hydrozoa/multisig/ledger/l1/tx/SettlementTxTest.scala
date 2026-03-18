@@ -92,7 +92,7 @@ def genDepositUtxo(
         address <- arbitrary[ShelleyAddress]
         nL2Outputs <- Gen.choose(1, 6)
         l2Outputs <- Gen
-            .listOfN(nL2Outputs, genGenesisObligation(config, address))
+            .listOfN(nL2Outputs, genGenesisObligation(config, address, genValue = genPositiveValue))
             .map(NonEmptyList.fromListUnsafe)
 
         // Generate some offset to the "zero slot" time.

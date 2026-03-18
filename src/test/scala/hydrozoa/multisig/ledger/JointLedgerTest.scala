@@ -328,8 +328,7 @@ object JointLedgerTestHelpers {
                                   genGenesisObligation(
                                     env.config,
                                     address,
-                                    genCoin = Gen.const(v.coin),
-                                    genMultiAsset = Gen.const(v.assets)
+                                    genValue = Gen.const(v)
                                   ),
                               minCoin = Coin.ada(3)
                             )
@@ -351,12 +350,7 @@ object JointLedgerTestHelpers {
                     // those strictly neceesary to achieve the aggregate L2 value
                     utxosWithZeroAssets <- Gen.listOfN(
                       nUtxos,
-                      genPubKeyUtxo(
-                        env.config,
-                        address,
-                        genCoin = Gen.const(Coin.ada(3)),
-                        genMultiAsset = Gen.const(MultiAsset.zero)
-                      )
+                      genPubKeyUtxo(env.config, address, genValue = Gen.const(Value.ada(3)))
                     )
 
                     valueDist <- Generators.Other.genValueDistribution(
@@ -453,9 +447,9 @@ object JointLedgerTestHelpers {
 }
 
 object JointLedgerTest extends Properties("Joint Ledger Test") {
-    import org.scalacheck.rng.Seed
-    override def overrideParameters(p: Test.Parameters): Test.Parameters =
-        p.withInitialSeed(Seed.fromBase64("rlrErmmUkV4avV8rFPceGSpj7WfLT74OCWSLXGU6oJL=").get)
+//    import org.scalacheck.rng.Seed
+//    override def overrideParameters(p: Test.Parameters): Test.Parameters =
+//        p.withInitialSeed(Seed.fromBase64("rlrErmmUkV4avV8rFPceGSpj7WfLT74OCWSLXGU6oJL=").get)
 
     import TestM.*
 

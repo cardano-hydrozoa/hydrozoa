@@ -28,9 +28,6 @@ object RolloutTxSeqBuilderTest extends Properties("RolloutTxSeq Builder") {
 
         } yield RolloutTxSeq.Build(config.headConfig)(payouts)
 
-//    val _ = property("Build partial rollout seq") =
-//        Prop.forAll(genBuilder)(builder => Prop(builder.partialResult.isRight))
-
     val _ = property("Finish partial result rollout seq") = Prop.forAll(genBuilder)(builder =>
         val res = for {
             pr <- builder.partialResult
