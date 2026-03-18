@@ -160,6 +160,31 @@ private object DepositTxOps {
             case MultisigRegimeWitnessUtxoNotReferenced
             case InvalidDatumContent(e: Throwable)
             case InvalidDatumType
+
+            override def toString: String = this match {
+                case MetadataParseError(e) =>
+                    s"MetadataParseError: $e"
+                case AlienDeposit(headAddress) =>
+                    s"AlienDeposit: deposit sent to wrong head address: $headAddress"
+                case HashMismatchL2Payload(l2Payload, hash) =>
+                    s"HashMismatchL2Payload: L2 payload hash mismatch (payload: ${l2Payload.toHex}, expected hash: ${hash.toHex})"
+                case MissingDepositOutputAtIndex(e) =>
+                    s"MissingDepositOutputAtIndex: no deposit output found at index $e"
+                case DepositUtxoError(e) =>
+                    s"DepositUtxoError: $e"
+                case TxCborDeserializationFailed(e) =>
+                    s"TxCborDeserializationFailed: ${e.getMessage}"
+                case DepositTxTTLParseError(e) =>
+                    s"DepositTxTTLParseError: ${e.getMessage}"
+                case IncorrectSubmissionDeadline(actual, expected) =>
+                    s"IncorrectSubmissionDeadline: actual=$actual, expected=$expected"
+                case MultisigRegimeWitnessUtxoNotReferenced =>
+                    "MultisigRegimeWitnessUtxoNotReferenced: deposit transaction must reference the multisig regime witness UTXO"
+                case InvalidDatumContent(e) =>
+                    s"InvalidDatumContent: ${e.getMessage}"
+                case InvalidDatumType =>
+                    "InvalidDatumType: deposit datum must be an inline datum"
+            }
         }
     }
 
