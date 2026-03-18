@@ -104,57 +104,115 @@ object BlockWeaverNew {
     }
 
     object State {
-        def start(config: Config, connections: Connections, logger: Logger[IO]): IO[Idle | Leader] =
-            Idle(connections, logger, PollResults.empty, Mempool.empty).act(config).map(_.get)
+        import Idle.*
+
+        def start(
+            config: Config,
+            connections: Connections,
+            logger: Logger[IO]
+        ): IO[IdleReactive | Leader] =
+            for {
+                state: Some[IdleReactive | Leader] <- IdleActive(
+                  connections = connections,
+                  logger = logger,
+                  pollResults = PollResults.empty,
+                  mempool = Mempool.empty
+                ).act(config)
+            } yield state.get
 
         private def continue[S <: State.Reactive](state: S): IO[Some[S]] =
             IO.pure(Some(state))
+
         private def stop(): IO[None.type] = IO.pure(None)
 
+        /** A caching state can store requests in its mempool. */
         sealed trait Caching extends State {
             def mempool: Mempool
         }
 
         /** An active state can immediately transition into another state, without waiting for a new
           * message.
+          *
+          * An active state cannot be reactive, and it can only transition into a reactive state (or
+          * terminate).
+          *
+          * An active state can transition to a reactive state via a chain of active states, but the
+          * [[Active.act]] function must statically prove that the chain of [[Active.act]] calls
+          * terminates in a reactive state.
           */
         sealed trait Active extends State {
             def act(config: Config): IO[Option[State.Reactive]]
         }
 
-        /** A reactive state can receive a message, reacting by transitioning to another state. */
+        /** A reactive state can receive a message, reacting by transitioning to another state.
+          *
+          * A reactive state cannot be active, and it can only transition into a reactive state (or
+          * terminate).
+          *
+          * A reactive state can transition to a reactive state via a chain of active states, but *
+          * the [[Reactive.react]] function must statically prove that the chain of [[Active.act]]
+          * calls terminates in a reactive * state.
+          */
         sealed trait Reactive extends State {
             def react(config: Config)(req: Request): IO[Option[State.Reactive]]
         }
 
-        final case class Idle private[State] (
-            override val connections: Connections,
-            override val logger: Logger[IO],
-            override val pollResults: PollResults,
-            override val mempool: Mempool,
-        ) extends Active,
-              Caching,
-              Reactive {
-            private def idle(newMempool: Mempool): Idle =
-                Idle(this, newMempool)
+        sealed trait Idle
 
-            private def leader(blockNumber: BlockNumber, startedBlock: Leader.StartedBlock) =
-                Leader(this, blockNumber, startedBlock)
+        object Idle {
+            final case class IdleActive private[State] (
+                override val connections: Connections,
+                override val logger: Logger[IO],
+                override val pollResults: PollResults,
+                override val mempool: Mempool,
+            ) extends Active,
+                  Caching {
+                private def idleReactive(newMempool: Mempool): IdleReactive =
+                    IdleReactive(this, newMempool)
 
-            private def follower(newMempool: Mempool): Follower =
-                Follower(this, newMempool)
+                private def leader(blockNumber: BlockNumber, startedBlock: Leader.StartedBlock) =
+                    Leader(this, blockNumber, startedBlock)
 
-            override def act(config: Config): IO[Some[Idle | Leader]] =
-                if config.ownHeadPeerId.isLeader(BlockNumber.zero)
-                then continue(leader(BlockNumber.zero, Leader.StartedBlock.NotStarted))
-                else ???
+                override def act(config: Config): IO[Some[IdleReactive | Leader]] =
+                    if config.ownHeadPeerId.isLeader(BlockNumber.zero)
+                    then continue(leader(BlockNumber.zero, Leader.StartedBlock.NotStarted))
+                    else continue(idleReactive(mempool))
+            }
 
-            override def react(config: Config)(req: Request): IO[Option[Idle | FollowerAwaiting]] =
-                req match {
-                    case ur: UserRequestWithId =>
-                        continue(idle(mempool.add(ur)))
+            object IdleActive {
+                private[State] def apply(state: State, mempool: Mempool): IdleActive =
+                    import state.*
+                    IdleActive(connections, logger, pollResults, mempool)
+            }
 
-                }
+            final case class IdleReactive private[State] (
+                override val connections: Connections,
+                override val logger: Logger[IO],
+                override val pollResults: PollResults,
+                override val mempool: Mempool,
+            ) extends Caching,
+                  Reactive {
+                private def idleReactive(newMempool: Mempool): IdleReactive =
+                    IdleReactive(this, newMempool)
+
+                private def follower(newMempool: Mempool): Follower =
+                    Follower(this, newMempool)
+
+                override def react(
+                    config: Config
+                )(req: Request): IO[Option[IdleReactive | FollowerAwaiting]] =
+                    req match {
+                        case ur: UserRequestWithId =>
+                            continue(idleReactive(mempool.add(ur)))
+
+                    }
+            }
+
+            object IdleReactive {
+                private[Idle] def apply(state: State, mempool: Mempool): IdleReactive =
+                    import state.*
+                    IdleReactive(connections, logger, pollResults, mempool)
+            }
         }
 
         final case class Follower private (
@@ -164,7 +222,7 @@ object BlockWeaverNew {
             override val mempool: Mempool,
         ) extends Active,
               Caching {
-            def act(config: Config): IO[Some[Idle | FollowerAwaiting]] = ???
+            def act(config: Config): IO[Some[IdleReactive | FollowerAwaiting]] = ???
         }
 
         final case class FollowerAwaiting private (
@@ -196,12 +254,6 @@ object BlockWeaverNew {
             previousBlockBriefConfirmed: BlockBrief.NonFinal
         ) extends Reactive {
             override def react(config: Config)(req: Request): IO[Option[State.Reactive]] = ???
-        }
-
-        object Idle {
-            private[State] def apply(state: State, mempool: Mempool): Idle =
-                import state.*
-                Idle(connections, logger, pollResults, mempool)
         }
 
         object Follower {
