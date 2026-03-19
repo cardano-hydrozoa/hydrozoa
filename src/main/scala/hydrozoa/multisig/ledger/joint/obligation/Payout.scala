@@ -16,7 +16,9 @@ object Payout {
     }
 
     object Obligation {
-        case class MinAdaViolation(utxo: KeepRaw[TransactionOutput], requiredMinAda: Coin) {
+
+        case class MinAdaViolation(utxo: KeepRaw[TransactionOutput], requiredMinAda: Coin)
+            extends Throwable {
             override def toString: String =
                 s"Transaction output ${utxo.value} did not have required" +
                     s" min ada (${requiredMinAda})" +

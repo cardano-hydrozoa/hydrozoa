@@ -275,6 +275,20 @@ private object InitializationTxOps {
             case TtlIsMissing
             case InvalidInitializationTtl
             case EquityToLow(equity: Coin, fee: Coin)
+
+            override def toString: String = this match {
+                case MetadataParseError(wrapped) =>
+                    s"MetadataParseError: $wrapped"
+                case InvalidTransactionError(msg) =>
+                    s"InvalidTransactionError: $msg"
+                case TtlIsMissing =>
+                    "TtlIsMissing: initialization transaction must have a TTL"
+                case InvalidInitializationTtl =>
+                    "InvalidInitializationTtl: initialization transaction TTL is invalid"
+                case EquityToLow(equity, fee) =>
+                    s"EquityToLow: equity ($equity) is too low to cover fee ($fee)"
+            }
+
         }
 
     }

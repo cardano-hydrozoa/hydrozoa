@@ -99,7 +99,7 @@ case class RemoteL2LedgerCodecs(config: CardanoNetwork.Section) {
                 )
             } yield dest
         )
-// TODO: can be removed if we just rename the userVk field?
+    // TODO: can be removed if we just rename the userVk field?
     implicit val depositRegistrationEncoder: Encoder[L2LedgerCommand.RegisterDeposit] =
         (r: L2LedgerCommand.RegisterDeposit) =>
             io.circe.Json.obj(
@@ -276,12 +276,13 @@ case class RemoteL2LedgerCodecs(config: CardanoNetwork.Section) {
     }
 
     // Payout.Obligation codec
+    // Encode directly as TransactionOutput (without "utxo" wrapper) for API compatibility
     given Encoder[Payout.Obligation] = Encoder.instance { po =>
-        io.circe.Json.obj("utxo" -> po.utxo.asJson)
+        po.utxo.asJson
     }
     given payoutObligationDecoder: Decoder[Payout.Obligation] = Decoder.instance { c =>
         for {
-            unvalidated <- c.downField("utxo").as[KeepRaw[TransactionOutput]]
+            unvalidated <- c.as[KeepRaw[TransactionOutput]]
             value <- Payout
                 .Obligation(unvalidated, config)
                 .left

@@ -49,7 +49,7 @@ final case class InitializationParameters(
     override transparent inline def initializationParams: InitializationParameters = this
 
     override lazy val initialL2Value: Value =
-        initialEvacuationMap.outputs.map(_.utxo.value.value).fold(Value.zero)(_ + _)
+        Value.combine(initialEvacuationMap.outputs.map(_.utxo.value.value))
 
     override lazy val initialEquityContributed: Coin =
         initialEquityContributions.toSortedMap.values.fold(Coin.zero)(_ + _)
