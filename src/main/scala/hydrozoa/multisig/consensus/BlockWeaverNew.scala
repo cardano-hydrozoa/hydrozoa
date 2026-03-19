@@ -4,7 +4,7 @@ import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.config.head.multisig.timing.TxTiming
-import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime, MajorBlockWakeupTime}
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
@@ -75,7 +75,6 @@ final case class BlockWeaverNew(
 }
 
 object BlockWeaverNew {
-    // TODO: Copied from Cardano Liason. Can we abstract?
     object Timeout
 
     type Config = CardanoNetwork.Section & OwnHeadPeerPublic.Section & NodeOperationMultisigConfig
@@ -288,7 +287,7 @@ object BlockWeaverNew {
                   nextBlockNumber
                 )
 
-            final case class AwaitingBlockBrief private[State] (
+            final case class AwaitingBlockBrief private[Idle] (
                 override val connections: Connections,
                 override val logger: Logger[IO],
                 override val pollResults: PollResults,
@@ -335,7 +334,7 @@ object BlockWeaverNew {
                     }
             }
 
-            object AwaitingBlockBrief {
+            private object AwaitingBlockBrief {
                 // Question: Why is the private[Idle]? I'd like to use it when transition from Leader.AwaitingRequest
                 private[Idle] def apply(
                     state: State,
@@ -491,7 +490,7 @@ object BlockWeaverNew {
                 }
             }
 
-            object AwaitingRequest {
+            private object AwaitingRequest {
                 private[State] def apply(
                     state: State,
                     reproducingBlockBrief: BlockBrief.Next,
@@ -526,25 +525,32 @@ object BlockWeaverNew {
             override def act(config: Config): IO[Some[NextState]] = for {
                 _ <- logStateTransition
                 now <- realTimeQuantizedInstant(config.slotConfig)
-                newState <- IO.pure(
-                  Some(
-                    Leader.AwaitingConfirmation(
-                      this,
-                      leadingBlockNum,
-                      Started
-                    )
+                requests <- extractRequestsInOrder
+                isBlockStarted <-
+                    if requests.isEmpty
+                    then IO.pure(NotStarted)
+                    else
+                        for {
+                            _ <- sendStartBlock(config)(leadingBlockNum)
+                            _ <- requests.traverse_(connections.jointLedger ! _)
+                        } yield Started
+                newState <- pure(
+                  Leader.AwaitingConfirmation(
+                    this,
+                    leadingBlockNum,
+                    isBlockStarted
                   )
                 )
             } yield newState
 
-            private def extractAndSendRequestsInOrder: IO[List[UserRequestWithId]] = {
+            private def extractRequestsInOrder: IO[List[UserRequestWithId]] = {
                 val requests = mempool.extractRequestsInOrder
                 for {
                     _ <- logger.trace(
                       "Extracting remaining requests from mempool in order of arrival. " +
                           s"First twenty request IDs: ${requests.iterator.take(20).map(_.requestId.asI64)}"
                     )
-                    _ <- requests.traverse_(connections.jointLedger ! _)
+
                 } yield requests
             }
         }
@@ -572,36 +578,37 @@ object BlockWeaverNew {
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
                 leadingBlockNumber: BlockNumber,
-                startedBlock: Leader.AwaitingConfirmation.StartedBlock
+                isBlockStarted: Leader.AwaitingConfirmation.StartedBlock
             ) extends Reactive {
                 override transparent inline def stateName: String = "Leader.AwaitingConfirmation"
 
                 override type NextState = Idle.AwaitingBlockBrief | Leader.AwaitingConfirmation |
                     Leader.AwaitingRequest
 
-                override type Unexpected = PreStart.type | BlockBrief.Next
+                override type Unexpected = PreStart.type | BlockBrief.Next |
+                    (BlockConfirmed & BlockType.Final)
 
                 override def react(config: Config)(req: Request): IO[Option[NextState]] =
                     req match {
                         case ur: UserRequestWithId =>
-                            lazy val completeFirstBlock = for {
+                            // First block is implicitly confirmed, so we exit immediately back to
+                            // the Idle.AwaitingBlockBrief state
+                            def completeFirstBlock = for {
                                 _ <- logger.trace(
                                   s"Completing first block immediately with request ${ur.requestId.asI64}"
                                 ) >> sendCompleteRegularBlockAsLeader(config)
-
-                            } yield Some(
-                              Idle.AwaitingBlockBrief(
-                                connections,
-                                logger,
-                                pollResults,
-                                finalizationLocallyTriggered,
-                                mempool = Mempool.empty,
-                                nextBlockNumber = leadingBlockNumber.increment
-                              )
-                            )
+                                newState <- Idle(
+                                  connections,
+                                  logger,
+                                  pollResults,
+                                  finalizationLocallyTriggered,
+                                  mempool = Mempool.empty,
+                                  nextBlockNumber = leadingBlockNumber.increment
+                                ).act(config)
+                            } yield newState
 
                             for {
-                                _ <- IO.whenA(startedBlock == NotStarted)(
+                                _ <- IO.whenA(isBlockStarted == NotStarted)(
                                   sendStartBlock(config)(leadingBlockNumber)
                                 )
 
@@ -612,26 +619,25 @@ object BlockWeaverNew {
                                 res <-
                                     if leadingBlockNumber == BlockNumber.zero.increment
                                     then completeFirstBlock
-                                    else pure(this)
+                                    else pure(this.copy(isBlockStarted = Started))
                             } yield res
 
-                        case bc: BlockConfirmed =>
-                            lazy val completeBlockRegular =
-                                sendCompleteRegularBlockAsLeader(config) >> pure(
-                                  Idle.AwaitingBlockBrief(
-                                    connections,
-                                    logger,
-                                    pollResults,
-                                    finalizationLocallyTriggered = finalizationLocallyTriggered,
-                                    mempool = Mempool.empty,
-                                    nextBlockNumber = leadingBlockNumber.increment
-                                  )
-                                )
+                        case bc: (BlockConfirmed & BlockType.NonFinal) =>
+                            def completeBlockRegular =
+                                sendCompleteRegularBlockAsLeader(config) >>
+                                    Idle(
+                                      connections,
+                                      logger,
+                                      pollResults,
+                                      finalizationLocallyTriggered = finalizationLocallyTriggered,
+                                      mempool = Mempool.empty,
+                                      nextBlockNumber = leadingBlockNumber.increment
+                                    ).act(config)
 
-                            lazy val completeBlockFinal =
+                            def completeBlockFinal =
                                 sendCompleteFinalBlockAsLeader(config) >> IO.pure(None)
 
-                            val completeNextBlock =
+                            def completeNextBlock =
                                 if bc.finalizationRequested || finalizationLocallyTriggered.asBoolean
                                 then completeBlockFinal
                                 else completeBlockRegular
@@ -639,14 +645,15 @@ object BlockWeaverNew {
                             // Iff the block confirmed is the previous block
                             if bc.blockNum.increment == leadingBlockNumber
                             then
-                                if startedBlock == Started
+                                if isBlockStarted == Started
                                 then completeNextBlock
                                 else
                                     pure(
                                       Leader.AwaitingRequest(
                                         this,
-                                        previousBlockBriefConfirmed = ???,
-                                        majorBlockWakeupTime = ???
+                                        // TODO: make BlockConfirmed just a full multisigned non-final block
+                                        previousBlockHeaderConfirmed =
+                                            bc.header.asInstanceOf[BlockHeader.NonFinal],
                                       )
                                     )
                             else pure(this)
@@ -673,7 +680,7 @@ object BlockWeaverNew {
                 private[State] def apply(
                     state: State,
                     blockNumber: BlockNumber,
-                    startedBlock: StartedBlock
+                    isBlockStarted: StartedBlock
                 ): Leader.AwaitingConfirmation =
                     import state.*
                     Leader.AwaitingConfirmation(
@@ -682,7 +689,7 @@ object BlockWeaverNew {
                       pollResults,
                       finalizationLocallyTriggered,
                       blockNumber,
-                      startedBlock
+                      isBlockStarted
                     )
 
                 enum StartedBlock:
@@ -694,8 +701,7 @@ object BlockWeaverNew {
                 override val logger: Logger[IO],
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
-                majorBlockWakeupTime: MajorBlockWakeupTime,
-                previousBlockBriefConfirmed: BlockBrief.NonFinal
+                previousBlockHeaderConfirmed: BlockHeader.NonFinal
             ) extends Reactive {
                 override transparent inline def stateName: String = "Leader.AwaitingConfirmation"
 
@@ -704,22 +710,20 @@ object BlockWeaverNew {
 
                 override type Unexpected = PreStart.type | BlockBrief.Next | BlockConfirmed
 
-                private val nextBlockNumber = previousBlockBriefConfirmed.blockNum.increment
+                private val nextBlockNumber = previousBlockHeaderConfirmed.blockNum.increment
 
                 override def react(config: Config)(req: Request): IO[Option[NextState]] =
                     req match {
                         case ur: UserRequestWithId =>
                             val completeBlockRegular = sendCompleteRegularBlockAsLeader(config) >>
-                                pure(
-                                  Idle.AwaitingBlockBrief(
-                                    connections,
-                                    logger,
-                                    pollResults,
-                                    finalizationLocallyTriggered,
-                                    mempool = Mempool.empty,
-                                    nextBlockNumber = nextBlockNumber.increment
-                                  )
-                                )
+                                Idle(
+                                  connections,
+                                  logger,
+                                  pollResults,
+                                  finalizationLocallyTriggered,
+                                  mempool = Mempool.empty,
+                                  nextBlockNumber = nextBlockNumber.increment
+                                ).act(config)
 
                             for {
                                 _ <- sendStartBlock(config)(nextBlockNumber)
@@ -748,24 +752,24 @@ object BlockWeaverNew {
                                         then sendCompleteFinalBlockAsLeader(config) >> IO.pure(None)
                                         else
                                             sendCompleteRegularBlockAsLeader(config)
-                                                >> pure(
-                                                  Idle.AwaitingBlockBrief(
-                                                    connections = connections,
-                                                    logger = logger,
-                                                    pollResults = pollResults,
-                                                    finalizationLocallyTriggered =
-                                                        finalizationLocallyTriggered,
-                                                    mempool = Mempool.empty,
-                                                    nextBlockNumber = nextBlockNumber
-                                                  )
-                                                )
+                                                >>
+                                                    Idle(
+                                                      connections = connections,
+                                                      logger = logger,
+                                                      pollResults = pollResults,
+                                                      finalizationLocallyTriggered =
+                                                          finalizationLocallyTriggered,
+                                                      mempool = Mempool.empty,
+                                                      nextBlockNumber = nextBlockNumber
+                                                    ).act(config)
+
                                 } yield res
 
                             for { // Check if newMajorBlockTime has passed, force new block if so
                                 _ <- logger.info("Timeout received in Leader.AwaitingRequest")
                                 now <- realTimeQuantizedInstant(config.slotConfig)
                                 res <-
-                                    if now >= majorBlockWakeupTime.convert
+                                    if now >= previousBlockHeaderConfirmed.majorBlockWakeupTime.convert
                                     then forceMajorBlock
                                     else pure(this)
                             } yield res
@@ -775,11 +779,10 @@ object BlockWeaverNew {
                     }
             }
 
-            object AwaitingRequest {
+            private object AwaitingRequest {
                 private[State] def apply(
                     state: State,
-                    previousBlockBriefConfirmed: BlockBrief.NonFinal,
-                    majorBlockWakeupTime: MajorBlockWakeupTime
+                    previousBlockHeaderConfirmed: BlockHeader.NonFinal
                 ): Leader.AwaitingRequest =
                     import state.*
                     Leader.AwaitingRequest(
@@ -787,8 +790,7 @@ object BlockWeaverNew {
                       logger,
                       pollResults,
                       finalizationLocallyTriggered,
-                      majorBlockWakeupTime,
-                      previousBlockBriefConfirmed
+                      previousBlockHeaderConfirmed
                     )
             }
         }
