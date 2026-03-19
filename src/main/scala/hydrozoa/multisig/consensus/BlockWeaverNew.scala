@@ -101,15 +101,13 @@ object BlockWeaverNew {
     }
 
     object State {
-        import Idle.*
-
         def start(
             config: Config,
             connections: Connections,
             logger: Logger[IO]
-        ): IO[IdleReactive | Leader] =
+        ): IO[Idle.AwaitingBlockBrief | Leader.AwaitingConfirmation] =
             for {
-                state: Some[IdleReactive | Leader] <- IdleActive(
+                state: Some[Idle.AwaitingBlockBrief | Leader.AwaitingConfirmation] <- Idle(
                   connections = connections,
                   logger = logger,
                   pollResults = PollResults.empty,
@@ -118,7 +116,10 @@ object BlockWeaverNew {
                 ).act(config)
             } yield state.get
 
-        private def continue[S <: State.Reactive](state: S): IO[Some[S]] =
+        /** If the next state is reactive, then the transition into it is pure because no immediate
+          * actions need to be taken.
+          */
+        private def pure[S <: State.Reactive](state: S): IO[Some[S]] =
             IO.pure(Some(state))
 
         // TODO: implement state machine termination.
@@ -167,43 +168,39 @@ object BlockWeaverNew {
                     IO.raiseError(RuntimeException(msg))
         }
 
-        sealed trait Idle
+        final case class Idle private[State] (
+            override val connections: Connections,
+            override val logger: Logger[IO],
+            override val pollResults: PollResults,
+            override val finalizationLocallyTriggered: LocalFinalizationTrigger,
+            override val mempool: Mempool,
+        ) extends Active,
+              WithMempool {
+            override type NextState = Idle.AwaitingBlockBrief | Leader.AwaitingConfirmation
+
+            override def act(config: Config): IO[Some[NextState]] =
+                if config.ownHeadPeerId.isLeader(BlockNumber.zero)
+                then {
+                    logger.info("Starting as Leader.") >>
+                        Leader(this, mempool).act(config)
+                } else {
+                    logger.info("Starting as Idle.") >>
+                        pure(Idle.AwaitingBlockBrief(this, mempool))
+                }
+        }
 
         object Idle {
-            final case class IdleActive private[State] (
-                override val connections: Connections,
-                override val logger: Logger[IO],
-                override val pollResults: PollResults,
-                override val finalizationLocallyTriggered: LocalFinalizationTrigger,
-                override val mempool: Mempool,
-            ) extends Active,
-                  WithMempool {
-                override type NextState = IdleReactive | Leader
+            private[State] def apply(state: State, mempool: Mempool): Idle =
+                import state.*
+                Idle(
+                  connections,
+                  logger,
+                  pollResults,
+                  finalizationLocallyTriggered,
+                  mempool
+                )
 
-                override def act(config: Config): IO[Some[NextState]] =
-                    if config.ownHeadPeerId.isLeader(BlockNumber.zero)
-                    then {
-                        logger.info("Starting as Leader.") >>
-                            continue(Leader(this, BlockNumber.zero, Leader.StartedBlock.NotStarted))
-                    } else {
-                        logger.info("Starting as Idle.") >>
-                            continue(IdleReactive(this, mempool))
-                    }
-            }
-
-            object IdleActive {
-                private[State] def apply(state: State, mempool: Mempool): IdleActive =
-                    import state.*
-                    IdleActive(
-                      connections,
-                      logger,
-                      pollResults,
-                      finalizationLocallyTriggered,
-                      mempool
-                    )
-            }
-
-            final case class IdleReactive private[State] (
+            final case class AwaitingBlockBrief private[State] (
                 override val connections: Connections,
                 override val logger: Logger[IO],
                 override val pollResults: PollResults,
@@ -211,7 +208,7 @@ object BlockWeaverNew {
                 override val mempool: Mempool,
             ) extends Reactive,
                   WithMempool {
-                override type NextState = IdleReactive | FollowerAwaiting
+                override type NextState = Idle.AwaitingBlockBrief | Follower.AwaitingRequest
 
                 override type Unexpected = PreStart.type | BlockConfirmed
 
@@ -222,7 +219,7 @@ object BlockWeaverNew {
                         case ur: UserRequestWithId =>
                             val newMempool = mempool.add(ur)
                             logger.trace(s"Adding ${ur.requestId} to mempool.") >>
-                                continue(copy(mempool = newMempool))
+                                pure(copy(mempool = newMempool))
 
                         case bb: BlockBrief.Next =>
                             logger.info(s"New block brief ${bb.blockNum}.") >>
@@ -230,21 +227,21 @@ object BlockWeaverNew {
 
                         case pr: PollResults =>
                             logger.trace("New poll results.") >>
-                                continue(copy(pollResults = pr))
+                                pure(copy(pollResults = pr))
 
                         case ft: LocalFinalizationTrigger.Triggered.type =>
                             logger.info("Finalization was locally triggered.") >>
-                                continue(copy(finalizationLocallyTriggered = ft))
+                                pure(copy(finalizationLocallyTriggered = ft))
 
                         case m: Unexpected =>
                             panicUnexpectedRequest(this, m)
                     }
             }
 
-            object IdleReactive {
-                private[Idle] def apply(state: State, mempool: Mempool): IdleReactive =
+            object AwaitingBlockBrief {
+                private[Idle] def apply(state: State, mempool: Mempool): Idle.AwaitingBlockBrief =
                     import state.*
-                    IdleReactive(
+                    Idle.AwaitingBlockBrief(
                       connections,
                       logger,
                       pollResults,
@@ -263,7 +260,7 @@ object BlockWeaverNew {
             reproducingBlockBrief: BlockBrief.Next,
         ) extends Active,
               WithMempool {
-            override type NextState = IdleReactive | FollowerAwaiting
+            override type NextState = Idle.AwaitingBlockBrief | Follower.AwaitingRequest
 
             def act(config: Config): IO[Some[NextState]] = ???
         }
@@ -283,160 +280,181 @@ object BlockWeaverNew {
                   mempool,
                   reproducingBlockBrief
                 )
-        }
 
-        final case class FollowerAwaiting private (
-            override val connections: Connections,
-            override val logger: Logger[IO],
-            override val pollResults: PollResults,
-            override val finalizationLocallyTriggered: LocalFinalizationTrigger,
-            override val mempool: Mempool,
-            reproducingBlockBrief: BlockBrief.Next,
-            awaitingRequestId: RequestId,
-        ) extends Reactive,
-              WithMempool {
-            override type NextState = IdleReactive | FollowerAwaiting
-
-            override type Unexpected = PreStart.type | BlockBrief.Next | BlockConfirmed
-
-            override def react(config: Config)(req: Request): IO[Option[NextState]] =
-                req match {
-                    case ur: UserRequestWithId =>
-                        if ur.requestId == awaitingRequestId then
-                            for {
-                                _ <- IO.unit
-                            } yield ???
-                        else {
-                            val newMempool = mempool.add(ur)
-                            logger.trace(s"Adding ${ur.requestId} to mempool.") >>
-                                continue(copy(mempool = newMempool))
-                        }
-
-                    case pr: PollResults =>
-                        logger.trace("New poll results.") >>
-                            continue(copy(pollResults = pr))
-
-                    case ft: LocalFinalizationTrigger.Triggered.type =>
-                        logger.info("Finalization was locally triggered.") >>
-                            continue(copy(finalizationLocallyTriggered = ft))
-
-                    case unexpected: Unexpected =>
-                        panicUnexpectedRequest(this, unexpected)
-                }
-        }
-
-        object FollowerAwaiting {
-            private[State] def apply(
-                state: State,
-                mempool: Mempool,
+            final case class AwaitingRequest private (
+                override val connections: Connections,
+                override val logger: Logger[IO],
+                override val pollResults: PollResults,
+                override val finalizationLocallyTriggered: LocalFinalizationTrigger,
+                override val mempool: Mempool,
                 reproducingBlockBrief: BlockBrief.Next,
-                awaitingRequestId: RequestId
-            ): FollowerAwaiting =
-                import state.*
-                FollowerAwaiting(
-                  connections,
-                  logger,
-                  pollResults,
-                  finalizationLocallyTriggered,
-                  mempool,
-                  reproducingBlockBrief,
-                  awaitingRequestId
-                )
+                awaitingRequestId: RequestId,
+            ) extends Reactive,
+                  WithMempool {
+                override type NextState = Idle.AwaitingBlockBrief | Follower.AwaitingRequest
+
+                override type Unexpected = PreStart.type | BlockBrief.Next | BlockConfirmed
+
+                override def react(config: Config)(req: Request): IO[Option[NextState]] =
+                    req match {
+                        case ur: UserRequestWithId =>
+                            if ur.requestId == awaitingRequestId then
+                                for {
+                                    _ <- IO.unit
+                                } yield ???
+                            else {
+                                val newMempool = mempool.add(ur)
+                                logger.trace(s"Adding ${ur.requestId} to mempool.") >>
+                                    pure(copy(mempool = newMempool))
+                            }
+
+                        case pr: PollResults =>
+                            logger.trace("New poll results.") >>
+                                pure(copy(pollResults = pr))
+
+                        case ft: LocalFinalizationTrigger.Triggered.type =>
+                            logger.info("Finalization was locally triggered.") >>
+                                pure(copy(finalizationLocallyTriggered = ft))
+
+                        case unexpected: Unexpected =>
+                            panicUnexpectedRequest(this, unexpected)
+                    }
+            }
+
+            object AwaitingRequest {
+                private[State] def apply(
+                    state: State,
+                    mempool: Mempool,
+                    reproducingBlockBrief: BlockBrief.Next,
+                    awaitingRequestId: RequestId
+                ): Follower.AwaitingRequest =
+                    import state.*
+                    Follower.AwaitingRequest(
+                      connections,
+                      logger,
+                      pollResults,
+                      finalizationLocallyTriggered,
+                      mempool,
+                      reproducingBlockBrief,
+                      awaitingRequestId
+                    )
+            }
         }
 
-        final case class Leader private (
+        final case class Leader(
             override val connections: Connections,
             override val logger: Logger[IO],
             override val pollResults: PollResults,
             override val finalizationLocallyTriggered: LocalFinalizationTrigger,
-            leadingBlockNumber: BlockNumber,
-            startedBlock: Leader.StartedBlock
-        ) extends Reactive {
-            override type NextState = IdleReactive | Leader | LeaderAwaiting
+            override val mempool: Mempool
+        ) extends Active,
+              WithMempool {
+            override type NextState = Leader.AwaitingConfirmation
 
-            override type Unexpected = PreStart.type | BlockBrief.Next
-
-            override def react(config: Config)(req: Request): IO[Option[NextState]] =
-                req match {
-                    case ur: UserRequestWithId => ???
-
-                    case bc: BlockConfirmed => ???
-
-                    case pr: PollResults =>
-                        logger.trace("New poll results.") >>
-                            continue(copy(pollResults = pr))
-
-                    case ft: LocalFinalizationTrigger.Triggered.type =>
-                        logger.info("Finalization was locally triggered.") >>
-                            continue(copy(finalizationLocallyTriggered = ft))
-
-                    case unexpected: Unexpected =>
-                        panicUnexpectedRequest(this, unexpected)
-                }
+            override def act(config: Config): IO[Some[NextState]] = ???
         }
 
         object Leader {
-            private[State] def apply(
-                state: State,
-                blockNumber: BlockNumber,
-                startedBlock: StartedBlock
-            ): Leader =
+            private[State] def apply(state: State, mempool: Mempool): Leader = {
                 import state.*
-                Leader(
-                  connections,
-                  logger,
-                  pollResults,
-                  finalizationLocallyTriggered,
-                  blockNumber,
-                  startedBlock
-                )
+                Leader(connections, logger, pollResults, finalizationLocallyTriggered, mempool)
+            }
 
-            enum StartedBlock:
-                case Started, NotStarted
-        }
+            final case class AwaitingConfirmation private (
+                override val connections: Connections,
+                override val logger: Logger[IO],
+                override val pollResults: PollResults,
+                override val finalizationLocallyTriggered: LocalFinalizationTrigger,
+                leadingBlockNumber: BlockNumber,
+                startedBlock: Leader.AwaitingConfirmation.StartedBlock
+            ) extends Reactive {
+                override type NextState = Idle.AwaitingBlockBrief | Leader.AwaitingConfirmation |
+                    Leader.AwaitingRequest
 
-        final case class LeaderAwaiting private (
-            override val connections: Connections,
-            override val logger: Logger[IO],
-            override val pollResults: PollResults,
-            override val finalizationLocallyTriggered: LocalFinalizationTrigger,
-            previousBlockBriefConfirmed: BlockBrief.NonFinal
-        ) extends Reactive {
-            override type NextState = IdleReactive | LeaderAwaiting
+                override type Unexpected = PreStart.type | BlockBrief.Next
 
-            override type Unexpected = PreStart.type | BlockBrief.Next | BlockConfirmed
+                override def react(config: Config)(req: Request): IO[Option[NextState]] =
+                    req match {
+                        case ur: UserRequestWithId => ???
 
-            override def react(config: Config)(req: Request): IO[Option[NextState]] =
-                req match {
-                    case ur: UserRequestWithId => ???
+                        case bc: BlockConfirmed => ???
 
-                    case pr: PollResults =>
-                        logger.trace("New poll results.") >>
-                            continue(copy(pollResults = pr))
+                        case pr: PollResults =>
+                            logger.trace("New poll results.") >>
+                                pure(copy(pollResults = pr))
 
-                    case ft: LocalFinalizationTrigger.Triggered.type =>
-                        logger.info("Finalization was locally triggered.") >>
-                            continue(copy(finalizationLocallyTriggered = ft))
+                        case ft: LocalFinalizationTrigger.Triggered.type =>
+                            logger.info("Finalization was locally triggered.") >>
+                                pure(copy(finalizationLocallyTriggered = ft))
 
-                    case unexpected: Unexpected =>
-                        panicUnexpectedRequest(this, unexpected)
-                }
-        }
+                        case unexpected: Unexpected =>
+                            panicUnexpectedRequest(this, unexpected)
+                    }
+            }
 
-        object LeaderAwaiting {
-            private[State] def apply(
-                state: State,
+            object AwaitingConfirmation {
+                private[State] def apply(
+                    state: State,
+                    blockNumber: BlockNumber,
+                    startedBlock: StartedBlock
+                ): Leader.AwaitingConfirmation =
+                    import state.*
+                    Leader.AwaitingConfirmation(
+                      connections,
+                      logger,
+                      pollResults,
+                      finalizationLocallyTriggered,
+                      blockNumber,
+                      startedBlock
+                    )
+
+                enum StartedBlock:
+                    case Started, NotStarted
+            }
+
+            final case class AwaitingRequest private (
+                override val connections: Connections,
+                override val logger: Logger[IO],
+                override val pollResults: PollResults,
+                override val finalizationLocallyTriggered: LocalFinalizationTrigger,
                 previousBlockBriefConfirmed: BlockBrief.NonFinal
-            ): LeaderAwaiting =
-                import state.*
-                LeaderAwaiting(
-                  connections,
-                  logger,
-                  pollResults,
-                  finalizationLocallyTriggered,
-                  previousBlockBriefConfirmed
-                )
-        }
+            ) extends Reactive {
+                override type NextState = Idle.AwaitingBlockBrief | Leader.AwaitingConfirmation |
+                    Leader.AwaitingRequest
 
+                override type Unexpected = PreStart.type | BlockBrief.Next | BlockConfirmed
+
+                override def react(config: Config)(req: Request): IO[Option[NextState]] =
+                    req match {
+                        case ur: UserRequestWithId => ???
+
+                        case pr: PollResults =>
+                            logger.trace("New poll results.") >>
+                                pure(copy(pollResults = pr))
+
+                        case ft: LocalFinalizationTrigger.Triggered.type =>
+                            logger.info("Finalization was locally triggered.") >>
+                                pure(copy(finalizationLocallyTriggered = ft))
+
+                        case unexpected: Unexpected =>
+                            panicUnexpectedRequest(this, unexpected)
+                    }
+            }
+
+            object AwaitingRequest {
+                private[State] def apply(
+                    state: State,
+                    previousBlockBriefConfirmed: BlockBrief.NonFinal
+                ): Leader.AwaitingRequest =
+                    import state.*
+                    Leader.AwaitingRequest(
+                      connections,
+                      logger,
+                      pollResults,
+                      finalizationLocallyTriggered,
+                      previousBlockBriefConfirmed
+                    )
+            }
+        }
     }
 }
