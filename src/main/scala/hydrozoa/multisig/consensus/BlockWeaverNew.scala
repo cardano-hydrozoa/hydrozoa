@@ -217,7 +217,7 @@ object BlockWeaverNew {
                 )(req: Request): IO[Option[NextState]] =
                     req match {
                         case ur: UserRequestWithId =>
-                            val newMempool = mempool.add(ur)
+                            val newMempool = mempool.unsafeAddRequest(ur)
                             logger.trace(s"Adding ${ur.requestId} to mempool.") >>
                                 pure(copy(mempool = newMempool))
 
@@ -303,7 +303,7 @@ object BlockWeaverNew {
                                     _ <- IO.unit
                                 } yield ???
                             else {
-                                val newMempool = mempool.add(ur)
+                                val newMempool = mempool.unsafeAddRequest(ur)
                                 logger.trace(s"Adding ${ur.requestId} to mempool.") >>
                                     pure(copy(mempool = newMempool))
                             }

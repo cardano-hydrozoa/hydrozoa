@@ -20,6 +20,14 @@ final case class Mempool(
 
     private val logger = Logging.logger("Mempool")
 
+    def isEmpty: Boolean = requests.isEmpty
+
+    /** Retrieve a request from the mempool, by the request's ID.
+     * @param requestId
+     *   the request's ID
+     */
+    def getRequest(requestId: RequestId): Option[UserRequestWithId] = requests.get(requestId)
+
     /** Add a request to the mempool
       *
       * @param request
@@ -29,7 +37,7 @@ final case class Mempool(
       * @throws IllegalArgumentException
       *   if a duplicate is detected
       */
-    def add(
+    def unsafeAddRequest(
         request: UserRequestWithId
     ): Mempool = {
 
@@ -38,7 +46,7 @@ final case class Mempool(
         require(
           !requests.contains(requestId), {
               val msg =
-                  s"Panic: attempting to add a duplicate request ID into the mempool: $requestId"
+                  s"Panic: attempting to add a duplicate request ID (${requestId.asI64}) into the mempool: $requestId"
               logger.error(msg)
               msg
           }
@@ -50,6 +58,23 @@ final case class Mempool(
         )
     }
 
+    /** Retrieve all mempool requests by order of arrival.
+     * @throws RuntimeException
+     *   if the mempool's [[arrivalOrder]] vector contains a request ID that is missing from its
+     *   [[requests]] map.
+     */
+    private def unsafeGetRequestsInOrder: IterableOnce[UserRequestWithId] =
+        arrivalOrder.iterator.map(requestId => {
+            requests.getOrElse(
+                requestId, {
+                    val msg = s"Panic: the mempool's `arrivalOrder` vector has a request ID (${requestId.asI64}) that" +
+                        s" is missing from the mempool's `requests` map."
+                    logger.error(msg)
+                    throw RuntimeException(msg)
+                }
+            )
+        })
+
     /** Remove a request (by request ID) from the mempool.
       * @param requestId
       *   the request's ID
@@ -58,50 +83,26 @@ final case class Mempool(
       * @throws IllegalArgumentException
       *   if the [[requestId]] is already missing from the mempool.
       */
-    def remove(requestId: RequestId): Mempool = {
-        require(
-          requests.contains(requestId), {
-              val msg =
-                  s"Panic: attempting to remove a request ID that is missing from the mempool: $requestId"
-              logger.error(msg)
-              msg
-          }
-        )
-        copy(
+    private def unsafeExtractRequest(requestId: RequestId): (Mempool, UserRequestWithId) = {
+        val requestWithId = requests.getOrElse(requestId, {
+            val msg =
+                s"Panic: attempting to remove a request ID (${requestId.asI64}) that is missing from the mempool: $requestId"
+            logger.error(msg)
+            throw IllegalArgumentException(msg)
+        })
+
+        val newMempool = copy(
           requests = requests - requestId,
           arrivalOrder = arrivalOrder.filterNot(_ == requestId)
         )
+
+        (newMempool, requestWithId)
     }
-
-    /** Retrieve a request from the mempool, by the request's ID.
-      * @param requestId
-      *   the request's ID
-      */
-    def get(requestId: RequestId): Option[UserRequestWithId] = requests.get(requestId)
-
-    /** Retrieve all mempool requests by order of arrival.
-      * @throws RuntimeException
-      *   if the mempool's [[arrivalOrder]] vector contains a request ID that is missing from its
-      *   [[requests]] map.
-      */
-    def inOrder: IterableOnce[UserRequestWithId] =
-        arrivalOrder.iterator.map(requestId => {
-            requests.getOrElse(
-              requestId, {
-                  val msg = s"Panic: the mempool's `arrivalOrder` vector has a request ID that" +
-                      s" is missing from the mempool's `requests` map."
-                  logger.error(msg)
-                  throw RuntimeException(msg)
-              }
-            )
-        })
-
-    def isEmpty: Boolean = requests.isEmpty
 }
 
 object Mempool {
     val empty: Mempool = Mempool()
 
     def apply(events: Seq[UserRequestWithId]): Mempool =
-        events.foldLeft(Mempool.empty)((mempool, request) => mempool.add(request))
+        events.foldLeft(Mempool.empty)((mempool, request) => mempool.unsafeAddRequest(request))
 }
