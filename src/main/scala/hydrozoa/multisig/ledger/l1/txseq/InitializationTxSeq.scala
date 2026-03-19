@@ -134,7 +134,7 @@ private object InitializationTxSeqOps {
                     .map(Slot.apply)
 
                 _ <-
-                    if fallbackValidityStartSlot == expectedFallbackValidityStart
+                    if fallbackValidityStartSlot == expectedFallbackValidityStart.toSlot
                     then Right(())
                     else
                         Left(

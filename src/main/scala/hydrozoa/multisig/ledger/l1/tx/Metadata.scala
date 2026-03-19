@@ -168,6 +168,7 @@ object Metadata {
             Right(Finalization())
     }
 
+    // FIXME: All of these must be non-negative.
     case class Initialization(
         multisigTreasuryIx: Int,
         multisigRegimeIx: Int,
@@ -212,18 +213,20 @@ object Metadata {
                     )
 
                 multisigTreasuryIx <- multisigTreasuryIxRaw match {
-                    case i: Metadatum.Int => Right(i.value.intValue)
+                    case i: Metadatum.Int if i.value >= 0L => Right(i.value.intValue)
                     case _ => Left(WrongMetadataValue("multisigTreasuryIx", multisigTreasuryIxRaw))
                 }
 
                 multisigRegimeIx <- multisigRegimeIxRaw match {
-                    case i: Metadatum.Int => Right(i.value.intValue)
+                    case i: Metadatum.Int
+                        if i.value >= 0L && i.value.intValue() != multisigTreasuryIx =>
+                        Right(i.value.intValue)
                     case _ => Left(WrongMetadataValue("multisigRegimeIx", multisigRegimeIxRaw))
                 }
 
                 seedIx <- seedIxRaw match {
-                    case i: Metadatum.Int => Right(i.value.intValue)
-                    case _                => Left(WrongMetadataValue("seedIx", seedIxRaw))
+                    case i: Metadatum.Int if i.value >= 0 => Right(i.value.intValue)
+                    case _ => Left(WrongMetadataValue("seedIx", seedIxRaw))
                 }
             } yield Initialization(
               multisigTreasuryIx = multisigTreasuryIx,

@@ -21,7 +21,6 @@ import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag.{Invalid, Valid}
 import hydrozoa.multisig.ledger.joint.EvacuationMap.applyDiffs
 import hydrozoa.multisig.ledger.joint.JointLedger.*
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.*
-import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.l1.L1LedgerM
 import hydrozoa.multisig.ledger.l1.L1LedgerM.*
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
@@ -33,14 +32,11 @@ import monocle.Focus.focus
 import scalus.cardano.ledger.{SlotConfig, TransactionInput}
 import scalus.uplc.builtin.ByteString
 
-// Fields of a work-in-progress block pertaining to user requests, with an additional field for dealing with withdrawn utxos
 private case class UserRequestState(
     requests: List[(RequestId, ValidityFlag)],
     postDatedRefundTxs: Vector[RefundTx.PostDated]
 )
 
-// NOTE: Joint ledger is created by the MultisigManager.
-// NOTE: As of 2025-11-16, George says BlockWeaver should be the ONLY actor calling the joint ledger
 final case class JointLedger(
     config: JointLedger.Config,
     pendingConnections: MultisigRegimeManager.PendingConnections | JointLedger.Connections,
@@ -643,7 +639,7 @@ final case class JointLedger(
               p,
               L1LedgerM.finalizeLedger(
                 payoutObligationsRemaining = Vector.from(
-                  p.evacuationMap.evacuationMap.map((_, o) => Payout.Obligation(o))
+                  p.evacuationMap.evacuationMap.values
                 ),
                 competingFallbackValidityStart = p.competingFallbackTxTime
               )

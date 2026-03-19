@@ -1,6 +1,8 @@
 package test
 
 import cats.data.{NonEmptyList, NonEmptyVector}
+import cats.syntax.all.toTraverseOps
+import cats.{Hash as _, *}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.value.coin.Distribution
 import hydrozoa.lib.cardano.value.coin.Distribution.NormalizedWeights
@@ -27,12 +29,20 @@ import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.{Babbage, valueLens}
 import scalus.cardano.onchain.plutus.prelude.Option as SOption
+import scalus.cardano.txbuilder.TransactionBuilder
 import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
 import scalus.uplc.builtin.Data.toData
 import scalus.uplc.builtin.{ByteString, Data}
 import scalus.|>
 import spire.math.{Rational, SafeLong}
-import test.Generators.Hydrozoa.genAdaOnlyPubKeyUtxo
+import test.Generators.Hydrozoa.{genPositiveValue, genPubKeyUtxo}
+
+// Annoyingly, `Gen` doesn't have `Monad[Gen]` already. But I want to use `traverse`, so I'm vendoring it here
+given genMonad: Monad[Gen] = new Monad[Gen] {
+    def pure[A](a: A): Gen[A] = Gen.const(a)
+    def flatMap[A, B](fa: Gen[A])(f: A => Gen[B]): Gen[B] = fa.flatMap(f)
+    def tailRecM[A, B](a: A)(f: A => Gen[Either[A, B]]): Gen[B] = Gen.tailRecM(a)(f)
+}
 
 /** This module contains shared generators and arbitrary instances that may be shared among multiple
   * tests. We separate them into "Hydrozoa" and "Other" objects for ease of upstreaming.
@@ -89,11 +99,20 @@ object Generators {
             )
         }
 
-        /** Generate a positive Ada value */
-        val genAdaOnlyValue: Gen[Value] =
+        /** Generate a value */
+        def genValue(genCoin: Gen[Coin], genMultiAsset: Gen[MultiAsset]): Gen[Value] =
             for {
-                coin <- arbitrary[Coin]
-            } yield Value(coin)
+                coin <- genCoin
+                ma <- genMultiAsset
+            } yield Value(coin, ma)
+
+        /** Helper generator with sensible defaults. The value will have at least 5 ada and may
+          * contain multiassets.
+          */
+        val genPositiveValue: Gen[Value] = genValue(
+          genCoin = Arbitrary.arbitrary[Coin].map(_ + Coin.ada(5)),
+          genMultiAsset = Arbitrary.arbitrary[MultiAsset].map(_.onlyPositive)
+        )
 
         val genAddrKeyHash: Gen[AddrKeyHash] =
             genByteStringOfN(28).map(AddrKeyHash.fromByteString)
@@ -161,16 +180,19 @@ object Generators {
           script = script
         )
 
-        def genPayoutObligation(network: CardanoNetwork.Section): Gen[Payout.Obligation] =
+        def genPayoutObligation(
+            network: CardanoNetwork.Section,
+            genValue: Gen[Value] = Hydrozoa.genPositiveValue
+        ): Gen[Payout.Obligation] =
             for {
-                coin <- arbitrary[Coin]
-                res <- genKnownCoinPayoutObligation(network, coin)
+                value <- genValue
+                res <- genKnownValuePayoutObligationWithMinAdaEnsured(network, value)
             } yield res
 
-        def genKnownCoinPayoutObligation(
+        def genKnownValuePayoutObligationWithMinAdaEnsured(
             network: CardanoNetwork.Section,
-            coin: Coin
-        ): Gen[Payout.Obligation] =
+            value: Value
+        ): Gen[Payout.Obligation] = {
             for {
                 l2Input <- arbitrary[TransactionInput]
 
@@ -179,75 +201,74 @@ object Generators {
                 datum <- arbitrary[ByteString]
                 output = Babbage(
                   address = address,
-                  value = Value(coin),
+                  value = value,
                   datumOption = Some(Inline(datum.toData)),
                   scriptRef = None
                 )
-            } yield Payout.Obligation(utxo = KeepRaw(output))
+            } yield Payout
+                .Obligation(KeepRaw(ensureMinAda(output, network.cardanoProtocolParams)), network)
+                .toOption
+                .get
+        }
 
         /** Ada-only pub key utxo from the given peer, at least minAda, random tx id, random index,
           * no datum, no script ref
           */
         // TODO: make this take all fields as Option and default to generation if None.
-        def genAdaOnlyPubKeyUtxo(
+        def genPubKeyUtxo(
             config: CardanoNetwork.Section,
             address: Address,
-            minimumCoin: Coin = Coin.zero,
-            datumGenerator: Option[Gen[Option[DatumOption]]] = None
+            genValue: Gen[Value],
+            datumGenerator: Option[Gen[Option[DatumOption]]] = None,
+            ensureMinAda: Boolean = false
         ): Gen[Utxo] =
             for {
                 txId <- arbitrary[TransactionInput]
-                txOutput <- genAdaOnlyBabbageOutput(
+                txOutput <- genBabbageOutput(
                   address,
                   config,
-                  minimumCoin,
-                  datumGenerator
+                  genValue,
+                  datumGenerator,
+                  ensureMinAda
                 )
             } yield Utxo(txId, txOutput)
 
-        /** @param peer
-          *   The test peer who's PKH this output will be at
-          * @param minimumCoin
-          *   an optional minimum coin. Should be positive, defaults to 0
-          * @param datumGenerator
-          *   an Optional datum generator. Will generate an empty datum if not passed
-          * @return
-          */
-        def genAdaOnlyBabbageOutput(
+        def genBabbageOutput(
             address: Address,
             config: CardanoNetwork.Section,
-            minimumCoin: Coin = Coin.zero,
-            datumGenerator: Option[Gen[Option[DatumOption]]] = None
+            genValue: Gen[Value],
+            datumGenerator: Option[Gen[Option[DatumOption]]] = None,
+            ensureMinAda: Boolean = false
         ): Gen[Babbage] =
             for {
-                value <- genAdaOnlyValue
-                coin <- arbitrary[Coin].map(_ + minimumCoin)
-
+                value <- genValue
                 datum <- datumGenerator match {
                     case None      => Gen.const(None)
                     case Some(gen) => gen
                 }
-                txOutput: TransactionOutput.Babbage = ensureMinAda(
-                  Babbage(
-                    address = address, // peer.address(config.network),
-                    value = Value(coin),
-                    datumOption = datum,
-                    scriptRef = None
-                  ),
-                  config.cardanoProtocolParams
-                ).asInstanceOf[Babbage].focus(_.value).modify(_ + value)
-            } yield txOutput
+                babbage = Babbage(
+                  address = address, // peer.address(config.network),
+                  value = value,
+                  datumOption = datum,
+                  scriptRef = None
+                )
+            } yield
+                if ensureMinAda
+                then
+                    TransactionBuilder
+                        .ensureMinAda(babbage, config.cardanoProtocolParams)
+                        .asInstanceOf[Babbage]
+                else babbage
 
         // Has duplication with genAdaOnlyBabbageOutput
         def genGenesisObligation(
             config: CardanoNetwork.Section,
             address: ShelleyAddress,
-            minimumCoin: Coin = Coin.zero,
-            datumGenerator: Option[Gen[Option[Inline]]] = None
+            datumGenerator: Option[Gen[Option[Inline]]] = None,
+            genValue: Gen[Value]
         ): Gen[GenesisObligation] =
             for {
-                value <- genAdaOnlyValue
-                coin <- arbitrary[Coin].map(_ + minimumCoin)
+                value <- genValue
 
                 datum <- datumGenerator match {
                     case None      => Gen.const(None)
@@ -256,12 +277,12 @@ object Generators {
                 txOutput: TransactionOutput.Babbage = ensureMinAda(
                   Babbage(
                     address = address, // peer.address(config.network),
-                    value = Value(coin),
+                    value = value,
                     datumOption = datum,
                     scriptRef = None
                   ),
                   config.cardanoProtocolParams
-                ).asInstanceOf[Babbage].focus(_.value).modify(_ + value)
+                ).asInstanceOf[Babbage]
 
                 genesisObligation = GenesisObligation(
                   l2OutputPaymentAddress = address.payment, // peer.address(config.network).payment,
@@ -270,7 +291,7 @@ object Generators {
                       case None    => SOption.None
                       case Some(d) => SOption.Some(d.data)
                   },
-                  l2OutputValue = txOutput.value.coin,
+                  l2OutputValue = txOutput.value,
                   l2OutputRefScript = None
                 )
 
@@ -340,7 +361,7 @@ object Generators {
             // Violates "AllInputsMustBeInUtxoValidator" ledger rule
             def inputsNotInUtxoAttack: (EutxoL2Ledger.Config, EutxoL2Ledger.State, L2Tx) => (
                 L2Tx,
-                (String | TransactionException)
+                String | TransactionException
             ) =
                 (context, state, transaction) => {
                     // Generate a random TxId that is _not_ present in the state
@@ -424,7 +445,13 @@ object Generators {
                       datumOption = Some(Inline(datum.toData)),
                       scriptRef = None
                     )
-                } yield Payout.Obligation(utxo = KeepRaw(output))
+                } yield Payout
+                    .Obligation(
+                      KeepRaw(output),
+                      CardanoNetwork.fromOrdinal(address.network.networkId.toInt)
+                    )
+                    .toOption
+                    .get
             }
 
         }
@@ -494,7 +521,7 @@ object Generators {
           * this initial distribution, it is evenly spread across the shares (in order) until it is
           * exhausted.
           */
-        def distribution(amount: SafeLong, n: Int): Gen[NonEmptyList[SafeLong]] = {
+        def genDistribution(amount: SafeLong, n: Int): Gen[NonEmptyList[SafeLong]] = {
             require(
               n > 0,
               "`distribution(amount: SafeLong, n : Int) : Gen[NonEmptyList[SafeLong]]` requires a positive `n`, but it " +
@@ -511,63 +538,122 @@ object Generators {
             require(
               n > 0,
               "`genCoinDistribution(coin: Coin, n : Int) : Gen[NonEmptyList[Coin]]` requires a positive `n`, but it " +
-                  s"received ${n}"
+                  s"received $n"
             )
-            distribution(SafeLong(coin.value), n).map(nel => nel.map(sl => Coin(sl.toLong)))
+            genDistribution(SafeLong(coin.value), n).map(nel => nel.map(sl => Coin(sl.toLong)))
         }
 
-        /** Distribute an amount of coin over transaction outputs, ensuring that min ada
+        def genValueDistribution(value: Value, n: Int): Gen[NonEmptyList[Value]] = {
+            require(
+              n > 0,
+              "`genValueDistribution(value: Value, n : Int) : Gen[NonEmptyList[Value]]` requires a positive `n`, but it " +
+                  s"received $n"
+            )
+            val genCoinDist: Gen[NonEmptyList[Value]] =
+                genCoinDistribution(value.coin, n).map(_.map(Value(_)))
+
+            val flat: Iterable[(PolicyId, AssetName, Long)] =
+                value.assets.assets.flatMap((policyId, innerMap) =>
+                    innerMap.map((assetName, amount) => (policyId, assetName, amount))
+                )
+
+            // Strategy:
+            //   - Start with a constant generator of the coin dist accumulator
+            //   - For each policyId, assetName, amount in the (flattened) total to be distributed:
+            //     - Do a single (scalar) distribution of the amount
+            //     - convert it to a multiasset distribution
+            //     - map over the accumulator generator, zip the generator distribution with the
+            //       multiasset distribution and sum element-wise (can these be fused?)
+            flat.foldLeft(genCoinDist) { case (genDist, (policyId, assetName, amount)) =>
+                for {
+                    singleAssetDist <- genDistribution(SafeLong(amount), n)
+
+                    res <- genDist.map(dist =>
+                        dist.zip(singleAssetDist)
+                            .map((baseDist, additionalAmount) =>
+                                val asValue = Value(
+                                  Coin.zero,
+                                  MultiAsset.asset(policyId, assetName, additionalAmount.toLong)
+                                )
+                                baseDist + asValue
+                            )
+                    )
+                } yield res
+            }
+        }
+
+        /** Distribute an amount of value over transaction outputs, ensuring that min ada
           * requirements are first met. This will ONLY increase the lovelace in each transaction
           * output and will throw an exception if there is not enough ada to cover min ada.
-          * @param additionalCoin
-          *   additional coin to add to the existing value in [[transactionOutputs]]
+          * @param additionalValue
+          *   additional value to add to the existing value in [[transactionOutputs]]
           */
-        def genAdditionalCoinDistributionWithMinAda(
-            additionalCoin: Coin,
+        def genAdditionalValueDistributionWithMinAda(
+            additionalValue: Value,
             transactionOutputs: NonEmptyList[TransactionOutput],
             params: ProtocolParams
         ): Gen[NonEmptyList[TransactionOutput]] =
 
-            val sumBefore = transactionOutputs.toList.map(_.value.coin.value).sum
+            val coinSumBefore = transactionOutputs.toList.map(_.value.coin.value).sum
             val withMinAda = transactionOutputs.toList.map(ensureMinAda(_, params))
             val withMinAdaSum = withMinAda.map(_.value.coin.value).sum
-            val remainderToDistribute = additionalCoin.value - (withMinAdaSum - sumBefore)
+            val remainderCoinToDistribute =
+                additionalValue.coin.value - (withMinAdaSum - coinSumBefore)
             require(
-              remainderToDistribute >= 0,
+              remainderCoinToDistribute >= 0,
               "genCoinDistribution: there is not enough lovelace" +
                   " to distribute while ensuring minAda is met."
             )
             for {
-                coinDist <- genCoinDistribution(
-                  Coin(remainderToDistribute),
+                valueDist <- genValueDistribution(
+                  Value(coin = Coin(remainderCoinToDistribute), additionalValue.assets),
                   transactionOutputs.length
                 )
-                zipped = withMinAda.zip(coinDist.toList)
+
+                zipped = withMinAda.zip(valueDist.toList)
                 summed: List[TransactionOutput] = zipped.foldRight(List.empty)((x, acc) => {
                     val to: TransactionOutput = x._1
-                    val coin: Coin = x._2
-                    (to |> valueLens
-                        .andThen(Focus[Value](_.coin.value))
-                        .modify(_ + coin.value)) :: acc
+                    val extraValue = x._2
+                    (to |> valueLens.modify(_ + extraValue)) :: acc
                 })
             } yield NonEmptyList.fromListUnsafe(summed)
 
-        /** Like [[genAdditionalCoinDistributionWithMinAda]], but replaces the transaction output
+        /** Like [[genAdditionalValueDistributionWithMinAda]], but replaces the transaction output
           * for a given list of utxos.
           */
-        def genCoinDistributionWithMinAdaUtxo(
-            coin: Coin,
+        def genValueDistributionWithMinAdaUtxo(
+            value: Value,
             utxoList: NonEmptyList[Utxo],
             params: ProtocolParams
         ): Gen[NonEmptyList[Utxo]] =
             val transactionOutputs = utxoList.map(_.output)
             for {
-                outputDist <- genAdditionalCoinDistributionWithMinAda(
-                  coin,
+                outputDist <- genAdditionalValueDistributionWithMinAda(
+                  value,
                   transactionOutputs,
                   params
                 )
             } yield utxoList.map(_.input).zip(outputDist).map(Utxo(_))
+
+        /** We need to be able to generate deposit utxos and payouts with a consistent set of
+          * allowed assets, otherwise the treasury utxo will exceed size limits (i.e., if we do 10
+          * deposits and payouts which each have 10 unique policy id <> assetname pairs, we end up
+          * with 200 pairs total).
+          *
+          * This helps with that by distributing a single value.
+          */
+        def genSequencedValueDistribution[A](
+            maxNumValues: Int,
+            mapping: Value => Gen[A],
+            minCoin: Coin = Coin.zero
+        ): Gen[NonEmptyList[A]] =
+            for {
+                totalValue <- genPositiveValue
+                nValues <- Gen.choose(1, maxNumValues)
+                valueDist <- genValueDistribution(totalValue, nValues)
+                valueDistWithMinAda = valueDist.map(_.focus(_.coin).modify(_ + minCoin))
+                res <- valueDistWithMinAda.map(mapping).sequence
+            } yield res
 
     }
 
@@ -576,36 +662,42 @@ object Generators {
 object GeneratorTests extends Properties("Generator Tests") {
     val _ = property("distribution sums to original amount") =
         Prop.forAll(Gen.posNum[Long], Gen.posNum[Int])((amount, n) =>
-            Prop.forAll(Generators.Other.distribution(SafeLong(amount), n))(distribution =>
+            Prop.forAll(Generators.Other.genDistribution(SafeLong(amount), n))(distribution =>
                 distribution.toList.map(_.toLong).sum == amount
             )
         )
 
-    val _ = property("coin distribution sums to original amount") =
-        Prop.forAll(Gen.posNum[Long], Gen.posNum[Int])((amount, n) =>
-            Prop.forAll(Generators.Other.genCoinDistribution(Coin(amount), n))(distribution =>
-                distribution.toList.map(_.value).sum == amount
+    val _ = property("value distribution sums to original amount") =
+        Prop.forAll(Arbitrary.arbitrary[Value], Gen.posNum[Int])((amount, n) =>
+            Prop.forAll(Generators.Other.genValueDistribution(amount, n))(distribution =>
+                distribution.foldLeft(Value.zero)(_ + _) == amount
             )
         )
 
-    val _ = property("genCoinDistributionWithMinAda sums to original amount") =
-        Prop.forAll(arbitrary[ShelleyAddress])(address =>
+    val _ = property("genValueDistributionWithMinAda sums to original amount") = Prop.forAll(
+      arbitrary[ShelleyAddress]
+    )(address =>
+        Prop.forAll(
+          Arbitrary.arbitrary[Value],
+          Gen.posNum[Int],
+          Gen.nonEmptyListOf(
+            genPubKeyUtxo(CardanoNetwork.Mainnet, address, genValue = Arbitrary.arbitrary[Value])
+          )
+        )((amount, n, utxos) =>
             Prop.forAll(
-              Gen.posNum[Long],
-              Gen.posNum[Int],
-              Gen.nonEmptyListOf(genAdaOnlyPubKeyUtxo(CardanoNetwork.Mainnet, address))
-            )((amount, n, utxos) =>
-                Prop.forAll(
-                  Generators.Other.genCoinDistributionWithMinAdaUtxo(
-                    coin = Coin(amount),
-                    utxoList = NonEmptyList.fromListUnsafe(utxos),
-                    params = CardanoNetwork.Mainnet.cardanoProtocolParams
-                  )
-                )(distribution =>
-                    val expectedAmount = distribution.toList.map(_.output.value.coin.value).sum
-                    expectedAmount == amount + utxos.toList.map(_.output.value.coin.value).sum
-                )
+              Generators.Other.genValueDistributionWithMinAdaUtxo(
+                value = amount,
+                utxoList = NonEmptyList.fromListUnsafe(utxos),
+                params = CardanoNetwork.Mainnet.cardanoProtocolParams
+              )
+            )(distribution =>
+                val expectedAmount =
+                    distribution.toList.map(_.output.value).foldLeft(Value.zero)(_ + _)
+                expectedAmount == amount + utxos
+                    .map(_.output.value)
+                    .foldLeft(Value.zero)(_ + _)
             )
         )
+    )
 
 }

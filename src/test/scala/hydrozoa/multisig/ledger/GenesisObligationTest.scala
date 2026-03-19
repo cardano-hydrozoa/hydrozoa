@@ -9,8 +9,8 @@ import org.scalacheck.*
 import org.scalacheck.Arbitrary.arbitrary
 import scalus.cardano.address.ArbitraryInstances.given_Arbitrary_ShelleyAddress
 import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.{Coin, OriginalCborByteArray, TransactionOutput}
-import test.Generators.Hydrozoa.genGenesisObligation
+import scalus.cardano.ledger.TransactionOutput
+import test.Generators.Hydrozoa.{genGenesisObligation, genPositiveValue}
 
 object GenesisObligationTest extends Properties("Genesis Obligation Properties"):
 
@@ -19,7 +19,11 @@ object GenesisObligationTest extends Properties("Genesis Obligation Properties")
           .flatMap(cardanoNetwork => arbitrary[ShelleyAddress].map(cardanoNetwork -> _))
           .flatMap((cardanoNetwork, address) =>
               Gen.nonEmptyListOf(
-                genGenesisObligation(cardanoNetwork, address, minimumCoin = Coin.ada(5))
+                genGenesisObligation(
+                  cardanoNetwork,
+                  address,
+                  genValue = genPositiveValue
+                )
               ).map(NonEmptyList.fromListUnsafe)
           )
     )(genesisObligations =>
@@ -29,8 +33,6 @@ object GenesisObligationTest extends Properties("Genesis Obligation Properties")
                   .map(_.toTransactionOutput.asInstanceOf[TransactionOutput])
             )
             .toByteArray
-
-        given OriginalCborByteArray = OriginalCborByteArray(bytes)
 
         val roundTrippedList: List[TransactionOutput] =
             Cbor
