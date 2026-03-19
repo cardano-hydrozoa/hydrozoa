@@ -9,12 +9,14 @@ import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEn
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
+import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockHeader, BlockNumber, BlockStatus, BlockType, BlockVersion}
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
+import org.typelevel.log4cats.Logger
 import scala.concurrent.duration.DurationInt
 import scalus.cardano.ledger.TransactionInput
 
@@ -197,6 +199,8 @@ trait BlockWeaver(
 ) extends Actor[IO, BlockWeaver.Request]:
     import BlockWeaver.*
 
+    private given logger: Logger[IO] = Logging.loggerIO("BlockWeaver")
+
     private val stateRef = Ref.unsafe[IO, BlockWeaver.State](State.mkInitialState)
 
     // Having this field separately rids of the need to weave it through state changes.
@@ -275,12 +279,17 @@ trait BlockWeaver(
             _ <- state match {
                 case Idle(mempool) =>
                     // Just add event to the mempool
-                    stateRef.set(Idle(mempool.add(event)))
+                    logger.trace(s"Adding to mempool: request ${event.requestId.asI64}") >>
+                        stateRef.set(Idle(mempool.add(event)))
                 case leader @ Leader(blockNumber) =>
                     for {
                         conn <- getConnections
                         // Pass-through to the joint ledger
-                        _ <- conn.jointLedger ! event
+                        _ <-
+                            logger.trace(
+                              s"Sending to joint ledger: request ${event.requestId.asI64}"
+                            ) >>
+                                (conn.jointLedger ! event)
                         now <- realTimeQuantizedInstant(config.slotConfig)
                         // Complete the first block immediately
                         _ <- IO.whenA(leader.isFirstBlock)(for {
@@ -288,12 +297,16 @@ trait BlockWeaver(
                             finalizationLocallyTriggered <- finalizationLocallyTriggeredRef.get
                             // It's always CompleteBlockRegular since we haven't
                             // seen any confirmations so far.
+                            _ <- logger.trace(
+                              s"Completing first block immediately with request ${event.requestId.asI64}"
+                            )
                             _ <- conn.jointLedger ! CompleteBlockRegular(
                               None,
                               pollResults.utxos,
                               finalizationLocallyTriggered,
                               BlockCreationEndTime(now)
                             )
+                            _ <- logger.trace("Switching to idle.")
                             _ <- switchToIdle(blockNumber.increment, Mempool.empty)
                         } yield ())
                     } yield ()
@@ -429,6 +442,9 @@ trait BlockWeaver(
                 case blockIntermediate: (BlockConfirmed & BlockType.Intermediate) =>
                     for {
                         state <- stateRef.get
+                        _ <- logger.trace(
+                          s"Received non-final block confirmed: ${blockIntermediate.blockNum}."
+                        )
                         _ <- state match {
                             case Leader(blockNumber) =>
                                 // Iff the block confirmed is the previous block
@@ -441,16 +457,25 @@ trait BlockWeaver(
                                     now <- realTimeQuantizedInstant(config.slotConfig)
 
                                     // Finish the current block immediately
-                                    _ <- conn.jointLedger !
-                                        (if blockIntermediate.finalizationRequested
-                                         then CompleteBlockFinal(None, BlockCreationEndTime(now))
-                                         else
-                                             CompleteBlockRegular(
-                                               None,
-                                               pollResults.utxos,
-                                               finalizationLocallyTriggered,
-                                               BlockCreationEndTime(now)
-                                             ))
+                                    blockToSend =
+                                        if blockIntermediate.finalizationRequested
+                                        then CompleteBlockFinal(None, BlockCreationEndTime(now))
+                                        else
+                                            CompleteBlockRegular(
+                                              None,
+                                              pollResults.utxos,
+                                              finalizationLocallyTriggered,
+                                              BlockCreationEndTime(now)
+                                            )
+
+                                    _ <- logger.trace(
+                                      s"Leader sending to joint ledger: ${
+                                              if blockToSend.isInstanceOf[CompleteBlockFinal]
+                                              then "CompleteBlockFinal"
+                                              else "CompleteBlockRegular"
+                                          } ${blockConfirmed.blockNum}."
+                                    )
+                                    _ <- conn.jointLedger ! blockToSend
                                     // Switch to Idle
                                     _ <- switchToIdle(blockNumber.increment, Mempool.empty)
                                 } yield ()
@@ -460,9 +485,10 @@ trait BlockWeaver(
                                 IO.unit
                         }
                     } yield ()
-                case _: (BlockConfirmed & BlockType.Final) =>
-                    // FIXME: Job done. Time for graceful shutdown?
-                    IO.unit
+                case blockFinal: (BlockConfirmed & BlockType.Final) =>
+                    logger.trace(s"Received final block confirmed: ${blockFinal.blockNum}.") >>
+                        // FIXME: Job done. Time for graceful shutdown?
+                        IO.unit
             }
         } yield ()
     }

@@ -9,16 +9,20 @@ import hydrozoa.multisig.ledger.eutxol2.tx.GenesisObligation
 import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import java.util.concurrent.TimeUnit
+import monocle.*
+import monocle.syntax.all.*
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.{Arbitrary, Gen, Prop, Properties}
 import scala.concurrent.duration.FiniteDuration
 import scalus.cardano.ledger.ArbitraryInstances.given
+import scalus.cardano.ledger.TransactionOutput.valueLens
 import scalus.cardano.ledger.{Hash, *}
 import scalus.cardano.onchain.plutus.v3.ArbitraryInstances.*
 import scalus.uplc.builtin.ByteString
 import test.*
 import test.Generators.Hydrozoa.*
+import test.Generators.Other.genValueDistribution
 
 def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = {
 
@@ -56,9 +60,15 @@ def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = 
 
         depositorAddress <- multiNodeConfig.pickPeer.map(multiNodeConfig.addressOf)
 
+        nL2Outputs <- Gen.choose(1, 10)
         l2Outputs <- Gen
-            .nonEmptyListOf(
-              genGenesisObligation(config, depositorAddress, minimumCoin = Coin.ada(2))
+            .listOfN(
+              nL2Outputs,
+              genGenesisObligation(
+                config,
+                depositorAddress,
+                genValue = genPositiveValue
+              )
             )
             .map(NonEmptyList.fromListUnsafe)
 
@@ -67,17 +77,25 @@ def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = 
           5 -> Gen.choose(Coin(500_000), Coin(5_000_000))
         )
 
-        l2Value = Value.combine(l2Outputs.map(vo => Value(vo.l2OutputValue)).toList)
+        l2Value = Value.combine(l2Outputs.map(_.l2OutputValue).toList)
         depositValue = l2Value + Value(depositFee)
 
-        // TODO: use arbitrary values, not just ADA only
-        fundingUtxos <- Gen
-            .nonEmptyListOf(genAdaOnlyPubKeyUtxo(config, depositorAddress))
-            .map(NonEmptyList.fromListUnsafe)
-            // FIXME: suchThat wastes a lot of generation time
-            // TODO: Use Hydrozoa's Value once tokens are added
-            .suchThat(utxos =>
-                Value.combine(utxos.toList.map(_.output.value)).coin > depositValue.coin
+        fundingUtxos <-
+            for {
+                nFunding <- Gen.choose(1, 6)
+
+                // Strategy: First gen arbitrary utxos with min ada, then add in at least as much as is needed to support
+                // the deposit value distribution
+                minFunding <- Gen
+                    .listOfN(
+                      nFunding,
+                      genPubKeyUtxo(config, depositorAddress, Gen.const(Value.ada(5)))
+                    )
+                    .map(l => NonEmptyList.fromListUnsafe(l.take(3)))
+                distribution <- genValueDistribution(depositValue, minFunding.length)
+                zipped: NonEmptyList[(Utxo, Value)] = minFunding.zip(distribution)
+            } yield zipped.map((utxo, additionalValue) =>
+                utxo.focus(_.output).andThen(valueLens).modify(_ + additionalValue)
             )
 
         refundAddr <- genPubkeyAddress(config)
@@ -94,6 +112,8 @@ def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = 
 }
 
 object DepositTxTest extends Properties("Deposit Tx Test") {
+//    override def overrideParameters(p: Test.Parameters): Test.Parameters =
+//        p.withInitialSeed(Seed.fromBase64("acCC2RZZ0k_j5emHOUqcuSC0RUDo1QkzDWHURe4HRjD=").get)
 
     val _ = property("Metadata can be parsed") =
         Prop.forAll(MultiNodeConfig.generate(TestPeersSpec.default)()) { multiNodeConfig =>
@@ -125,7 +145,7 @@ object DepositTxTest extends Properties("Deposit Tx Test") {
             val config = multiNodeConfig.nodeConfigs(HeadPeerNumber.zero)
             Prop.forAll(genDepositBuilder(multiNodeConfig))(depositBuilder =>
                 depositBuilder.result match {
-                    case Left(e) => "Build failed" |: Prop(false)
+                    case Left(e) => s"Build failed: $e" |: Prop(false)
                     case Right(depositTx) =>
                         DepositTx
                             .Parse(config)(

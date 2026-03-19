@@ -49,7 +49,7 @@ final case class InitializationParameters(
     override transparent inline def initializationParams: InitializationParameters = this
 
     override lazy val initialL2Value: Value =
-        initialEvacuationMap.outputs.map(_.value.value).fold(Value.zero)(_ + _)
+        Value.combine(initialEvacuationMap.outputs.map(_.utxo.value.value))
 
     override lazy val initialEquityContributed: Coin =
         initialEquityContributions.toSortedMap.values.fold(Coin.zero)(_ + _)
@@ -87,8 +87,9 @@ object InitializationParameters {
         final def initialFundingUtxos: Utxos =
             initialAdditionalFundingUtxos + initialSeedUtxo.toTuple
 
+        // FIXME: Must be positive
         final def initialSeedIx: Int =
-            initialFundingUtxos.keys.toList.sorted.indexOf(initialSeedUtxo)
+            initialFundingUtxos.keys.toList.sorted.indexOf(initialSeedUtxo.input)
     }
 
     extension (config: InitializationParameters.Section & HeadPeers.Section)

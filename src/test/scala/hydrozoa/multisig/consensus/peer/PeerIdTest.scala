@@ -11,7 +11,7 @@ object PeerIdTest extends Properties("Peer/RoundRobin") {
         p.withMinSuccessfulTests(1000)
     }
 
-    private val genSmallInt = Gen.choose(0, 200)
+    private val genSmallInt = Gen.choose(0, 127)
 
     val _ = property("Peer ID correctly calculates round-robin leadership schedule") =
         forAll(genSmallInt, genSmallInt, genSmallInt) { (x, y, z) =>

@@ -7,10 +7,12 @@ import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
 import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
 import hydrozoa.lib.actor.SyncRequest
+import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.EventSequencer.*
 import hydrozoa.multisig.consensus.PeerLiaison.Handle
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
+import org.typelevel.log4cats.Logger
 
 /** The first actor responsible for processing events from end-users, as received by the
   * [[HydrozoaServer]]. Only one event sequencer is running per node, specifically to handle _only_
@@ -25,6 +27,8 @@ trait EventSequencer(
 ) extends Actor[IO, Request] {
     private val connections = Ref.unsafe[IO, Option[EventSequencer.Connections]](None)
     private val state = State()
+
+    private given logger: Logger[IO] = Logging.loggerIO("EventSequencer")
 
     private def getConnections: IO[Connections] = for {
         mConn <- this.connections.get
@@ -72,6 +76,7 @@ trait EventSequencer(
                         userRequest = userRequest,
                         requestId = newId
                       )
+                      _ <- logger.debug(s"Assigned request ID ${newId.asI64}")
                       _ <- req.dResponse.complete(newId)
                       _ <- conn.blockWeaver ! newRequestWithId
                       _ <- (conn.peerLiaisons ! newRequestWithId).parallel

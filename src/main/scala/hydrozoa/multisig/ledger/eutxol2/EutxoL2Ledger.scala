@@ -100,7 +100,7 @@ case class EutxoL2Ledger private (
         for {
             s <- EitherT.right(state.get)
             l2Tx <- EitherT.fromEither(
-              L2Tx.parse(req.l2Payload.bytes)
+              L2Tx.parse(req.l2Payload.bytes, config)
                   .left
                   .map(error => L2LedgerError(error))
             )
@@ -118,11 +118,22 @@ case class EutxoL2Ledger private (
                   .map(error => L2LedgerError(error.toString))
             )
 
-            adds =
-                newActiveUtxos
-                    .removedAll(s.activeUtxos.keys)
-                    .map((ti, to) => EvacuationDiff.Update(ti.toEvacuationKey, KeepRaw(to)))
-                    .toVector
+            adds <-
+                EitherT.fromEither(
+                  newActiveUtxos
+                      .removedAll(s.activeUtxos.keys)
+                      .map((ti, to) =>
+                          Payout
+                              .Obligation(KeepRaw(to), config)
+                              .flatMap(obligation =>
+                                  Right(EvacuationDiff.Update(ti.toEvacuationKey, obligation))
+                              )
+                      )
+                      .toVector
+                      .sequence
+                      .left
+                      .map(error => L2LedgerError(error.toString))
+                )
 
             deletes =
                 s.activeUtxos
@@ -131,9 +142,19 @@ case class EutxoL2Ledger private (
                     .toVector
 
             _ <- EitherT.right(state.set(s.focus(_.activeUtxos).replace(newActiveUtxos)))
+
+            obligations <- EitherT.fromEither(
+              l2Tx.l1utxos
+                  .traverse((utxo: (TransactionInput, TransactionOutput)) =>
+                      Payout.Obligation(KeepRaw(utxo._2), config)
+                  )
+                  .left
+                  .map(error => L2LedgerError(error.toString))
+            )
+
         } yield (
           adds ++ deletes,
-          Vector.from(l2Tx.l1utxos.map((_, to) => Payout.Obligation(KeepRaw(to))))
+          Vector.from(obligations)
         )
     }
 
@@ -166,7 +187,21 @@ case class EutxoL2Ledger private (
                     .focus(_.pendingDeposits)
                     .modify(_.removedAll(req.absorbedDeposits ++ req.rejectedDeposits))
             _ <- EitherT.right(state.set(newState))
-            evacuationDiffs: Vector[EvacuationDiff] =
-                Vector.from(addedL2Utxos.map((i, o) => EvacuationDiff.Update(i.toEvacuationKey, o)))
+            evacuationDiffs <-
+                EitherT.fromEither(
+                  Vector
+                      .from(
+                        addedL2Utxos.map((i, o) =>
+                            Payout
+                                .Obligation(o, config)
+                                .flatMap(obligation =>
+                                    Right(EvacuationDiff.Update(i.toEvacuationKey, obligation))
+                                )
+                        )
+                      )
+                      .sequence
+                      .left
+                      .map(e => L2LedgerError(e.toString))
+                )
         } yield evacuationDiffs
 }

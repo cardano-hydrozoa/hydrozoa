@@ -12,7 +12,7 @@ import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, S
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.Script.Native
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{Blake2b_256, Coin, Hash, KeepRaw, Script, ScriptRef, TransactionHash, TransactionInput, TransactionOutput, Value}
+import scalus.cardano.ledger.{Blake2b_256, Hash, KeepRaw, Script, ScriptRef, TransactionHash, TransactionInput, TransactionOutput, Value}
 import scalus.cardano.onchain.plutus.prelude.Option as SOption
 import scalus.uplc.builtin.{ByteString, Data, platform}
 
@@ -72,7 +72,7 @@ case class GenesisObligation(
     l2OutputPaymentAddress: ShelleyPaymentPart,
     l2OutputNetwork: Network,
     l2OutputDatum: SOption[Data],
-    l2OutputValue: Coin,
+    l2OutputValue: Value,
     l2OutputRefScript: Option[Script.Native | Script.PlutusV3]
 ) {
     def toTransactionOutput: TransactionOutput =
@@ -82,7 +82,7 @@ case class GenesisObligation(
             payment = l2OutputPaymentAddress,
             delegation = ShelleyDelegationPart.Null
           ),
-          value = Value(l2OutputValue),
+          value = l2OutputValue,
           datumOption = l2OutputDatum match {
               case SOption.Some(data) => Some(Inline(data))
               case SOption.None       => None
@@ -101,7 +101,6 @@ object GenesisObligation {
     enum Error extends Throwable:
         case L2OutputNotShelleyAddress(babbage: Babbage)
         case L2OutputDatumNotInline(babbage: Babbage)
-        case L2OutputMultiAssetNotEmpty(babbage: Babbage)
         case L2OutputRefScriptInvalid(babbage: Babbage)
         case NonBabbageL2Output(shelley: TransactionOutput.Shelley)
 
@@ -123,10 +122,6 @@ object GenesisObligation {
                         case Some(i: Inline) => Right(SOption.Some(i.data))
                         case Some(_)         => Left(L2OutputDatumNotInline(o))
                     }
-                    coin <-
-                        if o.value.assets.isEmpty
-                        then Right(o.value.coin)
-                        else Left(L2OutputMultiAssetNotEmpty(o))
                     refScript: Option[Native | Script.PlutusV3] <- o.scriptRef match {
                         case None                                => Right(None)
                         case Some(ScriptRef(s: Script.PlutusV3)) => Right(Some(s))
@@ -137,7 +132,7 @@ object GenesisObligation {
                   l2OutputPaymentAddress = shelleyAddress.payment,
                   l2OutputNetwork = shelleyAddress.network,
                   l2OutputDatum = datum,
-                  l2OutputValue = coin,
+                  l2OutputValue = o.value,
                   l2OutputRefScript = refScript,
                 )
             case o: TransactionOutput.Shelley => Left(NonBabbageL2Output(o))

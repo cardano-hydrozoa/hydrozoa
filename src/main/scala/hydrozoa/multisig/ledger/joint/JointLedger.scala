@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.joint
 
 import cats.effect.{IO, Ref}
+import com.bloxbean.cardano.client.util.HexUtil
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
@@ -20,7 +21,6 @@ import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag.{Invalid, Valid}
 import hydrozoa.multisig.ledger.joint.EvacuationMap.applyDiffs
 import hydrozoa.multisig.ledger.joint.JointLedger.*
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.*
-import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.l1.L1LedgerM
 import hydrozoa.multisig.ledger.l1.L1LedgerM.*
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
@@ -32,14 +32,11 @@ import monocle.Focus.focus
 import scalus.cardano.ledger.{SlotConfig, TransactionInput}
 import scalus.uplc.builtin.ByteString
 
-// Fields of a work-in-progress block pertaining to user requests, with an additional field for dealing with withdrawn utxos
 private case class UserRequestState(
     requests: List[(RequestId, ValidityFlag)],
     postDatedRefundTxs: Vector[RefundTx.PostDated]
 )
 
-// NOTE: Joint ledger is created by the MultisigManager.
-// NOTE: As of 2025-11-16, George says BlockWeaver should be the ONLY actor calling the joint ledger
 final case class JointLedger(
     config: JointLedger.Config,
     pendingConnections: MultisigRegimeManager.PendingConnections | JointLedger.Connections,
@@ -55,28 +52,45 @@ final case class JointLedger(
     val state: Ref[IO, JointLedger.State] =
         Ref.unsafe[IO, JointLedger.State](JointLedger.State.initialize(config))
 
-    def executeL1Action[T](
+    private def executeL1Action[T](
         state: JointLedger.Producing,
         action: L1LedgerM[T]
-    ): IO[(L1LedgerM.State, T)] = IO.fromEither(runL1Action[T](state, action))
+    ): IO[(L1LedgerM.State, T)] = for {
+        either <- IO.pure(runL1Action[T](state, action))
+        ret <- either match {
+            case Left(err) =>
+                logger.error(s"L1 action failed: $err") *> IO.raiseError(err)
+            case Right(ret) => IO.pure(ret)
+        }
+    } yield ret
 
-    def executeL2Command(
+    private def executeL2Command(
         state: JointLedger.Producing,
         command: L2LedgerCommand.Real
-    ): IO[L2LedgerState] =
-        runL2Command(state, command).rethrow
+    ): IO[L2LedgerState] = for {
+        either <- runL2Command(state, command)
+        ret <- either match {
+            case Left(err) =>
+                logger.error(s"L2 command failed: $err") *> IO.raiseError(err)
+            case Right(ret) => IO.pure(ret)
+        }
+    } yield ret
 
-    def executeL2ProxyCommand(
+    private def executeL2ProxyCommand(
         command: L2LedgerCommand.Proxy
-    ): IO[Unit] = L2LedgerState.executeProxyCommand(l2Ledger, command)
+    ): IO[Unit] = L2LedgerState
+        .executeProxyCommand(l2Ledger, command)
+        .handleErrorWith { err =>
+            logger.error(s"L2 proxy command failed: $err") *> IO.raiseError(err)
+        }
 
-    def runL1Action[T](
+    private def runL1Action[T](
         state: JointLedger.Producing,
         action: L1LedgerM[T]
     ): Either[L1LedgerM.Error, (L1LedgerM.State, T)] =
         state.runL1Action[T](config, action)
 
-    def runL2Command(
+    private def runL2Command(
         state: JointLedger.Producing,
         command: L2LedgerCommand.Real
     ): IO[Either[L2LedgerError, L2LedgerState]] =
@@ -278,6 +292,7 @@ final case class JointLedger(
                                                   .focus(_.userRequestState.postDatedRefundTxs)
                                                   .modify(_.appended(refundTx))
                                             )
+                                            _ <- logger.debug(s"Request processed ($requestId)")
                                             _ <- tracer.eventProcessed(
                                               s"${requestId.peerNum: Int}:${requestId.requestNum: Int}",
                                               currentBlockNum: Int,
@@ -379,8 +394,8 @@ final case class JointLedger(
         import config.txTiming
 
         for {
-            _ <- logger.info(s"complete block ${args.referenceBlockBrief}")
             p <- unsafeGetProducing
+            _ <- logger.info(s"completing block ${p.nextBlockNumber}")
 
             partition = p.l1LedgerState.deposits.partition(
               blockCreationEndTime = blockCreationEndTime,
@@ -440,38 +455,46 @@ final case class JointLedger(
                   s"mkBlockBrief: blockWithdrawnUtxos=$blockWithdrawnUtxos\n" +
                   s"mkBlockBrief: blockStartTime=$blockCreationStartTime\n" +
                   s"mkBlockBrief: competingFallbackValidityStart=${p.competingFallbackTxTime}\n" +
-                  s"mkBlockBrief: events=$events"
+                  s"mkBlockBrief: events=$events\n" +
+                  s"mkBlockBrief: decisions.absorbed=${decisions.absorbed.requestIds}\n" +
+                  s"mkBlockBrief: decisions.rejected=${decisions.rejected.requestIds}"
             )
+
+            depositEventDecisions: L2LedgerCommand.ApplyDepositDecisions =
+                L2LedgerCommand.ApplyDepositDecisions(
+                  blockNumber = p.nextBlockNumber,
+                  blockCreationEndTime = blockCreationEndTime.toPosixTime,
+                  absorbedDeposits = decisions.absorbed.requestIds,
+                  rejectedDeposits = decisions.rejected.requestIds
+                )
 
             // Block header
             headerRes <-
                 if decisions.absorbed.isEmpty && blockWithdrawnUtxos.isEmpty
                 then
-                    IO.pure(
-                      (
-                        p,
-                        previousHeader.nextHeaderIntermediate(
-                          txTiming,
-                          blockCreationStartTime,
-                          blockCreationEndTime,
-                          decisions.mNextAbsorptionStartTime,
-                          // TODO: We want this to be done in a separate actor in the future
-                          // this doesn't include genesis
-                          applyDiffs(p.evacuationMap, p.l2LedgerState.diffs).kzgCommitment
-                        )
+                    val newEvacuationMap = applyDiffs(p.evacuationMap, p.l2LedgerState.diffs)
+                    for {
+                        newL2State <-
+                            if decisions.rejected.isEmpty then IO.pure(p.l2LedgerState)
+                            else executeL2Command(p, depositEventDecisions)
+                        _ <- logger.trace(s"New evacuation map: ${newEvacuationMap.evacuationMap}")
+                    } yield (
+                      p,
+                      previousHeader.nextHeaderIntermediate(
+                        txTiming,
+                        blockCreationStartTime,
+                        blockCreationEndTime,
+                        decisions.mNextAbsorptionStartTime,
+                        // TODO: We want this to be done in a separate actor in the future
+                        // this doesn't include genesis
+                        newEvacuationMap.kzgCommitment
                       )
                     )
                 else {
-                    val depositEventDecisions: L2LedgerCommand.ApplyDepositDecisions =
-                        L2LedgerCommand.ApplyDepositDecisions(
-                          blockNumber = p.nextBlockNumber,
-                          blockCreationEndTime = blockCreationEndTime.toPosixTime,
-                          absorbedDeposits = decisions.absorbed.requestIds,
-                          rejectedDeposits = decisions.rejected.requestIds
-                        )
                     for {
                         newL2State <- executeL2Command(p, depositEventDecisions)
                         newEvacuationMap = applyDiffs(p.evacuationMap, newL2State.diffs)
+                        _ <- logger.trace(s"New evacuation map: ${newEvacuationMap.evacuationMap}")
                         newJLState = p
                             .setL2LedgerState(newL2State)
                             .focus(_.evacuationMap)
@@ -503,6 +526,15 @@ final case class JointLedger(
                     )
                     BlockBrief.Major(header, blockBody)
             }
+
+            _ <- logger.trace(
+              "mkBlockBriefIntermediate result:\n" +
+                  s"  Block type: ${blockBrief match {
+                          case _: BlockBrief.Minor => "Minor"; case _: BlockBrief.Major => "Major"
+                      }}\n" +
+                  s"  Block number: ${headerIntermediate.blockNum}\n" +
+                  s"  Block brief: $blockBrief"
+            )
         } yield (newJlState, blockBrief)
     }
 
@@ -511,38 +543,82 @@ final case class JointLedger(
         next: BlockBrief.Intermediate,
         absorbedDeposits: DepositsMap.Unzip,
         postDatedRefundTxs: List[RefundTx.PostDated]
-    ): IO[(JointLedger.Producing, Block.Unsigned.Intermediate)] = next match {
-        case blockBrief @ BlockBrief.Minor(header, _) =>
-            val blockEffects = BlockEffects.Unsigned.Minor(
-              headerSerialized = header.onchainMsg,
-              postDatedRefundTxs = postDatedRefundTxs
-            )
-            IO.pure((p, Block.Unsigned.Minor(blockBrief, blockEffects)))
-        case blockBrief @ BlockBrief.Major(header, _) =>
-            for {
-                payoutObligations <- IO.pure(p.l2LedgerState.payouts)
+    ): IO[(JointLedger.Producing, Block.Unsigned.Intermediate)] = for {
+        _ <- logger.trace(
+          "mkBlockEffectsIntermediate:\n" +
+              s"  Block type: ${next match {
+                      case _: BlockBrief.Minor => "Minor"; case _: BlockBrief.Major => "Major"
+                  }}\n" +
+              s"  Block number: ${next.header.blockNum}\n" +
+              s"  Absorbed deposits: ${absorbedDeposits.requestIds}\n" +
+              s"  Post-dated refund txs: ${postDatedRefundTxs.size}\n" +
+              s"  L2 payouts: ${p.l2LedgerState.payouts.size}"
+        )
 
-                res <- executeL1Action(
-                  p,
-                  L1LedgerM.mkSettlementTxSeq(
-                    nextKzg = header.kzgCommitment,
-                    absorbedDeposits = absorbedDeposits.depositUtxos,
-                    payoutObligations = payoutObligations,
-                    blockCreationEndTime = header.endTime,
-                    competingFallbackValidityStart = p.competingFallbackTxTime
-                  )
-                )
-                (newL1State, settlementTxSeq) = res
-                newJlState = p.setL1LedgerState(newL1State)
-
-                blockEffects = BlockEffects.Unsigned.Major(
-                  settlementTx = settlementTxSeq.settlementTx,
-                  fallbackTx = settlementTxSeq.fallbackTx,
-                  rolloutTxs = settlementTxSeq.rolloutTxs,
+        result <- next match {
+            case blockBrief @ BlockBrief.Minor(header, _) =>
+                val blockEffects = BlockEffects.Unsigned.Minor(
+                  headerSerialized = header.onchainMsg,
                   postDatedRefundTxs = postDatedRefundTxs
                 )
-            } yield (newJlState, Block.Unsigned.Major(blockBrief, blockEffects))
-    }
+                for {
+                    _ <- logger.trace(
+                      s"Building effects for minor block ${next.blockNum} with version ${next.blockVersion}." + "\n" +
+                          s"Previous block (${p.previousBlockHeader.blockNum}) had version ${p.previousBlockHeader.blockVersion}."
+                    )
+                } yield (p, Block.Unsigned.Minor(blockBrief, blockEffects))
+            case blockBrief @ BlockBrief.Major(header, _) =>
+                for {
+                    // TODO: pass in args: should not access the state directly
+                    _ <- logger.trace(
+                      s"Building effects for major block ${next.blockNum} with version ${next.blockVersion}." + "\n" +
+                          s"Previous block (${p.previousBlockHeader.blockNum}) had version ${p.previousBlockHeader.blockVersion}."
+                    )
+                    payoutObligations <- IO.pure(p.l2LedgerState.payouts)
+                    _ <- logger.trace(s"Remitting payouts: ${payoutObligations
+                            .map(x => (x.utxo.value.address, x.utxo.value.value))}")
+
+                    res <- executeL1Action(
+                      p,
+                      L1LedgerM.mkSettlementTxSeq(
+                        nextKzg = header.kzgCommitment,
+                        absorbedDeposits = absorbedDeposits.depositUtxos,
+                        payoutObligations = payoutObligations,
+                        blockCreationEndTime = header.endTime,
+                        competingFallbackValidityStart = p.competingFallbackTxTime
+                      )
+                    )
+                    (newL1State, settlementTxSeq) = res
+                    newJlState = p.setL1LedgerState(newL1State)
+
+                    blockEffects = BlockEffects.Unsigned.Major(
+                      settlementTx = settlementTxSeq.settlementTx,
+                      fallbackTx = settlementTxSeq.fallbackTx,
+                      rolloutTxs = settlementTxSeq.rolloutTxs,
+                      postDatedRefundTxs = postDatedRefundTxs
+                    )
+
+                    _ <- logger.trace("mkBlockEffectsIntermediate: Major block effects created")
+
+                    _ <- logger.trace(
+                      s"Settlement tx (${blockEffects.settlementTx.tx.id}): ${HexUtil.encodeHexString(blockEffects.settlementTx.tx.toCbor)}"
+                    )
+                    _ <- logger.trace(
+                      s"Fallback tx (${blockEffects.fallbackTx.tx.id}): ${HexUtil.encodeHexString(blockEffects.fallbackTx.tx.toCbor)}"
+                    )
+                    _ <- IO.traverse_(blockEffects.rolloutTxs)(rolloutTx =>
+                        logger.trace(
+                          s"Rollout tx (${rolloutTx.tx.id}): ${HexUtil.encodeHexString(rolloutTx.tx.toCbor)}"
+                        )
+                    )
+                    _ <- IO.traverse_(blockEffects.postDatedRefundTxs)(refundTx =>
+                        logger.trace(
+                          s"Post-dated refund tx (${refundTx.tx.id}): ${HexUtil.encodeHexString(refundTx.tx.toCbor)}"
+                        )
+                    )
+                } yield (newJlState, Block.Unsigned.Major(blockBrief, blockEffects))
+        }
+    } yield result
 
     // Block completion Signal is provided to the joint ledger when the block weaver says it's time.
     // If it's a final block, we don't pass poll results from the cardano liaison. Otherwise, we do.
@@ -565,7 +641,7 @@ final case class JointLedger(
               p,
               L1LedgerM.finalizeLedger(
                 payoutObligationsRemaining = Vector.from(
-                  p.evacuationMap.evacuationMap.map((_, o) => Payout.Obligation(o))
+                  p.evacuationMap.evacuationMap.values
                 ),
                 competingFallbackValidityStart = p.competingFallbackTxTime
               )
