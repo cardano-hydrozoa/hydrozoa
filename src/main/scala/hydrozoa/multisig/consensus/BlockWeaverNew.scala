@@ -21,7 +21,7 @@ final case class BlockWeaverNew(
 ) extends Actor[IO, BlockWeaverNew.Request] {
     import BlockWeaverNew.*
 
-    private val loggerIO = Logging.loggerIO("BlockWeaver")
+    private val logger = Logging.loggerIO("BlockWeaver")
 
     override def preStart: IO[Unit] = for {
         _ <- context.self ! BlockWeaverNew.PreStart
@@ -45,12 +45,12 @@ final case class BlockWeaverNew(
         case PreStart =>
             for {
                 connections <- initializeConnections
-                startingState <- State.start(config, connections, loggerIO)
+                startingState <- State.start(config, connections, logger)
                 _ <- become(startingState)
             } yield ()
         case x =>
             val msg = s"Unexpected message received before PreStart: $x"
-            loggerIO.error(msg) >> IO.raiseError(RuntimeException(msg))
+            logger.error(msg) >> IO.raiseError(RuntimeException(msg))
     }
 
     private def initializeConnections: IO[BlockWeaverNew.Connections] = pendingConnections match {

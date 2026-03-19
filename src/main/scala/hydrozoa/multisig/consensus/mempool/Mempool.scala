@@ -1,5 +1,6 @@
 package hydrozoa.multisig.consensus.mempool
 
+import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.consensus.UserRequestWithId
 import hydrozoa.multisig.ledger.event.RequestId
 
@@ -9,20 +10,24 @@ import hydrozoa.multisig.ledger.event.RequestId
   *
   * @param requests
   *   map to store requests
-  * @param receivingOrder
+  * @param arrivalOrder
   *   vector to store order of request ids
   */
 final case class Mempool(
     requests: Map[RequestId, UserRequestWithId] = Map.empty,
-    receivingOrder: Vector[RequestId] = Vector.empty
+    arrivalOrder: Vector[RequestId] = Vector.empty
 ) {
 
-    /** Throws if a duplicate is detected.
+    private val logger = Logging.logger("Mempool")
+
+    /** Add a request to the mempool
       *
       * @param request
       *   a request to add
       * @return
       *   an updated mempool
+      * @throws IllegalArgumentException
+      *   if a duplicate is detected
       */
     def add(
         request: UserRequestWithId
@@ -31,34 +36,65 @@ final case class Mempool(
         val requestId = request.requestId
 
         require(
-          !requests.contains(requestId),
-          s"panic - duplicate event id in the pool: $requestId"
+          !requests.contains(requestId), {
+              val msg =
+                  s"Panic: attempting to add a duplicate request ID into the mempool: $requestId"
+              logger.error(msg)
+              msg
+          }
         )
 
         copy(
           requests = requests + (requestId -> request),
-          receivingOrder = receivingOrder :+ requestId
+          arrivalOrder = arrivalOrder :+ requestId
         )
     }
 
-    // Remove event - returns new state
-    def remove(id: RequestId): Mempool = {
+    /** Remove a request (by request ID) from the mempool.
+      * @param requestId
+      *   the request's ID
+      * @return
+      *   an updated mempool
+      * @throws IllegalArgumentException
+      *   if the [[requestId]] is already missing from the mempool.
+      */
+    def remove(requestId: RequestId): Mempool = {
         require(
-          requests.contains(id),
-          "panic - an attempt to remove a missing event from the mempool"
+          requests.contains(requestId), {
+              val msg =
+                  s"Panic: attempting to remove a request ID that is missing from the mempool: $requestId"
+              logger.error(msg)
+              msg
+          }
         )
         copy(
-          requests = requests - id,
-          receivingOrder = receivingOrder.filterNot(_ == id)
+          requests = requests - requestId,
+          arrivalOrder = arrivalOrder.filterNot(_ == requestId)
         )
     }
 
-    // Find by ID
-    def findById(id: RequestId): Option[UserRequestWithId] = requests.get(id)
+    /** Retrieve a request from the mempool, by the request's ID.
+      * @param requestId
+      *   the request's ID
+      */
+    def get(requestId: RequestId): Option[UserRequestWithId] = requests.get(requestId)
 
-    // Iterate in insertion order
-    def inOrder: Iterator[UserRequestWithId] =
-        receivingOrder.iterator.flatMap(requests.get)
+    /** Retrieve all mempool requests by order of arrival.
+      * @throws RuntimeException
+      *   if the mempool's [[arrivalOrder]] vector contains a request ID that is missing from its
+      *   [[requests]] map.
+      */
+    def inOrder: IterableOnce[UserRequestWithId] =
+        arrivalOrder.iterator.map(requestId => {
+            requests.getOrElse(
+              requestId, {
+                  val msg = s"Panic: the mempool's `arrivalOrder` vector has a request ID that" +
+                      s" is missing from the mempool's `requests` map."
+                  logger.error(msg)
+                  throw RuntimeException(msg)
+              }
+            )
+        })
 
     def isEmpty: Boolean = requests.isEmpty
 }
