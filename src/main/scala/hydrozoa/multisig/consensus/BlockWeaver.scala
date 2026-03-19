@@ -11,6 +11,9 @@ import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
+import hydrozoa.multisig.consensus.BlockWeaverNew.LocalFinalizationTrigger
+import hydrozoa.multisig.consensus.BlockWeaverNew.LocalFinalizationTrigger.{NotTriggered, Triggered}
+import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockHeader, BlockNumber, BlockStatus, BlockType, BlockVersion}
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.event.RequestId
@@ -18,7 +21,6 @@ import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import org.typelevel.log4cats.Logger
 import scala.concurrent.duration.DurationInt
-import scalus.cardano.ledger.TransactionInput
 
 /** Block weaver actor.
   *   - When the node is leading a block, the weaver packages all known unprocessed (by the time
@@ -85,11 +87,6 @@ object BlockWeaver:
       * @param utxos
       *   all utxos found
       */
-    final case class PollResults(utxos: Set[TransactionInput])
-
-    object PollResults:
-        val empty: PollResults = PollResults(Set.empty)
-
     object FinalizationLocallyTriggered
 
     type BlockConfirmed = BlockHeader.Section & Block.Fields.HasFinalizationRequested &
@@ -204,7 +201,7 @@ trait BlockWeaver(
     private val stateRef = Ref.unsafe[IO, BlockWeaver.State](State.mkInitialState)
 
     // Having this field separately rids of the need to weave it through state changes.
-    private val pollResultsRef = Ref.unsafe[IO, BlockWeaver.PollResults](PollResults.empty)
+    private val pollResultsRef = Ref.unsafe[IO, PollResults](PollResults.empty)
 
     private val connections = Ref.unsafe[IO, Option[BlockWeaver.Connections]](None)
 
@@ -215,7 +212,8 @@ trait BlockWeaver(
       * finalization flag `finalizationRequested` in the peer's ack, so the leader of the next block
       * observe it in their [[BlockWeaver.BlockConfirmed]] and produce the final block.
       */
-    private val finalizationLocallyTriggeredRef = Ref.unsafe[IO, Boolean](false)
+    private val finalizationLocallyTriggeredRef =
+        Ref.unsafe[IO, LocalFinalizationTrigger](NotTriggered)
 
     private def getConnections: IO[Connections] = for {
         mConn <- this.connections.get
@@ -256,7 +254,7 @@ trait BlockWeaver(
             case b: BlockBrief.Next           => handleNewBlock(b)
             case bc: BlockConfirmed           => handleBlockConfirmed(bc)
             case pr: PollResults              => handlePollResults(pr)
-            case finalizationLocallyTriggered => finalizationLocallyTriggeredRef.set(true)
+            case finalizationLocallyTriggered => finalizationLocallyTriggeredRef.set(Triggered)
         }
 
     private def preStartLocal: IO[Unit] =
@@ -302,7 +300,7 @@ trait BlockWeaver(
                             )
                             _ <- conn.jointLedger ! CompleteBlockRegular(
                               None,
-                              pollResults.utxos,
+                              pollResults,
                               finalizationLocallyTriggered,
                               BlockCreationEndTime(now)
                             )
@@ -406,7 +404,7 @@ trait BlockWeaver(
                 IO.pure(
                   CompleteBlockRegular(
                     Some(x),
-                    pollResults.utxos,
+                    pollResults,
                     finalizationLocallyTriggered,
                     blockBrief.endTime
                   )
@@ -415,7 +413,7 @@ trait BlockWeaver(
                 IO.pure(
                   CompleteBlockRegular(
                     Some(x),
-                    pollResults.utxos,
+                    pollResults,
                     finalizationLocallyTriggered,
                     blockBrief.endTime
                   )
@@ -463,7 +461,7 @@ trait BlockWeaver(
                                         else
                                             CompleteBlockRegular(
                                               None,
-                                              pollResults.utxos,
+                                              pollResults,
                                               finalizationLocallyTriggered,
                                               BlockCreationEndTime(now)
                                             )
