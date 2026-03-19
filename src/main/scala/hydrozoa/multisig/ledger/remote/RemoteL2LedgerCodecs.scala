@@ -15,7 +15,7 @@ import io.circe.generic.semiauto.*
 import io.circe.syntax.*
 import io.circe.{Decoder, Encoder}
 import scala.util.Try
-import scalus.cardano.ledger.{Coin, KeepRaw, TransactionInput, TransactionOutput, Value}
+import scalus.cardano.ledger.{AssetName, Coin, KeepRaw, MultiAsset, PolicyId, ScriptHash, TransactionInput, TransactionOutput, Value}
 import scalus.crypto.ed25519.VerificationKey
 import scalus.uplc.builtin.ByteString
 import scodec.bits.ByteVector
@@ -32,21 +32,76 @@ case class RemoteL2LedgerCodecs(config: CardanoNetwork.Section) {
     given Encoder[Coin] = Encoder.encodeLong.contramap(_.value)
     given Decoder[Coin] = Decoder.decodeLong.map(Coin.apply)
 
-    // Value codec for sugar-rush-ledger format: {"assets": [{"asset": {"tag": "Ada"}, "value": N}]}
-    // The old CIP-116 compatible codec is commented out below - we will need it in the future
+    // Value codec for sugar-rush-ledger format:
+    // {"assets": [{"asset": {"tag": "Ada"}, "value": N}, {"asset": {"tag": "NativeToken", ...}, "value": M}]}
     given Encoder[Value] = (v: Value) => {
         val adaEntry = io.circe.Json.obj(
           "asset" -> io.circe.Json.obj("tag" -> io.circe.Json.fromString("Ada")),
           "value" -> io.circe.Json.fromLong(v.coin.value)
         )
-        // For now, only ADA is supported
-        io.circe.Json.obj("assets" -> io.circe.Json.arr(adaEntry))
+
+        val nativeTokenEntries = v.assets.assets.flatMap { case (policyId, assetMap) =>
+            assetMap.map { case (assetName, quantity) =>
+                io.circe.Json.obj(
+                  "asset" -> io.circe.Json.obj(
+                    "tag" -> io.circe.Json.fromString("NativeToken"),
+                    "policyId" -> io.circe.Json.fromString(policyId.toHex),
+                    "assetName" -> io.circe.Json.fromString(assetName.bytes.toHex)
+                  ),
+                  "value" -> io.circe.Json.fromLong(quantity)
+                )
+            }
+        }
+
+        val allEntries = adaEntry +: nativeTokenEntries.toSeq
+        io.circe.Json.obj("assets" -> io.circe.Json.arr(allEntries*))
     }
 
-    // @Peter: this is just missing
     given Decoder[Value] = Decoder.instance { c =>
-        // Minimal: just extract ADA from the assets array
-        Right(Value(Coin(0))) // TODO: implement if needed
+        c.downField("assets").as[List[io.circe.Json]].flatMap { assets =>
+            var coin = Coin(0)
+            val tokenMap = scala.collection.mutable
+                .Map[PolicyId, scala.collection.mutable.Map[AssetName, Long]]()
+
+            assets.foreach { assetEntry =>
+                val assetCursor = assetEntry.hcursor
+                val tag = assetCursor.downField("asset").downField("tag").as[String].getOrElse("")
+                val value = assetCursor.downField("value").as[Long].getOrElse(0L)
+
+                tag match {
+                    case "Ada" =>
+                        coin = Coin(value)
+                    case "NativeToken" =>
+                        val policyIdHex = assetCursor
+                            .downField("asset")
+                            .downField("policyId")
+                            .as[String]
+                            .getOrElse("")
+                        val assetNameHex = assetCursor
+                            .downField("asset")
+                            .downField("assetName")
+                            .as[String]
+                            .getOrElse("")
+
+                        val policyId = ScriptHash.fromHex(policyIdHex)
+                        val assetName = AssetName.fromHex(assetNameHex)
+
+                        val innerMap =
+                            tokenMap.getOrElseUpdate(policyId, scala.collection.mutable.Map())
+                        innerMap(assetName) = value
+                    case unknown =>
+                        Left(io.circe.DecodingFailure(s"Unknown asset tag: $unknown", c.history))
+                }
+            }
+
+            val multiAsset = MultiAsset(
+              scala.collection.immutable.SortedMap.from(
+                tokenMap.view.mapValues(m => scala.collection.immutable.SortedMap.from(m))
+              )
+            )
+
+            Right(Value(coin, multiAsset))
+        }
     }
 
     // QuantizedInstant codec (simplified - loses SlotConfig context)
