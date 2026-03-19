@@ -13,8 +13,8 @@ import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.actor.*
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
-import hydrozoa.multisig.consensus.BlockWeaverNew.LocalFinalizationTrigger
-import hydrozoa.multisig.consensus.BlockWeaverNew.LocalFinalizationTrigger.NotTriggered
+import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger
+import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger.NotTriggered
 import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.consensus.{ConsensusActor, PeerLiaison, UserRequestWithId, pollresults}
 import hydrozoa.multisig.ledger.block.*
