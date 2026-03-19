@@ -13,7 +13,10 @@ import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.actor.*
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
-import hydrozoa.multisig.consensus.{ConsensusActor, PeerLiaison, UserRequestWithId}
+import hydrozoa.multisig.consensus.BlockWeaverNew.LocalFinalizationTrigger
+import hydrozoa.multisig.consensus.BlockWeaverNew.LocalFinalizationTrigger.NotTriggered
+import hydrozoa.multisig.consensus.pollresults.PollResults
+import hydrozoa.multisig.consensus.{ConsensusActor, PeerLiaison, UserRequestWithId, pollresults}
 import hydrozoa.multisig.ledger.block.*
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
@@ -29,7 +32,7 @@ import hydrozoa.multisig.ledger.l1.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerCommand, L2LedgerError, L2LedgerState}
 import monocle.Focus.focus
-import scalus.cardano.ledger.{SlotConfig, TransactionInput}
+import scalus.cardano.ledger.SlotConfig
 import scalus.uplc.builtin.ByteString
 
 private case class UserRequestState(
@@ -681,7 +684,7 @@ final case class JointLedger(
 
             _ <- state.set(newJlState.done(block.header))
 
-            _ <- handleBlock(block, false)
+            _ <- handleBlock(block, NotTriggered)
 
         } yield ()
     }
@@ -728,7 +731,7 @@ final case class JointLedger(
       */
     private def handleBlock(
         block: Block.Unsigned.Next,
-        localFinalization: Boolean
+        localFinalization: LocalFinalizationTrigger
     ): IO[Unit] =
         for {
             conn <- getConnections
@@ -741,7 +744,7 @@ final case class JointLedger(
               vMin,
               evtCnt
             )
-            acks = ownHeadWallet.mkAcks(block, localFinalization)
+            acks = ownHeadWallet.mkAcks(block, localFinalization.asBoolean)
             _ <- (conn.peerLiaisons ! block.blockBriefNext).parallel
             _ <- conn.consensusActor ! block
             _ <- IO.traverse_(acks)(ack => conn.consensusActor ! ack)
@@ -809,8 +812,8 @@ object JointLedger {
           */
         case class CompleteBlockRegular(
             referenceBlockBrief: Option[BlockBrief.Intermediate],
-            pollResults: Set[TransactionInput],
-            finalizationLocallyTriggered: Boolean,
+            pollResults: PollResults,
+            finalizationLocallyTriggered: LocalFinalizationTrigger,
             blockCreationEndTime: BlockCreationEndTime
         )
 

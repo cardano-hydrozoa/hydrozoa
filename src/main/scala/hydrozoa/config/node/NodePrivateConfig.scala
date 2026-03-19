@@ -37,5 +37,8 @@ object NodePrivateConfig {
 
         override def peerLiaisonMaxEventsPerBatch: PositiveInt =
             nodeOperationMultisigConfig.peerLiaisonMaxEventsPerBatch
+
+        override def blockWeaverTimeout: FiniteDuration =
+            nodeOperationMultisigConfig.blockWeaverTimeout
     }
 }

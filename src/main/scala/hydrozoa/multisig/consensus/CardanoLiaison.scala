@@ -12,7 +12,7 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuant
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.CardanoBackend
-import hydrozoa.multisig.consensus.BlockWeaver.PollResults
+import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.ledger.block.BlockVersion.Major.increment
 import hydrozoa.multisig.ledger.block.{BlockEffects, BlockHeader, BlockVersion}
 import hydrozoa.multisig.ledger.l1.tx.*

@@ -3,12 +3,12 @@ package hydrozoa.multisig.ledger.l1.deposits.map
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, SettlementTxEndTime}
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.DepositAbsorptionStartTime
 import hydrozoa.config.head.multisig.timing.{TxTiming, given_Ordering_DepositAbsorptionStartTime}
+import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap.Entry
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap.Partition.Compartment
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import scala.collection.immutable.{Queue, TreeMap}
-import scalus.cardano.ledger.TransactionInput
 
 /** deposits in a TreeMap according to their absorption start time. The Tree map ensures that the
   * traversal order is according to the absorption start time, with ties being broken according to
@@ -73,7 +73,7 @@ final case class DepositsMap private[map] (
     def partition(
         blockCreationEndTime: BlockCreationEndTime,
         settlementTxEndTime: SettlementTxEndTime,
-        pollResults: Set[TransactionInput]
+        pollResults: PollResults
     ): DepositsMap.Partition =
         treeMap.foldLeft(DepositsMap.Partition.empty) {
             case (outerAcc, (_absorptionStartTime, depositQueue)) =>
@@ -91,7 +91,7 @@ final case class DepositsMap private[map] (
                       depositUtxo.absorptionEndTime
                     )
 
-                    val isExistent = pollResults.contains(depositUtxo.toUtxo.input)
+                    val isExistent = pollResults.utxos.contains(depositUtxo.toUtxo.input)
 
                     val compartment =
                         if isImmature then Immature

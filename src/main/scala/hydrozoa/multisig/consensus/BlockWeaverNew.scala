@@ -4,8 +4,9 @@ import cats.effect.IO
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
-import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime, MajorBlockWakeupTime}
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.logging.Logging
@@ -17,6 +18,7 @@ import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import org.typelevel.log4cats.Logger
+import scala.math.Ordered.orderingToOrdered
 
 final case class BlockWeaverNew(
     config: BlockWeaverNew.Config,
@@ -49,6 +51,10 @@ final case class BlockWeaverNew(
             for {
                 connections <- initializeConnections
                 startingState <- State.start(config, connections, logger)
+                _ <- context.setReceiveTimeout(
+                  config.blockWeaverTimeout,
+                  BlockWeaverNew.Timeout
+                )
                 _ <- become(startingState)
             } yield ()
         case x =>
@@ -68,8 +74,10 @@ final case class BlockWeaverNew(
 }
 
 object BlockWeaverNew {
+    // TODO: Copied from Cardano Liason. Can we abstract?
+    object Timeout
 
-    type Config = CardanoNetwork.Section & OwnHeadPeerPublic.Section
+    type Config = CardanoNetwork.Section & OwnHeadPeerPublic.Section & NodeOperationMultisigConfig
 
     final case class Connections(
         jointLedger: JointLedger.Handle
@@ -78,7 +86,7 @@ object BlockWeaverNew {
     type Handle = ActorRef[IO, Request]
 
     type Request = PreStart.type | UserRequestWithId | BlockBrief.Next | BlockConfirmed |
-        PollResults | LocalFinalizationTrigger.Triggered.type
+        PollResults | LocalFinalizationTrigger.Triggered.type | Timeout.type
 
     type BlockConfirmed = BlockHeader.Section & Block.Fields.HasFinalizationRequested &
         BlockStatus.MultiSigned & BlockType.Next
@@ -116,7 +124,12 @@ object BlockWeaverNew {
         final def sendCompleteRegularBlockAsLeader(config: Config): IO[Unit] = for {
             now <- realTimeQuantizedInstant(config.slotConfig)
             blockCreationEndTime = BlockCreationEndTime(now)
-            completeBlockMsg = ???
+            completeBlockMsg = CompleteBlockRegular(
+              None,
+              pollResults,
+              finalizationLocallyTriggered,
+              blockCreationEndTime
+            )
             _ <- connections.jointLedger ! completeBlockMsg
         } yield ()
 
@@ -129,8 +142,8 @@ object BlockWeaverNew {
                 case x: BlockBrief.Intermediate =>
                     CompleteBlockRegular(
                       Some(x),
-                      pollResults.utxos,
-                      finalizationLocallyTriggered.asBoolean,
+                      pollResults,
+                      finalizationLocallyTriggered,
                       blockCreationEndTime
                     )
                 case x: BlockBrief.Final =>
@@ -250,11 +263,11 @@ object BlockWeaverNew {
 
         object Idle {
             private[State] def apply(
-                state: State,
+                stateToTransitionFrom: State,
                 mempool: Mempool,
                 nextBlockNumber: BlockNumber
             ): Idle =
-                import state.*
+                import stateToTransitionFrom.*
                 Idle(
                   connections,
                   logger,
@@ -302,12 +315,17 @@ object BlockWeaverNew {
                             logger.info("Finalization was locally triggered.") >>
                                 pure(copy(finalizationLocallyTriggered = ft))
 
+                        case t: Timeout.type =>
+                            logger.info("Timeout received in the Idle.AwaitBlockBrief state.")
+                                >> pure(this)
+
                         case m: Unexpected =>
                             panicUnexpectedRequest(this, m)
                     }
             }
 
             object AwaitingBlockBrief {
+                // Question: Why is the private[Idle]? I'd like to use it when transition from Leader.AwaitingRequest
                 private[Idle] def apply(
                     state: State,
                     mempool: Mempool,
@@ -438,6 +456,10 @@ object BlockWeaverNew {
                             logger.info("Finalization was locally triggered.") >>
                                 pure(copy(finalizationLocallyTriggered = ft))
 
+                        case t: Timeout.type =>
+                            logger.debug("Timeout received in Follower.AwaitingRequest state")
+                                >> pure(this)
+
                         case unexpected: Unexpected =>
                             panicUnexpectedRequest(this, unexpected)
                     }
@@ -535,7 +557,6 @@ object BlockWeaverNew {
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
                 leadingBlockNumber: BlockNumber,
-                // TODO: Add the MajorBlockWakeupTime, so we can set the timeout.
                 startedBlock: Leader.AwaitingConfirmation.StartedBlock
             ) extends Reactive {
                 override transparent inline def stateName: String = "Leader.AwaitingConfirmation"
@@ -558,6 +579,11 @@ object BlockWeaverNew {
                         case ft: LocalFinalizationTrigger.Triggered.type =>
                             logger.info("Finalization was locally triggered.") >>
                                 pure(copy(finalizationLocallyTriggered = ft))
+
+                        case _: Timeout.type =>
+                            logger.info(
+                              "Timeout received in Leader.AwaitingConfirmation state"
+                            ) >> pure(this)
 
                         case unexpected: Unexpected =>
                             panicUnexpectedRequest(this, unexpected)
@@ -589,6 +615,7 @@ object BlockWeaverNew {
                 override val logger: Logger[IO],
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
+                majorBlockWakeupTime: MajorBlockWakeupTime,
                 previousBlockBriefConfirmed: BlockBrief.NonFinal
             ) extends Reactive {
                 override transparent inline def stateName: String = "Leader.AwaitingConfirmation"
@@ -610,6 +637,39 @@ object BlockWeaverNew {
                             logger.info("Finalization was locally triggered.") >>
                                 pure(copy(finalizationLocallyTriggered = ft))
 
+                        case _: BlockWeaverNew.Timeout.type => {
+
+                            val forceMajorBlock = {
+                                if finalizationLocallyTriggered.asBoolean
+                                then ???
+                                else
+                                    (sendCompleteRegularBlockAsLeader(config))
+                                        >> pure(
+                                          Idle.AwaitingBlockBrief(
+                                            connections = this.connections,
+                                            logger = this.logger,
+                                            pollResults = this.pollResults,
+                                            finalizationLocallyTriggered =
+                                                this.finalizationLocallyTriggered,
+                                            // Question: At this point, we've drained the mempool, right?
+                                            mempool = Mempool.empty,
+                                            nextBlockNumber =
+                                                this.previousBlockBriefConfirmed.blockNum.increment
+                                          )
+                                        )
+                            }
+
+                            for { // Check if newMajorBlockTime has passed, force new block if so
+                                _ <- logger.info("Timeout received in Leader.AwaitingRequest")
+                                now <- realTimeQuantizedInstant(config.slotConfig)
+                                res <-
+                                    if now >= majorBlockWakeupTime.convert
+                                    then forceMajorBlock
+                                    else pure(this)
+                            } yield res
+
+                        }
+
                         case unexpected: Unexpected =>
                             panicUnexpectedRequest(this, unexpected)
                     }
@@ -618,7 +678,8 @@ object BlockWeaverNew {
             object AwaitingRequest {
                 private[State] def apply(
                     state: State,
-                    previousBlockBriefConfirmed: BlockBrief.NonFinal
+                    previousBlockBriefConfirmed: BlockBrief.NonFinal,
+                    majorBlockWakeupTime: MajorBlockWakeupTime
                 ): Leader.AwaitingRequest =
                     import state.*
                     Leader.AwaitingRequest(
@@ -626,6 +687,7 @@ object BlockWeaverNew {
                       logger,
                       pollResults,
                       finalizationLocallyTriggered,
+                      majorBlockWakeupTime,
                       previousBlockBriefConfirmed
                     )
             }
