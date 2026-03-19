@@ -17,8 +17,10 @@ import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.lib.cardano.scalus.QuantizedTime.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.ledger.stripVKeyWitnesses
+import hydrozoa.multisig.consensus.BlockWeaverNew.LocalFinalizationTrigger
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{ConsensusActor, RequestValidityEndTimeRaw, RequestValidityStartTimeRaw, UserRequest, UserRequestBody, UserRequestHeader, UserRequestWithId}
+import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.*
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Requests.*
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Scenarios.*
@@ -33,6 +35,7 @@ import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger, given}
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
+
 import java.util.concurrent.TimeUnit
 import monocle.Focus
 import monocle.Focus.focus
@@ -40,11 +43,12 @@ import org.scalacheck.*
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.PropertyM.monadForPropM
 import org.scalacheck.util.Pretty
+
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.TransactionOutput.valueLens
-import scalus.cardano.ledger.{Block as _, BlockHeader as _, Coin, *}
+import scalus.cardano.ledger.{Coin, Block as _, BlockHeader as _, *}
 import scalus.crypto.ed25519.Signature
 import scalus.uplc.builtin.ByteString
 import test.Generators.Hydrozoa.*
@@ -213,15 +217,15 @@ object JointLedgerTestHelpers {
         def completeBlockRegular(
             referenceBlock: Option[BlockBrief.Intermediate],
             blockCreationEndTime: BlockCreationEndTime,
-            pollResults: Set[TransactionInput]
+            pollResults: PollResults
         ): JLTest[Unit] =
             for {
                 env <- ask
                 _ <- completeBlockRegular(
                   CompleteBlockRegular(
                     referenceBlock,
-                    pollResults: Set[TransactionInput],
-                    false,
+                    pollResults,
+                    LocalFinalizationTrigger.NotTriggered,
                     blockCreationEndTime
                   )
                 )
@@ -713,7 +717,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
           } yield ()
 
           // Complete a block, but assume the deposit didn't show up in the poll results
-          _ <- completeBlockRegular(None, firstBlockCreationEndTime, Set.empty)
+          _ <- completeBlockRegular(None, firstBlockCreationEndTime, PollResults.empty)
           _ <-
               for {
                   consensusAgentState <- getConsensusAgentState
@@ -759,7 +763,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
           _ <- completeBlockRegular(
             None,
             secondBlockCreationEndTime,
-            Set(depositProduced.toUtxo.input)
+            PollResults(Set(depositProduced.toUtxo.input))
           )
           _ <- for {
               consensusAgentState <- getConsensusAgentState
@@ -784,7 +788,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
           _ <- completeBlockRegular(
             None,
             thirdBlockCreationEndTime,
-            Set(depositProduced.toUtxo.input)
+            PollResults(Set(depositProduced.toUtxo.input))
           )
 
           _ <- for {
