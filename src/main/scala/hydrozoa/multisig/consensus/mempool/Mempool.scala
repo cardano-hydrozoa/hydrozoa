@@ -3,7 +3,6 @@ package hydrozoa.multisig.consensus.mempool
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.consensus.UserRequestWithId
 import hydrozoa.multisig.ledger.event.RequestId
-
 import scala.annotation.tailrec
 
 /** Simple immutable mempool implementation. Duplicate ledger request IDs are NOT allowed and a
@@ -120,7 +119,7 @@ final case class Mempool(
                   requestId, {
                       val msg =
                           s"Panic: the mempool's `arrivalOrder` vector has a request ID (${requestId.asI64}) that" +
-                              s" is missing from the mempool's `requests` map."
+                              " is missing from the mempool's `requests` map."
                       logger.error(msg)
                       throw RuntimeException(msg)
                   }

@@ -90,6 +90,7 @@ object BlockWeaverNew {
     }
 
     sealed trait State {
+        def stateName: String
 
         /** See [[State.Active]] and [[State.Reactive]]. */
         type NextState <: State.Reactive
@@ -98,6 +99,9 @@ object BlockWeaverNew {
         def logger: Logger[IO]
         def pollResults: PollResults
         def finalizationLocallyTriggered: LocalFinalizationTrigger
+
+        def logStateTransition: IO[Unit] =
+            logger.info(s"Becoming $stateName.")
     }
 
     object State {
@@ -120,7 +124,7 @@ object BlockWeaverNew {
           * actions need to be taken.
           */
         private def pure[S <: State.Reactive](state: S): IO[Some[S]] =
-            IO.pure(Some(state))
+            state.logStateTransition >> IO.pure(Some(state))
 
         // TODO: implement state machine termination.
         // private def stop(): IO[None.type] = IO.pure(None)
@@ -188,17 +192,21 @@ object BlockWeaverNew {
             override val mempool: Mempool,
         ) extends Active,
               WithMempool {
+            override transparent inline def stateName: String = "Idle"
+
             override type NextState = Idle.AwaitingBlockBrief | Leader.AwaitingConfirmation
 
-            override def act(config: Config): IO[Some[NextState]] =
-                if config.ownHeadPeerId.isLeader(BlockNumber.zero)
-                then {
-                    logger.info("Starting as Leader.") >>
+            override def act(config: Config): IO[Some[NextState]] = for {
+                _ <- logStateTransition
+                newState <-
+                    if config.ownHeadPeerId.isLeader(BlockNumber.zero)
+                    then {
                         Leader(this, mempool).act(config)
-                } else {
-                    logger.info("Starting as Idle.") >>
+                    } else {
                         pure(Idle.AwaitingBlockBrief(this, mempool))
-                }
+                    }
+            } yield newState
+
         }
 
         object Idle {
@@ -220,7 +228,10 @@ object BlockWeaverNew {
                 override val mempool: Mempool,
             ) extends Reactive,
                   WithMempool {
-                override type NextState = Idle.AwaitingBlockBrief | Follower.AwaitingRequest
+                override transparent inline def stateName: String = "Idle.AwaitingBlockBrief"
+
+                override type NextState = Idle.AwaitingBlockBrief | Leader.AwaitingConfirmation |
+                    Follower.AwaitingRequest
 
                 override type Unexpected = PreStart.type | BlockConfirmed
 
@@ -273,18 +284,32 @@ object BlockWeaverNew {
             reproducingBlockBrief: BlockBrief.Next,
         ) extends Active,
               WithMempool {
-            override type NextState = Idle.AwaitingBlockBrief | Follower.AwaitingRequest
+            override transparent inline def stateName: String = "Follower"
 
-            def act(config: Config): IO[Some[NextState]] = ???
+            override type NextState = Idle.AwaitingBlockBrief | Leader.AwaitingConfirmation |
+                Follower.AwaitingRequest
 
-            private def extractBlockBriefRequestsFromMempool: IO[Mempool.Extraction.Result] = {
+            def act(config: Config): IO[Some[NextState]] = for {
+                _ <- logStateTransition
+                extractionResult <- extractAndSendRequestsFromMempool
+                newState <- extractionResult match {
+                    case Mempool.Extraction.Complete(extractedRequests, survivingMempool) =>
+                        Idle(this, survivingMempool).act(config)
+                    case result: Mempool.Extraction.Incomplete =>
+                        pure(Follower.AwaitingRequest(this, reproducingBlockBrief, result))
+                }
+            } yield newState
+
+            private def extractAndSendRequestsFromMempool: IO[Mempool.Extraction.Result] = {
                 val requestIds: List[RequestId] = reproducingBlockBrief.events.map(_._1)
                 val newExtractionResult = mempool.extractRequestsWhile(requestIds)
+                import newExtractionResult.extractedRequests
                 for {
                     _ <- logger.trace(
-                      s"Extracted requests from mempool: " +
-                          s"${newExtractionResult.extractedRequests.map(_.requestId.asI64)}"
+                      "Extracted requests from mempool. Sending them to joint ledger: " +
+                          s"${extractedRequests.map(_.requestId.asI64)}"
                     )
+                    _ <- extractedRequests.traverse_(connections.jointLedger ! _)
                 } yield mempool.extractRequestsWhile(requestIds)
             }
         }
@@ -315,6 +340,8 @@ object BlockWeaverNew {
                 incompleteExtraction: Mempool.Extraction.Incomplete
             ) extends Reactive,
                   WithMempool {
+                override transparent inline def stateName: String = "Follower.AwaitingRequest"
+
                 override type NextState = Idle.AwaitingBlockBrief | Follower.AwaitingRequest
 
                 override type Unexpected = PreStart.type | BlockBrief.Next | BlockConfirmed
@@ -351,7 +378,7 @@ object BlockWeaverNew {
                     val newExtractionResult = mempool.extractRequestsWhile(requestIds)
                     for {
                         _ <- logger.trace(
-                          s"Extracted more requests from mempool: " +
+                          "Extracted more requests from mempool: " +
                               s"${newExtractionResult.extractedRequests.map(_.requestId.asI64)}"
                         )
                     } yield newExtractionResult
@@ -361,7 +388,6 @@ object BlockWeaverNew {
             object AwaitingRequest {
                 private[State] def apply(
                     state: State,
-                    mempool: Mempool,
                     reproducingBlockBrief: BlockBrief.Next,
                     incompleteExtraction: Mempool.Extraction.Incomplete
                 ): Follower.AwaitingRequest =
@@ -371,7 +397,7 @@ object BlockWeaverNew {
                       logger,
                       pollResults,
                       finalizationLocallyTriggered,
-                      mempool,
+                      incompleteExtraction.survivingMempool,
                       reproducingBlockBrief,
                       incompleteExtraction
                     )
@@ -386,15 +412,20 @@ object BlockWeaverNew {
             override val mempool: Mempool
         ) extends Active,
               WithMempool {
+            override transparent inline def stateName: String = "Leader"
+
             override type NextState = Leader.AwaitingConfirmation
 
-            override def act(config: Config): IO[Some[NextState]] = ???
+            override def act(config: Config): IO[Some[NextState]] = for {
+                _ <- logStateTransition
+                newState <- IO.pure(Some(???))
+            } yield newState
 
             private def extractRequestsInOrder: IO[List[UserRequestWithId]] = {
                 val requests = mempool.extractRequestsInOrder
                 for {
                     _ <- logger.trace(
-                      s"Extracting remaining requests from mempool in order of arrival. " +
+                      "Extracting remaining requests from mempool in order of arrival. " +
                           s"First twenty request IDs: ${requests.iterator.take(20).map(_.requestId.asI64)}"
                     )
                 } yield requests
@@ -415,6 +446,8 @@ object BlockWeaverNew {
                 leadingBlockNumber: BlockNumber,
                 startedBlock: Leader.AwaitingConfirmation.StartedBlock
             ) extends Reactive {
+                override transparent inline def stateName: String = "Leader.AwaitingConfirmation"
+
                 override type NextState = Idle.AwaitingBlockBrief | Leader.AwaitingConfirmation |
                     Leader.AwaitingRequest
 
@@ -466,6 +499,8 @@ object BlockWeaverNew {
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
                 previousBlockBriefConfirmed: BlockBrief.NonFinal
             ) extends Reactive {
+                override transparent inline def stateName: String = "Leader.AwaitingConfirmation"
+
                 override type NextState = Idle.AwaitingBlockBrief | Leader.AwaitingConfirmation |
                     Leader.AwaitingRequest
 
