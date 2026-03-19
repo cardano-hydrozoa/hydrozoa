@@ -77,7 +77,8 @@ final case class BlockWeaver(
 object BlockWeaver {
     object Timeout
 
-    type Config = CardanoNetwork.Section & OwnHeadPeerPublic.Section & NodeOperationMultisigConfig.Section
+    type Config = CardanoNetwork.Section & OwnHeadPeerPublic.Section &
+        NodeOperationMultisigConfig.Section
 
     final case class Connections(
         jointLedger: JointLedger.Handle

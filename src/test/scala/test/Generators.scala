@@ -420,8 +420,8 @@ object Generators {
             headPeerNumber <- Gen.choose(0, 10)
             requestNumber <- Gen.choose[Long](0, 1024)
         } yield RequestId(
-            headPeerNumber, 
-            requestNumber
+          headPeerNumber,
+          requestNumber
         )
 
         /** NOTE: These will generate _fully_ arbitrary data. It is probably not what you want, but

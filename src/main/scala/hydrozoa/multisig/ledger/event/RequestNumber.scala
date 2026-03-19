@@ -6,7 +6,10 @@ object RequestNumber {
     opaque type RequestNumber = Long
 
     def apply(n: Long): RequestNumber = {
-        require(n >= 0 && n < (1L << 40), s"The request number should be in [0; ${1L << 40}), got: $n")
+        require(
+          n >= 0 && n < (1L << 40),
+          s"The request number should be in [0; ${1L << 40}), got: $n"
+        )
         n
     }
 

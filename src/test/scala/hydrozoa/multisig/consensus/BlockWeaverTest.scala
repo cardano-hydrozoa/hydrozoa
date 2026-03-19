@@ -19,18 +19,17 @@ import hydrozoa.multisig.ledger.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
+import java.time.Instant
+import java.util.concurrent.atomic.AtomicInteger
 import org.scalacheck.{Arbitrary, Gen, Properties, PropertyBuilder, Test}
+import scala.collection.mutable
+import scala.concurrent.duration.DurationInt
 import scalus.cardano.ledger.{Blake2b_256, Hash}
 import scalus.crypto.ed25519.Signature
 import scalus.uplc.builtin.ByteString
 import test.Generators.Hydrozoa.genRequestId
 import test.TestPeerName.{Bob, Carol}
 import test.{PeersNumberSpec, TestPeersSpec}
-
-import java.time.Instant
-import java.util.concurrent.atomic.AtomicInteger
-import scala.collection.mutable
-import scala.concurrent.duration.DurationInt
 
 object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
     override def overrideParameters(p: Test.Parameters): Test.Parameters = {
@@ -94,8 +93,8 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
         peerNumber: HeadPeerNumber
     ): BlockWeaver.Handle = {
         val config = multiNodeConfig.nodeConfigs(peerNumber)
-        //val connections = BlockWeaver.Connections(jointLedgerMockActor)
-        //p.runIO(system.actorOf(BlockWeaver(config, connections)))
+        // val connections = BlockWeaver.Connections(jointLedgerMockActor)
+        // p.runIO(system.actorOf(BlockWeaver(config, connections)))
         val connections = BlockWeaver.Connections(jointLedgerMockActor)
         p.runIO(system.actorOf(BlockWeaver(config, connections)))
     }
@@ -131,13 +130,15 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
     // Bob doesn't start block 1 until an event is received
     // ===================================
 
-    val _ = property("Bob doesn't start block 1 until an event is received") =
+    lazy val _ = property("Bob doesn't start block 1 until an event is received") =
         PropertyBuilder.property { p =>
 
             val TestSetup(system, jointLedgerMock, jointLedgerMockActor) = setupTestEnvironment(p)
 
             p.runIO(for {
-                _ <- IO.pure(createBlockWeaverActor(p, system, jointLedgerMockActor, Bob.headPeerNumber))
+                _ <- IO.pure(
+                  createBlockWeaverActor(p, system, jointLedgerMockActor, Bob.headPeerNumber)
+                )
                 _ <- system.waitForIdle()
             } yield ())
 
@@ -159,7 +160,8 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
 
             val TestSetup(system, jointLedgerMock, jointLedgerMockActor) = setupTestEnvironment(p)
 
-            val blockWeaver = createBlockWeaverActor(p, system, jointLedgerMockActor, Carol.headPeerNumber)
+            val blockWeaver =
+                createBlockWeaverActor(p, system, jointLedgerMockActor, Carol.headPeerNumber)
             val config = multiNodeConfig.nodeConfigs(Carol.headPeerNumber)
 
             // Brief
@@ -187,7 +189,8 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
 
             val TestSetup(system, jointLedgerMock, jointLedgerMockActor) = setupTestEnvironment(p)
 
-            val weaverActor = createBlockWeaverActor(p, system, jointLedgerMockActor, Bob.headPeerNumber)
+            val weaverActor =
+                createBlockWeaverActor(p, system, jointLedgerMockActor, Bob.headPeerNumber)
 
             // TODO: do we need it though?
             val _ = p.runIO(system.waitForIdle())
@@ -223,7 +226,8 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
 
         val TestSetup(system, jointLedgerMock, jointLedgerMockActor) = setupTestEnvironment(p)
 
-        val weaverActor = createBlockWeaverActor(p, system, jointLedgerMockActor, Carol.headPeerNumber)
+        val weaverActor =
+            createBlockWeaverActor(p, system, jointLedgerMockActor, Carol.headPeerNumber)
         val config = multiNodeConfig.nodeConfigs(Carol.headPeerNumber)
 
         // TODO: do we need it though?
@@ -270,12 +274,13 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
     // ===================================
     // Carol (2) leads block (2), feeding new requests in order
     // ===================================
-     val _ = property("Carol (2) leads block (2), feeding new requests in order") =
+    val _ = property("Carol (2) leads block (2), feeding new requests in order") =
         PropertyBuilder.property { p =>
 
             val TestSetup(system, jointLedgerMock, jointLedgerMockActor) = setupTestEnvironment(p)
 
-            val weaverActor = createBlockWeaverActor(p, system, jointLedgerMockActor, Carol.headPeerNumber)
+            val weaverActor =
+                createBlockWeaverActor(p, system, jointLedgerMockActor, Carol.headPeerNumber)
             val config = multiNodeConfig.nodeConfigs(Carol.headPeerNumber)
 
             // Brief for block 1
