@@ -583,8 +583,7 @@ trait BlockWeaver(
         if config.ownHeadPeerId.isLeader(nextBlockNum)
         then
             for {
-                // Delay empty blocks to prevent spin loop, but still create them for deposit lifecycle
-                _ <- IO.whenA(mempool.receivingOrder.isEmpty)(IO.sleep(5.seconds))
+                _ <- logger.info(s"Start leading block ${nextBlockNum}")
                 conn <- getConnections
                 _ <- conn.tracer.leaderStarted(nextBlockNum: Int, config.ownHeadPeerId.peerNum: Int)
                 now <- realTimeQuantizedInstant(config.slotConfig)
@@ -594,7 +593,9 @@ trait BlockWeaver(
                 )
                 _ <- stateRef.set(Leader(nextBlockNum))
             } yield ()
-        else stateRef.set(Idle(mempool))
+        else
+            logger.info(s"Staying in idle for block ${nextBlockNum}")
+                >> stateRef.set(Idle(mempool))
 
     private def handlePollResults(pollResults: PollResults): IO[Unit] =
         pollResultsRef.set(pollResults)

@@ -148,10 +148,10 @@ object JsonCodecs {
 
     // RequestNumber codec
     given requestNumberEncoder: Encoder[RequestNumber] =
-        Encoder.encodeInt.contramap(_.convert)
+        Encoder.encodeLong.contramap(_.convert)
 
     given requestNumberDecoder: Decoder[RequestNumber] =
-        Decoder.decodeInt.map(RequestNumber.apply)
+        Decoder.decodeLong.map(RequestNumber.apply)
 
     // HeadPeerNumber codec
     given headPeerNumberEncoder: Encoder[HeadPeerNumber] =
@@ -162,10 +162,10 @@ object JsonCodecs {
 
     // RequestId codec
     given requestIdEncoder: Encoder[RequestId] = (requestId: RequestId) =>
-        io.circe.Json.fromInt(requestId.asI64)
+        io.circe.Json.fromLong(requestId.asI64)
 
     given requestIdDecoder: Decoder[RequestId] =
-        Decoder.decodeInt.map(RequestId.fromI64)
+        Decoder.decodeLong.map(RequestId.fromI64)
 
     // Response types
     given requestAcceptedEncoder: Encoder[RequestAccepted] = deriveEncoder[RequestAccepted]

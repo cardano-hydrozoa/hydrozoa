@@ -230,8 +230,8 @@ final case class JointLedger(
             _ <- state.set(newState)
             _ <- logger.warn(s"Request rejected ($requestId): $e")
             _ <- tracer.eventProcessed(
-              s"${requestId.peerNum: Int}:${requestId.requestNum: Int}",
-              currentBlockNum: Int,
+              s"${requestId.peerNum}:${requestId.requestNum}",
+              currentBlockNum.toLong,
               false
             )
             l2Command = L2LedgerCommand.ProxyRequestError(
@@ -297,8 +297,8 @@ final case class JointLedger(
                                             )
                                             _ <- logger.debug(s"Request processed ($requestId)")
                                             _ <- tracer.eventProcessed(
-                                              s"${requestId.peerNum: Int}:${requestId.requestNum: Int}",
-                                              currentBlockNum: Int,
+                                              s"${requestId.peerNum}:${requestId.requestNum}",
+                                              currentBlockNum.toLong,
                                               true
                                             )
                                         } yield ()
@@ -355,8 +355,8 @@ final case class JointLedger(
                                           .modify(_.appended((requestId, Valid)))
                                     )
                                     _ <- tracer.eventProcessed(
-                                      s"${requestId.peerNum: Int}:${requestId.requestNum: Int}",
-                                      currentBlockNum: Int,
+                                      s"${requestId.peerNum}:${requestId.requestNum}",
+                                      currentBlockNum.toLong,
                                       true
                                     )
                                 } yield ()
