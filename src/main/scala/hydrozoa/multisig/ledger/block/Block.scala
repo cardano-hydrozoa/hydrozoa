@@ -165,6 +165,11 @@ object Block {
         type Next = Block.MultiSigned & BlockType.Next
         type Intermediate = Block.MultiSigned & BlockType.Intermediate
         type NonFinal = Block.MultiSigned & BlockType.NonFinal
+
+        extension (nonFinal: Block.MultiSigned.NonFinal)
+            def headerNonFinal: BlockHeader.NonFinal =
+                nonFinal.header.asInstanceOf[BlockHeader.NonFinal]
+
     }
 
     object Fields {
@@ -176,4 +181,5 @@ object Block {
     trait Section extends BlockType, BlockBrief.Section, BlockEffects.Section {
         def block: Block
     }
+
 }

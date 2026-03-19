@@ -14,7 +14,7 @@ import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.BlockWeaverNew.State.Leader.AwaitingConfirmation.StartedBlock.{NotStarted, Started}
 import hydrozoa.multisig.consensus.mempool.Mempool
 import hydrozoa.multisig.consensus.pollresults.PollResults
-import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockHeader, BlockNumber, BlockStatus, BlockType}
+import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockNumber, BlockType}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
@@ -108,6 +108,9 @@ object BlockWeaverNew {
         def pollResults: PollResults
         def finalizationLocallyTriggered: LocalFinalizationTrigger
 
+        final def stop(): IO[None.type] =
+            logger.info("Stopping") >> IO.pure(None)
+
         final def logStateTransition: IO[Unit] =
             logger.info(s"Becoming $stateName.")
 
@@ -183,9 +186,6 @@ object BlockWeaverNew {
           */
         private def pure[S <: State.Reactive](state: S): IO[Some[S]] =
             state.logStateTransition >> IO.pure(Some(state))
-
-        // TODO: implement state machine termination.
-        // private def stop(): IO[None.type] = IO.pure(None)
 
         /** A state with a mempool can store requests in its mempool. */
         sealed trait WithMempool extends State {
@@ -332,7 +332,6 @@ object BlockWeaverNew {
             }
 
             private object AwaitingBlockBrief {
-                // Question: Why is the private[Idle]? I'd like to use it when transition from Leader.AwaitingRequest
                 private[Idle] def apply(
                     state: State,
                     mempool: Mempool,
@@ -619,7 +618,7 @@ object BlockWeaverNew {
                                     else pure(this.copy(isBlockStarted = Started))
                             } yield res
 
-                        case bc: (Block.MultiSigned & BlockType.NonFinal) =>
+                        case bc: Block.MultiSigned.NonFinal =>
                             def completeBlockRegular =
                                 sendCompleteRegularBlockAsLeader(config) >>
                                     Idle(
@@ -648,14 +647,12 @@ object BlockWeaverNew {
                                     pure(
                                       Leader.AwaitingRequest(
                                         this,
-                                        // TODO: make BlockConfirmed just a full multisigned non-final block
-                                        previousBlockHeaderConfirmed =
-                                            bc.header.asInstanceOf[BlockHeader.NonFinal],
+                                        previousBlockConfirmed = bc,
                                       )
                                     )
                             else {
-                                val msg = s"Received wrong block number for confirmed block. We are producing" +
-                                    s" ${leadingBlockNumber}, but the confirmed block that we received is ${bc.blockNum}"
+                                val msg = "Received wrong block number for confirmed block. We are producing" +
+                                    s" $leadingBlockNumber, but the confirmed block that we received is ${bc.blockNum}"
                                 logger.error(msg) >> IO.raiseError(RuntimeException(msg))
                             }
 
@@ -713,27 +710,26 @@ object BlockWeaverNew {
 
                 private val currentBlockNumber = previousBlockConfirmed.blockNum.increment
 
-                override def react(config: Config)(req: Request): IO[Option[NextState]] =
+                override def react(config: Config)(req: Request): IO[Option[NextState]] = {
+                    def completeBlockRegular = sendCompleteRegularBlockAsLeader(config) >>
+                        Idle(
+                          this,
+                          mempool = Mempool.empty,
+                          nextBlockNumber = currentBlockNumber.increment
+                        ).act(config)
+
+                    def completeBlock =
+                        if finalizationLocallyTriggered.asBoolean || previousBlockConfirmed.finalizationRequested
+                        then sendCompleteFinalBlockAsLeader(config) >> stop()
+                        else completeBlockRegular
+
                     req match {
                         case ur: UserRequestWithId =>
-                            val completeBlockRegular = sendCompleteRegularBlockAsLeader(config) >>
-                                Idle(
-                                  connections,
-                                  logger,
-                                  pollResults,
-                                  finalizationLocallyTriggered,
-                                  mempool = Mempool.empty,
-                                  nextBlockNumber = currentBlockNumber.increment
-                                ).act(config)
-
                             for {
                                 _ <- sendStartBlock(config)(currentBlockNumber)
                                 _ <- connections.jointLedger ! ur
-                                res <-
-                                    if finalizationLocallyTriggered.asBoolean || previousBlockConfirmed.finalizationRequested
-                                    then sendCompleteFinalBlockAsLeader(config) >> IO.pure(None)
-                                    else completeBlockRegular
-                            } yield res
+                                newState <- completeBlock
+                            } yield newState
 
                         case pr: PollResults =>
                             logger.trace("New poll results.") >>
@@ -744,40 +740,31 @@ object BlockWeaverNew {
                                 pure(copy(finalizationLocallyTriggered = ft))
 
                         case _: BlockWeaverNew.Timeout.type =>
-
-                            val forceMajorBlock =
+                            def forceMajorBlock =
                                 for {
                                     _ <- sendStartBlock(config)(currentBlockNumber)
-                                    res <-
-                                        if finalizationLocallyTriggered.asBoolean // || previousBlockBriefConfirmed.final
-                                        then sendCompleteFinalBlockAsLeader(config) >> IO.pure(None)
-                                        else
-                                            sendCompleteRegularBlockAsLeader(config)
-                                                >>
-                                                    Idle(
-                                                      connections = connections,
-                                                      logger = logger,
-                                                      pollResults = pollResults,
-                                                      finalizationLocallyTriggered =
-                                                          finalizationLocallyTriggered,
-                                                      mempool = Mempool.empty,
-                                                      nextBlockNumber = currentBlockNumber
-                                                    ).act(config)
+                                    newState <- completeBlock
+                                } yield newState
 
-                                } yield res
+                            val wakeupTime =
+                                previousBlockConfirmed.headerNonFinal.majorBlockWakeupTime
 
                             for { // Check if newMajorBlockTime has passed, force new block if so
-                                _ <- logger.info("Timeout received in Leader.AwaitingRequest")
                                 now <- realTimeQuantizedInstant(config.slotConfig)
-                                res <-
-                                    if now >= previousBlockConfirmed.header.majorBlockWakeupTime.convert
+                                _ <- logger.info(
+                                  s"Timeout received in Leader.AwaitingRequest at ${now.instant}," +
+                                      s" wakeup time is ${wakeupTime.instant}"
+                                )
+                                newState <-
+                                    if now >= wakeupTime
                                     then forceMajorBlock
                                     else pure(this)
-                            } yield res
+                            } yield newState
 
                         case unexpected: Unexpected =>
                             panicUnexpectedRequest(this, unexpected)
                     }
+                }
             }
 
             private object AwaitingRequest {
