@@ -1,5 +1,4 @@
 package hydrozoa.multisig.consensus
-
 import cats.effect.IO
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
@@ -11,6 +10,7 @@ import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
+import hydrozoa.multisig.consensus.BlockWeaverNew.State.Leader.AwaitingConfirmation.StartedBlock.Started
 import hydrozoa.multisig.consensus.mempool.Mempool
 import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockHeader, BlockNumber, BlockStatus, BlockType}
@@ -128,6 +128,16 @@ object BlockWeaverNew {
               None,
               pollResults,
               finalizationLocallyTriggered,
+              blockCreationEndTime
+            )
+            _ <- connections.jointLedger ! completeBlockMsg
+        } yield ()
+
+        final def sendCompleteFinalBlockAsLeader(config: Config): IO[Unit] = for {
+            now <- realTimeQuantizedInstant(config.slotConfig)
+            blockCreationEndTime = BlockCreationEndTime(now)
+            completeBlockMsg = CompleteBlockFinal(
+              None,
               blockCreationEndTime
             )
             _ <- connections.jointLedger ! completeBlockMsg
@@ -519,7 +529,15 @@ object BlockWeaverNew {
                   leadingBlockNum,
                   BlockCreationStartTime(now)
                 )
-                newState <- IO.pure(Some(???))
+                newState <- IO.pure(
+                  Some(
+                    Leader.AwaitingConfirmation(
+                      this,
+                      leadingBlockNum,
+                      Started
+                    )
+                  )
+                )
             } yield newState
 
             private def extractAndSendRequestsInOrder: IO[List[UserRequestWithId]] = {
@@ -568,9 +586,59 @@ object BlockWeaverNew {
 
                 override def react(config: Config)(req: Request): IO[Option[NextState]] =
                     req match {
-                        case ur: UserRequestWithId => ???
+                        case ur: UserRequestWithId =>
+                            lazy val completeFirstBlock = for {
+                                _ <- logger.trace(
+                                  s"Completing first block immediately with request ${ur.requestId.asI64}"
+                                ) >> sendCompleteRegularBlockAsLeader(config)
 
-                        case bc: BlockConfirmed => ???
+                            } yield Some(
+                              Idle.AwaitingBlockBrief(
+                                connections,
+                                logger,
+                                pollResults,
+                                finalizationLocallyTriggered,
+                                mempool = Mempool.empty,
+                                nextBlockNumber = leadingBlockNumber.increment
+                              )
+                            )
+
+                            for {
+                                _ <- logger.trace(
+                                  s"Sending to joint ledger: request ${ur.requestId.asI64}"
+                                )
+                                _ <- connections.jointLedger ! ur
+                                res <-
+                                    if leadingBlockNumber == BlockNumber.zero.increment
+                                    then completeFirstBlock
+                                    else pure(this)
+                            } yield res
+
+                        case bc: BlockConfirmed =>
+                            lazy val completeBlockRegular =
+                                sendCompleteRegularBlockAsLeader(config) >> pure(
+                                  Idle.AwaitingBlockBrief(
+                                    connections,
+                                    logger,
+                                    pollResults,
+                                    finalizationLocallyTriggered = finalizationLocallyTriggered,
+                                    mempool = Mempool.empty,
+                                    nextBlockNumber = leadingBlockNumber.increment
+                                  )
+                                )
+
+                            lazy val completeBlockFinal =
+                                sendCompleteFinalBlockAsLeader(config) >> IO.pure(None)
+
+                            val completeNextBlock =
+                                if bc.finalizationRequested || finalizationLocallyTriggered.asBoolean
+                                then completeBlockFinal
+                                else completeBlockRegular
+
+                            // Iff the block confirmed is the previous block
+                            if bc.blockNum.increment == leadingBlockNumber
+                            then completeNextBlock
+                            else pure(this)
 
                         case pr: PollResults =>
                             logger.trace("New poll results.") >>
@@ -627,7 +695,27 @@ object BlockWeaverNew {
 
                 override def react(config: Config)(req: Request): IO[Option[NextState]] =
                     req match {
-                        case ur: UserRequestWithId => ???
+                        case ur: UserRequestWithId =>
+                            val completeBlockRegular = sendCompleteRegularBlockAsLeader(config) >>
+                                pure(
+                                  Idle.AwaitingBlockBrief(
+                                    connections,
+                                    logger,
+                                    pollResults,
+                                    finalizationLocallyTriggered,
+                                    mempool = Mempool.empty,
+                                    nextBlockNumber =
+                                        previousBlockBriefConfirmed.blockNum.increment.increment
+                                  )
+                                )
+
+                            for {
+                                _ <- connections.jointLedger ! ur
+                                res <-
+                                    if finalizationLocallyTriggered.asBoolean
+                                    then sendCompleteFinalBlockAsLeader(config) >> IO.pure(None)
+                                    else completeBlockRegular
+                            } yield res
 
                         case pr: PollResults =>
                             logger.trace("New poll results.") >>
@@ -637,11 +725,11 @@ object BlockWeaverNew {
                             logger.info("Finalization was locally triggered.") >>
                                 pure(copy(finalizationLocallyTriggered = ft))
 
-                        case _: BlockWeaverNew.Timeout.type => {
+                        case _: BlockWeaverNew.Timeout.type =>
 
                             val forceMajorBlock = {
-                                if finalizationLocallyTriggered.asBoolean
-                                then ???
+                                if finalizationLocallyTriggered.asBoolean // || previousBlockBriefConfirmed.final
+                                then sendCompleteFinalBlockAsLeader(config) >> IO.pure(None)
                                 else
                                     (sendCompleteRegularBlockAsLeader(config))
                                         >> pure(
@@ -667,8 +755,6 @@ object BlockWeaverNew {
                                     then forceMajorBlock
                                     else pure(this)
                             } yield res
-
-                        }
 
                         case unexpected: Unexpected =>
                             panicUnexpectedRequest(this, unexpected)
