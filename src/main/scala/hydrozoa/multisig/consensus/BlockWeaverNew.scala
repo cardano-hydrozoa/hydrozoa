@@ -8,11 +8,12 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
+import hydrozoa.multisig.consensus.mempool.Mempool
+import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockHeader, BlockNumber, BlockStatus, BlockType}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.JointLedger
 import org.typelevel.log4cats.Logger
-import scalus.cardano.ledger.TransactionInput
 
 final case class BlockWeaverNew(
     config: BlockWeaverNew.Config,
@@ -64,7 +65,6 @@ final case class BlockWeaverNew(
 }
 
 object BlockWeaverNew {
-    export BlockWeaverDataStructures.*
 
     type Config = CardanoNetwork.Section & OwnHeadPeerPublic.Section
 
@@ -124,8 +124,8 @@ object BlockWeaverNew {
         // TODO: implement state machine termination.
         // private def stop(): IO[None.type] = IO.pure(None)
 
-        /** A caching state can store requests in its mempool. */
-        sealed trait Caching extends State {
+        /** A state with a mempool can store requests in its mempool. */
+        sealed trait WithMempool extends State {
             def mempool: Mempool
         }
 
@@ -177,23 +177,17 @@ object BlockWeaverNew {
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
                 override val mempool: Mempool,
             ) extends Active,
-                  Caching {
+                  WithMempool {
                 override type NextState = IdleReactive | Leader
-
-                private def idleReactive(newMempool: Mempool): IdleReactive =
-                    IdleReactive(this, newMempool)
-
-                private def leader(blockNumber: BlockNumber, startedBlock: Leader.StartedBlock) =
-                    Leader(this, blockNumber, startedBlock)
 
                 override def act(config: Config): IO[Some[NextState]] =
                     if config.ownHeadPeerId.isLeader(BlockNumber.zero)
                     then {
                         logger.info("Starting as Leader.") >>
-                            continue(leader(BlockNumber.zero, Leader.StartedBlock.NotStarted))
+                            continue(Leader(this, BlockNumber.zero, Leader.StartedBlock.NotStarted))
                     } else {
                         logger.info("Starting as Idle.") >>
-                            continue(idleReactive(mempool))
+                            continue(IdleReactive(this, mempool))
                     }
             }
 
@@ -215,37 +209,33 @@ object BlockWeaverNew {
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
                 override val mempool: Mempool,
-            ) extends Caching,
-                  Reactive {
+            ) extends Reactive,
+                  WithMempool {
                 override type NextState = IdleReactive | FollowerAwaiting
 
                 override type Unexpected = PreStart.type | BlockConfirmed
-
-                private def idleReactive(newMempool: Mempool): IdleReactive =
-                    IdleReactive(this, newMempool)
-
-                private def follower(
-                    newMempool: Mempool,
-                    reproducingBlockBrief: BlockBrief.Next
-                ): Follower =
-                    Follower(this, newMempool, reproducingBlockBrief)
 
                 override def react(
                     config: Config
                 )(req: Request): IO[Option[NextState]] =
                     req match {
                         case ur: UserRequestWithId =>
+                            val newMempool = mempool.add(ur)
                             logger.trace(s"Adding ${ur.requestId} to mempool.") >>
-                                continue(idleReactive(mempool.add(ur)))
+                                continue(copy(mempool = newMempool))
+
                         case bb: BlockBrief.Next =>
                             logger.info(s"New block brief ${bb.blockNum}.") >>
-                                follower(mempool, bb).act(config)
+                                Follower(this, mempool, bb).act(config)
+
                         case pr: PollResults =>
                             logger.trace("New poll results.") >>
                                 continue(copy(pollResults = pr))
+
                         case ft: LocalFinalizationTrigger.Triggered.type =>
                             logger.info("Finalization was locally triggered.") >>
                                 continue(copy(finalizationLocallyTriggered = ft))
+
                         case m: Unexpected =>
                             panicUnexpectedRequest(this, m)
                     }
@@ -272,7 +262,7 @@ object BlockWeaverNew {
             override val mempool: Mempool,
             reproducingBlockBrief: BlockBrief.Next,
         ) extends Active,
-              Caching {
+              WithMempool {
             override type NextState = IdleReactive | FollowerAwaiting
 
             def act(config: Config): IO[Some[NextState]] = ???
@@ -303,21 +293,33 @@ object BlockWeaverNew {
             override val mempool: Mempool,
             reproducingBlockBrief: BlockBrief.Next,
             awaitingRequestId: RequestId,
-        ) extends Caching,
-              Reactive {
+        ) extends Reactive,
+              WithMempool {
             override type NextState = IdleReactive | FollowerAwaiting
 
             override type Unexpected = PreStart.type | BlockBrief.Next | BlockConfirmed
 
             override def react(config: Config)(req: Request): IO[Option[NextState]] =
                 req match {
-                    case ur: UserRequestWithId => ???
+                    case ur: UserRequestWithId =>
+                        if ur.requestId == awaitingRequestId then
+                            for {
+                                _ <- IO.unit
+                            } yield ???
+                        else {
+                            val newMempool = mempool.add(ur)
+                            logger.trace(s"Adding ${ur.requestId} to mempool.") >>
+                                continue(copy(mempool = newMempool))
+                        }
+
                     case pr: PollResults =>
                         logger.trace("New poll results.") >>
                             continue(copy(pollResults = pr))
+
                     case ft: LocalFinalizationTrigger.Triggered.type =>
                         logger.info("Finalization was locally triggered.") >>
                             continue(copy(finalizationLocallyTriggered = ft))
+
                     case unexpected: Unexpected =>
                         panicUnexpectedRequest(this, unexpected)
                 }
@@ -357,13 +359,17 @@ object BlockWeaverNew {
             override def react(config: Config)(req: Request): IO[Option[NextState]] =
                 req match {
                     case ur: UserRequestWithId => ???
-                    case bc: BlockConfirmed    => ???
+
+                    case bc: BlockConfirmed => ???
+
                     case pr: PollResults =>
                         logger.trace("New poll results.") >>
                             continue(copy(pollResults = pr))
+
                     case ft: LocalFinalizationTrigger.Triggered.type =>
                         logger.info("Finalization was locally triggered.") >>
                             continue(copy(finalizationLocallyTriggered = ft))
+
                     case unexpected: Unexpected =>
                         panicUnexpectedRequest(this, unexpected)
                 }
@@ -403,12 +409,15 @@ object BlockWeaverNew {
             override def react(config: Config)(req: Request): IO[Option[NextState]] =
                 req match {
                     case ur: UserRequestWithId => ???
+
                     case pr: PollResults =>
                         logger.trace("New poll results.") >>
                             continue(copy(pollResults = pr))
+
                     case ft: LocalFinalizationTrigger.Triggered.type =>
                         logger.info("Finalization was locally triggered.") >>
                             continue(copy(finalizationLocallyTriggered = ft))
+
                     case unexpected: Unexpected =>
                         panicUnexpectedRequest(this, unexpected)
                 }
@@ -430,85 +439,4 @@ object BlockWeaverNew {
         }
 
     }
-}
-
-private object BlockWeaverDataStructures {
-
-    /** Simple immutable mempool implementation. Duplicate ledger request IDs are NOT allowed and a
-      * runtime exception is thrown since this should never happen. Other components, particularly
-      * the peer liaison is in charge or maintaining the integrity of the stream of messages.
-      *
-      * @param requests
-      *   map to store requests
-      * @param receivingOrder
-      *   vector to store order of request ids
-      */
-    final case class Mempool(
-        requests: Map[RequestId, UserRequestWithId] = Map.empty,
-        receivingOrder: Vector[RequestId] = Vector.empty
-    ) {
-
-        /** Throws if a duplicate is detected.
-          *
-          * @param request
-          *   an request to add
-          * @return
-          *   an updated mempool
-          */
-        def add(
-            request: UserRequestWithId
-        ): Mempool = {
-
-            val requestId = request.requestId
-
-            require(
-              !requests.contains(requestId),
-              s"panic - duplicate event id in the pool: $requestId"
-            )
-
-            copy(
-              requests = requests + (requestId -> request),
-              receivingOrder = receivingOrder :+ requestId
-            )
-        }
-
-        // Remove event - returns new state
-        def remove(id: RequestId): Mempool = {
-            require(
-              requests.contains(id),
-              "panic - an attempt to remove a missing event from the mempool"
-            )
-            copy(
-              requests = requests - id,
-              receivingOrder = receivingOrder.filterNot(_ == id)
-            )
-        }
-
-        // Find by ID
-        def findById(id: RequestId): Option[UserRequestWithId] = requests.get(id)
-
-        // Iterate in insertion order
-        def inOrder: Iterator[UserRequestWithId] =
-            receivingOrder.iterator.flatMap(requests.get)
-
-        def isEmpty: Boolean = requests.isEmpty
-    }
-
-    object Mempool {
-        val empty: Mempool = Mempool()
-
-        def apply(events: Seq[UserRequestWithId]): Mempool =
-            events.foldLeft(Mempool.empty)((mempool, request) => mempool.add(request))
-    }
-
-    /** So-called "poll results" from the Cardano Liaison, i.e., a set of all utxos ids found at the
-      * multisig head address.
-      *
-      * @param utxos
-      *   all utxos found
-      */
-    final case class PollResults(utxos: Set[TransactionInput])
-
-    object PollResults:
-        val empty: PollResults = PollResults(Set.empty)
 }
