@@ -112,7 +112,7 @@ object BlockWeaverNew {
             startBlockMsg = StartBlock(blockNumber, blockCreationStartTime)
             _ <- connections.jointLedger ! startBlockMsg
         } yield ()
-        
+
         final def sendCompleteRegularBlockAsLeader(config: Config): IO[Unit] = for {
             now <- realTimeQuantizedInstant(config.slotConfig)
             blockCreationEndTime = BlockCreationEndTime(now)
@@ -535,6 +535,7 @@ object BlockWeaverNew {
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
                 leadingBlockNumber: BlockNumber,
+                // TODO: Add the MajorBlockWakeupTime, so we can set the timeout.
                 startedBlock: Leader.AwaitingConfirmation.StartedBlock
             ) extends Reactive {
                 override transparent inline def stateName: String = "Leader.AwaitingConfirmation"
