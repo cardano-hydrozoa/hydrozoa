@@ -85,11 +85,8 @@ object BlockWeaverNew {
 
     type Handle = ActorRef[IO, Request]
 
-    type Request = PreStart.type | UserRequestWithId | BlockBrief.Next | BlockConfirmed |
+    type Request = PreStart.type | UserRequestWithId | BlockBrief.Next | Block.MultiSigned |
         PollResults | LocalFinalizationTrigger.Triggered.type | Timeout.type
-
-    type BlockConfirmed = BlockHeader.Section & Block.Fields.HasFinalizationRequested &
-        BlockStatus.MultiSigned & BlockType.Next
 
     case object PreStart
 
@@ -301,7 +298,7 @@ object BlockWeaverNew {
                 override type NextState = Idle.AwaitingBlockBrief | Leader.AwaitingConfirmation |
                     Follower.AwaitingRequest
 
-                override type Unexpected = PreStart.type | BlockConfirmed
+                override type Unexpected = PreStart.type | Block.MultiSigned
 
                 override def react(
                     config: Config
@@ -426,7 +423,7 @@ object BlockWeaverNew {
                 override type NextState = Idle.AwaitingBlockBrief | Leader.AwaitingConfirmation |
                     Follower.AwaitingRequest
 
-                override type Unexpected = PreStart.type | BlockBrief.Next | BlockConfirmed
+                override type Unexpected = PreStart.type | BlockBrief.Next | Block.MultiSigned
 
                 override def react(config: Config)(req: Request): IO[Option[NextState]] =
                     req match {
@@ -586,7 +583,7 @@ object BlockWeaverNew {
                     Leader.AwaitingRequest
 
                 override type Unexpected = PreStart.type | BlockBrief.Next |
-                    (BlockConfirmed & BlockType.Final)
+                    (Block.MultiSigned & BlockType.Final)
 
                 override def react(config: Config)(req: Request): IO[Option[NextState]] =
                     req match {
@@ -622,7 +619,7 @@ object BlockWeaverNew {
                                     else pure(this.copy(isBlockStarted = Started))
                             } yield res
 
-                        case bc: (BlockConfirmed & BlockType.NonFinal) =>
+                        case bc: (Block.MultiSigned & BlockType.NonFinal) =>
                             def completeBlockRegular =
                                 sendCompleteRegularBlockAsLeader(config) >>
                                     Idle(
@@ -656,7 +653,11 @@ object BlockWeaverNew {
                                             bc.header.asInstanceOf[BlockHeader.NonFinal],
                                       )
                                     )
-                            else pure(this)
+                            else {
+                                val msg = s"Received wrong block number for confirmed block. We are producing" +
+                                    s" ${leadingBlockNumber}, but the confirmed block that we received is ${bc.blockNum}"
+                                logger.error(msg) >> IO.raiseError(RuntimeException(msg))
+                            }
 
                         case pr: PollResults =>
                             logger.trace("New poll results.") >>
@@ -701,16 +702,16 @@ object BlockWeaverNew {
                 override val logger: Logger[IO],
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
-                previousBlockHeaderConfirmed: BlockHeader.NonFinal
+                previousBlockConfirmed: Block.MultiSigned.NonFinal
             ) extends Reactive {
                 override transparent inline def stateName: String = "Leader.AwaitingConfirmation"
 
                 override type NextState = Idle.AwaitingBlockBrief | Leader.AwaitingConfirmation |
                     Leader.AwaitingRequest
 
-                override type Unexpected = PreStart.type | BlockBrief.Next | BlockConfirmed
+                override type Unexpected = PreStart.type | BlockBrief.Next | Block.MultiSigned
 
-                private val nextBlockNumber = previousBlockHeaderConfirmed.blockNum.increment
+                private val currentBlockNumber = previousBlockConfirmed.blockNum.increment
 
                 override def react(config: Config)(req: Request): IO[Option[NextState]] =
                     req match {
@@ -722,14 +723,14 @@ object BlockWeaverNew {
                                   pollResults,
                                   finalizationLocallyTriggered,
                                   mempool = Mempool.empty,
-                                  nextBlockNumber = nextBlockNumber.increment
+                                  nextBlockNumber = currentBlockNumber.increment
                                 ).act(config)
 
                             for {
-                                _ <- sendStartBlock(config)(nextBlockNumber)
+                                _ <- sendStartBlock(config)(currentBlockNumber)
                                 _ <- connections.jointLedger ! ur
                                 res <-
-                                    if finalizationLocallyTriggered.asBoolean
+                                    if finalizationLocallyTriggered.asBoolean || previousBlockConfirmed.finalizationRequested
                                     then sendCompleteFinalBlockAsLeader(config) >> IO.pure(None)
                                     else completeBlockRegular
                             } yield res
@@ -746,7 +747,7 @@ object BlockWeaverNew {
 
                             val forceMajorBlock =
                                 for {
-                                    _ <- sendStartBlock(config)(nextBlockNumber)
+                                    _ <- sendStartBlock(config)(currentBlockNumber)
                                     res <-
                                         if finalizationLocallyTriggered.asBoolean // || previousBlockBriefConfirmed.final
                                         then sendCompleteFinalBlockAsLeader(config) >> IO.pure(None)
@@ -760,7 +761,7 @@ object BlockWeaverNew {
                                                       finalizationLocallyTriggered =
                                                           finalizationLocallyTriggered,
                                                       mempool = Mempool.empty,
-                                                      nextBlockNumber = nextBlockNumber
+                                                      nextBlockNumber = currentBlockNumber
                                                     ).act(config)
 
                                 } yield res
@@ -769,7 +770,7 @@ object BlockWeaverNew {
                                 _ <- logger.info("Timeout received in Leader.AwaitingRequest")
                                 now <- realTimeQuantizedInstant(config.slotConfig)
                                 res <-
-                                    if now >= previousBlockHeaderConfirmed.majorBlockWakeupTime.convert
+                                    if now >= previousBlockConfirmed.header.majorBlockWakeupTime.convert
                                     then forceMajorBlock
                                     else pure(this)
                             } yield res
@@ -782,7 +783,7 @@ object BlockWeaverNew {
             private object AwaitingRequest {
                 private[State] def apply(
                     state: State,
-                    previousBlockHeaderConfirmed: BlockHeader.NonFinal
+                    previousBlockConfirmed: Block.MultiSigned.NonFinal
                 ): Leader.AwaitingRequest =
                     import state.*
                     Leader.AwaitingRequest(
@@ -790,7 +791,7 @@ object BlockWeaverNew {
                       logger,
                       pollResults,
                       finalizationLocallyTriggered,
-                      previousBlockHeaderConfirmed
+                      previousBlockConfirmed
                     )
             }
         }
