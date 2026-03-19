@@ -257,8 +257,7 @@ object BlockWeaverNew {
               WithMempool {
             override transparent inline def stateName: String = "DecidingRole"
 
-            override type NextReactiveState = Follower.AwaitingBlockBrief |
-                Leader.AwaitingConfirmation
+            export DecidingRole.NextReactiveState
 
             override def act(config: Config): IO[Some[NextReactiveState]] = for {
                 _ <- logStateTransition
@@ -274,6 +273,9 @@ object BlockWeaverNew {
         }
 
         object DecidingRole {
+            type NextReactiveState = Follower.AwaitingBlockBrief |
+                Leader.ProcessingReadyRequests.NextReactiveState
+
             private[State] def apply(
                 stateToTransitionFrom: State,
                 mempool: Mempool,
@@ -302,10 +304,7 @@ object BlockWeaverNew {
                   WithMempool {
                 override transparent inline def stateName: String = "Follower.AwaitingBlockBrief"
 
-                override type NextReactiveState = Follower.AwaitingBlockBrief |
-                    Follower.AwaitingRequest | Leader.AwaitingConfirmation
-
-                override type Unexpected = PreStart.type | Block.MultiSigned
+                export Follower.AwaitingBlockBrief.{NextReactiveState, Unexpected}
 
                 override def react(
                     config: Config
@@ -339,6 +338,10 @@ object BlockWeaverNew {
             }
 
             object AwaitingBlockBrief {
+                type NextReactiveState = Follower.AwaitingBlockBrief |
+                    Follower.ProcessingReadyRequests.NextReactiveState
+                type Unexpected = PreStart.type | Block.MultiSigned
+
                 private[State] def apply(
                     state: State,
                     mempool: Mempool,
@@ -367,8 +370,7 @@ object BlockWeaverNew {
                 override transparent inline def stateName: String =
                     "Follower.ProcessingReadyRequests"
 
-                override type NextReactiveState = Follower.AwaitingBlockBrief |
-                    Leader.AwaitingConfirmation | Follower.AwaitingRequest
+                export Follower.ProcessingReadyRequests.NextReactiveState
 
                 def act(config: Config): IO[Some[NextReactiveState]] = for {
                     _ <- logStateTransition
@@ -402,13 +404,15 @@ object BlockWeaverNew {
             }
 
             object ProcessingReadyRequests {
+                type NextReactiveState = DecidingRole.NextReactiveState | Follower.AwaitingRequest
+
                 private[State] def apply(
                     state: State,
                     mempool: Mempool,
                     reproducingBlockBrief: BlockBrief.Next
-                ): ProcessingReadyRequests = {
+                ): Follower.ProcessingReadyRequests = {
                     import state.*
-                    ProcessingReadyRequests(
+                    Follower.ProcessingReadyRequests(
                       connections,
                       logger,
                       pollResults,
@@ -431,10 +435,7 @@ object BlockWeaverNew {
                   WithMempool {
                 override transparent inline def stateName: String = "Follower.AwaitingRequest"
 
-                override type NextReactiveState = Follower.AwaitingBlockBrief |
-                    Leader.AwaitingConfirmation | Follower.AwaitingRequest
-
-                override type Unexpected = PreStart.type | BlockBrief.Next | Block.MultiSigned
+                export Follower.AwaitingRequest.{NextReactiveState, Unexpected}
 
                 override def react(config: Config)(req: Request): IO[Option[NextReactiveState]] =
                     req match {
@@ -499,6 +500,9 @@ object BlockWeaverNew {
             }
 
             private object AwaitingRequest {
+                type NextReactiveState = DecidingRole.NextReactiveState | Follower.AwaitingRequest
+                type Unexpected = PreStart.type | BlockBrief.Next | Block.MultiSigned
+
                 private[State] def apply(
                     state: State,
                     reproducingBlockBrief: BlockBrief.Next,
@@ -529,7 +533,7 @@ object BlockWeaverNew {
                   WithMempool {
                 override transparent inline def stateName: String = "Leader.ProcessingReadyRequests"
 
-                override type NextReactiveState = Leader.AwaitingConfirmation
+                export Leader.ProcessingReadyRequests.NextReactiveState
 
                 override def act(config: Config): IO[Some[NextReactiveState]] = for {
                     _ <- logStateTransition
@@ -565,13 +569,15 @@ object BlockWeaverNew {
             }
 
             object ProcessingReadyRequests {
+                type NextReactiveState = Leader.AwaitingConfirmation
+
                 private[State] def apply(
                     state: State,
                     mempool: Mempool,
                     leadingBlockNum: BlockNumber,
-                ): ProcessingReadyRequests = {
+                ): Leader.ProcessingReadyRequests = {
                     import state.*
-                    ProcessingReadyRequests(
+                    Leader.ProcessingReadyRequests(
                       connections,
                       logger,
                       pollResults,
@@ -592,11 +598,7 @@ object BlockWeaverNew {
             ) extends Reactive {
                 override transparent inline def stateName: String = "Leader.AwaitingConfirmation"
 
-                override type NextReactiveState = Follower.AwaitingBlockBrief |
-                    Leader.AwaitingConfirmation | Leader.AwaitingRequest
-
-                override type Unexpected = PreStart.type | BlockBrief.Next |
-                    (Block.MultiSigned & BlockType.Final)
+                export Leader.AwaitingConfirmation.{NextReactiveState, Unexpected}
 
                 override def react(config: Config)(req: Request): IO[Option[NextReactiveState]] =
                     req match {
@@ -687,6 +689,12 @@ object BlockWeaverNew {
             }
 
             object AwaitingConfirmation {
+                type NextReactiveState = DecidingRole.NextReactiveState |
+                    Leader.AwaitingConfirmation | Leader.AwaitingRequest
+
+                type Unexpected = PreStart.type | BlockBrief.Next |
+                    (Block.MultiSigned & BlockType.Final)
+
                 private[State] def apply(
                     state: State,
                     blockNumber: BlockNumber,
@@ -715,10 +723,7 @@ object BlockWeaverNew {
             ) extends Reactive {
                 override transparent inline def stateName: String = "Leader.AwaitingRequest"
 
-                override type NextReactiveState = Follower.AwaitingBlockBrief |
-                    Leader.AwaitingConfirmation | Leader.AwaitingRequest
-
-                override type Unexpected = PreStart.type | BlockBrief.Next | Block.MultiSigned
+                export Leader.AwaitingRequest.{NextReactiveState, Unexpected}
 
                 private val currentBlockNumber = previousBlockConfirmed.blockNum.increment
 
@@ -779,6 +784,10 @@ object BlockWeaverNew {
             }
 
             private object AwaitingRequest {
+                type NextReactiveState = DecidingRole.NextReactiveState | Leader.AwaitingRequest
+
+                type Unexpected = PreStart.type | BlockBrief.Next | Block.MultiSigned
+
                 private[State] def apply(
                     state: State,
                     previousBlockConfirmed: Block.MultiSigned.NonFinal
