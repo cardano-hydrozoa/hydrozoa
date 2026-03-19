@@ -17,7 +17,9 @@ import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.lib.cardano.scalus.QuantizedTime.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.ledger.stripVKeyWitnesses
+import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.consensus.{ConsensusActor, RequestValidityEndTimeRaw, RequestValidityStartTimeRaw, UserRequest, UserRequestBody, UserRequestHeader, UserRequestWithId}
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.*
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Requests.*
@@ -213,15 +215,15 @@ object JointLedgerTestHelpers {
         def completeBlockRegular(
             referenceBlock: Option[BlockBrief.Intermediate],
             blockCreationEndTime: BlockCreationEndTime,
-            pollResults: Set[TransactionInput]
+            pollResults: PollResults
         ): JLTest[Unit] =
             for {
                 env <- ask
                 _ <- completeBlockRegular(
                   CompleteBlockRegular(
                     referenceBlock,
-                    pollResults: Set[TransactionInput],
-                    false,
+                    pollResults,
+                    LocalFinalizationTrigger.NotTriggered,
                     blockCreationEndTime
                   )
                 )
@@ -713,7 +715,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
           } yield ()
 
           // Complete a block, but assume the deposit didn't show up in the poll results
-          _ <- completeBlockRegular(None, firstBlockCreationEndTime, Set.empty)
+          _ <- completeBlockRegular(None, firstBlockCreationEndTime, PollResults.empty)
           _ <-
               for {
                   consensusAgentState <- getConsensusAgentState
@@ -759,7 +761,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
           _ <- completeBlockRegular(
             None,
             secondBlockCreationEndTime,
-            Set(depositProduced.toUtxo.input)
+            PollResults(Set(depositProduced.toUtxo.input))
           )
           _ <- for {
               consensusAgentState <- getConsensusAgentState
@@ -784,7 +786,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
           _ <- completeBlockRegular(
             None,
             thirdBlockCreationEndTime,
-            Set(depositProduced.toUtxo.input)
+            PollResults(Set(depositProduced.toUtxo.input))
           )
 
           _ <- for {

@@ -13,7 +13,10 @@ import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.actor.*
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
-import hydrozoa.multisig.consensus.{ConsensusActor, PeerLiaison, UserRequestWithId}
+import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger
+import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger.NotTriggered
+import hydrozoa.multisig.consensus.pollresults.PollResults
+import hydrozoa.multisig.consensus.{ConsensusActor, PeerLiaison, UserRequestWithId, pollresults}
 import hydrozoa.multisig.ledger.block.*
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
@@ -29,7 +32,7 @@ import hydrozoa.multisig.ledger.l1.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerCommand, L2LedgerError, L2LedgerState}
 import monocle.Focus.focus
-import scalus.cardano.ledger.{SlotConfig, TransactionInput}
+import scalus.cardano.ledger.SlotConfig
 import scalus.uplc.builtin.ByteString
 
 private case class UserRequestState(
@@ -160,8 +163,9 @@ final case class JointLedger(
 
     override def preStart: IO[Unit] = context.self ! Requests.PreStart
 
-    // TODO: PartialFunction.fromFunction is a noop here
-    override def receive: Receive[IO, Requests.Request] = PartialFunction.fromFunction {
+    override def receive: Receive[IO, Requests.Request] = PartialFunction.fromFunction(receiveTotal)
+
+    private def receiveTotal(req: Requests.Request): IO[Unit] = req match {
         case Requests.PreStart       => preStartLocal
         case e: UserRequestWithId    => applyUserRequestWithId(e)
         case s: StartBlock           => startBlock(s)
@@ -226,8 +230,8 @@ final case class JointLedger(
             _ <- state.set(newState)
             _ <- logger.warn(s"Request rejected ($requestId): $e")
             _ <- tracer.eventProcessed(
-              s"${requestId.peerNum: Int}:${requestId.requestNum: Int}",
-              currentBlockNum: Int,
+              s"${requestId.peerNum}:${requestId.requestNum}",
+              currentBlockNum.toLong,
               false
             )
             l2Command = L2LedgerCommand.ProxyRequestError(
@@ -293,8 +297,8 @@ final case class JointLedger(
                                             )
                                             _ <- logger.debug(s"Request processed ($requestId)")
                                             _ <- tracer.eventProcessed(
-                                              s"${requestId.peerNum: Int}:${requestId.requestNum: Int}",
-                                              currentBlockNum: Int,
+                                              s"${requestId.peerNum}:${requestId.requestNum}",
+                                              currentBlockNum.toLong,
                                               true
                                             )
                                         } yield ()
@@ -351,8 +355,8 @@ final case class JointLedger(
                                           .modify(_.appended((requestId, Valid)))
                                     )
                                     _ <- tracer.eventProcessed(
-                                      s"${requestId.peerNum: Int}:${requestId.requestNum: Int}",
-                                      currentBlockNum: Int,
+                                      s"${requestId.peerNum}:${requestId.requestNum}",
+                                      currentBlockNum.toLong,
                                       true
                                     )
                                 } yield ()
@@ -388,7 +392,7 @@ final case class JointLedger(
       */
     private def completeBlockRegular(
         args: CompleteBlockRegular
-    ): IO[Block.Unsigned.Intermediate] = {
+    ): IO[Unit] = {
         import args.*
         import config.txTiming
 
@@ -434,7 +438,7 @@ final case class JointLedger(
 
             // Tell others about the block
             _ <- handleBlock(block, finalizationLocallyTriggered)
-        } yield block
+        } yield ()
     }
 
     /** KZG commitment + block brief (which is a bit strange)
@@ -483,7 +487,7 @@ final case class JointLedger(
                         txTiming,
                         blockCreationStartTime,
                         blockCreationEndTime,
-                        p.competingFallbackTxTime,
+                        decisions.mNextAbsorptionStartTime,
                         // TODO: We want this to be done in a separate actor in the future
                         // this doesn't include genesis
                         newEvacuationMap.kzgCommitment
@@ -505,6 +509,7 @@ final case class JointLedger(
                           txTiming,
                           blockCreationStartTime,
                           blockCreationEndTime,
+                          decisions.mNextAbsorptionStartTime,
                           kzgCommitment
                         )
                     } yield (newJLState, headerIntermediate)
@@ -628,7 +633,7 @@ final case class JointLedger(
     // If the produced block is NOT equal to a passed reference block, then:
     //   - Consensus is broken
     //   - Send a panic to the multisig regime manager in a suicide note
-    def completeBlockFinal(args: CompleteBlockFinal): IO[Block.Unsigned.Final] = {
+    def completeBlockFinal(args: CompleteBlockFinal): IO[Unit] = {
         import args.*
         import config.txTiming
 
@@ -679,9 +684,9 @@ final case class JointLedger(
 
             _ <- state.set(newJlState.done(block.header))
 
-            _ <- handleBlock(block, false)
+            _ <- handleBlock(block, NotTriggered)
 
-        } yield block
+        } yield ()
     }
 
     /** Extract trace metadata from a block for the tracer.
@@ -726,7 +731,7 @@ final case class JointLedger(
       */
     private def handleBlock(
         block: Block.Unsigned.Next,
-        localFinalization: Boolean
+        localFinalization: LocalFinalizationTrigger
     ): IO[Unit] =
         for {
             conn <- getConnections
@@ -739,7 +744,7 @@ final case class JointLedger(
               vMin,
               evtCnt
             )
-            acks = ownHeadWallet.mkAcks(block, localFinalization)
+            acks = ownHeadWallet.mkAcks(block, localFinalization.asBoolean)
             _ <- (conn.peerLiaisons ! block.blockBriefNext).parallel
             _ <- conn.consensusActor ! block
             _ <- IO.traverse_(acks)(ack => conn.consensusActor ! ack)
@@ -807,8 +812,8 @@ object JointLedger {
           */
         case class CompleteBlockRegular(
             referenceBlockBrief: Option[BlockBrief.Intermediate],
-            pollResults: Set[TransactionInput],
-            finalizationLocallyTriggered: Boolean,
+            pollResults: PollResults,
+            finalizationLocallyTriggered: LocalFinalizationTrigger,
             blockCreationEndTime: BlockCreationEndTime
         )
 

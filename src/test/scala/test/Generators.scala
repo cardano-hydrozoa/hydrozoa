@@ -418,8 +418,11 @@ object Generators {
         // TODO: improve
         def genRequestId: Gen[RequestId] = for {
             headPeerNumber <- Gen.choose(0, 10)
-            requestNumber <- Gen.choose(0, 1024)
-        } yield RequestId(headPeerNumber, requestNumber)
+            requestNumber <- Gen.choose[Long](0, 1024)
+        } yield RequestId(
+          headPeerNumber,
+          requestNumber
+        )
 
         /** NOTE: These will generate _fully_ arbitrary data. It is probably not what you want, but
           * may be a good starting point. For example, an arbitrary payout obligation may be for a

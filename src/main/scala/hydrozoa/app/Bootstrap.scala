@@ -221,15 +221,19 @@ object Bootstrap:
               x => x
             )
 
-    } yield {
+        fallbackTxStartTime = initTxSeq.fallbackTx.fallbackTxStartTime
+        forcedMajorBlockTime = headParams.txTiming.forcedMajorBlockTime(fallbackTxStartTime)
+        majorBlockWakeupTime = TxTiming.majorBlockWakeupTime(forcedMajorBlockTime, None)
 
+    } yield {
         val initialBlock = InitialBlock(
           Block.MultiSigned.Initial(
             blockBrief = BlockBrief.Initial(
               BlockHeader.Initial(
                 startTime = blockCreationStartTime,
                 endTime = blockCreationEndTime,
-                fallbackTxStartTime = initTxSeq.fallbackTx.fallbackTxStartTime,
+                fallbackTxStartTime = fallbackTxStartTime,
+                majorBlockWakeupTime = majorBlockWakeupTime,
                 kzgCommitment = evacMap.kzgCommitment
               )
             ),

@@ -11,10 +11,7 @@ import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.EventSequencer.*
 import hydrozoa.multisig.consensus.PeerLiaison.Handle
-import hydrozoa.multisig.ledger.block.{BlockBody, BlockEffects, BlockStatus}
-import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
-import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import org.typelevel.log4cats.Logger
 
 /** The first actor responsible for processing events from end-users, as received by the
@@ -62,7 +59,10 @@ trait EventSequencer(
 
     override def preStart: IO[Unit] = context.self ! EventSequencer.PreStart
 
-    override def receive: Receive[IO, Request] = {
+    override def receive: Receive[IO, Request] =
+        PartialFunction.fromFunction(receiveTotal)
+
+    private def receiveTotal(req: Request): IO[Unit] = req match {
         case EventSequencer.PreStart => preStartLocal
         case req: UserRequest.Sync =>
             req.request.handleSync(
@@ -113,26 +113,7 @@ object EventSequencer {
 
     type Handle = ActorRef[IO, Request]
 
-    type BlockConfirmed = BlockBody.Section & BlockEffects.Fields.HasPostDatedRefundTxs &
-        BlockStatus.MultiSigned
-
-    object BlockConfirmed {
-
-        /** For unit/property testing. */
-        final case class Minimal(
-            override val body: BlockBody.Next,
-            // FIXME: How do we ensure these are signed?
-            override val postDatedRefundTxs: List[RefundTx.PostDated],
-        ) extends BlockBody.Section,
-              BlockEffects.Fields.HasPostDatedRefundTxs,
-              BlockStatus.MultiSigned {
-            override def events: List[(RequestId, ValidityFlag)] = body.events
-            override def depositsAbsorbed: List[RequestId] = body.depositsAbsorbed
-            override def depositsRefunded: List[RequestId] = body.depositsAbsorbed
-        }
-    }
+    type Request = PreStart.type | UserRequest.Sync
 
     case object PreStart
-
-    type Request = PreStart.type | UserRequest.Sync
 }
