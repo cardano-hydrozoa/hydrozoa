@@ -4,8 +4,10 @@ import cats.effect.IO
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.mempool.Mempool
@@ -13,6 +15,7 @@ import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockHeader, BlockNumber, BlockStatus, BlockType}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.JointLedger
+import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import org.typelevel.log4cats.Logger
 
 final case class BlockWeaverNew(
@@ -82,11 +85,11 @@ object BlockWeaverNew {
 
     case object PreStart
 
-    sealed trait LocalFinalizationTrigger
+    sealed trait LocalFinalizationTrigger(val asBoolean: Boolean)
 
     object LocalFinalizationTrigger {
-        case object Triggered extends LocalFinalizationTrigger
-        case object NotTriggered extends LocalFinalizationTrigger
+        case object Triggered extends LocalFinalizationTrigger(true)
+        case object NotTriggered extends LocalFinalizationTrigger(false)
     }
 
     sealed trait State {
@@ -100,8 +103,42 @@ object BlockWeaverNew {
         def pollResults: PollResults
         def finalizationLocallyTriggered: LocalFinalizationTrigger
 
-        def logStateTransition: IO[Unit] =
+        final def logStateTransition: IO[Unit] =
             logger.info(s"Becoming $stateName.")
+
+        final def sendStartBlock(config: Config)(blockNumber: BlockNumber): IO[Unit] = for {
+            now <- realTimeQuantizedInstant(config.slotConfig)
+            blockCreationStartTime = BlockCreationStartTime(now)
+            startBlockMsg = StartBlock(blockNumber, blockCreationStartTime)
+            _ <- connections.jointLedger ! startBlockMsg
+        } yield ()
+        
+        final def sendCompleteRegularBlockAsLeader(config: Config): IO[Unit] = for {
+            now <- realTimeQuantizedInstant(config.slotConfig)
+            blockCreationEndTime = BlockCreationEndTime(now)
+            completeBlockMsg = ???
+            _ <- connections.jointLedger ! completeBlockMsg
+        } yield ()
+
+        final def sendCompleteBlockAsFollower(config: Config)(
+            blockBrief: BlockBrief.Next
+        ): IO[Unit] = for {
+            now <- realTimeQuantizedInstant(config.slotConfig)
+            blockCreationEndTime = BlockCreationEndTime(now)
+            completeBlockMsg = blockBrief match {
+                case x: BlockBrief.Intermediate =>
+                    CompleteBlockRegular(
+                      Some(x),
+                      pollResults.utxos,
+                      finalizationLocallyTriggered.asBoolean,
+                      blockCreationEndTime
+                    )
+                case x: BlockBrief.Final =>
+                    CompleteBlockFinal(Some(x), blockCreationEndTime)
+            }
+            _ <- connections.jointLedger ! completeBlockMsg
+        } yield ()
+
     }
 
     object State {
@@ -116,7 +153,8 @@ object BlockWeaverNew {
                   logger = logger,
                   pollResults = PollResults.empty,
                   finalizationLocallyTriggered = LocalFinalizationTrigger.NotTriggered,
-                  mempool = Mempool.empty
+                  mempool = Mempool.empty,
+                  nextBlockNumber = BlockNumber.zero.increment
                 ).act(config)
             } yield state.get
 
@@ -190,6 +228,7 @@ object BlockWeaverNew {
             override val pollResults: PollResults,
             override val finalizationLocallyTriggered: LocalFinalizationTrigger,
             override val mempool: Mempool,
+            nextBlockNumber: BlockNumber,
         ) extends Active,
               WithMempool {
             override transparent inline def stateName: String = "Idle"
@@ -199,25 +238,30 @@ object BlockWeaverNew {
             override def act(config: Config): IO[Some[NextState]] = for {
                 _ <- logStateTransition
                 newState <-
-                    if config.ownHeadPeerId.isLeader(BlockNumber.zero)
+                    if config.ownHeadPeerId.isLeader(nextBlockNumber)
                     then {
-                        Leader(this, mempool).act(config)
+                        Leader(this, mempool, nextBlockNumber).act(config)
                     } else {
-                        pure(Idle.AwaitingBlockBrief(this, mempool))
+                        pure(Idle.AwaitingBlockBrief(this, mempool, nextBlockNumber))
                     }
             } yield newState
 
         }
 
         object Idle {
-            private[State] def apply(state: State, mempool: Mempool): Idle =
+            private[State] def apply(
+                state: State,
+                mempool: Mempool,
+                nextBlockNumber: BlockNumber
+            ): Idle =
                 import state.*
                 Idle(
                   connections,
                   logger,
                   pollResults,
                   finalizationLocallyTriggered,
-                  mempool
+                  mempool,
+                  nextBlockNumber
                 )
 
             final case class AwaitingBlockBrief private[State] (
@@ -226,6 +270,7 @@ object BlockWeaverNew {
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
                 override val mempool: Mempool,
+                nextBlockNumber: BlockNumber
             ) extends Reactive,
                   WithMempool {
                 override transparent inline def stateName: String = "Idle.AwaitingBlockBrief"
@@ -263,14 +308,19 @@ object BlockWeaverNew {
             }
 
             object AwaitingBlockBrief {
-                private[Idle] def apply(state: State, mempool: Mempool): Idle.AwaitingBlockBrief =
+                private[Idle] def apply(
+                    state: State,
+                    mempool: Mempool,
+                    nextBlockNumber: BlockNumber
+                ): Idle.AwaitingBlockBrief =
                     import state.*
                     Idle.AwaitingBlockBrief(
                       connections,
                       logger,
                       pollResults,
                       finalizationLocallyTriggered,
-                      mempool
+                      mempool,
+                      nextBlockNumber
                     )
             }
         }
@@ -294,7 +344,10 @@ object BlockWeaverNew {
                 extractionResult <- extractAndSendRequestsFromMempool
                 newState <- extractionResult match {
                     case Mempool.Extraction.Complete(extractedRequests, survivingMempool) =>
-                        Idle(this, survivingMempool).act(config)
+                        val nextBlockNumber = reproducingBlockBrief.blockNum.increment
+                        for {
+                            newState <- Idle(this, survivingMempool, nextBlockNumber).act(config)
+                        } yield newState
                     case result: Mempool.Extraction.Incomplete =>
                         pure(Follower.AwaitingRequest(this, reproducingBlockBrief, result))
                 }
@@ -303,7 +356,7 @@ object BlockWeaverNew {
             private def extractAndSendRequestsFromMempool: IO[Mempool.Extraction.Result] = {
                 val requestIds: List[RequestId] = reproducingBlockBrief.events.map(_._1)
                 val newExtractionResult = mempool.extractRequestsWhile(requestIds)
-                import newExtractionResult.extractedRequests
+                import newExtractionResult.*
                 for {
                     _ <- logger.trace(
                       "Extracted requests from mempool. Sending them to joint ledger: " +
@@ -342,7 +395,8 @@ object BlockWeaverNew {
                   WithMempool {
                 override transparent inline def stateName: String = "Follower.AwaitingRequest"
 
-                override type NextState = Idle.AwaitingBlockBrief | Follower.AwaitingRequest
+                override type NextState = Idle.AwaitingBlockBrief | Leader.AwaitingConfirmation |
+                    Follower.AwaitingRequest
 
                 override type Unexpected = PreStart.type | BlockBrief.Next | BlockConfirmed
 
@@ -351,8 +405,25 @@ object BlockWeaverNew {
                         case ur: UserRequestWithId =>
                             if ur.requestId == incompleteExtraction.awaitingRequestId then
                                 for {
-                                    _ <- IO.unit
-                                } yield ???
+                                    newExtractionResult <- extractAndSendRequestsFromMempool
+                                    newState <- newExtractionResult match {
+                                        case Mempool.Extraction
+                                                .Complete(extractedRequests, survivingMempool) =>
+                                            val nextBlockNumber =
+                                                reproducingBlockBrief.blockNum.increment
+                                            Idle(this, survivingMempool, nextBlockNumber).act(
+                                              config
+                                            )
+                                        case result: Mempool.Extraction.Incomplete =>
+                                            pure(
+                                              Follower.AwaitingRequest(
+                                                this,
+                                                reproducingBlockBrief,
+                                                result
+                                              )
+                                            )
+                                    }
+                                } yield newState
                             else
                                 for {
                                     newMempool <- storeRequest(ur)
@@ -371,16 +442,18 @@ object BlockWeaverNew {
                             panicUnexpectedRequest(this, unexpected)
                     }
 
-                private def extractBlockBriefRequestsFromMempool: IO[Mempool.Extraction.Result] = {
+                private def extractAndSendRequestsFromMempool: IO[Mempool.Extraction.Result] = {
                     val allRequestIds: List[RequestId] = reproducingBlockBrief.events.map(_._1)
                     val requestIds =
                         allRequestIds.dropWhile(_ != incompleteExtraction.awaitingRequestId)
                     val newExtractionResult = mempool.extractRequestsWhile(requestIds)
+                    import newExtractionResult.*
                     for {
                         _ <- logger.trace(
                           "Extracted more requests from mempool: " +
                               s"${newExtractionResult.extractedRequests.map(_.requestId.asI64)}"
                         )
+                        _ <- extractedRequests.traverse_(connections.jointLedger ! _)
                     } yield newExtractionResult
                 }
             }
@@ -409,7 +482,8 @@ object BlockWeaverNew {
             override val logger: Logger[IO],
             override val pollResults: PollResults,
             override val finalizationLocallyTriggered: LocalFinalizationTrigger,
-            override val mempool: Mempool
+            override val mempool: Mempool,
+            leadingBlockNum: BlockNumber
         ) extends Active,
               WithMempool {
             override transparent inline def stateName: String = "Leader"
@@ -418,24 +492,41 @@ object BlockWeaverNew {
 
             override def act(config: Config): IO[Some[NextState]] = for {
                 _ <- logStateTransition
+                now <- realTimeQuantizedInstant(config.slotConfig)
+                _ <- connections.jointLedger ! StartBlock(
+                  leadingBlockNum,
+                  BlockCreationStartTime(now)
+                )
                 newState <- IO.pure(Some(???))
             } yield newState
 
-            private def extractRequestsInOrder: IO[List[UserRequestWithId]] = {
+            private def extractAndSendRequestsInOrder: IO[List[UserRequestWithId]] = {
                 val requests = mempool.extractRequestsInOrder
                 for {
                     _ <- logger.trace(
                       "Extracting remaining requests from mempool in order of arrival. " +
                           s"First twenty request IDs: ${requests.iterator.take(20).map(_.requestId.asI64)}"
                     )
+                    _ <- requests.traverse_(connections.jointLedger ! _)
                 } yield requests
             }
         }
 
         object Leader {
-            private[State] def apply(state: State, mempool: Mempool): Leader = {
+            private[State] def apply(
+                state: State,
+                mempool: Mempool,
+                leadingBlockNum: BlockNumber,
+            ): Leader = {
                 import state.*
-                Leader(connections, logger, pollResults, finalizationLocallyTriggered, mempool)
+                Leader(
+                  connections,
+                  logger,
+                  pollResults,
+                  finalizationLocallyTriggered,
+                  mempool,
+                  leadingBlockNum
+                )
             }
 
             final case class AwaitingConfirmation private (
