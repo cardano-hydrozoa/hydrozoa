@@ -101,7 +101,7 @@ object BlockWeaverNew {
         def stateName: String
 
         /** See [[State.Active]] and [[State.Reactive]]. */
-        type NextState <: State.Reactive
+        type NextReactiveState <: State.Reactive
 
         def connections: Connections
         def logger: Logger[IO]
@@ -113,6 +113,9 @@ object BlockWeaverNew {
 
         final def logStateTransition: IO[Unit] =
             logger.info(s"Becoming $stateName.")
+
+        final def logTimeout: IO[Unit] =
+            logger.info(s"Timeout received in ${stateName} state.")
 
         final def sendStartBlock(config: Config)(blockNumber: BlockNumber): IO[Unit] = for {
             now <- realTimeQuantizedInstant(config.slotConfig)
@@ -169,16 +172,17 @@ object BlockWeaverNew {
             config: Config,
             connections: Connections,
             logger: Logger[IO]
-        ): IO[Idle.AwaitingBlockBrief | Leader.AwaitingConfirmation] =
+        ): IO[Follower.AwaitingBlockBrief | Leader.AwaitingConfirmation] =
             for {
-                state: Some[Idle.AwaitingBlockBrief | Leader.AwaitingConfirmation] <- Idle(
-                  connections = connections,
-                  logger = logger,
-                  pollResults = PollResults.empty,
-                  finalizationLocallyTriggered = LocalFinalizationTrigger.NotTriggered,
-                  mempool = Mempool.empty,
-                  nextBlockNumber = BlockNumber.zero.increment
-                ).act(config)
+                state: Some[Follower.AwaitingBlockBrief | Leader.AwaitingConfirmation] <-
+                    DecidingRole(
+                      connections = connections,
+                      logger = logger,
+                      pollResults = PollResults.empty,
+                      finalizationLocallyTriggered = LocalFinalizationTrigger.NotTriggered,
+                      mempool = Mempool.empty,
+                      nextBlockNumber = BlockNumber.zero.increment
+                    ).act(config)
             } yield state.get
 
         /** If the next state is reactive, then the transition into it is pure because no immediate
@@ -215,7 +219,7 @@ object BlockWeaverNew {
           * terminates in a reactive state.
           */
         sealed trait Active extends State {
-            def act(config: Config): IO[Option[NextState]]
+            def act(config: Config): IO[Option[NextReactiveState]]
         }
 
         /** A reactive state can receive a message, reacting by transitioning to another state.
@@ -230,7 +234,7 @@ object BlockWeaverNew {
         sealed trait Reactive extends State {
             type Unexpected <: Request
 
-            def react(config: Config)(req: Request): IO[Option[NextState]]
+            def react(config: Config)(req: Request): IO[Option[NextReactiveState]]
 
             final def panicUnexpectedRequest(
                 state: State.Reactive,
@@ -242,7 +246,7 @@ object BlockWeaverNew {
                     IO.raiseError(RuntimeException(msg))
         }
 
-        final case class Idle private[State] (
+        final case class DecidingRole private[State] (
             override val connections: Connections,
             override val logger: Logger[IO],
             override val pollResults: PollResults,
@@ -251,31 +255,32 @@ object BlockWeaverNew {
             nextBlockNumber: BlockNumber,
         ) extends Active,
               WithMempool {
-            override transparent inline def stateName: String = "Idle"
+            override transparent inline def stateName: String = "DecidingRole"
 
-            override type NextState = Idle.AwaitingBlockBrief | Leader.AwaitingConfirmation
+            override type NextReactiveState = Follower.AwaitingBlockBrief |
+                Leader.AwaitingConfirmation
 
-            override def act(config: Config): IO[Some[NextState]] = for {
+            override def act(config: Config): IO[Some[NextReactiveState]] = for {
                 _ <- logStateTransition
                 newState <-
                     if config.ownHeadPeerId.isLeader(nextBlockNumber)
                     then {
-                        Leader(this, mempool, nextBlockNumber).act(config)
+                        Leader.ProcessingReadyRequests(this, mempool, nextBlockNumber).act(config)
                     } else {
-                        pure(Idle.AwaitingBlockBrief(this, mempool, nextBlockNumber))
+                        pure(Follower.AwaitingBlockBrief(this, mempool, nextBlockNumber))
                     }
             } yield newState
 
         }
 
-        object Idle {
+        object DecidingRole {
             private[State] def apply(
                 stateToTransitionFrom: State,
                 mempool: Mempool,
                 nextBlockNumber: BlockNumber
-            ): Idle =
+            ): DecidingRole =
                 import stateToTransitionFrom.*
-                Idle(
+                DecidingRole(
                   connections,
                   logger,
                   pollResults,
@@ -283,8 +288,10 @@ object BlockWeaverNew {
                   mempool,
                   nextBlockNumber
                 )
+        }
 
-            final case class AwaitingBlockBrief private[Idle] (
+        object Follower {
+            final case class AwaitingBlockBrief private (
                 override val connections: Connections,
                 override val logger: Logger[IO],
                 override val pollResults: PollResults,
@@ -293,16 +300,16 @@ object BlockWeaverNew {
                 nextBlockNumber: BlockNumber
             ) extends Reactive,
                   WithMempool {
-                override transparent inline def stateName: String = "Idle.AwaitingBlockBrief"
+                override transparent inline def stateName: String = "Follower.AwaitingBlockBrief"
 
-                override type NextState = Idle.AwaitingBlockBrief | Leader.AwaitingConfirmation |
-                    Follower.AwaitingRequest
+                override type NextReactiveState = Follower.AwaitingBlockBrief |
+                    Follower.AwaitingRequest | Leader.AwaitingConfirmation
 
                 override type Unexpected = PreStart.type | Block.MultiSigned
 
                 override def react(
                     config: Config
-                )(req: Request): IO[Option[NextState]] =
+                )(req: Request): IO[Option[NextReactiveState]] =
                     req match {
                         case ur: UserRequestWithId =>
                             for {
@@ -312,7 +319,7 @@ object BlockWeaverNew {
 
                         case bb: BlockBrief.Next =>
                             logger.info(s"New block brief ${bb.blockNum}.") >>
-                                Follower(this, mempool, bb).act(config)
+                                Follower.ProcessingReadyRequests(this, mempool, bb).act(config)
 
                         case pr: PollResults =>
                             logger.trace("New poll results.") >>
@@ -323,7 +330,7 @@ object BlockWeaverNew {
                                 pure(copy(finalizationLocallyTriggered = ft))
 
                         case t: Timeout.type =>
-                            logger.info("Timeout received in the Idle.AwaitBlockBrief state.")
+                            logger.info(s"Timeout received in the ${stateName} state.")
                                 >> pure(this)
 
                         case m: Unexpected =>
@@ -331,14 +338,14 @@ object BlockWeaverNew {
                     }
             }
 
-            private object AwaitingBlockBrief {
-                private[Idle] def apply(
+            object AwaitingBlockBrief {
+                private[State] def apply(
                     state: State,
                     mempool: Mempool,
                     nextBlockNumber: BlockNumber
-                ): Idle.AwaitingBlockBrief =
+                ): Follower.AwaitingBlockBrief =
                     import state.*
-                    Idle.AwaitingBlockBrief(
+                    Follower.AwaitingBlockBrief(
                       connections,
                       logger,
                       pollResults,
@@ -347,65 +354,70 @@ object BlockWeaverNew {
                       nextBlockNumber
                     )
             }
-        }
 
-        final case class Follower private (
-            override val connections: Connections,
-            override val logger: Logger[IO],
-            override val pollResults: PollResults,
-            override val finalizationLocallyTriggered: LocalFinalizationTrigger,
-            override val mempool: Mempool,
-            reproducingBlockBrief: BlockBrief.Next,
-        ) extends Active,
-              WithMempool {
-            override transparent inline def stateName: String = "Follower"
+            final case class ProcessingReadyRequests private (
+                override val connections: Connections,
+                override val logger: Logger[IO],
+                override val pollResults: PollResults,
+                override val finalizationLocallyTriggered: LocalFinalizationTrigger,
+                override val mempool: Mempool,
+                reproducingBlockBrief: BlockBrief.Next,
+            ) extends Active,
+                  WithMempool {
+                override transparent inline def stateName: String =
+                    "Follower.ProcessingReadyRequests"
 
-            override type NextState = Idle.AwaitingBlockBrief | Leader.AwaitingConfirmation |
-                Follower.AwaitingRequest
+                override type NextReactiveState = Follower.AwaitingBlockBrief |
+                    Leader.AwaitingConfirmation | Follower.AwaitingRequest
 
-            def act(config: Config): IO[Some[NextState]] = for {
-                _ <- logStateTransition
-                extractionResult <- extractAndSendRequestsFromMempool
-                newState <- extractionResult match {
-                    case Mempool.Extraction.Complete(extractedRequests, survivingMempool) =>
-                        val nextBlockNumber = reproducingBlockBrief.blockNum.increment
-                        for {
-                            newState <- Idle(this, survivingMempool, nextBlockNumber).act(config)
-                        } yield newState
-                    case result: Mempool.Extraction.Incomplete =>
-                        pure(Follower.AwaitingRequest(this, reproducingBlockBrief, result))
+                def act(config: Config): IO[Some[NextReactiveState]] = for {
+                    _ <- logStateTransition
+                    extractionResult <- extractAndSendRequestsFromMempool
+                    newState <- extractionResult match {
+                        case Mempool.Extraction.Complete(extractedRequests, survivingMempool) =>
+                            val nextBlockNumber = reproducingBlockBrief.blockNum.increment
+                            for {
+                                newState <- DecidingRole(this, survivingMempool, nextBlockNumber)
+                                    .act(
+                                      config
+                                    )
+                            } yield newState
+                        case result: Mempool.Extraction.Incomplete =>
+                            pure(Follower.AwaitingRequest(this, reproducingBlockBrief, result))
+                    }
+                } yield newState
+
+                private def extractAndSendRequestsFromMempool: IO[Mempool.Extraction.Result] = {
+                    val requestIds: List[RequestId] = reproducingBlockBrief.events.map(_._1)
+                    val newExtractionResult = mempool.extractRequestsWhile(requestIds)
+                    import newExtractionResult.*
+                    for {
+                        _ <- logger.trace(
+                          "Extracted requests from mempool. Sending them to joint ledger: " +
+                              s"${extractedRequests.map(_.requestId.asI64)}"
+                        )
+                        _ <- extractedRequests.traverse_(connections.jointLedger ! _)
+                    } yield mempool.extractRequestsWhile(requestIds)
                 }
-            } yield newState
-
-            private def extractAndSendRequestsFromMempool: IO[Mempool.Extraction.Result] = {
-                val requestIds: List[RequestId] = reproducingBlockBrief.events.map(_._1)
-                val newExtractionResult = mempool.extractRequestsWhile(requestIds)
-                import newExtractionResult.*
-                for {
-                    _ <- logger.trace(
-                      "Extracted requests from mempool. Sending them to joint ledger: " +
-                          s"${extractedRequests.map(_.requestId.asI64)}"
-                    )
-                    _ <- extractedRequests.traverse_(connections.jointLedger ! _)
-                } yield mempool.extractRequestsWhile(requestIds)
             }
-        }
 
-        object Follower {
-            private[State] def apply(
-                state: State,
-                mempool: Mempool,
-                reproducingBlockBrief: BlockBrief.Next
-            ): Follower =
-                import state.*
-                Follower(
-                  connections,
-                  logger,
-                  pollResults,
-                  finalizationLocallyTriggered,
-                  mempool,
-                  reproducingBlockBrief
-                )
+            object ProcessingReadyRequests {
+                private[State] def apply(
+                    state: State,
+                    mempool: Mempool,
+                    reproducingBlockBrief: BlockBrief.Next
+                ): ProcessingReadyRequests = {
+                    import state.*
+                    ProcessingReadyRequests(
+                      connections,
+                      logger,
+                      pollResults,
+                      finalizationLocallyTriggered,
+                      mempool,
+                      reproducingBlockBrief
+                    )
+                }
+            }
 
             final case class AwaitingRequest private (
                 override val connections: Connections,
@@ -419,12 +431,12 @@ object BlockWeaverNew {
                   WithMempool {
                 override transparent inline def stateName: String = "Follower.AwaitingRequest"
 
-                override type NextState = Idle.AwaitingBlockBrief | Leader.AwaitingConfirmation |
-                    Follower.AwaitingRequest
+                override type NextReactiveState = Follower.AwaitingBlockBrief |
+                    Leader.AwaitingConfirmation | Follower.AwaitingRequest
 
                 override type Unexpected = PreStart.type | BlockBrief.Next | Block.MultiSigned
 
-                override def react(config: Config)(req: Request): IO[Option[NextState]] =
+                override def react(config: Config)(req: Request): IO[Option[NextReactiveState]] =
                     req match {
                         case ur: UserRequestWithId =>
                             if ur.requestId == incompleteExtraction.awaitingRequestId then
@@ -435,9 +447,10 @@ object BlockWeaverNew {
                                                 .Complete(extractedRequests, survivingMempool) =>
                                             val nextBlockNumber =
                                                 reproducingBlockBrief.blockNum.increment
-                                            Idle(this, survivingMempool, nextBlockNumber).act(
-                                              config
-                                            )
+                                            DecidingRole(this, survivingMempool, nextBlockNumber)
+                                                .act(
+                                                  config
+                                                )
                                         case result: Mempool.Extraction.Incomplete =>
                                             pure(
                                               Follower.AwaitingRequest(
@@ -463,8 +476,7 @@ object BlockWeaverNew {
                                 pure(copy(finalizationLocallyTriggered = ft))
 
                         case t: Timeout.type =>
-                            logger.debug("Timeout received in Follower.AwaitingRequest state")
-                                >> pure(this)
+                            logTimeout >> pure(this)
 
                         case unexpected: Unexpected =>
                             panicUnexpectedRequest(this, unexpected)
@@ -505,67 +517,69 @@ object BlockWeaverNew {
             }
         }
 
-        final case class Leader(
-            override val connections: Connections,
-            override val logger: Logger[IO],
-            override val pollResults: PollResults,
-            override val finalizationLocallyTriggered: LocalFinalizationTrigger,
-            override val mempool: Mempool,
-            leadingBlockNum: BlockNumber
-        ) extends Active,
-              WithMempool {
-            override transparent inline def stateName: String = "Leader"
-
-            override type NextState = Leader.AwaitingConfirmation
-
-            override def act(config: Config): IO[Some[NextState]] = for {
-                _ <- logStateTransition
-                now <- realTimeQuantizedInstant(config.slotConfig)
-                requests <- extractRequestsInOrder
-                isBlockStarted <-
-                    if requests.isEmpty
-                    then IO.pure(NotStarted)
-                    else
-                        for {
-                            _ <- sendStartBlock(config)(leadingBlockNum)
-                            _ <- requests.traverse_(connections.jointLedger ! _)
-                        } yield Started
-                newState <- pure(
-                  Leader.AwaitingConfirmation(
-                    this,
-                    leadingBlockNum,
-                    isBlockStarted
-                  )
-                )
-            } yield newState
-
-            private def extractRequestsInOrder: IO[List[UserRequestWithId]] = {
-                val requests = mempool.extractRequestsInOrder
-                for {
-                    _ <- logger.trace(
-                      "Extracting remaining requests from mempool in order of arrival. " +
-                          s"First twenty request IDs: ${requests.iterator.take(20).map(_.requestId.asI64)}"
-                    )
-
-                } yield requests
-            }
-        }
-
         object Leader {
-            private[State] def apply(
-                state: State,
-                mempool: Mempool,
-                leadingBlockNum: BlockNumber,
-            ): Leader = {
-                import state.*
-                Leader(
-                  connections,
-                  logger,
-                  pollResults,
-                  finalizationLocallyTriggered,
-                  mempool,
-                  leadingBlockNum
-                )
+            final case class ProcessingReadyRequests private (
+                override val connections: Connections,
+                override val logger: Logger[IO],
+                override val pollResults: PollResults,
+                override val finalizationLocallyTriggered: LocalFinalizationTrigger,
+                override val mempool: Mempool,
+                leadingBlockNum: BlockNumber
+            ) extends Active,
+                  WithMempool {
+                override transparent inline def stateName: String = "Leader.ProcessingReadyRequests"
+
+                override type NextReactiveState = Leader.AwaitingConfirmation
+
+                override def act(config: Config): IO[Some[NextReactiveState]] = for {
+                    _ <- logStateTransition
+                    now <- realTimeQuantizedInstant(config.slotConfig)
+                    requests <- extractRequestsInOrder
+                    isBlockStarted <-
+                        if requests.isEmpty
+                        then IO.pure(NotStarted)
+                        else
+                            for {
+                                _ <- sendStartBlock(config)(leadingBlockNum)
+                                _ <- requests.traverse_(connections.jointLedger ! _)
+                            } yield Started
+                    newState <- pure(
+                      Leader.AwaitingConfirmation(
+                        this,
+                        leadingBlockNum,
+                        isBlockStarted
+                      )
+                    )
+                } yield newState
+
+                private def extractRequestsInOrder: IO[List[UserRequestWithId]] = {
+                    val requests = mempool.extractRequestsInOrder
+                    for {
+                        _ <- logger.trace(
+                          "Extracting remaining requests from mempool in order of arrival. " +
+                              s"First twenty request IDs: ${requests.iterator.take(20).map(_.requestId.asI64)}"
+                        )
+
+                    } yield requests
+                }
+            }
+
+            object ProcessingReadyRequests {
+                private[State] def apply(
+                    state: State,
+                    mempool: Mempool,
+                    leadingBlockNum: BlockNumber,
+                ): ProcessingReadyRequests = {
+                    import state.*
+                    ProcessingReadyRequests(
+                      connections,
+                      logger,
+                      pollResults,
+                      finalizationLocallyTriggered,
+                      mempool,
+                      leadingBlockNum
+                    )
+                }
             }
 
             final case class AwaitingConfirmation private (
@@ -578,22 +592,22 @@ object BlockWeaverNew {
             ) extends Reactive {
                 override transparent inline def stateName: String = "Leader.AwaitingConfirmation"
 
-                override type NextState = Idle.AwaitingBlockBrief | Leader.AwaitingConfirmation |
-                    Leader.AwaitingRequest
+                override type NextReactiveState = Follower.AwaitingBlockBrief |
+                    Leader.AwaitingConfirmation | Leader.AwaitingRequest
 
                 override type Unexpected = PreStart.type | BlockBrief.Next |
                     (Block.MultiSigned & BlockType.Final)
 
-                override def react(config: Config)(req: Request): IO[Option[NextState]] =
+                override def react(config: Config)(req: Request): IO[Option[NextReactiveState]] =
                     req match {
                         case ur: UserRequestWithId =>
                             // First block is implicitly confirmed, so we exit immediately back to
-                            // the Idle.AwaitingBlockBrief state
+                            // the DecidingRole state.
                             def completeFirstBlock = for {
                                 _ <- logger.trace(
                                   s"Completing first block immediately with request ${ur.requestId.asI64}"
                                 ) >> sendCompleteRegularBlockAsLeader(config)
-                                newState <- Idle(
+                                newState <- DecidingRole(
                                   connections,
                                   logger,
                                   pollResults,
@@ -621,7 +635,7 @@ object BlockWeaverNew {
                         case bc: Block.MultiSigned.NonFinal =>
                             def completeBlockRegular =
                                 sendCompleteRegularBlockAsLeader(config) >>
-                                    Idle(
+                                    DecidingRole(
                                       connections,
                                       logger,
                                       pollResults,
@@ -665,9 +679,7 @@ object BlockWeaverNew {
                                 pure(copy(finalizationLocallyTriggered = ft))
 
                         case _: Timeout.type =>
-                            logger.info(
-                              "Timeout received in Leader.AwaitingConfirmation state"
-                            ) >> pure(this)
+                            logTimeout >> pure(this)
 
                         case unexpected: Unexpected =>
                             panicUnexpectedRequest(this, unexpected)
@@ -701,18 +713,18 @@ object BlockWeaverNew {
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
                 previousBlockConfirmed: Block.MultiSigned.NonFinal
             ) extends Reactive {
-                override transparent inline def stateName: String = "Leader.AwaitingConfirmation"
+                override transparent inline def stateName: String = "Leader.AwaitingRequest"
 
-                override type NextState = Idle.AwaitingBlockBrief | Leader.AwaitingConfirmation |
-                    Leader.AwaitingRequest
+                override type NextReactiveState = Follower.AwaitingBlockBrief |
+                    Leader.AwaitingConfirmation | Leader.AwaitingRequest
 
                 override type Unexpected = PreStart.type | BlockBrief.Next | Block.MultiSigned
 
                 private val currentBlockNumber = previousBlockConfirmed.blockNum.increment
 
-                override def react(config: Config)(req: Request): IO[Option[NextState]] = {
+                override def react(config: Config)(req: Request): IO[Option[NextReactiveState]] = {
                     def completeBlockRegular = sendCompleteRegularBlockAsLeader(config) >>
-                        Idle(
+                        DecidingRole(
                           this,
                           mempool = Mempool.empty,
                           nextBlockNumber = currentBlockNumber.increment
@@ -751,9 +763,8 @@ object BlockWeaverNew {
 
                             for { // Check if newMajorBlockTime has passed, force new block if so
                                 now <- realTimeQuantizedInstant(config.slotConfig)
-                                _ <- logger.info(
-                                  s"Timeout received in Leader.AwaitingRequest at ${now.instant}," +
-                                      s" wakeup time is ${wakeupTime.instant}"
+                                _ <- logTimeout >> logger.info(
+                                  s"Current time is ${now.instant}. Wakeup time is ${wakeupTime.instant}"
                                 )
                                 newState <-
                                     if now >= wakeupTime

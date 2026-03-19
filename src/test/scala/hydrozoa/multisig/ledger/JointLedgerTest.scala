@@ -19,8 +19,8 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuanti
 import hydrozoa.lib.cardano.scalus.ledger.stripVKeyWitnesses
 import hydrozoa.multisig.consensus.BlockWeaverNew.LocalFinalizationTrigger
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.consensus.{ConsensusActor, RequestValidityEndTimeRaw, RequestValidityStartTimeRaw, UserRequest, UserRequestBody, UserRequestHeader, UserRequestWithId}
 import hydrozoa.multisig.consensus.pollresults.PollResults
+import hydrozoa.multisig.consensus.{ConsensusActor, RequestValidityEndTimeRaw, RequestValidityStartTimeRaw, UserRequest, UserRequestBody, UserRequestHeader, UserRequestWithId}
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.*
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Requests.*
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Scenarios.*
@@ -35,7 +35,6 @@ import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger, given}
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
-
 import java.util.concurrent.TimeUnit
 import monocle.Focus
 import monocle.Focus.focus
@@ -43,12 +42,11 @@ import org.scalacheck.*
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.PropertyM.monadForPropM
 import org.scalacheck.util.Pretty
-
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.TransactionOutput.valueLens
-import scalus.cardano.ledger.{Coin, Block as _, BlockHeader as _, *}
+import scalus.cardano.ledger.{Block as _, BlockHeader as _, Coin, *}
 import scalus.crypto.ed25519.Signature
 import scalus.uplc.builtin.ByteString
 import test.Generators.Hydrozoa.*
