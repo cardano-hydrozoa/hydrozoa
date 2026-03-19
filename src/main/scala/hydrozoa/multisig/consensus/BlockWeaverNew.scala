@@ -128,6 +128,18 @@ object BlockWeaverNew {
         /** A state with a mempool can store requests in its mempool. */
         sealed trait WithMempool extends State {
             def mempool: Mempool
+
+            def storeRequest(request: UserRequestWithId): IO[Mempool] = for {
+                _ <- logger.trace(s"Adding request ID ${request.requestId} to mempool.")
+                newMempool <- mempool.addRequest(request) match {
+                    case Some(newMempool) => IO.pure(newMempool)
+                    case None =>
+                        val msg =
+                            s"Request ID ${request.requestId} is already in the mempool."
+                        logger.error(msg) >>
+                            IO.raiseError(RuntimeException(msg))
+                }
+            } yield newMempool
         }
 
         /** An active state can immediately transition into another state, without waiting for a new
@@ -217,9 +229,10 @@ object BlockWeaverNew {
                 )(req: Request): IO[Option[NextState]] =
                     req match {
                         case ur: UserRequestWithId =>
-                            val newMempool = mempool.unsafeAddRequest(ur)
-                            logger.trace(s"Adding ${ur.requestId} to mempool.") >>
-                                pure(copy(mempool = newMempool))
+                            for {
+                                newMempool <- storeRequest(ur)
+                                newState <- pure(copy(mempool = newMempool))
+                            } yield newState
 
                         case bb: BlockBrief.Next =>
                             logger.info(s"New block brief ${bb.blockNum}.") >>
@@ -263,6 +276,17 @@ object BlockWeaverNew {
             override type NextState = Idle.AwaitingBlockBrief | Follower.AwaitingRequest
 
             def act(config: Config): IO[Some[NextState]] = ???
+
+            private def extractBlockBriefRequestsFromMempool: IO[Mempool.Extraction.Result] = {
+                val requestIds: List[RequestId] = reproducingBlockBrief.events.map(_._1)
+                val newExtractionResult = mempool.extractRequestsWhile(requestIds)
+                for {
+                    _ <- logger.trace(
+                      s"Extracted requests from mempool: " +
+                          s"${newExtractionResult.extractedRequests.map(_.requestId.asI64)}"
+                    )
+                } yield mempool.extractRequestsWhile(requestIds)
+            }
         }
 
         object Follower {
@@ -288,7 +312,7 @@ object BlockWeaverNew {
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
                 override val mempool: Mempool,
                 reproducingBlockBrief: BlockBrief.Next,
-                awaitingRequestId: RequestId,
+                incompleteExtraction: Mempool.Extraction.Incomplete
             ) extends Reactive,
                   WithMempool {
                 override type NextState = Idle.AwaitingBlockBrief | Follower.AwaitingRequest
@@ -298,15 +322,15 @@ object BlockWeaverNew {
                 override def react(config: Config)(req: Request): IO[Option[NextState]] =
                     req match {
                         case ur: UserRequestWithId =>
-                            if ur.requestId == awaitingRequestId then
+                            if ur.requestId == incompleteExtraction.awaitingRequestId then
                                 for {
                                     _ <- IO.unit
                                 } yield ???
-                            else {
-                                val newMempool = mempool.unsafeAddRequest(ur)
-                                logger.trace(s"Adding ${ur.requestId} to mempool.") >>
-                                    pure(copy(mempool = newMempool))
-                            }
+                            else
+                                for {
+                                    newMempool <- storeRequest(ur)
+                                    newState <- pure(copy(mempool = newMempool))
+                                } yield newState
 
                         case pr: PollResults =>
                             logger.trace("New poll results.") >>
@@ -319,6 +343,19 @@ object BlockWeaverNew {
                         case unexpected: Unexpected =>
                             panicUnexpectedRequest(this, unexpected)
                     }
+
+                private def extractBlockBriefRequestsFromMempool: IO[Mempool.Extraction.Result] = {
+                    val allRequestIds: List[RequestId] = reproducingBlockBrief.events.map(_._1)
+                    val requestIds =
+                        allRequestIds.dropWhile(_ != incompleteExtraction.awaitingRequestId)
+                    val newExtractionResult = mempool.extractRequestsWhile(requestIds)
+                    for {
+                        _ <- logger.trace(
+                          s"Extracted more requests from mempool: " +
+                              s"${newExtractionResult.extractedRequests.map(_.requestId.asI64)}"
+                        )
+                    } yield newExtractionResult
+                }
             }
 
             object AwaitingRequest {
@@ -326,7 +363,7 @@ object BlockWeaverNew {
                     state: State,
                     mempool: Mempool,
                     reproducingBlockBrief: BlockBrief.Next,
-                    awaitingRequestId: RequestId
+                    incompleteExtraction: Mempool.Extraction.Incomplete
                 ): Follower.AwaitingRequest =
                     import state.*
                     Follower.AwaitingRequest(
@@ -336,7 +373,7 @@ object BlockWeaverNew {
                       finalizationLocallyTriggered,
                       mempool,
                       reproducingBlockBrief,
-                      awaitingRequestId
+                      incompleteExtraction
                     )
             }
         }
@@ -352,6 +389,16 @@ object BlockWeaverNew {
             override type NextState = Leader.AwaitingConfirmation
 
             override def act(config: Config): IO[Some[NextState]] = ???
+
+            private def extractRequestsInOrder: IO[List[UserRequestWithId]] = {
+                val requests = mempool.extractRequestsInOrder
+                for {
+                    _ <- logger.trace(
+                      s"Extracting remaining requests from mempool in order of arrival. " +
+                          s"First twenty request IDs: ${requests.iterator.take(20).map(_.requestId.asI64)}"
+                    )
+                } yield requests
+            }
         }
 
         object Leader {

@@ -4,6 +4,8 @@ import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.consensus.UserRequestWithId
 import hydrozoa.multisig.ledger.event.RequestId
 
+import scala.annotation.tailrec
+
 /** Simple immutable mempool implementation. Duplicate ledger request IDs are NOT allowed and a
   * runtime exception is thrown since this should never happen. Other components, particularly the
   * peer liaison is in charge or maintaining the integrity of the stream of messages.
@@ -22,12 +24,6 @@ final case class Mempool(
 
     def isEmpty: Boolean = requests.isEmpty
 
-    /** Retrieve a request from the mempool, by the request's ID.
-     * @param requestId
-     *   the request's ID
-     */
-    def getRequest(requestId: RequestId): Option[UserRequestWithId] = requests.get(requestId)
-
     /** Add a request to the mempool
       *
       * @param request
@@ -37,72 +33,129 @@ final case class Mempool(
       * @throws IllegalArgumentException
       *   if a duplicate is detected
       */
-    def unsafeAddRequest(
+    def addRequest(
         request: UserRequestWithId
-    ): Mempool = {
-
+    ): Option[Mempool] = {
         val requestId = request.requestId
 
-        require(
-          !requests.contains(requestId), {
-              val msg =
-                  s"Panic: attempting to add a duplicate request ID (${requestId.asI64}) into the mempool: $requestId"
-              logger.error(msg)
-              msg
-          }
+        Option.when(!requests.contains(requestId))(
+          copy(
+            requests = requests + (requestId -> request),
+            arrivalOrder = arrivalOrder :+ requestId
+          )
         )
+    }
 
-        copy(
-          requests = requests + (requestId -> request),
-          arrivalOrder = arrivalOrder :+ requestId
-        )
+    /** Retrieve a request from the mempool, by the request's ID.
+      * @param requestId
+      *   the request's ID
+      */
+    def getRequest(requestId: RequestId): Option[UserRequestWithId] = requests.get(requestId)
+
+    /** Given a list of request IDs, extract the corresponding requests from the mempool until a
+      * request ID is encountered that is missing from the mempool.
+      *
+      * @param requestIds
+      *   a list of request IDs
+      * @return
+      *   An extraction result, which is complete if all request IDs were found or incomplete if a
+      *   request ID was missing from the mempool. If incomplete, the result indicates the first
+      *   request ID encountered in the list that was missing.
+      */
+    def extractRequestsWhile(requestIds: IterableOnce[RequestId]): Mempool.Extraction.Result =
+        extractRequestsWhile(Mempool.Extraction.start(this), requestIds.iterator)
+
+    @tailrec
+    private def extractRequestsWhile(
+        acc: Mempool.Extraction,
+        requestIds: Iterator[RequestId]
+    ): Mempool.Extraction.Result = acc match {
+        case result: Mempool.Extraction.Result => result
+        case inProgress: Mempool.Extraction.InProgress =>
+            import inProgress.*
+            if !requestIds.hasNext then
+                Mempool.Extraction.Complete(
+                  extractedRequests,
+                  survivingMempool
+                )
+            else {
+                val requestId = requestIds.next()
+                extractRequest(requestId) match {
+                    case None =>
+                        Mempool.Extraction.Incomplete(
+                          extractedRequests,
+                          survivingMempool,
+                          requestId
+                        )
+                    case Some(request) =>
+                        val newAcc = Mempool.Extraction.InProgress(
+                          extractedRequests,
+                          survivingMempool
+                        )
+                        extractRequestsWhile(newAcc, requestIds)
+                }
+            }
+    }
+
+    private def extractRequest(requestId: RequestId): Option[(Mempool, UserRequestWithId)] = {
+        val mRequestWithId = requests.get(requestId)
+        mRequestWithId.map(request => {
+            val newMempool = copy(
+              requests = requests - requestId,
+              arrivalOrder = arrivalOrder.filterNot(_ == requestId)
+            )
+            (newMempool, request)
+        })
     }
 
     /** Retrieve all mempool requests by order of arrival.
-     * @throws RuntimeException
-     *   if the mempool's [[arrivalOrder]] vector contains a request ID that is missing from its
-     *   [[requests]] map.
-     */
-    private def unsafeGetRequestsInOrder: IterableOnce[UserRequestWithId] =
-        arrivalOrder.iterator.map(requestId => {
-            requests.getOrElse(
-                requestId, {
-                    val msg = s"Panic: the mempool's `arrivalOrder` vector has a request ID (${requestId.asI64}) that" +
-                        s" is missing from the mempool's `requests` map."
-                    logger.error(msg)
-                    throw RuntimeException(msg)
-                }
-            )
-        })
-
-    /** Remove a request (by request ID) from the mempool.
-      * @param requestId
-      *   the request's ID
-      * @return
-      *   an updated mempool
-      * @throws IllegalArgumentException
-      *   if the [[requestId]] is already missing from the mempool.
+      * @throws RuntimeException
+      *   If the mempool's [[arrivalOrder]] vector contains a request ID that is missing from its
+      *   [[requests]] map, violating the mempool's invariant property.
       */
-    private def unsafeExtractRequest(requestId: RequestId): (Mempool, UserRequestWithId) = {
-        val requestWithId = requests.getOrElse(requestId, {
-            val msg =
-                s"Panic: attempting to remove a request ID (${requestId.asI64}) that is missing from the mempool: $requestId"
-            logger.error(msg)
-            throw IllegalArgumentException(msg)
-        })
-
-        val newMempool = copy(
-          requests = requests - requestId,
-          arrivalOrder = arrivalOrder.filterNot(_ == requestId)
-        )
-
-        (newMempool, requestWithId)
-    }
+    def extractRequestsInOrder: List[UserRequestWithId] =
+        arrivalOrder.iterator
+            .map(requestId => {
+                requests.getOrElse(
+                  requestId, {
+                      val msg =
+                          s"Panic: the mempool's `arrivalOrder` vector has a request ID (${requestId.asI64}) that" +
+                              s" is missing from the mempool's `requests` map."
+                      logger.error(msg)
+                      throw RuntimeException(msg)
+                  }
+                )
+            })
+            .toList
 }
 
 object Mempool {
     val empty: Mempool = Mempool()
 
-    def apply(events: Seq[UserRequestWithId]): Mempool =
-        events.foldLeft(Mempool.empty)((mempool, request) => mempool.unsafeAddRequest(request))
+    enum Extraction:
+        def extractedRequests: List[UserRequestWithId]
+        def survivingMempool: Mempool
+
+        private[Mempool] case InProgress(
+            extractedRequests: List[UserRequestWithId],
+            survivingMempool: Mempool
+        )
+
+        case Incomplete(
+            override val extractedRequests: List[UserRequestWithId],
+            override val survivingMempool: Mempool,
+            awaitingRequestId: RequestId
+        )
+
+        case Complete(
+            override val extractedRequests: List[UserRequestWithId],
+            override val survivingMempool: Mempool,
+        )
+
+    object Extraction {
+        type Result = Extraction.Complete | Extraction.Incomplete
+
+        private[Mempool] def start(mempool: Mempool): Extraction.InProgress =
+            Extraction.InProgress(List(), mempool)
+    }
 }
