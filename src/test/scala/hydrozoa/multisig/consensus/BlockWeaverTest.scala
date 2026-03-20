@@ -93,9 +93,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
         peerNumber: HeadPeerNumber
     ): BlockWeaver.Handle = {
         val config = multiNodeConfig.nodeConfigs(peerNumber)
-        // val connections = BlockWeaver.Connections(jointLedgerMockActor)
-        // p.runIO(system.actorOf(BlockWeaver(config, connections)))
-        val connections = BlockWeaver.Connections(jointLedgerMockActor)
+        val connections = BlockWeaver.ConnectionsPartial(jointLedgerMockActor)
         p.runIO(system.actorOf(BlockWeaver(config, connections)))
     }
 
