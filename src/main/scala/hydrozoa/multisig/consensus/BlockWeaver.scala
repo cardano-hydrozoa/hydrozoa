@@ -244,7 +244,7 @@ object BlockWeaver {
                 unexpected: Unexpected
             ): IO[None.type] =
                 val msg =
-                    s"Unexpectedly received in ${state.toString} state: ${unexpected.toString}"
+                    s"Unexpectedly received in ${state.stateName.toString} state: ${unexpected.toString}"
                 logger.error(msg) >>
                     IO.raiseError(RuntimeException(msg))
         }
@@ -331,8 +331,12 @@ object BlockWeaver {
                             logger.info("Finalization was locally triggered.") >>
                                 pure(copy(finalizationLocallyTriggered = ft))
 
-                        case m: Unexpected =>
-                            panicUnexpectedRequest(this, m)
+                        case _: Wakeup.type =>
+                            logger.trace("Unexpected awake, ignoring.") >>
+                                pure(this)
+
+                        case unexpected: Unexpected =>
+                            panicUnexpectedRequest(this, unexpected)
                     }
             }
 
@@ -475,6 +479,10 @@ object BlockWeaver {
                             logger.info("Finalization was locally triggered.") >>
                                 pure(copy(finalizationLocallyTriggered = ft))
 
+                        case _: Wakeup.type =>
+                            logger.trace("Unexpected awake, ignoring.") >>
+                                pure(this)
+
                         case unexpected: Unexpected =>
                             panicUnexpectedRequest(this, unexpected)
                     }
@@ -497,7 +505,7 @@ object BlockWeaver {
 
             private object AwaitingRequest {
                 type NextReactiveState = DecidingRole.NextReactiveState | Follower.AwaitingRequest
-                type Unexpected = PreStart.type | BlockBrief.Next | Block.MultiSigned | Wakeup.type
+                type Unexpected = PreStart.type | BlockBrief.Next | Block.MultiSigned
 
                 private[State] def apply(
                     state: State,
@@ -682,6 +690,10 @@ object BlockWeaver {
                             logger.info("Finalization was locally triggered.") >>
                                 pure(copy(finalizationLocallyTriggered = ft))
 
+                        case _: Wakeup.type =>
+                            logger.trace("Unexpected awake, ignoring.") >>
+                                pure(this)
+
                         case unexpected: Unexpected =>
                             panicUnexpectedRequest(this, unexpected)
                     }
@@ -698,7 +710,7 @@ object BlockWeaver {
                     Leader.AwaitingConfirmation | Leader.AwaitingRequest
 
                 type Unexpected = PreStart.type | BlockBrief.Next |
-                    (Block.MultiSigned & BlockType.Final) | Wakeup.type
+                    (Block.MultiSigned & BlockType.Final)
 
                 private[State] def apply(
                     state: State,
@@ -756,7 +768,7 @@ object BlockWeaver {
                                 newState <- completeBlock
                             } yield newState
 
-                        case _: BlockWeaver.Wakeup.type =>
+                        case _: Wakeup.type =>
                             def forceMajorBlock =
                                 for {
                                     _ <- sendStartBlock(config)(currentBlockNumber)
