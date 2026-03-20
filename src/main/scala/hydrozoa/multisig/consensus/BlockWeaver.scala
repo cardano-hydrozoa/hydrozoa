@@ -8,6 +8,7 @@ import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEn
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedFiniteDuration
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
@@ -22,13 +23,11 @@ import org.typelevel.log4cats.Logger
 
 final case class BlockWeaver(
     config: BlockWeaver.Config,
-    pendingConnections: MultisigRegimeManager.PendingConnections | BlockWeaver.Connections
+    pendingConnections: MultisigRegimeManager.PendingConnections | BlockWeaver.ConnectionsPartial
 ) extends Actor[IO, BlockWeaver.Request] {
     import BlockWeaver.*
 
     private val logger = Logging.loggerIO("BlockWeaver")
-
-    private def wakeup: IO[Unit] = context.self ! Wakeup
 
     override def preStart: IO[Unit] = for {
         _ <- context.self ! BlockWeaver.PreStart
@@ -52,7 +51,7 @@ final case class BlockWeaver(
         case PreStart =>
             for {
                 connections <- initializeConnections
-                startingState <- State.start(config, connections, logger, wakeup)
+                startingState <- State.start(config, connections, logger)
                 _ <- become(startingState)
             } yield ()
         case x =>
@@ -65,21 +64,28 @@ final case class BlockWeaver(
             for {
                 c <- pc.get
             } yield BlockWeaver.Connections(
+              blockWeaver = context.self,
               jointLedger = c.jointLedger
             )
-        case c: BlockWeaver.Connections => IO.pure(c)
+        case c: BlockWeaver.ConnectionsPartial => IO.pure(c(context.self))
     }
 }
 
 object BlockWeaver {
-    object Wakeup
-
     type Config = CardanoNetwork.Section & OwnHeadPeerPublic.Section &
         NodeOperationMultisigConfig.Section
 
-    final case class Connections(
+    final case class Connections private[BlockWeaver] (
+        blockWeaver: BlockWeaver.Handle,
         jointLedger: JointLedger.Handle
     )
+
+    final case class ConnectionsPartial(jointLedger: JointLedger.Handle) {
+        def apply(blockWeaver: BlockWeaver.Handle): Connections = Connections(
+          blockWeaver = blockWeaver,
+          jointLedger = jointLedger
+        )
+    }
 
     type Handle = ActorRef[IO, Request]
 
@@ -87,6 +93,8 @@ object BlockWeaver {
         PollResults | LocalFinalizationTrigger.Triggered.type | Wakeup.type
 
     case object PreStart
+
+    case object Wakeup
 
     sealed trait LocalFinalizationTrigger(val asBoolean: Boolean)
 
@@ -105,7 +113,6 @@ object BlockWeaver {
         def logger: Logger[IO]
         def pollResults: PollResults
         def finalizationLocallyTriggered: LocalFinalizationTrigger
-        def sendWakeup: IO[Unit]
 
         final def stop(): IO[None.type] =
             logger.info("Stopping") >> IO.pure(None)
@@ -167,8 +174,7 @@ object BlockWeaver {
         def start(
             config: Config,
             connections: Connections,
-            logger: Logger[IO],
-            sendWakeup: IO[Unit]
+            logger: Logger[IO]
         ): IO[Follower.AwaitingBlockBrief | Leader.AwaitingConfirmation] =
             for {
                 state: Some[Follower.AwaitingBlockBrief | Leader.AwaitingConfirmation] <-
@@ -177,7 +183,6 @@ object BlockWeaver {
                       logger = logger,
                       pollResults = PollResults.empty,
                       finalizationLocallyTriggered = LocalFinalizationTrigger.NotTriggered,
-                      sendWakeup = sendWakeup,
                       mempool = Mempool.empty,
                       nextBlockNumber = BlockNumber.zero.increment
                     ).act(config)
@@ -249,7 +254,6 @@ object BlockWeaver {
             override val logger: Logger[IO],
             override val pollResults: PollResults,
             override val finalizationLocallyTriggered: LocalFinalizationTrigger,
-            override val sendWakeup: IO[Unit],
             override val mempool: Mempool,
             nextBlockNumber: BlockNumber,
         ) extends Active,
@@ -286,7 +290,6 @@ object BlockWeaver {
                   logger,
                   pollResults,
                   finalizationLocallyTriggered,
-                  sendWakeup,
                   mempool,
                   nextBlockNumber
                 )
@@ -298,7 +301,6 @@ object BlockWeaver {
                 override val logger: Logger[IO],
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
-                override val sendWakeup: IO[Unit],
                 override val mempool: Mempool,
                 nextBlockNumber: BlockNumber
             ) extends Reactive,
@@ -337,7 +339,7 @@ object BlockWeaver {
             object AwaitingBlockBrief {
                 type NextReactiveState = Follower.AwaitingBlockBrief |
                     Follower.ProcessingReadyRequests.NextReactiveState
-                type Unexpected = PreStart.type | Block.MultiSigned
+                type Unexpected = PreStart.type | Block.MultiSigned | Wakeup.type
 
                 private[State] def apply(
                     state: State,
@@ -350,7 +352,6 @@ object BlockWeaver {
                       logger,
                       pollResults,
                       finalizationLocallyTriggered,
-                      sendWakeup,
                       mempool,
                       nextBlockNumber
                     )
@@ -361,7 +362,6 @@ object BlockWeaver {
                 override val logger: Logger[IO],
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
-                override val sendWakeup: IO[Unit],
                 override val mempool: Mempool,
                 reproducingBlockBrief: BlockBrief.Next,
             ) extends Active,
@@ -416,7 +416,6 @@ object BlockWeaver {
                       logger,
                       pollResults,
                       finalizationLocallyTriggered,
-                      sendWakeup,
                       mempool,
                       reproducingBlockBrief
                     )
@@ -428,7 +427,6 @@ object BlockWeaver {
                 override val logger: Logger[IO],
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
-                override val sendWakeup: IO[Unit],
                 override val mempool: Mempool,
                 reproducingBlockBrief: BlockBrief.Next,
                 incompleteExtraction: Mempool.Extraction.Incomplete
@@ -499,7 +497,7 @@ object BlockWeaver {
 
             private object AwaitingRequest {
                 type NextReactiveState = DecidingRole.NextReactiveState | Follower.AwaitingRequest
-                type Unexpected = PreStart.type | BlockBrief.Next | Block.MultiSigned
+                type Unexpected = PreStart.type | BlockBrief.Next | Block.MultiSigned | Wakeup.type
 
                 private[State] def apply(
                     state: State,
@@ -512,7 +510,6 @@ object BlockWeaver {
                       logger,
                       pollResults,
                       finalizationLocallyTriggered,
-                      sendWakeup,
                       incompleteExtraction.survivingMempool,
                       reproducingBlockBrief,
                       incompleteExtraction
@@ -526,7 +523,6 @@ object BlockWeaver {
                 override val logger: Logger[IO],
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
-                override val sendWakeup: IO[Unit],
                 override val mempool: Mempool,
                 leadingBlockNum: BlockNumber
             ) extends Active,
@@ -582,7 +578,6 @@ object BlockWeaver {
                       logger,
                       pollResults,
                       finalizationLocallyTriggered,
-                      sendWakeup,
                       mempool,
                       leadingBlockNum
                     )
@@ -594,7 +589,6 @@ object BlockWeaver {
                 override val logger: Logger[IO],
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
-                override val sendWakeup: IO[Unit],
                 leadingBlockNumber: BlockNumber,
                 isBlockStarted: Leader.AwaitingConfirmation.StartedBlock
             ) extends Reactive {
@@ -602,7 +596,7 @@ object BlockWeaver {
 
                 export Leader.AwaitingConfirmation.{NextReactiveState, Unexpected}
 
-                override def react(config: Config)(req: Request): IO[Option[NextReactiveState]] =
+                override def react(config: Config)(req: Request): IO[Option[NextReactiveState]] = {
                     req match {
                         case ur: UserRequestWithId =>
                             // First block is implicitly confirmed, so we exit immediately back to
@@ -616,7 +610,6 @@ object BlockWeaver {
                                   logger,
                                   pollResults,
                                   finalizationLocallyTriggered,
-                                  sendWakeup,
                                   mempool = Mempool.empty,
                                   nextBlockNumber = leadingBlockNumber.increment
                                 ).act(config)
@@ -645,7 +638,6 @@ object BlockWeaver {
                                       logger,
                                       pollResults,
                                       finalizationLocallyTriggered = finalizationLocallyTriggered,
-                                      sendWakeup,
                                       mempool = Mempool.empty,
                                       nextBlockNumber = leadingBlockNumber.increment
                                     ).act(config)
@@ -667,9 +659,7 @@ object BlockWeaver {
                                     for {
                                         now <- realTimeQuantizedInstant(config.slotConfig)
                                         sleepDuration = bc.headerNonFinal.majorBlockWakeupTime - now
-                                        fiber <- (IO.sleep(
-                                          sleepDuration.finiteDuration
-                                        ) >> sendWakeup).start
+                                        fiber <- sleepSendWakeup(sleepDuration).start
                                         ret <- pure(
                                           Leader.AwaitingRequest(
                                             this,
@@ -695,6 +685,12 @@ object BlockWeaver {
                         case unexpected: Unexpected =>
                             panicUnexpectedRequest(this, unexpected)
                     }
+                }
+
+                private def sleepSendWakeup(sleepDuration: QuantizedFiniteDuration): IO[Unit] = {
+                    IO.sleep(sleepDuration.finiteDuration) >>
+                        (connections.blockWeaver ! Wakeup)
+                }
             }
 
             object AwaitingConfirmation {
@@ -702,7 +698,7 @@ object BlockWeaver {
                     Leader.AwaitingConfirmation | Leader.AwaitingRequest
 
                 type Unexpected = PreStart.type | BlockBrief.Next |
-                    (Block.MultiSigned & BlockType.Final)
+                    (Block.MultiSigned & BlockType.Final) | Wakeup.type
 
                 private[State] def apply(
                     state: State,
@@ -715,7 +711,6 @@ object BlockWeaver {
                       logger,
                       pollResults,
                       finalizationLocallyTriggered,
-                      sendWakeup,
                       blockNumber,
                       isBlockStarted
                     )
@@ -729,7 +724,6 @@ object BlockWeaver {
                 override val logger: Logger[IO],
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
-                override val sendWakeup: IO[Unit],
                 previousBlockConfirmed: Block.MultiSigned.NonFinal,
                 wakeupFiber: Fiber[IO, Throwable, Unit]
             ) extends Reactive {
@@ -762,14 +756,6 @@ object BlockWeaver {
                                 newState <- completeBlock
                             } yield newState
 
-                        case pr: PollResults =>
-                            logger.trace("New poll results.") >>
-                                pure(copy(pollResults = pr))
-
-                        case ft: LocalFinalizationTrigger.Triggered.type =>
-                            logger.info("Finalization was locally triggered.") >>
-                                pure(copy(finalizationLocallyTriggered = ft))
-
                         case _: BlockWeaver.Wakeup.type =>
                             def forceMajorBlock =
                                 for {
@@ -781,6 +767,14 @@ object BlockWeaver {
                                 _ <- logger.info("Wakeup is received, force major block")
                                 newState <- forceMajorBlock
                             } yield newState
+
+                        case pr: PollResults =>
+                            logger.trace("New poll results.") >>
+                                pure(copy(pollResults = pr))
+
+                        case ft: LocalFinalizationTrigger.Triggered.type =>
+                            logger.info("Finalization was locally triggered.") >>
+                                pure(copy(finalizationLocallyTriggered = ft))
 
                         case unexpected: Unexpected =>
                             panicUnexpectedRequest(this, unexpected)
@@ -804,7 +798,6 @@ object BlockWeaver {
                       logger,
                       pollResults,
                       finalizationLocallyTriggered,
-                      sendWakeup,
                       previousBlockConfirmed,
                       wakeupFiber
                     )
