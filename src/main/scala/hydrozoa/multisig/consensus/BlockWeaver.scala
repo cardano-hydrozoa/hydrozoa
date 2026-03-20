@@ -1,5 +1,5 @@
 package hydrozoa.multisig.consensus
-import cats.effect.IO
+import cats.effect.{Fiber, IO}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
@@ -19,7 +19,6 @@ import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import org.typelevel.log4cats.Logger
-import scala.math.Ordered.orderingToOrdered
 
 final case class BlockWeaver(
     config: BlockWeaver.Config,
@@ -28,6 +27,8 @@ final case class BlockWeaver(
     import BlockWeaver.*
 
     private val logger = Logging.loggerIO("BlockWeaver")
+
+    private def wakeup: IO[Unit] = context.self ! Wakeup
 
     override def preStart: IO[Unit] = for {
         _ <- context.self ! BlockWeaver.PreStart
@@ -51,11 +52,7 @@ final case class BlockWeaver(
         case PreStart =>
             for {
                 connections <- initializeConnections
-                startingState <- State.start(config, connections, logger)
-                _ <- context.setReceiveTimeout(
-                  config.blockWeaverTimeout,
-                  BlockWeaver.Timeout
-                )
+                startingState <- State.start(config, connections, logger, wakeup)
                 _ <- become(startingState)
             } yield ()
         case x =>
@@ -75,7 +72,7 @@ final case class BlockWeaver(
 }
 
 object BlockWeaver {
-    object Timeout
+    object Wakeup
 
     type Config = CardanoNetwork.Section & OwnHeadPeerPublic.Section &
         NodeOperationMultisigConfig.Section
@@ -87,7 +84,7 @@ object BlockWeaver {
     type Handle = ActorRef[IO, Request]
 
     type Request = PreStart.type | UserRequestWithId | BlockBrief.Next | Block.MultiSigned |
-        PollResults | LocalFinalizationTrigger.Triggered.type | Timeout.type
+        PollResults | LocalFinalizationTrigger.Triggered.type | Wakeup.type
 
     case object PreStart
 
@@ -108,15 +105,13 @@ object BlockWeaver {
         def logger: Logger[IO]
         def pollResults: PollResults
         def finalizationLocallyTriggered: LocalFinalizationTrigger
+        def sendWakeup: IO[Unit]
 
         final def stop(): IO[None.type] =
             logger.info("Stopping") >> IO.pure(None)
 
         final def logStateTransition: IO[Unit] =
             logger.info(s"Becoming $stateName.")
-
-        final def logTimeout: IO[Unit] =
-            logger.info(s"Timeout received in ${stateName} state.")
 
         final def sendStartBlock(config: Config)(blockNumber: BlockNumber): IO[Unit] = for {
             now <- realTimeQuantizedInstant(config.slotConfig)
@@ -172,7 +167,8 @@ object BlockWeaver {
         def start(
             config: Config,
             connections: Connections,
-            logger: Logger[IO]
+            logger: Logger[IO],
+            sendWakeup: IO[Unit]
         ): IO[Follower.AwaitingBlockBrief | Leader.AwaitingConfirmation] =
             for {
                 state: Some[Follower.AwaitingBlockBrief | Leader.AwaitingConfirmation] <-
@@ -181,6 +177,7 @@ object BlockWeaver {
                       logger = logger,
                       pollResults = PollResults.empty,
                       finalizationLocallyTriggered = LocalFinalizationTrigger.NotTriggered,
+                      sendWakeup = sendWakeup,
                       mempool = Mempool.empty,
                       nextBlockNumber = BlockNumber.zero.increment
                     ).act(config)
@@ -252,6 +249,7 @@ object BlockWeaver {
             override val logger: Logger[IO],
             override val pollResults: PollResults,
             override val finalizationLocallyTriggered: LocalFinalizationTrigger,
+            override val sendWakeup: IO[Unit],
             override val mempool: Mempool,
             nextBlockNumber: BlockNumber,
         ) extends Active,
@@ -288,6 +286,7 @@ object BlockWeaver {
                   logger,
                   pollResults,
                   finalizationLocallyTriggered,
+                  sendWakeup,
                   mempool,
                   nextBlockNumber
                 )
@@ -299,6 +298,7 @@ object BlockWeaver {
                 override val logger: Logger[IO],
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
+                override val sendWakeup: IO[Unit],
                 override val mempool: Mempool,
                 nextBlockNumber: BlockNumber
             ) extends Reactive,
@@ -329,10 +329,6 @@ object BlockWeaver {
                             logger.info("Finalization was locally triggered.") >>
                                 pure(copy(finalizationLocallyTriggered = ft))
 
-                        case t: Timeout.type =>
-                            logger.info(s"Timeout received in the ${stateName} state.")
-                                >> pure(this)
-
                         case m: Unexpected =>
                             panicUnexpectedRequest(this, m)
                     }
@@ -354,6 +350,7 @@ object BlockWeaver {
                       logger,
                       pollResults,
                       finalizationLocallyTriggered,
+                      sendWakeup,
                       mempool,
                       nextBlockNumber
                     )
@@ -364,6 +361,7 @@ object BlockWeaver {
                 override val logger: Logger[IO],
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
+                override val sendWakeup: IO[Unit],
                 override val mempool: Mempool,
                 reproducingBlockBrief: BlockBrief.Next,
             ) extends Active,
@@ -418,6 +416,7 @@ object BlockWeaver {
                       logger,
                       pollResults,
                       finalizationLocallyTriggered,
+                      sendWakeup,
                       mempool,
                       reproducingBlockBrief
                     )
@@ -429,6 +428,7 @@ object BlockWeaver {
                 override val logger: Logger[IO],
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
+                override val sendWakeup: IO[Unit],
                 override val mempool: Mempool,
                 reproducingBlockBrief: BlockBrief.Next,
                 incompleteExtraction: Mempool.Extraction.Incomplete
@@ -477,9 +477,6 @@ object BlockWeaver {
                             logger.info("Finalization was locally triggered.") >>
                                 pure(copy(finalizationLocallyTriggered = ft))
 
-                        case t: Timeout.type =>
-                            logTimeout >> pure(this)
-
                         case unexpected: Unexpected =>
                             panicUnexpectedRequest(this, unexpected)
                     }
@@ -515,6 +512,7 @@ object BlockWeaver {
                       logger,
                       pollResults,
                       finalizationLocallyTriggered,
+                      sendWakeup,
                       incompleteExtraction.survivingMempool,
                       reproducingBlockBrief,
                       incompleteExtraction
@@ -528,6 +526,7 @@ object BlockWeaver {
                 override val logger: Logger[IO],
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
+                override val sendWakeup: IO[Unit],
                 override val mempool: Mempool,
                 leadingBlockNum: BlockNumber
             ) extends Active,
@@ -583,6 +582,7 @@ object BlockWeaver {
                       logger,
                       pollResults,
                       finalizationLocallyTriggered,
+                      sendWakeup,
                       mempool,
                       leadingBlockNum
                     )
@@ -594,6 +594,7 @@ object BlockWeaver {
                 override val logger: Logger[IO],
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
+                override val sendWakeup: IO[Unit],
                 leadingBlockNumber: BlockNumber,
                 isBlockStarted: Leader.AwaitingConfirmation.StartedBlock
             ) extends Reactive {
@@ -615,6 +616,7 @@ object BlockWeaver {
                                   logger,
                                   pollResults,
                                   finalizationLocallyTriggered,
+                                  sendWakeup,
                                   mempool = Mempool.empty,
                                   nextBlockNumber = leadingBlockNumber.increment
                                 ).act(config)
@@ -643,6 +645,7 @@ object BlockWeaver {
                                       logger,
                                       pollResults,
                                       finalizationLocallyTriggered = finalizationLocallyTriggered,
+                                      sendWakeup,
                                       mempool = Mempool.empty,
                                       nextBlockNumber = leadingBlockNumber.increment
                                     ).act(config)
@@ -661,12 +664,20 @@ object BlockWeaver {
                                 if isBlockStarted == Started
                                 then completeNextBlock
                                 else
-                                    pure(
-                                      Leader.AwaitingRequest(
-                                        this,
-                                        previousBlockConfirmed = bc,
-                                      )
-                                    )
+                                    for {
+                                        now <- realTimeQuantizedInstant(config.slotConfig)
+                                        sleepDuration = bc.headerNonFinal.majorBlockWakeupTime - now
+                                        fiber <- (IO.sleep(
+                                          sleepDuration.finiteDuration
+                                        ) >> sendWakeup).start
+                                        ret <- pure(
+                                          Leader.AwaitingRequest(
+                                            this,
+                                            previousBlockConfirmed = bc,
+                                            fiber
+                                          )
+                                        )
+                                    } yield ret
                             else {
                                 val msg = "Received wrong block number for confirmed block. We are producing" +
                                     s" $leadingBlockNumber, but the confirmed block that we received is ${bc.blockNum}"
@@ -680,9 +691,6 @@ object BlockWeaver {
                         case ft: LocalFinalizationTrigger.Triggered.type =>
                             logger.info("Finalization was locally triggered.") >>
                                 pure(copy(finalizationLocallyTriggered = ft))
-
-                        case _: Timeout.type =>
-                            logTimeout >> pure(this)
 
                         case unexpected: Unexpected =>
                             panicUnexpectedRequest(this, unexpected)
@@ -707,6 +715,7 @@ object BlockWeaver {
                       logger,
                       pollResults,
                       finalizationLocallyTriggered,
+                      sendWakeup,
                       blockNumber,
                       isBlockStarted
                     )
@@ -720,7 +729,9 @@ object BlockWeaver {
                 override val logger: Logger[IO],
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
-                previousBlockConfirmed: Block.MultiSigned.NonFinal
+                override val sendWakeup: IO[Unit],
+                previousBlockConfirmed: Block.MultiSigned.NonFinal,
+                wakeupFiber: Fiber[IO, Throwable, Unit]
             ) extends Reactive {
                 override transparent inline def stateName: String = "Leader.AwaitingRequest"
 
@@ -736,10 +747,12 @@ object BlockWeaver {
                           nextBlockNumber = currentBlockNumber.increment
                         ).act(config)
 
-                    def completeBlock =
-                        if finalizationLocallyTriggered.asBoolean || previousBlockConfirmed.finalizationRequested
-                        then sendCompleteFinalBlockAsLeader(config) >> stop()
-                        else completeBlockRegular
+                    def completeBlock = {
+                        wakeupFiber.cancel >>
+                            (if finalizationLocallyTriggered.asBoolean || previousBlockConfirmed.finalizationRequested
+                             then sendCompleteFinalBlockAsLeader(config) >> stop()
+                             else completeBlockRegular)
+                    }
 
                     req match {
                         case ur: UserRequestWithId =>
@@ -757,25 +770,16 @@ object BlockWeaver {
                             logger.info("Finalization was locally triggered.") >>
                                 pure(copy(finalizationLocallyTriggered = ft))
 
-                        case _: BlockWeaver.Timeout.type =>
+                        case _: BlockWeaver.Wakeup.type =>
                             def forceMajorBlock =
                                 for {
                                     _ <- sendStartBlock(config)(currentBlockNumber)
                                     newState <- completeBlock
                                 } yield newState
 
-                            val wakeupTime =
-                                previousBlockConfirmed.headerNonFinal.majorBlockWakeupTime
-
-                            for { // Check if newMajorBlockTime has passed, force new block if so
-                                now <- realTimeQuantizedInstant(config.slotConfig)
-                                _ <- logTimeout >> logger.info(
-                                  s"Current time is ${now.instant}. Wakeup time is ${wakeupTime.instant}"
-                                )
-                                newState <-
-                                    if now >= wakeupTime
-                                    then forceMajorBlock
-                                    else pure(this)
+                            for {
+                                _ <- logger.info("Wakeup is received, force major block")
+                                newState <- forceMajorBlock
                             } yield newState
 
                         case unexpected: Unexpected =>
@@ -791,7 +795,8 @@ object BlockWeaver {
 
                 private[State] def apply(
                     state: State,
-                    previousBlockConfirmed: Block.MultiSigned.NonFinal
+                    previousBlockConfirmed: Block.MultiSigned.NonFinal,
+                    wakeupFiber: Fiber[IO, Throwable, Unit]
                 ): Leader.AwaitingRequest =
                     import state.*
                     Leader.AwaitingRequest(
@@ -799,7 +804,9 @@ object BlockWeaver {
                       logger,
                       pollResults,
                       finalizationLocallyTriggered,
-                      previousBlockConfirmed
+                      sendWakeup,
+                      previousBlockConfirmed,
+                      wakeupFiber
                     )
             }
         }
