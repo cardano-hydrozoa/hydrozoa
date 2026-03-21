@@ -2,7 +2,8 @@ package hydrozoa.rulebased.ledger.l1.tx
 
 import cats.data.NonEmptyList
 import hydrozoa.*
-import hydrozoa.config.head.network.{CardanoNetwork, ensureMinAda}
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript

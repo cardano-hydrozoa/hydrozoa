@@ -3,6 +3,8 @@ package hydrozoa.app
 import cats.effect.IO
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.config.head.HeadConfig
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.peer.HeadPeerWallet
@@ -21,19 +23,22 @@ object Janitor:
     /** Upon the process finalization tries to build and submit a tx that:
       *   - grabs all utxos at [[headAddress]]
       *   - burns all token under [[headPolicy]]
-      *   - send all residual value to [[faucetAddress]]
+      *   - sends all ADA to [[faucetAddress]]
+      *   - sends all non-head tokens to [[tokenRecoveryAddress]] (if defined)
       *   - is signed by [[headPeerWallet]]
       *
       * @param backend
       * @param headPeerWallet
-      * @param headAddress
+      * @param config
       * @param faucetAddress
+      * @param tokenRecoveryAddress
       */
     def cleanUp(
         backend: CardanoBackend[IO],
         config: HeadConfig,
         headPeerWallet: HeadPeerWallet,
-        faucetAddress: ShelleyAddress
+        faucetAddress: ShelleyAddress,
+        tokenRecoveryAddress: Option[ShelleyAddress]
     ): IO[Unit] = for {
 
         headUtxos: Utxos <- backend
@@ -65,6 +70,10 @@ object Janitor:
                         )
                     else Value.zero
 
+                // Calculate non-head tokens (all tokens except head tokens)
+                nonHeadTokensAssets = totalValue.assets.assets - config.headMultisigScript.policyId
+                nonHeadTokensValue = Value(Coin.zero, MultiAsset(nonHeadTokensAssets))
+
                 // NB: for a multisig head it's always true
                 hasMultisigRefScript = true
                 // hasMultisigRefScript = headUtxos.exists((_, o) =>
@@ -74,6 +83,39 @@ object Janitor:
                 (withRefScript, withoutRefScript) = headUtxos.partition((_, o) =>
                     o.scriptRef.isDefined
                 )
+
+                // Build outputs based on whether we need to send tokens separately
+                outputs = (tokenRecoveryAddress, nonHeadTokensValue.assets.nonEmpty) match {
+                    case (Some(recoveryAddr), true) =>
+                        // Create token output with min ADA
+                        val tokenOutput = TransactionOutput
+                            .Babbage(
+                              address = recoveryAddr,
+                              value = nonHeadTokensValue
+                            )
+                            .ensureMinAda(config)
+
+                        val minAdaForTokens = tokenOutput.value.coin
+
+                        // Send remaining ADA to faucet
+                        val adaOutput = TransactionOutput.Babbage(
+                          address = faucetAddress,
+                          value = Value(totalValue.coin - minAdaForTokens, MultiAsset.empty)
+                        )
+
+                        List(Send(adaOutput), Send(tokenOutput))
+
+                    case _ =>
+                        // Send all (ADA + any tokens) to faucet, minus burned head tokens
+                        List(
+                          Send(
+                            TransactionOutput.Babbage(
+                              address = faucetAddress,
+                              value = totalValue - headTokensValue
+                            )
+                          )
+                        )
+                }
 
                 unbalanced = TransactionBuilder
                     .build(
@@ -91,7 +133,7 @@ object Janitor:
                                 witness = config.headMultisigScript.witnessAttached
                               )
                           }.toList ++
-                          (headTokens
+                          headTokens
                               .map((assetName, amount) =>
                                   Mint(
                                     scriptHash = config.headMultisigScript.policyId,
@@ -100,13 +142,8 @@ object Janitor:
                                     witness = config.headMultisigScript.witnessAttached
                                   )
                               )
-                              .toList :+
-                              Send(
-                                TransactionOutput.Babbage(
-                                  address = faucetAddress,
-                                  value = totalValue - headTokensValue
-                                )
-                              ))
+                              .toList ++
+                          outputs
                     )
                     .fold(err => throw RuntimeException(err.toString), identity)
 

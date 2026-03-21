@@ -12,6 +12,7 @@ import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost
 import hydrozoa.multisig.ledger.remote.RemoteL2Ledger
 import hydrozoa.multisig.server.HydrozoaServer
 import io.github.cdimascio.dotenv.Dotenv
+import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger.Coin
 import scalus.crypto.ed25519.{SigningKey, VerificationKey}
 import scalus.uplc.builtin.ByteString
@@ -39,7 +40,8 @@ object Main extends IOApp {
         minEquity: Coin,
         blockfrostApiKey: String,
         sugarRushHost: String,
-        sugarRushPort: String
+        sugarRushPort: String,
+        tokenRecoveryAddress: Option[ShelleyAddress]
     ) {
         val sugarRushUri: String = s"ws://$sugarRushHost:$sugarRushPort/ws"
     }
@@ -115,6 +117,31 @@ object Main extends IOApp {
             sugarRushHost <- getOptionalEnvVar("SUGAR_RUSH_HOST", "localhost")
             sugarRushPort <- getOptionalEnvVar("SUGAR_RUSH_PORT", "3001")
 
+            tokenRecoveryAddressOpt <- getOptionalEnvVar("TOKEN_RECOVERY_ADDRESS", "").flatMap {
+                case "" => IO.pure(None)
+                case addr =>
+                    IO.delay(Address.fromBech32(addr))
+                        .flatMap {
+                            case shelley: ShelleyAddress => IO.pure(Some(shelley))
+                            case _ =>
+                                IO.raiseError(
+                                  new IllegalArgumentException(
+                                    s"TOKEN_RECOVERY_ADDRESS must be a Shelley address, got: $addr"
+                                  )
+                                )
+                        }
+                        .handleErrorWith { err =>
+                            IO.raiseError(
+                              new IllegalArgumentException(
+                                s"TOKEN_RECOVERY_ADDRESS must be a valid Bech32 address: ${err.getMessage}"
+                              )
+                            )
+                        }
+            }
+            _ <- tokenRecoveryAddressOpt.fold(IO.unit)(addr =>
+                logger.info(s"Token recovery address: ${addr.toBech32.get}")
+            )
+
             _ <- logger.info(s"Minimum equity: $minEquity lovelace")
         } yield EnvConfig(
           verificationKey = vKey,
@@ -122,7 +149,8 @@ object Main extends IOApp {
           minEquity = minEquity,
           blockfrostApiKey = blockfrostKey,
           sugarRushHost = sugarRushHost,
-          sugarRushPort = sugarRushPort
+          sugarRushPort = sugarRushPort,
+          tokenRecoveryAddress = tokenRecoveryAddressOpt
         )
 
     val cardanoNetwork: StandardCardanoNetwork = CardanoNetwork.Preview
@@ -171,7 +199,8 @@ object Main extends IOApp {
                     faucetAddress = ShelleyAddressExtra.mkShelleyAddress(
                       env.verificationKey,
                       cardanoNetwork.network
-                    )
+                    ),
+                    tokenRecoveryAddress = env.tokenRecoveryAddress
                   )
             )
         } yield (env, backend, nodeConfig, remoteL2Ledger, system)
