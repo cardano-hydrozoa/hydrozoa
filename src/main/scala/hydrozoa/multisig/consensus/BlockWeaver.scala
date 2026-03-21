@@ -90,11 +90,11 @@ object BlockWeaver {
     type Handle = ActorRef[IO, Request]
 
     type Request = PreStart.type | UserRequestWithId | BlockBrief.Next | Block.MultiSigned |
-        PollResults | LocalFinalizationTrigger.Triggered.type | Wakeup.type
+        PollResults | LocalFinalizationTrigger.Triggered.type | Wakeup
 
     case object PreStart
 
-    case object Wakeup
+    case class Wakeup(blockNumber: BlockNumber)
 
     sealed trait LocalFinalizationTrigger(val asBoolean: Boolean)
 
@@ -331,8 +331,10 @@ object BlockWeaver {
                             logger.info("Finalization was locally triggered.") >>
                                 pure(copy(finalizationLocallyTriggered = ft))
 
-                        case _: Wakeup.type =>
-                            logger.trace("Unexpected awake, ignoring.") >>
+                        case w: Wakeup =>
+                            logger.trace(
+                              s"Unexpected wakeup for block ${w.blockNumber}, ignoring."
+                            ) >>
                                 pure(this)
 
                         case unexpected: Unexpected =>
@@ -343,7 +345,7 @@ object BlockWeaver {
             object AwaitingBlockBrief {
                 type NextReactiveState = Follower.AwaitingBlockBrief |
                     Follower.ProcessingReadyRequests.NextReactiveState
-                type Unexpected = PreStart.type | Block.MultiSigned | Wakeup.type
+                type Unexpected = PreStart.type | Block.MultiSigned
 
                 private[State] def apply(
                     state: State,
@@ -479,8 +481,10 @@ object BlockWeaver {
                             logger.info("Finalization was locally triggered.") >>
                                 pure(copy(finalizationLocallyTriggered = ft))
 
-                        case _: Wakeup.type =>
-                            logger.trace("Unexpected awake, ignoring.") >>
+                        case w: Wakeup =>
+                            logger.trace(
+                              s"Unexpected wakeup for block ${w.blockNumber}, ignoring."
+                            ) >>
                                 pure(this)
 
                         case unexpected: Unexpected =>
@@ -690,8 +694,10 @@ object BlockWeaver {
                             logger.info("Finalization was locally triggered.") >>
                                 pure(copy(finalizationLocallyTriggered = ft))
 
-                        case _: Wakeup.type =>
-                            logger.trace("Unexpected awake, ignoring.") >>
+                        case w: Wakeup =>
+                            logger.trace(
+                              s"Unexpected wakeup for block ${w.blockNumber}, ignoring."
+                            ) >>
                                 pure(this)
 
                         case unexpected: Unexpected =>
@@ -701,7 +707,7 @@ object BlockWeaver {
 
                 private def sleepSendWakeup(sleepDuration: QuantizedFiniteDuration): IO[Unit] = {
                     IO.sleep(sleepDuration.finiteDuration) >>
-                        (connections.blockWeaver ! Wakeup)
+                        (connections.blockWeaver ! Wakeup(this.leadingBlockNumber))
                 }
             }
 
@@ -754,10 +760,9 @@ object BlockWeaver {
                         ).act(config)
 
                     def completeBlock = {
-                        wakeupFiber.cancel >>
-                            (if finalizationLocallyTriggered.asBoolean || previousBlockConfirmed.finalizationRequested
-                             then sendCompleteFinalBlockAsLeader(config) >> stop()
-                             else completeBlockRegular)
+                        if finalizationLocallyTriggered.asBoolean || previousBlockConfirmed.finalizationRequested
+                        then sendCompleteFinalBlockAsLeader(config) >> stop()
+                        else completeBlockRegular
                     }
 
                     req match {
@@ -768,17 +773,30 @@ object BlockWeaver {
                                 newState <- completeBlock
                             } yield newState
 
-                        case _: Wakeup.type =>
+                        case w: Wakeup =>
                             def forceMajorBlock =
                                 for {
+                                    _ <- logger.info(
+                                      "Wakeup for the current block is received, force major block"
+                                    )
                                     _ <- sendStartBlock(config)(currentBlockNumber)
                                     newState <- completeBlock
                                 } yield newState
 
-                            for {
-                                _ <- logger.info("Wakeup is received, force major block")
-                                newState <- forceMajorBlock
-                            } yield newState
+                            if w.blockNumber == currentBlockNumber
+                            then forceMajorBlock
+                            else {
+                                (if w.blockNumber > currentBlockNumber
+                                 then
+                                     logger.warn(
+                                       s"Ignoring wakeup for a future block ${w.blockNumber}, current block: ${currentBlockNumber}"
+                                     )
+                                 else
+                                     logger.info(
+                                       s"Ignoring wakeup for preceding block ${w.blockNumber}, current block: ${currentBlockNumber}"
+                                     )
+                                ) >> pure(this)
+                            }
 
                         case pr: PollResults =>
                             logger.trace("New poll results.") >>
