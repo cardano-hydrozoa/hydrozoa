@@ -35,6 +35,10 @@ keygen:
   - sbt "runMain hydrozoa.app.GenerateKeyPair"
   just notify "keygen"
 
+token-recovery:
+  - sbt "runMain hydrozoa.app.TokenRecovery"
+  just notify "token-recovery"
+
 migrate ADDRESS:
   - sbt "runMain hydrozoa.app.Migrate {{ADDRESS}}"
   just notify "migrate"
