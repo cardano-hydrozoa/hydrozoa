@@ -83,7 +83,7 @@ object DeinitTx {
                 case Unresolved(_) => Left(TreasuryShouldBeResolved)
                 case Resolved(d)   => Right(d)
             }
-            _ <- Either.cond(resolved.utxosActive == g1bs, (), TreasuryShouldBeEmpty)
+            _ <- Either.cond(resolved.evacuationActive == g1bs, (), TreasuryShouldBeEmpty)
 
         } yield ()
 

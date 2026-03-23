@@ -7,34 +7,31 @@ import cats.syntax.all.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.*
-import hydrozoa.multisig.backend.cardano
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.peers.HeadPeers
+import hydrozoa.config.node.NodePrivateConfig
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.ledger.block.BlockHeader
-import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
-import hydrozoa.multisig.ledger.dapp.tx.Tx
+import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.rulebased.DisputeActor.*
 import hydrozoa.rulebased.DisputeActor.Error.ParseError.Treasury.TreasuryResolved
-import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
-import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum
-import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
-import hydrozoa.rulebased.ledger.dapp.tx.ResolutionTx.ResolutionTxError
-import hydrozoa.rulebased.ledger.dapp.tx.TallyTx.TallyTxError
-import hydrozoa.rulebased.ledger.dapp.tx.VoteTx.VoteTxError
-import hydrozoa.rulebased.ledger.dapp.tx.{ResolutionTx, TallyTx, VoteTx}
-import hydrozoa.rulebased.ledger.dapp.utxo.{OwnVoteUtxo, RuleBasedTreasuryUtxo, TallyVoteUtxo}
-import scala.concurrent.duration.FiniteDuration
+import hydrozoa.rulebased.ledger.l1.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
+import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
+import hydrozoa.rulebased.ledger.l1.tx.*
+import hydrozoa.rulebased.ledger.l1.tx.ResolutionTx.ResolutionTxError
+import hydrozoa.rulebased.ledger.l1.utxo.*
 import scala.util.{Failure, Success, Try}
 import scalus.builtin.Data.fromData
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
-import scalus.cardano.ledger.{AddrKeyHash, CardanoInfo, DatumOption, PlutusScriptEvaluator}
+import scalus.cardano.ledger.{AddrKeyHash, DatumOption, PlutusScriptEvaluator, Utxo, Utxos}
+import scalus.cardano.onchain.plutus.v3.PubKeyHash
 import scalus.cardano.txbuilder.SomeBuildError
-import scalus.ledger.api.v3.PubKeyHash
 
 // QUESTION: The `OwnVoteUtxo` type is pretty sparse. Should I augment it directly, or did we want to keep
 // it small for some reason?<
-type VoteUtxoWithDatum = (hydrozoa.Utxo[L1], VoteDatum)
+type VoteUtxoWithDatum = (Utxo, VoteDatum)
 
 /** Pulls in vote/treasury utxo from cardano backend, and decides whether to submit a vote tx, tally
   * tx, or dispute resolution tx. If none of these need to be submitted, it tells the rule-based
@@ -56,13 +53,13 @@ type VoteUtxoWithDatum = (hydrozoa.Utxo[L1], VoteDatum)
   *     proceed.
   *   - It throws an exception if multiple utxos with the treasury token are found.
   */
-final case class DisputeActor(
-    config: DisputeActor.Config,
-    collateralUtxo: hydrozoa.Utxo[L1],
+final case class DisputeActor(config: DisputeActor.Config)(
+    collateralUtxo: Utxo,
     blockHeader: BlockHeader.Minor.Onchain,
     cardanoBackend: CardanoBackend[IO],
     signatures: List[BlockHeader.Minor.HeaderSignature],
 ) extends Actor[IO, DisputeActor.Requests.Request] {
+    private def evaluator = PlutusScriptEvaluator(config.cardanoInfo, EvaluateAndComputeCost)
 
     // TODO: no transactions are currently getting signed
     val handleDisputeRes: IO[Either[DisputeActor.Error.RecoverableErrors, Unit]] = {
@@ -71,7 +68,7 @@ final case class DisputeActor(
             unparsedDisputeUtxos <- EitherT(
               cardanoBackend.utxosAt(
                 address = DisputeResolutionScript.address(config.cardanoInfo.network),
-                asset = (config.headMultisigScript.policyId, config.tokenNames.voteTokenName)
+                asset = (config.headMultisigScript.policyId, config.headTokenNames.voteTokenName)
               )
             )
             disputeUtxos <- EitherT.liftF(parseDisputeUtxos(unparsedDisputeUtxos))
@@ -79,7 +76,8 @@ final case class DisputeActor(
             unparsedTreasuryUtxo <- EitherT(
               cardanoBackend.utxosAt(
                 address = RuleBasedTreasuryScript.address(config.cardanoInfo.network),
-                asset = (config.headMultisigScript.policyId, config.tokenNames.headTokenName)
+                asset =
+                    (config.headMultisigScript.policyId, config.headTokenNames.treasuryTokenName)
               )
             )
             treasuryUtxo <- parseRBTreasury(unparsedTreasuryUtxo)
@@ -88,20 +86,22 @@ final case class DisputeActor(
                 // Cast Vote
                 case (Some(ownVoteUtxo), _) =>
                     val recipe = VoteTx.Recipe(
-                      voteUtxo = OwnVoteUtxo(AddrKeyHash(config.ownPeerPkh.hash), ownVoteUtxo._1),
+                      voteUtxo = OwnVoteUtxo(
+                        AddrKeyHash(config.ownHeadWallet.pubKeyHash.hash),
+                        ownVoteUtxo._1
+                      ),
                       treasuryUtxo = treasuryUtxo,
                       collateralUtxo = collateralUtxo,
                       blockHeader = blockHeader,
                       signatures = signatures,
                       network = config.cardanoInfo.network,
                       protocolParams = config.cardanoInfo.protocolParams,
-                      evaluator = config.evaluator,
-                      validators = Tx.Validators.nonSigningValidators
+                      evaluator = evaluator
                     )
                     for {
                         voteTx <- VoteTx.build(recipe) match {
                             case Left(e)   => EitherT.liftF(IO.raiseError(Error.BuildError.Vote(e)))
-                            case Right(tx) => EitherT.pure[IO, cardano.CardanoBackend.Error](tx)
+                            case Right(tx) => EitherT.pure[IO, CardanoBackend.Error](tx)
                         }
                         _ <- EitherT(cardanoBackend.submitTx(voteTx.tx))
                     } yield ()
@@ -121,15 +121,12 @@ final case class DisputeActor(
                       collateralUtxo = collateralUtxo,
                       network = config.cardanoInfo.network,
                       protocolParams = config.cardanoInfo.protocolParams,
-                      evaluator = config.evaluator,
-                      // Since this tx isn't multisigned, I suppose this would be one of the few transactions
-                      // where we could actually use all of the validators?
-                      validators = Tx.Validators.nonSigningValidators
+                      evaluator = evaluator
                     )
                     for {
                         tallyTx <- TallyTx.build(recipe) match {
                             case Left(e) => EitherT.liftF(IO.raiseError(Error.BuildError.Tally(e)))
-                            case Right(tx) => EitherT.pure[IO, cardano.CardanoBackend.Error](tx)
+                            case Right(tx) => EitherT.pure[IO, CardanoBackend.Error](tx)
                         }
                         _ <- EitherT(cardanoBackend.submitTx(tallyTx.tx))
                     } yield ()
@@ -142,14 +139,13 @@ final case class DisputeActor(
                       collateralUtxo = collateralUtxo,
                       network = config.cardanoInfo.network,
                       protocolParams = config.cardanoInfo.protocolParams,
-                      evaluator = config.evaluator,
-                      validators = Tx.Validators.nonSigningValidators
+                      evaluator = evaluator
                     )
                     for {
                         resolutionTx <- ResolutionTx.build(recipe) match {
                             case Left(e) =>
                                 EitherT.liftF(IO.raiseError(Error.BuildError.Resolution(e)))
-                            case Right(tx) => EitherT.pure[IO, cardano.CardanoBackend.Error](tx)
+                            case Right(tx) => EitherT.pure[IO, CardanoBackend.Error](tx)
                         }
                         _ <- EitherT(cardanoBackend.submitTx(resolutionTx.tx))
                     } yield ()
@@ -165,7 +161,8 @@ final case class DisputeActor(
         et.value
     }
 
-    override def preStart: IO[Unit] = context.setReceiveTimeout(config.receiveTimeout, ())
+    override def preStart: IO[Unit] =
+        context.setReceiveTimeout(config.evacuationBotPollingPeriod, ())
 
     override def receive: Receive[IO, Requests.Request] = { case _: Requests.HandleDisputeRes =>
         handleDisputeRes
@@ -190,24 +187,26 @@ final case class DisputeActor(
       *   "Some" if the dispute actor still needs to cast a vote. The second element is all other
       *   vote utxos.
       */
-    private def parseDisputeUtxos(utxos: hydrozoa.UtxoSetL1): IO[
+    private def parseDisputeUtxos(utxos: Utxos): IO[
       (
           Option[VoteUtxoWithDatum],
           Seq[VoteUtxoWithDatum]
       )
     ] =
         for {
-            voteUtxos <- utxos.toList.traverse((i, o) => utxoToVoteUtxo(hydrozoa.Utxo[L1](i, o)))
+            voteUtxos <- utxos.toList.traverse((i, o) => utxoToVoteUtxo(Utxo(i, o)))
 
             votePartition = voteUtxos.partition {
-                case (_, VoteDatum(_, _, VoteStatus.AwaitingVote(peerPkh))) =>
-                    peerPkh == config.ownPeerPkh
+                case (_, VoteDatum(_, _, VoteStatus.AwaitingVote(peerPkh))) => {
+                    val ownPkh: PubKeyHash = config.ownHeadWallet.pubKeyHash
+                    peerPkh == ownPkh
+                }
                 case _ => false
             }
         } yield (votePartition._1.headOption, votePartition._2)
 
     private def utxoToVoteUtxo(
-        utxo: hydrozoa.Utxo[L1]
+        utxo: Utxo
     ): IO[VoteUtxoWithDatum] = {
         for {
             d1: DatumOption <- utxo._2.datumOption match {
@@ -231,16 +230,8 @@ final case class DisputeActor(
 }
 
 object DisputeActor {
-    case class Config(
-        ownPeerPkh: PubKeyHash,
-        tokenNames: TokenNames,
-        headMultisigScript: HeadMultisigScript,
-        receiveTimeout: FiniteDuration,
-        cardanoInfo: CardanoInfo
-    ) {
-        def evaluator: PlutusScriptEvaluator =
-            PlutusScriptEvaluator(cardanoInfo, EvaluateAndComputeCost)
-    }
+    type Config = NodePrivateConfig.Section & CardanoNetwork.Section & HeadPeers.Section &
+        HasTokenNames
 
     type Handle = ActorRef[IO, Requests.Request]
 
@@ -271,16 +262,15 @@ object DisputeActor {
         sealed trait ParseError
         object ParseError {
             object Vote {
-                case class MissingDatum(utxo: hydrozoa.Utxo[L1]) extends Unrecoverable
+                case class MissingDatum(utxo: Utxo) extends Unrecoverable
 
-                case class DatumNotInline(utxo: hydrozoa.Utxo[L1]) extends Unrecoverable
+                case class DatumNotInline(utxo: Utxo) extends Unrecoverable
 
-                case class DatumDeserializationError(utxo: hydrozoa.Utxo[L1], e: Throwable)
-                    extends Unrecoverable
+                case class DatumDeserializationError(utxo: Utxo, e: Throwable) extends Unrecoverable
             }
 
             object Treasury {
-                case class MultipleTreasuryTokensFound(utxos: UtxoSetL1) extends Unrecoverable
+                case class MultipleTreasuryTokensFound(utxos: Utxos) extends Unrecoverable
 
                 case class WrappedTreasuryParseError(wrapped: RuleBasedTreasuryUtxo.ParseError)
                     extends Unrecoverable
@@ -304,13 +294,13 @@ object DisputeActor {
     // TODO: Factor out. Its shared between this and the li
     // obtained from the parameters to this class
     def parseRBTreasury(
-        utxos: UtxoSetL1
+        utxos: Utxos
     ): EitherT[IO, Error.RecoverableErrors, RuleBasedTreasuryUtxo] =
         for {
             utxo <- utxos.size match {
                 // May happen due to rollback, ignore and try again
                 case 0 => EitherT.left(IO.pure(Error.ParseError.Treasury.TreasuryMissing))
-                case 1 => EitherT.right(IO.pure(hydrozoa.Utxo[L1](utxos.head)))
+                case 1 => EitherT.right(IO.pure(Utxo(utxos.head)))
                 case _ =>
                     EitherT.liftF(
                       IO.raiseError(Error.ParseError.Treasury.MultipleTreasuryTokensFound(utxos))

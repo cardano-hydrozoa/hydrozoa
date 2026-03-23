@@ -20,6 +20,7 @@ import hydrozoa.multisig.ledger.joint.given
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap}
 import hydrozoa.multisig.ledger.l1.token.CIP67
+import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.given
 import java.time.Instant
 import org.scalacheck.{Gen, Prop, Properties}
 import scala.collection.immutable.{SortedMap, TreeMap}

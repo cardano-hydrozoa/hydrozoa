@@ -3,6 +3,7 @@ package hydrozoa.rulebased.ledger.l1.tx
 import cats.implicits.*
 import hydrozoa.*
 import hydrozoa.multisig.ledger.block.BlockHeader
+import hydrozoa.multisig.ledger.l1.tx.Tx.Validators.nonSigningValidators
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.{DisputeRedeemer, VoteRedeemer}
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.*
@@ -12,7 +13,6 @@ import scala.util.{Failure, Success, Try}
 import scalus.cardano.address.Network
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.{BlockHeader as _, *}
 import scalus.cardano.onchain.plutus.prelude.List as SList
 import scalus.cardano.txbuilder.*
@@ -40,7 +40,6 @@ object VoteTx {
         network: Network,
         protocolParams: ProtocolParams,
         evaluator: PlutusScriptEvaluator,
-        validators: Seq[Validator]
     )
 
     enum VoteTxError:
@@ -147,7 +146,7 @@ object VoteTx {
                   protocolParams = recipe.protocolParams,
                   diffHandler = Change.changeOutputDiffHandler(_, _, recipe.protocolParams, 0),
                   evaluator = recipe.evaluator,
-                  validators = recipe.validators
+                  validators = nonSigningValidators
                 )
 
         } yield VoteTx(

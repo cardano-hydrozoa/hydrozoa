@@ -5,7 +5,7 @@ import hydrozoa.config.head.initialization.InitializationParameters
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.HeadParameters
 import hydrozoa.config.head.peers.HeadPeers
-import hydrozoa.config.node.operation.liquidation.NodeOperationLiquidationConfig
+import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.multisig.consensus.peer.HeadPeerWallet
@@ -22,13 +22,13 @@ object NodeConfig {
     def apply(
         headConfig: HeadConfig,
         ownHeadWallet: HeadPeerWallet,
-        nodeOperationLiquidationConfig: NodeOperationLiquidationConfig,
+        nodeOperationEvacuationConfig: NodeOperationEvacuationConfig,
         nodeOperationMultisigConfig: NodeOperationMultisigConfig
     ): Option[NodeConfig] = for {
         ownHeadPeerPrivate <- OwnHeadPeerPrivate(ownHeadWallet, headConfig.headPeers)
         nodePrivateConfig = NodePrivateConfig(
           ownHeadPeerPrivate,
-          nodeOperationLiquidationConfig,
+          nodeOperationEvacuationConfig,
           nodeOperationMultisigConfig
         )
     } yield NodeConfig(headConfig, nodePrivateConfig)
@@ -52,10 +52,11 @@ object NodeConfig {
 
         override transparent inline def ownHeadPeerPrivate: OwnHeadPeerPrivate =
             nodePrivateConfig.ownHeadPeerPrivate
-        override transparent inline def nodeOperationLiquidationConfig
-            : NodeOperationLiquidationConfig =
-            nodePrivateConfig.nodeOperationLiquidationConfig
+        override transparent inline def nodeOperationEvacuationConfig
+            : NodeOperationEvacuationConfig =
+            nodePrivateConfig.nodeOperationEvacuationConfig
         override transparent inline def nodeOperationMultisigConfig: NodeOperationMultisigConfig =
             nodePrivateConfig.nodeOperationMultisigConfig
+
     }
 }

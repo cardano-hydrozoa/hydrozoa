@@ -33,7 +33,7 @@ object TreasuryState:
 
     case class ResolvedDatum(
         headMp: PolicyId,
-        utxosActive: MembershipProof,
+        evacuationActive: MembershipProof,
         // FIXME: missing in the refactored version
         version: (BigInt, BigInt),
         // FIXME: missing in the refactored version

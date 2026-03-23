@@ -1,6 +1,6 @@
 package hydrozoa.rulebased.ledger.l1.utxo
 
-import scalus.cardano.ledger.{AddrKeyHash, Utxo}
+import scalus.cardano.ledger.Utxo
 
 /** This represents a vote utxo in tallying.
   */

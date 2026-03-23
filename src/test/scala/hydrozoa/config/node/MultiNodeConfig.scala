@@ -10,7 +10,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.{GenHeadParams, generateHeadParameters}
 import hydrozoa.config.head.rulebased.{DisputeResolutionConfigGen, generateDisputeResolutionConfig}
 import hydrozoa.config.head.{HeadConfig, HeadConfigGen}
-import hydrozoa.config.node.operation.liquidation.{NodeOperationLiquidationConfig, generateNodeOperationLiquidationConfig}
+import hydrozoa.config.node.operation.evacuation.{NodeOperationEvacuationConfigGen, generateNodeOperationEvacuationConfig}
 import hydrozoa.config.node.operation.multisig.{NodeOperationMultisigConfig, generateNodeOperationMultisigConfig}
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.cardano.scalus.ShelleyAddressExtra
@@ -24,9 +24,6 @@ import test.{TestPeers, TestPeersSpec}
 
 /** Multi-node config is a tool for test suites that allows multisigning effects as well ad gives
   * the access to the head config, which is common for all peers.
-  *
-  * @param nodePrivateConfigs
-  * @param headConfig
   */
 case class MultiNodeConfig private (
     nodePrivateConfigs: Map[HeadPeerNumber, NodePrivateConfig],
@@ -38,7 +35,7 @@ case class MultiNodeConfig private (
                 NodeConfig(
                   headConfig,
                   pc.ownHeadWallet,
-                  pc.nodeOperationLiquidationConfig,
+                  pc.nodeOperationEvacuationConfig,
                   pc.nodeOperationMultisigConfig
                 ).get
         )
@@ -65,7 +62,9 @@ case class MultiNodeConfig private (
           headConfig.network
         )
 
-    def signTxAs(peerNumber: HeadPeerNumber) = nodeConfigs(peerNumber).ownHeadWallet.signTx
+    def signTxAs(peerNumber: HeadPeerNumber): Transaction => Transaction = nodeConfigs(
+      peerNumber
+    ).ownHeadWallet.signTx
 
     // TODO: are we fine with having that here? Better place?
     def pickPeer: Gen[HeadPeerNumber] =
@@ -88,8 +87,8 @@ object MultiNodeConfig {
         generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
             InitializationParametersGenTopDown.GenWithDeps =
             InitializationParametersGenBottomUp.generateInitializationParameters,
-        generateNodeOperationLiquidationConfig: Gen[NodeOperationLiquidationConfig] =
-            generateNodeOperationLiquidationConfig,
+        generateNodeOperationEvacuationConfig: NodeOperationEvacuationConfigGen =
+            generateNodeOperationEvacuationConfig,
         generateNodeOperationMultisigConfig: Gen[NodeOperationMultisigConfig] =
             generateNodeOperationMultisigConfig
     ): Gen[MultiNodeConfig] = for {
@@ -102,7 +101,7 @@ object MultiNodeConfig {
           generateDisputeResolutionConfig,
           generateHeadParameters,
           generateInitializationParameters,
-          generateNodeOperationLiquidationConfig,
+          generateNodeOperationEvacuationConfig,
           generateNodeOperationMultisigConfig
         )
     } yield ret
@@ -119,8 +118,8 @@ object MultiNodeConfig {
         generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
             InitializationParametersGenTopDown.GenWithDeps =
             InitializationParametersGenBottomUp.generateInitializationParameters,
-        generateNodeOperationLiquidationConfig: Gen[NodeOperationLiquidationConfig] =
-            generateNodeOperationLiquidationConfig,
+        generateNodeOperationEvacuationConfig: NodeOperationEvacuationConfigGen =
+            generateNodeOperationEvacuationConfig,
         generateNodeOperationMultisigConfig: Gen[NodeOperationMultisigConfig] =
             generateNodeOperationMultisigConfig
     ): Gen[MultiNodeConfig] =
@@ -140,15 +139,16 @@ object MultiNodeConfig {
                 ], (HeadPeerNumber, NodePrivateConfig)](
                   testPeers.headPeerIds.toList.map(peerId =>
                       for {
-                          nolc <- generateNodeOperationLiquidationConfig
                           nomc <- generateNodeOperationMultisigConfig
                           ohpp = OwnHeadPeerPrivate(
                             testPeers.walletFor(peerId._1),
                             headConfig.headPeers
                           ).get
+                          noec <- generateNodeOperationEvacuationConfig(ohpp.ownHeadWallet)
                       } yield peerId._1 -> NodePrivateConfig(
                         ownHeadPeerPrivate = ohpp,
-                        nodeOperationLiquidationConfig = nolc,
+                        // Re-using the same wallet for now, don't know if this will work
+                        nodeOperationEvacuationConfig = noec,
                         nodeOperationMultisigConfig = nomc
                       )
                   )

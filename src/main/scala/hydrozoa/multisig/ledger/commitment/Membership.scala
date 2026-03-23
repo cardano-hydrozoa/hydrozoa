@@ -1,13 +1,12 @@
 package hydrozoa.multisig.ledger.commitment
 
-import cats.data.EitherT
-import cats.effect.IO
+import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator
-import scalus.cardano.ledger.Utxos
+import scala.util.Try
 import scalus.uplc.builtin.bls12_381.G2Element
 import supranational.blst.P2
 
-import KzgCommitment.{KzgCommitment, asG1Element, asScalusScalar, hashToScalar, kzgCommitment}
+import KzgCommitment.{KzgCommitment, asG1Element, asScalusScalar}
 
 /** Membership check is required when withdrawing.
   */
@@ -19,8 +18,6 @@ object Membership {
       *   - Build the proof using the [[set]] and [[subset]] provided.
       *   - Verify the proof against the commitment provided.
       *
-      * @param kzgCommitment
-      *   the commitment to [[utxos]]
       * @param set
       *   the set of all utxos
       * @param subset
@@ -31,17 +28,15 @@ object Membership {
       *   that the [[kzgCommitment]] is wrong.
       */
     def mkMembershipProofValidated(
-        set: Utxos,
-        subset: Utxos
+        set: EvacuationMap,
+        subset: EvacuationMap
     ): Either[MembershipCheckError, KzgProof] = Try {
         import MembershipCheckError.*
 
-        val kzgCommitment = KzgCommitment.calculateCommitment(KzgCommitment.hashToScalar(set))
-
         for {
             // 1. Check the subset
-            _ <- Either.cond(subset.toSet.subsetOf(set.toSet), (), WrongSubset)
-            rest = set -- subset.keys
+            _ <- Either.cond(subset.subsetOf(set), (), WrongSubset)
+            rest = set.removed(subset.evacuationMap.keySet)
 
             // 2. Check that the setup is big enough
             monomialG2 = TrustedSetup.setup.g2Monomial
@@ -49,12 +44,12 @@ object Membership {
             crsG2 = TrustedSetup.takeSrsG2(subset.size + 1).map(G2Element.apply)
 
             // 3. Build the proof
-            proof <- IO { rest.kzgCommitment }.lift
+            proof = rest.kzgCommitment
 
             // 4. Validate the membership proof
-            commitmentG1 = kzgCommitment.asG1Element
+            commitmentG1 = set.kzgCommitment.asG1Element
             proofG1 = proof.asG1Element
-            subsetScalars = hashToScalar(subset).map(_.asScalusScalar)
+            subsetScalars = subset.scalars.map(_.asScalusScalar)
 
             membershipCheck =
                 RuleBasedTreasuryValidator.checkMembership(
@@ -67,12 +62,12 @@ object Membership {
             // 5. Return proof if check passes
             result <- Either.cond(membershipCheck, proof, WrongSubset)
         } yield result
-    }.toEither.left.map(UnexpectedError(_)).flatten
+    }.toEither.left.map(e => MembershipCheckError.UnexpectedError(e.getMessage)).flatten
 
     enum MembershipCheckError:
         case WrongSubset
         case SubsetIsTooLarge
-        case UnexpectedError(e: Throwable)
+        case UnexpectedError(err: String)
 
         def explain: String = this match {
             case MembershipCheckError.WrongSubset =>

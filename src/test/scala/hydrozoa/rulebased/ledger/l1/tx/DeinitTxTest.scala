@@ -45,7 +45,7 @@ def genEmptyResolvedTreasuryUtxo(
 
     val emptyResolvedDatum = ResolvedDatum(
       headMp = headMp,
-      utxosActive = g1Generator,
+      evacuationActive = g1Generator,
       version = (BigInt(1), BigInt(0)),
       setup = dummySetup
     )

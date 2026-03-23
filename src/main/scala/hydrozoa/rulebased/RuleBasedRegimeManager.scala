@@ -6,63 +6,41 @@ import cats.syntax.all.*
 import com.suprnation.actor.Actor.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.backend.cardano.CardanoBackend
-import hydrozoa.multisig.consensus.peer.PeerWallet
 import hydrozoa.multisig.ledger.block.BlockHeader
-import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
-import hydrozoa.{L1, UtxoSetL2, VerificationKeyBytes, rulebased}
-import scala.concurrent.duration.FiniteDuration
-import scalus.cardano.ledger.{CardanoInfo, TransactionHash}
+import hydrozoa.multisig.ledger.joint.EvacuationMap
+import scalus.cardano.ledger.{TransactionHash, Utxo}
 
 /** This doesn't actually do much of anything right now. It just starts the dispute and liquidation
   * actors, and those proceed autonomously. I don't think we need actors for these.
   */
-case class RuleBasedRegimeManager(
-    config: RuleBasedRegimeManager.Config,
-    collateralUtxo: hydrozoa.Utxo[L1],
+case class RuleBasedRegimeManager(config: RuleBasedRegimeManager.Config)(
+    collateralUtxo: Utxo,
     blockHeader: BlockHeader.Minor.Onchain,
     signatures: List[BlockHeader.Minor.HeaderSignature],
     cardanoBackend: CardanoBackend[IO],
     votingDeadline: QuantizedInstant,
-    utxosToWithdrawL2: UtxoSetL2,
-    l2SetAtFallback: UtxoSetL2,
+    toEvacuate: EvacuationMap,
+    evacuationMapAtFallback: EvacuationMap,
     fallbackTxHash: TransactionHash
 ) extends Actor[IO, Unit] {
 
     // Start the dispute and liquidation actors
     override def preStart: IO[Unit] = {
-        import config.*
-        val disputeActorConfig: DisputeActor.Config = DisputeActor.Config(
-          ownPeerPkh = ownPeerPkh.pubKeyHash,
-          tokenNames = tokenNames,
-          headMultisigScript = headMultisigScript,
-          receiveTimeout = receiveTimeout,
-          cardanoInfo = cardanoInfo
-        )
-        val liquidationActorConfig: LiquidationActor.Config = LiquidationActor.Config(
-          withdrawalFeeWallet = withdrawalFeeWallet,
-          receiveTimeout = receiveTimeout,
-          headMultisigScript = headMultisigScript,
-          tokenNames = tokenNames,
-          cardanoInfo = cardanoInfo
-        )
 
         for {
             _ <- context.actorOf(
-              DisputeActor(
+              DisputeActor(config)(
                 collateralUtxo = collateralUtxo,
                 blockHeader = blockHeader,
                 signatures = signatures,
-                config = disputeActorConfig,
                 cardanoBackend = cardanoBackend,
               )
             )
             _ <- context.actorOf(
-              LiquidationActor(
-                allUtxosToWithdraw = utxosToWithdrawL2,
+              EvacuationActor(config)(
+                toEvacuate = toEvacuate,
                 cardanoBackend = cardanoBackend,
-                config = liquidationActorConfig,
-                l2SetAtFallback = l2SetAtFallback,
+                evacuationMapAtFallback = evacuationMapAtFallback,
                 fallbackTxHash = fallbackTxHash
               )
             )
@@ -71,12 +49,5 @@ case class RuleBasedRegimeManager(
 }
 
 object RuleBasedRegimeManager {
-    case class Config(
-        ownPeerPkh: VerificationKeyBytes,
-        tokenNames: TokenNames,
-        cardanoInfo: CardanoInfo,
-        withdrawalFeeWallet: PeerWallet,
-        receiveTimeout: FiniteDuration,
-        headMultisigScript: HeadMultisigScript,
-    )
+    type Config = EvacuationActor.Config & DisputeActor.Config
 }

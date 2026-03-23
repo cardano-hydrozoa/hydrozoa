@@ -6,52 +6,43 @@ import cats.effect.IO
 import cats.syntax.all.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.peers.HeadPeers
+import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
 import hydrozoa.multisig.backend.cardano.CardanoBackend
-import hydrozoa.multisig.consensus.peer.PeerWallet
-import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
-import hydrozoa.multisig.ledger.virtual.commitment.Membership
-import hydrozoa.rulebased.LiquidationActor.{Error, Requests}
-import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryScript
-import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.WithdrawRedeemer
-import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum
-import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.Resolved
-import hydrozoa.rulebased.ledger.dapp.tx.Withdrawal
-import hydrozoa.rulebased.ledger.dapp.utxo.RuleBasedTreasuryUtxo
-import hydrozoa.{L1, L2, Output, UtxoId, UtxoIdL2, UtxoSet, UtxoSetL1, UtxoSetL2, rulebased}
-import scala.concurrent.duration.FiniteDuration
+import hydrozoa.multisig.consensus.peer.HeadPeerWallet
+import hydrozoa.multisig.ledger.commitment.Membership
+import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap}
+import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
+import hydrozoa.rulebased
+import hydrozoa.rulebased.EvacuationActor.*
+import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryScript
+import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.EvacuateRedeemer
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Resolved
+import hydrozoa.rulebased.ledger.l1.tx.EvacuationTx
+import hydrozoa.rulebased.ledger.l1.utxo.RuleBasedTreasuryUtxo
 import scala.util.{Failure, Success, Try}
-import scalus.builtin.Data
-import scalus.builtin.Data.fromData
-import scalus.cardano.address.ShelleyPaymentPart.Key
-import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
-import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
-import scalus.cardano.ledger.{CardanoInfo, PlutusScriptEvaluator, TransactionHash, TransactionInput, TransactionOutput}
-import scalus.cardano.txbuilder.SomeBuildError
+import scalus.cardano.ledger.{TransactionHash, Utxo, Utxos}
+import scalus.uplc.builtin.Data
+import scalus.uplc.builtin.Data.fromData
 
-case class LiquidationActor(
-    allUtxosToWithdraw: UtxoSetL2,
+case class EvacuationActor(config: Config)(
+    toEvacuate: EvacuationMap,
     cardanoBackend: CardanoBackend[IO],
-    l2SetAtFallback: UtxoSetL2,
-    fallbackTxHash: TransactionHash,
-    /** The PKH of the wallet that will pay for withdrawal TX fees and receive the change NOTE: The
-      * is no coin selection algorithm right now. This means that:
-      *   - This wallet MUST NOT contain anything but ADA-only utxos
-      *   - Every utxo at this address will be spent at each withdrawal transaction
-      *   - All ADA left-overs will be sent back to this address. Do NOT use this address for
-      *     anything else. Do NOT set the delegation part for this address
-      */
-    config: LiquidationActor.Config,
-) extends Actor[IO, LiquidationActor.Requests.Request] {
-    override def preStart: IO[Unit] = context.setReceiveTimeout(config.receiveTimeout, ())
+    evacuationMapAtFallback: EvacuationMap,
+    fallbackTxHash: TransactionHash
+) extends Actor[IO, Requests.Request] {
+    override def preStart: IO[Unit] =
+        context.setReceiveTimeout(config.evacuationBotPollingPeriod, ())
 
-    override def receive: Receive[IO, Requests.Request] = { case _: Requests.HandleLiquidation =>
-        handleLiquidation
+    override def receive: Receive[IO, Requests.Request] = { case _: Requests.Evacuate =>
+        handleEvacuation
     }
 
     //  TODOS:
     //
-    //   We might have too many withdrawals that dont fit in ex-units or tx size. We need a strategy to deal with
+    //   We might have too many evacuations that dont fit in ex-units or tx size. We need a strategy to deal with
     //   this efficiently.
     //
     //   I'm working under the assumption that minting the proof for such a transaction is expensive, so that we
@@ -59,19 +50,19 @@ case class LiquidationActor(
     //   all except 2). Some thoughts:
     //
     //   - If we can come up with bounds (exact or approximate), we can use them as a heuristic.
-    //   - Withdrawal txs can probably be chained.
-    //   - If we can't come up with bounds, we can probably make this logarithmic. Try withdrawals all; if it fails
-    //     try withdrawing half in two separate transactions and chaining. Or just withdraw half and submit ASAP
+    //   - Evacuation txs can probably be chained.
+    //   - If we can't come up with bounds, we can probably make this logarithmic. Try evacuating all; if it fails
+    //     try evacuating half in two separate transactions and chaining. Or just evacuate half and submit ASAP
     //   - I don't know if the crypto allows it, but maybe this could be parallelized? But we might need a new
     //     commitment first
-    //   - I don't know if the crypto works like this, but if withdrawing `N` is too big for one tx, but `N/2` isn't,
-    //     then maybe we just cache the `N/2` utxos to "withdraw next" and use that as our starting point for the next
+    //   - I don't know if the crypto works like this, but if evacuating `N` is too big for one tx, but `N/2` isn't,
+    //     then maybe we just cache the `N/2` utxos to "evacuate next" and use that as our starting point for the next
     //     tx? It wouldn't make sense to keep trying `N` at a time.
     //   - datum parsing could definitely be parallelized
     //
     //   But, as usual, this is a pessimistic case. Performance still matters, but happy-path performance matters more.
 
-    /** Queries for a treasury utxo, checks which utxos are members, and submits a withdrawal tx.
+    /** Queries for a treasury utxo, checks which utxos are members, and submits a evacuation tx.
       *
       * Error semantics:
       *   - Query failures on the cardano backend are ignored and we retry
@@ -81,8 +72,8 @@ case class LiquidationActor(
       *   - build failures on the withdrawal tx are thrown as exceptions
       * @return
       */
-    private def handleLiquidation: IO[Either[Error.RecoverableErrors, Unit]] = {
-        val et: EitherT[IO, Error.RecoverableErrors, Unit] = {
+    private def handleEvacuation: IO[Either[EvacuationActor.Error.RecoverableErrors, Unit]] = {
+        val et: EitherT[IO, EvacuationActor.Error.RecoverableErrors, Unit] = {
             for {
                 //////////////////////////////
                 // Step 1: Figure out utxos we need to withdraw
@@ -92,17 +83,20 @@ case class LiquidationActor(
                 // Every subsequent transaction also spends the treasury for a withdrawal
                 treasuryTxRedeemers: List[(TransactionHash, Data)] <- EitherT(
                   cardanoBackend.lastContinuingTxs(
-                    asset = (config.headMultisigScript.policyId, config.tokenNames.headTokenName),
+                    asset = (
+                      config.headMultisigScript.policyId,
+                      config.headTokenNames.treasuryTokenName
+                    ),
                     after = fallbackTxHash
                   )
                 )
 
                 // All parsed redeemers. If parsing fails, something is seriously wrong and we return Left
-                redeemers: List[WithdrawRedeemer] <- treasuryTxRedeemers.length match {
+                redeemers: List[EvacuateRedeemer] <- treasuryTxRedeemers.length match {
                     // Treasury not resolved, can't liquidate, return left and retry
                     case 0 => EitherT.fromEither[IO](Left(Error.QueryError.NoTreasuryFound))
                     // Treasury resolved but no withdrawals processed yet, active utxo set will be as it was at fallback
-                    case 1 => EitherT.fromEither[IO](Right(List.empty[WithdrawRedeemer]))
+                    case 1 => EitherT.fromEither[IO](Right(List.empty[EvacuateRedeemer]))
                     // Treasury resolved, some withdrawals processed. We need to parse redeemers to determine active utxo set.
                     case n =>
                         // The first transaction reported will be the dispute resolution tx.
@@ -110,7 +104,7 @@ case class LiquidationActor(
                         // occurs.
                         treasuryTxRedeemers.tail.traverse(tuple =>
                             val (_, redeemerData) = tuple
-                            Try(fromData[WithdrawRedeemer](redeemerData)) match {
+                            Try(fromData[EvacuateRedeemer](redeemerData)) match {
                                 // Can't deserialize the redeemer. Raise exception
                                 case Failure(t) =>
                                     EitherT(
@@ -126,24 +120,15 @@ case class LiquidationActor(
                 }
 
                 // All L2 utxos that were withdrawn in previous withdrawal transactions.
-                previouslyWithdrawnUtxos: Set[UtxoIdL2] = redeemers.foldLeft(Set.empty[UtxoIdL2])(
-                  (acc, redeemer) =>
-                      acc ++
-                          redeemer.utxoIds
-                              .map(id =>
-                                  UtxoIdL2(
-                                    TransactionInput(
-                                      TransactionHash.fromByteString(id.id.hash),
-                                      id.idx.toInt
-                                    )
-                                  )
-                              )
-                              .toScalaList
+                previouslyEvacuated: Set[EvacuationKey] = redeemers.foldLeft(
+                  Set.empty[EvacuationKey]
+                )((acc, redeemer) =>
+                    acc ++
+                        redeemer.evacuationKeys.toScalaList
                 )
 
-                // The set of utxos that should currently exist on L2
-                currentActiveSet: Map[TransactionInput, TransactionOutput] =
-                    l2SetAtFallback.asScalus.removedAll(previouslyWithdrawnUtxos.map(_.convert))
+                notEvacuatedYet: EvacuationMap =
+                    evacuationMapAtFallback.removed(previouslyEvacuated)
 
                 /////////////////////////////////
                 // Step 2: Figure out the current treasury
@@ -152,17 +137,16 @@ case class LiquidationActor(
                 unparsedTreasuryUtxos <- EitherT(
                   cardanoBackend.utxosAt(
                     address = RuleBasedTreasuryScript.address(config.cardanoInfo.network),
-                    asset = (config.headMultisigScript.policyId, config.tokenNames.headTokenName)
+                    asset = (
+                      config.headMultisigScript.policyId,
+                      config.headTokenNames.treasuryTokenName
+                    )
                   )
                 )
 
-                treasuryUtxoAndDatum <- LiquidationActor.parseRBTreasury(unparsedTreasuryUtxos)
+                treasuryUtxoAndDatum <- parseRBTreasury(unparsedTreasuryUtxos)
 
-                walletAddress = ShelleyAddress(
-                  network = config.cardanoInfo.network,
-                  payment = Key(config.withdrawalFeeWallet.exportVerificationKeyBytes.verKeyHash),
-                  delegation = ShelleyDelegationPart.Null
-                )
+                walletAddress = config.evacuationWallet.address(config.network)
 
                 // Note that if there are no fee utxos, we just try again.
                 feeUtxos <- EitherT(
@@ -171,32 +155,17 @@ case class LiquidationActor(
                   )
                 )
 
-                wConfig = Withdrawal.Config(
-                  config.cardanoInfo,
-                  changeAddress = ShelleyAddress(
-                    config.cardanoInfo.network,
-                    ShelleyPaymentPart.Key(
-                      config.withdrawalFeeWallet.exportVerificationKeyBytes.verKeyHash
-                    ),
-                    ShelleyDelegationPart.Null
-                  )
-                )
-
-                recipe = Withdrawal.Builder.Recipe(
-                  treasuryUtxo = treasuryUtxoAndDatum._1,
-                  withdrawalsSubset = UtxoSet[L2](
-                    currentActiveSet
-                        .filter((k, _) => allUtxosToWithdraw.contains(UtxoIdL2(k)))
-                        .map((k, v) => (UtxoId[L2](k), Output[L2](v)))
-                  ),
-                  activeSet =
-                      UtxoSet[L2](currentActiveSet.map((k, v) => (UtxoId[L2](k), Output[L2](v)))),
-                  feeUtxos = feeUtxos
-                )
-
-                withdrawTx <- Withdrawal(wConfig).build(recipe) match {
-                    case Left(e) => EitherT(IO.raiseError(Error.BuildError.WithdrawTxBuildError(e)))
-                    case Right(tx) => EitherT.pure[IO, LiquidationActor.Error.RecoverableErrors](tx)
+                withdrawTx <- EvacuationTx
+                    .Build(config)(
+                      treasuryUtxo = treasuryUtxoAndDatum._1,
+                      evacuatees = toEvacuate,
+                      notEvacuatedYet = notEvacuatedYet,
+                      feeUtxos = feeUtxos,
+                    )
+                    .result match {
+                    case Left(e) =>
+                        EitherT(IO.raiseError(Error.BuildError.EvacuationTxBuildError(e)))
+                    case Right(tx) => EitherT.pure[IO, Error.RecoverableErrors](tx)
                 }
 
                 _ <- EitherT(cardanoBackend.submitTx(withdrawTx.tx))
@@ -207,24 +176,16 @@ case class LiquidationActor(
 
 }
 
-object LiquidationActor {
-    case class Config(
-        withdrawalFeeWallet: PeerWallet,
-        receiveTimeout: FiniteDuration,
-        headMultisigScript: HeadMultisigScript,
-        tokenNames: TokenNames,
-        cardanoInfo: CardanoInfo
-    ) {
-        def evaluator: PlutusScriptEvaluator =
-            PlutusScriptEvaluator(cardanoInfo, EvaluateAndComputeCost)
-    }
+object EvacuationActor {
+    type Config = NodeOperationEvacuationConfig.Section & CardanoNetwork.Section &
+        HeadPeers.Section & HasTokenNames
 
     type Handle = ActorRef[IO, Requests.Request]
 
     object Requests {
-        type HandleLiquidation = Unit // Stub type, not sure if we'll need anything in the request
+        type Evacuate = Unit // Stub type, not sure if we'll need anything in the request
 
-        type Request = HandleLiquidation
+        type Request = Evacuate
     }
 
     object Error {
@@ -240,7 +201,7 @@ object LiquidationActor {
         }
 
         object ParseError {
-            case class MultipleTreasuryTokensFound(utxoSetL1: UtxoSetL1) extends Unrecoverable
+            case class MultipleTreasuryTokensFound(utxoSetL1: Utxos) extends Unrecoverable
 
             case object TreasuryMissing extends Recoverable
 
@@ -254,8 +215,8 @@ object LiquidationActor {
         }
 
         object BuildError {
-            case class WithdrawTxBuildError(
-                wrapped: Withdrawal.Builder.Error | SomeBuildError | Membership.MembershipCheckError
+            case class EvacuationTxBuildError(
+                wrapped: EvacuationTx.Build.Error
             ) extends Unrecoverable
         }
 
@@ -263,13 +224,13 @@ object LiquidationActor {
 
     // NOTE: some duplication with the same function in DisputeActor
     def parseRBTreasury(
-        utxos: UtxoSetL1
+        utxos: Utxos
     ): EitherT[IO, Error.RecoverableErrors, (RuleBasedTreasuryUtxo, Resolved)] =
         for {
             utxo <- utxos.size match {
                 // May happen due to rollback, ignore and try again
                 case 0 => EitherT.left(IO.pure(Error.ParseError.TreasuryMissing))
-                case 1 => EitherT.right(IO.pure(hydrozoa.Utxo[L1](utxos.head)))
+                case 1 => EitherT.right(IO.pure(Utxo(utxos.head)))
                 case _ =>
                     EitherT.liftF(
                       IO.raiseError(Error.ParseError.MultipleTreasuryTokensFound(utxos))
@@ -281,7 +242,7 @@ object LiquidationActor {
                 case Left(e) =>
                     EitherT.liftF(
                       IO.raiseError(
-                        LiquidationActor.Error.ParseError.RulesBasedTreasuryParseError(e)
+                        EvacuationActor.Error.ParseError.RulesBasedTreasuryParseError(e)
                       )
                     )
                 case Right(rbt) => EitherT.right(IO.pure(rbt))

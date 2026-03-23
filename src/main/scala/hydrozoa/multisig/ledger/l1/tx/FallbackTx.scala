@@ -143,9 +143,6 @@ private object FallbackTxOps {
                           disputeId = config.headTokenNames.voteTokenName.bytes,
                           peers = SList.from(config.headPeerVKeys.toList),
                           peersN = hns.numSigners,
-                          deadlineVoting =
-                              config.slotConfig.slotToTime(validityStartTime.toSlot.slot) +
-                                  config.votingDuration.finiteDuration.toMillis,
                           versionMajor = Steps.Spends.Treasury.datum.versionMajor.toInt,
                           // TODO: pull in N first elements of G2 CRS
                           // KZG setup I think?
@@ -242,7 +239,6 @@ private object FallbackTxOps {
                 val txId = finalized.transaction.id
 
                 val treasuryProduced = RuleBasedTreasuryUtxo(
-                  treasuryTokenName = config.headTokenNames.treasuryTokenName,
                   utxoId = TransactionInput(txId, 0),
                   address = config.ruleBasedTreasuryAddress,
                   datum = RuleBasedTreasuryDatum.Unresolved(Steps.Sends.Treasury.datum),

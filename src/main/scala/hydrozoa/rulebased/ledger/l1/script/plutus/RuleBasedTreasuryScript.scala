@@ -3,7 +3,8 @@ import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
 import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.ByteStringExtension.take
 import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.TxOutExtension.inlineDatumOfType
 import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.ValueExtension.*
-import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer.{Deinit, Resolve, Withdraw}
+import hydrozoa.multisig.ledger.joint.EvacuationKey
+import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer.{Deinit, Evacuate, Resolve}
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.{Resolved, Unresolved}
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.{MembershipProof, RuleBasedTreasuryDatum}
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.*
@@ -17,12 +18,14 @@ import scalus.cardano.onchain.plutus.prelude.Option.{None, Some}
 import scalus.cardano.onchain.plutus.prelude.crypto.bls12_381.G2
 import scalus.cardano.onchain.plutus.prelude.crypto.bls12_381.G2.scale
 import scalus.cardano.onchain.plutus.v1.Value.+
+import scalus.cardano.onchain.plutus.v2.TxOut
 import scalus.cardano.onchain.plutus.v3.{Validator, *}
+import scalus.compiler.Compile
 import scalus.uplc.DeBruijnedProgram
 import scalus.uplc.builtin.*
 import scalus.uplc.builtin.Builtins.*
 import scalus.uplc.builtin.ByteString.hex
-import scalus.uplc.builtin.Data.toData
+import scalus.uplc.builtin.Data.{fromData, toData}
 import scalus.uplc.builtin.bls12_381.*
 
 @Compile
@@ -31,22 +34,32 @@ object RuleBasedTreasuryValidator extends Validator {
     // Script redeemer
     enum TreasuryRedeemer:
         case Resolve
-        case Withdraw(withdrawRedeemer: WithdrawRedeemer)
+        case Evacuate(evacuateRedeemer: EvacuateRedeemer)
         case Deinit
 
     given FromData[TreasuryRedeemer] = FromData.derived
 
     given ToData[TreasuryRedeemer] = ToData.derived
 
-    case class WithdrawRedeemer(
-        utxoIds: List[TxOutRef],
-        // membership proof for utxoIds and the updated accumulator at the same time
+    case class EvacuateRedeemer(
+        evacuationKeys: List[EvacuationKey],
+        // membership proof for evacuation keys and the updated accumulator at the same time
         proof: MembershipProof
     )
 
-    given FromData[WithdrawRedeemer] = FromData.derived
+    given evacuationKeyToData: ToData[EvacuationKey] with {
+        override def apply(v1: EvacuationKey): Data = toData(v1.byteString)
+    }
 
-    given ToData[WithdrawRedeemer] = ToData.derived
+    given evacuationKeyFromData: FromData[EvacuationKey] with {
+        override def apply(data: Data): EvacuationKey = EvacuationKey(
+          fromData[ByteString](data)
+        ).get
+    }
+
+    given FromData[EvacuateRedeemer] = FromData.derived
+
+    given ToData[EvacuateRedeemer] = ToData.derived
 
     // Common errors
     private inline val DatumIsMissing =
@@ -74,22 +87,22 @@ object RuleBasedTreasuryValidator extends Validator {
     private inline val ResolveUnexpectedNoVote =
         "Unexpected NoVot when trying to resolve"
 
-    // Withdraw redeemer
-    private inline val WithdrawNeedsResolvedDatum =
-        "Withdraw redeemer requires resolved datum"
-    private inline val WithdrawWrongNumberOfWithdrawals =
+    // Evacuate redeemer
+    private inline val EvacuateNeedsResolvedDatum =
+        "Evacuate redeemer requires resolved datum"
+    private inline val EvacuateWrongNumberOfEvacuatees =
         "Number of outputs should match the number of utxo ids"
-    private inline val WithdrawBeaconTokenFailure =
+    private inline val EvacuateBeaconTokenFailure =
         "Treasury should contain exactly one beacon token"
-    private inline val WithdrawSetupIsNotBigEnough =
+    private inline val EvacuateSetupIsNotBigEnough =
         "Trusted setup in the treasury is not big enough"
-    private inline val WithdrawMembershipValidationFailed =
-        "Withdrawals membership check failed"
-    private inline val WithdrawBeaconTokenShouldBePreserved =
+    private inline val EvacuateMembershipValidationFailed =
+        "Evacuatees membership check failed"
+    private inline val EvacuateBeaconTokenShouldBePreserved =
         "Beacon token should be preserved in treasury output"
-    private inline val WithdrawValueShouldBePreserved =
-        "Value invariant should hold: treasuryInput = treasuryOutput + Σ withdrawalOutput"
-    private inline val WithdrawOutputAccumulatorUpdated =
+    private inline val EvacuateValueShouldBePreserved =
+        "Value invariant should hold: treasuryInput = treasuryOutput + Σ evacuatealOutput"
+    private inline val EvacuateOutputAccumulatorUpdated =
         "Accumulator in the output should be properly updated"
 
     // Deinit redeemer
@@ -100,7 +113,7 @@ object RuleBasedTreasuryValidator extends Validator {
     private inline val DeinitTokensNotBurned =
         "All head tokens should be burned"
     private inline val DeinitTreasuryShouldBeEmpty =
-        "All utxos should be withdrawn before deinitializing"
+        "All utxos should be evacuated before deinitializing"
 
     def cip67BeaconTokenPrefix = hex"01349900"
 
@@ -190,7 +203,7 @@ object RuleBasedTreasuryValidator extends Validator {
                         )
                         // (c) voteStatus and treasuryOutput must match on utxosActive.
                         require(
-                          treasuryOutputDatum.utxosActive === commitment,
+                          treasuryOutputDatum.evacuationActive === commitment,
                           ResolveUtxoActiveCheck
                         )
 
@@ -206,16 +219,16 @@ object RuleBasedTreasuryValidator extends Validator {
                 )
 
             // ===================================
-            // Withdraw redeemer
+            // Evacuate redeemer
             // ===================================
 
-            case Withdraw(WithdrawRedeemer(utxoIds, proof)) =>
-                log("Withdraw")
+            case Evacuate(EvacuateRedeemer(evacuationKeys, proof)) =>
+                log("Evacuate")
 
                 // Treasury datum should be "resolved" one
                 val resolvedDatum = treasuryDatum match
                     case Resolved(d) => d
-                    case _           => fail(WithdrawNeedsResolvedDatum)
+                    case _           => fail(EvacuateNeedsResolvedDatum)
 
                 // headMp and headId
 
@@ -233,73 +246,73 @@ object RuleBasedTreasuryValidator extends Validator {
                 val headId: TokenName =
                     treasuryInput.value.toSortedMap
                         .get(headMp)
-                        .getOrFail(WithdrawBeaconTokenFailure)
+                        .getOrFail(EvacuateBeaconTokenFailure)
                         .toList
                         .filter((tn, _) => tn.take(4) == cip67BeaconTokenPrefix) match
                         case List.Cons(tokenNameAndAmount, none) =>
                             val tokenName = tokenNameAndAmount._1
                             val amount = tokenNameAndAmount._2
-                            require(none.isEmpty && amount == BigInt(1), WithdrawBeaconTokenFailure)
+                            require(none.isEmpty && amount == BigInt(1), EvacuateBeaconTokenFailure)
                             tokenName
-                        case _ => fail(WithdrawBeaconTokenFailure)
+                        case _ => fail(EvacuateBeaconTokenFailure)
 
                 // The beacon token should be preserved
                 // By contract, we require:
                 //   - The change utxo is position one
                 //   - the treasury utxo in position
-                //   - the tail be withdrawals
-                val List.Cons(changeOutput, List.Cons(treasuryOutput, withdrawalOutputs)) =
+                //   - the tail be evacuatees
+                val List.Cons(changeOutput, List.Cons(treasuryOutput, evacuationOutputs)) =
                     tx.outputs: @unchecked
 
                 require(
                   treasuryOutput.value.toSortedMap
                       .get(headMp)
-                      .getOrFail(WithdrawBeaconTokenShouldBePreserved)
+                      .getOrFail(EvacuateBeaconTokenShouldBePreserved)
                       .get(headId)
-                      .getOrFail(WithdrawBeaconTokenShouldBePreserved) == BigInt(1),
-                  WithdrawBeaconTokenShouldBePreserved
+                      .getOrFail(EvacuateBeaconTokenShouldBePreserved) == BigInt(1),
+                  EvacuateBeaconTokenShouldBePreserved
                 )
 
-                // Withdrawals
-                // The number of withdrawals should match the number of utxos ids in the redeemer
+                // Evacuateals
+                // The number of evacuations should match the number of utxos ids in the redeemer
                 require(
-                  withdrawalOutputs.size == utxoIds.size,
-                  WithdrawWrongNumberOfWithdrawals
+                  evacuationOutputs.size == evacuationKeys.size,
+                  EvacuateWrongNumberOfEvacuatees
                 )
 
-                // Calculate the final poly for withdrawn subset
+                // Calculate the final poly for evacuated subset
 
-                // Zip utxo ids and outputs
-                val withdrawnUtxos: List[ScalusScalar] = utxoIds
-                    .zip(withdrawalOutputs)
+                // Zip evacuation keys and outputs
+                val evacuatedUtxos: List[ScalusScalar] = evacuationKeys
+                    .zip(evacuationOutputs)
                     // Convert to data, serialize, calculate a hash, convert to scalars
-                    .map(e =>
-                        e.toData
-                            |> serialiseData
-                            |> blake2b_224
-                            |> ScalusScalar.fromByteStringBigEndianUnsafe
+                    .map(
+                      _ |> ToData.tupleToData
+                          |> serialiseData
+                          |> blake2b_224
+                          |> ScalusScalar.fromByteStringBigEndianUnsafe
                     )
 
                 // Decompress commitments and run the membership check
-                val acc = bls12_381_G1_uncompress(resolvedDatum.utxosActive)
+                val acc = bls12_381_G1_uncompress(resolvedDatum.evacuationActive)
                 val proof_ = bls12_381_G1_uncompress(proof)
 
                 require(
-                  resolvedDatum.setup.length > withdrawnUtxos.length,
-                  WithdrawSetupIsNotBigEnough
+                  resolvedDatum.setup.length > evacuatedUtxos.length,
+                  EvacuateSetupIsNotBigEnough
                 )
 
                 // Extract setup of needed length
-                val setup = resolvedDatum.setup.take(withdrawnUtxos.length + 1).map(G2.uncompress)
+                val setup = resolvedDatum.setup.take(evacuatedUtxos.length + 1).map(G2.uncompress)
 
                 //// trace hashes
-                // withdrawnUtxos.foreach( s =>
+                // evacuatednUtxos.foreach( s =>
                 //    trace(s.toInt.show)(())
                 // )
 
                 require(
-                  checkMembership(setup, acc, withdrawnUtxos, proof_),
-                  WithdrawMembershipValidationFailed
+                  checkMembership(setup, acc, evacuatedUtxos, proof_),
+                  EvacuateMembershipValidationFailed
                 )
 
                 // Accumulator updated commitment
@@ -307,20 +320,20 @@ object RuleBasedTreasuryValidator extends Validator {
                     treasuryOutput.inlineDatumOfType[RuleBasedTreasuryDatum]: @unchecked
 
                 require(
-                  outputResolvedDatum.utxosActive == proof,
-                  WithdrawOutputAccumulatorUpdated
+                  outputResolvedDatum.evacuationActive == proof,
+                  EvacuateOutputAccumulatorUpdated
                 )
 
                 // treasuryInput must hold the sum of all tokens in treasuryOutput and the outputs of
-                // withdrawals.
+                // evacuations.
                 // TODO: combine with iterating for poly calculation up above?
-                val withdrawnValue =
-                    withdrawalOutputs.foldLeft(Value.zero)((acc, o) => acc + o.value)
+                val evacuatedValue =
+                    evacuationOutputs.foldLeft(Value.zero)((acc, o) => acc + o.value)
 
                 val valueIsPreserved =
-                    treasuryInput.value === (treasuryOutput.value + withdrawnValue)
+                    treasuryInput.value === (treasuryOutput.value + evacuatedValue)
 
-                require(valueIsPreserved, WithdrawValueShouldBePreserved)
+                require(valueIsPreserved, EvacuateValueShouldBePreserved)
 
             // ===================================
             // Deinit redeemer
@@ -331,7 +344,7 @@ object RuleBasedTreasuryValidator extends Validator {
 
                 // Treasury should be resolved
                 val (headMp, utxosActive) = treasuryDatum match
-                    case Resolved(d)   => (d.headMp, d.utxosActive)
+                    case Resolved(d)   => (d.headMp, d.evacuationActive)
                     case Unresolved(d) => fail(DeinitRequiresResolvedTreasury)
 
                 // TODO: factor out
@@ -357,7 +370,7 @@ object RuleBasedTreasuryValidator extends Validator {
 
                 require(headTokensInput === headTokensMint, DeinitTokensNotBurned)
 
-                // All utxos should be withdrawn
+                // All utxos should be evacuated
                 // TODO: comparing as bytestrings is more efficient, we want to have this constant in Scalus
                 require(
                   utxosActive === hex"97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb",
@@ -416,7 +429,7 @@ object RuleBasedTreasuryValidator extends Validator {
 
 object RuleBasedTreasuryScript {
     // Compile the validator to Scalus Intermediate Representation (SIR)
-    private val compiledSir = Compiler.compile(RuleBasedTreasuryValidator.validate)
+    private val compiledSir = compiler.compile(RuleBasedTreasuryValidator.validate)
 
     // Convert to optimized UPLC with error traces for PlutusV3
     private val compiledUplc = compiledSir.toUplcOptimized(generateErrorTraces = true)

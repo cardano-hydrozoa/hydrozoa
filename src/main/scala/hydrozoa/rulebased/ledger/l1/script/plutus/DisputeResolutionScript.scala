@@ -18,7 +18,6 @@ import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, S
 import scalus.cardano.ledger.{Language, Script}
 import scalus.cardano.onchain.plutus.prelude.Option.{None, Some}
 import scalus.cardano.onchain.plutus.prelude.{!==, ===, List, Option, SortedMap, fail, log, require}
-import scalus.cardano.onchain.plutus.v1.IntervalBoundType.Finite
 import scalus.cardano.onchain.plutus.v1.Value.+
 import scalus.cardano.onchain.plutus.v3.*
 import scalus.uplc.DeBruijnedProgram
@@ -509,7 +508,7 @@ object DisputeResolutionValidator extends Validator {
 
 object DisputeResolutionScript {
     // Compile the validator to Scalus Intermediate Representation (SIR)
-    private val compiledSir = Compiler.compile(DisputeResolutionValidator.validate)
+    private val compiledSir = compiler.compile(DisputeResolutionValidator.validate)
 
     // Convert to optimized UPLC with error traces for PlutusV3
     private val compiledUplc = compiledSir.toUplcOptimized(generateErrorTraces = true)

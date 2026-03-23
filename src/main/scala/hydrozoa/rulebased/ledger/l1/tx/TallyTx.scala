@@ -2,6 +2,7 @@ package hydrozoa.rulebased.ledger.l1.tx
 
 import cats.implicits.*
 import hydrozoa.*
+import hydrozoa.multisig.ledger.l1.tx.Tx.Validators.nonSigningValidators
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.{DisputeRedeemer, TallyRedeemer, maxVote}
 import hydrozoa.rulebased.ledger.l1.state.VoteState.*
@@ -10,7 +11,6 @@ import scala.util.{Failure, Success, Try}
 import scalus.cardano.address.Network
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.{Utxo as SUtxo, *}
 import scalus.cardano.txbuilder.Datum.DatumInlined
 import scalus.cardano.txbuilder.ScriptSource.PlutusScriptValue
@@ -35,7 +35,6 @@ object TallyTx {
         network: Network,
         protocolParams: ProtocolParams,
         evaluator: PlutusScriptEvaluator,
-        validators: Seq[Validator]
     )
 
     enum TallyTxError:
@@ -147,7 +146,7 @@ object TallyTx {
                   protocolParams = protocolParams,
                   diffHandler = Change.changeOutputDiffHandler(_, _, protocolParams, 0),
                   evaluator = evaluator,
-                  validators = validators
+                  validators = nonSigningValidators
                 )
 
         } yield TallyTx(

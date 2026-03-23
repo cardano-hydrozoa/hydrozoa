@@ -6,8 +6,15 @@ import hydrozoa.multisig.consensus.ack.{AckBlock, AckId, AckNumber}
 import hydrozoa.multisig.ledger.block.{Block, BlockHeader}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import scala.language.implicitConversions
-import scalus.cardano.ledger.{Transaction, VKeyWitness}
+import scalus.cardano.address.ShelleyDelegationPart.Null
+import scalus.cardano.address.ShelleyPaymentPart.Key
+import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart}
+import scalus.cardano.ledger.{AddrKeyHash, Transaction, VKeyWitness}
+import scalus.cardano.onchain.plutus.v2.PubKeyHash
 import scalus.crypto.ed25519.{SigningKey, VerificationKey}
+import scalus.uplc.builtin.Builtins.blake2b_224
+import scalus.uplc.builtin.ByteString
+import scalus.|>
 
 final class HeadPeerWallet(
     peerNum: HeadPeerNumber,
@@ -23,6 +30,20 @@ final class HeadPeerWallet(
         walletModule.exportVerificationKey(verificationKey)
 
     def exportVerificationKey: VerificationKey = verificationKeysBytes
+
+    def address(network: Network, delegationPart: ShelleyDelegationPart = Null): ShelleyAddress =
+        ShelleyAddress(
+          network = network,
+          payment =
+              Key(AddrKeyHash(blake2b_224(ByteString.fromArray(exportVerificationKey.bytes)))),
+          delegation = delegationPart
+        )
+
+    lazy val pubKeyHash: PubKeyHash =
+        exportVerificationKey.bytes
+            |> ByteString.fromArray
+            |> blake2b_224
+            |> PubKeyHash.apply
 
     def mkVKeyWitness(tx: Transaction): VKeyWitness =
         walletModule.signTx(tx, verificationKey, signingKey)

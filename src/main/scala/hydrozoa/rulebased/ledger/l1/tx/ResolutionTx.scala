@@ -2,6 +2,7 @@ package hydrozoa.rulebased.ledger.l1.tx
 
 import cats.implicits.*
 import hydrozoa.*
+import hydrozoa.multisig.ledger.l1.tx.Tx.Validators.nonSigningValidators
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.DisputeRedeemer
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer
 import hydrozoa.rulebased.ledger.l1.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
@@ -13,7 +14,6 @@ import scalus.cardano.address.Network
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.txbuilder.Datum.DatumInlined
 import scalus.cardano.txbuilder.ScriptSource.PlutusScriptValue
 import scalus.cardano.txbuilder.TransactionBuilderStep.{AddCollateral, Send, Spend}
@@ -36,7 +36,6 @@ object ResolutionTx {
         network: Network,
         protocolParams: ProtocolParams,
         evaluator: PlutusScriptEvaluator,
-        validators: Seq[Validator]
     )
 
     enum ResolutionTxError:
@@ -102,7 +101,7 @@ object ResolutionTx {
 
         val resolvedDatum = ResolvedDatum(
           headMp = unresolved.headMp,
-          utxosActive = voteDetails._1,
+          evacuationActive = voteDetails._1,
           version = (unresolved.versionMajor, voteDetails._2),
           setup = unresolved.setup
         )
@@ -164,7 +163,7 @@ object ResolutionTx {
                   protocolParams = recipe.protocolParams,
                   diffHandler = Change.changeOutputDiffHandler(_, _, recipe.protocolParams, 0),
                   evaluator = recipe.evaluator,
-                  validators = recipe.validators
+                  validators = nonSigningValidators
                 )
 
             newTreasuryUtxo = RuleBasedTreasuryUtxo(

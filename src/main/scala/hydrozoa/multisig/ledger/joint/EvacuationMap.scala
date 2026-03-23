@@ -3,10 +3,13 @@ package hydrozoa.multisig.ledger.joint
 import cats.implicits.*
 import hydrozoa.multisig.ledger.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
+import hydrozoa.multisig.ledger.joint.EvacuationMap.mkScalar
 import hydrozoa.multisig.ledger.joint.obligation.Payout
+import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.given
 import scala.collection.immutable.TreeMap
 import scalus.cardano.ledger.*
 import scalus.cardano.onchain.plutus.prelude.List as SList
+import scalus.cardano.onchain.plutus.v2.TxOut
 import scalus.uplc.builtin.Builtins.{blake2b_224, serialiseData}
 import scalus.uplc.builtin.Data.toData
 import scalus.uplc.builtin.{ByteString, Data, ToData}
@@ -21,10 +24,6 @@ given toDataTransactionInput: ToData[TransactionInput] with {
 given evacuationKeyOrdering: Ordering[EvacuationKey] with {
     override def compare(x: EvacuationKey, y: EvacuationKey): Int =
         summon[Ordering[ByteString]].compare(x.byteString, y.byteString)
-}
-
-given evacuationKeyToData: ToData[EvacuationKey] with {
-    override def apply(v1: EvacuationKey): Data = toData(v1.byteString)
 }
 
 final case class EvacuationKey private (byteString: ByteString)
@@ -61,19 +60,23 @@ final case class EvacuationMap(
 
     def kzgCommitment: KzgCommitment = KzgCommitment.calculateKzgCommitment(scalars)
 
-    private def scalars: SList[Scalar] = {
+    def scalars: SList[Scalar] = {
         SList.from(
           evacuationMap.toList.map(e =>
               // FIXME: redundant CBOR encoding with `Sized`, since we're keeping the original serialization anyways
-              (e._1, LedgerToPlutusTranslation.getTxOutV2(Sized(e._2.utxo.value)))
-                  |> ToData.tupleToData
-                  |> serialiseData
-                  |> blake2b_224
-                  |> (_.bytes)
-                  |> Scalar().from_bendian
+              mkScalar(e._1, LedgerToPlutusTranslation.getTxOutV2(Sized(e._2.utxo.value)))
           )
         )
     }
+
+    /** Assumes key -> value mappings are unique among all maps
+      * @return
+      */
+    def subsetOf(other: EvacuationMap): Boolean =
+        evacuationMap.keySet.subsetOf(other.evacuationMap.keySet)
+
+    def totalValue: Value =
+        evacuationMap.foldLeft(Value.zero)((acc, evacuatee) => acc + evacuatee._2.utxo.value.value)
 }
 
 object EvacuationMap:
@@ -88,6 +91,19 @@ object EvacuationMap:
                     (em: EvacuationMap) => EvacuationMap(em.evacuationMap.removed(key))
             }
             .foldLeft(identity: EvacuationMap => EvacuationMap)(_.andThen(_))
+
+    private def mkHash(key: EvacuationKey, output: TxOut): ByteString = {
+        (key, output)
+            |> ToData.tupleToData
+            |> serialiseData
+            |> blake2b_224
+    }
+
+    def mkScalar(key: EvacuationKey, output: TxOut): Scalar =
+        (key, output)
+            |> mkHash
+            |> (_.bytes)
+            |> Scalar().from_bendian
 
 enum EvacuationDiff:
     case Update(key: EvacuationKey, value: Payout.Obligation)

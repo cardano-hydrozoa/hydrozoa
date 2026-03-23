@@ -18,7 +18,7 @@ import hydrozoa.config.head.parameters.HeadParameters
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.config.node.NodeConfig
-import hydrozoa.config.node.operation.liquidation.NodeOperationLiquidationConfig
+import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
@@ -37,6 +37,7 @@ import monocle.Focus.focus
 import org.bouncycastle.crypto.generators.Ed25519KeyPairGenerator
 import org.bouncycastle.crypto.params.{Ed25519KeyGenerationParameters, Ed25519PrivateKeyParameters, Ed25519PublicKeyParameters}
 import scala.collection.immutable.SortedMap
+import scala.concurrent.duration.DurationInt
 import scalus.cardano.address.Network
 import scalus.cardano.ledger.{Coin, PlutusScriptEvaluator, TransactionOutput, Utxo, Value}
 import scalus.cardano.txbuilder.TransactionBuilderStep.Spend
@@ -256,7 +257,11 @@ object Bootstrap:
         NodeConfig(
           headConfig = headConfig,
           ownHeadWallet = ownHeadWallet,
-          nodeOperationLiquidationConfig = NodeOperationLiquidationConfig.default,
+          nodeOperationEvacuationConfig = NodeOperationEvacuationConfig(
+            evacuationBotPollingPeriod = 1.minute,
+            // NOTE: Reusing the same multisig wallet, in production this should be a different wallet
+            evacuationWallet = ownHeadWallet
+          ),
           nodeOperationMultisigConfig = NodeOperationMultisigConfig.default
         ).get
     }
