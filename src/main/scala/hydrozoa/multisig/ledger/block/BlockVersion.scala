@@ -33,7 +33,9 @@ object BlockVersion {
     object Major {
         opaque type Major = Int
 
-        def apply(i: Int): Major = i
+        def apply(i: Int): Major =
+            require(i >= 0)
+            i
 
         val zero: Major = 0
 
@@ -44,7 +46,12 @@ object BlockVersion {
                 x.compare(y)
         }
 
-        extension (self: Major) def increment: Major = Major(self + 1)
+        extension (self: Major)
+            def increment: Major = Major(self + 1)
+            def decrement: Major =
+                if self == zero
+                then throw RuntimeException("Attempt of version major decrement on 0")
+                else Major(self - 1)
 
         trait Produced {
             def majorVersionProduced: Major
@@ -54,7 +61,9 @@ object BlockVersion {
     object Minor {
         opaque type Minor = Int
 
-        def apply(i: Int): Minor = i
+        def apply(i: Int): Minor =
+            require(i >= 0)
+            i
 
         val zero: Minor = 0
 

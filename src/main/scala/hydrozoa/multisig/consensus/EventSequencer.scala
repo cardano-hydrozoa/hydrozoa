@@ -5,21 +5,30 @@ import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
+import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
+import hydrozoa.lib.actor.SyncRequest
+import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.EventSequencer.*
 import hydrozoa.multisig.consensus.PeerLiaison.Handle
-import hydrozoa.multisig.consensus.peer.PeerId
-import hydrozoa.multisig.ledger.block.{BlockBody, BlockEffects, BlockStatus}
-import hydrozoa.multisig.ledger.dapp.tx.RefundTx
-import hydrozoa.multisig.ledger.event.LedgerEventId.ValidityFlag
-import hydrozoa.multisig.ledger.event.{LedgerEvent, LedgerEventId, LedgerEventNumber}
+import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
+import org.typelevel.log4cats.Logger
 
+/** The first actor responsible for processing events from end-users, as received by the
+  * [[HydrozoaServer]]. Only one event sequencer is running per node, specifically to handle _only_
+  * the events that will be tagged with this Peer's [[HeadPeerNumber]] and sequential
+  * [[RequestId]]s.
+  *
+  * The messages are subsequently passed to the [[BlockWeaver]] and [[PeerLiaison]]s.
+  */
 trait EventSequencer(
     config: Config,
     pendingConnections: MultisigRegimeManager.PendingConnections | EventSequencer.Connections
 ) extends Actor[IO, Request] {
     private val connections = Ref.unsafe[IO, Option[EventSequencer.Connections]](None)
     private val state = State()
+
+    private given logger: Logger[IO] = Logging.loggerIO("EventSequencer")
 
     private def getConnections: IO[Connections] = for {
         mConn <- this.connections.get
@@ -48,52 +57,45 @@ trait EventSequencer(
         case x: EventSequencer.Connections => connections.set(Some(x))
     }
 
-    override def preStart: IO[Unit] = initializeConnections
+    override def preStart: IO[Unit] = context.self ! EventSequencer.PreStart
 
     override def receive: Receive[IO, Request] =
-        PartialFunction.fromFunction(req => getConnections.flatMap(receiveTotal(req, _)))
+        PartialFunction.fromFunction(receiveTotal)
 
-    private def receiveTotal(req: Request, conn: Connections): IO[Unit] =
-        req match {
-            case x: LedgerEvent =>
-                for {
-                    newNum <- state.nextLedgerEventNum()
-                    newId = LedgerEventId(config.peerId.peerNum, newNum)
-                    newEvent: LedgerEvent = x match {
-                        case y: LedgerEvent.TxL2Event       => y.copy(eventId = newId)
-                        case y: LedgerEvent.RegisterDeposit => y.copy(eventId = newId)
-                    }
-                    _ <- conn.blockWeaver ! newEvent
-                    _ <- (conn.peerLiaisons ! newEvent).parallel
-                } yield ()
-            case x: BlockConfirmed =>
-                // Complete the deferred ledger event outcomes confirmed by the block and remove them from queue
-                ???
-        }
+    private def receiveTotal(req: Request): IO[Unit] = req match {
+        case EventSequencer.PreStart => preStartLocal
+        case req: UserRequest.Sync =>
+            req.request.handleSync(
+              req,
+              (userRequest: UserRequest) =>
+                  for {
+                      conn <- getConnections
+                      newNum <- state.nextLedgerEventNum()
+                      newId = RequestId(config.ownHeadPeerId.peerNum, newNum)
+                      newRequestWithId = UserRequestWithId(
+                        userRequest = userRequest,
+                        requestId = newId
+                      )
+                      _ <- logger.debug(s"Assigned request ID ${newId.asI64}")
+                      _ <- req.dResponse.complete(newId)
+                      _ <- conn.blockWeaver ! newRequestWithId
+                      _ <- (conn.peerLiaisons ! newRequestWithId).parallel
+                  } yield newId
+            )
+    }
+
+    private def preStartLocal: IO[Unit] = initializeConnections
 
     private final class State {
-        private val nLedgerEvent = Ref.unsafe[IO, LedgerEventNumber](LedgerEventNumber(0))
-//        private val localRequests =
-//            Ref.unsafe[IO, Queue[(LedgerEventId.Number, Deferred[IO, Unit])]](
-//              Queue()
-//            )
+        private val nLedgerEvent = Ref.unsafe[IO, RequestNumber](RequestNumber(0))
 
-        def nextLedgerEventNum(): IO[LedgerEventNumber] =
-            for {
-                newNum <- nLedgerEvent.updateAndGet(x => x.increment)
-                // FIXME:
-//                _ <- localRequests.update(q => q :+ (newNum -> eventOutcome))
-            } yield newNum
-
-        def completeDeferredEventOutcomes(
-            eventOutcomes: List[(LedgerEventNumber, Unit)]
-        ): IO[Unit] =
-            ???
+        def nextLedgerEventNum(): IO[RequestNumber] =
+            nLedgerEvent.updateAndGet(x => x.increment)
     }
 }
 
-/** Event sequencer receives local submissions of new ledger events and emits them sequentially into
-  * the consensus system.
+/** Event sequencer receives local submissions of users' requests (via an http server), assigns
+  * ledger event ids and emits them sequentially into the consensus system.
   */
 object EventSequencer {
     def apply(
@@ -102,7 +104,7 @@ object EventSequencer {
     ): IO[EventSequencer] =
         IO(new EventSequencer(config, pendingConnections) {})
 
-    final case class Config(peerId: PeerId)
+    type Config = OwnHeadPeerPublic.Section
 
     final case class Connections(
         blockWeaver: BlockWeaver.Handle,
@@ -111,24 +113,7 @@ object EventSequencer {
 
     type Handle = ActorRef[IO, Request]
 
-    type BlockConfirmed = BlockBody.Section & BlockEffects.Fields.HasPostDatedRefundTxs &
-        BlockStatus.MultiSigned
+    type Request = PreStart.type | UserRequest.Sync
 
-    object BlockConfirmed {
-
-        /** For unit/property testing. */
-        final case class Minimal(
-            override val body: BlockBody.Next,
-            // FIXME: How do we ensure these are signed?
-            override val postDatedRefundTxs: List[RefundTx.PostDated],
-        ) extends BlockBody.Section,
-              BlockEffects.Fields.HasPostDatedRefundTxs,
-              BlockStatus.MultiSigned {
-            override def events: List[(LedgerEventId, ValidityFlag)] = body.events
-            override def depositsAbsorbed: List[LedgerEventId] = body.depositsAbsorbed
-            override def depositsRefunded: List[LedgerEventId] = body.depositsAbsorbed
-        }
-    }
-
-    type Request = LedgerEvent | BlockConfirmed
+    case object PreStart
 }

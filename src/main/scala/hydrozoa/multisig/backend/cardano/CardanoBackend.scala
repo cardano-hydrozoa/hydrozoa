@@ -1,40 +1,30 @@
 package hydrozoa.multisig.backend.cardano
 
-import hydrozoa.UtxoSetL1
-import scalus.builtin.Data
 import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.{AssetName, PolicyId, Transaction, TransactionHash}
+import scalus.cardano.ledger.{AssetName, PolicyId, ProtocolParams, Transaction, TransactionHash, Utxos}
+import scalus.uplc.builtin.Data
 
 /** Notes:
   *   - Only [[ShelleyAddress]] are supported
   *   - The return data types are limited by what is really needed for Hydrozoa, but can be expanded
   *     if needed
-  *
-  * @tparam F
   */
 trait CardanoBackend[F[_]]:
     import CardanoBackend.*
 
     /** All utxos at the [[address]]. The ordering of items from the point of view of the blockchain -
       * oldest first, newest last.
-      *
-      * @param address
       * @return
       */
-    def utxosAt(address: ShelleyAddress): F[Either[Error, UtxoSetL1]]
+    def utxosAt(address: ShelleyAddress): F[Either[Error, Utxos]]
 
     /** All the utxos that contain [[asset]] at the [[address]]. The ordering of items from the
       * point of view of the blockchain - oldest first, newest last.
-      *
-      * @param address
-      * @param asset
       * @return
       */
-    def utxosAt(address: ShelleyAddress, asset: (PolicyId, AssetName)): F[Either[Error, UtxoSetL1]]
+    def utxosAt(address: ShelleyAddress, asset: (PolicyId, AssetName)): F[Either[Error, Utxos]]
 
     /** Checks whether a tx specified by [[txHash]] is known to the backend ledger.
-      *
-      * @param txHash
       * @return
       *   true - known, false - unknown or an error
       */
@@ -48,8 +38,6 @@ trait CardanoBackend[F[_]]:
       * written in terms of common Scalus types, to keep it more general, but maybe we can switch to
       * concrete Hydrozoa types - like HeadMultisigScript/TokenNames/RuleBasedTreasuryDatum.
       *
-      * NB: this won't pick up the deinit tx since this one doesn't contain the continuing output.
-      *
       * @param asset
       *   the asset id that marks the continuing input
       * @param after
@@ -62,10 +50,13 @@ trait CardanoBackend[F[_]]:
     ): F[Either[CardanoBackend.Error, List[(TransactionHash, Data)]]]
 
     /** Submits a transaction.
-      * @param tx
       * @return
       */
     def submitTx(tx: Transaction): F[Either[Error, Unit]]
+
+    /** Retrieve the latest protocol parameters.
+      */
+    def fetchLatestParams: F[Either[Error, ProtocolParams]]
 
 object CardanoBackend:
 

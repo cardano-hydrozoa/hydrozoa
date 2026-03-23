@@ -1,5 +1,7 @@
 package hydrozoa.multisig.ledger.block
 
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
+
 sealed trait BlockBrief extends BlockBrief.Section {
     def asUnsigned: this.type & BlockStatus.Unsigned =
         this.asInstanceOf[this.type & BlockStatus.Unsigned]
@@ -41,32 +43,32 @@ object BlockBrief {
     }
 
     type Next = BlockBrief & BlockType.Next
-
     type Intermediate = BlockBrief & BlockType.Intermediate
+    type NonFinal = BlockBrief & BlockType.NonFinal
 
     trait Section extends BlockType, BlockHeader.Section, BlockBody.Section {
-        import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
-        import hydrozoa.multisig.ledger.event.LedgerEventId
-        import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
-        import LedgerEventId.ValidityFlag
+        import hydrozoa.multisig.ledger.event.RequestId
+        import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
+        import RequestId.ValidityFlag
 
         def blockBrief: BlockBrief
 
         override transparent inline def blockNum: BlockNumber = header.blockNum
         override transparent inline def blockVersion: BlockVersion.Full = header.blockVersion
-        override transparent inline def startTime: QuantizedInstant = header.startTime
+        override transparent inline def startTime: BlockCreationStartTime = header.startTime
+        override transparent inline def endTime: BlockCreationEndTime = header.endTime
         override transparent inline def kzgCommitment: KzgCommitment = header.kzgCommitment
 
-        override transparent inline def events: List[(LedgerEventId, ValidityFlag)] = body.events
-        override transparent inline def depositsAbsorbed: List[LedgerEventId] =
+        override transparent inline def events: List[(RequestId, ValidityFlag)] = body.events
+        override transparent inline def depositsAbsorbed: List[RequestId] =
             body.depositsAbsorbed
-        override transparent inline def depositsRefunded: List[LedgerEventId] =
+        override transparent inline def depositsRefunded: List[RequestId] =
             body.depositsRefunded
     }
 
     object Section {
         type Next = Section & BlockType.Next
         type Intermediate = Section & BlockType.Intermediate
+        type NonFinal = Section & BlockType.NonFinal
     }
-
 }

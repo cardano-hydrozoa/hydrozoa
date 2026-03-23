@@ -6,7 +6,7 @@ import java.time.Instant
 import scala.concurrent.duration.{FiniteDuration, MILLISECONDS}
 import scala.math.Ordered.orderingToOrdered
 import scalus.cardano.ledger.{Slot, SlotConfig}
-import scalus.ledger.api.v3.PosixTime
+import scalus.cardano.onchain.plutus.v3.PosixTime
 
 /** In Cardano, our notion of time is constrained by:
   *
@@ -59,6 +59,11 @@ object QuantizedTime {
     }
 
     case class QuantizedInstant private (instant: java.time.Instant, slotConfig: SlotConfig) {
+
+        def toPosixTime: PosixTime =
+            BigInt(instant.toEpochMilli)
+
+        def getEpochSecond: Long = instant.getEpochSecond
 
         /** WARNING: Will throw if the slot configuration is such that the instant is before the
           * zero slot
@@ -146,7 +151,7 @@ object QuantizedTime {
 
     given Ordering[QuantizedFiniteDuration] with {
         override def compare(self: QuantizedFiniteDuration, other: QuantizedFiniteDuration): Int = {
-            // Whether this "require" is needed is up to semantic interpretation.
+            // Whether this "required" is needed is up to semantic interpretation.
             // I'm choosing to include it because in our particular case such a comparison would almost certainly be a
             // programming error, and it is not a priori given what should happen if the instants being compared as "close"
             // within their respective quantization window.
@@ -180,6 +185,14 @@ object QuantizedTime {
                 slotConfig.slotToTime(slotConfig.timeToSlot(instant.toEpochMilli))
               )
             )
+
+        def ofEpochSeconds(slotConfig: SlotConfig, posixSeconds: Long): QuantizedInstant =
+            apply(slotConfig, Instant.ofEpochSecond(posixSeconds))
+
+        def fromPlutusPosixTime(slotConfig: SlotConfig, posixTime: PosixTime): QuantizedInstant = {
+            // TODO: potential truncation from BigInt
+            apply(slotConfig, Instant.ofEpochMilli(posixTime.longValue))
+        }
 
         def realTimeQuantizedInstant(slotConfig: SlotConfig): IO[QuantizedInstant] =
             IO.realTimeInstant.map(_.quantize(slotConfig))

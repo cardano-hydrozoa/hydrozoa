@@ -1,7 +1,7 @@
 package hydrozoa.multisig.ledger.block
 
 import hydrozoa.multisig.ledger.block.BlockHeader.Minor.HeaderSignature
-import hydrozoa.multisig.ledger.dapp.tx.{DeinitTx, FallbackTx, FinalizationTx, InitializationTx, RefundTx, RolloutTx, SettlementTx}
+import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, FinalizationTx, InitializationTx, RefundTx, RolloutTx, SettlementTx}
 
 sealed trait Block extends Block.Section
 
@@ -74,11 +74,11 @@ object Block {
 
             override transparent inline def finalizationTx: FinalizationTx = effects.finalizationTx
             override transparent inline def rolloutTxs: List[RolloutTx] = effects.rolloutTxs
-            override transparent inline def deinitTx: Option[DeinitTx] = effects.deinitTx
         }
 
         type Next = Block.Unsigned & BlockType.Next
         type Intermediate = Block.Unsigned & BlockType.Intermediate
+        type NonFinal = Block.MultiSigned & BlockType.NonFinal
 
         extension (self: Next)
             transparent inline def blockBriefNext: BlockBrief.Next =
@@ -158,14 +158,18 @@ object Block {
 
             override transparent inline def finalizationTx: FinalizationTx = effects.finalizationTx
             override transparent inline def rolloutTxs: List[RolloutTx] = effects.rolloutTxs
-            override transparent inline def deinitTx: Option[DeinitTx] = effects.deinitTx
 
             override transparent inline def finalizationRequested: Boolean = false
         }
 
         type Next = Block.MultiSigned & BlockType.Next
-
         type Intermediate = Block.MultiSigned & BlockType.Intermediate
+        type NonFinal = Block.MultiSigned & BlockType.NonFinal
+
+        extension (nonFinal: Block.MultiSigned.NonFinal)
+            def headerNonFinal: BlockHeader.NonFinal =
+                nonFinal.header.asInstanceOf[BlockHeader.NonFinal]
+
     }
 
     object Fields {
@@ -177,4 +181,5 @@ object Block {
     trait Section extends BlockType, BlockBrief.Section, BlockEffects.Section {
         def block: Block
     }
+
 }
