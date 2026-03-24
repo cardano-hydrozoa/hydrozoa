@@ -156,7 +156,7 @@ class ResolutionTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
     }
 
     // This doesn't fit the size, we needed to use reference script, ignoring for now
-    ignore("Resolution tx builds successfully") {
+    test("Resolution tx builds successfully") {
         forAll(genResolutionTxRecipe()) { recipe =>
             ResolutionTx.build(recipe) match {
                 case Left(e) =>

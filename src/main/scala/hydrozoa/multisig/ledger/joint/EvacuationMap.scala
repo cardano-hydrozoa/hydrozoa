@@ -6,7 +6,7 @@ import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.joint.EvacuationMap.mkScalar
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.given
-import scala.collection.immutable.TreeMap
+import scala.collection.immutable.{SortedMap, TreeMap}
 import scalus.cardano.ledger.*
 import scalus.cardano.onchain.plutus.prelude.List as SList
 import scalus.cardano.onchain.plutus.v2.TxOut
@@ -34,10 +34,20 @@ object EvacuationKey:
 
 final case class EvacuationMap(
     evacuationMap: TreeMap[EvacuationKey, Payout.Obligation]
-)(using Ordering[EvacuationKey], ToData[EvacuationKey]) {
-    val isEmpty: Boolean = evacuationMap.isEmpty
-    val nonEmpty: Boolean = evacuationMap.nonEmpty
-    val size: Int = evacuationMap.size
+)(using Ordering[EvacuationKey], ToData[EvacuationKey])
+    extends SortedMap[EvacuationKey, Payout.Obligation] {
+    def iterator: Iterator[(EvacuationKey, Payout.Obligation)] = evacuationMap.iterator
+
+    def removed(key: EvacuationKey): EvacuationMap = EvacuationMap(evacuationMap.removed(key))
+
+    override def removedAll(keys: IterableOnce[EvacuationKey]): EvacuationMap =
+        EvacuationMap(evacuationMap.removedAll(keys))
+
+    def updated[V1 >: Payout.Obligation](key: EvacuationKey, value: V1): EvacuationMap =
+        EvacuationMap(evacuationMap.updated(key, value.asInstanceOf[Payout.Obligation]))
+
+    // Members declared in scala.collection.MapOps
+    def get(key: EvacuationKey): Option[Payout.Obligation] = evacuationMap.get(key)
 
     /** The evac map, where we threw away the "KeepRaw"
       */
@@ -49,14 +59,6 @@ final case class EvacuationMap(
     /** The outputs of the evac map, where we threw away the "KeepRaw"
       */
     val outputsCooked: Iterable[TransactionOutput] = evacuationMap.values.map(_.utxo.value)
-
-    def appended(
-        otherMap: TreeMap[EvacuationKey, Payout.Obligation]
-    ): EvacuationMap =
-        EvacuationMap(evacuationMap ++ otherMap)
-
-    def removed(keys: Set[EvacuationKey]): EvacuationMap =
-        EvacuationMap(evacuationMap -- keys)
 
     def kzgCommitment: KzgCommitment = KzgCommitment.calculateKzgCommitment(scalars)
 
@@ -77,6 +79,20 @@ final case class EvacuationMap(
 
     def totalValue: Value =
         evacuationMap.foldLeft(Value.zero)((acc, evacuatee) => acc + evacuatee._2.utxo.value.value)
+
+    override def iteratorFrom(start: EvacuationKey): Iterator[(EvacuationKey, Payout.Obligation)] =
+        evacuationMap.iteratorFrom(start)
+
+    override def keysIteratorFrom(start: EvacuationKey): Iterator[EvacuationKey] =
+        evacuationMap.keysIteratorFrom(start)
+
+    override def ordering: Ordering[EvacuationKey] = evacuationMap.ordering
+
+    override def rangeImpl(
+        from: Option[EvacuationKey],
+        until: Option[EvacuationKey]
+    ): EvacuationMap =
+        EvacuationMap(evacuationMap.rangeImpl(from, until))
 }
 
 object EvacuationMap:
@@ -104,6 +120,9 @@ object EvacuationMap:
             |> mkHash
             |> (_.bytes)
             |> Scalar().from_bendian
+
+    def from(i: IterableOnce[(EvacuationKey, Payout.Obligation)]) =
+        EvacuationMap(TreeMap.from(i))
 
 enum EvacuationDiff:
     case Update(key: EvacuationKey, value: Payout.Obligation)

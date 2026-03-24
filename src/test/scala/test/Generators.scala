@@ -12,15 +12,17 @@ import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
 import hydrozoa.multisig.ledger.eutxol2.tx.{GenesisObligation, L2Tx}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.obligation.Payout
+import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap, evacuationKeyOrdering}
 import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
+import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.evacuationKeyToData
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.genShelleyAddress
 import monocle.*
 import monocle.syntax.all.*
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen, Prop, Properties}
-import scala.collection.immutable.SortedMap
+import scala.collection.immutable.{SortedMap, TreeMap}
 import scalus.cardano.address.*
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.ledger.*
@@ -49,6 +51,7 @@ given genMonad: Monad[Gen] = new Monad[Gen] {
   */
 
 object Generators {
+    export Generators.Hydrozoa.ArbitraryInstances.given
 
     // This guy is used everywhere through tests to log some traces when generating various things.
     // Use:
@@ -424,6 +427,49 @@ object Generators {
           requestNumber
         )
 
+        /** Warning:
+          *   - can loop infinitely if:
+          *     - minEntries is negative
+          *     - genEvacuationKey does not produce enough distinct keys to reach minEntries
+          *   - if you have a genEvacuationKeys with a high probability of generating duplicate
+          *     keys, this will be biased towards generating a number of entries closer to
+          *     minEntries
+          */
+        def genEvacuationMap(
+            minEntries: Int = 0,
+            maxEntries: Int = 100,
+            genEvacuationKey: Gen[EvacuationKey] = Arbitrary.arbitrary[EvacuationKey],
+            genPayoutObligation: Gen[Payout.Obligation] = Arbitrary.arbitrary[Payout.Obligation]
+        ): Gen[EvacuationMap] = {
+
+            for {
+                targetNumberOfKeys <- Gen.choose(minEntries, maxEntries)
+
+                // Recursively generate keys, retrying if we hit duplicates.
+                // This can possibly infinitely loop, but not with sane parameters.
+                // The main goal was to be able to generate large sets with small generators and not throw out all
+                // the work done every time we hit a duplicate with `_.suchThat`
+                // Feel free to revise.
+                keys <- Gen.tailRecM(List.empty[EvacuationKey])(keys => {
+                    def recur = for {
+                        newKey <- genEvacuationKey
+                        // We use distinct here rather than `suchThat` so that we don't throw
+                        // away all of the generation when we hit a duplicate. We re-roll instead.
+                    } yield Left(keys.prepended(newKey).distinct)
+
+                    () match {
+                        case _ if keys.size == targetNumberOfKeys => Gen.const(Right(keys))
+                        case _ if keys.size >= minEntries =>
+                            Gen.frequency((9, recur), (1, Right(keys)))
+                        case _ => recur
+                    }
+                })
+                values <- Gen.listOfN(keys.size, genPayoutObligation)
+            } yield EvacuationMap(
+              evacuationMap = TreeMap.from(keys.zip(values))
+            )
+        }
+
         /** NOTE: These will generate _fully_ arbitrary data. It is probably not what you want, but
           * may be a good starting point. For example, an arbitrary payout obligation may be for a
           * different network than the one you intend.
@@ -457,6 +503,12 @@ object Generators {
                     .get
             }
 
+            given Arbitrary[EvacuationKey] = Arbitrary {
+                for {
+                    bs <- genByteStringOfN(32)
+                } yield EvacuationKey(bs).get
+
+            }
         }
     }
 

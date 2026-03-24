@@ -1,6 +1,7 @@
 package hydrozoa.config.node
 
 import cats.data.NonEmptyList
+import cats.effect.unsafe.IORuntime
 import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.currentTimeBlockCreationEndTime
 import hydrozoa.config.head.initialization.{InitializationParametersGenBottomUp, InitializationParametersGenTopDown}
 import hydrozoa.config.head.multisig.fallback.{FallbackContingencyGen, generateFallbackContingency}
@@ -17,10 +18,11 @@ import hydrozoa.lib.cardano.scalus.ShelleyAddressExtra
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockHeader
-import org.scalacheck.{Gen, Prop, Properties}
+import org.scalacheck.util.Pretty
+import org.scalacheck.{Gen, Prop, Properties, PropertyM}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.{SlotConfig, Transaction, VKeyWitness}
-import test.{TestPeers, TestPeersSpec}
+import test.{TestM, TestMFixedEnv, TestPeers, TestPeersSpec}
 
 /** Multi-node config is a tool for test suites that allows multisigning effects as well ad gives
   * the access to the head config, which is common for all peers.
@@ -74,6 +76,19 @@ case class MultiNodeConfig private (
 }
 
 object MultiNodeConfig {
+    given tooLongPretty: (MultiNodeConfig => Pretty) = _ =>
+        Pretty(_ => "MultiNodeConfig (too long to print)")
+    type MultiNodeConfigTestM[A] = TestM[MultiNodeConfig, A]
+    private val mnctm = TestMFixedEnv[MultiNodeConfig]()
+    export mnctm.*
+
+    def runDefault[A](testM: MultiNodeConfigTestM[A])(using
+        toProp: A => Prop,
+        ioRuntime: IORuntime
+    ): Prop =
+        run(initializer = PropertyM.pick(generateDefault), testM = testM)
+
+    def generateDefault: Gen[MultiNodeConfig] = generate(TestPeersSpec.default)()
 
     def generate(spec: TestPeersSpec)(
         generateHeadConfig: HeadConfigGen = hydrozoa.config.head.generateHeadConfig,

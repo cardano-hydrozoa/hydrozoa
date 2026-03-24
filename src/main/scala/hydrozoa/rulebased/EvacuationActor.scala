@@ -31,7 +31,7 @@ case class EvacuationActor(config: Config)(
     toEvacuate: EvacuationMap,
     cardanoBackend: CardanoBackend[IO],
     evacuationMapAtFallback: EvacuationMap,
-    fallbackTxHash: TransactionHash
+    fallbackTxHash: TransactionHash,
 ) extends Actor[IO, Requests.Request] {
     override def preStart: IO[Unit] =
         context.setReceiveTimeout(config.evacuationBotPollingPeriod, ())
@@ -128,7 +128,7 @@ case class EvacuationActor(config: Config)(
                 )
 
                 notEvacuatedYet: EvacuationMap =
-                    evacuationMapAtFallback.removed(previouslyEvacuated)
+                    evacuationMapAtFallback.removedAll(previouslyEvacuated)
 
                 /////////////////////////////////
                 // Step 2: Figure out the current treasury
@@ -155,12 +155,13 @@ case class EvacuationActor(config: Config)(
                   )
                 )
 
-                withdrawTx <- EvacuationTx
+                evacTx <- EvacuationTx
                     .Build(config)(
-                      treasuryUtxo = treasuryUtxoAndDatum._1,
-                      evacuatees = toEvacuate,
-                      notEvacuatedYet = notEvacuatedYet,
-                      feeUtxos = feeUtxos,
+                      _treasuryUtxo = treasuryUtxoAndDatum._1,
+                      _evacuatees = toEvacuate,
+                      _notEvacuatedYet = notEvacuatedYet,
+                      _feeUtxos = feeUtxos,
+                      _collateralUtxo = ??? // Probably pick one from the wallet address?
                     )
                     .result match {
                     case Left(e) =>
@@ -168,7 +169,7 @@ case class EvacuationActor(config: Config)(
                     case Right(tx) => EitherT.pure[IO, Error.RecoverableErrors](tx)
                 }
 
-                _ <- EitherT(cardanoBackend.submitTx(withdrawTx.tx))
+                _ <- EitherT(cardanoBackend.submitTx(evacTx.tx))
             } yield ()
         }
         et.value

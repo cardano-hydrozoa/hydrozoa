@@ -28,18 +28,16 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.onchain.plutus.prelude.List as SList
 import test.Generators.Hydrozoa.genPubKeyUtxo
-import test.{TestM, TestMFixedEnv, TestPeersSpec}
+import test.{TestM, TestPeersSpec}
 
 object DisputeActorTestHelpers {
-    type DisputeActorTest[A] = TestM[MultiNodeConfig, A]
-    val disputeActorTest: TestMFixedEnv[MultiNodeConfig] = TestMFixedEnv[MultiNodeConfig]()
-    export disputeActorTest.*
+    import MultiNodeConfig.*
 
     def mkVoteUtxo(
         key: BigInt,
         link: BigInt,
         voteStatus: VoteStatus
-    ): DisputeActorTest[scalus.cardano.ledger.Utxo] =
+    ): MultiNodeConfigTestM[scalus.cardano.ledger.Utxo] =
         for {
             env <- ask
             ownVoteUtxoInput <- pick(Arbitrary.arbitrary[TransactionInput])
@@ -66,7 +64,7 @@ object DisputeActorTestHelpers {
     def mkRuleBasedTreasury(
         versionMajor: BigInt,
         coin: Coin
-    ): DisputeActorTest[RuleBasedTreasuryUtxo] =
+    ): MultiNodeConfigTestM[RuleBasedTreasuryUtxo] =
         for {
             env <- ask
             treasuryInput <- pick(Arbitrary.arbitrary[TransactionInput])
@@ -120,7 +118,7 @@ object DisputeActorTestHelpers {
         initialL1Utxos: Utxos,
         initialEvacuationMap: EvacuationMap,
         addCollateralUtxo: Boolean = true
-    ): DisputeActorTest[DisputeActor] =
+    ): MultiNodeConfigTestM[DisputeActor] =
         for {
             env <- ask
 
@@ -181,11 +179,7 @@ left are handled properly by `handleDisputeRes`.
 object DisputeActorTest extends Properties("Dispute Actor Test") {
 
     import DisputeActorTestHelpers.*
-
-    //    override def overrideParameters(p: Test.Parameters): Test.Parameters = {
-    //        p
-    //            .withInitialSeed(Seed.fromBase64("VQqSeZXfNOrKSH_vYlnW-f7o2OByIhEMhpvpLLvxt0P=").get)
-    //    }
+    import MultiNodeConfig.*
 
     val _ = property("dispute actor (no actor system)") = run(
       initializer = PropertyM.pick(MultiNodeConfig.generate(TestPeersSpec.default)()),

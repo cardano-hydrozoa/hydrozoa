@@ -36,7 +36,7 @@ object Membership {
         for {
             // 1. Check the subset
             _ <- Either.cond(subset.subsetOf(set), (), WrongSubset)
-            rest = set.removed(subset.evacuationMap.keySet)
+            rest = set.removedAll(subset.evacuationMap.keySet)
 
             // 2. Check that the setup is big enough
             monomialG2 = TrustedSetup.setup.g2Monomial

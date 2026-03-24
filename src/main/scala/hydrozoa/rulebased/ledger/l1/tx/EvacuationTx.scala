@@ -25,7 +25,7 @@ import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.Datum.DatumInlined
 import scalus.cardano.txbuilder.ScriptSource.PlutusScriptValue
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
-import scalus.cardano.txbuilder.TransactionBuilderStep.{Send, Spend}
+import scalus.cardano.txbuilder.TransactionBuilderStep.{AddCollateral, Send, Spend}
 import scalus.uplc.builtin.Data.toData
 
 final case class EvacuationTx(
@@ -67,11 +67,19 @@ private object EvacuationTxOps {
       *   Utxos to use to pay the fees
       */
     final case class Build(config: Config)(
-        treasuryUtxo: RuleBasedTreasuryUtxo,
-        evacuatees: EvacuationMap,
-        notEvacuatedYet: EvacuationMap,
-        feeUtxos: Utxos,
+        _treasuryUtxo: RuleBasedTreasuryUtxo,
+        _evacuatees: EvacuationMap,
+        _notEvacuatedYet: EvacuationMap,
+        _collateralUtxo: Utxo,
+        _feeUtxos: Utxos,
     ) {
+
+        // If I don't do these here, I can't access them directly from a `build : Build`. Why?
+        val treasuryUtxo: RuleBasedTreasuryUtxo = _treasuryUtxo
+        val evacuatees: EvacuationMap = _evacuatees
+        val notEvacuatedYet: EvacuationMap = _notEvacuatedYet
+        val feeUtxos: Utxos = _feeUtxos
+        val collateralUtxo: Utxo = _collateralUtxo
 
         private def halveEvacuation(evacuatees: EvacuationMap): EvacuationMap = {
             EvacuationMap(evacuatees.evacuationMap.drop(evacuatees.size / 2))
@@ -138,6 +146,7 @@ private object EvacuationTxOps {
                 /////////////
                 // Steps
 
+                // TODO: I guess this can be lifted out of the loop
                 // Spend the treasury utxo with withdrawal proof
                 spendTreasury = Spend(
                   treasuryUtxo.asUtxo,
@@ -148,6 +157,9 @@ private object EvacuationTxOps {
                     Set.empty
                   )
                 )
+
+                // TODO: also can be lifted out
+                addCollateral = AddCollateral(collateralUtxo)
 
                 // Create the empty change utxo
                 sendChangeUtxo = Send(
@@ -171,7 +183,7 @@ private object EvacuationTxOps {
                 context <- TransactionBuilder
                     .build(
                       config.cardanoInfo.network,
-                      List(spendTreasury, sendChangeUtxo, sendResidualTreasury)
+                      List(spendTreasury, addCollateral, sendChangeUtxo, sendResidualTreasury)
                           ++
                               // Outputs for withdrawals
                               evacuationOutputs.map(Send(_))
