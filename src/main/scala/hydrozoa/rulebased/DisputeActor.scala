@@ -56,10 +56,12 @@ type VoteUtxoWithDatum = (Utxo, VoteDatum)
 final case class DisputeActor(config: DisputeActor.Config)(
     collateralUtxo: Utxo,
     blockHeader: BlockHeader.Minor.Onchain,
-    cardanoBackend: CardanoBackend[IO],
+    _cardanoBackend: CardanoBackend[IO],
     signatures: List[BlockHeader.Minor.HeaderSignature],
 ) extends Actor[IO, DisputeActor.Requests.Request] {
     private def evaluator = PlutusScriptEvaluator(config.cardanoInfo, EvaluateAndComputeCost)
+
+    final val cardanoBackend = _cardanoBackend
 
     // TODO: no transactions are currently getting signed
     val handleDisputeRes: IO[Either[DisputeActor.Error.RecoverableErrors, Unit]] = {
@@ -252,7 +254,9 @@ object DisputeActor {
 
         sealed trait BuildError extends Throwable
         object BuildError {
-            case class Vote(wrapped: VoteTx.VoteTxError | SomeBuildError) extends Unrecoverable
+            case class Vote(wrapped: VoteTx.VoteTxError | SomeBuildError) extends Unrecoverable {
+                override def toString: String = wrapped.toString
+            }
 
             case class Tally(wrapped: TallyTx.TallyTxError | SomeBuildError) extends Unrecoverable
 

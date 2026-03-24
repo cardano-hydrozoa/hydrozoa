@@ -42,9 +42,16 @@ object VoteTx {
         evaluator: PlutusScriptEvaluator,
     )
 
-    enum VoteTxError:
+    enum VoteTxError extends Throwable:
         case InvalidVoteDatum(msg: String)
         case VoteAlreadyCast
+
+        override def toString: String = this.getMessage
+
+        override def getMessage: String = this match {
+            case i: VoteTxError.InvalidVoteDatum     => s"Invalid vote datum: $i.msg"
+            case v: VoteTxError.VoteAlreadyCast.type => "Vote have already been cast"
+        }
 
     def build(recipe: Recipe): Either[SomeBuildError | VoteTxError, VoteTx] = {
         import VoteTxError.*

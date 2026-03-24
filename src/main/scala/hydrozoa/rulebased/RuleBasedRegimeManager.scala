@@ -33,7 +33,7 @@ case class RuleBasedRegimeManager(config: RuleBasedRegimeManager.Config)(
                 collateralUtxo = collateralUtxo,
                 blockHeader = blockHeader,
                 signatures = signatures,
-                cardanoBackend = cardanoBackend,
+                _cardanoBackend = cardanoBackend,
               )
             )
             _ <- context.actorOf(
