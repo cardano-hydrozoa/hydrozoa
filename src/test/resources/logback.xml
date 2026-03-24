@@ -8,15 +8,15 @@
     <root level="warn">
         <appender-ref ref="STDOUT"/>
     </root>
-    <logger name="BlockWeaver" level="debug"/>
-    <logger name="CardanoLiaison" level="debug"/>
-    <logger name="CardanoLiaisonTest" level="debug"/>
+    <logger name="BlockWeaver" level="warn"/>
+    <logger name="CardanoLiaison" level="warn"/>
+    <logger name="CardanoLiaisonTest" level="warn"/>
     <logger name="InitializationTxSeq" level="warn"/>
     <logger name="InitializationTx" level="warn"/>
     <logger name="FallbackTx" level="warn"/>
-    <logger name="JointLedger" level="trace"/>
+    <logger name="JointLedger" level="warn"/>
     <logger name="SettlementTxSeq" level="warn"/>
     <logger name="SettlementTx" level="warn"/>
-    <logger name="Generators" level="trace"/>
+    <logger name="Generators" level="warn"/>
     <logger name="scalus" level="warn"/>
 </configuration>
