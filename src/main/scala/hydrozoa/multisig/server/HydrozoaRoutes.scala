@@ -4,14 +4,15 @@ import cats.effect.IO
 import fs2.Stream
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.lib.logging.Logging
-import hydrozoa.multisig.consensus.{EventSequencer, UserRequest}
+import hydrozoa.multisig.consensus.{BlockWeaver, EventSequencer, UserRequest}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.server.ApiResponse.{CardanoNativeToken, Error, HeadInfo, RequestAccepted}
 import hydrozoa.multisig.server.JsonCodecs.given
 import io.circe.syntax.*
 import org.http4s.circe.*
 import org.http4s.dsl.io.*
-import org.http4s.{EntityDecoder, HttpRoutes}
+import org.http4s.headers.Authorization
+import org.http4s.{BasicCredentials, EntityDecoder, HttpRoutes}
 import org.typelevel.log4cats.Logger
 
 /** HTTP routes for the Hydrozoa server. These routes are what get called by the frontend (or a
@@ -19,10 +20,20 @@ import org.typelevel.log4cats.Logger
   */
 class HydrozoaRoutes(
     eventSequencer: EventSequencer.Handle,
-    headConfig: HeadConfig
+    blockWeaver: BlockWeaver.Handle,
+    headConfig: HeadConfig,
+    serverConfig: HydrozoaServer.Config
 ) {
 
     private given logger: Logger[IO] = Logging.loggerIO("HydrozoaRoutes")
+
+    /** Check if the provided credentials match the configured admin credentials */
+    private def checkAuth(req: org.http4s.Request[IO]): Boolean =
+        req.headers.get[Authorization] match {
+            case Some(Authorization(BasicCredentials(username, password))) =>
+                username == serverConfig.adminUsername && password == serverConfig.adminPassword
+            case _ => false
+        }
 
     // Implicit decoders for request bodies
     implicit val depositRequestEntityDecoder: EntityDecoder[IO, UserRequest] =
@@ -156,12 +167,52 @@ class HydrozoaRoutes(
         // GET /health - Health check endpoint
         case GET -> Root / "health" =>
             Ok(io.circe.Json.obj("status" -> "ok".asJson))
+
+        // POST /api/admin/finalize - Trigger head finalization (admin only)
+        case req @ POST -> Root / "api" / "admin" / "finalize" =>
+            if !checkAuth(req) then
+                logger.warn("POST /api/admin/finalize - Unauthorized attempt") *>
+                    Unauthorized(
+                      org.http4s.headers.`WWW-Authenticate`(
+                        org.http4s.Challenge("Basic", "Hydrozoa Admin")
+                      )
+                    )
+            else
+                val result: IO[org.http4s.Response[IO]] = for {
+                    _ <- logger.info(
+                      "POST /api/admin/finalize - Triggering local head finalization"
+                    )
+                    _ <- blockWeaver ! BlockWeaver.LocalFinalizationTrigger.Triggered
+                    _ <- logger.info(
+                      "POST /api/admin/finalize - Finalization signal sent to BlockWeaver"
+                    )
+                    resp <- Ok(
+                      io.circe.Json.obj(
+                        "status" -> "success".asJson,
+                        "message" -> "Head finalization triggered".asJson
+                      )
+                    )
+                } yield resp
+
+                result.handleErrorWith { error =>
+                    logger.error(error)(
+                      s"POST /api/admin/finalize - Error: ${error.getMessage}"
+                    ) *>
+                        InternalServerError(
+                          Error(
+                            error = error.getMessage
+                          ).asJson
+                        )
+                }
     }
 }
 
 object HydrozoaRoutes {
     def apply(
         eventSequencer: EventSequencer.Handle,
+        blockWeaver: BlockWeaver.Handle,
         headConfig: HeadConfig,
-    ): IO[HydrozoaRoutes] = IO.pure(new HydrozoaRoutes(eventSequencer, headConfig))
+        serverConfig: HydrozoaServer.Config
+    ): IO[HydrozoaRoutes] =
+        IO.pure(new HydrozoaRoutes(eventSequencer, blockWeaver, headConfig, serverConfig))
 }
