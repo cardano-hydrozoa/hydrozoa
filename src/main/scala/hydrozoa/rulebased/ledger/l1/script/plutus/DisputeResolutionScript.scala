@@ -193,13 +193,12 @@ object DisputeResolutionValidator extends Validator {
                 // Verify the treasury reference input
                 // Let treasury be the only reference input matching voteOutref on tx hash.
                 val treasuryReference = tx.referenceInputs match {
-                    case List.Cons(input, otherInputs) =>
-                        require(
-                          otherInputs.isEmpty && input.outRef.id === voteOutref.outRef.id,
-                          VoteOneRefInputTreasury
-                        )
-                        input
                     case List.Nil => fail(VoteOneRefInputTreasury)
+                    case l @ List.Cons(_, _) =>
+                        val treasuryRefInputs: List[TxInInfo] =
+                            l.filter(_.outRef.id === voteOutref.outRef.id)
+                        require(treasuryRefInputs.size === BigInt(1), VoteOneRefInputTreasury)
+                        treasuryRefInputs.head
                 }
 
                 // A head beacon token of headMp and CIP-67 prefix 4937 must be in treasury.

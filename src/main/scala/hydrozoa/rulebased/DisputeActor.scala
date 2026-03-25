@@ -12,10 +12,11 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.NodePrivateConfig
 import hydrozoa.multisig.backend.cardano.CardanoBackend
+import hydrozoa.multisig.backend.cardano.CardanoBackend.Error.*
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
-import hydrozoa.rulebased.DisputeActor.*
 import hydrozoa.rulebased.DisputeActor.Error.ParseError.Treasury.TreasuryResolved
+import hydrozoa.rulebased.DisputeActor.{Error, *}
 import hydrozoa.rulebased.ledger.l1.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
@@ -25,9 +26,8 @@ import scala.util.{Failure, Success, Try}
 import scalus.builtin.Data.fromData
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
-import scalus.cardano.ledger.{AddrKeyHash, DatumOption, PlutusScriptEvaluator, Utxo, Utxos}
+import scalus.cardano.ledger.{AddrKeyHash, DatumOption, PlutusScriptEvaluator, Transaction, Utxo, Utxos}
 import scalus.cardano.onchain.plutus.v3.PubKeyHash
-import scalus.cardano.txbuilder.SomeBuildError
 
 // QUESTION: The `OwnVoteUtxo` type is pretty sparse. Should I augment it directly, or did we want to keep
 // it small for some reason?<
@@ -63,11 +63,31 @@ final case class DisputeActor(config: DisputeActor.Config)(
 
     final val cardanoBackend = _cardanoBackend
 
+    private def handleCardanoBackendError[A](
+        action: IO[Either[CardanoBackend.Error, A]]
+    ): EitherT[IO, DisputeActor.Error.RecoverableErrors, A] =
+        for {
+            res <- EitherT.liftF(action)
+            a <- res match {
+                case Left(e: Timeout) =>
+                    EitherT.left(IO.pure(Error.RecoverableCardanoBackendError(e)))
+                case Left(e) =>
+                    EitherT.liftF(IO.raiseError(Error.UnrecoverableCardanoBackendError(e)))
+                case Right(a) => EitherT.right[DisputeActor.Error.RecoverableErrors](IO.pure(a))
+            }
+        } yield a
+
+    private def signAndSubmitTx(
+        tx: Transaction
+    ): EitherT[IO, DisputeActor.Error.RecoverableErrors, Unit] =
+        val signed = config.ownHeadWallet.signTx(tx)
+        handleCardanoBackendError(cardanoBackend.submitTx(signed))
+
     // TODO: no transactions are currently getting signed
     val handleDisputeRes: IO[Either[DisputeActor.Error.RecoverableErrors, Unit]] = {
         val et: EitherT[IO, DisputeActor.Error.RecoverableErrors, Unit] = for {
             // Wrapped in EitherT because a Left doesn't signify an unrecoverable failure
-            unparsedDisputeUtxos <- EitherT(
+            unparsedDisputeUtxos <- handleCardanoBackendError(
               cardanoBackend.utxosAt(
                 address = DisputeResolutionScript.address(config.cardanoInfo.network),
                 asset = (config.headMultisigScript.policyId, config.headTokenNames.voteTokenName)
@@ -75,7 +95,7 @@ final case class DisputeActor(config: DisputeActor.Config)(
             )
             disputeUtxos <- EitherT.liftF(parseDisputeUtxos(unparsedDisputeUtxos))
 
-            unparsedTreasuryUtxo <- EitherT(
+            unparsedTreasuryUtxo <- handleCardanoBackendError(
               cardanoBackend.utxosAt(
                 address = RuleBasedTreasuryScript.address(config.cardanoInfo.network),
                 asset =
@@ -87,25 +107,22 @@ final case class DisputeActor(config: DisputeActor.Config)(
             _ <- disputeUtxos match {
                 // Cast Vote
                 case (Some(ownVoteUtxo), _) =>
-                    val recipe = VoteTx.Recipe(
-                      voteUtxo = OwnVoteUtxo(
+                    val builder = VoteTx.Build(config)(
+                      _voteUtxo = OwnVoteUtxo(
                         AddrKeyHash(config.ownHeadWallet.pubKeyHash.hash),
                         ownVoteUtxo._1
                       ),
-                      treasuryUtxo = treasuryUtxo,
-                      collateralUtxo = collateralUtxo,
-                      blockHeader = blockHeader,
-                      signatures = signatures,
-                      network = config.cardanoInfo.network,
-                      protocolParams = config.cardanoInfo.protocolParams,
-                      evaluator = evaluator
+                      _treasuryUtxo = treasuryUtxo,
+                      _collateralUtxo = collateralUtxo,
+                      _blockHeader = blockHeader,
+                      _signatures = signatures,
                     )
                     for {
-                        voteTx <- VoteTx.build(recipe) match {
+                        voteTx <- builder.result match {
                             case Left(e)   => EitherT.liftF(IO.raiseError(Error.BuildError.Vote(e)))
-                            case Right(tx) => EitherT.pure[IO, CardanoBackend.Error](tx)
+                            case Right(tx) => EitherT.right(IO.pure(tx))
                         }
-                        _ <- EitherT(cardanoBackend.submitTx(voteTx.tx))
+                        _ <- signAndSubmitTx(voteTx.tx)
                     } yield ()
 
                 // Tally
@@ -128,9 +145,9 @@ final case class DisputeActor(config: DisputeActor.Config)(
                     for {
                         tallyTx <- TallyTx.build(recipe) match {
                             case Left(e) => EitherT.liftF(IO.raiseError(Error.BuildError.Tally(e)))
-                            case Right(tx) => EitherT.pure[IO, CardanoBackend.Error](tx)
+                            case Right(tx) => EitherT.right(IO.pure(tx))
                         }
-                        _ <- EitherT(cardanoBackend.submitTx(tallyTx.tx))
+                        _ <- signAndSubmitTx(tallyTx.tx)
                     } yield ()
 
                 // Resolve
@@ -145,9 +162,9 @@ final case class DisputeActor(config: DisputeActor.Config)(
                             .result match {
                             case Left(e) =>
                                 EitherT.liftF(IO.raiseError(Error.BuildError.Resolution(e)))
-                            case Right(tx) => EitherT.pure[IO, CardanoBackend.Error](tx)
+                            case Right(tx) => EitherT.right(IO.pure(tx))
                         }
-                        _ <- EitherT(cardanoBackend.submitTx(resolutionTx.tx))
+                        _ <- signAndSubmitTx(resolutionTx.tx)
                     } yield ()
 
                 // This should not be able to happen. If the treasury is unresolved,
@@ -243,22 +260,36 @@ object DisputeActor {
     }
 
     object Error {
-        type RecoverableErrors = Recoverable | CardanoBackend.Error
+        type RecoverableErrors = Recoverable
         sealed trait Recoverable
+        case class RecoverableCardanoBackendError(
+            wrapped: CardanoBackend.Error
+        ) extends Recoverable
 
         type UnrecoverableErrors = Unrecoverable
         sealed trait Unrecoverable extends Throwable
         case object TreasuryUnresolvedButNoVotes extends Unrecoverable
+        case class UnrecoverableCardanoBackendError(
+            wrapped: CardanoBackend.Error
+        ) extends Unrecoverable {
+            override val getMessage: String = wrapped.getMessage
+            override def toString: String = getMessage
+        }
 
         sealed trait BuildError extends Throwable
         object BuildError {
-            case class Vote(wrapped: VoteTx.VoteTxError | SomeBuildError) extends Unrecoverable {
-                override def toString: String = wrapped.toString
+            case class Vote(wrapped: VoteTx.Build.Error) extends Unrecoverable {
+                override def getMessage: String = wrapped.getMessage
             }
 
-            case class Tally(wrapped: TallyTx.TallyTxError | SomeBuildError) extends Unrecoverable
+            case class Tally(wrapped: TallyTx.TallyTxError) extends Unrecoverable {
+                override def getMessage: String = wrapped.getMessage
+            }
 
-            case class Resolution(wrapped: ResolutionTx.Build.Error) extends Unrecoverable
+            case class Resolution(wrapped: ResolutionTx.Build.Error) extends Unrecoverable {
+                override def getMessage: String = wrapped.getMessage
+            }
+
         }
 
         sealed trait ParseError

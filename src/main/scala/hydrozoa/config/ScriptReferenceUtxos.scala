@@ -7,14 +7,13 @@ import hydrozoa.rulebased.ledger.l1.script.plutus.{DisputeResolutionScript, Rule
 import scalus.cardano.ledger.Utxo
 import scalus.cardano.txbuilder.TransactionBuilderStep.ReferenceOutput
 
-//opaque type TreasuryReferenceScriptUtxo <: Reader[CardanoNetwork.Section, (ShelleyPaymentPart, ShelleyDelegationPart)]
-//  =  Reader[CardanoNetwork.Section, (ShelleyPaymentPart, ShelleyDelegationPart)]
-
-case class ScriptReferenceUtxos(
+final case class ScriptReferenceUtxos(
     override val rulebasedTreasuryScriptUtxo: ScriptReferenceUtxos.TreasuryScriptUtxo,
     override val disputeResolutionScriptUtxo: ScriptReferenceUtxos.DisputeScriptUtxo
 ) extends ScriptReferenceUtxos.Section {
     override val scriptReferenceUtxos: ScriptReferenceUtxos = this
+    def toList: List[Utxo] =
+        List(rulebasedTreasuryScriptUtxo.utxo, disputeResolutionScriptUtxo.utxo)
 }
 
 object ScriptReferenceUtxos {

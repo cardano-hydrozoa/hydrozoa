@@ -15,7 +15,7 @@ import scala.collection.immutable.TreeMap
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.rules.State
-import test.Generators.Hydrozoa.genEvacuationMap
+import test.Generators.Hydrozoa.{genEvacuationMap, genPayoutObligation}
 import test.{TestM, TestPeersSpec}
 
 //class TestTransaction(
@@ -33,7 +33,11 @@ object EvacuationActorTestHelpers {
         for {
             env <- ask
             // Might be empty
-            evacMapFull <- pick(genEvacuationMap().label("Full evacuation map at fallback"))
+            evacMapFull <- pick(
+              genEvacuationMap(
+                genPayoutObligation = genPayoutObligation(env.headConfig)
+              ).label("Full evacuation map at fallback")
+            )
             // Also might be empty, even if the full map isn't
             subset <- pick(
               Gen.someOf(evacMapFull.evacuationMap)

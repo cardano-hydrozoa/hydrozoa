@@ -43,7 +43,7 @@ private object ResolutionTxOps {
     type Config = CardanoNetwork.Section & ScriptReferenceUtxos.Section
 
     object Build {
-        enum Error:
+        enum Error extends Throwable:
             case AbsentVoteDatum(utxo: TransactionInput)
             case InvalidVoteDatum(utxo: TransactionInput, msg: String)
             case InvalidTreasuryDatum(msg: String)
@@ -51,8 +51,19 @@ private object ResolutionTxOps {
             case TreasuryAlreadyResolved
             case BuildError(wrapped: SomeBuildError)
 
-        // TODO
-        // override def toString : String = ???
+            override def getMessage: String = this match {
+                case AbsentVoteDatum(utxo: TransactionInput) =>
+                    s"Vote datum missing from transaction input ${utxo}"
+                case InvalidVoteDatum(utxo: TransactionInput, msg: String) =>
+                    s"Vote datum is malformed for transaction input $utxo. $msg"
+                case InvalidTreasuryDatum(msg: String) =>
+                    s"Treasury datum is invalid. $msg"
+                case TalliedNoVote => "Expected to find a tailled vote, but it was absent"
+                case TreasuryAlreadyResolved =>
+                    "Expected to find an unresolved treasury, but it was resolved."
+                case BuildError(wrapped: SomeBuildError) =>
+                    s"Build error occurred in resolution tx. ${wrapped.toString}"
+            }
     }
 
     final case class Build(config: Config)(

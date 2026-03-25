@@ -11,6 +11,8 @@ import scalus.cardano.txbuilder.{SomeBuildError, TransactionBuilder}
 import scalus.uplc.builtin.ByteString
 import sourcecode.*
 
+// FIXME: This trait and parts of the companion object are applicable to the rulebased regime.
+//   Lets move it out
 trait Tx[Self <: Tx[Self]] extends HasResolvedUtxos { self: Self =>
     def tx: Transaction
 

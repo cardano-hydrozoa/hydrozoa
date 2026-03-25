@@ -10,37 +10,43 @@ import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.commitment.TrustedSetup
-import hydrozoa.multisig.ledger.eutxol2.toEvacuationMap
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.rulebased.DisputeActor
 import hydrozoa.rulebased.ledger.l1.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
+import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.Voted
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.l1.state.{TreasuryState, VoteState}
-import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.*
 import hydrozoa.rulebased.ledger.l1.utxo.RuleBasedTreasuryUtxo
-import org.scalacheck.{Arbitrary, Gen, Properties, PropertyM}
+import org.scalacheck.rng.Seed
+import org.scalacheck.{Arbitrary, Gen, Properties, Test}
 import scalus.builtin.BLS12_381_G2_Element
 import scalus.builtin.Data.{fromData, toData}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.{genByteStringOfN, given}
 import scalus.cardano.ledger.DatumOption.Inline
+import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
 import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger.rules.{Context, UtxoEnv}
 import scalus.cardano.onchain.plutus.prelude.List as SList
-import test.Generators.Hydrozoa.genPubKeyUtxo
-import test.{TestM, TestPeersSpec}
+import test.Generators.Hydrozoa.{genEvacuationMap, genPayoutObligation, genPubKeyUtxo}
 
+// Note: If the vote status is unresolved, the dispute resolution script will fail unless the tx hash matches
+// the treasury utxo's tx hash, which is the tx hash of the fallback transaction.
+// The generators do some manual threading of this right now, perhaps we move towards more type safety in the future
 object DisputeActorTestHelpers {
     import MultiNodeConfig.*
 
     def mkVoteUtxo(
         key: BigInt,
         link: BigInt,
-        voteStatus: VoteStatus
+        voteStatus: VoteStatus,
+        // Careful, these can't conflict!
+        txIn: TransactionInput,
+        nVoteTokens: BigInt = 1,
     ): MultiNodeConfigTestM[scalus.cardano.ledger.Utxo] =
         for {
             env <- ask
-            ownVoteUtxoInput <- pick(Arbitrary.arbitrary[TransactionInput])
             disputeResAddress = DisputeResolutionScript.address(env.headConfig.network)
             ownVoteUtxoOutput = Babbage(
               address = disputeResAddress,
@@ -49,7 +55,7 @@ object DisputeActorTestHelpers {
                 assets = Map(
                   (
                     env.headConfig.headMultisigScript.policyId,
-                    Map((env.headConfig.headTokenNames.voteTokenName, 1))
+                    Map((env.headConfig.headTokenNames.voteTokenName, nVoteTokens.toLong))
                   )
                 )
               ),
@@ -58,21 +64,21 @@ object DisputeActorTestHelpers {
               ),
               scriptRef = None
             )
-            ownVoteUtxo = (ownVoteUtxoInput, ownVoteUtxoOutput)
+            ownVoteUtxo = (txIn, ownVoteUtxoOutput)
         } yield scalus.cardano.ledger.Utxo(ownVoteUtxo)
 
     def mkRuleBasedTreasury(
         versionMajor: BigInt,
-        coin: Coin
+        value: Value,
+        txIn: TransactionInput
     ): MultiNodeConfigTestM[RuleBasedTreasuryUtxo] =
         for {
             env <- ask
-            treasuryInput <- pick(Arbitrary.arbitrary[TransactionInput])
 
             datum =
                 TreasuryState.UnresolvedDatum(
                   headMp = env.headConfig.headMultisigScript.policyId,
-                  disputeId = env.headConfig.headTokenNames.treasuryTokenName.bytes,
+                  disputeId = env.headConfig.headTokenNames.voteTokenName.bytes,
                   peers = SList.from(env.headConfig.headPeerVKeys.toList),
                   peersN = env.headConfig.headPeerVKeys.size,
                   versionMajor = versionMajor,
@@ -82,18 +88,10 @@ object DisputeActorTestHelpers {
                       .map(p2 => BLS12_381_G2_Element(p2).toCompressedByteString)
                 )
             treasuryUtxo = RuleBasedTreasuryUtxo(
-              utxoId = treasuryInput,
+              utxoId = txIn,
               address = RuleBasedTreasuryScript.address(env.headConfig.network),
               datum = RuleBasedTreasuryDatum.Unresolved(datum),
-              value = Value.assets(
-                assets = Map(
-                  (
-                    env.headConfig.headMultisigScript.policyId,
-                    Map((env.headConfig.headTokenNames.treasuryTokenName, 1))
-                  )
-                ),
-                lovelace = coin
-              )
+              value = value
             )
 
         } yield treasuryUtxo
@@ -117,7 +115,8 @@ object DisputeActorTestHelpers {
         versionMinor: BigInt,
         initialL1Utxos: Utxos,
         initialEvacuationMap: EvacuationMap,
-        addCollateralUtxo: Boolean = true
+        addCollateralUtxo: Boolean = true,
+        addReferenceUtxos: Boolean = true
     ): MultiNodeConfigTestM[DisputeActor] =
         for {
             env <- ask
@@ -158,7 +157,24 @@ object DisputeActorTestHelpers {
                         (if addCollateralUtxo
                          then List((collateralUtxo.input, collateralUtxo.output))
                          else List.empty)
-                )
+                        ++ (
+                          if addReferenceUtxos
+                          then env.nodeConfigs.head._2.scriptReferenceUtxos.toList.map(_.toTuple)
+                          else List.empty
+                        )
+                ),
+                mkContext = l =>
+                    Context(
+                      fee = Coin.zero,
+                      env = UtxoEnv.apply(
+                        0,
+                        env.headConfig.cardanoProtocolParams,
+                        certState = CertState.empty,
+                        env.headConfig.network
+                      ),
+                      slotConfig = env.headConfig.slotConfig,
+                      evaluatorMode = EvaluateAndComputeCost
+                    )
               )
             )
             disputeActor = DisputeActor(config = env.nodeConfigs.head._2)(
@@ -177,154 +193,232 @@ The first few tests are sanity checks to ensure that raising exceptions (for unr
 left are handled properly by `handleDisputeRes`.
  */
 object DisputeActorTest extends Properties("Dispute Actor Test") {
+    override def overrideParameters(p: Test.Parameters): Test.Parameters =
+        p.withInitialSeed(Seed.fromBase64("blVd1G_dGK3N5DNMxvKMHmt03ilDJznWdugKlvIS4HI=").get)
 
     import DisputeActorTestHelpers.*
     import MultiNodeConfig.*
 
-    val _ = property("dispute actor (no actor system)") = run(
-      initializer = PropertyM.pick(MultiNodeConfig.generate(TestPeersSpec.default)()),
-      testM = for {
-          env <- ask
+    def missingVoteDatumThrows: MultiNodeConfigTestM[Boolean] = for {
+        env <- ask
+        txHash <- pick(genByteStringOfN(32).map(TransactionHash.fromByteString))
+        index <- pick(Gen.choose(0, 10))
 
-          // Missing vote datum throws
-          _ <- {
-              for {
-                  txHash <- pick(genByteStringOfN(32).map(TransactionHash.fromByteString))
-                  index <- pick(Gen.choose(0, 10))
+        voteInput = TransactionInput(txHash, index)
+        voteOutput = Babbage(
+          address = DisputeResolutionScript.address(env.headConfig.network),
+          value = Value.assets(
+            lovelace = Coin.ada(5),
+            assets = Map(
+              (
+                env.headConfig.headMultisigScript.policyId,
+                Map((env.headConfig.headTokenNames.voteTokenName, 1))
+              )
+            )
+          ),
+          datumOption = None,
+          scriptRef = None
+        )
+        disputeActor <- mkDisputeActor(
+          versionMajor = 100,
+          versionMinor = 2,
+          initialL1Utxos = Map((voteInput, voteOutput)),
+          initialEvacuationMap = EvacuationMap.empty
+        )
+        // Should throw here
+        res <- lift(disputeActor.handleDisputeRes.attempt)
+        _ <- assertWith(
+          msg = "Missing vote datum throws",
+          condition = res == Left(
+            DisputeActor.Error.ParseError.Vote.MissingDatum(Utxo(voteInput, voteOutput))
+          )
+        )
+    } yield true
 
-                  voteInput = TransactionInput(txHash, index)
-                  voteOutput = Babbage(
-                    address = DisputeResolutionScript.address(env.headConfig.network),
-                    value = Value.assets(
-                      lovelace = Coin.ada(5),
-                      assets = Map(
-                        (
-                          env.headConfig.headMultisigScript.policyId,
-                          Map((env.headConfig.headTokenNames.voteTokenName, 1))
-                        )
-                      )
-                    ),
-                    datumOption = None,
-                    scriptRef = None
+    def missingRuleBasedTreasuryUtxoDoesNotThrow: MultiNodeConfigTestM[Boolean] = for {
+        disputeActor <- mkDisputeActor(
+          versionMajor = 100,
+          versionMinor = 2,
+          initialL1Utxos = Map.empty,
+          initialEvacuationMap = EvacuationMap.empty
+        )
+        res <- lift(disputeActor.handleDisputeRes)
+        _ <- assertWith(
+          msg = "Missing rules best treasury returns Left",
+          condition = res == Left(DisputeActor.Error.ParseError.Treasury.TreasuryMissing)
+        )
+    } yield true
+
+    // Own uncast vote utxo and other uncast vote utxo exist -- Vote is cast
+    def votingHappyPath: MultiNodeConfigTestM[Boolean] = for {
+        env <- ask
+        treasuryToken =
+            Value.asset(
+              env.headConfig.headMultisigScript.policyId,
+              env.headConfig.headTokenNames.treasuryTokenName,
+              1
+            )
+        fallbackTxId <- pick(Arbitrary.arbitrary[TransactionHash])
+        evacMap <- pick(genEvacuationMap(genPayoutObligation = genPayoutObligation(env.headConfig)))
+        versionMajor = 100
+        versionMinor = 2
+
+        ruleBasedTreasury <- mkRuleBasedTreasury(
+          versionMajor,
+          // TODO: add equity in this test
+          evacMap.totalValue + treasuryToken,
+          TransactionInput(fallbackTxId, 0)
+        )
+
+        ownWallet =
+            env.nodePrivateConfigs.head._2.ownHeadWallet
+
+        // One vote awaiting a vote with our pkh
+        ownVoteUtxo <- mkVoteUtxo(
+          1,
+          2,
+          VoteStatus.AwaitingVote(ownWallet.pubKeyHash),
+          TransactionInput(fallbackTxId, env.headConfig.nHeadPeers + 1)
+        )
+
+        // One vote awaiting a vote with a different pkh
+        otherVoteUtxo <- mkVoteUtxo(
+          2,
+          3,
+          VoteStatus.AwaitingVote(
+            peer = env.nodePrivateConfigs
+                .map(_._2)
+                .filter(_.ownHeadVKey != ownWallet.exportVerificationKey)
+                .head
+                .ownHeadWallet
+                .pubKeyHash
+          ),
+          TransactionInput(fallbackTxId, env.headConfig.nHeadPeers + 2)
+        )
+
+        disputeActor <- mkDisputeActor(
+          versionMajor = versionMajor,
+          versionMinor = versionMinor,
+          initialL1Utxos = Map(
+            (ruleBasedTreasury.utxoId, ruleBasedTreasury.output),
+            ownVoteUtxo.toTuple,
+            otherVoteUtxo.toTuple
+          ),
+          initialEvacuationMap = evacMap
+        )
+        _ <- lift(disputeActor.handleDisputeRes)
+        queryRes <- lift(
+          disputeActor.cardanoBackend.utxosAt(
+            DisputeResolutionScript.address(env.headConfig.network)
+          )
+        ).flatMap(MultiNodeConfig.failLeft)
+
+        _ <- assertWith(
+          msg = "utxo set size stays the same after casting vote",
+          condition = queryRes.size == 2
+        )
+
+        votedOutput = queryRes
+            .filter((input, _) => !(otherVoteUtxo.input == input))
+            .head
+        _ <- assertWith(
+          msg = "Vote output value doesn't change",
+          condition = votedOutput._2.value == ownVoteUtxo.output.value
+        )
+        _ <- assertWith(
+          msg = "Vote output address doesn't change",
+          condition = votedOutput._2.address == ownVoteUtxo.output.address
+        )
+
+        _ <- assertWith(
+          msg = "Vote output has correct datum",
+          condition = votedOutput._2.datumOption match {
+              case Some(Inline(d)) =>
+                  val votedDatum = fromData[VoteDatum](d)(using VoteState.given_FromData_VoteDatum)
+                  votedDatum.key == 1
+                  && votedDatum.link == 2
+                  && votedDatum.voteStatus == VoteStatus.Voted(
+                    commitment = evacMap.kzgCommitment,
+                    versionMinor = versionMinor
                   )
-                  disputeActor <- mkDisputeActor(
-                    versionMajor = 100,
-                    versionMinor = 2,
-                    initialL1Utxos = Map((voteInput, voteOutput)),
-                    initialEvacuationMap = EvacuationMap.empty
-                  )
-                  // Should throw here
-                  res <- lift(disputeActor.handleDisputeRes.attempt)
-                  _ <- assertWith(
-                    msg = "Missing vote datum throws",
-                    condition = res == Left(
-                      DisputeActor.Error.ParseError.Vote.MissingDatum(Utxo(voteInput, voteOutput))
-                    )
-                  )
-              } yield true
+              case None => false
           }
+        )
 
-          // Test: Missing rules-based treasury utxo does not throw
-          _ <- for {
-              disputeActor <- mkDisputeActor(
-                versionMajor = 100,
-                versionMinor = 2,
-                initialL1Utxos = Map.empty,
-                initialEvacuationMap = EvacuationMap.empty
-              )
-              res <- lift(disputeActor.handleDisputeRes)
-              _ <- assertWith(
-                msg = "Missing rules best treasury returns Left",
-                condition = res == Left(DisputeActor.Error.ParseError.Treasury.TreasuryMissing)
-              )
-          } yield true
+    } yield true
 
-          // Own uncast vote utxo and other uncast vote utxo exist -- Vote is cast
-          _ <- for {
-              initialL2Utxos <- pick(genUtxosL2(env.headConfig, 10))
-              versionMajor = 100
-              versionMinor = 2
+    def resolutionHappyPath: MultiNodeConfigTestM[Boolean] = for {
+        env <- ask
+        treasuryToken =
+            Value.asset(
+              env.headConfig.headMultisigScript.policyId,
+              env.headConfig.headTokenNames.treasuryTokenName,
+              1
+            )
+        evacMap <- pick(genEvacuationMap(genPayoutObligation = genPayoutObligation(env.headConfig)))
 
-              ruleBasedTreasury <- mkRuleBasedTreasury(
-                versionMajor,
-                Coin(initialL2Utxos.map((_, o) => o.value.coin.value).sum)
-              )
+        voteTxId <- pick(Arbitrary.arbitrary[TransactionHash])
+        finalVoteUtxo <- mkVoteUtxo(
+          0,
+          1,
+          voteStatus = Voted(evacMap.kzgCommitment, 1),
+          nVoteTokens = BigInt(env.headConfig.nHeadPeers.convert + 1),
+          txIn = TransactionInput(voteTxId, 0)
+        )
 
-              ownWallet =
-                  env.nodePrivateConfigs.head._2.ownHeadWallet
+        fallbackTxId <- pick(Arbitrary.arbitrary[TransactionHash])
+        rulesBasedTreasury <- mkRuleBasedTreasury(
+          100,
+          evacMap.totalValue + treasuryToken,
+          TransactionInput(fallbackTxId, 0)
+        )
 
-              // One vote awaiting a vote with our pkh
-              ownVoteUtxo <- mkVoteUtxo(1, 2, VoteStatus.AwaitingVote(ownWallet.pubKeyHash))
+        collateralUtxo <- pick(
+          genPubKeyUtxo(
+            env.headConfig,
+            env.nodePrivateConfigs.head._2.ownHeadWallet.address(env.headConfig.network),
+            Gen.const(Value.ada(1000)),
+            None,
+            ensureMinAda = true
+          )
+        )
 
-              // One vote awaiting a vote with a different pkg
-              otherVoteUtxo <- mkVoteUtxo(
-                2,
-                3,
-                VoteStatus.AwaitingVote(
-                  peer = env.nodePrivateConfigs
-                      .map(_._2)
-                      .filter(_.ownHeadVKey != ownWallet.exportVerificationKey)
-                      .head
-                      .ownHeadWallet
-                      .pubKeyHash
-                )
-              )
+        da <- mkDisputeActor(
+          100,
+          1,
+          Map(finalVoteUtxo.toTuple, rulesBasedTreasury.asTuple, collateralUtxo.toTuple),
+          evacMap
+        )
 
-              initEvacMap <- failEither(initialL2Utxos.toEvacuationMap(env.headConfig))
+        _ <- lift(da.handleDisputeRes)
+        utxosAtResolutionAddress <- lift(
+          da.cardanoBackend.utxosAt(DisputeResolutionScript.address(env.headConfig.network))
+        )
+            .flatMap(failLeft)
+        utxosAtTreasuryAddress <- lift(
+          da.cardanoBackend.utxosAt(RuleBasedTreasuryScript.address(env.headConfig.network))
+        ).flatMap(failLeft)
 
-              disputeActor <- mkDisputeActor(
-                versionMajor = versionMajor,
-                versionMinor = versionMinor,
-                initialL1Utxos = Map(
-                  (ruleBasedTreasury.utxoId, ruleBasedTreasury.output),
-                  ownVoteUtxo.toTuple,
-                  otherVoteUtxo.toTuple
-                ),
-                initialEvacuationMap = initEvacMap
-              )
-              _ <- lift(disputeActor.handleDisputeRes)
-              queryResEither <- lift(
-                disputeActor.cardanoBackend.utxosAt(
-                  DisputeResolutionScript.address(env.headConfig.network)
-                )
-              )
-              Right(queryRes) = queryResEither
+        _ <- assertWith(
+          utxosAtResolutionAddress.isEmpty,
+          "There should be no utxos at the resolution address" +
+              s"after dispute resolution, but we found ${utxosAtResolutionAddress}"
+        )
 
-              _ <- assertWith(
-                msg = "utxo set size stays the same after casting vote",
-                condition = queryRes.size == 2
-              )
+        _ <- assertWith(
+          utxosAtTreasuryAddress.size == 1,
+          "There should be 1 utxo at the treasury address" +
+              s"after dispute resolution, but we found ${utxosAtTreasuryAddress}"
+        )
 
-              votedOutput = queryRes
-                  .filter((input, _) => !(otherVoteUtxo.input == input))
-                  .head
-              _ <- assertWith(
-                msg = "Vote output value doesn't change",
-                condition = votedOutput._2.value == ownVoteUtxo.output.value
-              )
-              _ <- assertWith(
-                msg = "Vote output address doesn't change",
-                condition = votedOutput._2.address == ownVoteUtxo.output.address
-              )
+    } yield true
 
-              evacMap <- failEither(initialL2Utxos.toEvacuationMap(env.headConfig))
-              _ <- assertWith(
-                msg = "Vote output has correct datum",
-                condition = votedOutput._2.datumOption match {
-                    case Some(Inline(d)) =>
-                        val votedDatum = fromData[VoteDatum](d)
-                        votedDatum.key == 1
-                        && votedDatum.link == 2
-                        && votedDatum.voteStatus == VoteStatus.Voted(
-                          commitment = evacMap.kzgCommitment,
-                          versionMinor = versionMinor
-                        )
-                    case None => false
-                }
-              )
-
-          } yield true
-
+    val _ = property("dispute actor (no actor system)") = runDefault(
+      for {
+          _ <- missingVoteDatumThrows
+          _ <- missingRuleBasedTreasuryUtxoDoesNotThrow
+          _ <- votingHappyPath
+//          _ <- resolutionHappyPath
       } yield true
     )
 }

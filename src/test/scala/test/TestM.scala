@@ -90,7 +90,7 @@ object TestM {
 
     def lift[R, A](propertyM: PropertyM[IO, A]): TestM[R, A] = TestM(Kleisli.liftF(propertyM))
 
-    def failEither[R, E, A](e: Either[E, A]): TestM[R, A] = e match {
+    def failLeft[R, E, A](e: Either[E, A]): TestM[R, A] = e match {
         case Left(e)  => fail(e.toString)
         case Right(x) => pure(x)
     }
@@ -139,8 +139,5 @@ final class TestMFixedEnv[R](dummy: Boolean = true) {
 
     def lift[A](propertyM: PropertyM[IO, A]): TestM[R, A] = TestM.lift(propertyM)
 
-    def failEither[E, A](e: Either[E, A]): TestM[R, A] = e match {
-        case Left(e)  => fail(e.toString)
-        case Right(x) => pure(x)
-    }
+    def failLeft[E, A](e: Either[E, A]): TestM[R, A] = TestM.failLeft(e)
 }

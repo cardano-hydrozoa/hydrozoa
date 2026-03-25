@@ -439,7 +439,7 @@ object Generators {
             minEntries: Int = 0,
             maxEntries: Int = 100,
             genEvacuationKey: Gen[EvacuationKey] = Arbitrary.arbitrary[EvacuationKey],
-            genPayoutObligation: Gen[Payout.Obligation] = Arbitrary.arbitrary[Payout.Obligation]
+            genPayoutObligation: Gen[Payout.Obligation]
         ): Gen[EvacuationMap] = {
 
             for {

@@ -37,17 +37,18 @@ object TallyTx {
         evaluator: PlutusScriptEvaluator,
     )
 
-    enum TallyTxError:
+    enum TallyTxError extends Throwable:
         case AbsentVoteDatum(utxo: TransactionInput)
         case MalformedVoteDatum(utxo: TransactionInput, msg: String)
         case IncompatibleVotes(continuing: (Key, Link), removed: (Key, Link))
+        case BuildError(wrapped: SomeBuildError)
 
-    def build(recipe: Recipe): Either[SomeBuildError | TallyTxError, TallyTx] = {
+    def build(recipe: Recipe): Either[TallyTxError, TallyTx] = {
         for {
             continuingVoteDatum <- extractVoteDatum(recipe.continuingVoteUtxo)
             removedVoteDatum <- extractVoteDatum(recipe.removedVoteUtxo)
             outputDatum <- tallyVotes(continuingVoteDatum, removedVoteDatum)
-            result <- buildTallyTx(recipe, outputDatum)
+            result <- buildTallyTx(recipe, outputDatum).left.map(TallyTxError.BuildError(_))
         } yield result
     }
 

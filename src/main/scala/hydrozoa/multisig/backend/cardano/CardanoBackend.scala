@@ -73,4 +73,4 @@ object CardanoBackend:
         case ErrorDecodingRedeemerCbor(hex: String)
             extends Error(s"Error decoding redeemer Data from hex: $hex")
 
-        override def toString: String = msg
+        override def getMessage: String = msg

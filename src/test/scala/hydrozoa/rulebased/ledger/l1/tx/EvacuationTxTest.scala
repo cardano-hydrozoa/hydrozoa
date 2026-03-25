@@ -199,7 +199,7 @@ object EvacuationTxTest extends Properties("EvacuationTx Test") {
       for {
           env <- ask
           builder <- pick(genEvacuationTxBuild(env))
-          evacuationTx <- failEither(builder.result)
+          evacuationTx <- failLeft(builder.result)
           _ <- assertWith(
             evacuationTx.treasuryUtxoSpent == builder.treasuryUtxo,
             "Spent treasury UTXO should match recipe input"

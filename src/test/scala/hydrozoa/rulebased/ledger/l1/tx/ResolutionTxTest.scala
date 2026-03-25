@@ -120,7 +120,7 @@ object ResolutionTxTest extends Properties("Resolution Tx Test") {
     val _ = property("Resolution Builder generator works") = runDefault(for {
         config <- ask
         builder <- pick(genResolutionTxBuilder(config))
-        tx <- failEither(builder.result)
+        tx <- failLeft(builder.result)
         // Basic smoke test assertions
         _ <- assertWith(tx.talliedVoteUtxo != null, "Tallied vote UTXO should not be null")
         _ <- assertWith(
