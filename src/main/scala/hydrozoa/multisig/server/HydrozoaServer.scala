@@ -5,7 +5,7 @@ import cats.syntax.all.*
 import com.comcast.ip4s.*
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.lib.logging.Logging
-import hydrozoa.multisig.consensus.EventSequencer
+import hydrozoa.multisig.consensus.{BlockWeaver, EventSequencer}
 import org.http4s.ember.server.EmberServerBuilder
 import org.http4s.server.Server
 import org.http4s.server.middleware.CORS
@@ -22,13 +22,19 @@ object HydrozoaServer {
     // TODO: shall we include it into node config?
     final case class Config(
         host: Host = host"0.0.0.0",
-        port: Port = port"8080"
+        port: Port = port"8080",
+        adminUsername: String,
+        adminPassword: String
     )
 
     /** Create and start the HTTP server
       *
       * @param eventSequencer
       *   Handle to the EventSequencer actor
+      * @param blockWeaver
+      *   Handle to the BlockWeaver actor
+      * @param headConfig
+      *   Head configuration
       * @param config
       *   Server configuration
       * @return
@@ -36,11 +42,14 @@ object HydrozoaServer {
       */
     def create(
         eventSequencer: EventSequencer.Handle,
+        blockWeaver: BlockWeaver.Handle,
         headConfig: HeadConfig,
-        config: Config = Config()
+        config: Config
     ): Resource[IO, Server] =
         for {
-            hydrozoaRoutes <- Resource.eval(HydrozoaRoutes(eventSequencer, headConfig))
+            hydrozoaRoutes <- Resource.eval(
+              HydrozoaRoutes(eventSequencer, blockWeaver, headConfig, config)
+            )
             server <- EmberServerBuilder
                 .default[IO]
                 .withHost(config.host)
@@ -61,10 +70,11 @@ object HydrozoaServer {
       */
     def run(
         eventSequencer: EventSequencer.Handle,
+        blockWeaver: BlockWeaver.Handle,
         headConfig: HeadConfig,
-        config: Config = Config()
+        config: Config
     ): IO[Nothing] = {
-        create(eventSequencer, headConfig, config)
+        create(eventSequencer, blockWeaver, headConfig, config)
             .use(_ => IO.never)
     }
 }

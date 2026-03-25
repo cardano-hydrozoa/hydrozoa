@@ -3,6 +3,7 @@ package hydrozoa.app
 import cats.effect.{ExitCode, IO, IOApp, Resource}
 import com.bloxbean.cardano.client.util.HexUtil
 import com.bloxbean.cardano.client.util.HexUtil.encodeHexString
+import com.comcast.ip4s.{host, port}
 import com.suprnation.actor.ActorSystem
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.lib.cardano.scalus.ShelleyAddressExtra
@@ -41,7 +42,9 @@ object Main extends IOApp {
         blockfrostApiKey: String,
         sugarRushHost: String,
         sugarRushPort: String,
-        tokenRecoveryAddress: Option[ShelleyAddress]
+        tokenRecoveryAddress: Option[ShelleyAddress],
+        adminUsername: String,
+        adminPassword: String
     ) {
         val sugarRushUri: String = s"ws://$sugarRushHost:$sugarRushPort/ws"
     }
@@ -142,6 +145,10 @@ object Main extends IOApp {
                 logger.info(s"Token recovery address: ${addr.toBech32.get}")
             )
 
+            adminUsername <- getMandatoryEnvVar("ADMIN_USERNAME")
+            adminPassword <- getMandatoryEnvVar("ADMIN_PASSWORD")
+            _ <- logger.info(s"Loaded admin credentials for user: $adminUsername")
+
             _ <- logger.info(s"Minimum equity: $minEquity lovelace")
         } yield EnvConfig(
           verificationKey = vKey,
@@ -150,7 +157,9 @@ object Main extends IOApp {
           blockfrostApiKey = blockfrostKey,
           sugarRushHost = sugarRushHost,
           sugarRushPort = sugarRushPort,
-          tokenRecoveryAddress = tokenRecoveryAddressOpt
+          tokenRecoveryAddress = tokenRecoveryAddressOpt,
+          adminUsername = adminUsername,
+          adminPassword = adminPassword
         )
 
     val cardanoNetwork: StandardCardanoNetwork = CardanoNetwork.Preview
@@ -213,9 +222,20 @@ object Main extends IOApp {
 
                 // Start HTTP server once EventSequencer is available
                 _ <- mrm.connectionsDeferred.get.flatMap { connections =>
+                    val serverConfig = HydrozoaServer.Config(
+                      host = host"0.0.0.0",
+                      port = port"8080",
+                      adminUsername = env.adminUsername,
+                      adminPassword = env.adminPassword
+                    )
                     logger.info("Starting HTTP server...") *>
                         HydrozoaServer
-                            .create(connections.eventSequencer, nodeConfig.headConfig)
+                            .create(
+                              connections.eventSequencer,
+                              connections.blockWeaver,
+                              nodeConfig.headConfig,
+                              serverConfig
+                            )
                             .use(_ => IO.never)
                             .start // Run in background
                             .void
