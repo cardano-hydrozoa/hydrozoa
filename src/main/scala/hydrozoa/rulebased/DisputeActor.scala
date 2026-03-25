@@ -7,6 +7,7 @@ import cats.syntax.all.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.*
+import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.NodePrivateConfig
@@ -19,7 +20,6 @@ import hydrozoa.rulebased.ledger.l1.script.plutus.{DisputeResolutionScript, Rule
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.l1.tx.*
-import hydrozoa.rulebased.ledger.l1.tx.ResolutionTx.ResolutionTxError
 import hydrozoa.rulebased.ledger.l1.utxo.*
 import scala.util.{Failure, Success, Try}
 import scalus.builtin.Data.fromData
@@ -135,16 +135,14 @@ final case class DisputeActor(config: DisputeActor.Config)(
 
                 // Resolve
                 case (None, lastVoteUtxo) if lastVoteUtxo.length == 1 =>
-                    val recipe = ResolutionTx.Recipe(
-                      talliedVoteUtxo = TallyVoteUtxo(lastVoteUtxo.head._1),
-                      treasuryUtxo = treasuryUtxo,
-                      collateralUtxo = collateralUtxo,
-                      network = config.cardanoInfo.network,
-                      protocolParams = config.cardanoInfo.protocolParams,
-                      evaluator = evaluator
-                    )
                     for {
-                        resolutionTx <- ResolutionTx.build(recipe) match {
+                        resolutionTx <- ResolutionTx
+                            .Build(config)(
+                              _talliedVoteUtxo = TallyVoteUtxo(lastVoteUtxo.head._1),
+                              _treasuryUtxo = treasuryUtxo,
+                              _collateralUtxo = collateralUtxo
+                            )
+                            .result match {
                             case Left(e) =>
                                 EitherT.liftF(IO.raiseError(Error.BuildError.Resolution(e)))
                             case Right(tx) => EitherT.pure[IO, CardanoBackend.Error](tx)
@@ -233,7 +231,7 @@ final case class DisputeActor(config: DisputeActor.Config)(
 
 object DisputeActor {
     type Config = NodePrivateConfig.Section & CardanoNetwork.Section & HeadPeers.Section &
-        HasTokenNames
+        HasTokenNames & ScriptReferenceUtxos.Section
 
     type Handle = ActorRef[IO, Requests.Request]
 
@@ -260,7 +258,7 @@ object DisputeActor {
 
             case class Tally(wrapped: TallyTx.TallyTxError | SomeBuildError) extends Unrecoverable
 
-            case class Resolution(wrapped: ResolutionTxError | SomeBuildError) extends Unrecoverable
+            case class Resolution(wrapped: ResolutionTx.Build.Error) extends Unrecoverable
         }
 
         sealed trait ParseError

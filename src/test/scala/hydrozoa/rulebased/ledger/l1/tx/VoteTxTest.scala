@@ -5,7 +5,6 @@ import hydrozoa.*
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.cardano.scalus.ShelleyAddressExtra
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionScript
-import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.AwaitingVote
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.*
@@ -86,7 +85,6 @@ def genVoteTxRecipe(
         // Generate a treasury UTXO to use a reference input
         treasuryDatum <- genTreasuryUnresolvedDatum(
           config,
-          config.headTokenNames.voteTokenName.bytes,
           versionMajor
         )
         fallbackTxId <- genByteStringOfN(32).map(TransactionHash.fromByteString)
@@ -98,8 +96,6 @@ def genVoteTxRecipe(
         treasuryUtxo <- genRuleBasedTreasuryUtxo(
           config = config,
           fallbackTxId = fallbackTxId,
-          headMp = config.headMultisigScript.policyId,
-          treasuryTokenName = cip67BeaconTokenPrefix.concat(headTokenSuffix),
           treasuryDatum
         )
 

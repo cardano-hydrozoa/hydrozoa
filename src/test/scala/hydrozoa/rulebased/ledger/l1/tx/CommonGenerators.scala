@@ -8,6 +8,7 @@ import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.commitment.TrustedSetup
 import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
+import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryScript
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.UnresolvedDatum
@@ -67,8 +68,7 @@ object CommonGenerators {
         )
 
     def genTreasuryUnresolvedDatum(
-        config: CardanoNetwork.Section & HeadPeers.Section,
-        disputeId: TokenName,
+        config: CardanoNetwork.Section & HeadPeers.Section & HasTokenNames,
         versionMajor: BigInt
     ): Gen[UnresolvedDatum] =
         for {
@@ -81,7 +81,7 @@ object CommonGenerators {
                 .map(p2 => G2Element(p2).toCompressedByteString)
         } yield UnresolvedDatum(
           headMp = config.headMultisigScript.policyId,
-          disputeId = disputeId,
+          disputeId = config.headTokenNames.voteTokenName.bytes,
           peers = SList.from(config.headPeerVKeys.iterator),
           peersN = config.nHeadPeers.convert,
           versionMajor = versionMajor,
@@ -89,10 +89,8 @@ object CommonGenerators {
         )
 
     def genRuleBasedTreasuryUtxo(
-        config: CardanoNetwork.Section,
+        config: CardanoNetwork.Section & HasTokenNames & HeadPeers.Section,
         fallbackTxId: TransactionHash,
-        headMp: PolicyId,
-        treasuryTokenName: TokenName,
         unresolvedDatum: UnresolvedDatum
     ): Gen[RuleBasedTreasuryUtxo] =
         for {
@@ -105,8 +103,8 @@ object CommonGenerators {
             spp = ShelleyPaymentPart.Script(RuleBasedTreasuryScript.compiledScriptHash)
             scriptAddr = ShelleyAddress(config.network, spp, ShelleyDelegationPart.Null)
 
-            beaconTokenAssetName = AssetName(treasuryTokenName)
-            beaconToken = Value.asset(headMp, beaconTokenAssetName, 1)
+            beaconTokenAssetName = AssetName(config.headTokenNames.treasuryTokenName.bytes)
+            beaconToken = Value.asset(config.headMultisigScript.policyId, beaconTokenAssetName, 1)
         } yield RuleBasedTreasuryUtxo(
           utxoId = txId,
           address = scriptAddr,
@@ -124,7 +122,7 @@ object CommonGenerators {
           input,
           Babbage(
             address = address,
-            value = Value(Coin(5_000_000L)),
+            value = Value.ada(5),
             datumOption = None,
             scriptRef = None
           )

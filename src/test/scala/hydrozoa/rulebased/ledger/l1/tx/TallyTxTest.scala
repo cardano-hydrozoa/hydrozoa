@@ -1,23 +1,24 @@
 package hydrozoa.rulebased.ledger.l1.tx
 
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.cip67DisputeTokenPrefix
-import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
-import hydrozoa.rulebased.ledger.l1.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryValidator}
-import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
+import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
+import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionScript
+import hydrozoa.rulebased.ledger.l1.state.VoteState
+import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus, given_ToData_VoteDatum}
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.*
 import hydrozoa.rulebased.ledger.l1.utxo.TallyVoteUtxo
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 import scala.annotation.nowarn
-import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
+import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.onchain.plutus.v1.ArbitraryInstances.genByteStringOfN
-import scalus.cardano.onchain.plutus.v3.TokenName
 import scalus.uplc.builtin.Builtins.blake2b_224
 import scalus.uplc.builtin.ByteString
 import scalus.uplc.builtin.Data.toData
@@ -69,26 +70,24 @@ def genCompatibleVoteDatums(peersN: Int): Gen[(VoteDatum, VoteDatum)] =
     } yield (continuingDatum, removedDatum)
 
 def genTallyVoteUtxo(
+    config: CardanoNetwork.Section & HasTokenNames & HeadPeers.Section,
     fallbackTxId: TransactionHash,
     outputIndex: Int,
-    headMp: PolicyId,
-    voteTokenName: TokenName,
     voteDatum: VoteDatum,
     voter: AddrKeyHash,
-    network: Network
 ): Gen[TallyVoteUtxo] = {
     val txId = TransactionInput(fallbackTxId, outputIndex)
     val spp = ShelleyPaymentPart.Script(DisputeResolutionScript.compiledScriptHash)
-    val scriptAddr = ShelleyAddress(network, spp, ShelleyDelegationPart.Null)
+    val scriptAddr = ShelleyAddress(config.network, spp, ShelleyDelegationPart.Null)
 
-    val voteTokenAssetName = AssetName(voteTokenName)
-    val voteToken = Value.assets(Map(headMp -> Map(voteTokenAssetName -> 1)))
+    val voteTokenAssetName = config.headTokenNames.voteTokenName
+    val voteToken = Value.asset(config.headMultisigScript.policyId, voteTokenAssetName, 1)
 
     val voteOutput = Babbage(
       address = scriptAddr,
       // Sufficient ADA for minAda + tally fees
       value = Value(Coin(10_000_000L)) + voteToken,
-      datumOption = Some(Inline(voteDatum.toData)),
+      datumOption = Some(Inline(voteDatum.toData(using VoteState.given_ToData_VoteDatum))),
       scriptRef = None
     )
 
@@ -110,17 +109,9 @@ def genTallyTxRecipe(
         )()
         config = multiNodeConfig.headConfig
 
-        // This is 4 bytes shorter to accommodate CIP-67 prefixes
-        // NB: we use the same token name _suffix_ for all head tokens so far, which is not the case in reality
-        headTokensSuffix <- genByteStringOfN(28)
-        // Generate a treasury UTXO to use as reference input
-        beaconTokenName = cip67BeaconTokenPrefix.concat(headTokensSuffix)
-        voteTokenName = cip67DisputeTokenPrefix.concat(headTokensSuffix)
-
         versionMajor <- Gen.choose(1L, 99L).map(BigInt(_))
         treasuryDatum <- genTreasuryUnresolvedDatum(
           config,
-          voteTokenName,
           versionMajor
         )
 
@@ -128,8 +119,6 @@ def genTallyTxRecipe(
         treasuryUtxo <- genRuleBasedTreasuryUtxo(
           config,
           fallbackTxId,
-          config.headMultisigScript.policyId,
-          beaconTokenName,
           treasuryDatum
         )
 
@@ -138,23 +127,19 @@ def genTallyTxRecipe(
 
         // Generate a vote utxo with cast votes
         continuingVoteUtxo <- genTallyVoteUtxo(
+          config,
           fallbackTxId,
           1, // Output index 1
-          config.headMultisigScript.policyId,
-          voteTokenName,
           continuingVoteDatum,
           AddrKeyHash(blake2b_224(config.headPeers.headPeerVKeys.head)),
-          config.network
         )
 
         removedVoteUtxo <- genTallyVoteUtxo(
+          config,
           fallbackTxId,
           2, // Output index 2
-          config.headMultisigScript.policyId,
-          voteTokenName,
           removedVoteDatum,
           AddrKeyHash(blake2b_224(config.headPeers.headPeerVKeys.toList(1))),
-          config.network
         )
 
         collateralUtxo <- genCollateralUtxo(

@@ -262,7 +262,11 @@ object Bootstrap:
             // NOTE: Reusing the same multisig wallet, in production this should be a different wallet
             evacuationWallet = ownHeadWallet
           ),
-          nodeOperationMultisigConfig = NodeOperationMultisigConfig.default
+          nodeOperationMultisigConfig = NodeOperationMultisigConfig.default,
+          // TODO: I assume that these will be pre-populated on preview, pre-prod, and mainnet, and that we'll have
+          // a different utility to publish the utxo to a given network.
+          // We should probably query these utxos using the backend, and then parse.
+          scriptReferenceUtxos = ???
         ).get
     }
 

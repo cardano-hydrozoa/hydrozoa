@@ -14,6 +14,7 @@ import hydrozoa.config.head.{HeadConfig, HeadConfigGen}
 import hydrozoa.config.node.operation.evacuation.{NodeOperationEvacuationConfigGen, generateNodeOperationEvacuationConfig}
 import hydrozoa.config.node.operation.multisig.{NodeOperationMultisigConfig, generateNodeOperationMultisigConfig}
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
+import hydrozoa.config.{ScriptReferenceUtxosGen, generateScriptReferenceUtxos}
 import hydrozoa.lib.cardano.scalus.ShelleyAddressExtra
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
@@ -24,9 +25,10 @@ import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.{SlotConfig, Transaction, VKeyWitness}
 import test.{TestM, TestMFixedEnv, TestPeers, TestPeersSpec}
 
-/** Multi-node config is a tool for test suites that allows multisigning effects as well ad gives
+/** Multi-node config is a tool for test suites that allows multisigning effects as well as giving
   * the access to the head config, which is common for all peers.
   */
+// TODO: Should we add a mock cardano backend that is aware of transactions deploying the reference script utxos?
 case class MultiNodeConfig private (
     nodePrivateConfigs: Map[HeadPeerNumber, NodePrivateConfig],
     headConfig: HeadConfig,
@@ -38,7 +40,8 @@ case class MultiNodeConfig private (
                   headConfig,
                   pc.ownHeadWallet,
                   pc.nodeOperationEvacuationConfig,
-                  pc.nodeOperationMultisigConfig
+                  pc.nodeOperationMultisigConfig,
+                  pc.scriptReferenceUtxos
                 ).get
         )
 
@@ -105,7 +108,8 @@ object MultiNodeConfig {
         generateNodeOperationEvacuationConfig: NodeOperationEvacuationConfigGen =
             generateNodeOperationEvacuationConfig,
         generateNodeOperationMultisigConfig: Gen[NodeOperationMultisigConfig] =
-            generateNodeOperationMultisigConfig
+            generateNodeOperationMultisigConfig,
+        generateScriptReferenceUtxos: ScriptReferenceUtxosGen = generateScriptReferenceUtxos
     ): Gen[MultiNodeConfig] = for {
         testPeers <- TestPeers.generate(spec)
         ret <- generateForTestPeers(testPeers)(
@@ -117,7 +121,8 @@ object MultiNodeConfig {
           generateHeadParameters,
           generateInitializationParameters,
           generateNodeOperationEvacuationConfig,
-          generateNodeOperationMultisigConfig
+          generateNodeOperationMultisigConfig,
+          generateScriptReferenceUtxos
         )
     } yield ret
 
@@ -136,7 +141,8 @@ object MultiNodeConfig {
         generateNodeOperationEvacuationConfig: NodeOperationEvacuationConfigGen =
             generateNodeOperationEvacuationConfig,
         generateNodeOperationMultisigConfig: Gen[NodeOperationMultisigConfig] =
-            generateNodeOperationMultisigConfig
+            generateNodeOperationMultisigConfig,
+        generateScriptReferenceUtxos: ScriptReferenceUtxosGen = generateScriptReferenceUtxos
     ): Gen[MultiNodeConfig] =
         for {
             headConfig <- generateHeadConfig(testPeers)(
@@ -145,7 +151,7 @@ object MultiNodeConfig {
               generateFallbackContingency = generateFallbackContingency,
               generateDisputeResolutionConfig = generateDisputeResolutionConfig,
               generateHeadParameters = generateHeadParameters,
-              generateInitializationParameters = generateInitializationParameters
+              generateInitializationParameters = generateInitializationParameters,
             )
 
             nodePrivateConfigs <-
@@ -160,11 +166,13 @@ object MultiNodeConfig {
                             headConfig.headPeers
                           ).get
                           noec <- generateNodeOperationEvacuationConfig(ohpp.ownHeadWallet)
+                          sru <- generateScriptReferenceUtxos(headConfig)
                       } yield peerId._1 -> NodePrivateConfig(
                         ownHeadPeerPrivate = ohpp,
                         // Re-using the same wallet for now, don't know if this will work
                         nodeOperationEvacuationConfig = noec,
-                        nodeOperationMultisigConfig = nomc
+                        nodeOperationMultisigConfig = nomc,
+                        scriptReferenceUtxos = sru
                       )
                   )
                 )

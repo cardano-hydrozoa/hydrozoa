@@ -1,5 +1,6 @@
 package hydrozoa.config.node
 
+import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.initialization.InitializationParameters
 import hydrozoa.config.head.network.CardanoNetwork
@@ -23,13 +24,15 @@ object NodeConfig {
         headConfig: HeadConfig,
         ownHeadWallet: HeadPeerWallet,
         nodeOperationEvacuationConfig: NodeOperationEvacuationConfig,
-        nodeOperationMultisigConfig: NodeOperationMultisigConfig
+        nodeOperationMultisigConfig: NodeOperationMultisigConfig,
+        scriptReferenceUtxos: ScriptReferenceUtxos
     ): Option[NodeConfig] = for {
         ownHeadPeerPrivate <- OwnHeadPeerPrivate(ownHeadWallet, headConfig.headPeers)
         nodePrivateConfig = NodePrivateConfig(
           ownHeadPeerPrivate,
           nodeOperationEvacuationConfig,
-          nodeOperationMultisigConfig
+          nodeOperationMultisigConfig,
+          scriptReferenceUtxos
         )
     } yield NodeConfig(headConfig, nodePrivateConfig)
 
@@ -58,5 +61,7 @@ object NodeConfig {
         override transparent inline def nodeOperationMultisigConfig: NodeOperationMultisigConfig =
             nodePrivateConfig.nodeOperationMultisigConfig
 
+        override transparent inline def scriptReferenceUtxos: ScriptReferenceUtxos =
+            nodePrivateConfig.scriptReferenceUtxos
     }
 }
