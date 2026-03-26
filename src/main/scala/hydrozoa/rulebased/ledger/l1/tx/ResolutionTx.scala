@@ -4,6 +4,7 @@ import cats.implicits.*
 import hydrozoa.*
 import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.multisig.ledger.l1.tx.Tx
 import hydrozoa.multisig.ledger.l1.tx.Tx.Validators.nonSigningValidators
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionScript
@@ -22,8 +23,8 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.txbuilder.Datum.DatumInlined
 import scalus.cardano.txbuilder.ScriptSource.{PlutusScriptAttached, PlutusScriptValue}
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
-import scalus.cardano.txbuilder.TransactionBuilderStep.{AddCollateral, Send, Spend}
-import scalus.cardano.txbuilder.{Change, PubKeyWitness, SomeBuildError, ThreeArgumentPlutusScriptWitness, TransactionBuilder}
+import scalus.cardano.txbuilder.TransactionBuilderStep.{Send, Spend}
+import scalus.cardano.txbuilder.{Change, SomeBuildError, ThreeArgumentPlutusScriptWitness, TransactionBuilder}
 import scalus.uplc.builtin.Data.{fromData, toData}
 
 final case class ResolutionTx(
@@ -69,11 +70,11 @@ private object ResolutionTxOps {
     final case class Build(config: Config)(
         _talliedVoteUtxo: TallyVoteUtxo,
         _treasuryUtxo: RuleBasedTreasuryUtxo,
-        _collateralUtxo: Utxo,
+        _collateralUtxo: CollateralUtxo,
     ) {
         val talliedVoteUtxo: TallyVoteUtxo = _talliedVoteUtxo
         val treasuryUtxo: RuleBasedTreasuryUtxo = _treasuryUtxo
-        val collateralUtxo: Utxo = _collateralUtxo
+        val collateralUtxo: CollateralUtxo = _collateralUtxo
         def result: Either[Build.Error, ResolutionTx] =
             for {
                 voteDetails <- extractVoteDetails(talliedVoteUtxo)
@@ -184,15 +185,9 @@ private object ResolutionTxOps {
                             scriptRef = None
                           )
                         ),
-                        // Change Utxo
-                        Send(
-                          Babbage(
-                            collateralUtxo.output.address,
-                            value = Value.zero
-                          )
-                        ),
-                        Spend(collateralUtxo, PubKeyWitness),
-                        AddCollateral(collateralUtxo),
+                        collateralUtxo.add,
+                        collateralUtxo.spend,
+                        collateralUtxo.sendContinuing,
                       )
                     )
 

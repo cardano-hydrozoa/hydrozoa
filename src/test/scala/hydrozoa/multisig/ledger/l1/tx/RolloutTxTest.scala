@@ -21,13 +21,17 @@ object RolloutTxTest extends Properties("RolloutTxTest") {
     given ppLastBuilder: (RolloutTx.Build.Last => Pretty) = builder =>
         Pretty(_ => builder.config.headMultisigScript.policyId.toString)
 
-    private def genPayouts(network: CardanoNetwork.Section) =
-        GenOther
-            .genSequencedValueDistribution(
-              500,
-              v => genKnownValuePayoutObligationWithMinAdaEnsured(network, v)
-            )
-            .map(nel => NonEmptyVector.fromVectorUnsafe(Vector.from(nel.toList)))
+    private def genPayouts(network: CardanoNetwork.Section) = {
+        for {
+            nPayouts <- Gen.choose(1, 500)
+            res <- GenOther
+                .genSequencedValueDistribution(
+                  nPayouts,
+                  v => genKnownValuePayoutObligationWithMinAdaEnsured(network, v)
+                )
+                .map(nel => NonEmptyVector.fromVectorUnsafe(Vector.from(nel.toList)))
+        } yield res
+    }
 
     val genLastBuilder: Gen[RolloutTx.Build.Last] =
         for {

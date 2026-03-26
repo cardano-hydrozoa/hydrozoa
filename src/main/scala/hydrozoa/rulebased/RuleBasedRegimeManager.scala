@@ -5,16 +5,17 @@ import cats.effect.*
 import cats.syntax.all.*
 import com.suprnation.actor.Actor.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.joint.EvacuationMap
-import scalus.cardano.ledger.{TransactionHash, Utxo}
+import scalus.cardano.ledger.TransactionHash
 
 /** This doesn't actually do much of anything right now. It just starts the dispute and liquidation
   * actors, and those proceed autonomously. I don't think we need actors for these.
   */
 case class RuleBasedRegimeManager(config: RuleBasedRegimeManager.Config)(
-    collateralUtxo: Utxo,
+    collateralUtxo: CollateralUtxo,
     blockHeader: BlockHeader.Minor.Onchain,
     signatures: List[BlockHeader.Minor.HeaderSignature],
     cardanoBackend: CardanoBackend[IO],

@@ -17,6 +17,7 @@ import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.Voted
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.l1.state.{TreasuryState, VoteState}
+import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.genCollateralUtxo
 import hydrozoa.rulebased.ledger.l1.utxo.RuleBasedTreasuryUtxo
 import org.scalacheck.rng.Seed
 import org.scalacheck.{Arbitrary, Gen, Properties, Test}
@@ -29,7 +30,7 @@ import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, UtxoEnv}
 import scalus.cardano.onchain.plutus.prelude.List as SList
-import test.Generators.Hydrozoa.{genEvacuationMap, genPayoutObligation, genPubKeyUtxo}
+import test.Generators.Hydrozoa.{genEvacuationMap, genPositiveValue}
 
 // Note: If the vote status is unresolved, the dispute resolution script will fail unless the tx hash matches
 // the treasury utxo's tx hash, which is the tx hash of the fallback transaction.
@@ -98,48 +99,43 @@ object DisputeActorTestHelpers {
 
     /** Given a pre-initialized TestM with a TestHeadConfig environment and an initial L2 UTxO set,
       * create a (pure) DisputeActor.
+      *
+      * Automatically adds an ada-only collateral utxo and the reference utxos from the config.
       * @param versionMajor
       *   the major version to vote for
       * @param versionMinor
       *   the minor version to vote for
-      * @param initialL1Utxos
+      * @param additionalL1Utxos
       *   the utxos to initialize the cardanoBackend with
       * @param initialEvacuationMap
       *   the evacuation map to initialize the KZG commitment with
-      * @param addCollateralUtxoToBackend
-      *   true if we should add a generated a collateral utxo to the backend, false if we should
-      *   not.
       */
     def mkDisputeActor(
         versionMajor: BigInt,
         versionMinor: BigInt,
-        initialL1Utxos: Utxos,
+        additionalL1Utxos: Utxos,
         initialEvacuationMap: EvacuationMap,
-        addCollateralUtxo: Boolean = true,
-        addReferenceUtxos: Boolean = true
     ): MultiNodeConfigTestM[DisputeActor] =
         for {
             env <- ask
 
+            // If you happen to have reference utxos with the same tx id as other utxos, this will screw things up
+            refUtxoIds = env.nodeConfigs.head._2.scriptReferenceUtxos.toList.map(_.input)
+
+            _ <- assertWith(
+              refUtxoIds.forall(id => !additionalL1Utxos.contains(id)),
+              "Reference utxos from head config conflict with utxos from mkDisputeActor"
+            )
             ownPeerConfig = env.nodePrivateConfigs.head
 
-            // Not sure if this indexing is correct
             collateralUtxo <- pick(
-              genPubKeyUtxo(
+              genCollateralUtxo(
                 env.headConfig,
-                ownPeerConfig._2.ownHeadWallet.address(env.headConfig.network),
-                Arbitrary.arbitrary[Coin].map(Value(_))
+                AddrKeyHash(env.nodePrivateConfigs.head._2.ownHeadWallet.pubKeyHash.hash)
               )
                   .label("collateral utxo")
             )
 
-            ////////////////////////////////////////////////////////
-            // Scenario: fallback hasn't been submitted yet or was rolled back.
-            // Expectation: handleDisputeRes returns unit
-
-            /////////////////////
-            // L2 commitment and block header
-            /////////////////////
             initialCommitment: VoteState.KzgCommitment = initialEvacuationMap.kzgCommitment
 
             blockHeader = BlockHeader.Minor.Onchain(
@@ -153,15 +149,9 @@ object DisputeActorTestHelpers {
             cardanoBackend <- lift(
               CardanoBackendMock.mockIO(
                 MockState(initialUtxos =
-                    initialL1Utxos ++
-                        (if addCollateralUtxo
-                         then List((collateralUtxo.input, collateralUtxo.output))
-                         else List.empty)
-                        ++ (
-                          if addReferenceUtxos
-                          then env.nodeConfigs.head._2.scriptReferenceUtxos.toList.map(_.toTuple)
-                          else List.empty
-                        )
+                    additionalL1Utxos ++
+                        List((collateralUtxo.input, collateralUtxo.output))
+                        ++ env.nodeConfigs.head._2.scriptReferenceUtxos.toList.map(_.toTuple)
                 ),
                 mkContext = l =>
                     Context(
@@ -194,7 +184,7 @@ left are handled properly by `handleDisputeRes`.
  */
 object DisputeActorTest extends Properties("Dispute Actor Test") {
     override def overrideParameters(p: Test.Parameters): Test.Parameters =
-        p.withInitialSeed(Seed.fromBase64("blVd1G_dGK3N5DNMxvKMHmt03ilDJznWdugKlvIS4HI=").get)
+        p.withInitialSeed(Seed.fromBase64("44OLuP3O46fF64PCbvx2qrfHavqcClJ_Q6KdTz-ZrdC=").get)
 
     import DisputeActorTestHelpers.*
     import MultiNodeConfig.*
@@ -222,7 +212,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
         disputeActor <- mkDisputeActor(
           versionMajor = 100,
           versionMinor = 2,
-          initialL1Utxos = Map((voteInput, voteOutput)),
+          additionalL1Utxos = Map((voteInput, voteOutput)),
           initialEvacuationMap = EvacuationMap.empty
         )
         // Should throw here
@@ -239,7 +229,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
         disputeActor <- mkDisputeActor(
           versionMajor = 100,
           versionMinor = 2,
-          initialL1Utxos = Map.empty,
+          additionalL1Utxos = Map.empty,
           initialEvacuationMap = EvacuationMap.empty
         )
         res <- lift(disputeActor.handleDisputeRes)
@@ -259,7 +249,8 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
               1
             )
         fallbackTxId <- pick(Arbitrary.arbitrary[TransactionHash])
-        evacMap <- pick(genEvacuationMap(genPayoutObligation = genPayoutObligation(env.headConfig)))
+        nEvacs <- pick(Gen.choose(0, 1000))
+        evacMap <- pick(genEvacuationMap(env.headConfig.cardanoNetwork, nEvacs))
         versionMajor = 100
         versionMinor = 2
 
@@ -286,8 +277,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
           2,
           3,
           VoteStatus.AwaitingVote(
-            peer = env.nodePrivateConfigs
-                .map(_._2)
+            peer = env.nodePrivateConfigs.values
                 .filter(_.ownHeadVKey != ownWallet.exportVerificationKey)
                 .head
                 .ownHeadWallet
@@ -299,7 +289,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
         disputeActor <- mkDisputeActor(
           versionMajor = versionMajor,
           versionMinor = versionMinor,
-          initialL1Utxos = Map(
+          additionalL1Utxos = Map(
             (ruleBasedTreasury.utxoId, ruleBasedTreasury.output),
             ownVoteUtxo.toTuple,
             otherVoteUtxo.toTuple
@@ -347,6 +337,74 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
 
     } yield true
 
+    def tallyHappyPath: MultiNodeConfigTestM[Boolean] = for {
+        env <- ask
+        treasuryToken =
+            Value.asset(
+              env.headConfig.headMultisigScript.policyId,
+              env.headConfig.headTokenNames.treasuryTokenName,
+              1
+            )
+        fallbackTxId <- pick(Arbitrary.arbitrary[TransactionHash])
+        nEvacs <- pick(Gen.choose(0, 1000))
+        evacMap <- pick(genEvacuationMap(env.headConfig.cardanoNetwork, nEvacs))
+        versionMajor = 100
+        versionMinor = 2
+
+        ruleBasedTreasury <- mkRuleBasedTreasury(
+          versionMajor,
+          // TODO: add equity in this test
+          evacMap.totalValue + treasuryToken,
+          TransactionInput(fallbackTxId, 0)
+        )
+
+        ownWallet =
+            env.nodePrivateConfigs.head._2.ownHeadWallet
+
+        // NOTE: This can conflict with the other txids and cause strange failures. We should probably
+        // Keep a running "ResolvedUtxos" in the TestM state to avoid this.
+        continuingVoteTxId <- pick(Arbitrary.arbitrary[TransactionHash])
+        // One vote awaiting a vote with our pkh
+        continuingVoteUtxo <- mkVoteUtxo(
+          0,
+          1,
+          VoteStatus.Voted(evacMap.kzgCommitment, 2),
+          TransactionInput(continuingVoteTxId, 0)
+        )
+
+        // One vote awaiting a vote with a different pkh
+        otherVoteUtxo <- mkVoteUtxo(
+          1,
+          0,
+          VoteStatus.AwaitingVote(
+            peer = env.nodePrivateConfigs.values
+                .filter(_.ownHeadVKey != ownWallet.exportVerificationKey)
+                .head
+                .ownHeadWallet
+                .pubKeyHash
+          ),
+          TransactionInput(fallbackTxId, env.headConfig.nHeadPeers + 2)
+        )
+
+        disputeActor <- mkDisputeActor(
+          versionMajor = versionMajor,
+          versionMinor = versionMinor,
+          additionalL1Utxos = Map(
+            (ruleBasedTreasury.utxoId, ruleBasedTreasury.output),
+            continuingVoteUtxo.toTuple,
+            otherVoteUtxo.toTuple
+          ),
+          initialEvacuationMap = evacMap
+        )
+        _ <- lift(disputeActor.handleDisputeRes)
+        queryRes <- lift(
+          disputeActor.cardanoBackend.utxosAt(
+            DisputeResolutionScript.address(env.headConfig.network)
+          )
+        ).flatMap(MultiNodeConfig.failLeft)
+
+    } yield true
+
     def resolutionHappyPath: MultiNodeConfigTestM[Boolean] = for {
         env <- ask
         treasuryToken =
@@ -355,7 +413,9 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
               env.headConfig.headTokenNames.treasuryTokenName,
               1
             )
-        evacMap <- pick(genEvacuationMap(genPayoutObligation = genPayoutObligation(env.headConfig)))
+
+        nEvacs <- pick(Gen.choose(0, 1000))
+        evacMap <- pick(genEvacuationMap(env.headConfig.cardanoNetwork, nEvacs))
 
         voteTxId <- pick(Arbitrary.arbitrary[TransactionHash])
         finalVoteUtxo <- mkVoteUtxo(
@@ -363,30 +423,21 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
           1,
           voteStatus = Voted(evacMap.kzgCommitment, 1),
           nVoteTokens = BigInt(env.headConfig.nHeadPeers.convert + 1),
-          txIn = TransactionInput(voteTxId, 0)
+          txIn = TransactionInput(voteTxId, 88)
         )
 
-        fallbackTxId <- pick(Arbitrary.arbitrary[TransactionHash])
+        fallbackTxId <- pick(Arbitrary.arbitrary[TransactionHash].suchThat(_ != voteTxId))
+        treasuryEquity <- pick(genPositiveValue)
         rulesBasedTreasury <- mkRuleBasedTreasury(
           100,
-          evacMap.totalValue + treasuryToken,
-          TransactionInput(fallbackTxId, 0)
-        )
-
-        collateralUtxo <- pick(
-          genPubKeyUtxo(
-            env.headConfig,
-            env.nodePrivateConfigs.head._2.ownHeadWallet.address(env.headConfig.network),
-            Gen.const(Value.ada(1000)),
-            None,
-            ensureMinAda = true
-          )
+          evacMap.totalValue + treasuryToken + treasuryEquity,
+          TransactionInput(fallbackTxId, 77)
         )
 
         da <- mkDisputeActor(
           100,
           1,
-          Map(finalVoteUtxo.toTuple, rulesBasedTreasury.asTuple, collateralUtxo.toTuple),
+          Map(finalVoteUtxo.toTuple, rulesBasedTreasury.asTuple),
           evacMap
         )
 
@@ -418,7 +469,8 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
           _ <- missingVoteDatumThrows
           _ <- missingRuleBasedTreasuryUtxoDoesNotThrow
           _ <- votingHappyPath
-//          _ <- resolutionHappyPath
+          _ <- tallyHappyPath
+          _ <- resolutionHappyPath
       } yield true
     )
 }

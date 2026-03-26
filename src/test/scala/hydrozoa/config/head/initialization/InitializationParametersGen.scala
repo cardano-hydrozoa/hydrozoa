@@ -412,12 +412,13 @@ object InitializationParametersGenBottomUp {
 
             fallbackContingency <- generateFallbackContingency(cardanoNetwork)
 
+            nUtxos <- Gen.choose(1, 20)
             // Pubkey utxos (at least one) at some peer address(es), with at least 5 ada
             // We generate these up front so that we know they have the same multiassets
             utxos: Utxos <-
                 Generators.Other
                     .genSequencedValueDistribution(
-                      maxNumValues = 20,
+                      nValues = nUtxos,
                       minCoin = Coin.ada(5),
                       mapping = v =>
                           for {

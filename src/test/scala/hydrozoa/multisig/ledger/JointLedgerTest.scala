@@ -326,9 +326,9 @@ object JointLedgerTestHelpers {
                     pick(
                       (
                         for {
-                            maxL2Outputs <- Gen.choose(1, 100)
+                            nL2Outputs <- Gen.choose(1, 100)
                             res <- Generators.Other.genSequencedValueDistribution(
-                              maxL2Outputs,
+                              nL2Outputs,
                               v =>
                                   genGenesisObligation(
                                     env.config,

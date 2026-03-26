@@ -49,7 +49,8 @@ given genMonad: Monad[Gen] = new Monad[Gen] {
 /** This module contains shared generators and arbitrary instances that may be shared among multiple
   * tests. We separate them into "Hydrozoa" and "Other" objects for ease of upstreaming.
   */
-
+// TODO: Most of these need some sort of configuration, especially CardanoNetwork and ProtocolPararms.
+//   We should lift the config into a `case class Generators(config : Generators.Config)` or a Reader Equivalent
 object Generators {
     export Generators.Hydrozoa.ArbitraryInstances.given
 
@@ -110,11 +111,11 @@ object Generators {
             } yield Value(coin, ma)
 
         /** Helper generator with sensible defaults. The value will have at least 5 ada and may
-          * contain multiassets.
+          * contain at most 6 multiassets.
           */
         val genPositiveValue: Gen[Value] = genValue(
           genCoin = Arbitrary.arbitrary[Coin].map(_ + Coin.ada(5)),
-          genMultiAsset = Arbitrary.arbitrary[MultiAsset].map(_.onlyPositive)
+          genMultiAsset = genMultiAsset(1, 1, 1, 1).map(_.onlyPositive)
         )
 
         val genAddrKeyHash: Gen[AddrKeyHash] =
@@ -429,45 +430,43 @@ object Generators {
 
         /** Warning:
           *   - can loop infinitely if:
-          *     - minEntries is negative
-          *     - genEvacuationKey does not produce enough distinct keys to reach minEntries
-          *   - if you have a genEvacuationKeys with a high probability of generating duplicate
-          *     keys, this will be biased towards generating a number of entries closer to
-          *     minEntries
+          *     - entries is negative
+          *     - genEvacuationKey does not produce enough distinct keys to reach entires
           */
         def genEvacuationMap(
-            minEntries: Int = 0,
-            maxEntries: Int = 100,
-            genEvacuationKey: Gen[EvacuationKey] = Arbitrary.arbitrary[EvacuationKey],
-            genPayoutObligation: Gen[Payout.Obligation]
+            network: CardanoNetwork.Section,
+            nEntries: Int,
+            generateEvacuationKey: Gen[EvacuationKey] = Arbitrary.arbitrary[EvacuationKey],
         ): Gen[EvacuationMap] = {
+            if nEntries == 0
+            then Gen.const(EvacuationMap.empty)
+            else
+                for {
+                    // Recursively generate keys, retrying if we hit duplicates.
+                    // This can possibly infinitely loop, but not with sane parameters.
+                    // The main goal was to be able to generate large sets with small generators and not throw out all
+                    // the work done every time we hit a duplicate with `_.suchThat`
+                    // Feel free to revise.
+                    keys <- Gen.tailRecM(List.empty[EvacuationKey])(keys => {
+                        def recur = for {
+                            newKey <- generateEvacuationKey
+                            // We use distinct here rather than `suchThat` so that we don't throw
+                            // away all of the generation when we hit a duplicate. We re-roll instead.
+                        } yield Left(keys.prepended(newKey).distinct)
 
-            for {
-                targetNumberOfKeys <- Gen.choose(minEntries, maxEntries)
+                        () match {
+                            case _ if keys.size == nEntries => Gen.const(Right(keys))
+                            case _                          => recur
+                        }
+                    })
+                    valueDist <- Other.genSequencedValueDistribution(
+                      nEntries,
+                      v => genPayoutObligation(network, Gen.const(v))
+                    )
 
-                // Recursively generate keys, retrying if we hit duplicates.
-                // This can possibly infinitely loop, but not with sane parameters.
-                // The main goal was to be able to generate large sets with small generators and not throw out all
-                // the work done every time we hit a duplicate with `_.suchThat`
-                // Feel free to revise.
-                keys <- Gen.tailRecM(List.empty[EvacuationKey])(keys => {
-                    def recur = for {
-                        newKey <- genEvacuationKey
-                        // We use distinct here rather than `suchThat` so that we don't throw
-                        // away all of the generation when we hit a duplicate. We re-roll instead.
-                    } yield Left(keys.prepended(newKey).distinct)
-
-                    () match {
-                        case _ if keys.size == targetNumberOfKeys => Gen.const(Right(keys))
-                        case _ if keys.size >= minEntries =>
-                            Gen.frequency((9, recur), (1, Right(keys)))
-                        case _ => recur
-                    }
-                })
-                values <- Gen.listOfN(keys.size, genPayoutObligation)
-            } yield EvacuationMap(
-              evacuationMap = TreeMap.from(keys.zip(values))
-            )
+                } yield EvacuationMap(
+                  evacuationMap = TreeMap.from(keys.zip(valueDist.toList))
+                )
         }
 
         /** NOTE: These will generate _fully_ arbitrary data. It is probably not what you want, but
@@ -698,13 +697,12 @@ object Generators {
           * This helps with that by distributing a single value.
           */
         def genSequencedValueDistribution[A](
-            maxNumValues: Int,
+            nValues: Int,
             mapping: Value => Gen[A],
             minCoin: Coin = Coin.zero
         ): Gen[NonEmptyList[A]] =
             for {
                 totalValue <- genPositiveValue
-                nValues <- Gen.choose(1, maxNumValues)
                 valueDist <- genValueDistribution(totalValue, nValues)
                 valueDistWithMinAda = valueDist.map(_.focus(_.coin).modify(_ + minCoin))
                 res <- valueDistWithMinAda.map(mapping).sequence

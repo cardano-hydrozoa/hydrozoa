@@ -137,12 +137,14 @@ def genSettlementTxSeqBuilder(config: HeadConfig)(
 
     for {
         majorVersion <- Gen.posNum[Int]
+        nDeposits <- Gen.choose(1, config.maxDepositsAbsorbedPerBlock.toInt)
         deposits <- Other.genSequencedValueDistribution(
-          config.maxDepositsAbsorbedPerBlock,
+          nDeposits,
           value => genDepositUtxo(config, Some(config.headMultisigAddress), Gen.const(value))()
         )
+        nPayouts <- Gen.choose(1, 100)
         payouts <- Other.genSequencedValueDistribution(
-          100,
+          nPayouts,
           value => genKnownValuePayoutObligationWithMinAdaEnsured(config, value)
         )
         totalPayoutValue = payouts.foldLeft(Value.zero)((v, payout) => v + payout.utxo.value.value)
@@ -201,13 +203,15 @@ def genNextSettlementTxSeqBuilder(config: HeadConfig)(
     given Ord[v1.Value] = valueOrd
 
     for {
+        nDeposits <- Gen.choose(1, config.maxDepositsAbsorbedPerBlock.toInt)
         deposits <- Other.genSequencedValueDistribution(
-          config.maxDepositsAbsorbedPerBlock,
+          nDeposits,
           value => genDepositUtxo(config, Some(config.headMultisigAddress), Gen.const(value))()
         )
+        nPayouts <- Gen.choose(1, 100)
         payouts <- Other
             .genSequencedValueDistribution(
-              100,
+              nPayouts,
               value => genKnownValuePayoutObligationWithMinAdaEnsured(config, value)
             )
             .map(nel => Vector.from(nel.toList))

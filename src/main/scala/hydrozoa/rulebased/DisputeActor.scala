@@ -11,6 +11,7 @@ import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.NodePrivateConfig
+import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.backend.cardano.CardanoBackend.Error.*
 import hydrozoa.multisig.ledger.block.BlockHeader
@@ -54,7 +55,7 @@ type VoteUtxoWithDatum = (Utxo, VoteDatum)
   *   - It throws an exception if multiple utxos with the treasury token are found.
   */
 final case class DisputeActor(config: DisputeActor.Config)(
-    collateralUtxo: Utxo,
+    collateralUtxo: CollateralUtxo,
     blockHeader: BlockHeader.Minor.Onchain,
     _cardanoBackend: CardanoBackend[IO],
     signatures: List[BlockHeader.Minor.HeaderSignature],
@@ -127,23 +128,35 @@ final case class DisputeActor(config: DisputeActor.Config)(
 
                 // Tally
                 case (None, otherUtxos) if otherUtxos.length > 1 =>
-                    // NOTE: it could potentially go faster (by reducing contention) if we:
-                    // - Tx-Chained multiple of these resolutions
-                    // - Processed multiple disjoint tallies in parallel
-                    // - Randomized or otherwise came up with an algorithm for peers to optimistically not
-                    //   submit non-disjoint tallying transactions
-                    // But right now I'm just doing the simplest thing
-                    val recipe = TallyTx.Recipe(
-                      continuingVoteUtxo = TallyVoteUtxo(otherUtxos.head._1),
-                      removedVoteUtxo = TallyVoteUtxo(otherUtxos.tail.head._1),
-                      treasuryUtxo = treasuryUtxo,
-                      collateralUtxo = collateralUtxo,
-                      network = config.cardanoInfo.network,
-                      protocolParams = config.cardanoInfo.protocolParams,
-                      evaluator = evaluator
-                    )
+                    // We must have that they key of the continuing input is less than the key of the removed input,
+                    // so we sort here.
+                    val keySorted = otherUtxos.sortBy(_._2.key)
+                    val continuing = keySorted.head
                     for {
-                        tallyTx <- TallyTx.build(recipe) match {
+                        removed <- keySorted.tail.find((utxo, voteDatum) =>
+                            voteDatum.key == continuing._2.link
+                        ) match {
+                            case None =>
+                                EitherT.liftF(
+                                  IO.raiseError(
+                                    DisputeActor.Error.NoCompatibleVoteForTallyingFound(otherUtxos)
+                                  )
+                                )
+                            case Some(x) => EitherT.right(IO.pure(x))
+                        }
+                        // NOTE: it could potentially go faster (by reducing contention) if we:
+                        // - Tx-Chained multiple of these resolutions
+                        // - Processed multiple disjoint tallies in parallel
+                        // - Randomized or otherwise came up with an algorithm for peers to optimistically not
+                        //   submit non-disjoint tallying transactions
+                        // But right now I'm just doing the simplest thing
+                        builder = TallyTx.Build(config)(
+                          _continuingVoteUtxo = TallyVoteUtxo(continuing._1),
+                          _removedVoteUtxo = TallyVoteUtxo(removed._1),
+                          _treasuryUtxo = treasuryUtxo,
+                          _collateralUtxo = collateralUtxo
+                        )
+                        tallyTx <- builder.result match {
                             case Left(e) => EitherT.liftF(IO.raiseError(Error.BuildError.Tally(e)))
                             case Right(tx) => EitherT.right(IO.pure(tx))
                         }
@@ -202,7 +215,7 @@ final case class DisputeActor(config: DisputeActor.Config)(
       * @return
       *   A tuple of [[VoteUtxoWithDatum]]. The first element is wrapped in an option, and is only
       *   "Some" if the dispute actor still needs to cast a vote. The second element is all other
-      *   vote utxos.
+      *   vote utxos with cast votes.
       */
     private def parseDisputeUtxos(utxos: Utxos): IO[
       (
@@ -269,6 +282,12 @@ object DisputeActor {
         type UnrecoverableErrors = Unrecoverable
         sealed trait Unrecoverable extends Throwable
         case object TreasuryUnresolvedButNoVotes extends Unrecoverable
+        case class NoCompatibleVoteForTallyingFound(voteUtxos: Seq[(Utxo, VoteDatum)])
+            extends Unrecoverable {
+            override def getMessage: String =
+                s"No compatible vote utxo with key ${voteUtxos.head._2.link} found. Datums found: " +
+                    s"${voteUtxos.map { _._2 }}"
+        }
         case class UnrecoverableCardanoBackendError(
             wrapped: CardanoBackend.Error
         ) extends Unrecoverable {
@@ -282,7 +301,7 @@ object DisputeActor {
                 override def getMessage: String = wrapped.getMessage
             }
 
-            case class Tally(wrapped: TallyTx.TallyTxError) extends Unrecoverable {
+            case class Tally(wrapped: TallyTx.Build.Error) extends Unrecoverable {
                 override def getMessage: String = wrapped.getMessage
             }
 

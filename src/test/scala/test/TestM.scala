@@ -53,6 +53,10 @@ object TestM {
     def assertWith[R](condition: Boolean, msg: String): TestM[R, Unit] =
         TestM(Kleisli.liftF(PropertyM.assertWith(condition, msg)))
 
+    def assert[R](condition: Boolean): TestM[R, Unit] = TestM(
+      Kleisli.liftF(PropertyM.assert(condition))
+    )
+
     /** Given a computation of type [[TestM]] that returns a value that can be implicitly turned
       * into a [[Prop]], run the computation.
       * @param testM
@@ -129,6 +133,8 @@ final class TestMFixedEnv[R](dummy: Boolean = true) {
 
     def assertWith(condition: Boolean, msg: String): TestM[R, Unit] =
         TestM.assertWith[R](condition, msg)
+
+    def assert(condition: Boolean): TestM[R, Unit] = TestM.assert(condition)
 
     def run[A](testM: TestM[R, A], initializer: PT[R])(using
         toProp: A => Prop,

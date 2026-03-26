@@ -41,6 +41,8 @@ final case class FallbackTx(
     override val resolvedUtxos: ResolvedUtxos,
     // TODO type better
     peerVoteUtxosProduced: NonEmptyList[Utxo]
+    // TODO
+    // val collateralUtxos : Map[HeadPeerNumber, CollateralUtxo]
 ) extends MultisigTreasuryUtxo.Spent,
       MultisigRegimeUtxo.Spent,
       RuleBasedTreasuryUtxo.Produced,

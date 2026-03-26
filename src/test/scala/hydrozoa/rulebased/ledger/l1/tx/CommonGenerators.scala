@@ -5,6 +5,7 @@ import hydrozoa.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.MultiNodeConfig
+import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.commitment.TrustedSetup
 import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
@@ -15,6 +16,7 @@ import hydrozoa.rulebased.ledger.l1.state.TreasuryState.UnresolvedDatum
 import hydrozoa.rulebased.ledger.l1.utxo.RuleBasedTreasuryUtxo
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
+import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.TransactionOutput.Babbage
@@ -114,18 +116,18 @@ object CommonGenerators {
 
     def genCollateralUtxo(
         config: CardanoNetwork.Section,
-        address: ShelleyAddress,
-    ): Gen[(TransactionInput, Babbage)] =
+        addrKeyHash: AddrKeyHash,
+    ): Gen[CollateralUtxo] =
         for {
             input <- arbitrary[TransactionInput]
-        } yield (
+        } yield CollateralUtxo(
           input,
-          Babbage(
-            address = address,
-            value = Value.ada(5),
-            datumOption = None,
-            scriptRef = None
-          )
+          config.network,
+          addrKeyHash,
+          Null,
+          Coin.ada(10),
+          datumOption = None,
+          scriptRef = None
         )
 
     /** Generate collateral UTXO with random address */

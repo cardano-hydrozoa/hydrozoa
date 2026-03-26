@@ -114,7 +114,12 @@ def genVoteTxBuilder(multiNodeConfig: MultiNodeConfig): Gen[VoteTx.Build] = {
         )
         collateralUtxo <- genCollateralUtxo(
           config,
-          peerAddresses.toList(voteDatum.key.intValue - 1)
+          // FIXME Being lazy here, do this better
+          peerAddresses
+              .toList(voteDatum.key.intValue - 1)
+              .keyHashOption
+              .get
+              .asInstanceOf[AddrKeyHash]
         )
 
         // Create builder context (not needed for Recipe anymore)
@@ -127,7 +132,7 @@ def genVoteTxBuilder(multiNodeConfig: MultiNodeConfig): Gen[VoteTx.Build] = {
     } yield VoteTx.Build(multiNodeConfig.nodeConfigs.head._2)(
       _voteUtxo = voteUtxo,
       _treasuryUtxo = treasuryUtxo,
-      _collateralUtxo = Utxo(collateralUtxo._1, collateralUtxo._2),
+      _collateralUtxo = collateralUtxo,
       _blockHeader = blockHeader,
       _signatures = signatures.toList,
     )

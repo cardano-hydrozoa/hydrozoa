@@ -86,7 +86,7 @@ object DisputeResolutionValidator extends Validator {
     given FromData[TallyRedeemer] = FromData.derived
     given ToData[TallyRedeemer] = ToData.derived
 
-    inline def cip67DisputeTokenPrefix = hex"00d950b0"
+    inline def cip67DisputeTokenPrefix = hex"021eb240"
 
     // Common errors
     private inline val DatumIsMissing = "Vote datum should be present"
@@ -374,7 +374,7 @@ object DisputeResolutionValidator extends Validator {
 
                 // Verify the treasury reference input
 
-                // If the voteStatus of either continuingInput or removedInput is NoVote,
+                // If the voteStatus of either continuingInput or removedInput is AwaitingVote,
                 // all the following must be satisfied
                 if continuingDatum.voteStatus match {
                         case VoteStatus.AwaitingVote(_) => true
@@ -392,14 +392,13 @@ object DisputeResolutionValidator extends Validator {
                             i.resolved.value.toSortedMap
                                 .get(contCs)
                                 .getOrElse(SortedMap.empty)
-                                .toList match
-                                case List.Cons(tokenNameAndAmount, none) =>
-                                    val tokenName = tokenNameAndAmount._1
-                                    val amount = tokenNameAndAmount._2
+                                .toList
+                                .find((tokenName, amount) =>
                                     tokenName.take(4) == cip67BeaconTokenPrefix
-                                    && amount == BigInt(1)
-                                    && none.isEmpty
-                                case _ => fail(TreasuryReferenceInputExists)
+                                        && amount == BigInt(1)
+                                ) match
+                                case Some(_) => true
+                                case _       => false
                         }
                         .getOrFail(TreasuryReferenceInputExists)
 

@@ -1,5 +1,6 @@
 package hydrozoa.rulebased.ledger.l1.tx
 
+import cats.effect.unsafe.implicits.global
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.MultiNodeConfig
@@ -10,10 +11,7 @@ import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus, given_ToData_VoteDatum}
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.*
 import hydrozoa.rulebased.ledger.l1.utxo.TallyVoteUtxo
-import org.scalacheck.Gen
-import org.scalatest.funsuite.AnyFunSuite
-import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
-import scala.annotation.nowarn
+import org.scalacheck.{Gen, Properties}
 import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
@@ -22,8 +20,6 @@ import scalus.cardano.onchain.plutus.v1.ArbitraryInstances.genByteStringOfN
 import scalus.uplc.builtin.Builtins.blake2b_224
 import scalus.uplc.builtin.ByteString
 import scalus.uplc.builtin.Data.toData
-import test.PeersNumberSpec.Exact
-import test.TestPeersSpec
 
 /** Generate a vote datum with a cast vote for tally testing
   */
@@ -98,16 +94,9 @@ def genTallyVoteUtxo(
     )
 }
 
-def genTallyTxRecipe(
-    estimatedFee: Coin = Coin(5_000_000L)
-): Gen[TallyTx.Recipe] =
+def genTallyTxBuilder(multiNodeConfig: MultiNodeConfig): Gen[TallyTx.Build] =
+    val config = multiNodeConfig.headConfig
     for {
-
-        // Test currently uses two peers
-        multiNodeConfig <- MultiNodeConfig.generate(
-          TestPeersSpec.default.withPeersNumberSpec(Exact(2))
-        )()
-        config = multiNodeConfig.headConfig
 
         versionMajor <- Gen.choose(1L, 99L).map(BigInt(_))
         treasuryDatum <- genTreasuryUnresolvedDatum(
@@ -144,43 +133,30 @@ def genTallyTxRecipe(
 
         collateralUtxo <- genCollateralUtxo(
           config,
-          multiNodeConfig.addressOf(HeadPeerNumber.zero)
+          multiNodeConfig.addrKeyHashOf(HeadPeerNumber.zero)
         )
 
-    } yield TallyTx.Recipe(
-      continuingVoteUtxo = continuingVoteUtxo,
-      removedVoteUtxo = removedVoteUtxo,
-      treasuryUtxo = treasuryUtxo,
-      collateralUtxo = Utxo(collateralUtxo._1, collateralUtxo._2),
-      network = config.network,
-      protocolParams = config.cardanoProtocolParams,
-      evaluator = PlutusScriptEvaluator(config.cardanoInfo, EvaluatorMode.EvaluateAndComputeCost),
+    } yield TallyTx.Build(multiNodeConfig.nodeConfigs.head._2)(
+      _continuingVoteUtxo = continuingVoteUtxo,
+      _removedVoteUtxo = removedVoteUtxo,
+      _treasuryUtxo = treasuryUtxo,
+      _collateralUtxo = collateralUtxo
     )
 
-@nowarn("msg=unused value")
-class TallyTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
+object TallyTxTest extends Properties("Tally Tx Test") {
 
-    implicit override val generatorDrivenConfig: PropertyCheckConfiguration =
-        PropertyCheckConfiguration(minSuccessful = 10)
+    import MultiNodeConfig.*
 
-    test("Tally recipe generator works") {
-        val exampleRecipe = genTallyTxRecipe().sample.get
-        println(s"Generated TallyTx recipe: $exampleRecipe")
-    }
+    val _ = property("Tally Tx happy path") = runDefault(
+      for {
+          env <- ask
+          builder <- pick(genTallyTxBuilder(env))
+          tx <- failLeft(builder.result)
+          // Basic smoke test assertions
+//            _ <- assert(tx.continuingVoteUtxo != null)
+//            _ <- assert(tx.removedVoteUtxo != null)
+//            _ <- assert(tx.treasuryUtxo != null)
+      } yield true
+    )
 
-    test("Tally tx builds successfully") {
-        forAll(genTallyTxRecipe()) { recipe =>
-            TallyTx.build(recipe) match {
-                case Left(e) =>
-                    fail(s"TallyTx build failed: $e")
-                case Right(tx) =>
-                    // println(HexUtil.encodeHexString(tx.tx.toCbor))
-
-                    // Basic smoke test assertions
-                    assert(tx.continuingVoteUtxo != null)
-                    assert(tx.removedVoteUtxo != null)
-                    assert(tx.treasuryUtxo != null)
-            }
-        }
-    }
 }

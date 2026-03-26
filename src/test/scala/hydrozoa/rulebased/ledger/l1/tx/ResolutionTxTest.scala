@@ -105,13 +105,13 @@ def genResolutionTxBuilder(multiNodeConfig: MultiNodeConfig): Gen[ResolutionTx.B
 
         collateralUtxo <- genCollateralUtxo(
           config,
-          multiNodeConfig.addressOf(HeadPeerNumber.zero)
+          multiNodeConfig.addrKeyHashOf(HeadPeerNumber.zero)
         )
 
     } yield ResolutionTx.Build(multiNodeConfig.nodeConfigs.head._2)(
       _talliedVoteUtxo = talliedVoteUtxo,
       _treasuryUtxo = treasuryUtxo,
-      _collateralUtxo = Utxo(collateralUtxo._1, collateralUtxo._2),
+      _collateralUtxo = collateralUtxo,
     )
 
 object ResolutionTxTest extends Properties("Resolution Tx Test") {

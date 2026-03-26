@@ -22,7 +22,8 @@ import hydrozoa.multisig.ledger.block.BlockHeader
 import org.scalacheck.util.Pretty
 import org.scalacheck.{Gen, Prop, Properties, PropertyM}
 import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.{SlotConfig, Transaction, VKeyWitness}
+import scalus.cardano.ledger.{AddrKeyHash, SlotConfig, Transaction, VKeyWitness}
+import scalus.uplc.builtin.Builtins.blake2b_224
 import test.{TestM, TestMFixedEnv, TestPeers, TestPeersSpec}
 
 /** Multi-node config is a tool for test suites that allows multisigning effects as well as giving
@@ -66,6 +67,9 @@ case class MultiNodeConfig private (
           nodeConfigs(peerNumber).ownHeadWallet.exportVerificationKey,
           headConfig.network
         )
+
+    def addrKeyHashOf(peerNumber: HeadPeerNumber): AddrKeyHash =
+        AddrKeyHash(blake2b_224(nodeConfigs(peerNumber).ownHeadWallet.exportVerificationKey))
 
     def signTxAs(peerNumber: HeadPeerNumber): Transaction => Transaction = nodeConfigs(
       peerNumber

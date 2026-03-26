@@ -4,6 +4,7 @@ import cats.implicits.*
 import hydrozoa.*
 import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.block.BlockHeader.Minor
 import hydrozoa.multisig.ledger.block.BlockHeader.Minor.HeaderSignature
@@ -56,25 +57,22 @@ private object VoteTxOps {
             override def getMessage: String = this match {
                 case i: Error.InvalidVoteDatum     => s"Invalid vote datum: $i.msg"
                 case v: Error.VoteAlreadyCast.type => "Vote has already been cast"
-                case b: Error.BuildError => s"Build error encountered in vote tx. ${b.toString}"
+                case b: Error.BuildError =>
+                    s"Build error encountered in vote tx. ${b.wrapped.toString}"
             }
     }
 
     final case class Build(config: Config)(
         _voteUtxo: OwnVoteUtxo,
         _treasuryUtxo: RuleBasedTreasuryUtxo,
-        _collateralUtxo: Utxo,
+        _collateralUtxo: CollateralUtxo,
         _blockHeader: BlockHeader.Minor.Onchain,
         _signatures: List[BlockHeader.Minor.HeaderSignature],
     ) {
         val voteUtxo: OwnVoteUtxo = _voteUtxo
-
-        val treasuryUtxo: RuleBasedTreasuryUtxo = _treasuryUtxo: RuleBasedTreasuryUtxo
-
-        val collateralUtxo: Utxo = _collateralUtxo: Utxo
-
-        val blockHeader: Minor.Onchain = _blockHeader: BlockHeader.Minor.Onchain
-
+        val treasuryUtxo: RuleBasedTreasuryUtxo = _treasuryUtxo
+        val collateralUtxo: CollateralUtxo = _collateralUtxo
+        val blockHeader: Minor.Onchain = _blockHeader
         val signatures: List[BlockHeader.Minor.HeaderSignature] = _signatures
 
         def result: Either[Build.Error, VoteTx] = {
@@ -136,9 +134,9 @@ private object VoteTxOps {
                       config.network,
                       List(
                         config.referenceDispute,
-                        // Use collateral to pay fees
-                        Spend(collateralUtxo, PubKeyWitness),
-                        Send(collateralUtxo._2),
+                        collateralUtxo.add,
+                        collateralUtxo.spend,
+                        collateralUtxo.sendContinuing,
                         // Spend the vote utxo with dispute resolution script witness
                         // So far we use in-place script
                         Spend(
@@ -161,7 +159,6 @@ private object VoteTxOps {
                           )
                         ),
                         ReferenceOutput(Utxo(treasuryUtxo.asTuple)),
-                        AddCollateral(collateralUtxo)
                       )
                     )
 
