@@ -5,7 +5,7 @@ import hydrozoa.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.MultiNodeConfig
-import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
+import hydrozoa.lib.cardano.scalus.ledger.{CollateralOutput, CollateralUtxo}
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.commitment.TrustedSetup
 import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
@@ -16,7 +16,6 @@ import hydrozoa.rulebased.ledger.l1.state.TreasuryState.UnresolvedDatum
 import hydrozoa.rulebased.ledger.l1.utxo.RuleBasedTreasuryUtxo
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
-import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.TransactionOutput.Babbage
@@ -70,8 +69,9 @@ object CommonGenerators {
         )
 
     def genTreasuryUnresolvedDatum(
-        config: CardanoNetwork.Section & HeadPeers.Section & HasTokenNames,
         versionMajor: BigInt
+    )(using
+        config: CardanoNetwork.Section & HeadPeers.Section & HasTokenNames
     ): Gen[UnresolvedDatum] =
         for {
             deadlineVoting <- Gen
@@ -91,9 +91,10 @@ object CommonGenerators {
         )
 
     def genRuleBasedTreasuryUtxo(
-        config: CardanoNetwork.Section & HasTokenNames & HeadPeers.Section,
         fallbackTxId: TransactionHash,
         unresolvedDatum: UnresolvedDatum
+    )(using
+        config: CardanoNetwork.Section & HasTokenNames & HeadPeers.Section
     ): Gen[RuleBasedTreasuryUtxo] =
         for {
             adaAmount <- Arbitrary
@@ -115,27 +116,22 @@ object CommonGenerators {
         )
 
     def genCollateralUtxo(
-        config: CardanoNetwork.Section,
         addrKeyHash: AddrKeyHash,
-    ): Gen[CollateralUtxo] =
+    )(using config: CardanoNetwork.Section & HeadPeers.Section): Gen[CollateralUtxo] =
         for {
             input <- arbitrary[TransactionInput]
+            coin <- arbitrary[Coin].map(_ + Coin.ada(100))
         } yield CollateralUtxo(
           input,
-          config.network,
-          addrKeyHash,
-          Null,
-          Coin.ada(10),
-          datumOption = None,
-          scriptRef = None
+          CollateralOutput(addrKeyHash, ShelleyDelegationPart.Null, coin, None, None)
         )
 
     /** Generate collateral UTXO with random address */
-    def genCollateralUtxo(config: CardanoNetwork.Section): Gen[Utxo] =
+    def genCollateralUtxo(using config: CardanoNetwork.Section): Gen[Utxo] =
         for {
             txId <- arbitrary[TransactionHash]
             ix <- Gen.choose(0, 10)
-            addr <- genPubkeyAddress(config)
+            addr <- genPubkeyAddress()
             value <- Gen.choose(5_000_000L, 50_000_000L).map(v => Value(Coin(v)))
         } yield Utxo(
           TransactionInput(txId, ix),
@@ -162,7 +158,7 @@ object CommonGenerators {
         )
 
     /** Generator for Shelley address */
-    def genShelleyAddress(config: CardanoNetwork.Section): Gen[ShelleyAddress] =
+    def genShelleyAddress(using config: CardanoNetwork.Section): Gen[ShelleyAddress] =
         for {
             keyHash <- arbitrary[AddrKeyHash]
         } yield ShelleyAddress(
@@ -172,16 +168,16 @@ object CommonGenerators {
         )
 
     /** Generator for L2 UTXO sets */
-    def genUtxosL2(config: CardanoNetwork.Section, count: Int = 2): Gen[Utxos] =
+    def genUtxosL2(count: Int = 2)(using config: CardanoNetwork.Section): Gen[Utxos] =
         for {
-            outputs <- Gen.listOfN(count, genOutputL2(config))
+            outputs <- Gen.listOfN(count, genOutputL2)
             utxoIds <- Gen.listOfN(count, arbitrary[TransactionInput])
         } yield utxoIds.zip(outputs).toMap
 
     /** Generator for a single L2 output */
-    def genOutputL2(config: CardanoNetwork.Section): Gen[TransactionOutput] =
+    def genOutputL2(using config: CardanoNetwork.Section): Gen[TransactionOutput] =
         for {
-            address <- genShelleyAddress(config)
+            address <- genShelleyAddress
             coin <- Gen.choose(1_000_000L, 10_000_000L)
             value = Value(Coin(coin))
         } yield Babbage(

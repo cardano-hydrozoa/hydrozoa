@@ -3,23 +3,21 @@ package hydrozoa.rulebased.ledger.l1.tx
 import cats.effect.unsafe.implicits.global
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
-import hydrozoa.config.node.MultiNodeConfig
+import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
+import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.l1.state.VoteState
-import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus, given_ToData_VoteDatum}
+import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.*
-import hydrozoa.rulebased.ledger.l1.utxo.TallyVoteUtxo
+import hydrozoa.rulebased.ledger.l1.utxo.{VoteOutput, VoteUtxo}
 import org.scalacheck.{Gen, Properties}
 import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.onchain.plutus.v1.ArbitraryInstances.genByteStringOfN
 import scalus.uplc.builtin.Builtins.blake2b_224
 import scalus.uplc.builtin.ByteString
-import scalus.uplc.builtin.Data.toData
 
 /** Generate a vote datum with a cast vote for tally testing
   */
@@ -66,47 +64,41 @@ def genCompatibleVoteDatums(peersN: Int): Gen[(VoteDatum, VoteDatum)] =
     } yield (continuingDatum, removedDatum)
 
 def genTallyVoteUtxo(
-    config: CardanoNetwork.Section & HasTokenNames & HeadPeers.Section,
     fallbackTxId: TransactionHash,
     outputIndex: Int,
     voteDatum: VoteDatum,
     voter: AddrKeyHash,
-): Gen[TallyVoteUtxo] = {
+)(using
+    config: CardanoNetwork.Section & HasTokenNames & HeadPeers.Section
+): Gen[VoteUtxo[VoteStatus]] = {
     val txId = TransactionInput(fallbackTxId, outputIndex)
     val spp = ShelleyPaymentPart.Script(DisputeResolutionScript.compiledScriptHash)
     val scriptAddr = ShelleyAddress(config.network, spp, ShelleyDelegationPart.Null)
 
-    val voteTokenAssetName = config.headTokenNames.voteTokenName
-    val voteToken = Value.asset(config.headMultisigScript.policyId, voteTokenAssetName, 1)
-
-    val voteOutput = Babbage(
-      address = scriptAddr,
-      // Sufficient ADA for minAda + tally fees
-      value = Value(Coin(10_000_000L)) + voteToken,
-      datumOption = Some(Inline(voteDatum.toData(using VoteState.given_ToData_VoteDatum))),
-      scriptRef = None
+    val voteOutput = VoteOutput(
+      key = voteDatum.key,
+      link = voteDatum.link,
+      coin = Coin.ada(5),
+      voteTokens = PositiveInt.unsafeApply(1),
+      status = voteDatum.voteStatus
     )
 
     Gen.const(
-      TallyVoteUtxo(
-        Utxo(txId, voteOutput)
-      )
+      VoteUtxo(txId, voteOutput)
     )
 }
 
-def genTallyTxBuilder(multiNodeConfig: MultiNodeConfig): Gen[TallyTx.Build] =
-    val config = multiNodeConfig.headConfig
+def genTallyTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[TallyTx.Build] =
+    given config: NodeConfig = multiNodeConfig.nodeConfigs.head._2
     for {
 
         versionMajor <- Gen.choose(1L, 99L).map(BigInt(_))
         treasuryDatum <- genTreasuryUnresolvedDatum(
-          config,
           versionMajor
         )
 
         fallbackTxId <- genByteStringOfN(32).map(TransactionHash.fromByteString)
         treasuryUtxo <- genRuleBasedTreasuryUtxo(
-          config,
           fallbackTxId,
           treasuryDatum
         )
@@ -116,7 +108,6 @@ def genTallyTxBuilder(multiNodeConfig: MultiNodeConfig): Gen[TallyTx.Build] =
 
         // Generate a vote utxo with cast votes
         continuingVoteUtxo <- genTallyVoteUtxo(
-          config,
           fallbackTxId,
           1, // Output index 1
           continuingVoteDatum,
@@ -124,7 +115,6 @@ def genTallyTxBuilder(multiNodeConfig: MultiNodeConfig): Gen[TallyTx.Build] =
         )
 
         removedVoteUtxo <- genTallyVoteUtxo(
-          config,
           fallbackTxId,
           2, // Output index 2
           removedVoteDatum,
@@ -132,15 +122,14 @@ def genTallyTxBuilder(multiNodeConfig: MultiNodeConfig): Gen[TallyTx.Build] =
         )
 
         collateralUtxo <- genCollateralUtxo(
-          config,
           multiNodeConfig.addrKeyHashOf(HeadPeerNumber.zero)
         )
 
-    } yield TallyTx.Build(multiNodeConfig.nodeConfigs.head._2)(
-      _continuingVoteUtxo = continuingVoteUtxo,
-      _removedVoteUtxo = removedVoteUtxo,
-      _treasuryUtxo = treasuryUtxo,
-      _collateralUtxo = collateralUtxo
+    } yield TallyTx.Build(
+      continuingVoteUtxo = continuingVoteUtxo,
+      removedVoteUtxo = removedVoteUtxo,
+      treasuryUtxo = treasuryUtxo,
+      collateralUtxo = collateralUtxo
     )
 
 object TallyTxTest extends Properties("Tally Tx Test") {
@@ -150,13 +139,13 @@ object TallyTxTest extends Properties("Tally Tx Test") {
     val _ = property("Tally Tx happy path") = runDefault(
       for {
           env <- ask
-          builder <- pick(genTallyTxBuilder(env))
-          tx <- failLeft(builder.result)
-          // Basic smoke test assertions
-//            _ <- assert(tx.continuingVoteUtxo != null)
-//            _ <- assert(tx.removedVoteUtxo != null)
-//            _ <- assert(tx.treasuryUtxo != null)
+          _ <- {
+              given MultiNodeConfig = env
+              for {
+                  builder <- pick(genTallyTxBuilder)
+                  tx <- failLeft(builder.result)
+              } yield ()
+          }
       } yield true
     )
-
 }

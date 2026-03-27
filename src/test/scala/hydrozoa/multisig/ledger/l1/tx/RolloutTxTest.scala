@@ -27,7 +27,7 @@ object RolloutTxTest extends Properties("RolloutTxTest") {
             res <- GenOther
                 .genSequencedValueDistribution(
                   nPayouts,
-                  v => genKnownValuePayoutObligationWithMinAdaEnsured(network, v)
+                  v => genKnownValuePayoutObligationWithMinAdaEnsured(v)(using network)
                 )
                 .map(nel => NonEmptyVector.fromVectorUnsafe(Vector.from(nel.toList)))
         } yield res

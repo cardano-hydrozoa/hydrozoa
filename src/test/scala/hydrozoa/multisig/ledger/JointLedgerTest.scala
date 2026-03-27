@@ -331,10 +331,9 @@ object JointLedgerTestHelpers {
                               nL2Outputs,
                               v =>
                                   genGenesisObligation(
-                                    env.config,
                                     address,
                                     genValue = Gen.const(v)
-                                  ),
+                                  )(using env.multiNodeConfig),
                               minCoin = Coin.ada(3)
                             )
 
@@ -355,7 +354,9 @@ object JointLedgerTestHelpers {
                     // those strictly neceesary to achieve the aggregate L2 value
                     utxosWithZeroAssets <- Gen.listOfN(
                       nUtxos,
-                      genPubKeyUtxo(env.config, address, genValue = Gen.const(Value.ada(3)))
+                      genPubKeyUtxo(address, genValue = Gen.const(Value.ada(3)))(using
+                        env.multiNodeConfig
+                      )
                     )
 
                     valueDist <- Generators.Other.genValueDistribution(

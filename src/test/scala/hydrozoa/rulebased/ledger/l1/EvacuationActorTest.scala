@@ -34,7 +34,7 @@ object EvacuationActorTestHelpers {
             env <- ask
             nEvacs <- pick(Gen.choose(0, 1000))
             evacMapFull <- pick(
-              genEvacuationMap(env.headConfig.cardanoNetwork, nEvacs)
+              genEvacuationMap(nEvacs)(using env)
                   .label("Full evacuation map at fallback")
             )
             // Also might be empty, even if the full map isn't

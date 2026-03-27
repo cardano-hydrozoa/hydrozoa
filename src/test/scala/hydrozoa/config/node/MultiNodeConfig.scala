@@ -18,6 +18,7 @@ import hydrozoa.config.{ScriptReferenceUtxosGen, generateScriptReferenceUtxos}
 import hydrozoa.lib.cardano.scalus.ShelleyAddressExtra
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.ledger.block.Block.MultiSigned
 import hydrozoa.multisig.ledger.block.BlockHeader
 import org.scalacheck.util.Pretty
 import org.scalacheck.{Gen, Prop, Properties, PropertyM}
@@ -32,8 +33,8 @@ import test.{TestM, TestMFixedEnv, TestPeers, TestPeersSpec}
 // TODO: Should we add a mock cardano backend that is aware of transactions deploying the reference script utxos?
 case class MultiNodeConfig private (
     nodePrivateConfigs: Map[HeadPeerNumber, NodePrivateConfig],
-    headConfig: HeadConfig,
-) {
+    override val headConfig: HeadConfig,
+) extends HeadConfig.Section {
     lazy val nodeConfigs: Map[HeadPeerNumber, NodeConfig] =
         nodePrivateConfigs.map((n, pc) =>
             n ->
@@ -45,6 +46,9 @@ case class MultiNodeConfig private (
                   pc.scriptReferenceUtxos
                 ).get
         )
+
+    override def headConfigPreinit: HeadConfig.Preinit = headConfig.headConfigPreinit
+    override def initialBlock: MultiSigned.Initial = headConfig.initialBlock
 
     def multisignTx(tx: Transaction): Transaction =
         tx.attachVKeyWitnesses(mkVKeyWitnesses(tx).toList)

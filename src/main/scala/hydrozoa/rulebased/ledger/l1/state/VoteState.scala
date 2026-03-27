@@ -43,6 +43,7 @@ object VoteDatum {
 
 @Compile
 object VoteState:
+    // TODO: I'd like to turn this into `VoteDatum[Status <: VoteStatus]`, but then data derivation breaks
     case class VoteDatum(
         // Uniquely identifies a vote utxo. The default vote utxo has key number 0,
         // according to the spec draft 2025-11-07
