@@ -16,7 +16,7 @@ object Membership {
 
     /** The straightforward approach to proofs:
       *   - Build the proof using the [[set]] and [[subset]] provided.
-      *   - Verify the proof against the commitment provided.
+      *   - Verify the proof against the commitment of the set.
       *
       * @param set
       *   the set of all utxos
@@ -24,8 +24,7 @@ object Membership {
       *   the subset that we want to withdraw
       * @return
       *   the proof that [[subset]] is a subset of [[set]] indeed, which is no more no less than a
-      *   new KZG commitment for ([[set]] \ [[subset]]). None if the check failed, which indicates
-      *   that the [[kzgCommitment]] is wrong.
+      *   new KZG commitment for ([[set]] \ [[subset]]) or an error
       */
     def mkMembershipProofValidated(
         set: EvacuationMap,

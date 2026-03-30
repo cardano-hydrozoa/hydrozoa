@@ -60,9 +60,9 @@ final case class EvacuationMap(
       */
     val outputsCooked: Iterable[TransactionOutput] = evacuationMap.values.map(_.utxo.value)
 
-    def kzgCommitment: KzgCommitment = KzgCommitment.calculateKzgCommitment(scalars)
+    lazy val kzgCommitment: KzgCommitment = KzgCommitment.calculateKzgCommitment(scalars)
 
-    def scalars: SList[Scalar] = {
+    lazy val scalars: SList[Scalar] = {
         SList.from(
           evacuationMap.toList.map(e =>
               // FIXME: redundant CBOR encoding with `Sized`, since we're keeping the original serialization anyways
