@@ -37,15 +37,31 @@ final case class RuleBasedTreasuryUtxo(
 }
 
 object RuleBasedTreasuryUtxo {
-    trait ParseError extends Throwable
+    trait ParseError extends Throwable {
+        override def toString: String = getMessage
 
-    case class TreasuryDatumMissing(utxo: Utxo) extends ParseError
+        override def getMessage: String
+    }
 
-    case class TreasuryDatumNotInline(utxo: Utxo) extends ParseError
+    case class TreasuryDatumMissing(utxo: Utxo) extends ParseError {
+        override def getMessage: String =
+            s"Treasury datum is missing for utxo: ${utxo.input}"
+    }
 
-    case class TreasuryDatumDeserializationError(utxo: Utxo, e: Throwable) extends ParseError
+    case class TreasuryDatumNotInline(utxo: Utxo) extends ParseError {
+        override def getMessage: String =
+            s"Treasury datum is not inline for utxo: ${utxo.input}"
+    }
 
-    case class TreasuryAddressNotShelley(utxo: Utxo) extends ParseError
+    case class TreasuryDatumDeserializationError(utxo: Utxo, e: Throwable) extends ParseError {
+        override def getMessage: String =
+            s"Failed to deserialize treasury datum for utxo: ${utxo.input}. Error: ${e.getMessage}"
+    }
+
+    case class TreasuryAddressNotShelley(utxo: Utxo) extends ParseError {
+        override def getMessage: String =
+            s"Treasury address is not a Shelley address for utxo: ${utxo.input}"
+    }
 
     def parse(utxo: Utxo): Either[ParseError, RuleBasedTreasuryUtxo] =
         for {

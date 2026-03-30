@@ -47,7 +47,7 @@ private object EvacuationTxOps {
     type Config = CardanoNetwork.Section & NodeOperationEvacuationConfig.Section
 
     object Build {
-        enum Error:
+        enum Error extends Throwable:
             case InvalidTreasuryDatum(msg: String)
             case TreasuryNotResolved
             case InsufficientTreasuryFunds(negativeDiff: Value)
@@ -56,8 +56,23 @@ private object EvacuationTxOps {
             case MembershipError(wrapped: Membership.MembershipCheckError)
             case BuilderError(wrapped: (SomeBuildError, String))
 
-            // TODO
-            // override def toString: String = ???
+            override def toString: String = getMessage
+
+            override def getMessage: String = this match
+                case InvalidTreasuryDatum(msg) =>
+                    s"Invalid treasury datum: $msg"
+                case TreasuryNotResolved =>
+                    "Treasury datum is not resolved"
+                case InsufficientTreasuryFunds(negativeDiff) =>
+                    s"Insufficient treasury funds, negative difference: $negativeDiff"
+                case NoEvacuatees =>
+                    "No evacuatees provided"
+                case NotASubset(evacuatees, evacuationMap) =>
+                    s"Evacuatees are not a subset of the evacuation map. Evacuatees: ${evacuatees.evacuationMap.keySet}, Evacuation map: ${evacuationMap.evacuationMap.keySet}"
+                case MembershipError(wrapped) =>
+                    s"Membership error: ${wrapped}"
+                case BuilderError((buildError, explanation)) =>
+                    s"Builder error: $explanation - $buildError"
     }
 
     /** @param evacuatees
