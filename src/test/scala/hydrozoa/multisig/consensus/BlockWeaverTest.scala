@@ -128,7 +128,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
     // Bob doesn't start block 1 until an event is received
     // ===================================
 
-    lazy val _ = property("Bob doesn't start block 1 until an event is received") =
+    val _ = property("Bob doesn't start block 1 until an event is received") =
         PropertyBuilder.property { p =>
 
             val TestSetup(system, jointLedgerMock, jointLedgerMockActor) = setupTestEnvironment(p)
@@ -153,7 +153,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
     // Carol doesn't start block 2 until an event is received
     // ===================================
 
-    lazy val _ = property("Carol doesn't start block 2 until an event is received") =
+    val _ = property("Carol doesn't start block 2 until an event is received") =
         PropertyBuilder.property { p =>
 
             val TestSetup(system, jointLedgerMock, jointLedgerMockActor) = setupTestEnvironment(p)
@@ -162,7 +162,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
                 createBlockWeaverActor(p, system, jointLedgerMockActor, Carol.headPeerNumber)
             val config = multiNodeConfig.nodeConfigs(Carol.headPeerNumber)
 
-            // Brief
+            // Block 1 brief
             p.runIO(for {
                 brief <- mkDummyBlockBrief1(config.headConfig)
                 _ <- blockWeaver ! brief
@@ -182,16 +182,13 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
     // Bob finishes first block after receiving any event
     // ===================================
 
-    lazy val _ = property("Bob finishes first block after receiving any event") =
+    val _ = property("Bob finishes first block after receiving any event") =
         PropertyBuilder.property { p =>
 
             val TestSetup(system, jointLedgerMock, jointLedgerMockActor) = setupTestEnvironment(p)
 
             val weaverActor =
                 createBlockWeaverActor(p, system, jointLedgerMockActor, Bob.headPeerNumber)
-
-            // TODO: do we need it though?
-            val _ = p.runIO(system.waitForIdle())
 
             val anyLedgerEvent =
                 p.pick(
@@ -218,7 +215,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
     // Carol (2) leads block (2), feeding residual requests in order
     // ===================================
 
-    lazy val _ = property(
+    val _ = property(
       "Carol (2) leads block (2), feeding residual requests in order"
     ) = PropertyBuilder.property { p =>
 
@@ -227,9 +224,6 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
         val weaverActor =
             createBlockWeaverActor(p, system, jointLedgerMockActor, Carol.headPeerNumber)
         val config = multiNodeConfig.nodeConfigs(Carol.headPeerNumber)
-
-        // TODO: do we need it though?
-        val _ = p.runIO(system.waitForIdle())
 
         // Generate and send some random requests
         val requests: Seq[UserRequestWithId] = p.pick(
@@ -308,9 +302,136 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
             true
         }
 
-    // TODO: block is NOT finished when the previous block is confirmed but a request is not received
-    // TODO: block is finished when the previous block is confirmed and a request is received
-    // TODO: block is finished when a request is received and the previous block is confirmed
+    // ===================================
+    // Carol (2) does NOT start block 2 when only previous block brief is received
+    // ===================================
+    val _ = property(
+      "Carol (2) does NOT start block 2 when only previous block brief is received"
+    ) = PropertyBuilder.property { p =>
+
+        val TestSetup(system, jointLedgerMock, jointLedgerMockActor) = setupTestEnvironment(p)
+
+        val weaverActor =
+            createBlockWeaverActor(p, system, jointLedgerMockActor, Carol.headPeerNumber)
+        val config = multiNodeConfig.nodeConfigs(Carol.headPeerNumber)
+
+        // Brief for block 1
+        val brief = p.runIO(mkDummyBlockBrief1(config.headConfig))
+        p.runIO((weaverActor ! brief) >> system.waitForIdle())
+
+        // Should NOT have sent StartBlock for block 2 (only brief, no request)
+        val startBlockCounter = jointLedgerMock.startBlocksCounter.get
+        p.assert(
+          startBlockCounter == 0,
+          s"No StartBlock is expected when only brief received, but ${startBlockCounter} found"
+        )
+
+        // Check that no events were fed (since we didn't send any user requests)
+        p.assert(
+          jointLedgerMock.events.isEmpty,
+          "No events should be fed when only brief is received"
+        )
+
+        p.runIO(system.terminate())
+
+        true
+    }
+
+    // ===================================
+    // Carol (2) starts block 2 when previous block brief then request received
+    // ===================================
+    val _ = property(
+      "Carol (2) starts block 2 when previous block brief then request received"
+    ) = PropertyBuilder.property { p =>
+
+        val TestSetup(system, jointLedgerMock, jointLedgerMockActor) = setupTestEnvironment(p)
+
+        val weaverActor =
+            createBlockWeaverActor(p, system, jointLedgerMockActor, Carol.headPeerNumber)
+        val config = multiNodeConfig.nodeConfigs(Carol.headPeerNumber)
+
+        // Brief for block 1 first
+        val brief = p.runIO(mkDummyBlockBrief1(config.headConfig))
+        p.runIO(weaverActor ! brief)
+
+        // Then send a user request
+        val anyLedgerEvent =
+            p.pick(
+              Arbitrary.arbitrary[UserRequestWithId],
+              "any event to start the block"
+            )
+
+        p.assert(
+          p.runIO(
+            handleBoolean(for {
+                _ <- weaverActor ! anyLedgerEvent
+                _ <- system.waitForIdle()
+                _ <- expectMsgPF(jointLedgerMockActor, 5.seconds) { case s: StartBlock =>
+                    ()
+                }
+            } yield ())
+          ),
+          "StartBlock should be sent after both brief and request are received"
+        )
+
+        // Verify the event was fed through
+        p.assert(
+          jointLedgerMock.events.contains(anyLedgerEvent),
+          "Event should be fed through to joint ledger"
+        )
+
+        p.runIO(system.terminate())
+
+        true
+    }
+
+    // ===================================
+    // Carol (2) starts block 2 when request then previous block brief received
+    // ===================================
+    val _ = property(
+      "Carol (2) starts block 2 when request then previous block brief received"
+    ) = PropertyBuilder.property { p =>
+
+        val TestSetup(system, jointLedgerMock, jointLedgerMockActor) = setupTestEnvironment(p)
+
+        val weaverActor =
+            createBlockWeaverActor(p, system, jointLedgerMockActor, Carol.headPeerNumber)
+        val config = multiNodeConfig.nodeConfigs(Carol.headPeerNumber)
+
+        // Send a user request first
+        val anyLedgerEvent =
+            p.pick(
+              Arbitrary.arbitrary[UserRequestWithId],
+              "any event before brief"
+            )
+        p.runIO(weaverActor ! anyLedgerEvent)
+
+        // Then send brief for block 1
+        val brief = p.runIO(mkDummyBlockBrief1(config.headConfig))
+
+        p.assert(
+          p.runIO(
+            handleBoolean(for {
+                _ <- weaverActor ! brief
+                _ <- system.waitForIdle()
+                _ <- expectMsgPF(jointLedgerMockActor, 5.seconds) { case s: StartBlock =>
+                    ()
+                }
+            } yield ())
+          ),
+          "StartBlock should be sent after both request and brief are received (reverse order)"
+        )
+
+        // Verify the event was fed through
+        p.assert(
+          jointLedgerMock.events.contains(anyLedgerEvent),
+          "Event should be fed through to joint ledger"
+        )
+
+        p.runIO(system.terminate())
+
+        true
+    }
 
     // TODO: finalization
     // TODO: follower mode
