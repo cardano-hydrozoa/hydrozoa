@@ -132,8 +132,10 @@ object DisputeResolutionValidator extends Validator {
         "Treasury datum should match voting inputs on head policy"
     private inline val TreasuryDatumMatchesDisputeId =
         "Treasury datum should match voting inputs on dispute id"
-    private inline val TimeValidityCheck =
-        "The transaction validity upper bound must not exceed the deadlineVoting"
+    private inline val ValidityStartShouldBeSetToTallyAwaiting =
+        "Tx that tallies awaiting votes should specify the validity start"
+    private inline val AwaitingVotesCanBeTalliedAfterVotingDeadlineOnly =
+        "Vote utxos in awaiting status can be tallied up only after deadlineVoting"
     private inline val HighestVoteCheck =
         "continuingOutput must match the highest voteStatus"
     private inline val AbsentOrWrongContinuingOutput =
@@ -384,8 +386,7 @@ object DisputeResolutionValidator extends Validator {
 
                 // Verify the treasury reference input
 
-                // If the voteStatus of either continuingInput or removedInput is AwaitingVote,
-                // all the following must be satisfied
+                // If the voteStatus of either continuingInput or removedInput is AwaitingVote...
                 if continuingDatum.voteStatus match {
                         case VoteStatus.AwaitingVote(_) => true
                         case VoteStatus.Voted(_, _) =>
@@ -395,6 +396,8 @@ object DisputeResolutionValidator extends Validator {
                             }
                     }
                 then {
+                    // ...all the following must be satisfied
+
                     // Let treasury be a reference input holding the head beacon token of headMp
                     // and CIP-67 prefix 4937
                     val treasuryReference = tx.referenceInputs
@@ -423,13 +426,15 @@ object DisputeResolutionValidator extends Validator {
                     require(treasuryDatum.headMp === contCs, TreasuryDatumMatchesHeadMp)
                     require(treasuryDatum.disputeId === contTn, TreasuryDatumMatchesDisputeId)
 
-                    // TODO: why do we care about the validity interval when tallying?
-                    // The transaction’s time -validity upper bound must not exceed the deadlineVoting
-                    // field of treasury.
-                    tx.validRange.to.boundType match {
-                        case IntervalBoundType.Finite(toTime) =>
-                            require(toTime <= treasuryDatum.deadlineVoting, TimeValidityCheck)
-                        case _ => fail(TimeValidityCheck)
+                    // Merging vote utxos that are in the awaiting mode is not allowed before the
+                    // voting deadline.
+                    tx.validRange.from.boundType match {
+                        case IntervalBoundType.Finite(fromTime) =>
+                            require(
+                              treasuryDatum.deadlineVoting <= fromTime,
+                              AwaitingVotesCanBeTalliedAfterVotingDeadlineOnly
+                            )
+                        case _ => fail(ValidityStartShouldBeSetToTallyAwaiting)
                     }
                 }
 
