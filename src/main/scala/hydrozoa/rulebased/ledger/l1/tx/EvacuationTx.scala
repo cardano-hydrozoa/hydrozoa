@@ -4,6 +4,7 @@ import cats.syntax.all.*
 import hydrozoa.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
+import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.multisig.ledger.commitment.Membership
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, evacuationKeyOrdering}
 import hydrozoa.multisig.ledger.l1.tx.Tx
@@ -164,7 +165,8 @@ private object EvacuationTxOps {
                 // Create the empty change utxo
                 sendChangeUtxo = Send(
                   Babbage(
-                    address = config.evacuationWallet.address(config.network),
+                    address = config.evacuationWallet.exportVerificationKey
+                        .shelleyAddress(config.network),
                     value = Value.zero,
                     datumOption = None,
                     scriptRef = None

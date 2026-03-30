@@ -11,6 +11,7 @@ import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.NodePrivateConfig
+import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.{addrKeyHash, pubKeyHash}
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.backend.cardano.CardanoBackend.Error.*
@@ -27,7 +28,7 @@ import scala.util.{Failure, Success, Try}
 import scalus.builtin.Data.fromData
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
-import scalus.cardano.ledger.{AddrKeyHash, DatumOption, PlutusScriptEvaluator, Transaction, Utxo, Utxos}
+import scalus.cardano.ledger.{DatumOption, PlutusScriptEvaluator, Transaction, Utxo, Utxos}
 import scalus.cardano.onchain.plutus.v3.PubKeyHash
 
 // QUESTION: The `OwnVoteUtxo` type is pretty sparse. Should I augment it directly, or did we want to keep
@@ -110,7 +111,7 @@ final case class DisputeActor(config: DisputeActor.Config)(
                 case (Some(ownVoteUtxo), _) =>
                     val builder = VoteTx.Build(config)(
                       _voteUtxo = OwnVoteUtxo(
-                        AddrKeyHash(config.ownHeadWallet.pubKeyHash.hash),
+                        config.ownHeadWallet.exportVerificationKey.addrKeyHash,
                         ownVoteUtxo._1
                       ),
                       _treasuryUtxo = treasuryUtxo,
@@ -228,7 +229,7 @@ final case class DisputeActor(config: DisputeActor.Config)(
 
             votePartition = voteUtxos.partition {
                 case (_, VoteDatum(_, _, VoteStatus.AwaitingVote(peerPkh))) => {
-                    val ownPkh: PubKeyHash = config.ownHeadWallet.pubKeyHash
+                    val ownPkh: PubKeyHash = config.ownHeadWallet.exportVerificationKey.pubKeyHash
                     peerPkh == ownPkh
                 }
                 case _ => false

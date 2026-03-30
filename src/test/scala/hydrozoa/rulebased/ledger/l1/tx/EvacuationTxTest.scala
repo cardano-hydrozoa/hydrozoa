@@ -4,6 +4,7 @@ import cats.effect.unsafe.implicits.global
 import hydrozoa.*
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
+import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.asG1Element
 import hydrozoa.multisig.ledger.commitment.{KzgCommitment, Membership, TrustedSetup}
 import hydrozoa.multisig.ledger.eutxol2.toEvacuationMap
@@ -139,7 +140,8 @@ def genEvacuationTxBuild(config: MultiNodeConfig): Gen[EvacuationTx.Build] =
           2,
           genPubKeyUtxo(
             config = config.headConfig,
-            address = config.nodeConfigs.head._2.ownHeadWallet.address(config.headConfig.network),
+            address = config.nodeConfigs.head._2.ownHeadWallet.exportVerificationKey
+                .shelleyAddress(config.headConfig.network),
             genValue = Gen.const(Value.ada(100))
           )
         )

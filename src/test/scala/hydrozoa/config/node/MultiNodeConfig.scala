@@ -15,13 +15,12 @@ import hydrozoa.config.node.operation.evacuation.{NodeOperationEvacuationConfigG
 import hydrozoa.config.node.operation.multisig.{NodeOperationMultisigConfig, generateNodeOperationMultisigConfig}
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.config.{ScriptReferenceUtxosGen, generateScriptReferenceUtxos}
-import hydrozoa.lib.cardano.scalus.ShelleyAddressExtra
+import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockHeader
 import org.scalacheck.util.Pretty
 import org.scalacheck.{Gen, Prop, Properties, PropertyM}
-import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.{AddrKeyHash, SlotConfig, Transaction, VKeyWitness}
 import scalus.uplc.builtin.Builtins.blake2b_224
 import test.{TestM, TestMFixedEnv, TestPeers, TestPeersSpec}
@@ -62,11 +61,9 @@ case class MultiNodeConfig private (
           nodePrivateConfigs.map(_._2.ownHeadWallet.mkMinorHeaderSignature(serialized)).toList
         )
 
-    def addressOf(peerNumber: HeadPeerNumber): ShelleyAddress =
-        ShelleyAddressExtra.mkShelleyAddress(
-          nodeConfigs(peerNumber).ownHeadWallet.exportVerificationKey,
-          headConfig.network
-        )
+    def addressOf(peerNumber: HeadPeerNumber) = nodeConfigs(
+      peerNumber
+    ).ownHeadWallet.exportVerificationKey.shelleyAddress(headConfig.network)
 
     def addrKeyHashOf(peerNumber: HeadPeerNumber): AddrKeyHash =
         AddrKeyHash(blake2b_224(nodeConfigs(peerNumber).ownHeadWallet.exportVerificationKey))

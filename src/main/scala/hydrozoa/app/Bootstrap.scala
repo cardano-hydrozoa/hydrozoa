@@ -22,7 +22,7 @@ import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
-import hydrozoa.lib.cardano.scalus.ShelleyAddressExtra
+import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.cardano.wallet.WalletModule
 import hydrozoa.lib.logging.Logging
 import hydrozoa.lib.number.PositiveInt
@@ -110,7 +110,7 @@ object Bootstrap:
 
         evacMap = EvacuationMap.empty
 
-        peerAddress = ShelleyAddressExtra.mkShelleyAddress(vKey, cardanoNetwork.network)
+        peerAddress = vKey.shelleyAddress(cardanoNetwork.network)
         _ <- logger.info(s"Peer address: ${peerAddress.toBech32.get}")
 
         // Fetch UTXOs from backend
@@ -287,7 +287,7 @@ object GenerateKeyPair extends IOApp:
                 _ <- IO.println(s"Verification key (32 bytes): $vKeyHex")
                 _ <- IO.println(s"Signing key (32 bytes): $sKeyHex")
                 _ <- IO.println(
-                  s"Testnet address: ${ShelleyAddressExtra.mkShelleyAddress(vKey, Network.Testnet).toBech32.get}"
+                  s"Testnet address: ${vKey.shelleyAddress(Network.Testnet).toBech32.get}"
                 )
 
                 _ <- IO.println("\nAdd these to your .env file:")
@@ -358,10 +358,7 @@ object Migrate extends IOApp:
             )
 
             // Get peer address
-            peerAddress = ShelleyAddressExtra.mkShelleyAddress(
-              env.verificationKey,
-              cardanoNetwork.network
-            )
+            peerAddress = env.verificationKey.shelleyAddress(cardanoNetwork.network)
             _ <- logger.info(s"Peer address: ${peerAddress.toBech32.get}")
 
             // Fetch all UTXOs from peer address

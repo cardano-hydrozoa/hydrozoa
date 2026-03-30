@@ -9,8 +9,8 @@ import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
+import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.multisig.backend.cardano.CardanoBackend
-import hydrozoa.multisig.consensus.peer.HeadPeerWallet
 import hydrozoa.multisig.ledger.commitment.Membership
 import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap}
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
@@ -146,7 +146,9 @@ case class EvacuationActor(config: Config)(
 
                 treasuryUtxoAndDatum <- parseRBTreasury(unparsedTreasuryUtxos)
 
-                walletAddress = config.evacuationWallet.address(config.network)
+                walletAddress = config.evacuationWallet.exportVerificationKey.shelleyAddress(
+                  config.network
+                )
 
                 // Note that if there are no fee utxos, we just try again.
                 feeUtxos <- EitherT(

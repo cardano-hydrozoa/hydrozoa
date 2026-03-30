@@ -6,7 +6,7 @@ import hydrozoa.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.MultiNodeConfig
-import hydrozoa.lib.cardano.scalus.ShelleyAddressExtra
+import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.l1.state.VoteState
@@ -109,9 +109,7 @@ def genVoteTxBuilder(multiNodeConfig: MultiNodeConfig): Gen[VoteTx.Build] = {
 
         // Make vote details
         // TODO: simplify getting peers addresses
-        peerAddresses = config.headPeerVKeys.map(vkey =>
-            ShelleyAddressExtra.mkShelleyAddress(vkey, config.network)
-        )
+        peerAddresses = config.headPeerVKeys.map(_.shelleyAddress(config.network))
         collateralUtxo <- genCollateralUtxo(
           config,
           // FIXME Being lazy here, do this better

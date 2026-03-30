@@ -4,7 +4,7 @@ import cats.effect.{ExitCode, IO, IOApp}
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
-import hydrozoa.lib.cardano.scalus.ShelleyAddressExtra
+import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.cardano.wallet.WalletModule
 import hydrozoa.lib.logging.Logging
@@ -50,10 +50,7 @@ object TokenRecovery extends IOApp:
             _ <- logger.info(s"Token recovery address: ${tokenRecoveryAddress.toBech32.get}")
 
             // Create faucet address from verification key
-            faucetAddress = ShelleyAddressExtra.mkShelleyAddress(
-              env.verificationKey,
-              cardanoNetwork.network
-            )
+            faucetAddress = env.verificationKey.shelleyAddress(cardanoNetwork.network)
             _ <- logger.info(s"Faucet address: ${faucetAddress.toBech32.get}")
 
             // Initialize backend

@@ -7,6 +7,7 @@ import hydrozoa.*
 import hydrozoa.config.*
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.node.MultiNodeConfig
+import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.{addrKeyHash, pubKeyHash}
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.commitment.TrustedSetup
@@ -131,7 +132,7 @@ object DisputeActorTestHelpers {
             collateralUtxo <- pick(
               genCollateralUtxo(
                 env.headConfig,
-                AddrKeyHash(env.nodePrivateConfigs.head._2.ownHeadWallet.pubKeyHash.hash)
+                env.nodePrivateConfigs.head._2.ownHeadWallet.exportVerificationKey.addrKeyHash
               )
                   .label("collateral utxo")
             )
@@ -268,7 +269,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
         ownVoteUtxo <- mkVoteUtxo(
           1,
           2,
-          VoteStatus.AwaitingVote(ownWallet.pubKeyHash),
+          VoteStatus.AwaitingVote(ownWallet.exportVerificationKey.pubKeyHash),
           TransactionInput(fallbackTxId, env.headConfig.nHeadPeers + 1)
         )
 
@@ -281,6 +282,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
                 .filter(_.ownHeadVKey != ownWallet.exportVerificationKey)
                 .head
                 .ownHeadWallet
+                .exportVerificationKey
                 .pubKeyHash
           ),
           TransactionInput(fallbackTxId, env.headConfig.nHeadPeers + 2)
@@ -381,6 +383,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
                 .filter(_.ownHeadVKey != ownWallet.exportVerificationKey)
                 .head
                 .ownHeadWallet
+                .exportVerificationKey
                 .pubKeyHash
           ),
           TransactionInput(fallbackTxId, env.headConfig.nHeadPeers + 2)
