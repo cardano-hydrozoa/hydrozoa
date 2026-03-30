@@ -145,6 +145,9 @@ private object FallbackTxOps {
                           disputeId = config.headTokenNames.voteTokenName.bytes,
                           peers = SList.from(config.headPeerVKeys.toList),
                           peersN = hns.numSigners,
+                          deadlineVoting =
+                              config.slotConfig.slotToTime(validityStartTime.toSlot.slot) +
+                                  config.votingDuration.finiteDuration.toMillis,
                           versionMajor = Steps.Spends.Treasury.datum.versionMajor.toInt,
                           // TODO: pull in N first elements of G2 CRS
                           // KZG setup I think?

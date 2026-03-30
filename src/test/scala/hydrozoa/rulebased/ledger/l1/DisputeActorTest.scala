@@ -83,6 +83,8 @@ object DisputeActorTestHelpers {
                   disputeId = env.headConfig.headTokenNames.voteTokenName.bytes,
                   peers = SList.from(env.headConfig.headPeerVKeys.toList),
                   peersN = env.headConfig.headPeerVKeys.size,
+                  // TODO: revise
+                  deadlineVoting = System.currentTimeMillis() + 600_000,
                   versionMajor = versionMajor,
                   // this is cribbed from the CommonGenerators.scala test
                   setup = TrustedSetup

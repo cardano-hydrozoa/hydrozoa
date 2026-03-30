@@ -258,8 +258,8 @@ object RuleBasedTreasuryValidator extends Validator {
 
                 // The beacon token should be preserved
                 // By contract, we require:
-                //   - The change utxo is position one
-                //   - the treasury utxo in position
+                //   - The change utxo is position zero
+                //   - the treasury utxo in position one
                 //   - the tail be evacuatees
                 val List.Cons(changeOutput, List.Cons(treasuryOutput, evacuationOutputs)) =
                     tx.outputs: @unchecked
@@ -273,7 +273,7 @@ object RuleBasedTreasuryValidator extends Validator {
                   EvacuateBeaconTokenShouldBePreserved
                 )
 
-                // Evacuateals
+                // Evacuatees
                 // The number of evacuations should match the number of utxos ids in the redeemer
                 require(
                   evacuationOutputs.size == evacuationKeys.size,

@@ -86,6 +86,7 @@ object CommonGenerators {
           disputeId = config.headTokenNames.voteTokenName.bytes,
           peers = SList.from(config.headPeerVKeys.iterator),
           peersN = config.nHeadPeers.convert,
+          deadlineVoting = deadlineVoting,
           versionMajor = versionMajor,
           setup = setup
         )
