@@ -131,7 +131,7 @@ object DisputeActorTestHelpers {
             )
             ownPeerConfig = env.nodePrivateConfigs.head
 
-            collateralUtxo <- pick(
+            disputeCollateralUtxo <- pick(
               genCollateralUtxo(
                 env.headConfig,
                 env.nodePrivateConfigs.head._2.ownHeadWallet.exportVerificationKey.addrKeyHash
@@ -149,13 +149,19 @@ object DisputeActorTestHelpers {
               commitment = initialCommitment
             )
 
+            initialUtxos = additionalL1Utxos ++
+                List(
+                  (
+                    disputeCollateralUtxo.input,
+                    disputeCollateralUtxo.collateralOutput
+                        .toOutput(using env)
+                  )
+                )
+                ++ env.nodeConfigs.head._2.scriptReferenceUtxos.toList.map(_.toTuple)
+
             cardanoBackend <- lift(
               CardanoBackendMock.mockIO(
-                MockState(initialUtxos =
-                    additionalL1Utxos ++
-                        List((collateralUtxo.input, collateralUtxo.output))
-                        ++ env.nodeConfigs.head._2.scriptReferenceUtxos.toList.map(_.toTuple)
-                ),
+                MockState(initialUtxos = initialUtxos),
                 mkContext = l =>
                     Context(
                       fee = Coin.zero,
@@ -170,12 +176,11 @@ object DisputeActorTestHelpers {
                     )
               )
             )
-            disputeActor = DisputeActor(config = env.nodeConfigs.head._2)(
-              collateralUtxo = collateralUtxo,
+            disputeActor = DisputeActor(
               blockHeader = blockHeader,
-              _cardanoBackend = cardanoBackend,
+              cardanoBackend = cardanoBackend,
               signatures = env.multisignHeader(blockHeader).toList
-            )
+            )(using env.nodeConfigs.head._2)
         } yield disputeActor
 }
 
@@ -186,8 +191,8 @@ The first few tests are sanity checks to ensure that raising exceptions (for unr
 left are handled properly by `handleDisputeRes`.
  */
 object DisputeActorTest extends Properties("Dispute Actor Test") {
-    override def overrideParameters(p: Test.Parameters): Test.Parameters =
-        p.withInitialSeed(Seed.fromBase64("44OLuP3O46fF64PCbvx2qrfHavqcClJ_Q6KdTz-ZrdC=").get)
+//    override def overrideParameters(p: Test.Parameters): Test.Parameters =
+//        p.withInitialSeed(Seed.fromBase64("44OLuP3O46fF64PCbvx2qrfHavqcClJ_Q6KdTz-ZrdC=").get)
 
     import DisputeActorTestHelpers.*
     import MultiNodeConfig.*
@@ -253,7 +258,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
             )
         fallbackTxId <- pick(Arbitrary.arbitrary[TransactionHash])
         nEvacs <- pick(Gen.choose(0, 1000))
-        evacMap <- pick(genEvacuationMap(env.headConfig.cardanoNetwork, nEvacs))
+        evacMap <- pick(genEvacuationMap(nEvacs)(using env))
         versionMajor = 100
         versionMinor = 2
 
@@ -351,7 +356,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
             )
         fallbackTxId <- pick(Arbitrary.arbitrary[TransactionHash])
         nEvacs <- pick(Gen.choose(0, 1000))
-        evacMap <- pick(genEvacuationMap(env.headConfig.cardanoNetwork, nEvacs))
+        evacMap <- pick(genEvacuationMap(nEvacs)(using env))
         versionMajor = 100
         versionMinor = 2
 
@@ -420,7 +425,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
             )
 
         nEvacs <- pick(Gen.choose(0, 1000))
-        evacMap <- pick(genEvacuationMap(env.headConfig.cardanoNetwork, nEvacs))
+        evacMap <- pick(genEvacuationMap(nEvacs)(using env))
 
         voteTxId <- pick(Arbitrary.arbitrary[TransactionHash])
         finalVoteUtxo <- mkVoteUtxo(

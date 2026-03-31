@@ -36,12 +36,12 @@ import test.Generators.Other
 
 def genDepositDatum(network: CardanoNetwork.Section): Gen[DepositUtxo.Datum] = {
     for {
-        address <- genPubkeyAddress(network).map(
+        address <- genPubkeyAddress()(using network).map(
           LedgerToPlutusTranslation.getAddress(_).credential
         )
         datum <- genByteStringData
         deadline <- Gen.posNum[BigInt]
-        refundAddress <- genPubkeyAddress(network).map(
+        refundAddress <- genPubkeyAddress()(using network).map(
           LedgerToPlutusTranslation.getAddress(_)
         )
         genData = Gen.frequency(
@@ -74,7 +74,7 @@ def genDepositUtxo(
 ): Gen[DepositUtxo] =
     for {
         utxoId <- arbitrary[TransactionInput]
-        headAddress_ = headAddress.getOrElse(genScriptAddress(config).sample.get)
+        headAddress_ = headAddress.getOrElse(genScriptAddress()(using config).sample.get)
         dd <- genDepositDatum(config)
 
         // Mock utxo to calculate minAda
@@ -92,7 +92,10 @@ def genDepositUtxo(
         address <- arbitrary[ShelleyAddress]
         nL2Outputs <- Gen.choose(1, 6)
         l2Outputs <- Gen
-            .listOfN(nL2Outputs, genGenesisObligation(config, address, genValue = genPositiveValue))
+            .listOfN(
+              nL2Outputs,
+              genGenesisObligation(address, genValue = genPositiveValue)(using config)
+            )
             .map(NonEmptyList.fromListUnsafe)
 
         // Generate some offset to the "zero slot" time.
@@ -145,7 +148,7 @@ def genSettlementTxSeqBuilder(config: HeadConfig)(
         nPayouts <- Gen.choose(1, 100)
         payouts <- Other.genSequencedValueDistribution(
           nPayouts,
-          value => genKnownValuePayoutObligationWithMinAdaEnsured(config, value)
+          value => genKnownValuePayoutObligationWithMinAdaEnsured(value)(using config)
         )
         totalPayoutValue = payouts.foldLeft(Value.zero)((v, payout) => v + payout.utxo.value.value)
 
@@ -212,7 +215,7 @@ def genNextSettlementTxSeqBuilder(config: HeadConfig)(
         payouts <- Other
             .genSequencedValueDistribution(
               nPayouts,
-              value => genKnownValuePayoutObligationWithMinAdaEnsured(config, value)
+              value => genKnownValuePayoutObligationWithMinAdaEnsured(value)(using config)
             )
             .map(nel => Vector.from(nel.toList))
         prefixes = (payouts.length to 0 by -1).map(payouts.take)

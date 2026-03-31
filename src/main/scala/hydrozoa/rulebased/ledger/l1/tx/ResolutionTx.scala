@@ -3,8 +3,12 @@ package hydrozoa.rulebased.ledger.l1.tx
 import cats.implicits.*
 import hydrozoa.*
 import hydrozoa.config.ScriptReferenceUtxos
+import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.peers.HeadPeers
+import hydrozoa.lib.cardano.scalus.implicitscalus.TransactionBuilder.{build, finalizeContext}
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
+import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.multisig.ledger.l1.tx.Tx
 import hydrozoa.multisig.ledger.l1.tx.Tx.Validators.nonSigningValidators
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionScript
@@ -12,23 +16,22 @@ import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.Dis
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.{ResolvedDatum, RuleBasedTreasuryDatum, UnresolvedDatum}
 import hydrozoa.rulebased.ledger.l1.state.VoteState
-import hydrozoa.rulebased.ledger.l1.state.VoteState.{KzgCommitment, VoteDatum, VoteStatus}
-import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryUtxo, TallyVoteUtxo}
+import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus
+import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.Voted
+import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryUtxo, VoteUtxo}
 import monocle.*
-import scala.util.{Failure, Success, Try}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.txbuilder.Datum.DatumInlined
 import scalus.cardano.txbuilder.ScriptSource.{PlutusScriptAttached, PlutusScriptValue}
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Send, Spend}
-import scalus.cardano.txbuilder.{Change, SomeBuildError, ThreeArgumentPlutusScriptWitness, TransactionBuilder}
-import scalus.uplc.builtin.Data.{fromData, toData}
+import scalus.cardano.txbuilder.{Change, SomeBuildError, ThreeArgumentPlutusScriptWitness}
+import scalus.uplc.builtin.Data.toData
 
 final case class ResolutionTx(
-    talliedVoteUtxo: TallyVoteUtxo,
+    talliedVoteUtxo: VoteUtxo[Voted],
     treasuryUnresolvedUtxoSpent: RuleBasedTreasuryUtxo,
     treasuryResolvedUtxoProduced: RuleBasedTreasuryUtxo,
     override val tx: Transaction,
@@ -41,7 +44,8 @@ object ResolutionTx {
 }
 
 private object ResolutionTxOps {
-    type Config = CardanoNetwork.Section & ScriptReferenceUtxos.Section
+    type Config = CardanoNetwork.Section & ScriptReferenceUtxos.Section & HeadPeers.Section &
+        FallbackContingency.Section & HasTokenNames
 
     object Build {
         enum Error extends Throwable:
@@ -67,53 +71,22 @@ private object ResolutionTxOps {
             }
     }
 
-    final case class Build(config: Config)(
-        _talliedVoteUtxo: TallyVoteUtxo,
-        _treasuryUtxo: RuleBasedTreasuryUtxo,
-        _collateralUtxo: CollateralUtxo,
-    ) {
-        val talliedVoteUtxo: TallyVoteUtxo = _talliedVoteUtxo
-        val treasuryUtxo: RuleBasedTreasuryUtxo = _treasuryUtxo
-        val collateralUtxo: CollateralUtxo = _collateralUtxo
+    final case class Build(
+        talliedVoteUtxo: VoteUtxo[Voted],
+        treasuryUtxo: RuleBasedTreasuryUtxo,
+        collateralUtxo: CollateralUtxo,
+    )(using config: Config) {
         def result: Either[Build.Error, ResolutionTx] =
             for {
-                voteDetails <- extractVoteDetails(talliedVoteUtxo)
                 treasuryDatum <- extractTreasuryDatum(treasuryUtxo)
-                resolvedTreasuryDatum = mkResolvedTreasuryDatum(treasuryDatum, voteDetails)
+                resolvedTreasuryDatum = mkResolvedTreasuryDatum(
+                  treasuryDatum,
+                  talliedVoteUtxo.voteOutput.status
+                )
                 result <- buildResolutionTx(resolvedTreasuryDatum).left.map(
                   Build.Error.BuildError(_)
                 )
             } yield result
-
-        private def extractVoteDetails(
-            talliedUtxo: TallyVoteUtxo
-        ): Either[Build.Error, (KzgCommitment, BigInt)] = {
-            import Build.Error.*
-
-            val voteOutput = talliedUtxo.utxo.output
-            voteOutput.datumOption match {
-                case Some(DatumOption.Inline(datumData)) =>
-                    Try(
-                      fromData[VoteDatum](datumData)(using VoteState.given_FromData_VoteDatum)
-                    ) match {
-                        case Success(voteDatum) =>
-                            voteDatum.voteStatus match {
-                                case VoteStatus.AwaitingVote(_) => Left(TalliedNoVote)
-                                case VoteStatus.Voted(commitment, versionMinor) =>
-                                    Right((commitment, versionMinor))
-                            }
-                        case Failure(e) =>
-                            Left(
-                              InvalidVoteDatum(
-                                talliedUtxo.utxo.input,
-                                s"Malformed tallied VoteDatum data: ${datumData.toString}"
-                              )
-                            )
-                    }
-                case _ =>
-                    Left(AbsentVoteDatum(talliedUtxo.utxo.input))
-            }
-        }
 
         private def extractTreasuryDatum(
             treasuryUtxo: RuleBasedTreasuryUtxo
@@ -128,7 +101,7 @@ private object ResolutionTxOps {
 
         private def mkResolvedTreasuryDatum(
             unresolved: UnresolvedDatum,
-            voteDetails: (KzgCommitment, BigInt)
+            voteDetails: VoteStatus.Voted
         ): RuleBasedTreasuryDatum = {
 
             val resolvedDatum = ResolvedDatum(
@@ -143,22 +116,21 @@ private object ResolutionTxOps {
 
         private def buildResolutionTx(
             resolvedTreasuryDatum: RuleBasedTreasuryDatum
-        ): Either[SomeBuildError, ResolutionTx] = {
+        )(using config: Config): Either[SomeBuildError, ResolutionTx] = {
 
             val voteRedeemer = DisputeRedeemer.Resolve
             val treasuryRedeemer = TreasuryRedeemer.Resolve
 
-            val newTreasuryValue = treasuryUtxo.value + talliedVoteUtxo.utxo.output.value
+            val newTreasuryValue = treasuryUtxo.value + talliedVoteUtxo.voteOutput.toOutput.value
 
             for {
-                context <- TransactionBuilder
-                    .build(
-                      config.network,
+                context <-
+                    build(
                       List(
                         config.referenceTreasury,
                         // Spend the tallied vote utxo
                         Spend(
-                          talliedVoteUtxo.utxo,
+                          talliedVoteUtxo.toUtxo,
                           ThreeArgumentPlutusScriptWitness(
                             PlutusScriptValue(DisputeResolutionScript.compiledPlutusV3Script),
                             voteRedeemer.toData,
@@ -187,16 +159,14 @@ private object ResolutionTxOps {
                         ),
                         collateralUtxo.add,
                         collateralUtxo.spend,
-                        collateralUtxo.sendContinuing,
+                        collateralUtxo.collateralOutput.sendContinuing,
                       )
                     )
 
                 finalized <- context
                     .finalizeContext(
-                      protocolParams = config.cardanoProtocolParams,
                       diffHandler =
                           Change.changeOutputDiffHandler(_, _, config.cardanoProtocolParams, 1),
-                      evaluator = PlutusScriptEvaluator(config.cardanoInfo, EvaluateAndComputeCost),
                       validators = nonSigningValidators
                     )
 

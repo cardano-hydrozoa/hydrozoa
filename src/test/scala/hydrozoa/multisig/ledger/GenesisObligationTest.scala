@@ -20,10 +20,9 @@ object GenesisObligationTest extends Properties("Genesis Obligation Properties")
           .flatMap((cardanoNetwork, address) =>
               Gen.nonEmptyListOf(
                 genGenesisObligation(
-                  cardanoNetwork,
                   address,
                   genValue = genPositiveValue
-                )
+                )(using cardanoNetwork)
               ).map(NonEmptyList.fromListUnsafe)
           )
     )(genesisObligations =>

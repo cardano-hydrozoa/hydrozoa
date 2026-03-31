@@ -46,8 +46,8 @@ def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = 
                 )
             )
 
-        l2Addr <- genPubkeyAddress(config)
-        refundAddr <- genPubkeyAddress(config)
+        l2Addr <- genPubkeyAddress()(using config)
+        refundAddr <- genPubkeyAddress()(using config)
 
         instructions =
             DepositUtxo.Refund.Instructions(
@@ -65,10 +65,9 @@ def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = 
             .listOfN(
               nL2Outputs,
               genGenesisObligation(
-                config,
                 depositorAddress,
                 genValue = genPositiveValue
-              )
+              )(using config)
             )
             .map(NonEmptyList.fromListUnsafe)
 
@@ -89,7 +88,7 @@ def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = 
                 minFunding <- Gen
                     .listOfN(
                       nFunding,
-                      genPubKeyUtxo(config, depositorAddress, Gen.const(Value.ada(5)))
+                      genPubKeyUtxo(depositorAddress, Gen.const(Value.ada(5)))(using config)
                     )
                     .map(l => NonEmptyList.fromListUnsafe(l.take(3)))
                 distribution <- genValueDistribution(depositValue, minFunding.length)
@@ -98,7 +97,7 @@ def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = 
                 utxo.focus(_.output).andThen(valueLens).modify(_ + additionalValue)
             )
 
-        refundAddr <- genPubkeyAddress(config)
+        refundAddr <- genPubkeyAddress()(using config)
 
     } yield DepositTx.Build(config)(
       utxosFunding = fundingUtxos,

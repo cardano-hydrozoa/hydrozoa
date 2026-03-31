@@ -113,7 +113,7 @@ def genSimpleDeinitTxRecipe(config: CardanoNetwork.Section, cardanoInfo: Cardano
           peers.length + 1
         )
 
-        collateralUtxo <- genCollateralUtxo(config)
+        collateralUtxo <- genCollateralUtxo(using config)
 
     } yield {
         Recipe(

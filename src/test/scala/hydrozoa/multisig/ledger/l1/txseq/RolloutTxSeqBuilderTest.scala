@@ -21,9 +21,8 @@ object RolloutTxSeqBuilderTest extends Properties("RolloutTxSeq Builder") {
               nPayouts,
               v =>
                   genKnownValuePayoutObligationWithMinAdaEnsured(
-                    config.headConfig.cardanoNetwork,
                     v
-                  )
+                  )(using config.headConfig)
             )
                 .map(nel => NonEmptyVector.fromVectorUnsafe(Vector.from(nel.toList)))
 

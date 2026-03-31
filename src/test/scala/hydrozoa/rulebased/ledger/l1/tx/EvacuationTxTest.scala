@@ -73,12 +73,12 @@ def genTreasuryResolvedDatum(
 
 /** Generator for EvacuationTx transaction recipe */
 // Feel free to trim down the config argument
-def genEvacuationTxBuild(config: MultiNodeConfig): Gen[EvacuationTx.Build] =
+def genEvacuationTxBuild(using config: MultiNodeConfig): Gen[EvacuationTx.Build] =
     for {
         // Generate a set of 64-1000 L2 utxos
         l2UtxoCount <- Gen.choose(64, 1000)
         // FIXME: this is partial, but I'm just trying to restore the old test for now
-        Right(evacMap) <- genUtxosL2(config.headConfig, l2UtxoCount).map(
+        Right(evacMap) <- genUtxosL2(l2UtxoCount).map(
           _.toEvacuationMap(config.headConfig)
         )
         _ = println(s"evac map: ${evacMap.size}")
@@ -139,7 +139,6 @@ def genEvacuationTxBuild(config: MultiNodeConfig): Gen[EvacuationTx.Build] =
         utxos <- Gen.listOfN(
           2,
           genPubKeyUtxo(
-            config = config.headConfig,
             address = config.nodeConfigs.head._2.ownHeadWallet.exportVerificationKey
                 .shelleyAddress(config.headConfig.network),
             genValue = Gen.const(Value.ada(100))
@@ -200,7 +199,7 @@ object EvacuationTxTest extends Properties("EvacuationTx Test") {
     ) = runDefault(
       for {
           env <- ask
-          builder <- pick(genEvacuationTxBuild(env))
+          builder <- pick(genEvacuationTxBuild(using env))
           evacuationTx <- failLeft(builder.result)
           _ <- assertWith(
             evacuationTx.treasuryUtxoSpent == builder.treasuryUtxo,

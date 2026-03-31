@@ -424,10 +424,9 @@ object InitializationParametersGenBottomUp {
                           for {
                               peer <- Gen.oneOf(testPeers.headPeerNums.toList)
                               utxo <- genPubKeyUtxo(
-                                config = cardanoNetwork,
                                 address = testPeers.addressFor(peer),
                                 genValue = Gen.const(v)
-                              )
+                              )(using cardanoNetwork)
                           } yield utxo
                     )
                     .map(nel => Map.from(nel.toList.map(_.toTuple)))
@@ -457,10 +456,9 @@ object InitializationParametersGenBottomUp {
                 for {
                     peer <- Gen.oneOf(testPeers.headPeerNums.toList)
                     utxo <- genPubKeyUtxo(
-                      config = cardanoNetwork,
                       address = testPeers.addressFor(peer),
                       genValue = Gen.const(Value.zero)
-                    )
+                    )(using cardanoNetwork)
                 } yield utxo
 
             fundingUtxosList <-
@@ -470,8 +468,7 @@ object InitializationParametersGenBottomUp {
                     distributed <- genValueDistributionWithMinAdaUtxo(
                       value = grossFundingAmount,
                       utxoList = NonEmptyList.fromListUnsafe(utxos),
-                      params = cardanoNetwork.cardanoProtocolParams
-                    )
+                    )(using cardanoNetwork)
                 } yield distributed
 
             seedUtxo = fundingUtxosList.head
