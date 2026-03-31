@@ -111,6 +111,7 @@ object Bootstrap:
         // This is the temporary hard-coded evacuation map - 10 ADA
         // goes to the fee account so the whole Sugar Rush ledger can be
         // correctly evacuated at any point of time.
+        feeAccValue = Value.ada(10L)
         evacMap: EvacuationMap = EvacuationMap.apply(
           TreeMap(
             EvacuationKey
@@ -128,7 +129,7 @@ object Bootstrap:
                               .fromBech32(
                                 "addr_test1vrhh0xnmqlh5jpys4cqrj3vteje70r0swakm7q2w8nmcp3sh5wdk4"
                               ),
-                          value = Value.ada(10L)
+                          value = feeAccValue
                         )
                       ),
                       network = cardanoNetwork
@@ -220,7 +221,7 @@ object Bootstrap:
             TransactionOutput.Babbage(
               address = peerAddress,
               value = valueSelected - Value(minEquity) -
-                  Value(zeroPeerContingency),
+                  Value(zeroPeerContingency) - feeAccValue,
               datumOption = None,
               scriptRef = None
             )
