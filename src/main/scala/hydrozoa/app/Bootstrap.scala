@@ -29,16 +29,17 @@ import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost}
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, HeadPeerWallet}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
-import hydrozoa.multisig.ledger.joint.EvacuationMap
+import hydrozoa.multisig.ledger.joint.obligation.Payout
+import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap, evacuationKeyOrdering, evacuationKeyToData}
 import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import java.security.SecureRandom
 import monocle.Focus.focus
 import org.bouncycastle.crypto.generators.Ed25519KeyPairGenerator
 import org.bouncycastle.crypto.params.{Ed25519KeyGenerationParameters, Ed25519PrivateKeyParameters, Ed25519PublicKeyParameters}
-import scala.collection.immutable.SortedMap
-import scalus.cardano.address.Network
-import scalus.cardano.ledger.{Coin, PlutusScriptEvaluator, TransactionOutput, Utxo, Value}
+import scala.collection.immutable.{SortedMap, TreeMap}
+import scalus.cardano.address.{Address, Network}
+import scalus.cardano.ledger.{Coin, KeepRaw, PlutusScriptEvaluator, TransactionOutput, Utxo, Value}
 import scalus.cardano.txbuilder.TransactionBuilderStep.Spend
 import scalus.cardano.txbuilder.{TransactionBuilder, TransactionBuilderStep}
 import scalus.crypto.ed25519.{SigningKey, VerificationKey}
@@ -107,7 +108,35 @@ object Bootstrap:
           settlementConfig = SettlementConfig(PositiveInt.unsafeApply(100))
         )
 
-        evacMap = EvacuationMap.empty
+        // This is the temporary hard-coded evacuation map - 10 ADA
+        // goes to the fee account so the whole Sugar Rush ledger can be
+        // correctly evacuated at any point of time.
+        evacMap: EvacuationMap = EvacuationMap.apply(
+          TreeMap(
+            EvacuationKey
+                .apply(
+                  ByteString.fromHex(
+                    "ef779a7b07ef490490ae0039458bccb3e78df0776dbf014e3cf780c600000000"
+                  )
+                )
+                .get ->
+                Payout.Obligation
+                    .apply(
+                      output = KeepRaw.apply(
+                        TransactionOutput.apply(
+                          address = Address
+                              .fromBech32(
+                                "addr_test1vrhh0xnmqlh5jpys4cqrj3vteje70r0swakm7q2w8nmcp3sh5wdk4"
+                              ),
+                          value = Value.ada(10L)
+                        )
+                      ),
+                      network = cardanoNetwork
+                    )
+                    .toOption
+                    .get
+          )
+        )
 
         peerAddress = ShelleyAddressExtra.mkShelleyAddress(vKey, cardanoNetwork.network)
         _ <- logger.info(s"Peer address: ${peerAddress.toBech32.get}")
