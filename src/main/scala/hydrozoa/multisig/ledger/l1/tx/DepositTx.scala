@@ -2,6 +2,7 @@ package hydrozoa.multisig.ledger.l1.tx
 
 import cats.data.NonEmptyList
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
+import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.*
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.RequestValidityEndTime
@@ -17,7 +18,7 @@ import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
-import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, ReferenceOutput, Send, Spend, ValidityEndSlot}
+import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend, ValidityEndSlot}
 import scalus.uplc.builtin.Builtins.blake2b_256
 import scalus.uplc.builtin.ByteString
 import scalus.uplc.builtin.Data.{fromData, toData}
@@ -36,9 +37,9 @@ object DepositTx {
 
 private object DepositTxOps {
     type Config = CardanoNetwork.Section & HeadPeers.Section & InitialBlock.Section &
-        TxTiming.Section & InitializationParameters.Section
+        TxTiming.Section & InitializationParameters.Section & FallbackContingency.Section
 
-    final case class Build(config: Config)(
+    final case class Build(
         utxosFunding: NonEmptyList[Utxo],
         l2Payload: ByteString,
         l2Value: Value,
@@ -46,12 +47,8 @@ private object DepositTxOps {
         changeAddress: ShelleyAddress,
         requestValidityEndTime: RequestValidityEndTime,
         refundInstructions: DepositUtxo.Refund.Instructions
-    ) {
+    )(using config: Config) {
         def result: Either[(SomeBuildError, String), DepositTx] = {
-
-            val referenceMultisigRegime =
-                ReferenceOutput(config.multisigRegimeUtxo.asUtxo)
-
             val spendUtxosFunding = utxosFunding.toList.map(Spend(_, PubKeyWitness))
 
             val depositDatum: DepositUtxo.Datum =
@@ -98,7 +95,7 @@ private object DepositTxOps {
                     .build(
                       config.network,
                       spendUtxosFunding ++ List(
-                        referenceMultisigRegime,
+                        config.multisigRegimeUtxo.referenceOutput,
                         addRefundMetadata,
                         sendDeposit,
                         sendChange,
@@ -260,7 +257,7 @@ private object DepositTxOps {
                         // Check the multisig regime witness utxo was referenced
                         _ <- Either.cond(
                           tx.body.value.referenceInputs.toSet
-                              .contains(config.multisigRegimeUtxo.utxoId),
+                              .contains(config.multisigRegimeUtxo.input),
                           (),
                           MultisigRegimeWitnessUtxoNotReferenced
                         )

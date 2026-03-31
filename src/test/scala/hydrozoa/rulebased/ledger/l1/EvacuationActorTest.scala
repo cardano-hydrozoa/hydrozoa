@@ -59,12 +59,12 @@ object EvacuationActorTestHelpers {
             )
 
         } yield EvacuationActor(
-          env.nodeConfigs.head._2
-        )(
           toEvacuate = subset,
           cardanoBackend = cardanoBackend,
           evacuationMapAtFallback = evacMapFull,
           fallbackTxHash = fallbackTxHash
+        )(using
+          env.nodeConfigs.head._2
         )
 
 }

@@ -373,7 +373,7 @@ object JointLedgerTestHelpers {
 
                 utxosFundingValue = Value.combine(utxosFunding.toList.map(_._2.value))
 
-                depositRefundSeqBuilder = DepositRefundTxSeq.Build(env.config)(
+                depositRefundSeqBuilder = DepositRefundTxSeq.Build(
                   l2Payload = l2OutputsBytes,
                   l2Value = l2OutputsValue,
                   depositFee = Coin.zero,
@@ -383,7 +383,7 @@ object JointLedgerTestHelpers {
                   refundAddress = address,
                   refundDatum = None,
                   requestId = requestId
-                )
+                )(using env.config)
 
                 depositRefundTxSeq <- lift(depositRefundSeqBuilder.result.liftTo[IO])
 

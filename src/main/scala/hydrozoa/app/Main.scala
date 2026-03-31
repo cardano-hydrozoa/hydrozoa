@@ -205,7 +205,7 @@ object Main extends IOApp {
                     backend = backend,
                     headPeerWallet = nodeConfig.ownHeadWallet,
                     config = nodeConfig.headConfig,
-                    faucetAddress = env.verificationKey.shelleyAddress(cardanoNetwork.network),
+                    faucetAddress = env.verificationKey.shelleyAddress()(using cardanoNetwork),
                     tokenRecoveryAddress = env.tokenRecoveryAddress
                   )
             )

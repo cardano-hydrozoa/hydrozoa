@@ -242,8 +242,7 @@ private object FinalizationTxOps {
             private val spendTreasury =
                 Spend(treasuryToSpend.asUtxo, config.headMultisigScript.witnessAttached)
 
-            private val spendMultisigRegime =
-                Spend(config.multisigRegimeUtxo.asUtxo, config.headMultisigScript.witnessAttached)
+            private val spendMultisigRegime = config.multisigRegimeUtxo.spend(using config)
 
             private val spendSteps = List(spendMultisigRegime, spendTreasury)
 

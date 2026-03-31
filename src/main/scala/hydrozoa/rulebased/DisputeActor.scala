@@ -9,10 +9,9 @@ import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.*
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.node.NodePrivateConfig
+import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.{pubKeyHash, shelleyAddress}
 import hydrozoa.lib.cardano.scalus.ledger.{CollateralOutput, CollateralUtxo}
 import hydrozoa.lib.number.PositiveInt
-import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.{addrKeyHash, pubKeyHash}
-import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.backend.cardano.CardanoBackend.Error.*
 import hydrozoa.multisig.ledger.block.BlockHeader
@@ -30,8 +29,6 @@ import scalus.builtin.Data.fromData
 import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.{DatumOption, Transaction, TransactionOutput, Utxo, Utxos}
-import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
-import scalus.cardano.ledger.{DatumOption, PlutusScriptEvaluator, Transaction, Utxo, Utxos}
 import scalus.cardano.onchain.plutus.v3.PubKeyHash
 
 // TODO: relocate
@@ -88,13 +85,13 @@ final case class DisputeActor(
         : EitherT[IO, DisputeActor.Error.RecoverableErrors, CollateralUtxo] =
         for {
             collateralCandidates <- handleCardanoBackendError(
-              cardanoBackend.utxosAt(config.ownHeadWallet.address(config.network))
+              cardanoBackend.utxosAt(config.ownHeadWallet.exportVerificationKey.shelleyAddress())
             )
             collateralUtxoTuple <- collateralCandidates.filter((_, to) =>
                 to.value.isOnlyAda
             ) match {
                 case x if x.nonEmpty =>
-                    EitherT.right(IO.pure(x.toList.sortBy(_._2.value.coin.value).head))
+                    EitherT.right(IO.pure(x.toList.maxBy(_._2.value.coin.value)))
                 case _ => EitherT.liftF(IO.raiseError(NoSuitableCollateralUtxosFound))
             }
             collateralOutput <- collateralUtxoTuple._2 match {
@@ -383,7 +380,7 @@ object DisputeActor {
             object Treasury {
                 case class MultipleTreasuryTokensFound(utxos: Utxos) extends Unrecoverable
 
-                case class WrappedTreasuryParseError(wrapped: RuleBasedTreasuryUtxo.ParseError)
+                case class WrappedTreasuryParseError(wrapped: RuleBasedTreasuryOutput.ParseError)
                     extends Unrecoverable
 
                 /** This either means something is very wrong, or simply that the dispute resolution
@@ -406,7 +403,7 @@ object DisputeActor {
     // obtained from the parameters to this class
     def parseRBTreasury(
         utxos: Utxos
-    ): EitherT[IO, Error.RecoverableErrors, RuleBasedTreasuryUtxo] =
+    )(using config: Config): EitherT[IO, Error.RecoverableErrors, RuleBasedTreasuryUtxo] =
         for {
             utxo <- utxos.size match {
                 // May happen due to rollback, ignore and try again
@@ -418,10 +415,10 @@ object DisputeActor {
                     )
             }
 
-            rbTreasury <- EitherT.right(IO.fromEither(RuleBasedTreasuryUtxo.parse(utxo)))
-            unresolvedRbt <- rbTreasury.datum match {
-                case RuleBasedTreasuryDatum.Unresolved(_) => EitherT.right(IO.pure(rbTreasury))
-                case RuleBasedTreasuryDatum.Resolved(_)   => EitherT.left(IO.pure(TreasuryResolved))
+            rbTreasuryOut <- EitherT.right(IO.fromEither(RuleBasedTreasuryOutput(utxo.output)))
+            unresolvedRbt <- rbTreasuryOut.datum match {
+                case _: RuleBasedTreasuryDatum.Unresolved => EitherT.right(IO.pure(rbTreasuryOut))
+                case _: RuleBasedTreasuryDatum.Resolved   => EitherT.left(IO.pure(TreasuryResolved))
             }
-        } yield unresolvedRbt
+        } yield RuleBasedTreasuryUtxo(utxo.input, unresolvedRbt)
 }

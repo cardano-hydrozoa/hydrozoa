@@ -6,6 +6,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
+import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.l1.state.VoteState
@@ -102,7 +103,7 @@ def genVoteTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[VoteTx.Build] 
 
         // Make vote details
         // TODO: simplify getting peers addresses
-        peerAddresses = config.headPeerVKeys.map(_.shelleyAddress(config.network))
+        peerAddresses = config.headPeerVKeys.map(_.shelleyAddress()(using config))
         collateralUtxo <- genCollateralUtxo(
           // FIXME Being lazy here, do this better
           peerAddresses
@@ -115,7 +116,7 @@ def genVoteTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[VoteTx.Build] 
         // Create builder context (not needed for Recipe anymore)
         allUtxos = Map(
           voteUtxo.toUtxo.input -> voteUtxo.toUtxo.output,
-          treasuryUtxo.asTuple._1 -> treasuryUtxo.asTuple._2,
+          treasuryUtxo.toUtxo.toTuple._1 -> treasuryUtxo.toUtxo.toTuple._2,
           collateralUtxo._1 -> collateralUtxo._2
         )
 
@@ -136,6 +137,7 @@ object VoteTxTest extends Properties("Vote Tx Test") {
           mnc <- ask
           _ <- {
               given MultiNodeConfig = mnc
+              given VoteTx.Config = mnc.nodeConfigs.head._2
               for {
                   builder <- pick(genVoteTxBuilder)
                   tx <- failLeft(builder.result)

@@ -2,25 +2,33 @@ package hydrozoa.rulebased.ledger.l1.tx
 
 import cats.implicits.*
 import hydrozoa.*
-import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
-import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryScript
+import hydrozoa.config.ScriptReferenceUtxos
+import hydrozoa.config.head.multisig.fallback.FallbackContingency
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.peers.HeadPeers
+import hydrozoa.lib.cardano.scalus.contextualscalus.Change
+import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{build, finalizeContext}
+import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
+import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
+import hydrozoa.multisig.ledger.l1.tx.Tx
+import hydrozoa.multisig.ledger.l1.tx.Tx.Validators.nonSigningValidators
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.{Resolved, Unresolved}
-import hydrozoa.rulebased.ledger.l1.utxo.RuleBasedTreasuryUtxo
-import scala.collection.immutable.SortedMap
-import scalus.cardano.ledger.*
-import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.txbuilder.*
-import scalus.cardano.txbuilder.Datum.DatumInlined
-import scalus.cardano.txbuilder.ScriptSource.{NativeScriptValue, PlutusScriptValue}
-import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, *}
+import hydrozoa.rulebased.ledger.l1.tx.DeinitTxOps.Build.Error.*
+import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryUtxo, *}
+import monocle.*
+import scalus.cardano.ledger.{BlockHeader as _, *}
+import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
+import scalus.cardano.txbuilder.{SomeBuildError, *}
+import scalus.uplc.builtin.ByteString
 import scalus.uplc.builtin.ByteString.hex
-import scalus.uplc.builtin.Data.toData
 
 final case class DeinitTx(
     treasuryUtxoSpent: RuleBasedTreasuryUtxo,
-    tx: Transaction
-)
+    override val tx: Transaction,
+    override val txLens: Lens[DeinitTx, Transaction] = Focus[DeinitTx](_.tx),
+    override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
+) extends Tx[DeinitTx]
 
 /** The deinit tx spends an empty (i.e. not containing any l2 utxos) treasury utxo, distributing the
   * residual _head equity_ according to peers' shares. If a share happens to be less than min ada,
@@ -37,128 +45,77 @@ final case class DeinitTx(
   * All head tokens under the head's policy id (and only those) should be burnt.
   */
 object DeinitTx {
+    export DeinitTxOps.{Build, Config}
+}
 
-    case class Recipe(
-        headNativeScript: HeadMultisigScript,
+private object DeinitTxOps {
+    type Config = CardanoNetwork.Section & HeadPeers.Section & FallbackContingency.Section &
+        HasTokenNames & ScriptReferenceUtxos.Section
+
+    object Build {
+        // TODO add `getMessage`
+        enum Error extends Throwable:
+            case TreasuryShouldBeResolved
+            case TreasuryShouldBeEmpty
+            case NoHeadTokensFound
+
+    }
+
+    final case class Build(
         treasuryUtxo: RuleBasedTreasuryUtxo,
-        defaultVoteDeposit: Coin,
-        voteDeposit: Coin,
-        collateralUtxo: Utxo,
-        env: CardanoInfo,
-        evaluator: PlutusScriptEvaluator,
-        validators: Seq[Validator]
-    )
+        collateralUtxo: CollateralUtxo,
+    ) {
 
-    enum DeinitTxError:
-        case TreasuryShouldBeResolved
-        case TreasuryShouldBeEmpty
-        case NoHeadTokensFound
-
-    import DeinitTxError.*
-
-    def build(recipe: Recipe): Either[SomeBuildError | DeinitTxError, DeinitTx] = {
-        import recipe.*
-
-        val policyId = headNativeScript.policyId
-
-        for {
-            _ <- checkTreasury(treasuryUtxo)
-
-            headTokens <- extractHeadTokens(policyId, treasuryUtxo)
-
-            result <- buildDeinitTx(recipe, headTokens)
-        } yield result
-    }
-
-    private def checkTreasury(
-        treasury: RuleBasedTreasuryUtxo
-    ): Either[DeinitTxError, Unit] =
-
-        // TODO use G1.generatorCompressed once it's here
-        val g1bs =
-            hex"97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb"
-
-        for {
-            resolved <- treasury.datum match {
-                case Unresolved(_) => Left(TreasuryShouldBeResolved)
-                case Resolved(d)   => Right(d)
-            }
-            _ <- Either.cond(resolved.evacuationActive == g1bs, (), TreasuryShouldBeEmpty)
-
-        } yield ()
-
-    private def extractHeadTokens(
-        policyId: PolicyId,
-        treasuryUtxo: RuleBasedTreasuryUtxo
-    ): Either[DeinitTxError, SortedMap[AssetName, Long]] = {
-        treasuryUtxo.value.assets.assets.get(policyId) match {
-            case Some(headTokens) =>
-                if headTokens.nonEmpty
-                then Right(headTokens)
-                else Left(NoHeadTokensFound)
-            case None => Left(NoHeadTokensFound)
+        def result(using config: Config): Either[SomeBuildError | Build.Error, DeinitTx] = {
+            for {
+                _ <- checkTreasury
+                result <- buildDeinitTx
+            } yield result
         }
-    }
 
-    private def buildDeinitTx(
-        recipe: Recipe,
-        headTokens: SortedMap[AssetName, Long]
-    ): Either[SomeBuildError | DeinitTxError, DeinitTx] = {
-        import recipe.*
+        val checkTreasury: Either[Build.Error, Unit] =
 
-        val policyId = recipe.headNativeScript.policyId
+            // TODO use G1.generatorCompressed once it's here
+            val g1bs =
+                hex"97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb"
 
-        for {
-            context <- TransactionBuilder
-                .build(
-                  env.network,
+            for {
+                resolved <- treasuryUtxo.treasuryOutput.datum match {
+                    case _: Unresolved => Left(TreasuryShouldBeResolved)
+                    case d: Resolved   => Right(d)
+                }
+                _ <- Either.cond(resolved.evacuationActive == g1bs, (), TreasuryShouldBeEmpty)
+
+            } yield ()
+
+        def buildDeinitTx(using config: Config): Either[SomeBuildError | Build.Error, DeinitTx] = {
+
+            for {
+                context <- build(
                   List(
+                    config.referenceTreasury,
                     // Spend the treasury utxo
-                    Spend(
-                      Utxo(treasuryUtxo.asTuple._1, treasuryUtxo.asTuple._2),
-                      ThreeArgumentPlutusScriptWitness(
-                        PlutusScriptValue(RuleBasedTreasuryScript.compiledPlutusV3Script),
-                        TreasuryRedeemer.Deinit.toData,
-                        DatumInlined,
-                        Set.empty
-                      )
-                    ),
+                    treasuryUtxo.spendAttached(TreasuryRedeemer.Deinit),
                     // Fees are covered by the collateral to simplify the balancing
-                    Spend(collateralUtxo, PubKeyWitness),
-                    AddCollateral(collateralUtxo),
+                    collateralUtxo.spend,
+                    collateralUtxo.add,
                     // Send collateral back as the first output
-                    Send(collateralUtxo.output)
-                  )
-                  // Burn head tokens
-                      ++ headTokens.map((assetName, amount) =>
-                          Mint(
-                            scriptHash = policyId,
-                            assetName = assetName,
-                            amount = -amount,
-                            witness = NativeScriptWitness(
-                              NativeScriptValue(headNativeScript.script),
-                              headNativeScript.requiredSigners
-                            )
-                          )
-                      )
+                    collateralUtxo.collateralOutput.send
+                  ) ++ treasuryUtxo.treasuryOutput.burnHeadTokens
                 )
 
-            finalized <- context
-                .finalizeContext(
-                  protocolParams = env.protocolParams,
-                  diffHandler = Change.changeOutputDiffHandler(
-                    _,
-                    _,
-                    env.protocolParams,
-                    0
-                  ), // the collateral sent back
-                  evaluator = evaluator,
-                  validators = validators
-                )
+                finalized <- context
+                    .finalizeContext(
+                      diffHandler = Change.changeOutputDiffHandler(
+                        0
+                      ), // the collateral sent back
+                      validators = nonSigningValidators
+                    )
 
-        } yield DeinitTx(
-          treasuryUtxoSpent = treasuryUtxo,
-          tx = finalized.transaction
-        )
+            } yield DeinitTx(
+              treasuryUtxoSpent = treasuryUtxo,
+              tx = finalized.transaction
+            )
+        }
     }
 }

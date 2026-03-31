@@ -1,48 +1,41 @@
 package hydrozoa.multisig.ledger.l1.utxo
 
-import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
+import hydrozoa.config.head.HeadConfig
+import hydrozoa.config.head.multisig.fallback.FallbackContingency
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.peers.HeadPeers
+import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
+import hydrozoa.multisig.ledger.l1.utxo.MultisigRegimeOutput.Config
 import scalus.*
-import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.txbuilder.NativeScriptWitness
+import scalus.cardano.txbuilder.ScriptSource.NativeScriptAttached
+import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, ReferenceOutput, Send, Spend}
 
+// TODO: Add parsing functions. The Multisig regime utxo should
+// carry the correct token and be at the correct address.
 final case class MultisigRegimeUtxo(
-    multisigRegimeTokenName: AssetName,
-    utxoId: TransactionInput,
-    address: ShelleyAddress,
-    value: Value,
-    script: HeadMultisigScript
+    input: TransactionInput,
 ) {
-    val input: TransactionInput = utxoId
-    val output: Babbage = Babbage(
-      address = address,
-      value = value,
-      datumOption = None,
-      scriptRef = Some(ScriptRef.apply(script.script))
-    )
 
-    val asUtxo: Utxo =
+    def toUtxo(using config: MultisigRegimeOutput.Config): Utxo =
         Utxo(
           input,
-          output
+          MultisigRegimeOutput.toOutput
         )
+
+    def referenceOutput(using config: Config): ReferenceOutput = ReferenceOutput(
+      this.toUtxo
+    )
+
+    def spend(using config: Config): Spend = Spend(
+      this.toUtxo,
+        config.headMultisigScript.witnessAttached
+    )
 }
 
 object MultisigRegimeUtxo {
-
-    def apply(
-        multisigRegimeTokenName: AssetName,
-        utxoId: TransactionInput,
-        output: TransactionOutput,
-        script: HeadMultisigScript
-    ): MultisigRegimeUtxo =
-        MultisigRegimeUtxo(
-          multisigRegimeTokenName,
-          utxoId,
-          output.address.asInstanceOf[ShelleyAddress],
-          output.value,
-          script
-        )
 
     /** If some tx extends this, it means that tx is producing it. */
     trait Produced {
@@ -54,4 +47,32 @@ object MultisigRegimeUtxo {
         def multisigRegimeUtxoSpent: MultisigRegimeUtxo
     }
 
+}
+
+case object MultisigRegimeOutput {
+    type Config = HasTokenNames & CardanoNetwork.Section & HeadPeers.Section &
+        FallbackContingency.Section
+
+    def toOutput(using config: Config): Babbage = Babbage(
+      address = config.headMultisigAddress,
+      value = Value(config.totalFallbackContingency) +
+          Value.asset(
+            config.headMultisigScript.policyId,
+            config.headTokenNames.multisigRegimeTokenName,
+            1L
+          ),
+      datumOption = None,
+      scriptRef = Some(ScriptRef(config.headMultisigScript.script))
+    )
+
+    def burnMultisigRegimeTokens(using config: Config) = Mint(
+      config.headMultisigScript.policyId,
+      config.headTokenNames.multisigRegimeTokenName,
+      -1,
+      config.headMultisigScript.witnessAttached
+    )
+
+    def send(using config: Config): Send = Send(
+      toOutput
+    )
 }

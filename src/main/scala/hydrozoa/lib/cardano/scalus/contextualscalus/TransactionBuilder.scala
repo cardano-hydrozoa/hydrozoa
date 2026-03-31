@@ -1,4 +1,4 @@
-package hydrozoa.lib.cardano.scalus.implicitscalus
+package hydrozoa.lib.cardano.scalus.contextualscalus
 
 import hydrozoa.config.head.network.CardanoNetwork
 import scalus.cardano.ledger.rules.STS.Validator

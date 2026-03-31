@@ -1,7 +1,8 @@
 package hydrozoa.lib.cardano.scalus
 
+import hydrozoa.config.head.network.CardanoNetwork
 import scalus.cardano.address.ShelleyPaymentPart.Key
-import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart}
+import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart}
 import scalus.cardano.ledger.AddrKeyHash
 import scalus.cardano.onchain.plutus.v1.PubKeyHash
 import scalus.crypto.ed25519.VerificationKey
@@ -21,11 +22,10 @@ object VerificationKeyExtra:
           * @return
           */
         def shelleyAddress(
-            network: Network,
             delegationPart: ShelleyDelegationPart = ShelleyDelegationPart.Null
-        ): ShelleyAddress =
+        )(using network: CardanoNetwork.Section): ShelleyAddress =
             ShelleyAddress(
-              network = network,
+              network = network.network,
               payment = Key(addrKeyHash),
               delegation = delegationPart
             )
@@ -35,6 +35,7 @@ object VerificationKeyExtra:
 
         def addrKeyHash: AddrKeyHash = AddrKeyHash(hash)
 
+        // Better as a lazy val, but you can't put those in extension methods
         private def hash: ByteString = self.bytes
             |> ByteString.fromArray
             |> blake2b_224

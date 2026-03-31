@@ -1,6 +1,12 @@
 package hydrozoa.rulebased.ledger.l1.utxo
 
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.peers.HeadPeers
+import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
+import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.{RuleBasedTreasuryDatum, RuleBasedTreasuryDatumOnchain}
+import hydrozoa.rulebased.ledger.l1.utxo.RuleBasedTreasuryOutput.{Config, *}
+import scala.collection.immutable.SortedMap
 import scala.util.{Failure, Success, Try}
 import scalus.*
 import scalus.builtin.Data
@@ -8,86 +14,56 @@ import scalus.builtin.Data.{fromData, toData}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{TransactionInput, TransactionOutput, Utxo, Value}
+import scalus.cardano.ledger.{AssetName, MultiAsset, PolicyId, Slot, TransactionInput, TransactionOutput, Utxo, Value}
+import scalus.cardano.txbuilder.Datum.DatumInlined
+import scalus.cardano.txbuilder.ScriptSource.PlutusScriptAttached
+import scalus.cardano.txbuilder.ThreeArgumentPlutusScriptWitness
+import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, ReferenceOutput, Send, Spend}
 import scalus.uplc.builtin.Data
 
-// TODO: Make opaque
 final case class RuleBasedTreasuryUtxo(
     utxoId: TransactionInput,
-    address: ShelleyAddress,
-    datum: RuleBasedTreasuryDatum,
-    value: Value
+    treasuryOutput: RuleBasedTreasuryOutput
 ) {
-    val output: Babbage =
-        Babbage(
-          address = address,
-          value = value,
-          datumOption = Some(Inline(datum.toData)),
-          scriptRef = None
-        )
 
-    val asTuple: (TransactionInput, Babbage) =
-        (
-          utxoId,
-          output
-        )
+    def toUtxo(using config: Config): Utxo =
+        Utxo(utxoId, treasuryOutput.toOutput)
 
-    val asUtxo: Utxo =
-        Utxo(utxoId, output)
+    // Other alternative is to pass a type variable to RuleBasedTreasuryUtxo indicating the datum type,
+    // but we'd still have to parse at some point due to type erasure. But we could parse at the boundary instead.
+    def parseVotingDeadline(using config: Config): Either[ParseError, Slot] =
+        treasuryOutput.datum match {
+            case RuleBasedTreasuryDatum.Unresolved(deadlineVoting, _, _) =>
+                Try(Slot(config.slotConfig.timeToSlot(deadlineVoting.toLong))).toEither.left
+                    .map(TreasuryDatumContainsInvalidDeadline(_))
+            case _ => Left(TreasuryDatumResolved)
+        }
+
+    def referenceOutput(using config: Config): ReferenceOutput = ReferenceOutput(toUtxo)
+
+    def spendAttached(redeemer: TreasuryRedeemer)(using config: Config) = Spend(
+      toUtxo,
+      ThreeArgumentPlutusScriptWitness(
+        PlutusScriptAttached,
+        redeemer.toData,
+        DatumInlined,
+        Set.empty
+      )
+    )
 }
 
 object RuleBasedTreasuryUtxo {
-    trait ParseError extends Throwable {
-        override def toString: String = getMessage
 
-        override def getMessage: String
-    }
+    def parse(utxo: Utxo)(using config: Config): Either[ParseError, RuleBasedTreasuryUtxo] = {
 
-    case class TreasuryDatumMissing(utxo: Utxo) extends ParseError {
-        override def getMessage: String =
-            s"Treasury datum is missing for utxo: ${utxo.input}"
-    }
-
-    case class TreasuryDatumNotInline(utxo: Utxo) extends ParseError {
-        override def getMessage: String =
-            s"Treasury datum is not inline for utxo: ${utxo.input}"
-    }
-
-    case class TreasuryDatumDeserializationError(utxo: Utxo, e: Throwable) extends ParseError {
-        override def getMessage: String =
-            s"Failed to deserialize treasury datum for utxo: ${utxo.input}. Error: ${e.getMessage}"
-    }
-
-    case class TreasuryAddressNotShelley(utxo: Utxo) extends ParseError {
-        override def getMessage: String =
-            s"Treasury address is not a Shelley address for utxo: ${utxo.input}"
-    }
-
-    def parse(utxo: Utxo): Either[ParseError, RuleBasedTreasuryUtxo] =
         for {
-            d1 <- utxo.output.datumOption.toRight(TreasuryDatumMissing(utxo))
-
-            d2 <- d1 match {
-                case i: Inline => Right(i)
-                case _         => Left(TreasuryDatumNotInline(utxo))
-            }
-
-            datum <- Try(fromData[RuleBasedTreasuryDatum](d2.data)) match {
-                case Success(d) => Right(d)
-                case Failure(e) => Left(TreasuryDatumDeserializationError(utxo, e))
-            }
-
-            address <- utxo.output.address match {
-                case sa: ShelleyAddress => Right(sa)
-                case _                  => Left(TreasuryAddressNotShelley(utxo))
-            }
-
+            output <- RuleBasedTreasuryOutput(utxo.output)
         } yield RuleBasedTreasuryUtxo(
           utxoId = utxo.input,
-          address = address,
-          datum = datum,
-          value = utxo.output.value
+          treasuryOutput = output
         )
+    }
+
     trait Produced {
         def treasuryProduced: RuleBasedTreasuryUtxo
     }
@@ -95,36 +71,129 @@ object RuleBasedTreasuryUtxo {
     trait Spent {
         def treasurySpent: RuleBasedTreasuryUtxo
     }
-    // def mkTreasuryDatumUnresolved(
-//    headMp: PolicyId,
-//    disputeId: TokenName,
-//    peers: List[VerificationKeyBytes],
-//    deadlineVoting: HPosixTime,
-//    versionMajor: BigInt,
-//    params: Unit // TODO: L2ConsensusParamsH32
-//): TreasuryDatum =
-//    UnresolvedDatum(
-//      headMp = headMp,
-//      disputeId = disputeId,
-//      peers = peers.map(_.bytes),
-//      peersN = peers.length,
-//      deadlineVoting = deadlineVoting,
-//      versionMajor = versionMajor,
-//      params = ???,
-//      // TODO: magic number, arguably should be a parameter
-//      setup = TrustedSetup.takeSrsG2(10).map(p2 => BLS12_381_G2_Element(p2).toCompressedByteString)
-//    ) |> Unresolved.apply
+}
 
-    //    def fromUtxo(utxo : (TransactionInput, TransactionOutput)) : Option[TreasuryUtxo] = {
-//        val tuxo = for {
-//           datum <- Try(fromData[TreasuryUtxo.Datum](utxo._2.asInstanceOf[Babbage].datumOption.get.asInstanceOf[Inline].data))
-//           va
-//        } yield ???
-//
-//        tuxo match {
-//            case Success(v) => Some(v)
-//            case Failure(e) => None
-//        }
-//    }
+// TODO: this class could further decompose the value into "Vote tokens" and an implicit "Treasury Token".
+//   The primary benefit to doing so would be encoding the expected invariants at the type level, which may make
+//   model checking or formalization easier. It also gives us the ability to add a
+final case class RuleBasedTreasuryOutput(datum: RuleBasedTreasuryDatum, value: Value) {
+
+    def toOutput(using config: RuleBasedTreasuryOutput.Config): Babbage =
+        Babbage(
+          address = config.ruleBasedTreasuryAddress,
+          value = value,
+          datumOption = Some(Inline(datum.toOnchain.toData)),
+          scriptRef = None
+        )
+
+    def send(using config: RuleBasedTreasuryOutput.Config): Send = Send(toOutput)
+
+    def headTokens(using config: RuleBasedTreasuryOutput.Config): MultiAsset = {
+        val inner =
+            value.assets.assets(config.headMultisigScript.policyId)
+        val outer: SortedMap[PolicyId, SortedMap[AssetName, Long]] = SortedMap(
+          (config.headMultisigScript.policyId, inner)
+        )
+        MultiAsset(outer)
+    }
+
+    def burnHeadTokens(using config: RuleBasedTreasuryOutput.Config): List[Mint] = {
+        val policyId = config.headMultisigScript.policyId
+        val inner = headTokens.assets(policyId)
+        inner.toList.map((assetName, amount) =>
+            Mint(
+              scriptHash = policyId,
+              assetName = assetName,
+              amount = -amount,
+              witness = config.headMultisigScript.witnessValue
+            )
+        )
+    }
+}
+
+object RuleBasedTreasuryOutput {
+    type Config = CardanoNetwork.Section & HeadPeers.Section & HasTokenNames
+
+    def apply(
+        output: TransactionOutput
+    )(using config: Config): Either[ParseError, RuleBasedTreasuryOutput] =
+        for {
+            d1 <- output.datumOption.toRight(TreasuryDatumMissing(output))
+
+            d2 <- d1 match {
+                case i: Inline => Right(i)
+                case _         => Left(TreasuryDatumNotInline(output))
+            }
+
+            datum <- Try(fromData[RuleBasedTreasuryDatumOnchain](d2.data)) match {
+                case Success(d) if d.toOffchain.nonEmpty => Right(d.toOffchain.get)
+                case Failure(e) => Left(TreasuryDatumDeserializationError(output, e))
+            }
+
+            address <- output.address match {
+                case sa: ShelleyAddress if sa == config.ruleBasedTreasuryAddress => Right(sa)
+                case _ => Left(TreasuryAtWrongAddress(output))
+            }
+
+            value = output.value
+            _ <- value.assets.assets.get(config.headMultisigScript.policyId) match {
+                case None => Left(WrongTreasuryValue(value))
+                case Some(innerMap) =>
+                    innerMap.get(config.headTokenNames.treasuryTokenName) match {
+                        case None               => Left(WrongTreasuryValue(value))
+                        case Some(v) if v != 1L => Left(WrongTreasuryValue(value))
+                        case Some(_)            => Right(RuleBasedTreasuryOutput(datum, value))
+                    }
+            }
+        } yield RuleBasedTreasuryOutput(
+          datum = datum,
+          value = value
+        )
+
+    sealed trait ParseError extends Throwable {
+        override def toString: String = getMessage
+
+        override def getMessage: String
+    }
+
+    case class TreasuryDatumContainsInvalidDeadline(wrapped: Throwable) extends ParseError {
+        override def getMessage: String =
+            "Could not convert voting deadline. "
+                ++ "Wrapped message: ${t.wrapped.getMessage}"
+    }
+
+    case object TreasuryDatumResolved extends ParseError {
+        override def getMessage: String =
+            "Needed an unresolved treasury datum, but found a resolved datum."
+    }
+
+    case class TreasuryDatumMissing(output: TransactionOutput) extends ParseError {
+        override def getMessage: String =
+            s"Treasury datum is missing for output ${output}"
+    }
+
+    case class TreasuryDatumNotInline(output: TransactionOutput) extends ParseError {
+        override def getMessage: String =
+            s"Treasury datum is not inline for output: $output"
+    }
+
+    case class TreasuryDatumDeserializationError(output: TransactionOutput, e: Throwable)
+        extends ParseError {
+        override def getMessage: String =
+            s"Failed to deserialize treasury datum for output ${output}. Error: ${e.getMessage}"
+    }
+
+    case class TreasuryAtWrongAddress(output: TransactionOutput)(using config: Config)
+        extends ParseError {
+        override def getMessage: String =
+            s"Treasury address is not at the correct address. Expected ${config.ruleBasedTreasuryAddress}, " +
+                s"but the utxo was: $output"
+    }
+
+    case class WrongTreasuryValue(value: Value)(using config: Config) extends ParseError {
+        override def getMessage
+            : String = "A RuleBasedTreauryOutput for this configuration needs exactly 1 Treasury Token with policy id" +
+            s" ${config.headMultisigScript.policyId} and asset name ${config.headTokenNames.treasuryTokenName}, but we found $value"
+    }
 
 }

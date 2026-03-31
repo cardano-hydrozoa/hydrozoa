@@ -55,5 +55,5 @@ case class CollateralOutput(
           scriptRef = scriptRef
         )
 
-    final def sendContinuing(using network: CardanoNetwork.Section): Send = Send(this.toOutput)
+    final def send(using network: CardanoNetwork.Section): Send = Send(toOutput)
 }

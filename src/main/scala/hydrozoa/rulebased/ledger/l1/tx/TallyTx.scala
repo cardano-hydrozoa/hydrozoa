@@ -6,25 +6,23 @@ import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
-import hydrozoa.lib.cardano.scalus.implicitscalus
-import hydrozoa.lib.cardano.scalus.implicitscalus.TransactionBuilder.finalizeContext
+import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
+import hydrozoa.lib.cardano.scalus.contextualscalus
+import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.finalizeContext
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.multisig.ledger.l1.tx.Tx
-import hydrozoa.multisig.ledger.l1.tx.Tx.Validators.nonSigningValidators
+import hydrozoa.multisig.ledger.l1.tx.Tx.Validators.nonSigningNonValidityChecksValidators
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.{DisputeRedeemer, TallyRedeemer, maxVote}
 import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.*
-import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryUtxo, VoteOutput, VoteUtxo}
+import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo, VoteOutput, VoteUtxo}
 import monocle.*
-import scalus.cardano.ledger.{Utxo as SUtxo, *}
-import scalus.cardano.txbuilder.Datum.DatumInlined
-import scalus.cardano.txbuilder.ScriptSource.PlutusScriptAttached
+import scalus.cardano.ledger.{Utxo as _, *}
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
-import scalus.cardano.txbuilder.{ExpectedSigner, SomeBuildError, ThreeArgumentPlutusScriptWitness, TransactionBuilder}
-import scalus.uplc.builtin.Data.toData
+import scalus.cardano.txbuilder.{ExpectedSigner, SomeBuildError, TransactionBuilder}
 
 final case class TallyTx(
     continuingVoteUtxo: VoteUtxo[VoteStatus],
@@ -41,7 +39,7 @@ object TallyTx {
 
 object TallyTxOps {
     type Config = CardanoNetwork.Section & ScriptReferenceUtxos.Section & HeadPeers.Section &
-        FallbackContingency.Section & HasTokenNames
+        FallbackContingency.Section & HasTokenNames & OwnHeadPeerPrivate.Section
 
     object Build {
         enum Error extends Throwable:
@@ -49,6 +47,7 @@ object TallyTxOps {
             case MalformedVoteDatum(utxo: TransactionInput, msg: String)
             case IncompatibleVotes(continuing: (Key, Link), removed: (Key, Link))
             case BuildError(wrapped: SomeBuildError)
+            case TreasuryParseError(wrapped: RuleBasedTreasuryOutput.ParseError)
 
             override def getMessage: String = this match {
                 case AbsentVoteDatum(utxo: TransactionInput) =>
@@ -112,11 +111,15 @@ object TallyTxOps {
         def result: Either[Build.Error, TallyTx] =
             for {
                 tallied <- tallyVoteUtxos(continuingVoteUtxo, removedVoteUtxo)
-                result <- buildTallyTx(tallied).left.map(Build.Error.BuildError(_))
+                votingDeadline <- treasuryUtxo.parseVotingDeadline.left.map(
+                  Build.Error.TreasuryParseError(_)
+                )
+                result <- buildTallyTx(tallied, votingDeadline).left.map(Build.Error.BuildError(_))
             } yield result
 
         private def buildTallyTx(
-            tallied: VoteOutput[VoteStatus]
+            tallied: VoteOutput[VoteStatus],
+            votingDeadline: Slot
         ): Either[SomeBuildError, TallyTx] = {
             val continuingRedeemer = DisputeRedeemer.Tally(TallyRedeemer.Continuing)
             val removedRedeemer = DisputeRedeemer.Tally(TallyRedeemer.Removed)
@@ -128,41 +131,26 @@ object TallyTxOps {
             )
 
             for {
-                context <- implicitscalus.TransactionBuilder
+                context <- contextualscalus.TransactionBuilder
                     .build(
                       List(
                         config.referenceDispute,
                         // Spend the continuing vote utxo with tally redeemer
-                        Spend(
-                          continuingVoteUtxo.toUtxo,
-                          ThreeArgumentPlutusScriptWitness(
-                            PlutusScriptAttached,
-                            continuingRedeemer.toData,
-                            DatumInlined,
-                            Set(collateralSigner)
-                          )
-                        ),
+                        continuingVoteUtxo.spend(continuingRedeemer),
                         // Spend the removed vote utxo with tally redeemer
-                        Spend(
-                          removedVoteUtxo.toUtxo,
-                          ThreeArgumentPlutusScriptWitness(
-                            PlutusScriptAttached,
-                            removedRedeemer.toData,
-                            DatumInlined,
-                            Set.empty
-                          )
-                        ),
+                        removedVoteUtxo.spend(removedRedeemer),
                         // Send back the continuing vote utxo (the removed one is consumed)
-                        Send(tallied.toOutput),
-                        ReferenceOutput(SUtxo(treasuryUtxo.asTuple._1, treasuryUtxo.asTuple._2)),
+                        tallied.send,
+                        treasuryUtxo.referenceOutput,
                         collateralUtxo.add,
+                        ValidityStartSlot(votingDeadline.slot)
                       )
                     )
 
                 finalized <- context
                     .finalizeContext(
-                      diffHandler = implicitscalus.Change.changeOutputDiffHandler(0),
-                      validators = nonSigningValidators
+                      diffHandler = contextualscalus.Change.changeOutputDiffHandler(0),
+                      validators = nonSigningNonValidityChecksValidators
                     )
 
             } yield TallyTx(

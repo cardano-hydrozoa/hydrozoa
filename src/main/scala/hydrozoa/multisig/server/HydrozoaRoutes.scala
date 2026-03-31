@@ -139,7 +139,7 @@ class HydrozoaRoutes(
                   HeadInfo(
                     headId = headConfig.headId,
                     headAddress = headConfig.headMultisigAddress,
-                    multisigRegimeUtxo = headConfig.multisigRegimeUtxo.utxoId,
+                    multisigRegimeUtxo = headConfig.multisigRegimeUtxo.input,
                     treasuryBeaconToken = CardanoNativeToken(
                       headConfig.headMultisigScript.policyId,
                       headConfig.headTokenNames.treasuryTokenName

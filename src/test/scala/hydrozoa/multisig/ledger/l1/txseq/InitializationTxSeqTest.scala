@@ -27,12 +27,6 @@ import test.*
 import test.TransactionChain.observeTxChain
 
 object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
-
-    override def overrideParameters(p: Test.Parameters): Test.Parameters = {
-        p.withMinSuccessfulTests(100)
-            .withInitialSeed(Seed.fromBase64("2ilMfqvqb3K1t4SElxC9HcP1MG6stB521QKTt0zoEND=").get)
-    }
-
     // NOTE (Peter, 2025-11-28): These properties primarily test the built transaction with coherence against
     // the "semantic" InitializationTx value produced.
     //
@@ -159,7 +153,9 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
             props.append(
               "initialization tx contains MR output at correct index" |:
                   (iTxOutputs(multisigRegimeUtxo.input.index) ==
-                      multisigRegimeUtxo.output) && multisigRegimeUtxo.input.index == 1
+                      multisigRegimeUtxo
+                          .toUtxo(using config)
+                          .output) && multisigRegimeUtxo.input.index == 1
             )
 
             props.append(
@@ -169,7 +165,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
 
             props.append(
               "MR utxo only contains MR token in multiassets" |:
-                  multisigRegimeUtxo.output.value.assets ==
+                  multisigRegimeUtxo.toUtxo(using config).output.value.assets ==
                   MultiAsset(
                     SortedMap(
                       expectedHeadNativeScript.policyId -> SortedMap(
@@ -181,7 +177,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
 
             props.append(
               "MR utxo contains at least enough coin for fallback deposit" |:
-                  (multisigRegimeUtxo.output.value.coin >=
+                  (multisigRegimeUtxo.toUtxo(using config).output.value.coin >=
                       config.maxNonPlutusTxFee)
             )
 
@@ -328,14 +324,18 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
               "rules-based treasury utxo has at least as much coin as multisig treasury (minus equity)" |: {
                   // can have more because of the max fallback fee in the multisig regime utxo
                   fbTx.treasurySpent.value.coin.value - fbTx.treasurySpent.equity.coin.value
-                      <= fbTx.treasuryProduced.output.value.coin.value
+                      <= fbTx.treasuryProduced.treasuryOutput
+                          .toOutput(using config)
+                          .value
+                          .coin
+                          .value
               }
             )
 
             props.append(
               "rules-based treasury has no more than multisig treasury " +
                   "+ extra from fallback tx fee" |:
-                  fbTx.treasuryProduced.output.value.coin.value <=
+                  fbTx.treasuryProduced.treasuryOutput.toOutput(using config).value.coin.value <=
                   fbTx.treasurySpent.value.coin.value + config.maxNonPlutusTxFee.value
             )
 
@@ -418,7 +418,11 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
             props.append(
               "multsig regime utxo contains at exactly enough ada to cover tx fee and all non-treasury outputs" |: {
                   val expectedHMRWCoin: Coin = config.totalFallbackContingency
-                  iTx.multisigRegimeProduced.output.value.coin == expectedHMRWCoin
+                  iTx.multisigRegimeProduced
+                      .toUtxo(using config)
+                      .output
+                      .value
+                      .coin == expectedHMRWCoin
               }
             )
 

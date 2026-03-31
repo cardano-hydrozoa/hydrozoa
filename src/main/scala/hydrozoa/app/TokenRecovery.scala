@@ -50,7 +50,7 @@ object TokenRecovery extends IOApp:
             _ <- logger.info(s"Token recovery address: ${tokenRecoveryAddress.toBech32.get}")
 
             // Create faucet address from verification key
-            faucetAddress = env.verificationKey.shelleyAddress(cardanoNetwork.network)
+            faucetAddress = env.verificationKey.shelleyAddress()(using cardanoNetwork)
             _ <- logger.info(s"Faucet address: ${faucetAddress.toBech32.get}")
 
             // Initialize backend

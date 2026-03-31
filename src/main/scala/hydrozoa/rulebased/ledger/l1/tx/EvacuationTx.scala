@@ -2,32 +2,32 @@ package hydrozoa.rulebased.ledger.l1.tx
 
 import cats.syntax.all.*
 import hydrozoa.*
+import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
+import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{build, finalizeContext}
+import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.multisig.ledger.commitment.Membership
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, evacuationKeyOrdering}
+import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.multisig.ledger.l1.tx.Tx
 import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.explainConst
-import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryScript
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.{EvacuateRedeemer, TreasuryRedeemer, given}
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.{ResolvedDatum, RuleBasedTreasuryDatum}
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Resolved
 import hydrozoa.rulebased.ledger.l1.tx.EvacuationTxOps.Build.Error.BuilderError
-import hydrozoa.rulebased.ledger.l1.utxo.RuleBasedTreasuryUtxo
+import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import monocle.*
 import scala.annotation.tailrec
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
 import scalus.cardano.ledger.TransactionException.{ExUnitsExceedMaxException, InvalidTransactionSizeException}
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.onchain.plutus.prelude.List as SList
 import scalus.cardano.txbuilder.*
-import scalus.cardano.txbuilder.Datum.DatumInlined
-import scalus.cardano.txbuilder.ScriptSource.PlutusScriptValue
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
-import scalus.cardano.txbuilder.TransactionBuilderStep.{AddCollateral, Send, Spend}
-import scalus.uplc.builtin.Data.toData
+import scalus.cardano.txbuilder.TransactionBuilderStep.{Send, Spend}
 
 final case class EvacuationTx(
     treasuryUtxoSpent: RuleBasedTreasuryUtxo,
@@ -44,7 +44,8 @@ object EvacuationTx {
 }
 
 private object EvacuationTxOps {
-    type Config = CardanoNetwork.Section & NodeOperationEvacuationConfig.Section
+    type Config = CardanoNetwork.Section & NodeOperationEvacuationConfig.Section &
+        ScriptReferenceUtxos.Section & HasTokenNames & HeadPeers.Section
 
     object Build {
         enum Error extends Throwable:
@@ -82,47 +83,55 @@ private object EvacuationTxOps {
       * @param feeUtxos
       *   Utxos to use to pay the fees
       */
-    final case class Build(config: Config)(
-        _treasuryUtxo: RuleBasedTreasuryUtxo,
-        _evacuatees: EvacuationMap,
-        _notEvacuatedYet: EvacuationMap,
-        _collateralUtxo: Utxo,
-        _feeUtxos: Utxos,
+    final case class Build(
+        treasuryUtxo: RuleBasedTreasuryUtxo,
+        evacuatees: EvacuationMap,
+        notEvacuatedYet: EvacuationMap,
+        collateralUtxo: CollateralUtxo,
+        feeUtxos: Utxos,
     ) {
-
-        // If I don't do these here, I can't access them directly from a `build : Build`. Why?
-        val treasuryUtxo: RuleBasedTreasuryUtxo = _treasuryUtxo
-        val evacuatees: EvacuationMap = _evacuatees
-        val notEvacuatedYet: EvacuationMap = _notEvacuatedYet
-        val feeUtxos: Utxos = _feeUtxos
-        val collateralUtxo: Utxo = _collateralUtxo
 
         private def halveEvacuation(evacuatees: EvacuationMap): EvacuationMap = {
             EvacuationMap(evacuatees.evacuationMap.drop(evacuatees.size / 2))
         }
 
-        def result: Either[Build.Error, EvacuationTx] = loop(evacuatees)
+        /** Current strategy (implementation detail, can be swapped out):
+          *   - Try to evacuate all evacuatees
+          *   - If we fail due to exunits or tx size, try with half.
+          */
+        def result(using config: Config): Either[Build.Error, EvacuationTx] = for {
+
+            // "loop" requires that the subset actually be a subset. We establish this once before looping, and
+            // rely on `halveEvacuation` to maintain this property
+            _ <- Either.cond(
+              test = evacuatees.evacuationMap.keySet
+                  .subsetOf(notEvacuatedYet.evacuationMap.keySet),
+              right = (),
+              left = EvacuationTx.Build.Error.NotASubset(
+                evacuatees = evacuatees,
+                evaucationMap = notEvacuatedYet
+              )
+            )
+
+            treasuryDatum <- extractTreasuryDatum(treasuryUtxo)
+
+            res <- {
+                given Resolved = treasuryDatum
+                loop(evacuatees)
+            }
+        } yield res
 
         @tailrec
-        private def loop(evacuatees: EvacuationMap): Either[Build.Error, EvacuationTx] =
+        private def loop(
+            evacuatees: EvacuationMap
+        )(using config: Config, treasuryDatum: Resolved): Either[Build.Error, EvacuationTx] =
             (for {
-                _ <-
-                    if evacuatees.nonEmpty then Right(())
-                    else Left(EvacuationTx.Build.Error.NoEvacuatees)
-                _ <-
-                    if evacuatees.evacuationMap.keySet
-                            .subsetOf(notEvacuatedYet.evacuationMap.keySet)
-                    then Right(())
-                    else
-                        Left(
-                          EvacuationTx.Build.Error.NotASubset(
-                            evacuatees = evacuatees,
-                            evaucationMap = notEvacuatedYet
-                          )
-                        )
-
-                // TODO: This can be hoisted outside the loop
-                treasuryDatum <- extractTreasuryDatum(treasuryUtxo)
+                // Recursion termination condition
+                _ <- Either.cond(
+                  test = evacuatees.nonEmpty,
+                  right = (),
+                  left = EvacuationTx.Build.Error.NoEvacuatees
+                )
 
                 membershipProof <- Membership
                     .mkMembershipProofValidated(
@@ -146,10 +155,7 @@ private object EvacuationTxOps {
                   )
                 )
 
-                newTreasuryDatum =
-                    RuleBasedTreasuryDatum.Resolved(
-                      treasuryDatum.copy(evacuationActive = membershipProof)
-                    )
+                newTreasuryDatum = treasuryDatum.copy(evacuationActive = membershipProof)
 
                 // evacuation outputs
                 evacuationOutputs = evacuationList.map(_._2.utxo.value)
@@ -162,63 +168,46 @@ private object EvacuationTxOps {
                 /////////////
                 // Steps
 
-                // TODO: I guess this can be lifted out of the loop
-                // Spend the treasury utxo with withdrawal proof
-                spendTreasury = Spend(
-                  treasuryUtxo.asUtxo,
-                  ThreeArgumentPlutusScriptWitness(
-                    PlutusScriptValue(RuleBasedTreasuryScript.compiledPlutusV3Script),
-                    evacuationRedeemer.toData,
-                    DatumInlined,
-                    Set.empty
-                  )
-                )
-
-                // TODO: also can be lifted out
-                addCollateral = AddCollateral(collateralUtxo)
-
                 // Create the empty change utxo
                 sendChangeUtxo = Send(
                   Babbage(
                     address = config.evacuationWallet.exportVerificationKey
-                        .shelleyAddress(config.network),
+                        .shelleyAddress(),
                     value = Value.zero,
                     datumOption = None,
                     scriptRef = None
                   )
                 )
 
-                sendResidualTreasury = Send(
-                  Babbage(
-                    address = treasuryUtxo.address,
-                    value = residualValue,
-                    datumOption = Some(Inline(newTreasuryDatum.toData)),
-                    scriptRef = None
-                  )
+                residualTreasury = RuleBasedTreasuryOutput(
+                  newTreasuryDatum,
+                  residualValue
                 )
 
-                context <- TransactionBuilder
-                    .build(
-                      config.cardanoInfo.network,
-                      List(spendTreasury, addCollateral, sendChangeUtxo, sendResidualTreasury)
-                          ++
-                              // Outputs for withdrawals
-                              evacuationOutputs.map(Send(_))
-                              // Spend the fee utxos
-                              ++ feeUtxos.toList.map((ti, to) =>
-                                  Spend(scalus.cardano.ledger.Utxo(ti, to), PubKeyWitness)
-                              )
-                    )
+                context <- build(
+                  List(
+                    config.referenceTreasury,
+                    treasuryUtxo.spendAttached(evacuationRedeemer),
+                    collateralUtxo.add,
+                    sendChangeUtxo,
+                    residualTreasury.send
+                  )
+                      ++
+                          // Outputs for withdrawals
+                          evacuationOutputs.map(Send(_))
+                          // Spend the fee utxos
+                          ++ feeUtxos.toList.map((ti, to) =>
+                              Spend(scalus.cardano.ledger.Utxo(ti, to), PubKeyWitness)
+                          )
+                )
                     .explainConst("Building evacuation tx failed")
                     .left
                     .map(BuilderError(_))
 
                 finalized <- context
                     .finalizeContext(
-                      protocolParams = config.cardanoInfo.protocolParams,
                       diffHandler = Change
                           .changeOutputDiffHandler(_, _, config.cardanoInfo.protocolParams, 0),
-                      evaluator = PlutusScriptEvaluator(config.cardanoInfo, EvaluateAndComputeCost),
                       validators = Tx.Validators.nonSigningValidators
                     )
                     .explainConst("Finalizing evacuation tx failed")
@@ -230,18 +219,16 @@ private object EvacuationTxOps {
                     finalized.transaction.id,
                     0
                   ),
-                  address = treasuryUtxo.address,
-                  datum = treasuryUtxo.datum,
-                  value = residualValue
+                  residualTreasury
                 )
 
-                withdrawTx: EvacuationTx = EvacuationTx(
+                evacuationTx = EvacuationTx(
                   treasuryUtxo,
                   newTreasuryUtxo,
                   evacuationOutputs,
                   finalized.transaction
                 )
-            } yield withdrawTx) match {
+            } yield evacuationTx) match {
                 case Right(w) => Right(w)
                 case Left(
                       BuilderError(
@@ -260,22 +247,24 @@ private object EvacuationTxOps {
                 case Left(e) => Left(e)
             }
 
+        // TODO: Make method on RuleBasedTreasuryUtxo
         def extractTreasuryDatum(
             treasuryUtxo: RuleBasedTreasuryUtxo
-        ): Either[Build.Error.TreasuryNotResolved.type, ResolvedDatum] = {
+        ): Either[Build.Error.TreasuryNotResolved.type, Resolved] = {
 
-            treasuryUtxo.datum match {
-                case RuleBasedTreasuryDatum.Resolved(resolved) => Right(resolved)
-                case RuleBasedTreasuryDatum.Unresolved(_) => Left(Build.Error.TreasuryNotResolved)
+            treasuryUtxo.treasuryOutput.datum match {
+                case resolved: RuleBasedTreasuryDatum.Resolved => Right(resolved)
+                case _: RuleBasedTreasuryDatum.Unresolved => Left(Build.Error.TreasuryNotResolved)
             }
         }
 
+        // TODO: Make method on RuleBasedTreasuryUtxo
         private def calculateResidualTreasury(
             treasuryUtxo: RuleBasedTreasuryUtxo,
             evacuatees: EvacuationMap
         ): Either[Build.Error.InsufficientTreasuryFunds, Value] = {
 
-            val treasuryValue = treasuryUtxo.value
+            val treasuryValue = treasuryUtxo.treasuryOutput.value
             val residueValue = treasuryValue - evacuatees.totalValue
 
             if residueValue.isPositive

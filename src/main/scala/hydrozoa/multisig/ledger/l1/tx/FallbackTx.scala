@@ -4,13 +4,17 @@ import cats.data.NonEmptyList
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.initialization.InitializationParameters
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.FallbackTxStartTime
+import hydrozoa.lib.cardano.scalus.contextualscalus.Change
+import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{build, finalizeContext}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.l1.tx.Metadata.Fallback
-import hydrozoa.multisig.ledger.l1.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.{RuleBasedTreasuryDatum, UnresolvedDatum}
+import hydrozoa.multisig.ledger.l1.utxo.{MultisigRegimeOutput, MultisigRegimeUtxo, MultisigTreasuryUtxo}
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.l1.state.VoteDatum as VD
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteDatum
-import hydrozoa.rulebased.ledger.l1.utxo.RuleBasedTreasuryUtxo
+import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import monocle.{Focus, Lens}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.DatumOption.Inline
@@ -66,23 +70,25 @@ private object FallbackTxOps {
     }
 
     // TODO: Distribute equity
-    final case class Build(config: Config)(
+    final case class Build(
         validityStartTime: FallbackTxStartTime,
         treasuryUtxoSpent: MultisigTreasuryUtxo,
         multisigRegimeUtxo: MultisigRegimeUtxo,
-    ) {
-        private val hns = config.headMultisigScript
+    )(using config: Config) {
 
         lazy val result: Either[SomeBuildError, FallbackTx] = for {
-            unbalanced <- TransactionBuilder.build(config.network, Steps())
-
-            finalized <- TxBuilder.finalizeContext(unbalanced)
-
+            unbalanced <- build(Steps())
+            finalized <- unbalanced.finalizeContext(
+              diffHandler = Change.changeOutputDiffHandler(1),
+              validators = Tx.Validators.nonSigningNonValidityChecksValidators
+            )
             completed = Complete(finalized)
         } yield completed
 
         object Steps {
             def apply(): List[TransactionBuilderStep] = Base() ++ Spends() ++ Mints() ++ Sends()
+
+            val hns: HeadMultisigScript = config.headMultisigScript
 
             object Base {
                 def apply(): List[TransactionBuilderStep] =
@@ -108,21 +114,13 @@ private object FallbackTxOps {
 
                 object MultisigRegime {
                     def apply() =
-                        Spend(multisigRegimeUtxo.asUtxo, config.headMultisigScript.witnessAttached)
+                        Spend(multisigRegimeUtxo.toUtxo, config.headMultisigScript.witnessAttached)
                 }
             }
 
             object Mints {
-                def apply(): List[Mint] = List(BurnMultisigRegime(), MintVotes())
-
-                private object BurnMultisigRegime {
-                    def apply() = Mint(
-                      hns.policyId,
-                      assetName = config.headTokenNames.multisigRegimeTokenName,
-                      amount = -1,
-                      witness = hns.witnessAttached
-                    )
-                }
+                def apply(): List[Mint] =
+                    List(MultisigRegimeOutput.burnMultisigRegimeTokens, MintVotes())
 
                 private object MintVotes {
                     def apply() = Mint(
@@ -133,18 +131,15 @@ private object FallbackTxOps {
                     )
                 }
             }
+
             object Sends {
                 def apply(): List[Send] = List(Treasury()) ++ Collaterals().toList ++ Votes().toList
 
                 object Treasury {
-                    def apply() = Send(output)
+                    def apply(): Send = output.send
 
-                    val datum: UnresolvedDatum = time("newTreasuryDatum") {
-                        UnresolvedDatum(
-                          headMp = hns.policyId,
-                          disputeId = config.headTokenNames.voteTokenName.bytes,
-                          peers = SList.from(config.headPeerVKeys.toList),
-                          peersN = hns.numSigners,
+                    val datum: Unresolved = time("newTreasuryDatum") {
+                        Unresolved(
                           deadlineVoting =
                               config.slotConfig.slotToTime(validityStartTime.toSlot.slot) +
                                   config.votingDuration.finiteDuration.toMillis,
@@ -155,12 +150,14 @@ private object FallbackTxOps {
                         )
                     }
 
-                    private val output = Babbage(
-                      address = config.ruleBasedTreasuryAddress,
-                      value = treasuryUtxoSpent.value - Value(treasuryUtxoSpent.equity.coin),
-                      datumOption = Some(Inline(datum.toData)),
-                      scriptRef = None
-                    )
+                    // TODO: Partial, hacked in during a refactor
+                    private val output = {
+                        val v = treasuryUtxoSpent.value - Value(treasuryUtxoSpent.equity.coin)
+                        RuleBasedTreasuryOutput(
+                          value = v,
+                          datum = datum,
+                        )
+                    }
                 }
 
                 object Votes {
@@ -243,17 +240,24 @@ private object FallbackTxOps {
             def apply(finalized: TransactionBuilder.Context): FallbackTx = {
                 val txId = finalized.transaction.id
 
-                val treasuryProduced = RuleBasedTreasuryUtxo(
-                  utxoId = TransactionInput(txId, 0),
-                  address = config.ruleBasedTreasuryAddress,
-                  datum = RuleBasedTreasuryDatum.Unresolved(Steps.Sends.Treasury.datum),
-                  value = treasuryUtxoSpent.value - Value(treasuryUtxoSpent.equity.coin)
-                )
+                // FIXME: Partial, introduced during a refactor where RuleBasedTreasuryOutput began to verify
+                // that the constructed output did indeed have a valid treasury token
+                val treasuryOutputProduced = {
+                    val value = treasuryUtxoSpent.value - Value(treasuryUtxoSpent.equity.coin)
+                    RuleBasedTreasuryOutput(
+                      datum = Steps.Sends.Treasury.datum,
+                      value = value
+                    )
+
+                }
 
                 FallbackTx(
                   fallbackTxStartTime = validityStartTime,
                   treasurySpent = treasuryUtxoSpent,
-                  treasuryProduced = treasuryProduced,
+                  treasuryProduced = RuleBasedTreasuryUtxo(
+                    utxoId = TransactionInput(txId, 0),
+                    treasuryOutput = treasuryOutputProduced
+                  ),
                   multisigRegimeUtxoSpent = multisigRegimeUtxo,
                   tx = finalized.transaction,
                   resolvedUtxos = finalized.resolvedUtxos,
@@ -272,27 +276,7 @@ private object FallbackTxOps {
                   }
                 )
             }
+
         }
-
-        private object TxBuilder {
-            private val diffHandler = Change.changeOutputDiffHandler(
-              _,
-              _,
-              protocolParams = config.cardanoProtocolParams,
-              changeOutputIdx = 1
-            )
-
-            def finalizeContext(
-                ctx: TransactionBuilder.Context
-            ): Either[SomeBuildError, TransactionBuilder.Context] =
-                ctx.finalizeContext(
-                  config.cardanoProtocolParams,
-                  diffHandler = diffHandler,
-                  evaluator = config.plutusScriptEvaluatorForTxBuild,
-                  validators = Tx.Validators.nonSigningNonValidityChecksValidators
-                )
-        }
-
     }
-
 }

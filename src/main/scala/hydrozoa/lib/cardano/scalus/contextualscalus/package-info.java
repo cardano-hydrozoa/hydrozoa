@@ -1,4 +1,4 @@
-package hydrozoa.lib.cardano.scalus.implicitscalus;
+package hydrozoa.lib.cardano.scalus.contextualscalus;
 
 /**
  * This package is experimenting with writing a layer on top of scalus that assumes you're building a 

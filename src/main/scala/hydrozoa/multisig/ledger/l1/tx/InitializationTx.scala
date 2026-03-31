@@ -12,7 +12,7 @@ import hydrozoa.multisig.ledger.l1.token.CIP67.{HasTokenNames, HeadTokenNames}
 import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
 import hydrozoa.multisig.ledger.l1.tx.Metadata.Initialization
 import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.{BuilderResultSimple, explainConst}
-import hydrozoa.multisig.ledger.l1.utxo.{Equity, MultisigRegimeUtxo, MultisigTreasuryUtxo}
+import hydrozoa.multisig.ledger.l1.utxo.{Equity, MultisigRegimeOutput, MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import monocle.{Focus, Lens}
 import scala.util.Try
 import scalus.cardano.ledger.*
@@ -143,7 +143,8 @@ private object InitializationTxOps {
             }
 
             object Sends {
-                def apply(): List[Send] = List(Treasury(), MultisigRegime()) ++ ChangeOutputs()
+                def apply(): List[Send] =
+                    List(Treasury(), MultisigRegimeOutput.send(using config)) ++ ChangeOutputs()
 
                 object Treasury {
                     def apply(): Send = Send(treasuryOutput)
@@ -168,24 +169,6 @@ private object InitializationTxOps {
                     )
                 }
 
-                object MultisigRegime {
-                    def apply(): Send = Send(multisigRegimeOutput)
-
-                    private val multisigRegimeUtxoValue = Value(config.totalFallbackContingency) +
-                        Value.asset(
-                          config.headMultisigScript.policyId,
-                          config.headTokenNames.multisigRegimeTokenName,
-                          1L
-                        )
-
-                    private[tx] val multisigRegimeOutput = Babbage(
-                      config.headMultisigAddress,
-                      multisigRegimeUtxoValue,
-                      None,
-                      Some(ScriptRef(config.headMultisigScript.script))
-                    )
-                }
-
                 object ChangeOutputs {
                     def apply(): List[Send] = config.initialChangeOutputs.map(Send.apply)
                 }
@@ -204,10 +187,7 @@ private object InitializationTxOps {
                     finalized.transaction.body.value.outputs(treasuryIndex).value.value
 
                 val multisigRegimeProduced = MultisigRegimeUtxo(
-                  config.headTokenNames.multisigRegimeTokenName,
-                  utxoId = TransactionInput(finalized.transaction.id, multisigRegimeIndex),
-                  output = Steps.Sends.MultisigRegime.multisigRegimeOutput,
-                  script = config.headMultisigScript
+                  input = TransactionInput(finalized.transaction.id, multisigRegimeIndex),
                 )
 
                 val equityCoin =
@@ -507,11 +487,7 @@ private object InitializationTxOps {
           initializationTxEndTime = initializationTxEndTime,
           treasuryProduced = treasury,
           multisigRegimeProduced = MultisigRegimeUtxo(
-            multisigRegimeTokenName = config.headTokenNames.multisigRegimeTokenName,
-            utxoId = TransactionInput(tx.id, md.multisigRegimeIx),
-            address = expectedHeadAddress,
-            value = actualMultisigRegimeOutput.value,
-            script = expectedHNS
+            input = TransactionInput(tx.id, md.multisigRegimeIx)
           ),
           headTokenNames = config.headTokenNames,
           resolvedUtxos = resolvedUtxos,

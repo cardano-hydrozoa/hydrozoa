@@ -5,8 +5,8 @@ import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.TxOutExtension.inlineD
 import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.ValueExtension.*
 import hydrozoa.multisig.ledger.joint.EvacuationKey
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer.{Deinit, Evacuate, Resolve}
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.{Resolved, Unresolved}
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.{MembershipProof, RuleBasedTreasuryDatum}
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatumOnchain.{ResolvedOnchain, UnresolvedOnchain}
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.{MembershipProof, RuleBasedTreasuryDatumOnchain}
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.*
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import scalus.*
@@ -128,8 +128,8 @@ object RuleBasedTreasuryValidator extends Validator {
         log("TreasuryValidator")
 
         // Parse datum
-        val treasuryDatum: RuleBasedTreasuryDatum = datum match
-            case Some(d) => d.to[RuleBasedTreasuryDatum]
+        val treasuryDatum: RuleBasedTreasuryDatumOnchain = datum match
+            case Some(d) => d.to[RuleBasedTreasuryDatumOnchain]
             case None    => fail(DatumIsMissing)
 
         // ===================================
@@ -142,8 +142,8 @@ object RuleBasedTreasuryValidator extends Validator {
 
                 // Treasury datum should be an "unresolved" one
                 val unresolvedDatum = treasuryDatum match
-                    case Unresolved(d) => d
-                    case _             => fail(ResolveNeedsUnresolvedDatumInInput)
+                    case d: UnresolvedOnchain => d
+                    case _                    => fail(ResolveNeedsUnresolvedDatumInInput)
 
                 // TODO: pass vote input's outRef in the redeemer?
                 // Vote input
@@ -184,9 +184,9 @@ object RuleBasedTreasuryValidator extends Validator {
                 )
 
                 val treasuryOutputDatum =
-                    treasuryOutput.inlineDatumOfType[RuleBasedTreasuryDatum] match
-                        case Unresolved(_) => fail(ResolveNeedsResolvedDatumInOutput)
-                        case Resolved(d)   => d
+                    treasuryOutput.inlineDatumOfType[RuleBasedTreasuryDatumOnchain] match
+                        case _: UnresolvedOnchain => fail(ResolveNeedsResolvedDatumInOutput)
+                        case d: ResolvedOnchain   => d
 
                 val voteDatum = voteInput.inlineDatumOfType[VoteDatum]
 
@@ -227,8 +227,8 @@ object RuleBasedTreasuryValidator extends Validator {
 
                 // Treasury datum should be "resolved" one
                 val resolvedDatum = treasuryDatum match
-                    case Resolved(d) => d
-                    case _           => fail(EvacuateNeedsResolvedDatum)
+                    case d: ResolvedOnchain => d
+                    case _                  => fail(EvacuateNeedsResolvedDatum)
 
                 // headMp and headId
 
@@ -316,8 +316,10 @@ object RuleBasedTreasuryValidator extends Validator {
                 )
 
                 // Accumulator updated commitment
-                val Resolved(outputResolvedDatum) =
-                    treasuryOutput.inlineDatumOfType[RuleBasedTreasuryDatum]: @unchecked
+                val outputResolvedDatum =
+                    treasuryOutput.inlineDatumOfType[RuleBasedTreasuryDatumOnchain] match
+                        case _: UnresolvedOnchain => fail(ResolveNeedsResolvedDatumInOutput)
+                        case d: ResolvedOnchain   => d
 
                 require(
                   outputResolvedDatum.evacuationActive == proof,
@@ -344,8 +346,8 @@ object RuleBasedTreasuryValidator extends Validator {
 
                 // Treasury should be resolved
                 val (headMp, utxosActive) = treasuryDatum match
-                    case Resolved(d)   => (d.headMp, d.evacuationActive)
-                    case Unresolved(d) => fail(DeinitRequiresResolvedTreasury)
+                    case d: ResolvedOnchain   => (d.headMp, d.evacuationActive)
+                    case d: UnresolvedOnchain => fail(DeinitRequiresResolvedTreasury)
 
                 // TODO: factor out
                 val treasuryInput = tx.inputs

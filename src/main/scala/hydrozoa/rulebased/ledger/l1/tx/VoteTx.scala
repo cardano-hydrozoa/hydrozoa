@@ -6,8 +6,9 @@ import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
-import hydrozoa.lib.cardano.scalus.implicitscalus
-import hydrozoa.lib.cardano.scalus.implicitscalus.TransactionBuilder.finalizeContext
+import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
+import hydrozoa.lib.cardano.scalus.contextualscalus
+import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.finalizeContext
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.block.BlockHeader.Minor
@@ -18,6 +19,7 @@ import hydrozoa.multisig.ledger.l1.tx.Tx.Validators.nonSigningValidators
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.{DisputeRedeemer, VoteRedeemer}
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.*
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
+import hydrozoa.rulebased.ledger.l1.tx.VoteTxOps.Build.Error
 import hydrozoa.rulebased.ledger.l1.tx.VoteTxOps.Build.Error.{InvalidVoteDatum, VoteAlreadyCast}
 import hydrozoa.rulebased.ledger.l1.utxo.*
 import monocle.*
@@ -25,12 +27,10 @@ import scala.util.{Failure, Success, Try}
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.{BlockHeader as _, *}
 import scalus.cardano.onchain.plutus.prelude.List as SList
-import scalus.cardano.txbuilder.Datum.DatumInlined
-import scalus.cardano.txbuilder.ScriptSource.PlutusScriptAttached
+import scalus.cardano.txbuilder.SomeBuildError
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
-import scalus.cardano.txbuilder.{ExpectedSigner, SomeBuildError, ThreeArgumentPlutusScriptWitness}
-import scalus.uplc.builtin.Data.{fromData, toData}
+import scalus.uplc.builtin.Data.fromData
 import scalus.uplc.builtin.{ByteString, Data}
 
 final case class VoteTx(
@@ -47,12 +47,13 @@ object VoteTx {
 
 private object VoteTxOps {
     type Config = CardanoNetwork.Section & ScriptReferenceUtxos.Section & HeadPeers.Section &
-        FallbackContingency.Section & HasTokenNames
+        FallbackContingency.Section & HasTokenNames & OwnHeadPeerPrivate.Section
 
     object Build {
         enum Error extends Throwable:
             case InvalidVoteDatum(msg: String)
             case VoteAlreadyCast
+            case TreasuryParseError(wrapped: RuleBasedTreasuryOutput.ParseError)
             case BuildError(wrapped: SomeBuildError)
 
             override def toString: String = this.getMessage
@@ -62,6 +63,7 @@ private object VoteTxOps {
                 case v: Error.VoteAlreadyCast.type => "Vote has already been cast"
                 case b: Error.BuildError =>
                     s"Build error encountered in vote tx. ${b.wrapped.toString}"
+                case t: TreasuryParseError => t.wrapped.getMessage
             }
     }
 
@@ -71,25 +73,22 @@ private object VoteTxOps {
         collateralUtxo: CollateralUtxo,
         blockHeader: BlockHeader.Minor.Onchain,
         signatures: List[BlockHeader.Minor.HeaderSignature],
-    )(using config: Config) {
-        def result: Either[Build.Error, VoteTx] = {
-            import Build.Error
+    ) {
 
-            // Extract current vote datum from the UTXO
-            val uncastVoteOutput = uncastVoteUtxo.toUtxo.output
-
-            uncastVoteOutput.datumOption match {
+        // TODO relocate to "VoteOutput" companion object?
+        def parseAndVote(unparsedVoteDatum: Option[DatumOption]): Either[Error, VoteOutput[Voted]] =
+            unparsedVoteDatum match {
                 case Some(DatumOption.Inline(datumData)) =>
                     Try(fromData[VoteDatum](datumData)) match {
                         case Success(voteDatum) =>
                             voteDatum.voteStatus match {
                                 case AwaitingVote(_) =>
-                                    val voted = uncastVoteUtxo.voteOutput.castVote(
-                                      blockHeader.commitment,
-                                      blockHeader.versionMinor
+                                    Right(
+                                      uncastVoteUtxo.voteOutput.castVote(
+                                        blockHeader.commitment,
+                                        blockHeader.versionMinor
+                                      )
                                     )
-
-                                    buildVoteTx(voted).left.map(Error.BuildError(_))
                                 case _ => Left(VoteAlreadyCast)
                             }
 
@@ -103,15 +102,26 @@ private object VoteTxOps {
                 case _ =>
                     Left(InvalidVoteDatum("Vote utxo must have inline datum"))
             }
+
+        def result(using config: Config): Either[Build.Error, VoteTx] = {
+            import Build.Error
+
+            // Extract current vote datum from the UTXO
+            val uncastVoteOutput = uncastVoteUtxo.toUtxo.output
+
+            for {
+                newVoteDatum <- parseAndVote(uncastVoteOutput.datumOption)
+                votingDeadline <- treasuryUtxo.parseVotingDeadline.left.map(
+                  Error.TreasuryParseError(_)
+                )
+                res <- buildVoteTx(newVoteDatum, votingDeadline).left.map(Error.BuildError(_))
+            } yield res
         }
 
         private def buildVoteTx(
-            votedOutput: VoteOutput[Voted]
-        ): Either[SomeBuildError, VoteTx] = {
-
-            // Get the TransactionInput and TransactionOutput from VoteUtxo
-            val (uncastVoteInput, uncastVoteOutput) =
-                (uncastVoteUtxo.input, uncastVoteUtxo.voteOutput.toOutput)
+            votedOutput: VoteOutput[Voted],
+            votingDeadline: Slot
+        )(using config: Config): Either[SomeBuildError, VoteTx] = {
 
             // Create redeemer for dispute resolution script
             val redeemer = DisputeRedeemer.Vote(
@@ -125,27 +135,19 @@ private object VoteTxOps {
 
             // Build the transaction
             for {
-                context <- implicitscalus.TransactionBuilder.build(
+                context <- contextualscalus.TransactionBuilder.build(
                   List(
                     config.referenceDispute,
                     collateralUtxo.add,
                     collateralUtxo.spend,
-                    collateralUtxo.collateralOutput.sendContinuing,
+                    collateralUtxo.collateralOutput.send,
                     // Spend the vote utxo with dispute resolution script witness
                     // So far we use in-place script
-                    Spend(
-                      Utxo(uncastVoteInput, uncastVoteOutput),
-                      ThreeArgumentPlutusScriptWitness(
-                        PlutusScriptAttached,
-                        redeemer.toData,
-                        DatumInlined,
-                        // Set.empty
-                        Set(ExpectedSigner(uncastVoteUtxo.voteOutput.voterAddrKeyHash))
-                      )
-                    ),
+                    uncastVoteUtxo.votingSpend(redeemer),
                     // Send back to the vote contract address with updated datum
-                    Send(votedOutput.toOutput),
-                    ReferenceOutput(Utxo(treasuryUtxo.asTuple)),
+                    votedOutput.send,
+                    treasuryUtxo.referenceOutput,
+                    ValidityEndSlot(votingDeadline.slot)
                   )
                 )
 
@@ -153,7 +155,7 @@ private object VoteTxOps {
 
                 finalized <- context
                     .finalizeContext(
-                      diffHandler = implicitscalus.Change.changeOutputDiffHandler(0),
+                      diffHandler = contextualscalus.Change.changeOutputDiffHandler(0),
                       validators = nonSigningValidators
                     )
 

@@ -6,6 +6,7 @@ import cats.effect.IO
 import cats.syntax.all.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
+import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
@@ -21,18 +22,19 @@ import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.Eva
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Resolved
 import hydrozoa.rulebased.ledger.l1.tx.EvacuationTx
-import hydrozoa.rulebased.ledger.l1.utxo.RuleBasedTreasuryUtxo
+import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import scala.util.{Failure, Success, Try}
 import scalus.cardano.ledger.{TransactionHash, Utxo, Utxos}
 import scalus.uplc.builtin.Data
 import scalus.uplc.builtin.Data.fromData
 
-case class EvacuationActor(config: Config)(
+case class EvacuationActor(
     toEvacuate: EvacuationMap,
     cardanoBackend: CardanoBackend[IO],
     evacuationMapAtFallback: EvacuationMap,
     fallbackTxHash: TransactionHash,
-) extends Actor[IO, Requests.Request] {
+)(using config: Config)
+    extends Actor[IO, Requests.Request] {
     override def preStart: IO[Unit] =
         context.setReceiveTimeout(config.evacuationBotPollingPeriod, ())
 
@@ -146,8 +148,8 @@ case class EvacuationActor(config: Config)(
 
                 treasuryUtxoAndDatum <- parseRBTreasury(unparsedTreasuryUtxos)
 
-                walletAddress = config.evacuationWallet.exportVerificationKey.shelleyAddress(
-                  config.network
+                walletAddress = config.evacuationWallet.exportVerificationKey.shelleyAddress()(using
+                  config
                 )
 
                 // Note that if there are no fee utxos, we just try again.
@@ -158,12 +160,12 @@ case class EvacuationActor(config: Config)(
                 )
 
                 evacTx <- EvacuationTx
-                    .Build(config)(
-                      _treasuryUtxo = treasuryUtxoAndDatum._1,
-                      _evacuatees = toEvacuate,
-                      _notEvacuatedYet = notEvacuatedYet,
-                      _feeUtxos = feeUtxos,
-                      _collateralUtxo = ??? // Probably pick one from the wallet address?
+                    .Build(
+                      treasuryUtxo = treasuryUtxoAndDatum._1,
+                      evacuatees = toEvacuate,
+                      notEvacuatedYet = notEvacuatedYet,
+                      feeUtxos = feeUtxos,
+                      collateralUtxo = ??? // Probably pick one from the wallet address?
                     )
                     .result match {
                     case Left(e) =>
@@ -181,7 +183,7 @@ case class EvacuationActor(config: Config)(
 
 object EvacuationActor {
     type Config = NodeOperationEvacuationConfig.Section & CardanoNetwork.Section &
-        HeadPeers.Section & HasTokenNames
+        HeadPeers.Section & HasTokenNames & ScriptReferenceUtxos.Section
 
     type Handle = ActorRef[IO, Requests.Request]
 
@@ -213,7 +215,7 @@ object EvacuationActor {
             case class TreasuryWithdrawRedeemerDataDeserializationFailure(wrapped: Throwable)
                 extends Unrecoverable
 
-            case class RulesBasedTreasuryParseError(wrapped: RuleBasedTreasuryUtxo.ParseError)
+            case class RulesBasedTreasuryParseError(wrapped: RuleBasedTreasuryOutput.ParseError)
                 extends Unrecoverable
         }
 
@@ -228,6 +230,8 @@ object EvacuationActor {
     // NOTE: some duplication with the same function in DisputeActor
     def parseRBTreasury(
         utxos: Utxos
+    )(using
+        config: Config
     ): EitherT[IO, Error.RecoverableErrors, (RuleBasedTreasuryUtxo, Resolved)] =
         for {
             utxo <- utxos.size match {
@@ -250,13 +254,8 @@ object EvacuationActor {
                     )
                 case Right(rbt) => EitherT.right(IO.pure(rbt))
             }
-            resolvedDatum <- treasuryUtxo match {
-                case RuleBasedTreasuryUtxo(
-                      _utxoId,
-                      _address,
-                      datum: RuleBasedTreasuryDatum.Resolved,
-                      _value
-                    ) =>
+            resolvedDatum <- treasuryUtxo.treasuryOutput.datum match {
+                case datum: RuleBasedTreasuryDatum.Resolved =>
                     EitherT.right(IO.pure(datum))
                 case _ => EitherT.liftF(IO.raiseError(Error.ParseError.TreasuryNotResolved))
             }

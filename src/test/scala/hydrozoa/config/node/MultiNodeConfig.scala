@@ -67,7 +67,7 @@ case class MultiNodeConfig private (
 
     def addressOf(peerNumber: HeadPeerNumber) = nodeConfigs(
       peerNumber
-    ).ownHeadWallet.exportVerificationKey.shelleyAddress(headConfig.network)
+    ).ownHeadWallet.exportVerificationKey.shelleyAddress()(using headConfig)
 
     def addrKeyHashOf(peerNumber: HeadPeerNumber): AddrKeyHash =
         AddrKeyHash(blake2b_224(nodeConfigs(peerNumber).ownHeadWallet.exportVerificationKey))

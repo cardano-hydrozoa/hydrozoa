@@ -10,11 +10,15 @@ import hydrozoa.multisig.ledger.commitment.{KzgCommitment, Membership, TrustedSe
 import hydrozoa.multisig.ledger.eutxol2.toEvacuationMap
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.rulebased.ledger.l1.script.plutus.{RuleBasedTreasuryScript, RuleBasedTreasuryValidator}
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.{ResolvedDatum, RuleBasedTreasuryDatum}
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Resolved
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.*
-import hydrozoa.rulebased.ledger.l1.utxo.RuleBasedTreasuryUtxo
+import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
+import monocle.*
+import monocle.syntax.all.*
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.{Arbitrary, Gen, Prop, Properties}
+import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
@@ -47,9 +51,10 @@ def genResolvedTreasuryUtxo(
         scriptAddr = ShelleyAddress(network, spp, ShelleyDelegationPart.Null)
     } yield RuleBasedTreasuryUtxo(
       utxoId = txId,
-      address = scriptAddr,
-      datum = RuleBasedTreasuryDatum.Resolved(treasuryDatum),
-      value = value
+      treasuryOutput = RuleBasedTreasuryOutput(
+        treasuryDatum,
+        value
+      )
     )
 
 /** Generator for resolved treasury datum */
@@ -57,15 +62,14 @@ def genTreasuryResolvedDatum(
     headMp: PolicyId,
     utxosCommitment: KzgCommitment.KzgCommitment,
     setupSize: Int
-): Gen[ResolvedDatum] =
+): Gen[Resolved] =
     for {
         version <- genVersion
         params <- genByteStringOfN(32)
         setup = TrustedSetup
             .takeSrsG2(setupSize)
             .map(p2 => BLS12_381_G2_Element(p2).toCompressedByteString)
-    } yield ResolvedDatum(
-      headMp = headMp,
+    } yield Resolved(
       evacuationActive = utxosCommitment,
       version = version,
       setup = setup
@@ -129,27 +133,32 @@ def genEvacuationTxBuild(using config: MultiNodeConfig): Gen[EvacuationTx.Build]
 
         // Ensure treasury has sufficient funds
         totalL2Value = evacMap.totalValue
-        sufficientTreasuryValue = treasuryUtxo.value + totalL2Value +
+        sufficientTreasuryValue = treasuryUtxo.treasuryOutput.value + totalL2Value +
             Value(Coin(20_000_000L))
-        adjustedTreasuryUtxo = treasuryUtxo.copy(value = sufficientTreasuryValue)
+        adjustedTreasuryUtxo = treasuryUtxo
+            .focus(_.treasuryOutput.value)
+            .set(sufficientTreasuryValue)
 
         // Generate validity slot
         validityEndSlot <- Gen.choose(100L, 1000L)
 
-        utxos <- Gen.listOfN(
-          2,
-          genPubKeyUtxo(
-            address = config.nodeConfigs.head._2.ownHeadWallet.exportVerificationKey
-                .shelleyAddress(config.headConfig.network),
-            genValue = Gen.const(Value.ada(100))
-          )
-        )
-    } yield EvacuationTx.Build(config.nodeConfigs.head._2)(
-      _treasuryUtxo = adjustedTreasuryUtxo,
-      _evacuatees = evacuatees,
-      _notEvacuatedYet = evacMap,
-      _feeUtxos = Map.from(utxos.tail.map(_.toTuple)),
-      _collateralUtxo = utxos.head
+        addr = config.nodeConfigs.head._2.ownHeadWallet.exportVerificationKey
+            .shelleyAddress()(using config.headConfig)
+
+        feeUtxo <-
+            genPubKeyUtxo(
+              address = addr,
+              genValue = Gen.const(Value.ada(100))
+            )
+
+        collateralUtxo <- genCollateralUtxo(addr.payment.asInstanceOf[Key].hash)(using config)
+
+    } yield EvacuationTx.Build(
+      treasuryUtxo = adjustedTreasuryUtxo,
+      evacuatees = evacuatees,
+      notEvacuatedYet = evacMap,
+      feeUtxos = Map(feeUtxo.toTuple),
+      collateralUtxo = collateralUtxo
     )
 
 def genMembershipCheck
@@ -200,7 +209,7 @@ object EvacuationTxTest extends Properties("EvacuationTx Test") {
       for {
           env <- ask
           builder <- pick(genEvacuationTxBuild(using env))
-          evacuationTx <- failLeft(builder.result)
+          evacuationTx <- failLeft(builder.result(using env.nodeConfigs.head._2))
           _ <- assertWith(
             evacuationTx.treasuryUtxoSpent == builder.treasuryUtxo,
             "Spent treasury UTXO should match recipe input"
@@ -220,9 +229,9 @@ object EvacuationTxTest extends Properties("EvacuationTx Test") {
           // Verify residual treasury value is correct
           totalEvacuations =
               builder.evacuatees.totalValue
-          expectedResidual = builder.treasuryUtxo.value - totalEvacuations
+          expectedResidual = builder.treasuryUtxo.treasuryOutput.value - totalEvacuations
           _ <- assertWith(
-            evacuationTx.treasuryUtxoProduced.value == expectedResidual,
+            evacuationTx.treasuryUtxoProduced.treasuryOutput.value == expectedResidual,
             "Residual treasury value should be correct"
           )
       } yield true

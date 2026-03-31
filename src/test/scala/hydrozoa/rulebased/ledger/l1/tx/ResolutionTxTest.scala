@@ -139,7 +139,7 @@ object ResolutionTxTest extends Properties("Resolution Tx Test") {
 
                 // Verify treasury state transition from Unresolved to Resolved
                 _ <- assertWith(
-                  tx.treasuryUnresolvedUtxoSpent.datum.isInstanceOf[Unresolved],
+                  tx.treasuryUnresolvedUtxoSpent.treasuryOutput.datum.isInstanceOf[Unresolved],
                   "Input treasury should be Unresolved"
                 )
             } yield ()

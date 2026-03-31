@@ -145,7 +145,7 @@ case class TestPeers private (
 
     private val addressCache: mutable.Map[TestPeerName, ShelleyAddress] =
         mutable.Map.empty.withDefault(peer =>
-            verificationKeyFor(peer).shelleyAddress(network.network)
+            verificationKeyFor(peer).shelleyAddress()(using network)
         )
 
     private val walletCache: mutable.Map[TestPeerName, HeadPeerWallet] = mutable.Map.empty

@@ -99,7 +99,7 @@ def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = 
 
         refundAddr <- genPubkeyAddress()(using config)
 
-    } yield DepositTx.Build(config)(
+    } yield DepositTx.Build(
       utxosFunding = fundingUtxos,
       l2Payload = GenesisObligation.serialize(l2Outputs),
       depositFee = depositFee,
@@ -107,7 +107,7 @@ def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = 
       requestValidityEndTime = requestValidityEndTime,
       refundInstructions = instructions,
       l2Value = l2Value
-    )
+    )(using config)
 }
 
 object DepositTxTest extends Properties("Deposit Tx Test") {

@@ -12,22 +12,19 @@ import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryScript
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.UnresolvedDatum
-import hydrozoa.rulebased.ledger.l1.utxo.RuleBasedTreasuryUtxo
+import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
 import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{BlockHeader as _, Utxo, *}
-import scalus.cardano.onchain.plutus.prelude.List as SList
+import scalus.cardano.ledger.{BlockHeader as _, Value, *}
 import scalus.cardano.onchain.plutus.v1.ArbitraryInstances.genByteStringOfN
 import scalus.cardano.onchain.plutus.v3.TokenName
 import scalus.crypto.ed25519.VerificationKey
 import scalus.uplc.builtin.ByteString
 import scalus.uplc.builtin.bls12_381.G2Element
 import test.*
-import test.Generators.Hydrozoa.genPubkeyAddress
 
 /** Common test generators for rule-based transaction tests */
 object CommonGenerators {
@@ -72,7 +69,7 @@ object CommonGenerators {
         versionMajor: BigInt
     )(using
         config: CardanoNetwork.Section & HeadPeers.Section & HasTokenNames
-    ): Gen[UnresolvedDatum] =
+    ): Gen[Unresolved] =
         for {
             deadlineVoting <- Gen
                 .choose(600_000, 1800_000)
@@ -81,11 +78,7 @@ object CommonGenerators {
             setup = TrustedSetup
                 .takeSrsG2(10)
                 .map(p2 => G2Element(p2).toCompressedByteString)
-        } yield UnresolvedDatum(
-          headMp = config.headMultisigScript.policyId,
-          disputeId = config.headTokenNames.voteTokenName.bytes,
-          peers = SList.from(config.headPeerVKeys.iterator),
-          peersN = config.nHeadPeers.convert,
+        } yield Unresolved(
           deadlineVoting = deadlineVoting,
           versionMajor = versionMajor,
           setup = setup
@@ -93,7 +86,7 @@ object CommonGenerators {
 
     def genRuleBasedTreasuryUtxo(
         fallbackTxId: TransactionHash,
-        unresolvedDatum: UnresolvedDatum
+        unresolvedDatum: Unresolved
     )(using
         config: CardanoNetwork.Section & HasTokenNames & HeadPeers.Section
     ): Gen[RuleBasedTreasuryUtxo] =
@@ -109,11 +102,13 @@ object CommonGenerators {
 
             beaconTokenAssetName = AssetName(config.headTokenNames.treasuryTokenName.bytes)
             beaconToken = Value.asset(config.headMultisigScript.policyId, beaconTokenAssetName, 1)
+            output = RuleBasedTreasuryOutput(
+              unresolvedDatum,
+              Value(adaAmount) + beaconToken
+            )
         } yield RuleBasedTreasuryUtxo(
           utxoId = txId,
-          address = scriptAddr,
-          datum = Unresolved(unresolvedDatum),
-          value = Value(adaAmount) + beaconToken
+          treasuryOutput = output
         )
 
     def genCollateralUtxo(
@@ -125,23 +120,6 @@ object CommonGenerators {
         } yield CollateralUtxo(
           input,
           CollateralOutput(addrKeyHash, ShelleyDelegationPart.Null, coin, None, None)
-        )
-
-    /** Generate collateral UTXO with random address */
-    def genCollateralUtxo(using config: CardanoNetwork.Section): Gen[Utxo] =
-        for {
-            txId <- arbitrary[TransactionHash]
-            ix <- Gen.choose(0, 10)
-            addr <- genPubkeyAddress()
-            value <- Gen.choose(5_000_000L, 50_000_000L).map(v => Value(Coin(v)))
-        } yield Utxo(
-          TransactionInput(txId, ix),
-          Babbage(
-            address = addr,
-            value = value,
-            datumOption = None,
-            scriptRef = None
-          )
         )
 
     def genOnchainBlockHeader(versionMajor: BigInt): Gen[BlockHeader.Minor.Onchain] =

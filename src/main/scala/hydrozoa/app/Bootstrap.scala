@@ -38,7 +38,6 @@ import org.bouncycastle.crypto.generators.Ed25519KeyPairGenerator
 import org.bouncycastle.crypto.params.{Ed25519KeyGenerationParameters, Ed25519PrivateKeyParameters, Ed25519PublicKeyParameters}
 import scala.collection.immutable.SortedMap
 import scala.concurrent.duration.DurationInt
-import scalus.cardano.address.Network
 import scalus.cardano.ledger.{Coin, PlutusScriptEvaluator, TransactionOutput, Utxo, Value}
 import scalus.cardano.txbuilder.TransactionBuilderStep.Spend
 import scalus.cardano.txbuilder.{TransactionBuilder, TransactionBuilderStep}
@@ -110,7 +109,7 @@ object Bootstrap:
 
         evacMap = EvacuationMap.empty
 
-        peerAddress = vKey.shelleyAddress(cardanoNetwork.network)
+        peerAddress = vKey.shelleyAddress()(using cardanoNetwork)
         _ <- logger.info(s"Peer address: ${peerAddress.toBech32.get}")
 
         // Fetch UTXOs from backend
@@ -287,7 +286,7 @@ object GenerateKeyPair extends IOApp:
                 _ <- IO.println(s"Verification key (32 bytes): $vKeyHex")
                 _ <- IO.println(s"Signing key (32 bytes): $sKeyHex")
                 _ <- IO.println(
-                  s"Testnet address: ${vKey.shelleyAddress(Network.Testnet).toBech32.get}"
+                  s"Testnet address: ${vKey.shelleyAddress()(using CardanoNetwork.Preview).toBech32.get}"
                 )
 
                 _ <- IO.println("\nAdd these to your .env file:")
@@ -358,7 +357,7 @@ object Migrate extends IOApp:
             )
 
             // Get peer address
-            peerAddress = env.verificationKey.shelleyAddress(cardanoNetwork.network)
+            peerAddress = env.verificationKey.shelleyAddress()(using cardanoNetwork)
             _ <- logger.info(s"Peer address: ${peerAddress.toBech32.get}")
 
             // Fetch all UTXOs from peer address

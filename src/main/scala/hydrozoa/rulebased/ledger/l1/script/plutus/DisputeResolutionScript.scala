@@ -7,8 +7,8 @@ import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.ValueExtension.*
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.TallyRedeemer.{Continuing, Removed}
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatumOnchain
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatumOnchain.UnresolvedOnchain
 import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.AwaitingVote
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
@@ -220,9 +220,10 @@ object DisputeResolutionValidator extends Validator {
 
                 //  headMp and disputeId must match the corresponding fields of the Unresolved datum in treasury.
                 val treasuryDatum =
-                    treasuryReference.resolved.inlineDatumOfType[RuleBasedTreasuryDatum] match {
-                        case Unresolved(unresolvedDatum) => unresolvedDatum
-                        case _                           => fail(VoteTreasuryDatum)
+                    treasuryReference.resolved
+                        .inlineDatumOfType[RuleBasedTreasuryDatumOnchain] match {
+                        case u: UnresolvedOnchain => u
+                        case _                    => fail(VoteTreasuryDatum)
                     }
                 require(treasuryDatum.headMp === headMp, VoteTreasuryDatumHeadMp)
                 require(treasuryDatum.disputeId === disputeId, VoteTreasuryDatumDisputeId)
@@ -418,9 +419,10 @@ object DisputeResolutionValidator extends Validator {
                     // headMp and disputeId must match the corresponding fields of the Unresolved
                     // datum in treasury
                     val treasuryDatum =
-                        treasuryReference.resolved.inlineDatumOfType[RuleBasedTreasuryDatum] match {
-                            case Unresolved(unresolvedDatum) => unresolvedDatum
-                            case _                           => fail(TreasuryDatumIsUnresolved)
+                        treasuryReference.resolved
+                            .inlineDatumOfType[RuleBasedTreasuryDatumOnchain] match {
+                            case u: UnresolvedOnchain => u
+                            case _                    => fail(TreasuryDatumIsUnresolved)
                         }
 
                     require(treasuryDatum.headMp === contCs, TreasuryDatumMatchesHeadMp)
@@ -503,9 +505,9 @@ object DisputeResolutionValidator extends Validator {
 
                 // TODO: This is checked by the treasury validator
                 val treasuryDatum =
-                    treasuryInput.resolved.inlineDatumOfType[RuleBasedTreasuryDatum] match {
-                        case Unresolved(unresolvedDatum) => unresolvedDatum
-                        case _                           => fail(ResolveDatumIsUnresolved)
+                    treasuryInput.resolved.inlineDatumOfType[RuleBasedTreasuryDatumOnchain] match {
+                        case u: UnresolvedOnchain => u
+                        case _                    => fail(ResolveDatumIsUnresolved)
                     }
 
                 // headMp and disputeId must match the corresponding fields of the Unresolved datum

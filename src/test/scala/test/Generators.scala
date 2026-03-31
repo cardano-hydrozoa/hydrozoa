@@ -165,11 +165,7 @@ object Generators {
             )
 
         } yield MultisigRegimeUtxo(
-          multisigRegimeTokenName = config.headTokenNames.multisigRegimeTokenName,
-          utxoId = utxoId,
-          address = config.headMultisigScript.mkAddress(config.network),
-          value = Value.ada(2) + hmrwToken,
-          script = config.headMultisigScript
+          input = utxoId
         )
 
         def genPayoutObligation(
