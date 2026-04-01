@@ -162,8 +162,11 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
                 createBlockWeaverActor(p, system, jointLedgerMockActor, Carol.headPeerNumber)
             val config = multiNodeConfig.nodeConfigs(Carol.headPeerNumber)
 
+            val anyEvent = p.pick(Arbitrary.arbitrary[UserRequestWithId])
+
             // Block 1 brief
             p.runIO(for {
+                _ <- blockWeaver ! anyEvent
                 brief <- mkDummyBlockBrief1(config.headConfig)
                 _ <- blockWeaver ! brief
                 _ <- system.waitForIdle()
