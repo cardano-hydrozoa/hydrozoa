@@ -3,10 +3,13 @@ package hydrozoa.multisig.ledger.joint
 import cats.implicits.*
 import hydrozoa.multisig.ledger.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
+import hydrozoa.multisig.ledger.joint.EvacuationMap.mkScalar
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import scala.collection.immutable.TreeMap
+import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.given
+import scala.collection.immutable.{SortedMap, TreeMap}
 import scalus.cardano.ledger.*
 import scalus.cardano.onchain.plutus.prelude.List as SList
+import scalus.cardano.onchain.plutus.v2.TxOut
 import scalus.uplc.builtin.Builtins.{blake2b_224, serialiseData}
 import scalus.uplc.builtin.Data.toData
 import scalus.uplc.builtin.{ByteString, Data, ToData}
@@ -23,10 +26,6 @@ given evacuationKeyOrdering: Ordering[EvacuationKey] with {
         summon[Ordering[ByteString]].compare(x.byteString, y.byteString)
 }
 
-given evacuationKeyToData: ToData[EvacuationKey] with {
-    override def apply(v1: EvacuationKey): Data = toData(v1.byteString)
-}
-
 final case class EvacuationKey private (byteString: ByteString)
 
 object EvacuationKey:
@@ -35,10 +34,20 @@ object EvacuationKey:
 
 final case class EvacuationMap(
     evacuationMap: TreeMap[EvacuationKey, Payout.Obligation]
-)(using Ordering[EvacuationKey], ToData[EvacuationKey]) {
-    val isEmpty: Boolean = evacuationMap.isEmpty
-    val nonEmpty: Boolean = evacuationMap.nonEmpty
-    val size: Int = evacuationMap.size
+)(using Ordering[EvacuationKey], ToData[EvacuationKey])
+    extends SortedMap[EvacuationKey, Payout.Obligation] {
+    def iterator: Iterator[(EvacuationKey, Payout.Obligation)] = evacuationMap.iterator
+
+    def removed(key: EvacuationKey): EvacuationMap = EvacuationMap(evacuationMap.removed(key))
+
+    override def removedAll(keys: IterableOnce[EvacuationKey]): EvacuationMap =
+        EvacuationMap(evacuationMap.removedAll(keys))
+
+    def updated[V1 >: Payout.Obligation](key: EvacuationKey, value: V1): EvacuationMap =
+        EvacuationMap(evacuationMap.updated(key, value.asInstanceOf[Payout.Obligation]))
+
+    // Members declared in scala.collection.MapOps
+    def get(key: EvacuationKey): Option[Payout.Obligation] = evacuationMap.get(key)
 
     /** The evac map, where we threw away the "KeepRaw"
       */
@@ -51,29 +60,39 @@ final case class EvacuationMap(
       */
     val outputsCooked: Iterable[TransactionOutput] = evacuationMap.values.map(_.utxo.value)
 
-    def appended(
-        otherMap: TreeMap[EvacuationKey, Payout.Obligation]
-    ): EvacuationMap =
-        EvacuationMap(evacuationMap ++ otherMap)
+    lazy val kzgCommitment: KzgCommitment = KzgCommitment.calculateKzgCommitment(scalars)
 
-    def removed(keys: Set[EvacuationKey]): EvacuationMap =
-        EvacuationMap(evacuationMap -- keys)
-
-    def kzgCommitment: KzgCommitment = KzgCommitment.calculateKzgCommitment(scalars)
-
-    private def scalars: SList[Scalar] = {
+    lazy val scalars: SList[Scalar] = {
         SList.from(
           evacuationMap.toList.map(e =>
               // FIXME: redundant CBOR encoding with `Sized`, since we're keeping the original serialization anyways
-              (e._1, LedgerToPlutusTranslation.getTxOutV2(Sized(e._2.utxo.value)))
-                  |> ToData.tupleToData
-                  |> serialiseData
-                  |> blake2b_224
-                  |> (_.bytes)
-                  |> Scalar().from_bendian
+              mkScalar(e._1, LedgerToPlutusTranslation.getTxOutV2(Sized(e._2.utxo.value)))
           )
         )
     }
+
+    /** Assumes key -> value mappings are unique among all maps
+      * @return
+      */
+    def subsetOf(other: EvacuationMap): Boolean =
+        evacuationMap.keySet.subsetOf(other.evacuationMap.keySet)
+
+    def totalValue: Value =
+        evacuationMap.foldLeft(Value.zero)((acc, evacuatee) => acc + evacuatee._2.utxo.value.value)
+
+    override def iteratorFrom(start: EvacuationKey): Iterator[(EvacuationKey, Payout.Obligation)] =
+        evacuationMap.iteratorFrom(start)
+
+    override def keysIteratorFrom(start: EvacuationKey): Iterator[EvacuationKey] =
+        evacuationMap.keysIteratorFrom(start)
+
+    override def ordering: Ordering[EvacuationKey] = evacuationMap.ordering
+
+    override def rangeImpl(
+        from: Option[EvacuationKey],
+        until: Option[EvacuationKey]
+    ): EvacuationMap =
+        EvacuationMap(evacuationMap.rangeImpl(from, until))
 }
 
 object EvacuationMap:
@@ -88,6 +107,22 @@ object EvacuationMap:
                     (em: EvacuationMap) => EvacuationMap(em.evacuationMap.removed(key))
             }
             .foldLeft(identity: EvacuationMap => EvacuationMap)(_.andThen(_))
+
+    private def mkHash(key: EvacuationKey, output: TxOut): ByteString = {
+        (key, output)
+            |> ToData.tupleToData
+            |> serialiseData
+            |> blake2b_224
+    }
+
+    def mkScalar(key: EvacuationKey, output: TxOut): Scalar =
+        (key, output)
+            |> mkHash
+            |> (_.bytes)
+            |> Scalar().from_bendian
+
+    def from(i: IterableOnce[(EvacuationKey, Payout.Obligation)]) =
+        EvacuationMap(TreeMap.from(i))
 
 enum EvacuationDiff:
     case Update(key: EvacuationKey, value: Payout.Obligation)

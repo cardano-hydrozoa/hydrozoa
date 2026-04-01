@@ -54,11 +54,11 @@ private object InitializationTxSeqOps {
                 .map(InitializationTxError(_))
 
             fallbackTx <- FallbackTx
-                .Build(config)(
+                .Build(
                   config.txTiming.newFallbackStartTime(blockCreationEndTime),
                   initializationTx.treasuryProduced,
                   initializationTx.multisigRegimeProduced,
-                )
+                )(using config)
                 .result
                 .left
                 .map(FallbackTxError(_))
@@ -146,11 +146,11 @@ private object InitializationTxSeqOps {
 
                 expectedFallbackTx <- time("FallbackTx.build") {
                     FallbackTx
-                        .Build(config)(
+                        .Build(
                           config.txTiming.newFallbackStartTime(blockCreationEndTime),
                           iTx.treasuryProduced,
                           iTx.multisigRegimeProduced
-                        )
+                        )(using config)
                         .result
                         .left
                         .map(FallbackTxBuildError(_))

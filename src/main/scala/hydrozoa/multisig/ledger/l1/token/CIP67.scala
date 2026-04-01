@@ -13,27 +13,37 @@ object CIP67 {
             4679 // "HMRW" (hydrozoa multisig regime witness) on the phone pad
     }
 
+    def prefix(cip67Tag: Int): ByteString =
+        ByteString.fromArray(cip67.CIP67AssetNameUtil.labelToPrefix(cip67Tag))
+
     case class HeadTokenNames(seedUtxo: TransactionInput) {
-        private val tokenSuffix: Array[Byte] = {
+        private val suffix: ByteString = {
             // Serialized + hashed utxo ID of seed utxo
             val utxoBytes = ByteString.fromArray(Cbor.encode(seedUtxo).toByteArray)
-            blake2b_224(utxoBytes).bytes
+            blake2b_224(utxoBytes)
         }
 
-        private def prefixToken(cip67Tag: Int): AssetName =
-            AssetName(
-              ByteString.fromArray(cip67.CIP67AssetNameUtil.labelToPrefix(cip67Tag) ++ tokenSuffix)
-            )
+        val treasuryTokenName: AssetName = AssetName(prefix(CIP67.Tags.head) ++ suffix)
 
-        val treasuryTokenName: AssetName = prefixToken(CIP67.Tags.head)
+        val voteTokenName: AssetName = AssetName(prefix(CIP67.Tags.vote) ++ suffix)
 
-        val voteTokenName: AssetName = prefixToken(CIP67.Tags.vote)
-
-        val multisigRegimeTokenName: AssetName = prefixToken(CIP67.Tags.multiSigRegime)
+        val multisigRegimeTokenName: AssetName = AssetName(
+          prefix(CIP67.Tags.multiSigRegime) ++ suffix
+        )
     }
 
     trait HasTokenNames {
         def headTokenNames: HeadTokenNames
     }
 
+}
+
+object PrintPrefixes {
+    def main(args: Array[String]): Unit = {
+        println("=" * 80)
+        println("Prefixes:")
+        println(s"head = ${CIP67.prefix(CIP67.Tags.head)}")
+        println(s"vote = ${CIP67.prefix(CIP67.Tags.vote)}")
+        println(s"multisig regime = ${CIP67.prefix(CIP67.Tags.multiSigRegime)}")
+    }
 }

@@ -6,7 +6,7 @@ import com.bloxbean.cardano.client.util.HexUtil.encodeHexString
 import com.comcast.ip4s.{host, port}
 import com.suprnation.actor.ActorSystem
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
-import hydrozoa.lib.cardano.scalus.ShelleyAddressExtra
+import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost
@@ -205,10 +205,7 @@ object Main extends IOApp {
                     backend = backend,
                     headPeerWallet = nodeConfig.ownHeadWallet,
                     config = nodeConfig.headConfig,
-                    faucetAddress = ShelleyAddressExtra.mkShelleyAddress(
-                      env.verificationKey,
-                      cardanoNetwork.network
-                    ),
+                    faucetAddress = env.verificationKey.shelleyAddress()(using cardanoNetwork),
                     tokenRecoveryAddress = env.tokenRecoveryAddress
                   )
             )

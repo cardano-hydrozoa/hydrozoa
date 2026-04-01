@@ -35,6 +35,7 @@ import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger, given}
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
+import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.evacuationKeyToData
 import java.util.concurrent.TimeUnit
 import monocle.Focus
 import monocle.Focus.focus
@@ -50,8 +51,8 @@ import scalus.cardano.ledger.{Block as _, BlockHeader as _, Coin, *}
 import scalus.crypto.ed25519.Signature
 import scalus.uplc.builtin.ByteString
 import test.Generators.Hydrozoa.*
-import test.TestM.*
-import test.{*, given}
+import test.given
+import test.{TestMFixedEnv, *}
 
 // Pretty Printers for more manageable scalacheck logs
 given ppMultiNodeConfig: (MultiNodeConfig => Pretty) = nodeConfig =>
@@ -90,6 +91,9 @@ given ppMultiNodeConfig: (MultiNodeConfig => Pretty) = nodeConfig =>
   *     of the embedded PropertyM and IO of the JLTest.
   */
 object JointLedgerTestHelpers {
+    type JLTest[A] = TestM[TestR, A]
+    val jlTest = TestMFixedEnv[TestR]()
+    import jlTest.*
 
     /** An agent of this test, pretending to be a [[ConsensusActor]] for [[JointLedger]]. */
     final case class ConsensusAgent() extends Actor[IO, ConsensusAgent.Request] {
@@ -118,7 +122,6 @@ object JointLedgerTestHelpers {
         type Request = ConsensusActor.Request | GetState.Sync
     }
 
-    type JLTest[A] = TestM[TestR, A]
     val defaultInitializer: PropertyM[IO, TestR] = {
         for {
             multiNodeConfig <- PropertyM.pick[IO, MultiNodeConfig](
@@ -188,7 +191,7 @@ object JointLedgerTestHelpers {
 
         def registerDeposit(req: UserRequestWithId): JLTest[Unit] = {
             for {
-                jl <- asks[TestR, ActorRef[IO, JointLedger.Requests.Request]](_.jointLedger)
+                jl <- asks[ActorRef[IO, JointLedger.Requests.Request]](_.jointLedger)
                 _ <- lift(jl ? req)
             } yield ()
         }
@@ -243,16 +246,16 @@ object JointLedgerTestHelpers {
           */
         def completeBlockRegular(req: CompleteBlockRegular): JLTest[Unit] =
             for {
-                jl <- asks[TestR, ActorRef[IO, JointLedger.Requests.Request]](_.jointLedger)
+                jl <- asks(_.jointLedger)
                 beforeState <- lift(jl ?: JointLedger.Requests.GetState)
                 _ <- lift(jl ! req)
                 afterState <- lift(jl ?: JointLedger.Requests.GetState)
-                _ <- assertWith[TestR](
+                _ <- assertWith(
                   condition = beforeState.isInstanceOf[JointLedger.Producing],
                   msg = "A CompleteBlockRegular request was sent to the JointLedger and it succeeded, but" +
                       " the JointLedger wasn't in the Producing state before the request was sent"
                 )
-                _ <- assertWith[TestR](
+                _ <- assertWith(
                   condition = afterState.isInstanceOf[JointLedger.Done],
                   msg = "A CompleteBlockRegular request was sent to the JointLedger and it succeeded, but" +
                       " the JointLedger didn't transition to the Done state after the request was processed"
@@ -274,7 +277,7 @@ object JointLedgerTestHelpers {
 
         def completeBlockFinal(req: CompleteBlockFinal): JLTest[Unit] =
             for {
-                jl <- asks[TestR, ActorRef[IO, JointLedger.Requests.Request]](_.jointLedger)
+                jl <- asks(_.jointLedger)
                 _ <- lift(jl ! req)
             } yield ()
 
@@ -290,7 +293,7 @@ object JointLedgerTestHelpers {
                 state <- getJointLedgerState
                 p <- state match {
                     case _: Done => throw RuntimeException("Expected a Producing State, got Done")
-                    case p: Producing => TestM.pure[TestR, Producing](p)
+                    case p: Producing => pure(p)
                 }
             } yield p
 
@@ -298,7 +301,7 @@ object JointLedgerTestHelpers {
             for {
                 state <- getJointLedgerState
                 d <- state match {
-                    case d: Done => TestM.pure[TestR, Done](d)
+                    case d: Done => pure(d)
                     case _: Producing =>
                         throw RuntimeException("Expected a Done State, got Producing")
                 }
@@ -315,23 +318,22 @@ object JointLedgerTestHelpers {
         ] = {
             import Requests.*
             for {
-                env <- ask[TestR]
+                env <- ask
 
                 address = env.multiNodeConfig.addressOf(HeadPeerNumber.zero)
 
                 l2Outputs <-
-                    pick[TestR, NonEmptyList[GenesisObligation]](
+                    pick(
                       (
                         for {
-                            maxL2Outputs <- Gen.choose(1, 100)
+                            nL2Outputs <- Gen.choose(1, 100)
                             res <- Generators.Other.genSequencedValueDistribution(
-                              maxL2Outputs,
+                              nL2Outputs,
                               v =>
                                   genGenesisObligation(
-                                    env.config,
                                     address,
                                     genValue = Gen.const(v)
-                                  ),
+                                  )(using env.multiNodeConfig),
                               minCoin = Coin.ada(3)
                             )
 
@@ -345,14 +347,16 @@ object JointLedgerTestHelpers {
                   l2Outputs.map(_.l2OutputValue).toList
                 )
 
-                utxosFunding <- pick[TestR, NonEmptyList[Utxo]]((for {
+                utxosFunding <- pick((for {
                     nUtxos <- Gen.choose(1, 100)
 
                     // TODO: A more realistic generator would generate extraneous assets besides
                     // those strictly neceesary to achieve the aggregate L2 value
                     utxosWithZeroAssets <- Gen.listOfN(
                       nUtxos,
-                      genPubKeyUtxo(env.config, address, genValue = Gen.const(Value.ada(3)))
+                      genPubKeyUtxo(address, genValue = Gen.const(Value.ada(3)))(using
+                        env.multiNodeConfig
+                      )
                     )
 
                     valueDist <- Generators.Other.genValueDistribution(
@@ -369,7 +373,7 @@ object JointLedgerTestHelpers {
 
                 utxosFundingValue = Value.combine(utxosFunding.toList.map(_._2.value))
 
-                depositRefundSeqBuilder = DepositRefundTxSeq.Build(env.config)(
+                depositRefundSeqBuilder = DepositRefundTxSeq.Build(
                   l2Payload = l2OutputsBytes,
                   l2Value = l2OutputsValue,
                   depositFee = Coin.zero,
@@ -379,13 +383,13 @@ object JointLedgerTestHelpers {
                   refundAddress = address,
                   refundDatum = None,
                   requestId = requestId
-                )
+                )(using env.config)
 
                 depositRefundTxSeq <- lift(depositRefundSeqBuilder.result.liftTo[IO])
 
                 // refund(i).validity_start = deposit(i).absorption_end + silence_period
                 // refund(i).validity_end = ∅
-                _ <- assertWith[TestR](
+                _ <- assertWith(
                   msg = "refund start validity is correct",
                   condition = {
                       depositRefundTxSeq.refundTx.tx.body.value.validityStartSlot.isDefined
@@ -396,7 +400,7 @@ object JointLedgerTestHelpers {
                   }
                 )
 
-                _ <- assertWith[TestR](
+                _ <- assertWith(
                   msg = "refund end validity is correct",
                   condition = depositRefundTxSeq.refundTx.tx.body.value.ttl.isEmpty
                 )
@@ -453,7 +457,8 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 //    override def overrideParameters(p: Test.Parameters): Test.Parameters =
 //        p.withInitialSeed(Seed.fromBase64("rlrErmmUkV4avV8rFPceGSpj7WfLT74OCWSLXGU6oJL=").get)
 
-    import TestM.*
+    import JointLedgerTestHelpers.*
+    import jlTest.*
 
     //  We can observe three test statistics:
     //  - Whether ties are occurring
@@ -576,17 +581,9 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
           }
 
           for {
-              env <- ask[TestR]
+              env <- ask
               blockStartTime <- startBlockNow(BlockNumber.zero.increment)
-              eventStreamActions <- pick[TestR, Queue[
-                JLTest[
-                  (
-                      DepositRefundTxSeq,
-                      UserRequestWithId,
-                      NonEmptyList[GenesisObligation]
-                  )
-                ]
-              ]](
+              eventStreamActions <- pick(
                 genEventStream(
                   env.config,
                   env.config.headMultisigAddress,
@@ -605,14 +602,14 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               depositsMap <- getJointLedgerState.map(_.l1LedgerState.deposits)
 
               // Test statistic:  make sure that ties are actually occurring in some samples
-              _ <- lift[TestR, Unit](PropertyM.monitor[IO](Prop.collect {
+              _ <- lift(PropertyM.monitor[IO](Prop.collect {
                   if eventStream.length <= 1
                   then "events.length <= 1"
                   else "events.length > 1"
               }))
 
               // Test statistic:  make sure that ties are actually occurring in some samples
-              _ <- lift[TestR, Unit](PropertyM.monitor[IO](Prop.collect {
+              _ <- lift(PropertyM.monitor[IO](Prop.collect {
                   val collectionSizes = depositsMap.treeMap.map(_._2.length)
                   if collectionSizes.forall(_ == 1)
                   then "no duplicate start times"
@@ -620,13 +617,13 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               }))
 
               // Test statistic: the flattened deposits map and unsorted stream are different
-              _ <- lift[TestR, Unit](PropertyM.monitor[IO](Prop.collect {
+              _ <- lift(PropertyM.monitor[IO](Prop.collect {
                   if depositsMap.flatten == eventStream
                   then "depositsMap.flatValues == eventStream"
                   else "depositsMap.flatValues != eventStream"
               }))
 
-              _ <- assertWith[TestR](
+              _ <- assertWith(
                 msg = "Deposits are sorted by absorption start time",
                 condition = {
                     val startTimes = depositsMap.depositUtxos.map(deposit =>
@@ -640,13 +637,13 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                 }
               )
 
-              _ <- assertWith[TestR](
+              _ <- assertWith(
                 msg =
                     "Deposit ledger state includes the same number of elements as the event stream",
                 condition = depositsMap.numberOfDeposits == eventStream.length
               )
 
-              _ <- assertWith[TestR](
+              _ <- assertWith(
                 msg =
                     "If multiple deposits have the same absorption start time, order of the sorted deposits must be" +
                         " a subsequence of the event stream",
@@ -665,7 +662,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
     val _ = property("Joint Ledger Happy Path") = run(
       initializer = defaultInitializer,
       testM = for {
-          env <- ask[TestR]
+          env <- ask
 
           // Put the joint ledger in producing mode
           firstBlockNumber = BlockNumber.zero.increment
@@ -687,20 +684,20 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               jlState <- getJointLedgerState
               dlState = jlState.l1LedgerState
 
-              _ <- assertWith[TestR](
+              _ <- assertWith(
                 msg =
                     s"We should have 1 deposit in the state. We have ${dlState.deposits.numberOfDeposits}",
                 condition = dlState.deposits.numberOfDeposits == 1
               )
-              _ <- assertWith[TestR](
+              _ <- assertWith(
                 msg = "Correct deposit(s) in state",
                 condition = dlState.deposits.depositUtxos.head == depositProduced
               )
-              _ <- assertWith[TestR](
+              _ <- assertWith(
                 msg = "Correct treasury in state",
                 condition = dlState.treasury == env.config.initializationTx.treasuryProduced
               )
-              _ <- assertWith[TestR](
+              _ <- assertWith(
                 msg = "Correct refund in state",
                 condition =
                     val refundsWithoutSignatures =
@@ -719,24 +716,24 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
           _ <-
               for {
                   consensusAgentState <- getConsensusAgentState
-                  _ <- assertWith[TestR](
+                  _ <- assertWith(
                     msg = "Joint ledger should only have sent out one block, total.",
                     condition = consensusAgentState.size == 1
                   )
 
                   block = consensusAgentState(0)
 
-                  _ <- assertWith[TestR](
+                  _ <- assertWith(
                     msg = "First block should be minor -- no deposits/withdrawals.",
                     condition = block.isInstanceOf[Block.Unsigned.Minor]
                   )
 
-                  _ <- assertWith[TestR](
+                  _ <- assertWith(
                     msg = "Block's deposit absorbed and deposits refunded should both be empty",
                     condition = block.body.depositsRefunded.isEmpty
                         && block.body.depositsAbsorbed.isEmpty
                   )
-                  _ <- assertWith[TestR](
+                  _ <- assertWith(
                     msg = "Post-dated refund should appear",
                     condition = block.effects.postDatedRefundTxs
                         .map(_.focus(_.tx).modify(_.stripVKeyWitnesses)) == List(
@@ -765,14 +762,14 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
           )
           _ <- for {
               consensusAgentState <- getConsensusAgentState
-              _ <- assertWith[TestR](
+              _ <- assertWith(
                 msg = "Joint ledger should only have sent out two block, total.",
                 condition = consensusAgentState.size == 2
               )
 
               block = consensusAgentState(1)
 
-              _ <- assertWith[TestR](
+              _ <- assertWith(
                 msg = "Second block should be minor -- no deposits were absorbed.",
                 condition = block.isInstanceOf[Block.Unsigned.Minor]
               )
@@ -793,21 +790,21 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               jlState <- getJointLedgerState
 
               consensusAgentState <- getConsensusAgentState
-              _ <- assertWith[TestR](
+              _ <- assertWith(
                 msg = "Joint ledger should only have sent out three block, total.",
                 condition = consensusAgentState.size == 3
               )
 
               block = consensusAgentState(2)
 
-              _ <- assertWith[TestR](
+              _ <- assertWith(
                 msg = "Third block should be major.",
                 condition = block.isInstanceOf[Block.Unsigned.Major]
               )
 
               majorBlock = block.asInstanceOf[Block.Unsigned.Major]
 
-              _ <- assertWith[TestR](
+              _ <- assertWith(
                 msg = "Deposits should be correct with absorbed deposit",
                 condition = majorBlock.body.depositsAbsorbed == List(depositReq.requestId) &&
                     majorBlock.body.depositsRefunded == List.empty
@@ -826,7 +823,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
               expectedEvacMap = EvacuationMap(initialEvacMap ++ depositEvacMap)
 
-              _ <- assertWith[TestR](
+              _ <- assertWith(
                 msg = "Evacuation map should contain deposit",
                 condition = jlState.evacuationMap == expectedEvacMap
               )
@@ -835,7 +832,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
               expectedKzg = expectedEvacMap.kzgCommitment
 
-              _ <- assertWith[TestR](
+              _ <- assertWith(
                 msg =
                     s"KZG Commitment is correct.\n\tObtained: $kzgCommit\n\tExpected: $expectedKzg",
                 condition = kzgCommit == expectedKzg
@@ -852,13 +849,13 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
     val _ = property("Accepts deposit registration with sensible submission deadline") = run(
       initializer = defaultInitializer,
       testM = for {
-          env <- ask[TestR]
+          env <- ask
           blockStartTime <- startBlockNow(BlockNumber.zero.increment)
 
           _ <- for {
 
               // Sensible stands for the opposite for SubmissionPeriodIsOver error
-              requestValidityEndTime <- pick[TestR, RequestValidityEndTime](
+              requestValidityEndTime <- pick(
                 Gen.choose(1, 10)
                     .map(s =>
                         unsafeRequestValidityEndTime(
@@ -876,7 +873,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               (depositRefundTxSeq, depositReq, genesisObligations) = seqAndReq
               jlState <- unsafeGetProducing
 
-              _ <- assertWith[TestR](
+              _ <- assertWith(
                 msg = "Deposit should be in dapp ledger state",
                 condition = jlState.l1LedgerState.deposits == DepositsMap.empty.append(
                   DepositsMap.Entry(
@@ -886,7 +883,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                 )
               )
 
-              _ <- assertWith[TestR](
+              _ <- assertWith(
                 msg = "Deposit should be in transient fields as valid",
                 condition = jlState.userRequestState.requests == List((depositReq.requestId, Valid))
               )
@@ -897,13 +894,13 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
     val _ = property("Rejects deposit registration with expired submission deadline") = run(
       initializer = defaultInitializer,
       testM = for {
-          env <- ask[TestR]
+          env <- ask
           blockStartTime <- startBlockNow(BlockNumber.zero.increment)
 
           _ <- for {
 
               // Sensible stands for the opposite for SubmissionPeriodIsOver error
-              requestValidityEndTime <- pick[TestR, RequestValidityEndTime](
+              requestValidityEndTime <- pick(
                 Gen.choose(0, 10)
                     .map(s =>
                         unsafeRequestValidityEndTime(
@@ -921,12 +918,12 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               (depositRefundTxSeq, depositReq, genesisObligation) = seqAndReq
               jlState <- unsafeGetProducing
 
-              _ <- assertWith[TestR](
+              _ <- assertWith(
                 msg = "Deposit should not be in dapp ledger state",
                 condition = jlState.l1LedgerState.deposits.isEmpty
               )
 
-              _ <- assertWith[TestR](
+              _ <- assertWith(
                 msg = "Deposit should be in transient fields as invalid",
                 condition =
                     jlState.userRequestState.requests == List((depositReq.requestId, Invalid))

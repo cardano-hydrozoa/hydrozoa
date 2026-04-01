@@ -8,7 +8,7 @@ import hydrozoa.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.network.CardanoNetworkGen.given_Arbitrary_CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
-import hydrozoa.lib.cardano.scalus.ShelleyAddressExtra.mkShelleyAddress
+import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.cardano.wallet.WalletModule
 import hydrozoa.lib.number.PositiveInt
@@ -145,7 +145,7 @@ case class TestPeers private (
 
     private val addressCache: mutable.Map[TestPeerName, ShelleyAddress] =
         mutable.Map.empty.withDefault(peer =>
-            mkShelleyAddress(verificationKeyFor(peer), network.network)
+            verificationKeyFor(peer).shelleyAddress()(using network)
         )
 
     private val walletCache: mutable.Map[TestPeerName, HeadPeerWallet] = mutable.Map.empty

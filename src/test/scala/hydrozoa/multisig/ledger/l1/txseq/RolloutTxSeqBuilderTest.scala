@@ -16,13 +16,13 @@ object RolloutTxSeqBuilderTest extends Properties("RolloutTxSeq Builder") {
     val genBuilder: Gen[RolloutTxSeq.Build] =
         for {
             config <- MultiNodeConfig.generate(TestPeersSpec.default)()
+            nPayouts <- Gen.choose(1, 160)
             payouts <- genSequencedValueDistribution(
-              160,
+              nPayouts,
               v =>
                   genKnownValuePayoutObligationWithMinAdaEnsured(
-                    config.headConfig.cardanoNetwork,
                     v
-                  )
+                  )(using config.headConfig)
             )
                 .map(nel => NonEmptyVector.fromVectorUnsafe(Vector.from(nel.toList)))
 

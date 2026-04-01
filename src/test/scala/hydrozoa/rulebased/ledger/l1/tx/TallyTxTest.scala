@@ -1,29 +1,23 @@
 package hydrozoa.rulebased.ledger.l1.tx
 
-import hydrozoa.config.node.MultiNodeConfig
+import cats.effect.unsafe.implicits.global
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.peers.HeadPeers
+import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
+import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.l1.tx.Tx.Validators.nonSigningValidators
-import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.cip67DisputeTokenPrefix
-import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
-import hydrozoa.rulebased.ledger.l1.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryValidator}
+import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
+import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionScript
+import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.*
-import hydrozoa.rulebased.ledger.l1.utxo.TallyVoteUtxo
-import org.scalacheck.Gen
-import org.scalatest.funsuite.AnyFunSuite
-import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
-import scala.annotation.nowarn
-import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
+import hydrozoa.rulebased.ledger.l1.utxo.{VoteOutput, VoteUtxo}
+import org.scalacheck.{Gen, Properties}
+import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.onchain.plutus.v1.ArbitraryInstances.genByteStringOfN
-import scalus.cardano.onchain.plutus.v3.TokenName
 import scalus.uplc.builtin.Builtins.blake2b_224
 import scalus.uplc.builtin.ByteString
-import scalus.uplc.builtin.Data.toData
-import test.PeersNumberSpec.Exact
-import test.TestPeersSpec
 
 /** Generate a vote datum with a cast vote for tally testing
   */
@@ -72,66 +66,40 @@ def genCompatibleVoteDatums(peersN: Int): Gen[(VoteDatum, VoteDatum)] =
 def genTallyVoteUtxo(
     fallbackTxId: TransactionHash,
     outputIndex: Int,
-    headMp: PolicyId,
-    voteTokenName: TokenName,
     voteDatum: VoteDatum,
     voter: AddrKeyHash,
-    network: Network
-): Gen[TallyVoteUtxo] = {
+)(using
+    config: CardanoNetwork.Section & HasTokenNames & HeadPeers.Section
+): Gen[VoteUtxo[VoteStatus]] = {
     val txId = TransactionInput(fallbackTxId, outputIndex)
     val spp = ShelleyPaymentPart.Script(DisputeResolutionScript.compiledScriptHash)
-    val scriptAddr = ShelleyAddress(network, spp, ShelleyDelegationPart.Null)
+    val scriptAddr = ShelleyAddress(config.network, spp, ShelleyDelegationPart.Null)
 
-    val voteTokenAssetName = AssetName(voteTokenName)
-    val voteToken = Value.assets(Map(headMp -> Map(voteTokenAssetName -> 1)))
-
-    val voteOutput = Babbage(
-      address = scriptAddr,
-      // Sufficient ADA for minAda + tally fees
-      value = Value(Coin(10_000_000L)) + voteToken,
-      datumOption = Some(Inline(voteDatum.toData)),
-      scriptRef = None
+    val voteOutput = VoteOutput(
+      key = voteDatum.key,
+      link = voteDatum.link,
+      coin = Coin.ada(5),
+      voteTokens = PositiveInt.unsafeApply(1),
+      status = voteDatum.voteStatus
     )
 
     Gen.const(
-      TallyVoteUtxo(
-        voter = voter,
-        Utxo(txId, voteOutput)
-      )
+      VoteUtxo(txId, voteOutput)
     )
 }
 
-def genTallyTxRecipe(
-    estimatedFee: Coin = Coin(5_000_000L)
-): Gen[TallyTx.Recipe] =
+def genTallyTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[TallyTx.Build] =
+    given config: NodeConfig = multiNodeConfig.nodeConfigs.head._2
     for {
-
-        // Test currently uses two peers
-        multiNodeConfig <- MultiNodeConfig.generate(
-          TestPeersSpec.default.withPeersNumberSpec(Exact(2))
-        )()
-        config = multiNodeConfig.headConfig
-
-        // This is 4 bytes shorter to accommodate CIP-67 prefixes
-        // NB: we use the same token name _suffix_ for all head tokens so far, which is not the case in reality
-        headTokensSuffix <- genByteStringOfN(28)
-        // Generate a treasury UTXO to use as reference input
-        beaconTokenName = cip67BeaconTokenPrefix.concat(headTokensSuffix)
-        voteTokenName = cip67DisputeTokenPrefix.concat(headTokensSuffix)
 
         versionMajor <- Gen.choose(1L, 99L).map(BigInt(_))
         treasuryDatum <- genTreasuryUnresolvedDatum(
-          config,
-          voteTokenName,
           versionMajor
         )
 
         fallbackTxId <- genByteStringOfN(32).map(TransactionHash.fromByteString)
         treasuryUtxo <- genRuleBasedTreasuryUtxo(
-          config,
           fallbackTxId,
-          config.headMultisigScript.policyId,
-          beaconTokenName,
           treasuryDatum
         )
 
@@ -142,64 +110,42 @@ def genTallyTxRecipe(
         continuingVoteUtxo <- genTallyVoteUtxo(
           fallbackTxId,
           1, // Output index 1
-          config.headMultisigScript.policyId,
-          voteTokenName,
           continuingVoteDatum,
           AddrKeyHash(blake2b_224(config.headPeers.headPeerVKeys.head)),
-          config.network
         )
 
         removedVoteUtxo <- genTallyVoteUtxo(
           fallbackTxId,
           2, // Output index 2
-          config.headMultisigScript.policyId,
-          voteTokenName,
           removedVoteDatum,
           AddrKeyHash(blake2b_224(config.headPeers.headPeerVKeys.toList(1))),
-          config.network
         )
 
         collateralUtxo <- genCollateralUtxo(
-          config,
-          multiNodeConfig.addressOf(HeadPeerNumber.zero)
+          multiNodeConfig.addrKeyHashOf(HeadPeerNumber.zero)
         )
 
-    } yield TallyTx.Recipe(
+    } yield TallyTx.Build(
       continuingVoteUtxo = continuingVoteUtxo,
       removedVoteUtxo = removedVoteUtxo,
       treasuryUtxo = treasuryUtxo,
-      collateralUtxo = Utxo(collateralUtxo._1, collateralUtxo._2),
-      validityEndSlot = 200,
-      network = config.network,
-      protocolParams = config.cardanoProtocolParams,
-      evaluator = PlutusScriptEvaluator(config.cardanoInfo, EvaluatorMode.EvaluateAndComputeCost),
-      validators = nonSigningValidators
+      collateralUtxo = collateralUtxo
     )
 
-@nowarn("msg=unused value")
-class TallyTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
+object TallyTxTest extends Properties("Tally Tx Test") {
 
-    implicit override val generatorDrivenConfig: PropertyCheckConfiguration =
-        PropertyCheckConfiguration(minSuccessful = 10)
+    import MultiNodeConfig.*
 
-    test("Tally recipe generator works") {
-        val exampleRecipe = genTallyTxRecipe().sample.get
-        println(s"Generated TallyTx recipe: $exampleRecipe")
-    }
-
-    test("Tally tx builds successfully") {
-        forAll(genTallyTxRecipe()) { recipe =>
-            TallyTx.build(recipe) match {
-                case Left(e) =>
-                    fail(s"TallyTx build failed: $e")
-                case Right(tx) =>
-                    // println(HexUtil.encodeHexString(tx.tx.toCbor))
-
-                    // Basic smoke test assertions
-                    assert(tx.continuingVoteUtxo != null)
-                    assert(tx.removedVoteUtxo != null)
-                    assert(tx.treasuryUtxo != null)
-            }
-        }
-    }
+    val _ = property("Tally Tx happy path") = runDefault(
+      for {
+          env <- ask
+          _ <- {
+              given MultiNodeConfig = env
+              for {
+                  builder <- pick(genTallyTxBuilder)
+                  tx <- failLeft(builder.result)
+              } yield ()
+          }
+      } yield true
+    )
 }

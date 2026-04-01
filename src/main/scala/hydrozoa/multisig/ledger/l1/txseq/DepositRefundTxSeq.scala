@@ -2,6 +2,7 @@ package hydrozoa.multisig.ledger.l1.txseq
 
 import cats.data.NonEmptyList
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
+import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.RequestValidityEndTime
 import hydrozoa.config.head.network.CardanoNetwork
@@ -75,7 +76,7 @@ object DepositRefundTxSeq {
 private object DepositRefundTxSeqOps {
 
     type Config = CardanoNetwork.Section & HeadPeers.Section & InitialBlock.Section &
-        InitializationParameters.Section & TxTiming.Section
+        InitializationParameters.Section & TxTiming.Section & FallbackContingency.Section
 
     object Build {
         sealed trait Error extends Throwable {
@@ -116,7 +117,7 @@ private object DepositRefundTxSeqOps {
       * @param refundDatum
       *   Optional datum to add to the refund utxo.
       */
-    final case class Build(config: Config)(
+    final case class Build(
         l2Payload: ByteString,
         l2Value: Value,
         depositFee: Coin,
@@ -126,7 +127,7 @@ private object DepositRefundTxSeqOps {
         refundAddress: ShelleyAddress,
         refundDatum: Option[Data],
         requestId: RequestId
-    ) {
+    )(using config: Config) {
         def result: Either[Build.Error, DepositRefundTxSeq] = {
             val expectedDepositValue = l2Value + Value(depositFee)
 
@@ -139,7 +140,7 @@ private object DepositRefundTxSeqOps {
             for {
 
                 depositTx <- DepositTx
-                    .Build(config)(
+                    .Build(
                       utxosFunding,
                       l2Payload,
                       l2Value,

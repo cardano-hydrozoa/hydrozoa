@@ -7,8 +7,8 @@ import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.ValueExtension.*
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.TallyRedeemer.{Continuing, Removed}
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatumOnchain
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatumOnchain.UnresolvedOnchain
 import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.AwaitingVote
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
@@ -18,7 +18,6 @@ import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, S
 import scalus.cardano.ledger.{Language, Script}
 import scalus.cardano.onchain.plutus.prelude.Option.{None, Some}
 import scalus.cardano.onchain.plutus.prelude.{!==, ===, List, Option, SortedMap, fail, log, require}
-import scalus.cardano.onchain.plutus.v1.IntervalBoundType.Finite
 import scalus.cardano.onchain.plutus.v1.Value.+
 import scalus.cardano.onchain.plutus.v3.*
 import scalus.uplc.DeBruijnedProgram
@@ -87,7 +86,7 @@ object DisputeResolutionValidator extends Validator {
     given FromData[TallyRedeemer] = FromData.derived
     given ToData[TallyRedeemer] = ToData.derived
 
-    inline def cip67DisputeTokenPrefix = hex"00d950b0"
+    inline def cip67DisputeTokenPrefix = hex"021eb240"
 
     // Common errors
     private inline val DatumIsMissing = "Vote datum should be present"
@@ -133,8 +132,10 @@ object DisputeResolutionValidator extends Validator {
         "Treasury datum should match voting inputs on head policy"
     private inline val TreasuryDatumMatchesDisputeId =
         "Treasury datum should match voting inputs on dispute id"
-    private inline val TimeValidityCheck =
-        "The transaction validity upper bound must not exceed the deadlineVoting"
+    private inline val ValidityStartShouldBeSetToTallyAwaiting =
+        "Tx that tallies awaiting votes should specify the validity start"
+    private inline val AwaitingVotesCanBeTalliedAfterVotingDeadlineOnly =
+        "Vote utxos in awaiting status can be tallied up only after deadlineVoting"
     private inline val HighestVoteCheck =
         "continuingOutput must match the highest voteStatus"
     private inline val AbsentOrWrongContinuingOutput =
@@ -196,13 +197,12 @@ object DisputeResolutionValidator extends Validator {
                 // Verify the treasury reference input
                 // Let treasury be the only reference input matching voteOutref on tx hash.
                 val treasuryReference = tx.referenceInputs match {
-                    case List.Cons(input, otherInputs) =>
-                        require(
-                          otherInputs.isEmpty && input.outRef.id === voteOutref.outRef.id,
-                          VoteOneRefInputTreasury
-                        )
-                        input
                     case List.Nil => fail(VoteOneRefInputTreasury)
+                    case l @ List.Cons(_, _) =>
+                        val treasuryRefInputs: List[TxInInfo] =
+                            l.filter(_.outRef.id === voteOutref.outRef.id)
+                        require(treasuryRefInputs.size === BigInt(1), VoteOneRefInputTreasury)
+                        treasuryRefInputs.head
                 }
 
                 // A head beacon token of headMp and CIP-67 prefix 4937 must be in treasury.
@@ -220,9 +220,10 @@ object DisputeResolutionValidator extends Validator {
 
                 //  headMp and disputeId must match the corresponding fields of the Unresolved datum in treasury.
                 val treasuryDatum =
-                    treasuryReference.resolved.inlineDatumOfType[RuleBasedTreasuryDatum] match {
-                        case Unresolved(unresolvedDatum) => unresolvedDatum
-                        case _                           => fail(VoteTreasuryDatum)
+                    treasuryReference.resolved
+                        .inlineDatumOfType[RuleBasedTreasuryDatumOnchain] match {
+                        case u: UnresolvedOnchain => u
+                        case _                    => fail(VoteTreasuryDatum)
                     }
                 require(treasuryDatum.headMp === headMp, VoteTreasuryDatumHeadMp)
                 require(treasuryDatum.disputeId === disputeId, VoteTreasuryDatumDisputeId)
@@ -230,7 +231,7 @@ object DisputeResolutionValidator extends Validator {
                 // The transaction’s time -validity upper bound must not exceed the deadlineVoting
                 // field of treasury.
                 tx.validRange.to.boundType match {
-                    case Finite(toTime) =>
+                    case IntervalBoundType.Finite(toTime) =>
                         require(toTime <= treasuryDatum.deadlineVoting, VoteTimeValidityCheck)
                     case _ => fail(VoteTimeValidityCheck)
                 }
@@ -386,8 +387,7 @@ object DisputeResolutionValidator extends Validator {
 
                 // Verify the treasury reference input
 
-                // If the voteStatus of either continuingInput or removedInput is NoVote,
-                // all the following must be satisfied
+                // If the voteStatus of either continuingInput or removedInput is AwaitingVote...
                 if continuingDatum.voteStatus match {
                         case VoteStatus.AwaitingVote(_) => true
                         case VoteStatus.Voted(_, _) =>
@@ -397,6 +397,8 @@ object DisputeResolutionValidator extends Validator {
                             }
                     }
                 then {
+                    // ...all the following must be satisfied
+
                     // Let treasury be a reference input holding the head beacon token of headMp
                     // and CIP-67 prefix 4937
                     val treasuryReference = tx.referenceInputs
@@ -404,34 +406,37 @@ object DisputeResolutionValidator extends Validator {
                             i.resolved.value.toSortedMap
                                 .get(contCs)
                                 .getOrElse(SortedMap.empty)
-                                .toList match
-                                case List.Cons(tokenNameAndAmount, none) =>
-                                    val tokenName = tokenNameAndAmount._1
-                                    val amount = tokenNameAndAmount._2
+                                .toList
+                                .find((tokenName, amount) =>
                                     tokenName.take(4) == cip67BeaconTokenPrefix
-                                    && amount == BigInt(1)
-                                    && none.isEmpty
-                                case _ => fail(TreasuryReferenceInputExists)
+                                        && amount == BigInt(1)
+                                ) match
+                                case Some(_) => true
+                                case _       => false
                         }
                         .getOrFail(TreasuryReferenceInputExists)
 
                     // headMp and disputeId must match the corresponding fields of the Unresolved
                     // datum in treasury
                     val treasuryDatum =
-                        treasuryReference.resolved.inlineDatumOfType[RuleBasedTreasuryDatum] match {
-                            case Unresolved(unresolvedDatum) => unresolvedDatum
-                            case _                           => fail(TreasuryDatumIsUnresolved)
+                        treasuryReference.resolved
+                            .inlineDatumOfType[RuleBasedTreasuryDatumOnchain] match {
+                            case u: UnresolvedOnchain => u
+                            case _                    => fail(TreasuryDatumIsUnresolved)
                         }
 
                     require(treasuryDatum.headMp === contCs, TreasuryDatumMatchesHeadMp)
                     require(treasuryDatum.disputeId === contTn, TreasuryDatumMatchesDisputeId)
 
-                    // The transaction’s time -validity upper bound must not exceed the deadlineVoting
-                    // field of treasury.
-                    tx.validRange.to.boundType match {
-                        case Finite(toTime) =>
-                            require(toTime <= treasuryDatum.deadlineVoting, TimeValidityCheck)
-                        case _ => fail(TimeValidityCheck)
+                    // Merging vote utxos that are in the awaiting mode is not allowed before the
+                    // voting deadline.
+                    tx.validRange.from.boundType match {
+                        case IntervalBoundType.Finite(fromTime) =>
+                            require(
+                              treasuryDatum.deadlineVoting <= fromTime,
+                              AwaitingVotesCanBeTalliedAfterVotingDeadlineOnly
+                            )
+                        case _ => fail(ValidityStartShouldBeSetToTallyAwaiting)
                     }
                 }
 
@@ -500,9 +505,9 @@ object DisputeResolutionValidator extends Validator {
 
                 // TODO: This is checked by the treasury validator
                 val treasuryDatum =
-                    treasuryInput.resolved.inlineDatumOfType[RuleBasedTreasuryDatum] match {
-                        case Unresolved(unresolvedDatum) => unresolvedDatum
-                        case _                           => fail(ResolveDatumIsUnresolved)
+                    treasuryInput.resolved.inlineDatumOfType[RuleBasedTreasuryDatumOnchain] match {
+                        case u: UnresolvedOnchain => u
+                        case _                    => fail(ResolveDatumIsUnresolved)
                     }
 
                 // headMp and disputeId must match the corresponding fields of the Unresolved datum
@@ -527,7 +532,7 @@ object DisputeResolutionValidator extends Validator {
 
 object DisputeResolutionScript {
     // Compile the validator to Scalus Intermediate Representation (SIR)
-    private val compiledSir = Compiler.compile(DisputeResolutionValidator.validate)
+    private val compiledSir = compiler.compile(DisputeResolutionValidator.validate)
 
     // Convert to optimized UPLC with error traces for PlutusV3
     private val compiledUplc = compiledSir.toUplcOptimized(generateErrorTraces = true)

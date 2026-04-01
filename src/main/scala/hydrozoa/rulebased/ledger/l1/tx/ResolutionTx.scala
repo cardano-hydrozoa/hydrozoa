@@ -2,186 +2,161 @@ package hydrozoa.rulebased.ledger.l1.tx
 
 import cats.implicits.*
 import hydrozoa.*
+import hydrozoa.config.ScriptReferenceUtxos
+import hydrozoa.config.head.multisig.fallback.FallbackContingency
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.peers.HeadPeers
+import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
+import hydrozoa.lib.cardano.scalus.contextualscalus.Change
+import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{build, finalizeContext}
+import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
+import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
+import hydrozoa.multisig.ledger.l1.tx.Tx
+import hydrozoa.multisig.ledger.l1.tx.Tx.Validators.nonSigningValidators
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.DisputeRedeemer
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer
-import hydrozoa.rulebased.ledger.l1.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.{ResolvedDatum, RuleBasedTreasuryDatum, UnresolvedDatum}
-import hydrozoa.rulebased.ledger.l1.state.VoteState.{KzgCommitment, VoteDatum, VoteStatus}
-import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryUtxo, TallyVoteUtxo}
-import scala.util.{Failure, Success, Try}
-import scalus.cardano.address.Network
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.{Resolved, Unresolved}
+import hydrozoa.rulebased.ledger.l1.state.VoteState
+import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus
+import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.Voted
+import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo, VoteUtxo}
+import monocle.*
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.txbuilder.Datum.DatumInlined
-import scalus.cardano.txbuilder.ScriptSource.PlutusScriptValue
-import scalus.cardano.txbuilder.TransactionBuilderStep.{AddCollateral, Send, Spend, ValidityEndSlot}
-import scalus.cardano.txbuilder.{Change, SomeBuildError, ThreeArgumentPlutusScriptWitness, TransactionBuilder}
-import scalus.uplc.builtin.Data.{fromData, toData}
+import scalus.cardano.txbuilder.SomeBuildError
+import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 
 final case class ResolutionTx(
-    talliedVoteUtxo: TallyVoteUtxo,
+    talliedVoteUtxo: VoteUtxo[Voted],
     treasuryUnresolvedUtxoSpent: RuleBasedTreasuryUtxo,
     treasuryResolvedUtxoProduced: RuleBasedTreasuryUtxo,
-    tx: Transaction
-)
+    override val tx: Transaction,
+    override val txLens: Lens[ResolutionTx, Transaction] = Focus[ResolutionTx](_.tx),
+    override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
+) extends Tx[ResolutionTx]
 
 object ResolutionTx {
+    export ResolutionTxOps.{Build, Config}
+}
 
-    case class Recipe(
-        talliedVoteUtxo: TallyVoteUtxo,
+private object ResolutionTxOps {
+    type Config = CardanoNetwork.Section & ScriptReferenceUtxos.Section & HeadPeers.Section &
+        FallbackContingency.Section & HasTokenNames & OwnHeadPeerPrivate.Section
+
+    object Build {
+        enum Error extends Throwable:
+            case AbsentVoteDatum(utxo: TransactionInput)
+            case InvalidVoteDatum(utxo: TransactionInput, msg: String)
+            case InvalidTreasuryDatum(msg: String)
+            case TalliedNoVote
+            case TreasuryAlreadyResolved
+            case BuildError(wrapped: SomeBuildError)
+
+            override def getMessage: String = this match {
+                case AbsentVoteDatum(utxo: TransactionInput) =>
+                    s"Vote datum missing from transaction input ${utxo}"
+                case InvalidVoteDatum(utxo: TransactionInput, msg: String) =>
+                    s"Vote datum is malformed for transaction input $utxo. $msg"
+                case InvalidTreasuryDatum(msg: String) =>
+                    s"Treasury datum is invalid. $msg"
+                case TalliedNoVote => "Expected to find a tailled vote, but it was absent"
+                case TreasuryAlreadyResolved =>
+                    "Expected to find an unresolved treasury, but it was resolved."
+                case BuildError(wrapped: SomeBuildError) =>
+                    s"Build error occurred in resolution tx. ${wrapped.toString}"
+            }
+    }
+
+    final case class Build(
+        talliedVoteUtxo: VoteUtxo[Voted],
         treasuryUtxo: RuleBasedTreasuryUtxo,
-        collateralUtxo: Utxo,
-        validityEndSlot: Long,
-        network: Network,
-        protocolParams: ProtocolParams,
-        evaluator: PlutusScriptEvaluator,
-        validators: Seq[Validator]
-    )
-
-    enum ResolutionTxError:
-        case AbsentVoteDatum(utxo: TransactionInput)
-        case InvalidVoteDatum(utxo: TransactionInput, msg: String)
-        case InvalidTreasuryDatum(msg: String)
-        case TalliedNoVote
-        case TreasuryAlreadyResolved
-
-    def build(recipe: Recipe): Either[SomeBuildError | ResolutionTxError, ResolutionTx] = {
-
-        for {
-            voteDetails <- extractVoteDetails(recipe.talliedVoteUtxo)
-            treasuryDatum <- extractTreasuryDatum(recipe.treasuryUtxo)
-            resolvedTreasuryDatum = mkResolvedTreasuryDatum(treasuryDatum, voteDetails)
-            result <- buildResolutionTx(recipe, resolvedTreasuryDatum)
-        } yield result
-    }
-
-    private def extractVoteDetails(
-        talliedUtxo: TallyVoteUtxo
-    ): Either[ResolutionTxError, (KzgCommitment, BigInt)] = {
-        import ResolutionTxError.*
-
-        val voteOutput = talliedUtxo.utxo.output
-        voteOutput.datumOption match {
-            case Some(DatumOption.Inline(datumData)) =>
-                Try(fromData[VoteDatum](datumData)) match {
-                    case Success(voteDatum) =>
-                        voteDatum.voteStatus match {
-                            case VoteStatus.AwaitingVote(_) => Left(TalliedNoVote)
-                            case VoteStatus.Voted(commitment, versionMinor) =>
-                                Right((commitment, versionMinor))
-                        }
-                    case Failure(e) =>
-                        Left(
-                          InvalidVoteDatum(
-                            talliedUtxo.utxo.input,
-                            s"Malformed tallied VoteDatum data: ${datumData.toString}"
-                          )
-                        )
-                }
-            case _ =>
-                Left(AbsentVoteDatum(talliedUtxo.utxo.input))
-        }
-    }
-
-    private def extractTreasuryDatum(
-        treasuryUtxo: RuleBasedTreasuryUtxo
-    ): Either[ResolutionTxError, UnresolvedDatum] = {
-        import ResolutionTxError.*
-
-        treasuryUtxo.datum match {
-            case RuleBasedTreasuryDatum.Unresolved(unresolved) => Right(unresolved)
-            case RuleBasedTreasuryDatum.Resolved(_)            => Left(TreasuryAlreadyResolved)
-        }
-    }
-
-    private def mkResolvedTreasuryDatum(
-        unresolved: UnresolvedDatum,
-        voteDetails: (KzgCommitment, BigInt)
-    ): RuleBasedTreasuryDatum = {
-
-        val resolvedDatum = ResolvedDatum(
-          headMp = unresolved.headMp,
-          utxosActive = voteDetails._1,
-          version = (unresolved.versionMajor, voteDetails._2),
-          setup = unresolved.setup
-        )
-
-        RuleBasedTreasuryDatum.Resolved(resolvedDatum)
-    }
-
-    private def buildResolutionTx(
-        recipe: Recipe,
-        resolvedTreasuryDatum: RuleBasedTreasuryDatum
-    ): Either[SomeBuildError, ResolutionTx] = {
-        import recipe.*
-
-        val voteRedeemer = DisputeRedeemer.Resolve
-        val treasuryRedeemer = TreasuryRedeemer.Resolve
-
-        val newTreasuryValue = treasuryUtxo.value + talliedVoteUtxo.utxo.output.value
-
-        for {
-            context <- TransactionBuilder
-                .build(
-                  recipe.network,
-                  List(
-                    // Spend the tallied vote utxo
-                    Spend(
-                      talliedVoteUtxo.utxo,
-                      ThreeArgumentPlutusScriptWitness(
-                        PlutusScriptValue(DisputeResolutionScript.compiledPlutusV3Script),
-                        voteRedeemer.toData,
-                        DatumInlined,
-                        Set.empty
-                      )
-                    ),
-                    // Spend the treasury utxo and update its datum to resolved state
-                    Spend(
-                      treasuryUtxo.asUtxo,
-                      ThreeArgumentPlutusScriptWitness(
-                        PlutusScriptValue(RuleBasedTreasuryScript.compiledPlutusV3Script),
-                        treasuryRedeemer.toData,
-                        DatumInlined,
-                        Set.empty
-                      )
-                    ),
-                    // Send resolved treasury back with resolved datum and total value
-                    Send(
-                      Babbage(
-                        address = treasuryUtxo.address,
-                        value = newTreasuryValue,
-                        datumOption = Some(Inline(resolvedTreasuryDatum.toData)),
-                        scriptRef = None
-                      )
-                    ),
-                    AddCollateral(collateralUtxo),
-                    ValidityEndSlot(recipe.validityEndSlot)
-                  )
+        collateralUtxo: CollateralUtxo,
+    )(using config: Config) {
+        def result: Either[Build.Error, ResolutionTx] =
+            for {
+                treasuryDatum <- extractTreasuryDatum(treasuryUtxo)
+                resolvedTreasuryDatum = mkResolvedTreasuryDatum(
+                  treasuryDatum,
+                  talliedVoteUtxo.voteOutput.status
                 )
-
-            finalized <- context
-                .finalizeContext(
-                  protocolParams = recipe.protocolParams,
-                  diffHandler = Change.changeOutputDiffHandler(_, _, recipe.protocolParams, 0),
-                  evaluator = recipe.evaluator,
-                  validators = recipe.validators
+                result <- buildResolutionTx(resolvedTreasuryDatum).left.map(
+                  Build.Error.BuildError(_)
                 )
+            } yield result
 
-            newTreasuryUtxo = RuleBasedTreasuryUtxo(
-              treasuryTokenName = recipe.treasuryUtxo.treasuryTokenName,
-              utxoId = TransactionInput(finalized.transaction.id, 0), // Treasury output at index 0
-              address = recipe.treasuryUtxo.address,
-              datum = resolvedTreasuryDatum,
-              value = recipe.treasuryUtxo.value
+        // TODO: Move to a method on RuleBasedTreasuryUtxo
+        private def extractTreasuryDatum(
+            treasuryUtxo: RuleBasedTreasuryUtxo
+        ): Either[Build.Error, Unresolved] = {
+            import Build.Error.*
+
+            treasuryUtxo.treasuryOutput.datum match {
+                case unresolved: RuleBasedTreasuryDatum.Unresolved => Right(unresolved)
+                case _: RuleBasedTreasuryDatum.Resolved            => Left(TreasuryAlreadyResolved)
+            }
+        }
+
+        // TODO: move to a method on RuleBasedTreasuryUtxo after adding a type tag for the datum
+        private def mkResolvedTreasuryDatum(
+            unresolved: Unresolved,
+            voteDetails: VoteStatus.Voted
+        ): RuleBasedTreasuryDatum = {
+            Resolved(
+              evacuationActive = voteDetails._1,
+              version = (unresolved.versionMajor, voteDetails._2),
+              setup = unresolved.setup
             )
+        }
 
-        } yield ResolutionTx(
-          talliedVoteUtxo = recipe.talliedVoteUtxo,
-          treasuryUnresolvedUtxoSpent = recipe.treasuryUtxo,
-          treasuryResolvedUtxoProduced = newTreasuryUtxo,
-          tx = finalized.transaction
-        )
+        private def buildResolutionTx(
+            resolvedTreasuryDatum: RuleBasedTreasuryDatum
+        ): Either[SomeBuildError, ResolutionTx] = {
+
+            val voteRedeemer = DisputeRedeemer.Resolve
+            val treasuryRedeemer = TreasuryRedeemer.Resolve
+
+            val newTreasuryValue =
+                treasuryUtxo.treasuryOutput.value + talliedVoteUtxo.voteOutput.toOutput.value
+
+            // TODO: Partial, we can definitely find a way to make this more type safe
+            val newTreasury = RuleBasedTreasuryOutput(resolvedTreasuryDatum, newTreasuryValue)
+
+            for {
+                context <-
+                    build(
+                      List(
+                        config.referenceTreasury,
+                        config.referenceDispute,
+                        // Spend the tallied vote utxo
+                        talliedVoteUtxo.spend(voteRedeemer),
+                        // Spend the treasury utxo and update its datum to resolved state
+                        treasuryUtxo.spendAttached(treasuryRedeemer),
+                        // Send resolved treasury back with resolved datum and total value
+                        newTreasury.send,
+                        collateralUtxo.add,
+                        collateralUtxo.spend,
+                        collateralUtxo.collateralOutput.send,
+                      )
+                    )
+
+                finalized <- context
+                    .finalizeContext(
+                      diffHandler = Change.changeOutputDiffHandler(1),
+                      validators = nonSigningValidators
+                    )
+
+                newTreasuryUtxo = RuleBasedTreasuryUtxo(
+                  utxoId =
+                      TransactionInput(finalized.transaction.id, 0), // Treasury output at index 0
+                  treasuryOutput = newTreasury
+                )
+
+            } yield ResolutionTx(
+              talliedVoteUtxo = talliedVoteUtxo,
+              treasuryUnresolvedUtxoSpent = treasuryUtxo,
+              treasuryResolvedUtxoProduced = newTreasuryUtxo,
+              tx = finalized.transaction
+            )
+        }
     }
 }

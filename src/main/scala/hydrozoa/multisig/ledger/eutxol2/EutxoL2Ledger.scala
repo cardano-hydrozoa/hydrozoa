@@ -12,12 +12,14 @@ import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.eutxol2.tx.{L2Genesis, L2Tx}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationKey}
+import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationKey, EvacuationMap, evacuationKeyOrdering}
 import hydrozoa.multisig.ledger.l1.tx.Tx
 import hydrozoa.multisig.ledger.l2.*
 import hydrozoa.multisig.ledger.l2.L2LedgerCommand.RegisterDeposit
+import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.evacuationKeyToData
 import io.bullet.borer.Cbor
 import monocle.syntax.all.*
+import scala.collection.immutable.TreeMap
 import scala.util.Try
 import scalus.cardano.ledger.*
 import scalus.uplc.builtin.ByteString
@@ -28,6 +30,25 @@ extension (ti: TransactionInput) {
     def toEvacuationKey: EvacuationKey = EvacuationKey(
       ByteString.fromArray(Cbor.encode(ti).toByteArray)
     ).get
+}
+
+extension (utxos: Utxos) {
+    def toEvacuationMap(
+        network: CardanoNetwork.Section
+    ): Either[Payout.Obligation.MinAdaViolation, EvacuationMap] =
+        for {
+            map <- utxos
+                .map((ti, to) =>
+                    Payout.Obligation(KeepRaw(to), network) match {
+                        case Left(e)  => Left(e)
+                        case Right(o) => Right(ti.toEvacuationKey, o)
+                    }
+                )
+                .toList
+                .sequence
+
+            em = EvacuationMap(TreeMap.from(map))
+        } yield em
 }
 
 object EutxoL2Ledger {

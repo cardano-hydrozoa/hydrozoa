@@ -18,11 +18,11 @@ import hydrozoa.config.head.parameters.HeadParameters
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.config.node.NodeConfig
-import hydrozoa.config.node.operation.liquidation.NodeOperationLiquidationConfig
+import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
-import hydrozoa.lib.cardano.scalus.ShelleyAddressExtra
+import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.cardano.wallet.WalletModule
 import hydrozoa.lib.logging.Logging
 import hydrozoa.lib.number.PositiveInt
@@ -37,6 +37,9 @@ import java.security.SecureRandom
 import monocle.Focus.focus
 import org.bouncycastle.crypto.generators.Ed25519KeyPairGenerator
 import org.bouncycastle.crypto.params.{Ed25519KeyGenerationParameters, Ed25519PrivateKeyParameters, Ed25519PublicKeyParameters}
+import scala.collection.immutable.SortedMap
+import scala.concurrent.duration.DurationInt
+import scalus.cardano.ledger.{Coin, PlutusScriptEvaluator, TransactionOutput, Utxo, Value}
 import scala.collection.immutable.{SortedMap, TreeMap}
 import scalus.cardano.address.{Address, Network}
 import scalus.cardano.ledger.{Coin, KeepRaw, PlutusScriptEvaluator, TransactionOutput, Utxo, Value}
@@ -139,7 +142,7 @@ object Bootstrap:
           )
         )
 
-        peerAddress = ShelleyAddressExtra.mkShelleyAddress(vKey, cardanoNetwork.network)
+        peerAddress = vKey.shelleyAddress()(using cardanoNetwork)
         _ <- logger.info(s"Peer address: ${peerAddress.toBech32.get}")
 
         // Fetch UTXOs from backend
@@ -286,8 +289,16 @@ object Bootstrap:
         NodeConfig(
           headConfig = headConfig,
           ownHeadWallet = ownHeadWallet,
-          nodeOperationLiquidationConfig = NodeOperationLiquidationConfig.default,
-          nodeOperationMultisigConfig = NodeOperationMultisigConfig.default
+          nodeOperationEvacuationConfig = NodeOperationEvacuationConfig(
+            evacuationBotPollingPeriod = 1.minute,
+            // NOTE: Reusing the same multisig wallet, in production this should be a different wallet
+            evacuationWallet = ownHeadWallet
+          ),
+          nodeOperationMultisigConfig = NodeOperationMultisigConfig.default,
+          // TODO: I assume that these will be pre-populated on preview, pre-prod, and mainnet, and that we'll have
+          // a different utility to publish the utxo to a given network.
+          // We should probably query these utxos using the backend, and then parse.
+          scriptReferenceUtxos = ???
         ).get
     }
 
@@ -308,7 +319,7 @@ object GenerateKeyPair extends IOApp:
                 _ <- IO.println(s"Verification key (32 bytes): $vKeyHex")
                 _ <- IO.println(s"Signing key (32 bytes): $sKeyHex")
                 _ <- IO.println(
-                  s"Testnet address: ${ShelleyAddressExtra.mkShelleyAddress(vKey, Network.Testnet).toBech32.get}"
+                  s"Testnet address: ${vKey.shelleyAddress()(using CardanoNetwork.Preview).toBech32.get}"
                 )
 
                 _ <- IO.println("\nAdd these to your .env file:")
@@ -379,10 +390,7 @@ object Migrate extends IOApp:
             )
 
             // Get peer address
-            peerAddress = ShelleyAddressExtra.mkShelleyAddress(
-              env.verificationKey,
-              cardanoNetwork.network
-            )
+            peerAddress = env.verificationKey.shelleyAddress()(using cardanoNetwork)
             _ <- logger.info(s"Peer address: ${peerAddress.toBech32.get}")
 
             // Fetch all UTXOs from peer address

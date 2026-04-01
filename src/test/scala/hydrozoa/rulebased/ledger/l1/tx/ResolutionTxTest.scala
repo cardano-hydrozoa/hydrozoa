@@ -1,31 +1,26 @@
 package hydrozoa.rulebased.ledger.l1.tx
 
-import cats.data.NonEmptyList
-import com.bloxbean.cardano.client.util.HexUtil
+import cats.effect.unsafe.implicits.global
+import hydrozoa.config.head.HeadConfig
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.MultiNodeConfig
+import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.l1.tx.Tx.Validators.nonSigningValidators
-import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.cip67DisputeTokenPrefix
-import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
-import hydrozoa.rulebased.ledger.l1.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryValidator}
+import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
+import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
+import hydrozoa.rulebased.ledger.l1.state.VoteState
+import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.Voted
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.*
-import hydrozoa.rulebased.ledger.l1.utxo.TallyVoteUtxo
-import org.scalacheck.Gen
-import org.scalatest.funsuite.AnyFunSuite
-import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
-import scala.annotation.nowarn
-import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
+import hydrozoa.rulebased.ledger.l1.utxo.{VoteOutput, VoteUtxo}
+import org.scalacheck.{Arbitrary, Gen, Prop, Properties}
+import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger.ArbitraryInstances.given_Arbitrary_Hash
 import scalus.cardano.onchain.plutus.v1.ArbitraryInstances.genByteStringOfN
-import scalus.cardano.onchain.plutus.v3.TokenName
 import scalus.uplc.builtin.Builtins.blake2b_224
-import scalus.uplc.builtin.ByteString
-import scalus.uplc.builtin.Data.toData
-import test.*
 
 /** Generate a tallied vote datum with Vote status for resolution testing
   */
@@ -45,72 +40,48 @@ def genTalliedVoteDatum(
 def genResolutionTallyVoteUtxo(
     fallbackTxId: TransactionHash,
     outputIndex: Int,
-    headMp: PolicyId,
-    voteTokenName: TokenName,
-    voteTokenAmount: Int,
     voteDatum: VoteDatum,
     voter: AddrKeyHash,
-    network: Network
-): Gen[TallyVoteUtxo] = {
+)(using
+    config: HeadPeers.Section & HasTokenNames & CardanoNetwork.Section
+): Gen[VoteUtxo[Voted]] = {
     val txId = TransactionInput(fallbackTxId, outputIndex)
     val spp = ShelleyPaymentPart.Script(DisputeResolutionScript.compiledScriptHash)
-    val scriptAddr = ShelleyAddress(network, spp, ShelleyDelegationPart.Null)
+    val scriptAddr = ShelleyAddress(config.network, spp, ShelleyDelegationPart.Null)
 
-    val voteTokenAssetName = AssetName(voteTokenName)
-    val voteToken = Value.assets(Map(headMp -> Map(voteTokenAssetName -> voteTokenAmount)))
+    val voteTokenAssetName = config.headTokenNames.voteTokenName
+    val voteToken = Value.asset(
+      policyId = config.headMultisigScript.policyId,
+      assetName = voteTokenAssetName,
+      amount = config.nHeadPeers.convert + 1
+    )
 
-    val voteOutput = Babbage(
-      address = scriptAddr,
-      // Sufficient ADA for minAda + resolution fees
-      value = Value(Coin(10_000_000L)) + voteToken,
-      datumOption = Some(Inline(voteDatum.toData)),
-      scriptRef = None
+    val voteOutput: VoteOutput[Voted] = VoteOutput(
+      key = voteDatum.key,
+      link = voteDatum.link,
+      coin = Coin(10_000_000),
+      voteTokens = PositiveInt.unsafeApply(config.nHeadPeers + 1),
+      status = voteDatum.voteStatus.asInstanceOf[Voted]
     )
 
     Gen.const(
-      TallyVoteUtxo(
-        voter = voter,
-        Utxo(txId, voteOutput)
-      )
+      VoteUtxo(input = txId, voteOutput)
     )
 }
 
-// TODO: update
-def genResolutionTxRecipe(
-    estimatedFee: Coin = Coin(5_000_000L)
-): Gen[ResolutionTx.Recipe] =
+// Feel free to trim down the config argument
+def genResolutionTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[ResolutionTx.Build] =
+    given config: HeadConfig = multiNodeConfig.headConfig
+
     for {
-        // Common head parameters
-        // FIXME: This genHeadParams is old. We're now using `generateNodeConfig`
-        // but we still need a few fields from this.
-        (
-          _,
-          headTokensSuffix,
-          _,
-          _,
-          _,
-          versionMajor,
-          fallbackTxId
-        ) <-
-            genHeadParams
-
-        multiNodeConfig <- MultiNodeConfig.generate(TestPeersSpec.default)()
-        config = multiNodeConfig.headConfig
-
+        fallbackTxId <- Arbitrary.arbitrary[TransactionHash]
         // Generate a treasury UTXO with Unresolved datum
-        beaconTokenName = cip67BeaconTokenPrefix.concat(headTokensSuffix)
-        voteTokenName = cip67DisputeTokenPrefix.concat(headTokensSuffix)
 
         treasuryDatum <- genTreasuryUnresolvedDatum(
-          config,
-          voteTokenName,
-          versionMajor
+          BigInt(10)
         )
         treasuryUtxo <- genRuleBasedTreasuryUtxo(
-          config,
           fallbackTxId,
-          config.headMultisigScript.policyId,
-          beaconTokenName,
           treasuryDatum
         )
 
@@ -124,74 +95,55 @@ def genResolutionTxRecipe(
         talliedVoteUtxo <- genResolutionTallyVoteUtxo(
           fallbackTxId,
           1, // Output index 1
-          config.headMultisigScript.policyId,
-          voteTokenName,
-          config.nHeadPeers.toInt + 1, // number of vote tokens in the tallied utxo
           talliedVoteDatum,
-          AddrKeyHash(blake2b_224(config.headPeerVKeys.head)),
-          config.network
+          voter = AddrKeyHash(blake2b_224(config.headPeerVKeys.head))
         )
 
         collateralUtxo <- genCollateralUtxo(
-          config,
-          multiNodeConfig.addressOf(HeadPeerNumber.zero)
+          multiNodeConfig.addrKeyHashOf(HeadPeerNumber.zero)
         )
 
-    } yield ResolutionTx.Recipe(
+    } yield ResolutionTx.Build(
       talliedVoteUtxo = talliedVoteUtxo,
       treasuryUtxo = treasuryUtxo,
-      collateralUtxo = Utxo(collateralUtxo._1, collateralUtxo._2),
-      validityEndSlot = 200,
-      network = config.network,
-      protocolParams = config.cardanoProtocolParams,
-      evaluator = PlutusScriptEvaluator(config.cardanoInfo, EvaluatorMode.EvaluateAndComputeCost),
-      validators = nonSigningValidators
-    )
+      collateralUtxo = collateralUtxo,
+    )(using multiNodeConfig.nodeConfigs.head._2)
 
-@nowarn("msg=unused value")
-class ResolutionTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
+object ResolutionTxTest extends Properties("Resolution Tx Test") {
+    import MultiNodeConfig.*
 
-    implicit override val generatorDrivenConfig: PropertyCheckConfiguration =
-        PropertyCheckConfiguration(minSuccessful = 10)
+    val _ = property("Resolution Builder generator works") = runDefault(for {
+        config <- ask
+        _ <- {
+            given MultiNodeConfig = config
+            for {
+                builder <- pick(genResolutionTxBuilder)
+                tx <- failLeft(builder.result)
+                // Basic smoke test assertions
+                _ <- assertWith(tx.talliedVoteUtxo != null, "Tallied vote UTXO should not be null")
+                _ <- assertWith(
+                  tx.treasuryUnresolvedUtxoSpent != null,
+                  "Treasury unresolved UTXO spent should not be null"
+                )
+                _ <- assertWith(
+                  tx.treasuryResolvedUtxoProduced != null,
+                  "Treasury resolved UTXO produced should not be null"
+                )
+                _ <- assertWith(tx.tx != null, "Transaction should not be null")
 
-    test("Resolution recipe generator works") {
-        val exampleRecipe = genResolutionTxRecipe().sample.get
-        println(s"Generated ResolutionTx recipe: $exampleRecipe")
-    }
+                // Verify the spent treasury UTXO matches the recipe input
+                _ <- assertWith(
+                  tx.treasuryUnresolvedUtxoSpent == builder.treasuryUtxo,
+                  "Spent treasury UTXO should match recipe input"
+                )
 
-    // This doesn't fit the size, we needed to use reference script, ignoring for now
-    ignore("Resolution tx builds successfully") {
-        forAll(genResolutionTxRecipe()) { recipe =>
-            ResolutionTx.build(recipe) match {
-                case Left(e) =>
-                    fail(s"ResolutionTx build failed: $e")
-                case Right(tx) =>
-                    println(HexUtil.encodeHexString(tx.tx.toCbor))
-
-                    // Basic smoke test assertions
-                    assert(tx.talliedVoteUtxo != null, "Tallied vote UTXO should not be null")
-                    assert(
-                      tx.treasuryUnresolvedUtxoSpent != null,
-                      "Treasury unresolved UTXO spent should not be null"
-                    )
-                    assert(
-                      tx.treasuryResolvedUtxoProduced != null,
-                      "Treasury resolved UTXO produced should not be null"
-                    )
-                    assert(tx.tx != null, "Transaction should not be null")
-
-                    // Verify the spent treasury UTXO matches the recipe input
-                    assert(
-                      tx.treasuryUnresolvedUtxoSpent == recipe.treasuryUtxo,
-                      "Spent treasury UTXO should match recipe input"
-                    )
-
-                    // Verify treasury state transition from Unresolved to Resolved
-                    assert(
-                      tx.treasuryUnresolvedUtxoSpent.datum.isInstanceOf[Unresolved],
-                      "Input treasury should be Unresolved"
-                    )
-            }
+                // Verify treasury state transition from Unresolved to Resolved
+                _ <- assertWith(
+                  tx.treasuryUnresolvedUtxoSpent.treasuryOutput.datum.isInstanceOf[Unresolved],
+                  "Input treasury should be Unresolved"
+                )
+            } yield ()
         }
-    }
+
+    } yield true)
 }

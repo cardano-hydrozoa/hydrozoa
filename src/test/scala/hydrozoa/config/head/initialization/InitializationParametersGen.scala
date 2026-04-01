@@ -20,6 +20,7 @@ import hydrozoa.multisig.ledger.joint.given
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap}
 import hydrozoa.multisig.ledger.l1.token.CIP67
+import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.given
 import java.time.Instant
 import org.scalacheck.{Gen, Prop, Properties}
 import scala.collection.immutable.{SortedMap, TreeMap}
@@ -411,21 +412,21 @@ object InitializationParametersGenBottomUp {
 
             fallbackContingency <- generateFallbackContingency(cardanoNetwork)
 
+            nUtxos <- Gen.choose(1, 20)
             // Pubkey utxos (at least one) at some peer address(es), with at least 5 ada
             // We generate these up front so that we know they have the same multiassets
             utxos: Utxos <-
                 Generators.Other
                     .genSequencedValueDistribution(
-                      maxNumValues = 20,
+                      nValues = nUtxos,
                       minCoin = Coin.ada(5),
                       mapping = v =>
                           for {
                               peer <- Gen.oneOf(testPeers.headPeerNums.toList)
                               utxo <- genPubKeyUtxo(
-                                config = cardanoNetwork,
                                 address = testPeers.addressFor(peer),
                                 genValue = Gen.const(v)
-                              )
+                              )(using cardanoNetwork)
                           } yield utxo
                     )
                     .map(nel => Map.from(nel.toList.map(_.toTuple)))
@@ -455,10 +456,9 @@ object InitializationParametersGenBottomUp {
                 for {
                     peer <- Gen.oneOf(testPeers.headPeerNums.toList)
                     utxo <- genPubKeyUtxo(
-                      config = cardanoNetwork,
                       address = testPeers.addressFor(peer),
                       genValue = Gen.const(Value.zero)
-                    )
+                    )(using cardanoNetwork)
                 } yield utxo
 
             fundingUtxosList <-
@@ -468,8 +468,7 @@ object InitializationParametersGenBottomUp {
                     distributed <- genValueDistributionWithMinAdaUtxo(
                       value = grossFundingAmount,
                       utxoList = NonEmptyList.fromListUnsafe(utxos),
-                      params = cardanoNetwork.cardanoProtocolParams
-                    )
+                    )(using cardanoNetwork)
                 } yield distributed
 
             seedUtxo = fundingUtxosList.head

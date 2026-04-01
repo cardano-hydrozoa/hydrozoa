@@ -219,11 +219,11 @@ private object SettlementTxSeqOps {
 
                         fallbackTx <- time("FallbackTx.Build") {
                             FallbackTx
-                                .Build(config)(
+                                .Build(
                                   newFallbackValidityEnd,
                                   settlementTx.transaction.treasuryProduced,
                                   config.multisigRegimeUtxo
-                                )
+                                )(using config)
                                 .result
                                 .left
                                 .map(Build.Error.FallbackError(_))
@@ -258,11 +258,11 @@ private object SettlementTxSeqOps {
 
                         fallbackTx <- time("FallbackTx.Build") {
                             FallbackTx
-                                .Build(config)(
+                                .Build(
                                   newFallbackValidityEnd,
                                   settlementTxRes.transaction.treasuryProduced,
                                   config.multisigRegimeUtxo
-                                )
+                                )(using config)
                                 .result
                                 .left
                                 .map(Build.Error.FallbackError(_))

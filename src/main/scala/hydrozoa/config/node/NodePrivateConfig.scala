@@ -1,6 +1,7 @@
 package hydrozoa.config.node
 
-import hydrozoa.config.node.operation.liquidation.NodeOperationLiquidationConfig
+import hydrozoa.config.ScriptReferenceUtxos
+import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.{OwnHeadPeerPrivate, OwnHeadPeerPublic}
 import hydrozoa.lib.number.PositiveInt
@@ -9,8 +10,10 @@ import scala.concurrent.duration.FiniteDuration
 
 final case class NodePrivateConfig(
     override val ownHeadPeerPrivate: OwnHeadPeerPrivate,
-    override val nodeOperationLiquidationConfig: NodeOperationLiquidationConfig,
+    override val nodeOperationEvacuationConfig: NodeOperationEvacuationConfig,
     override val nodeOperationMultisigConfig: NodeOperationMultisigConfig,
+    // Adding this here because it's not something that the peers necessarily need to agree upon.
+    override val scriptReferenceUtxos: ScriptReferenceUtxos,
 ) extends NodePrivateConfig.Section {
     override transparent inline def nodePrivateConfig: NodePrivateConfig = this
 }
@@ -18,24 +21,36 @@ final case class NodePrivateConfig(
 object NodePrivateConfig {
     trait Section
         extends NodeOperationMultisigConfig.Section,
-          NodeOperationLiquidationConfig.Section,
-          OwnHeadPeerPrivate.Section {
+          NodeOperationEvacuationConfig.Section,
+          OwnHeadPeerPrivate.Section,
+          ScriptReferenceUtxos.Section {
         def nodePrivateConfig: NodePrivateConfig
 
-        override def ownHeadWallet: HeadPeerWallet =
+        override transparent inline def ownHeadWallet: HeadPeerWallet =
             ownHeadPeerPrivate.ownHeadWallet
-        override def ownHeadPeerPublic: OwnHeadPeerPublic =
+        override transparent inline def ownHeadPeerPublic: OwnHeadPeerPublic =
             ownHeadPeerPrivate.ownHeadPeerPublic
-        override def ownHeadPeerNum: HeadPeerNumber =
+        override transparent inline def ownHeadPeerNum: HeadPeerNumber =
             ownHeadPeerPrivate.ownHeadPeerNum
 
-        override def liquidationBotPollingPeriod: FiniteDuration =
-            nodeOperationLiquidationConfig.liquidationBotPollingPeriod
+        override transparent inline def evacuationBotPollingPeriod: FiniteDuration =
+            nodeOperationEvacuationConfig.evacuationBotPollingPeriod
 
-        override def cardanoLiaisonPollingPeriod: FiniteDuration =
+        override transparent inline def cardanoLiaisonPollingPeriod: FiniteDuration =
             nodeOperationMultisigConfig.cardanoLiaisonPollingPeriod
 
-        override def peerLiaisonMaxEventsPerBatch: PositiveInt =
+        override transparent inline def peerLiaisonMaxEventsPerBatch: PositiveInt =
             nodeOperationMultisigConfig.peerLiaisonMaxEventsPerBatch
+
+        override transparent inline def evacuationWallet: HeadPeerWallet =
+            nodeOperationEvacuationConfig.evacuationWallet
+
+        override transparent inline def rulebasedTreasuryScriptUtxo
+            : ScriptReferenceUtxos.TreasuryScriptUtxo =
+            scriptReferenceUtxos.rulebasedTreasuryScriptUtxo
+
+        override transparent inline def disputeResolutionScriptUtxo
+            : ScriptReferenceUtxos.DisputeScriptUtxo =
+            scriptReferenceUtxos.disputeResolutionScriptUtxo
     }
 }
