@@ -1,6 +1,5 @@
 package hydrozoa.multisig.ledger.l1.utxo
 
-import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
@@ -9,8 +8,6 @@ import hydrozoa.multisig.ledger.l1.utxo.MultisigRegimeOutput.Config
 import scalus.*
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.txbuilder.NativeScriptWitness
-import scalus.cardano.txbuilder.ScriptSource.NativeScriptAttached
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, ReferenceOutput, Send, Spend}
 
 // TODO: Add parsing functions. The Multisig regime utxo should
@@ -31,7 +28,7 @@ final case class MultisigRegimeUtxo(
 
     def spend(using config: Config): Spend = Spend(
       this.toUtxo,
-        config.headMultisigScript.witnessAttached
+      config.headMultisigScript.witnessAttached
     )
 }
 

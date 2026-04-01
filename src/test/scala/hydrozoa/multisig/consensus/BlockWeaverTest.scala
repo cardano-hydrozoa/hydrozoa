@@ -235,6 +235,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
         // Brief for block 1
         val brief = p.runIO(mkDummyBlockBrief1(config.headConfig))
         p.runIO(weaverActor ! brief)
+        p.runIO(system.waitForIdle())
 
         def aroundNow(other: Instant): Boolean = {
             val now = p.runIO(realTimeQuantizedInstant(slotConfig = config.slotConfig))
@@ -254,7 +255,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
 
         p.assert(
           jointLedgerMock.events.toSeq == requests,
-          "feed all residual/recovered mempool requests"
+          s"feed all residual/recovered mempool requests: expected ${requests.size}, got: ${jointLedgerMock.events.size}"
         )
 
         p.runIO(system.terminate())

@@ -125,7 +125,7 @@ object DeinitTxTest extends Properties("Deinit Tx Test") {
               given MultiNodeConfig = env
               for {
                   builder <- pick(genSimpleDeinitTxBuilder)
-                  deinitTx <- failLeft(builder.result(using  env.nodeConfigs.head._2))
+                  deinitTx <- failLeft(builder.result(using env.nodeConfigs.head._2))
                   _ <- assertWith(deinitTx.tx != null, "Transaction should not be null")
                   _ <- assertWith(
                     builder.treasuryUtxo == deinitTx.treasuryUtxoSpent,

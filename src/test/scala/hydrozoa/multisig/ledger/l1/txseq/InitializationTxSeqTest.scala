@@ -9,8 +9,7 @@ import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.l1.state.VoteDatum
 import io.bullet.borer.Cbor
 import org.scalacheck.Prop.propBoolean
-import org.scalacheck.rng.Seed
-import org.scalacheck.{Prop, Properties, Test}
+import org.scalacheck.{Prop, Properties}
 import scala.collection.immutable.SortedMap
 import scala.collection.mutable
 import scalus.cardano.address.*
