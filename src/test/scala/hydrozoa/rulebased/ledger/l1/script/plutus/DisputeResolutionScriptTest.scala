@@ -11,10 +11,9 @@ class DisputeResolutionScriptTest extends AnyFunSuite {
         assert(DisputeResolutionScript.toString != null)
     }
 
-    // TODO: restore once hash issue is fixed in Scalus
     test("Script compiles producing expected hash") {
         val goldenHash =
-            ScriptHash.fromHex("00000000000000000000000000000000000000000000000000000000")
+            ScriptHash.fromHex("af2157ca1fdaa92369aa586370b22a105419e3ef4e2a86a82de95f9f")
         if DisputeResolutionScript.compiledScriptHash != goldenHash then {
             DisputeResolutionScript.writePlutusFile("disputeResolution.plutus")
         }
@@ -26,9 +25,9 @@ class DisputeResolutionScriptTest extends AnyFunSuite {
         }
     }
 
-    ignore("Script compiles producing expected size") {
+    test("Script compiles producing expected size") {
         assertResult(
-          13694,
+          9322,
           "Script size should be stable. In case the script is modified please update the test."
         ) {
             DisputeResolutionScript.flatEncoded.length
