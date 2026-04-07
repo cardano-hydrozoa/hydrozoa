@@ -1,489 +1,837 @@
 package hydrozoa.multisig.consensus
-
-import cats.Monad
-import cats.effect.{IO, Ref}
+import cats.effect.{Fiber, IO}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
-import hydrozoa.UtxoIdL1
-import hydrozoa.lib.cardano.scalus.QuantizedTime.toEpochQuantizedInstant
-import hydrozoa.multisig.ledger.JointLedger
-import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
-import hydrozoa.multisig.protocol.types.Block.Number.first
-import hydrozoa.multisig.protocol.types.Block.blockEvents
-import hydrozoa.multisig.protocol.types.{Block, LedgerEvent, LedgerEventId, Peer}
-import scalus.cardano.ledger.SlotConfig
+import hydrozoa.config.head.multisig.timing.TxTiming
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
+import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedFiniteDuration
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
+import hydrozoa.lib.logging.Logging
+import hydrozoa.multisig.MultisigRegimeManager
+import hydrozoa.multisig.consensus.BlockWeaver.State.Leader.AwaitingConfirmation.StartedBlock.{NotStarted, Started}
+import hydrozoa.multisig.consensus.mempool.Mempool
+import hydrozoa.multisig.consensus.pollresults.PollResults
+import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockNumber, BlockType}
+import hydrozoa.multisig.ledger.event.RequestId
+import hydrozoa.multisig.ledger.joint.JointLedger
+import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
+import org.typelevel.log4cats.Logger
 
-/** Block weaver actor.
-  *   - When the node is leading a block, the weaver packages all known unprocessed (by the time
-  *     block is stared) and continue streaming all incoming events (until the block is completed)
-  *     into that block. These events include L1 deposits and L2 txs.
-  *   - When the node is a follower, before any block arrives, the weaver simply stores incoming
-  *     events in the mempool, keeping the order or arrival.
-  *   - When a block arrives, the weaver feeds all the block events to the joint ledger or switches
-  *     to Awaiting mode if some events are not here yet.
-  *
-  * There are several diagrams in the Hydrozoa docs that illustrate the work of the weaver.
-  */
-object BlockWeaver:
-
-    final case class Config(
-        /** Normally this is always the initial block, the only block known to the head upfront. In
-          * the case of recovery it may be any block that was fully finished and synced to the
-          * persistence.
-          */
-        lastKnownBlock: Block.Number,
-
-        /** Own peer number */
-        peerId: Peer.Number,
-
-        /** This is needed for [[isLeaderForBlock]] function, the total number of peers in the head.
-          *
-          * Invariant: >= 1
-          *
-          * TODO: likely we are going to move it to the head config
-          */
-        numberOfPeers: Int,
-
-        /** Round-robin peer's turn. see [[isLeaderForBlock]] function.
-          *
-          * Invariant: blockLeadTurn ∈ [1, numberOfPeers]
-          *
-          * TODO: likely we are going to move it to the head config
-          */
-        blockLeadTurn: Int,
-
-        /** Recovered mempool, i.e., all ledger events outstanding the indices of the last known
-          * block. Upon initialization is always an empty set by definition.
-          *
-          * TODO: shall we use just Seq[LedgerEvent here] not to expose Mempool?
-          */
-        recoveredMempool: Mempool,
-        jointLedger: JointLedger.Handle,
-        slotConfig: SlotConfig
-    )
-
-    // ===================================
-    // Weaver internal state
-    // ===================================
-
-    sealed trait State
-
-    final case class Idle(
-        mempool: Mempool
-    ) extends State
-
-    final case class Leader(
-        blockNumber: Block.Number
-    ) extends State {
-        def isFirstBlock: Boolean = blockNumber == first
-    }
-
-    final case class Awaiting(
-        block: Block.Next,
-        eventIdAwaited: LedgerEventId,
-        mempool: Mempool
-    ) extends State
-
-    object State:
-        def mkInitialState: State = Idle(Mempool.empty)
-
-    // ===================================
-    // Request + ActorRef + apply
-    // ===================================
-
-    /** Block confirmation.
-      *
-      * @param blockNumber
-      */
-    final case class BlockConfirmed(
-        blockNumber: Block.Number,
-        finalizationRequested: Boolean = false
-    )
-
-    /** So-called "poll results" from the Cardano Liaison, i.e., a set of all utxos ids found at the
-      * multisig head address.
-      *
-      * @param utxos
-      *   all utxos found
-      */
-    final case class PollResults(utxos: Set[UtxoIdL1])
-
-    object PollResults:
-        val empty: PollResults = PollResults(Set.empty)
-
-    type Handle = ActorRef[IO, Request]
-    type Request = LedgerEvent | Block.Next | BlockConfirmed | PollResults
-
-    def apply(config: Config): IO[BlockWeaver] = for {
-        stateRef <- Ref[IO].of(State.mkInitialState)
-        pollResultsRef <- Ref[IO].of(PollResults.empty)
-    } yield new BlockWeaver(config = config, stateRef = stateRef, pollResultsRef = pollResultsRef)
-
-    // ===================================
-    // Immutable mempool state
-    // ===================================
-
-    /** Simple immutable mempool implementation. Duplicate ledger events IDs are NOT allowe and a
-      * runtime exception is thrown since this should never happen. Other components, particularly
-      * the peer liaison is in charge or maintaining the integrity of the stream of messages.
-      *
-      * @param events
-      *   map to srtore events
-      * @param receivingOrder
-      *   vector to store order of event ids
-      */
-    case class Mempool(
-        events: Map[LedgerEventId, LedgerEvent] = Map.empty,
-        receivingOrder: Vector[LedgerEventId] = Vector.empty
-    )
-
-    object Mempool {
-        val empty: Mempool = Mempool()
-
-        def apply(events: Seq[LedgerEvent]): Mempool =
-            events.foldLeft(Mempool.empty)((mempool, event) => mempool.add(event))
-
-        // Extension methods
-        extension (mempool: Mempool)
-
-            // Add event - returns new state
-            /** Throws if a duplicate is detected.
-              * @param event
-              *   an event to add
-              * @return
-              *   an updated mempool
-              */
-            def add(
-                event: LedgerEvent
-            ): Mempool = {
-
-                val eventId = event.eventId
-
-                require(
-                  !mempool.events.contains(eventId),
-                  s"panic - duplicate event id in the pool: $eventId"
-                )
-
-                mempool.copy(
-                  events = mempool.events + (eventId -> event),
-                  receivingOrder = mempool.receivingOrder :+ eventId
-                )
-            }
-
-            // Remove event - returns new state
-            def remove(id: LedgerEventId): Mempool = {
-                require(
-                  mempool.events.contains(id),
-                  "panic - an attempt to remove a missing event from the mempool"
-                )
-                mempool.copy(
-                  events = mempool.events - id,
-                  receivingOrder = mempool.receivingOrder.filterNot(_ == id)
-                )
-            }
-
-            // Find by ID
-            def findById(id: LedgerEventId): Option[LedgerEvent] =
-                mempool.events.get(id)
-
-            // Iterate in insertion order
-            def inOrder: Iterator[LedgerEvent] =
-                mempool.receivingOrder.iterator.flatMap(mempool.events.get)
-
-            def isEmpty: Boolean = mempool.events.isEmpty
-    }
-end BlockWeaver
-
-class BlockWeaver(
-    private val config: BlockWeaver.Config,
-    private val stateRef: Ref[IO, BlockWeaver.State],
-    // Having this field separately rids of the need to weave it through state changes.
-    private val pollResultsRef: Ref[IO, BlockWeaver.PollResults]
-) extends Actor[IO, BlockWeaver.Request]:
+final case class BlockWeaver(
+    config: BlockWeaver.Config,
+    pendingConnections: MultisigRegimeManager.PendingConnections | BlockWeaver.ConnectionsPartial
+) extends Actor[IO, BlockWeaver.Request] {
     import BlockWeaver.*
 
-    override def preStart: IO[Unit] =
-        if config.lastKnownBlock.toInt == 0 then
-            require(
-              config.recoveredMempool.isEmpty,
-              "panic: recovered mempool should be empty before the first block"
-            )
-        switchToIdle(config.lastKnownBlock.increment, config.recoveredMempool)
+    private val logger = Logging.loggerIO("BlockWeaver")
 
-    override def receive: Receive[IO, Request] =
-        PartialFunction.fromFunction(receiveTotal)
-
-    private def receiveTotal(req: Request): IO[Unit] =
-        req match {
-            case msg: LedgerEvent   => handleLedgerEvent(msg)
-            case b: Block.Next      => handleNewBlock(b)
-            case bc: BlockConfirmed => handleBlockConfirmed(bc)
-            case pr: PollResults    => handlePollResults(pr)
-        }
-
-    // ===================================
-    // Mailbox message handlers
-    // ===================================
-
-    private def handleLedgerEvent(event: LedgerEvent): IO[Unit] = {
-        import FeedResult.*
-
-        for {
-            // _ <- IO.println("handleLedgerEvent")
-            state <- stateRef.get
-
-            _ <- state match {
-                case Idle(mempool) =>
-                    // Just add event to the mempool
-                    stateRef.set(Idle(mempool.add(event)))
-                case leader @ Leader(blockNumber) =>
-                    for {
-                        // Pass-through to the joint ledger
-                        _ <- config.jointLedger ! event
-                        // Complete the first block immediately
-                        pollResults <- pollResultsRef.get
-                        _ <- IO.whenA(leader.isFirstBlock) {
-                            // It's always CompleteBlockRegular since we haven't
-                            // seen any confirmations so far.
-                            (config.jointLedger ! CompleteBlockRegular(None, pollResults.utxos))
-                                >> switchToIdle(blockNumber.increment)
-                        }
-                    } yield ()
-
-                case awaiting @ Awaiting(block, eventIdAwaited, mempool) =>
-                    if event.eventId == eventIdAwaited
-                    then {
-                        // We got the event we waited for, try to finish the block
-                        for {
-                            result <- continueFeedBlock(block, event, mempool)
-                            _ <- result match {
-                                case Done(residualMempool) =>
-                                    for {
-                                        // We are done with the block
-                                        // _ <- IO.println("Done after awaiting for missing events")
-                                        _ <- completeReferenceBlock(block)
-                                        // Switch to Idle with the residual of mempool
-                                        _ <- switchToIdle(block.id.increment, residualMempool)
-                                    } yield ()
-                                case EventMissing(newEventIdAwaited, newMempool) =>
-                                    // Stay in Awaiting with new eventIdAwaited and new mempool
-                                    stateRef.set(
-                                      awaiting.copy(
-                                        eventIdAwaited = newEventIdAwaited,
-                                        mempool = newMempool
-                                      )
-                                    )
-                            }
-                        } yield ()
-                    } else {
-                        // This is not an event we are waiting for, just add it to the mempool and keep going
-                        stateRef.set(
-                          awaiting.copy(mempool = mempool.add(event))
-                        )
-                    }
-            }
-        } yield ()
-    }
-
-    private def handleNewBlock(block: Block.Next): IO[Unit] = {
-        import FeedResult.*
-        import WeaverError.*
-
-        for {
-            // _ <- IO.println("handleNewBlock")
-            state <- stateRef.get
-
-            _ <- state match {
-                case Idle(mempool) =>
-                    for {
-                        // This is sort of ephemeral Follower state
-                        _ <- config.jointLedger ! StartBlock(
-                          block.header.blockNum,
-                          block.header.timeCreation
-                        )
-                        result <- tryFeedBlock(block, mempool)
-                        _ <- result match {
-                            case Done(residualMempool) =>
-                                for {
-                                    // We are done with the block
-                                    // _ <- IO.println("Done")
-                                    _ <- completeReferenceBlock(block)
-                                    _ <- switchToIdle(block.id.increment, residualMempool)
-                                } yield ()
-                            case EventMissing(eventIdAwaited, residualMempool) =>
-                                for {
-                                    // _ <- IO.println(s"EventMissing: ${eventIdAwaited}")
-                                    _ <- stateRef.set(
-                                      Awaiting(block, eventIdAwaited, residualMempool)
-                                    )
-                                } yield ()
-                        }
-                    } yield ()
-                case _ => IO.raiseError(UnexpectedBlockAnnouncement)
-            }
-        } yield ()
-    }
-
-    private def completeReferenceBlock(block: Block.Next): IO[Unit] = for {
-        pollResults <- pollResultsRef.get
-        completeBlock <- block match {
-            case _: Block.Minor =>
-                IO.pure(CompleteBlockRegular(Some(block), pollResults.utxos))
-            case _: Block.Major =>
-                IO.pure(CompleteBlockRegular(Some(block), pollResults.utxos))
-            case _: Block.Final =>
-                IO.pure(CompleteBlockFinal(Some(block)))
-        }
-        _ <- config.jointLedger ! completeBlock
+    override def preStart: IO[Unit] = for {
+        _ <- context.self ! BlockWeaver.PreStart
+        _ <- context.become(receive)
     } yield ()
 
-    private def handleBlockConfirmed(blockConfirmed: BlockConfirmed): IO[Unit] = {
-        for {
-            // _ <- IO.println("handleBlockConfirmed")
-            state <- stateRef.get
-            _ <- state match {
-                case Leader(blockNumber) =>
-                    // Iff the block confirmed is the previous block
-                    IO.whenA(blockConfirmed.blockNumber.increment == blockNumber)
-                    for {
-                        pollResults <- pollResultsRef.get
-                        // Finish the current block immediately
-                        _ <- config.jointLedger !
-                            (if blockConfirmed.finalizationRequested
-                             then CompleteBlockFinal(None)
-                             else CompleteBlockRegular(None, pollResults.utxos))
-                        // Switch to Idle
-                        _ <- switchToIdle(blockNumber.increment)
-                    } yield ()
-                case _ =>
-                    // This may happen, but we should ignore it since that signal is useless for the weaver
-                    // when the node is node a leader.
-                    IO.pure(())
-            }
-        } yield ()
+    private def become(state: BlockWeaver.State.Reactive): IO[Unit] =
+        context.become(
+          PartialFunction.fromFunction(req =>
+              for {
+                  // Handle the request using the current state's handler
+                  mNewState <- state.react(config)(req)
+                  // If the handler returns a new state, become that state.
+                  // Otherwise, stop the actor.
+                  _ <- mNewState.fold(context.self.stop)(newState => become(newState))
+              } yield ()
+          )
+        )
+
+    override def receive: Receive[IO, BlockWeaver.Request] = PartialFunction.fromFunction {
+        case PreStart =>
+            for {
+                connections <- initializeConnections
+                startingState <- State.start(config, connections, logger)
+                _ <- become(startingState)
+            } yield ()
+        case x =>
+            val msg = s"Unexpected message received before PreStart: $x"
+            logger.error(msg) >> IO.raiseError(RuntimeException(msg))
     }
 
-    // ===================================
-    // Feeding, i.e. pushing all block events into the joint ledger being a follower
-    // ===================================
+    private def initializeConnections: IO[BlockWeaver.Connections] = pendingConnections match {
+        case pc: MultisigRegimeManager.PendingConnections =>
+            for {
+                c <- pc.get
+            } yield BlockWeaver.Connections(
+              blockWeaver = context.self,
+              jointLedger = c.jointLedger
+            )
+        case c: BlockWeaver.ConnectionsPartial => IO.pure(c(context.self))
+    }
+}
 
-    private enum FeedResult:
-        case Done(mempool: Mempool)
-        case EventMissing(eventId: LedgerEventId, mempool: Mempool)
+object BlockWeaver {
+    type Config = CardanoNetwork.Section & OwnHeadPeerPublic.Section &
+        NodeOperationMultisigConfig.Section
 
-    /** Make an attempt to feed the whole block to the joint ledger
-      * @param block
-      *   the next block to handle
-      * @param initialMempool
-      *   the current state of mempool
-      * @param startWith
-      * @return
-      *   [[FeedResult]]
-      */
-    private def tryFeedBlock(
-        block: Block.Next,
-        initialMempool: Mempool,
-        startWith: Option[LedgerEventId] = None
-    ): IO[FeedResult] = {
-        import FeedResult.*
+    final case class Connections private[BlockWeaver] (
+        blockWeaver: BlockWeaver.Handle,
+        jointLedger: JointLedger.Handle
+    )
 
-        for {
-            // _ <- IO.println(s"tryFeedBlock: start with: $startWith")
-            blockEvents <- IO.pure(block.blockEvents)
+    final case class ConnectionsPartial(jointLedger: JointLedger.Handle) {
+        def apply(blockWeaver: BlockWeaver.Handle): Connections = Connections(
+          blockWeaver = blockWeaver,
+          jointLedger = jointLedger
+        )
+    }
 
-            eventsToFeed = startWith match {
-                case Some(eventId) => blockEvents.splitAt(blockEvents.indexOf(eventId))._2
-                case None          => blockEvents
+    type Handle = ActorRef[IO, Request]
+
+    type Request = PreStart.type | UserRequestWithId | BlockBrief.Next | Block.MultiSigned |
+        PollResults | LocalFinalizationTrigger.Triggered.type | Wakeup
+
+    case object PreStart
+
+    case class Wakeup(blockNumber: BlockNumber)
+
+    sealed trait LocalFinalizationTrigger(val asBoolean: Boolean)
+
+    object LocalFinalizationTrigger {
+        case object Triggered extends LocalFinalizationTrigger(true)
+        case object NotTriggered extends LocalFinalizationTrigger(false)
+    }
+
+    sealed trait State {
+        def stateName: String
+
+        /** See [[State.Active]] and [[State.Reactive]]. */
+        type NextReactiveState <: State.Reactive
+
+        def connections: Connections
+        def logger: Logger[IO]
+        def pollResults: PollResults
+        def finalizationLocallyTriggered: LocalFinalizationTrigger
+
+        final def stop(): IO[None.type] =
+            logger.info("Stopping") >> IO.pure(None)
+
+        final def logStateTransition: IO[Unit] =
+            logger.info(s"Becoming $stateName.")
+
+        final def sendStartBlock(config: Config)(blockNumber: BlockNumber): IO[Unit] = for {
+            now <- realTimeQuantizedInstant(config.slotConfig)
+            blockCreationStartTime = BlockCreationStartTime(now)
+            startBlockMsg = StartBlock(blockNumber, blockCreationStartTime)
+            _ <- connections.jointLedger ! startBlockMsg
+        } yield ()
+
+        final def sendCompleteRegularBlockAsLeader(config: Config): IO[Unit] = for {
+            now <- realTimeQuantizedInstant(config.slotConfig)
+            blockCreationEndTime = BlockCreationEndTime(now)
+            completeBlockMsg = CompleteBlockRegular(
+              None,
+              pollResults,
+              finalizationLocallyTriggered,
+              blockCreationEndTime
+            )
+            _ <- connections.jointLedger ! completeBlockMsg
+        } yield ()
+
+        final def sendCompleteFinalBlockAsLeader(config: Config): IO[Unit] = for {
+            now <- realTimeQuantizedInstant(config.slotConfig)
+            blockCreationEndTime = BlockCreationEndTime(now)
+            completeBlockMsg = CompleteBlockFinal(
+              None,
+              blockCreationEndTime
+            )
+            _ <- connections.jointLedger ! completeBlockMsg
+        } yield ()
+
+        final def sendCompleteBlockAsFollower(config: Config)(
+            blockBrief: BlockBrief.Next
+        ): IO[Unit] = for {
+            now <- realTimeQuantizedInstant(config.slotConfig)
+            blockCreationEndTime = BlockCreationEndTime(now)
+            completeBlockMsg = blockBrief match {
+                case x: BlockBrief.Intermediate =>
+                    CompleteBlockRegular(
+                      Some(x),
+                      pollResults,
+                      finalizationLocallyTriggered,
+                      blockCreationEndTime
+                    )
+                case x: BlockBrief.Final =>
+                    CompleteBlockFinal(Some(x), blockCreationEndTime)
             }
+            _ <- connections.jointLedger ! completeBlockMsg
+        } yield ()
 
-            // _ <- IO.println(s"events to feed: ${eventsToFeed}")
-            // _ <- IO.println(s"initial mempool: ${initialMempool}")
+    }
 
-            // Tries to feed block events, until it's over or an event is missing.
-            mbFirstEventIdMissingAndResidualMempool <- Monad[IO].tailRecM(
-              (eventsToFeed, initialMempool)
-            ) {
-                case (Nil, mempool) => IO.pure(Right(None, mempool))
-                // TODO maybe add tryRemove later on
-                case (e :: es, mempool) =>
-                    mempool.findById(e) match {
-                        case Some(event) =>
-                            (config.jointLedger ! event) >> IO.pure(Left(es, mempool.remove(e)))
-                        case None =>
-                            // IO.println(s"new missing event: $e") >>
-                            IO.pure(Right(Some(e), mempool))
+    object State {
+        def start(
+            config: Config,
+            connections: Connections,
+            logger: Logger[IO]
+        ): IO[Follower.AwaitingBlockBrief | Leader.AwaitingConfirmation] =
+            for {
+                state: Some[Follower.AwaitingBlockBrief | Leader.AwaitingConfirmation] <-
+                    DecidingRole(
+                      connections = connections,
+                      logger = logger,
+                      pollResults = PollResults.empty,
+                      finalizationLocallyTriggered = LocalFinalizationTrigger.NotTriggered,
+                      mempool = Mempool.empty,
+                      nextBlockNumber = BlockNumber.zero.increment
+                    ).act(config)
+            } yield state.get
+
+        /** If the next state is reactive, then the transition into it is pure because no immediate
+          * actions need to be taken.
+          */
+        private def pure[S <: State.Reactive](state: S): IO[Some[S]] =
+            state.logStateTransition >> IO.pure(Some(state))
+
+        /** A state with a mempool can store requests in its mempool. */
+        sealed trait WithMempool extends State {
+            def mempool: Mempool
+
+            def storeRequest(request: UserRequestWithId): IO[Mempool] = for {
+                _ <- logger.trace(s"Adding request ID ${request.requestId} to mempool.")
+                newMempool <- mempool.addRequest(request) match {
+                    case Some(newMempool) => IO.pure(newMempool)
+                    case None =>
+                        val msg =
+                            s"Request ID ${request.requestId} is already in the mempool."
+                        logger.error(msg) >>
+                            IO.raiseError(RuntimeException(msg))
+                }
+            } yield newMempool
+        }
+
+        /** An active state can immediately transition into another state, without waiting for a new
+          * message.
+          *
+          * An active state cannot be reactive, and it can only transition into a reactive state (or
+          * terminate).
+          *
+          * An active state can transition to a reactive state via a chain of active states, but the
+          * [[Active.act]] function must statically prove that the chain of [[Active.act]] calls
+          * terminates in a reactive state.
+          */
+        sealed trait Active extends State {
+            def act(config: Config): IO[Option[NextReactiveState]]
+        }
+
+        /** A reactive state can receive a message, reacting by transitioning to another state.
+          *
+          * A reactive state cannot be active, and it can only transition into a reactive state (or
+          * terminate).
+          *
+          * A reactive state can transition to a reactive state via a chain of active states, but *
+          * the [[Reactive.react]] function must statically prove that the chain of [[Active.act]]
+          * calls terminates in a reactive * state.
+          */
+        sealed trait Reactive extends State {
+            type Unexpected <: Request
+
+            def react(config: Config)(req: Request): IO[Option[NextReactiveState]]
+
+            final def panicUnexpectedRequest(
+                state: State.Reactive,
+                unexpected: Unexpected
+            ): IO[None.type] =
+                val msg =
+                    s"Unexpectedly received in ${state.stateName.toString} state: ${unexpected.toString}"
+                logger.error(msg) >>
+                    IO.raiseError(RuntimeException(msg))
+        }
+
+        final case class DecidingRole private[State] (
+            override val connections: Connections,
+            override val logger: Logger[IO],
+            override val pollResults: PollResults,
+            override val finalizationLocallyTriggered: LocalFinalizationTrigger,
+            override val mempool: Mempool,
+            nextBlockNumber: BlockNumber,
+        ) extends Active,
+              WithMempool {
+            override transparent inline def stateName: String = "DecidingRole"
+
+            export DecidingRole.NextReactiveState
+
+            override def act(config: Config): IO[Some[NextReactiveState]] = for {
+                _ <- logStateTransition
+                newState <-
+                    if config.ownHeadPeerId.isLeader(nextBlockNumber)
+                    then {
+                        Leader.ProcessingReadyRequests(this, mempool, nextBlockNumber).act(config)
+                    } else {
+                        pure(Follower.AwaitingBlockBrief(this, mempool, nextBlockNumber))
+                    }
+            } yield newState
+
+        }
+
+        object DecidingRole {
+            type NextReactiveState = Follower.AwaitingBlockBrief |
+                Leader.ProcessingReadyRequests.NextReactiveState
+
+            private[State] def apply(
+                stateToTransitionFrom: State,
+                mempool: Mempool,
+                nextBlockNumber: BlockNumber
+            ): DecidingRole =
+                import stateToTransitionFrom.*
+                DecidingRole(
+                  connections,
+                  logger,
+                  pollResults,
+                  finalizationLocallyTriggered,
+                  mempool,
+                  nextBlockNumber
+                )
+        }
+
+        object Follower {
+            final case class AwaitingBlockBrief private (
+                override val connections: Connections,
+                override val logger: Logger[IO],
+                override val pollResults: PollResults,
+                override val finalizationLocallyTriggered: LocalFinalizationTrigger,
+                override val mempool: Mempool,
+                nextBlockNumber: BlockNumber
+            ) extends Reactive,
+                  WithMempool {
+                override transparent inline def stateName: String = "Follower.AwaitingBlockBrief"
+
+                export Follower.AwaitingBlockBrief.{NextReactiveState, Unexpected}
+
+                override def react(
+                    config: Config
+                )(req: Request): IO[Option[NextReactiveState]] =
+                    req match {
+                        case ur: UserRequestWithId =>
+                            for {
+                                newMempool <- storeRequest(ur)
+                                newState <- pure(copy(mempool = newMempool))
+                            } yield newState
+
+                        case bb: BlockBrief.Next =>
+                            logger.info(s"New block brief ${bb.blockNum}.") >>
+                                Follower.ProcessingReadyRequests(this, mempool, bb).act(config)
+
+                        case pr: PollResults =>
+                            logger.trace("New poll results.") >>
+                                pure(copy(pollResults = pr))
+
+                        case ft: LocalFinalizationTrigger.Triggered.type =>
+                            logger.info("Finalization was locally triggered.") >>
+                                pure(copy(finalizationLocallyTriggered = ft))
+
+                        case w: Wakeup =>
+                            logger.trace(
+                              s"Unexpected wakeup for block ${w.blockNumber}, ignoring."
+                            ) >>
+                                pure(this)
+
+                        case unexpected: Unexpected =>
+                            panicUnexpectedRequest(this, unexpected)
                     }
             }
 
-            result <- mbFirstEventIdMissingAndResidualMempool match {
-                case (None, residualMempool) =>
-                    IO.pure(Done(residualMempool))
-                case (Some(eventId), residualMempool) =>
-                    IO.pure(EventMissing(eventId, residualMempool))
+            object AwaitingBlockBrief {
+                type NextReactiveState = Follower.AwaitingBlockBrief |
+                    Follower.ProcessingReadyRequests.NextReactiveState
+                type Unexpected = PreStart.type | Block.MultiSigned
+
+                private[State] def apply(
+                    state: State,
+                    mempool: Mempool,
+                    nextBlockNumber: BlockNumber
+                ): Follower.AwaitingBlockBrief =
+                    import state.*
+                    Follower.AwaitingBlockBrief(
+                      connections,
+                      logger,
+                      pollResults,
+                      finalizationLocallyTriggered,
+                      mempool,
+                      nextBlockNumber
+                    )
             }
-        } yield result
-    }
 
-    private def continueFeedBlock(
-        block: Block.Next,
-        event: LedgerEvent,
-        mempool: Mempool
-    ): IO[FeedResult] =
-        tryFeedBlock(block, mempool.add(event), Some(event.eventId))
+            final case class ProcessingReadyRequests private (
+                override val connections: Connections,
+                override val logger: Logger[IO],
+                override val pollResults: PollResults,
+                override val finalizationLocallyTriggered: LocalFinalizationTrigger,
+                override val mempool: Mempool,
+                reproducingBlockBrief: BlockBrief.Next,
+            ) extends Active,
+                  WithMempool {
+                override transparent inline def stateName: String =
+                    "Follower.ProcessingReadyRequests"
 
-    // ===================================
-    // Switch to Idle
-    // ===================================
+                export Follower.ProcessingReadyRequests.NextReactiveState
 
-    /** Switch to the Idle state. If node is a leader of the next block, starts a new block, send
-      * all events existing in the mempool to the joint ledger and immediately switches to the
-      * Leader state. If not, stays in Idle until we see the next block announcement.
-      *
-      * @param nextBlockNum
-      *   the next block number
-      * @param mempool
-      *   if we are switching from follower/awaiting there may be the rest of mempool
-      * @return
-      */
-    private def switchToIdle(
-        nextBlockNum: Block.Number,
-        mempool: Mempool = Mempool.empty
-    ): IO[Unit] =
-        if isLeaderForBlock(nextBlockNum)
-        then
-            for {
-                // _ <- IO.println(s"becoming leader for block: $nextBlockNum")
-                now <- IO.realTime.map(_.toEpochQuantizedInstant(config.slotConfig))
-                _ <- config.jointLedger ! StartBlock(nextBlockNum, now)
-                _ <- IO.traverse_(mempool.receivingOrder)(event =>
-                    config.jointLedger ! mempool.findById(event).get
-                )
-                _ <- stateRef.set(Leader(nextBlockNum))
-            } yield ()
-        else stateRef.set(Idle(mempool))
+                def act(config: Config): IO[Some[NextReactiveState]] = for {
+                    _ <- logStateTransition
+                    extractionResult <- extractAndSendRequestsFromMempool
+                    newState <- extractionResult match {
+                        case Mempool.Extraction.Complete(extractedRequests, survivingMempool) =>
+                            val nextBlockNumber = reproducingBlockBrief.blockNum.increment
+                            for {
+                                newState <- DecidingRole(this, survivingMempool, nextBlockNumber)
+                                    .act(
+                                      config
+                                    )
+                            } yield newState
+                        case result: Mempool.Extraction.Incomplete =>
+                            pure(Follower.AwaitingRequest(this, reproducingBlockBrief, result))
+                    }
+                } yield newState
 
-    /** Determines whether the weaver is a leader for a block n:
-      *   - The leader for block n = 1 is those that has blockLeadTurn = 1
-      *   - ...
-      *   - The leader for block n = numberOfPeers is that with blockLeadTurn = numberOfPeers
-      *   - .. and so on and so forth
-      *
-      * @param blockNumber
-      *   the number of the block, n ∈ [1 .. inf). Technically it's defined for block number 0,
-      *   pointing to the last peer, but we don't need it in practice.
-      */
-    private def isLeaderForBlock(blockNumber: Block.Number): Boolean =
-        blockNumber % config.numberOfPeers == config.blockLeadTurn % config.numberOfPeers
+                private def extractAndSendRequestsFromMempool: IO[Mempool.Extraction.Result] = {
+                    val requestIds: List[RequestId] = reproducingBlockBrief.events.map(_._1)
+                    val newExtractionResult = mempool.extractRequestsWhile(requestIds)
+                    import newExtractionResult.*
+                    for {
+                        _ <- logger.trace(
+                          "Extracted requests from mempool. Sending them to joint ledger: " +
+                              s"${extractedRequests.map(_.requestId.asI64)}"
+                        )
+                        _ <- extractedRequests.traverse_(connections.jointLedger ! _)
+                    } yield mempool.extractRequestsWhile(requestIds)
+                }
+            }
 
-    private def handlePollResults(pollResults: PollResults): IO[Unit] =
-        pollResultsRef.set(pollResults)
+            object ProcessingReadyRequests {
+                type NextReactiveState = DecidingRole.NextReactiveState | Follower.AwaitingRequest
 
-    private enum WeaverError extends Throwable:
-        case UnexpectedBlockAnnouncement
+                private[State] def apply(
+                    state: State,
+                    mempool: Mempool,
+                    reproducingBlockBrief: BlockBrief.Next
+                ): Follower.ProcessingReadyRequests = {
+                    import state.*
+                    Follower.ProcessingReadyRequests(
+                      connections,
+                      logger,
+                      pollResults,
+                      finalizationLocallyTriggered,
+                      mempool,
+                      reproducingBlockBrief
+                    )
+                }
+            }
 
-        def msg: String = this match {
-            case UnexpectedBlockAnnouncement => "Weaver got an unexpected new block announcement"
+            final case class AwaitingRequest private (
+                override val connections: Connections,
+                override val logger: Logger[IO],
+                override val pollResults: PollResults,
+                override val finalizationLocallyTriggered: LocalFinalizationTrigger,
+                override val mempool: Mempool,
+                reproducingBlockBrief: BlockBrief.Next,
+                incompleteExtraction: Mempool.Extraction.Incomplete
+            ) extends Reactive,
+                  WithMempool {
+                override transparent inline def stateName: String = "Follower.AwaitingRequest"
+
+                export Follower.AwaitingRequest.{NextReactiveState, Unexpected}
+
+                override def react(config: Config)(req: Request): IO[Option[NextReactiveState]] =
+                    req match {
+                        case ur: UserRequestWithId =>
+                            if ur.requestId == incompleteExtraction.awaitingRequestId then
+                                for {
+                                    newExtractionResult <- extractAndSendRequestsFromMempool
+                                    newState <- newExtractionResult match {
+                                        case Mempool.Extraction
+                                                .Complete(extractedRequests, survivingMempool) =>
+                                            val nextBlockNumber =
+                                                reproducingBlockBrief.blockNum.increment
+                                            DecidingRole(this, survivingMempool, nextBlockNumber)
+                                                .act(
+                                                  config
+                                                )
+                                        case result: Mempool.Extraction.Incomplete =>
+                                            pure(
+                                              Follower.AwaitingRequest(
+                                                this,
+                                                reproducingBlockBrief,
+                                                result
+                                              )
+                                            )
+                                    }
+                                } yield newState
+                            else
+                                for {
+                                    newMempool <- storeRequest(ur)
+                                    newState <- pure(copy(mempool = newMempool))
+                                } yield newState
+
+                        case pr: PollResults =>
+                            logger.trace("New poll results.") >>
+                                pure(copy(pollResults = pr))
+
+                        case ft: LocalFinalizationTrigger.Triggered.type =>
+                            logger.info("Finalization was locally triggered.") >>
+                                pure(copy(finalizationLocallyTriggered = ft))
+
+                        case w: Wakeup =>
+                            logger.trace(
+                              s"Unexpected wakeup for block ${w.blockNumber}, ignoring."
+                            ) >>
+                                pure(this)
+
+                        case unexpected: Unexpected =>
+                            panicUnexpectedRequest(this, unexpected)
+                    }
+
+                private def extractAndSendRequestsFromMempool: IO[Mempool.Extraction.Result] = {
+                    val allRequestIds: List[RequestId] = reproducingBlockBrief.events.map(_._1)
+                    val requestIds =
+                        allRequestIds.dropWhile(_ != incompleteExtraction.awaitingRequestId)
+                    val newExtractionResult = mempool.extractRequestsWhile(requestIds)
+                    import newExtractionResult.*
+                    for {
+                        _ <- logger.trace(
+                          "Extracted more requests from mempool: " +
+                              s"${newExtractionResult.extractedRequests.map(_.requestId.asI64)}"
+                        )
+                        _ <- extractedRequests.traverse_(connections.jointLedger ! _)
+                    } yield newExtractionResult
+                }
+            }
+
+            private object AwaitingRequest {
+                type NextReactiveState = DecidingRole.NextReactiveState | Follower.AwaitingRequest
+                type Unexpected = PreStart.type | BlockBrief.Next | Block.MultiSigned
+
+                private[State] def apply(
+                    state: State,
+                    reproducingBlockBrief: BlockBrief.Next,
+                    incompleteExtraction: Mempool.Extraction.Incomplete
+                ): Follower.AwaitingRequest =
+                    import state.*
+                    Follower.AwaitingRequest(
+                      connections,
+                      logger,
+                      pollResults,
+                      finalizationLocallyTriggered,
+                      incompleteExtraction.survivingMempool,
+                      reproducingBlockBrief,
+                      incompleteExtraction
+                    )
+            }
         }
 
-end BlockWeaver
+        object Leader {
+            final case class ProcessingReadyRequests private (
+                override val connections: Connections,
+                override val logger: Logger[IO],
+                override val pollResults: PollResults,
+                override val finalizationLocallyTriggered: LocalFinalizationTrigger,
+                override val mempool: Mempool,
+                leadingBlockNum: BlockNumber
+            ) extends Active,
+                  WithMempool {
+                override transparent inline def stateName: String = "Leader.ProcessingReadyRequests"
+
+                export Leader.ProcessingReadyRequests.NextReactiveState
+
+                override def act(config: Config): IO[Some[NextReactiveState]] = for {
+                    _ <- logStateTransition
+                    now <- realTimeQuantizedInstant(config.slotConfig)
+                    requests <- extractRequestsInOrder
+                    isBlockStarted <-
+                        if requests.isEmpty
+                        then IO.pure(NotStarted)
+                        else
+                            for {
+                                _ <- sendStartBlock(config)(leadingBlockNum)
+                                _ <- requests.traverse_(connections.jointLedger ! _)
+                            } yield Started
+                    newState <- pure(
+                      Leader.AwaitingConfirmation(
+                        this,
+                        leadingBlockNum,
+                        isBlockStarted
+                      )
+                    )
+                } yield newState
+
+                private def extractRequestsInOrder: IO[List[UserRequestWithId]] = {
+                    val requests = mempool.extractRequestsInOrder
+                    for {
+                        _ <- logger.trace(
+                          "Extracting remaining requests from mempool in order of arrival. " +
+                              s"First twenty request IDs: ${requests.iterator.take(20).map(_.requestId.asI64)}"
+                        )
+
+                    } yield requests
+                }
+            }
+
+            object ProcessingReadyRequests {
+                type NextReactiveState = Leader.AwaitingConfirmation
+
+                private[State] def apply(
+                    state: State,
+                    mempool: Mempool,
+                    leadingBlockNum: BlockNumber,
+                ): Leader.ProcessingReadyRequests = {
+                    import state.*
+                    Leader.ProcessingReadyRequests(
+                      connections,
+                      logger,
+                      pollResults,
+                      finalizationLocallyTriggered,
+                      mempool,
+                      leadingBlockNum
+                    )
+                }
+            }
+
+            final case class AwaitingConfirmation private (
+                override val connections: Connections,
+                override val logger: Logger[IO],
+                override val pollResults: PollResults,
+                override val finalizationLocallyTriggered: LocalFinalizationTrigger,
+                leadingBlockNumber: BlockNumber,
+                isBlockStarted: Leader.AwaitingConfirmation.StartedBlock
+            ) extends Reactive {
+                override transparent inline def stateName: String = "Leader.AwaitingConfirmation"
+
+                export Leader.AwaitingConfirmation.{NextReactiveState, Unexpected}
+
+                override def react(config: Config)(req: Request): IO[Option[NextReactiveState]] = {
+                    req match {
+                        case ur: UserRequestWithId =>
+                            // First block is implicitly confirmed, so we exit immediately back to
+                            // the DecidingRole state.
+                            def completeFirstBlock = for {
+                                _ <- logger.trace(
+                                  s"Completing first block immediately with request ${ur.requestId.asI64}"
+                                ) >> sendCompleteRegularBlockAsLeader(config)
+                                newState <- DecidingRole(
+                                  connections,
+                                  logger,
+                                  pollResults,
+                                  finalizationLocallyTriggered,
+                                  mempool = Mempool.empty,
+                                  nextBlockNumber = leadingBlockNumber.increment
+                                ).act(config)
+                            } yield newState
+
+                            for {
+                                _ <- IO.whenA(isBlockStarted == NotStarted)(
+                                  sendStartBlock(config)(leadingBlockNumber)
+                                )
+
+                                _ <- logger.trace(
+                                  s"Sending to joint ledger: request ${ur.requestId.asI64}"
+                                )
+                                _ <- connections.jointLedger ! ur
+                                res <-
+                                    if leadingBlockNumber == BlockNumber.zero.increment
+                                    then completeFirstBlock
+                                    else pure(this.copy(isBlockStarted = Started))
+                            } yield res
+
+                        case bc: Block.MultiSigned.NonFinal =>
+                            def completeBlockRegular =
+                                sendCompleteRegularBlockAsLeader(config) >>
+                                    DecidingRole(
+                                      connections,
+                                      logger,
+                                      pollResults,
+                                      finalizationLocallyTriggered = finalizationLocallyTriggered,
+                                      mempool = Mempool.empty,
+                                      nextBlockNumber = leadingBlockNumber.increment
+                                    ).act(config)
+
+                            def completeBlockFinal =
+                                sendCompleteFinalBlockAsLeader(config) >> IO.pure(None)
+
+                            def completeNextBlock =
+                                if bc.finalizationRequested || finalizationLocallyTriggered.asBoolean
+                                then completeBlockFinal
+                                else completeBlockRegular
+
+                            // Iff the block confirmed is the previous block
+                            if bc.blockNum.increment == leadingBlockNumber
+                            then
+                                if isBlockStarted == Started
+                                then completeNextBlock
+                                else
+                                    for {
+                                        now <- realTimeQuantizedInstant(config.slotConfig)
+                                        sleepDuration = bc.headerNonFinal.majorBlockWakeupTime - now
+                                        fiber <- sleepSendWakeup(sleepDuration).start
+                                        ret <- pure(
+                                          Leader.AwaitingRequest(
+                                            this,
+                                            previousBlockConfirmed = bc,
+                                            fiber
+                                          )
+                                        )
+                                    } yield ret
+                            else {
+                                val msg = "Received wrong block number for confirmed block. We are producing" +
+                                    s" $leadingBlockNumber, but the confirmed block that we received is ${bc.blockNum}"
+                                logger.error(msg) >> IO.raiseError(RuntimeException(msg))
+                            }
+
+                        case pr: PollResults =>
+                            logger.trace("New poll results.") >>
+                                pure(copy(pollResults = pr))
+
+                        case ft: LocalFinalizationTrigger.Triggered.type =>
+                            logger.info("Finalization was locally triggered.") >>
+                                pure(copy(finalizationLocallyTriggered = ft))
+
+                        case w: Wakeup =>
+                            logger.trace(
+                              s"Unexpected wakeup for block ${w.blockNumber}, ignoring."
+                            ) >>
+                                pure(this)
+
+                        case unexpected: Unexpected =>
+                            panicUnexpectedRequest(this, unexpected)
+                    }
+                }
+
+                private def sleepSendWakeup(sleepDuration: QuantizedFiniteDuration): IO[Unit] = {
+                    IO.sleep(sleepDuration.finiteDuration) >>
+                        (connections.blockWeaver ! Wakeup(this.leadingBlockNumber))
+                }
+            }
+
+            object AwaitingConfirmation {
+                type NextReactiveState = DecidingRole.NextReactiveState |
+                    Leader.AwaitingConfirmation | Leader.AwaitingRequest
+
+                type Unexpected = PreStart.type | BlockBrief.Next |
+                    (Block.MultiSigned & BlockType.Final)
+
+                private[State] def apply(
+                    state: State,
+                    blockNumber: BlockNumber,
+                    isBlockStarted: StartedBlock
+                ): Leader.AwaitingConfirmation =
+                    import state.*
+                    Leader.AwaitingConfirmation(
+                      connections,
+                      logger,
+                      pollResults,
+                      finalizationLocallyTriggered,
+                      blockNumber,
+                      isBlockStarted
+                    )
+
+                enum StartedBlock:
+                    case Started, NotStarted
+            }
+
+            final case class AwaitingRequest private (
+                override val connections: Connections,
+                override val logger: Logger[IO],
+                override val pollResults: PollResults,
+                override val finalizationLocallyTriggered: LocalFinalizationTrigger,
+                previousBlockConfirmed: Block.MultiSigned.NonFinal,
+                wakeupFiber: Fiber[IO, Throwable, Unit]
+            ) extends Reactive {
+                override transparent inline def stateName: String = "Leader.AwaitingRequest"
+
+                export Leader.AwaitingRequest.{NextReactiveState, Unexpected}
+
+                private val currentBlockNumber = previousBlockConfirmed.blockNum.increment
+
+                override def react(config: Config)(req: Request): IO[Option[NextReactiveState]] = {
+                    def completeBlockRegular = sendCompleteRegularBlockAsLeader(config) >>
+                        DecidingRole(
+                          this,
+                          mempool = Mempool.empty,
+                          nextBlockNumber = currentBlockNumber.increment
+                        ).act(config)
+
+                    def completeBlock = {
+                        if finalizationLocallyTriggered.asBoolean || previousBlockConfirmed.finalizationRequested
+                        then sendCompleteFinalBlockAsLeader(config) >> stop()
+                        else completeBlockRegular
+                    }
+
+                    req match {
+                        case ur: UserRequestWithId =>
+                            for {
+                                _ <- sendStartBlock(config)(currentBlockNumber)
+                                _ <- connections.jointLedger ! ur
+                                newState <- completeBlock
+                            } yield newState
+
+                        case w: Wakeup =>
+                            def forceMajorBlock =
+                                for {
+                                    _ <- logger.info(
+                                      "Wakeup for the current block is received, force major block"
+                                    )
+                                    _ <- sendStartBlock(config)(currentBlockNumber)
+                                    newState <- completeBlock
+                                } yield newState
+
+                            if w.blockNumber == currentBlockNumber
+                            then forceMajorBlock
+                            else {
+                                (if w.blockNumber > currentBlockNumber
+                                 then
+                                     logger.warn(
+                                       s"Ignoring wakeup for a future block ${w.blockNumber}, current block: ${currentBlockNumber}"
+                                     )
+                                 else
+                                     logger.info(
+                                       s"Ignoring wakeup for preceding block ${w.blockNumber}, current block: ${currentBlockNumber}"
+                                     )
+                                ) >> pure(this)
+                            }
+
+                        case pr: PollResults =>
+                            logger.trace("New poll results.") >>
+                                pure(copy(pollResults = pr))
+
+                        case ft: LocalFinalizationTrigger.Triggered.type =>
+                            logger.info("Finalization was locally triggered.") >>
+                                pure(copy(finalizationLocallyTriggered = ft))
+
+                        case unexpected: Unexpected =>
+                            panicUnexpectedRequest(this, unexpected)
+                    }
+                }
+            }
+
+            private object AwaitingRequest {
+                type NextReactiveState = DecidingRole.NextReactiveState | Leader.AwaitingRequest
+
+                type Unexpected = PreStart.type | BlockBrief.Next | Block.MultiSigned
+
+                private[State] def apply(
+                    state: State,
+                    previousBlockConfirmed: Block.MultiSigned.NonFinal,
+                    wakeupFiber: Fiber[IO, Throwable, Unit]
+                ): Leader.AwaitingRequest =
+                    import state.*
+                    Leader.AwaitingRequest(
+                      connections,
+                      logger,
+                      pollResults,
+                      finalizationLocallyTriggered,
+                      previousBlockConfirmed,
+                      wakeupFiber
+                    )
+            }
+        }
+    }
+}

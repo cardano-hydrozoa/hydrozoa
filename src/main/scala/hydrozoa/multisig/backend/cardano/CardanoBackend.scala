@@ -1,29 +1,77 @@
 package hydrozoa.multisig.backend.cardano
 
-import cats.effect.IO
-import com.suprnation.actor.Actor.{Actor, Receive}
-import hydrozoa.lib.actor.SyncRequest
-import hydrozoa.multisig.protocol.CardanoBackendProtocol.CardanoBackend.*
+import scalus.cardano.address.ShelleyAddress
+import scalus.cardano.ledger.{AssetName, PolicyId, ProtocolParams, Transaction, TransactionHash, Utxos}
+import scalus.uplc.builtin.Data
 
-/** Cardano backend actor is a mock interface to the Cardano blockchain:
-  *
-  *   - Receives L1 effects
-  *   - Responds to queries about utxo state.
+/** Notes:
+  *   - Only [[ShelleyAddress]] are supported
+  *   - The return data types are limited by what is really needed for Hydrozoa, but can be expanded
+  *     if needed
   */
-object CardanoBackend {
-    def apply(): IO[CardanoBackend] =
-        IO.pure(new CardanoBackend {})
-}
+trait CardanoBackend[F[_]]:
+    import CardanoBackend.*
 
-trait CardanoBackend extends Actor[IO, Request] {
-    override def receive: Receive[IO, Request] = PartialFunction.fromFunction { receiveTotal }
+    /** All utxos at the [[address]]. The ordering of items from the point of view of the blockchain -
+      * oldest first, newest last.
+      * @return
+      */
+    def utxosAt(address: ShelleyAddress): F[Either[Error, Utxos]]
 
-    private def receiveTotal(req: Request): IO[Unit] = req match {
-        case req: SyncRequest.Any =>
-            req.request match {
-                case x: GetCardanoHeadState.type => ???
-                case x: GetTxInfo                => ???
-            }
-        case x: SubmitL1Effects => ???
-    }
-}
+    /** All the utxos that contain [[asset]] at the [[address]]. The ordering of items from the
+      * point of view of the blockchain - oldest first, newest last.
+      * @return
+      */
+    def utxosAt(address: ShelleyAddress, asset: (PolicyId, AssetName)): F[Either[Error, Utxos]]
+
+    /** Checks whether a tx specified by [[txHash]] is known to the backend ledger.
+      * @return
+      *   true - known, false - unknown or an error
+      */
+    def isTxKnown(txHash: TransactionHash): F[Either[Error, Boolean]]
+
+    /** This is used for tracking the current treasury state when doing withdrawals in the
+      * rule-based regime. Gets all transaction in the reverse order (newest first, oldest last)
+      * starting from some known transaction with txHash=[[after]] EXCLUDING it, such that a tx
+      * contains a continuing output with an asset (a treasury beacon token is going to be used).
+      * Returns the tx hashes along with the spending redeemer for the corresponding input. This is
+      * written in terms of common Scalus types, to keep it more general, but maybe we can switch to
+      * concrete Hydrozoa types - like HeadMultisigScript/TokenNames/RuleBasedTreasuryDatum.
+      *
+      * @param asset
+      *   the asset id that marks the continuing input
+      * @param after
+      *   the lower bound of the list, usually the fallback tx.
+      * @return
+      */
+    def lastContinuingTxs(
+        asset: (PolicyId, AssetName),
+        after: TransactionHash
+    ): F[Either[CardanoBackend.Error, List[(TransactionHash, Data)]]]
+
+    /** Submits a transaction.
+      * @return
+      */
+    def submitTx(tx: Transaction): F[Either[Error, Unit]]
+
+    /** Retrieve the latest protocol parameters.
+      */
+    def fetchLatestParams: F[Either[Error, ProtocolParams]]
+
+object CardanoBackend:
+
+    enum Error(msg: String) extends Throwable:
+        case Timeout(msg: String) extends Error(msg)
+        case InvalidTx(msg: String) extends Error(msg)
+        case Unexpected(msg: String) extends Error(msg)
+        case NoTxInputWithAsset(txId: TransactionHash, asset: String)
+            extends Error(s"The tx $txId doesn't contain an input with asset: $asset")
+        case NoTxOutputWithAsset(txId: TransactionHash, asset: String)
+            extends Error(s"The tx $txId doesn't contain an output with asset: $asset")
+        case SpendingRedeemerNotFound(txId: TransactionHash, ix: Int)
+            extends Error(s"The redeemer for input with index $ix was not found for tx $txId")
+        case ErrorDecodingRedeemerCbor(hex: String)
+            extends Error(s"Error decoding redeemer Data from hex: $hex")
+
+        override def toString: String = getMessage
+        override def getMessage: String = msg

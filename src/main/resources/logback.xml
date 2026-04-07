@@ -1,14 +1,30 @@
 <configuration>
     <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
-            <pattern>%X{node} %d{HH:mm:ss.SSS} %boldBlue([%thread]) %highlight(%-5level) %cyan(%logger{64}) -%kvp- %n
-                %msg%n
+            <pattern>%d{HH:mm:ss.SSS} %highlight(%-5level) %cyan(%logger{64}) %n%msg%n
             </pattern>
         </encoder>
     </appender>
-    <root level="debug">
+    <!-- Protocol trace: writes JSONL to file, no formatting overhead -->
+    <appender name="TRACE_FILE" class="ch.qos.logback.core.FileAppender">
+        <file>hydrozoa-trace.jsonl</file>
+        <encoder><pattern>%msg%n</pattern></encoder>
+    </appender>
+    <appender name="LOG_FILE" class="ch.qos.logback.core.FileAppender">
+        <file>hydrozoa.log</file>
+        <encoder><pattern>%d{HH:mm:ss.SSS} %highlight(%-5level) %cyan(%logger{64}) %n%msg%n</pattern></encoder>
+    </appender>
+    <logger name="hydrozoa.trace" level="info" additivity="false">
+        <appender-ref ref="TRACE_FILE"/>
+    </logger>
+    <root level="trace">
         <appender-ref ref="STDOUT"/>
+        <appender-ref ref="LOG_FILE"/>
     </root>
-    <logger name="hydrozoa" level="debug"/>
-    <logger name="scalus" level="debug"/>
+    <logger name="CardanoLiaison" level="trace"/>
+    <logger name="JointLedger" level="trace"/>
+    <logger name="RemoteL2Ledger" level="trace"/>
+    <logger name="HydrozoaRoutes" level="trace"/>
+    <logger name="hydrozoa" level="trace"/>
+    <logger name="scalus" level="trace"/>
 </configuration>

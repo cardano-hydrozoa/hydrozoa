@@ -1,7 +1,7 @@
 package org.scalacheck.gen
 
-import cats.Applicative.ops.toAllApplicativeOps
 import cats.Monad
+import cats.syntax.all.*
 import org.scalacheck
 import org.scalacheck.Gen
 import org.scalacheck.Gen.Parameters

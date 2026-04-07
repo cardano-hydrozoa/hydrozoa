@@ -56,3 +56,9 @@ old/**
 
 # justfile
 .just/notify
+
+# dotenv
+.env
+
+# traces
+/hydrozoa-trace.jsonl

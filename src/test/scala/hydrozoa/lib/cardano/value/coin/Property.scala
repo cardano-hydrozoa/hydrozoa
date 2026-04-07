@@ -24,14 +24,14 @@ object Property extends Properties("Coin") {
         p.withMinSuccessfulTests(10_000)
     }
 
-    property("Long constructors behave for Coin.Coin") = forAll(arbitrary[Long]) {
+    val _ = property("Long constructors behave for Coin.Coin") = forAll(arbitrary[Long]) {
         case l if 0 <= l => Coin(l).isRight && Try(Coin.unsafeApply(l)).isSuccess
         case l =>
             Coin(l) === Left(Coin.ArithmeticError.Underflow)
             && Try(Coin.unsafeApply(l)).isFailure
     }
 
-    property("SafeLong constructor for Coin.Coin behaves") = forAll(arbitrary[SafeLong]) {
+    val _ = property("SafeLong constructor for Coin.Coin behaves") = forAll(arbitrary[SafeLong]) {
         case sl if 0 <= sl && sl <= Long.MaxValue =>
             Coin(sl).isRight && Try(Coin.unsafeApply(sl)).isSuccess
         case sl if sl < 0 =>
@@ -48,19 +48,20 @@ object Property extends Properties("Coin") {
 
     ///////////
     // For Coin
-    property("Coin => Unbounded => Coin round trips") = forAll(arbitrary[Coin]) { c =>
+    val _ = property("Coin => Unbounded => Coin round trips") = forAll(arbitrary[Coin]) { c =>
         c.toUnbounded.toCoin === Right(c)
     }
 
-    property("Coin => Fractional => Coin round trips") = forAll(arbitrary[Coin]) { c =>
+    val _ = property("Coin => Fractional => Coin round trips") = forAll(arbitrary[Coin]) { c =>
         c.toFractional.toCoin === Right(c)
     }
 
-    property("∀ (c : Coin) => Coin(c.underlying) === Right(c)") = forAll(arbitrary[Coin]) { c =>
-        Coin(c.underlying) === Right(c)
+    val _ = property("∀ (c : Coin) => Coin(c.underlying) === Right(c)") = forAll(arbitrary[Coin]) {
+        c =>
+            Coin(c.underlying) === Right(c)
     }
 
-    property("∀ (u : Unbounded) => u.toFractional.toUnbounded === u)") =
+    val _ = property("∀ (u : Unbounded) => u.toFractional.toUnbounded === u)") =
         forAll(Arbitrary.arbitrary[Coin.Unbounded]) { u =>
             {
                 u.toFractional.toUnbounded === u
@@ -69,23 +70,24 @@ object Property extends Properties("Coin") {
 
     /////////////////////////////
     // Scaling round trips
-    property("Scale bounded coin by integral and inverse fractional") =
+    val _ = property("Scale bounded coin by integral and inverse fractional") =
         forAll(arbitrary[Coin], genNonZeroSafeLong) { (coin, i) =>
             (coin *~ i /~ i).toCoin === Right(coin)
         }
 
     /////////////////////////
     // Average coin
-    property("Average coin, long constructor") = forAll(Gen0.listOf(Gen0.posNum[Long])) { longs =>
-        {
-            longs.map(Coin.unsafeApply).coinAverage === {
-                if longs.nonEmpty then Some(Coin.Fractional(Rational(longs.sum, longs.length)))
-                else None
+    val _ = property("Average coin, long constructor") = forAll(Gen0.listOf(Gen0.posNum[Long])) {
+        longs =>
+            {
+                longs.map(Coin.unsafeApply).coinAverage === {
+                    if longs.nonEmpty then Some(Coin.Fractional(Rational(longs.sum, longs.length)))
+                    else None
+                }
             }
-        }
     }
 
-    property(
+    val _ = property(
       "∀ (sl : SafeLong , c: Coin) => c.scaleIntegral(sl) === c.scaleFractional(Rational(sl, 1)).toUnbounded"
     ) = forAll(Arbitrary.arbitrary[SafeLong], arbitrary[Coin]) { (sl, c) =>
         {
@@ -96,19 +98,19 @@ object Property extends Properties("Coin") {
     // ===================================
     // Coin distribution
     // ===================================
-    property("Coin distribution weights are normalized.") = forAll(genRawWeights()) { rw =>
+    val _ = property("Coin distribution weights are normalized.") = forAll(genRawWeights()) { rw =>
         Distribution
             .normalizeWeights(rw)
             .fold(false)(weights => weights.totalWeight === Rational(1))
     }
 
-    property("Coin.Unbounded distribution sums to amount distributed.") =
+    val _ = property("Coin.Unbounded distribution sums to amount distributed.") =
         forAll(arbitrary[Coin.Unbounded], arbitrary[Distribution.NormalizedWeights]) {
             (coin, weights) =>
                 coin.distribute(weights).toList.coinSum === coin
         }
 
-    property("Coin distribution sums to amount distributed.") =
+    val _ = property("Coin distribution sums to amount distributed.") =
         forAll(arbitrary[Coin], arbitrary[Distribution.NormalizedWeights]) { (coin, weights) =>
             coin.distribute(weights).toList.coinSum === coin.toUnbounded
         }

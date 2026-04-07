@@ -1,46 +1,64 @@
 package test
 
 import cats.data.{NonEmptyList, NonEmptyVector}
+import cats.syntax.all.toTraverseOps
+import cats.{Hash as _, *}
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.value.coin.Distribution
 import hydrozoa.lib.cardano.value.coin.Distribution.NormalizedWeights
-import hydrozoa.multisig.ledger.VirtualLedgerM
-import hydrozoa.multisig.ledger.VirtualLedgerM.{Config, State}
-import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.token.CIP67
-import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
-import hydrozoa.multisig.ledger.dapp.tx.Tx
-import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
+import hydrozoa.lib.logging.Logging
+import hydrozoa.multisig.ledger
+import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
+import hydrozoa.multisig.ledger.eutxol2.tx.{GenesisObligation, L2Tx}
+import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import hydrozoa.multisig.ledger.virtual.{GenesisObligation, L2EventTransaction}
-import hydrozoa.multisig.protocol.types.LedgerEvent.TxL2Event
-import hydrozoa.multisig.protocol.types.{LedgerEvent, LedgerEventId}
-import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.genShelleyAddress
+import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap, evacuationKeyOrdering}
+import hydrozoa.multisig.ledger.l1.token.CIP67
+import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
+import hydrozoa.multisig.ledger.l1.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
+import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.evacuationKeyToData
+import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.genShelleyAddress
 import monocle.*
 import monocle.syntax.all.*
 import org.scalacheck.Arbitrary.arbitrary
-import org.scalacheck.{Arbitrary, Gen}
-import scala.collection.immutable.SortedMap
-import scalus.builtin.Data.toData
-import scalus.builtin.{ByteString, Data}
+import org.scalacheck.{Arbitrary, Gen, Prop, Properties}
+import scala.collection.immutable.{SortedMap, TreeMap}
 import scalus.cardano.address.*
-import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.{*, given}
 import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.{Babbage, valueLens}
-import scalus.cardano.ledger.rules.STS.Validator
+import scalus.cardano.onchain.plutus.prelude.Option as SOption
+import scalus.cardano.txbuilder.TransactionBuilder
 import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
-import scalus.prelude.Option as SOption
+import scalus.uplc.builtin.Data.toData
+import scalus.uplc.builtin.{ByteString, Data}
 import scalus.|>
 import spire.math.{Rational, SafeLong}
+import test.Generators.Hydrozoa.{genPositiveValue, genPubKeyUtxo}
+
+// Annoyingly, `Gen` doesn't have `Monad[Gen]` already. But I want to use `traverse`, so I'm vendoring it here
+given genMonad: Monad[Gen] = new Monad[Gen] {
+    def pure[A](a: A): Gen[A] = Gen.const(a)
+    def flatMap[A, B](fa: Gen[A])(f: A => Gen[B]): Gen[B] = fa.flatMap(f)
+    def tailRecM[A, B](a: A)(f: A => Gen[Either[A, B]]): Gen[B] = Gen.tailRecM(a)(f)
+}
 
 /** This module contains shared generators and arbitrary instances that may be shared among multiple
   * tests. We separate them into "Hydrozoa" and "Other" objects for ease of upstreaming.
   */
-
+// TODO: Most of these need some sort of configuration, especially CardanoNetwork and ProtocolPararms.
+//   We should lift the config into a `case class Generators(config : Generators.Config)` or a Reader Equivalent
 object Generators {
+    export Generators.Hydrozoa.ArbitraryInstances.given
+
+    // This guy is used everywhere through tests to log some traces when generating various things.
+    // Use:
+    //   - trace level for diversity traces (z-print-results property)
+    val loggerGenerators = Logging.logger("Generators")
 
     /** NOTE: generators here are opinionated. They are not directly suitable for upstreaming and
       * contain reasonable, hydrozoa-specific defaults.
@@ -68,46 +86,10 @@ object Generators {
               (noneFrequency, SOption.None)
             )
 
-        /** Generates the general configuration for a hydrozoa (non-init) transaction, and returns
-          * the set of peers to use for signing.
-          */
-        def genTxBuilderConfigAndPeers(
-            env: CardanoInfo = testTxBuilderEnvironment,
-            evaluator: PlutusScriptEvaluator = testEvaluator,
-            validators: Seq[Validator] = nonSigningNonValidityChecksValidators
-        ): Gen[(Tx.Builder.Config, NonEmptyList[TestPeer])] =
-            for {
-                peers <- genTestPeers()
-                hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
-                seedUtxo <- arbitrary[TransactionInput]
-                tokenNames = TokenNames(seedUtxo)
-                multisigWitnessUtxo <- genFakeMultisigWitnessUtxo(
-                  hns,
-                  env.network,
-                  Some(tokenNames.multisigRegimeTokenName)
-                )
-            } yield (
-              Tx.Builder.Config(
-                headNativeScript = hns,
-                multisigRegimeUtxo = multisigWitnessUtxo,
-                tokenNames = tokenNames,
-                env = env,
-                evaluator = evaluator,
-                validators = validators
-              ),
-              peers
-            )
-
-        def genTxConfig(
-            env: CardanoInfo = testTxBuilderEnvironment,
-            evaluator: PlutusScriptEvaluator = testEvaluator,
-            validators: Seq[Validator] = nonSigningValidators
-        ): Gen[Tx.Builder.Config] = genTxBuilderConfigAndPeers(env, evaluator, validators).map(_._1)
-
         val genHeadTokenName: Gen[AssetName] =
             for {
                 ti <- arbitrary[TransactionInput]
-            } yield CIP67.TokenNames(ti).headTokenName
+            } yield CIP67.HeadTokenNames(ti).treasuryTokenName
 
         val genTreasuryDatum: Gen[MultisigTreasuryUtxo.Datum] = {
             for {
@@ -118,16 +100,24 @@ object Generators {
 
             } yield MultisigTreasuryUtxo.Datum(
               commit = kzg,
-              versionMajor = mv,
-              paramsHash = paramsHash
+              versionMajor = mv
             )
         }
 
-        /** Generate a positive Ada value */
-        val genAdaOnlyValue: Gen[Value] =
+        /** Generate a value */
+        def genValue(genCoin: Gen[Coin], genMultiAsset: Gen[MultiAsset]): Gen[Value] =
             for {
-                coin <- arbitrary[Coin]
-            } yield Value(coin)
+                coin <- genCoin
+                ma <- genMultiAsset
+            } yield Value(coin, ma)
+
+        /** Helper generator with sensible defaults. The value will have at least 5 ada and may
+          * contain at most 6 multiassets.
+          */
+        val genPositiveValue: Gen[Value] = genValue(
+          genCoin = Arbitrary.arbitrary[Coin].map(_ + Coin.ada(5)),
+          genMultiAsset = genMultiAsset(1, 1, 1, 1).map(_.onlyPositive)
+        )
 
         val genAddrKeyHash: Gen[AddrKeyHash] =
             genByteStringOfN(28).map(AddrKeyHash.fromByteString)
@@ -137,155 +127,130 @@ object Generators {
         val genPolicyId: Gen[PolicyId] = genScriptHash
 
         def genPubkeyAddress(
-            network: Network = testNetwork,
             delegation: ShelleyDelegationPart = ShelleyDelegationPart.Null
-        ): Gen[ShelleyAddress] =
+        )(using config: CardanoNetwork.Section): Gen[ShelleyAddress] =
             genAddrKeyHash.flatMap(akh =>
-                ShelleyAddress(network = network, payment = Key(akh), delegation = delegation)
+                ShelleyAddress(
+                  network = config.network,
+                  payment = Key(akh),
+                  delegation = delegation
+                )
             )
 
         def genScriptAddress(
-            network: Network = testNetwork,
             delegation: ShelleyDelegationPart = ShelleyDelegationPart.Null
-        ): Gen[ShelleyAddress] =
+        )(using config: CardanoNetwork.Section): Gen[ShelleyAddress] =
             for {
                 sh <- genScriptHash
             } yield ShelleyAddress(
-              network = network,
+              network = config.network,
               payment = ShelleyPaymentPart.Script(sh),
               delegation = delegation
             )
 
         def genFakeMultisigWitnessUtxo(
-            script: HeadMultisigScript,
-            network: Network,
-            // Pass this if you need a specific token name for coherence with the rest of your test.
-            // In general, it should be obtained via `CIP67.TokenNames(seedUtxo).multisigRegimeTokenName
-            hmrwTokenName: Option[AssetName] = None
+        )(using
+            config: HeadPeers.Section & CardanoNetwork.Section & HasTokenNames
         ): Gen[MultisigRegimeUtxo] = for {
             utxoId <- Arbitrary.arbitrary[TransactionInput]
-
-            hmrwTn <- hmrwTokenName match {
-                case None =>
-                    arbitrary[TransactionInput].flatMap(ti =>
-                        CIP67.TokenNames(ti).multisigRegimeTokenName
-                    )
-                case Some(n) => Gen.const(n)
-            }
             hmrwToken = Value(
               Coin.zero,
               MultiAsset(
                 SortedMap(
-                  script.policyId -> SortedMap(
-                    hmrwTn -> 1L
+                  config.headMultisigScript.policyId -> SortedMap(
+                    config.headTokenNames.multisigRegimeTokenName -> 1L
                   )
                 )
               )
             )
 
         } yield MultisigRegimeUtxo(
-          multisigRegimeTokenName = hmrwTn,
-          utxoId = utxoId,
-          address = script.mkAddress(network),
-          value = Value.ada(2) + hmrwToken,
-          script = script
+          input = utxoId
         )
 
-        def genPayoutObligation(network: Network): Gen[Payout.Obligation] =
+        def genPayoutObligation(
+            genValue: Gen[Value] = Hydrozoa.genPositiveValue
+        )(using config: CardanoNetwork.Section): Gen[Payout.Obligation] =
             for {
-                coin <- arbitrary[Coin]
-                res <- genKnownCoinPayoutObligation(network, coin)
+                value <- genValue
+                res <- genKnownValuePayoutObligationWithMinAdaEnsured(value)
             } yield res
 
-        def genKnownCoinPayoutObligation(
-            network: Network,
-            coin: Coin
-        ): Gen[Payout.Obligation] =
+        def genKnownValuePayoutObligationWithMinAdaEnsured(
+            value: Value
+        )(using network: CardanoNetwork.Section): Gen[Payout.Obligation] = {
             for {
                 l2Input <- arbitrary[TransactionInput]
 
                 address0 <- arbitrary[ShelleyAddress]
-                address = address0.copy(network = network)
+                address = address0.copy(network = network.network)
                 datum <- arbitrary[ByteString]
                 output = Babbage(
                   address = address,
-                  value = Value(coin),
+                  value = value,
                   datumOption = Some(Inline(datum.toData)),
                   scriptRef = None
                 )
-            } yield Payout.Obligation(l2UtxoId = l2Input, utxo = output)
+            } yield Payout
+                .Obligation(KeepRaw(ensureMinAda(output, network.cardanoProtocolParams)), network)
+                .toOption
+                .get
+        }
 
         /** Ada-only pub key utxo from the given peer, at least minAda, random tx id, random index,
           * no datum, no script ref
           */
         // TODO: make this take all fields as Option and default to generation if None.
-        def genAdaOnlyPubKeyUtxo(
-            peer: TestPeer,
-            params: ProtocolParams = blockfrost544Params,
-            network: Network = testNetwork,
-            minimumCoin: Coin = Coin.zero,
-            datumGenerator: Option[Gen[Option[DatumOption]]] = None
-        ): Gen[Utxo] =
+        def genPubKeyUtxo(
+            address: Address,
+            genValue: Gen[Value],
+            datumGenerator: Option[Gen[Option[DatumOption]]] = None,
+            ensureMinAda: Boolean = false
+        )(using config: CardanoNetwork.Section): Gen[Utxo] =
             for {
                 txId <- arbitrary[TransactionInput]
-                txOutput <- genAdaOnlyBabbageOutput(
-                  peer,
-                  params,
-                  network,
-                  minimumCoin,
-                  datumGenerator
+                txOutput <- genBabbageOutput(
+                  address,
+                  genValue,
+                  datumGenerator,
+                  ensureMinAda
                 )
             } yield Utxo(txId, txOutput)
 
-        /** @param peer
-          *   The test peer who's PKH this output will be at
-          * @param network
-          *   The network of the address, defaults to Testnet
-          * @param params
-          *   The protocol params, defaults to testProtocolParams
-          * @param minimumCoin
-          *   an optional minimum coin. Should be positive, defaults to 0
-          * @param datumGenerator
-          *   an Optional datum generator. Will generate an empty datum if not passed
-          * @return
-          */
-        def genAdaOnlyBabbageOutput(
-            peer: TestPeer,
-            params: ProtocolParams = testProtocolParams,
-            network: Network = testNetwork,
-            minimumCoin: Coin = Coin.zero,
-            datumGenerator: Option[Gen[Option[DatumOption]]] = None
-        ): Gen[Babbage] =
+        def genBabbageOutput(
+            address: Address,
+            genValue: Gen[Value],
+            datumGenerator: Option[Gen[Option[DatumOption]]] = None,
+            ensureMinAda: Boolean = false
+        )(using config: CardanoNetwork.Section): Gen[Babbage] =
             for {
-                value <- genAdaOnlyValue
-                coin <- arbitrary[Coin].map(_ + minimumCoin)
-
+                value <- genValue
                 datum <- datumGenerator match {
                     case None      => Gen.const(None)
                     case Some(gen) => gen
                 }
-                txOutput: TransactionOutput.Babbage = ensureMinAda(
-                  Babbage(
-                    address = peer.address(network),
-                    value = Value(coin),
-                    datumOption = datum,
-                    scriptRef = None
-                  ),
-                  params
-                ).asInstanceOf[Babbage].focus(_.value).modify(_ + value)
-            } yield txOutput
+                babbage = Babbage(
+                  address = address, // peer.address(config.network),
+                  value = value,
+                  datumOption = datum,
+                  scriptRef = None
+                )
+            } yield
+                if ensureMinAda
+                then
+                    TransactionBuilder
+                        .ensureMinAda(babbage, config.cardanoProtocolParams)
+                        .asInstanceOf[Babbage]
+                else babbage
 
         // Has duplication with genAdaOnlyBabbageOutput
         def genGenesisObligation(
-            peer: TestPeer,
-            params: ProtocolParams = testProtocolParams,
-            network: Network = testNetwork,
-            minimumCoin: Coin = Coin.zero,
-            datumGenerator: Option[Gen[Option[Inline]]] = None
-        ): Gen[GenesisObligation] =
+            address: ShelleyAddress,
+            datumGenerator: Option[Gen[Option[Inline]]] = None,
+            genValue: Gen[Value]
+        )(using config: CardanoNetwork.Section): Gen[GenesisObligation] =
             for {
-                value <- genAdaOnlyValue
-                coin <- arbitrary[Coin].map(_ + minimumCoin)
+                value <- genValue
 
                 datum <- datumGenerator match {
                     case None      => Gen.const(None)
@@ -293,94 +258,34 @@ object Generators {
                 }
                 txOutput: TransactionOutput.Babbage = ensureMinAda(
                   Babbage(
-                    address = peer.address(network),
-                    value = Value(coin),
+                    address = address, // peer.address(config.network),
+                    value = value,
                     datumOption = datum,
                     scriptRef = None
                   ),
-                  params
-                ).asInstanceOf[Babbage].focus(_.value).modify(_ + value)
+                  config.cardanoProtocolParams
+                ).asInstanceOf[Babbage]
 
                 genesisObligation = GenesisObligation(
-                  l2OutputPaymentAddress = peer.address(network).payment,
-                  l2OutputNetwork = network,
+                  l2OutputPaymentAddress = address.payment, // peer.address(config.network).payment,
+                  l2OutputNetwork = config.network,
                   l2OutputDatum = datum match {
                       case None    => SOption.None
                       case Some(d) => SOption.Some(d.data)
                   },
-                  l2OutputValue = txOutput.value.coin,
+                  l2OutputValue = txOutput.value,
                   l2OutputRefScript = None
                 )
 
             } yield genesisObligation
-
-        /** Generate a treasury utxo with at least minAda */
-        def genTreasuryUtxo(
-            network: Network = testNetwork,
-            params: ProtocolParams = blockfrost544Params,
-            headAddress: Option[ShelleyAddress],
-            coin: Option[Coin] = None // None to generate
-        ): Gen[MultisigTreasuryUtxo] =
-            for {
-                txId <- arbitrary[TransactionInput]
-                headTn <- genHeadTokenName
-
-                scriptAddress = headAddress.getOrElse {
-                    ShelleyAddress(
-                      network,
-                      ShelleyPaymentPart.Script(genScriptHash.sample.get),
-                      Null
-                    )
-                }
-                datum <- genTreasuryDatum
-
-                treasuryToken: Value = Value(
-                  Coin.zero,
-                  MultiAsset(
-                    SortedMap(
-                      scriptAddress.payment.asInstanceOf[ShelleyPaymentPart.Script].hash ->
-                          SortedMap(headTn -> 1L)
-                    )
-                  )
-                )
-
-                treasuryMinAda = ensureMinAda(
-                  MultisigTreasuryUtxo(
-                    treasuryTokenName = headTn,
-                    utxoId = txId,
-                    address = scriptAddress,
-                    datum = datum,
-                    value = Value(Coin(0L)) + treasuryToken
-                  ).asUtxo._2,
-                  params
-                ).value.coin
-
-                treasuryAda <- arbitrary[Coin].map(l => l - Coin(1L) + treasuryMinAda)
-
-            } yield MultisigTreasuryUtxo(
-              treasuryTokenName = headTn,
-              utxoId = txId,
-              datum = datum,
-              address = scriptAddress,
-              value = Value(coin.getOrElse(treasuryAda)) + treasuryToken
-            )
-
-        /** Generate a treasury utxo according to a builder config */
-        def genTreasuryUtxo(config: Tx.Builder.Config): Gen[MultisigTreasuryUtxo] =
-            genTreasuryUtxo(
-              network = config.env.network,
-              params = config.env.protocolParams,
-              headAddress = Some(config.headAddress),
-              coin = None
-            )
 
         /** Given a set of inputs event, construct a withdrawal event attempting to withdraw all
           * inputs with the given key to a single output
           */
         def genL2WithdrawalFromUtxosAndPeer(
             inputUtxos: Utxos,
-            peer: TestPeer
-        ): Gen[L2EventTransaction] =
+            peer: TestPeerName
+        )(using config: CardanoNetwork.Section): Gen[L2Tx] =
             for {
                 addr <- genShelleyAddress
 
@@ -399,7 +304,7 @@ object Generators {
                 txUnsigned: Transaction =
                     Transaction(
                       body = KeepRaw(txBody),
-                      witnessSet = TransactionWitnessSet.empty,
+                      witnessSetRaw = KeepRaw(TransactionWitnessSet.empty),
                       isValid = true,
                       auxiliaryData = Some(
                         KeepRaw(
@@ -413,7 +318,7 @@ object Generators {
                       )
                     )
 
-            } yield L2EventTransaction(signTx(peer, txUnsigned))
+            } yield ??? // L2Tx(peer.signTx(txUnsigned))
 
         /** Generate an "attack" that, given a context, state, and L2EventTransaction, returns a
           * tuple containing:
@@ -428,16 +333,16 @@ object Generators {
           * actual context of the errors raised.
           */
         def genL2EventTransactionAttack: Gen[
-          (VirtualLedgerM.Config, State, L2EventTransaction) => (
-              L2EventTransaction,
-              (String | TransactionException)
+          (EutxoL2Ledger.Config, EutxoL2Ledger.State, L2Tx) => (
+              L2Tx,
+              String | TransactionException
           )
         ] = {
 
             // Violates "AllInputsMustBeInUtxoValidator" ledger rule
-            def inputsNotInUtxoAttack: (VirtualLedgerM.Config, State, L2EventTransaction) => (
-                L2EventTransaction,
-                (String | TransactionException)
+            def inputsNotInUtxoAttack: (EutxoL2Ledger.Config, EutxoL2Ledger.State, L2Tx) => (
+                L2Tx,
+                String | TransactionException
             ) =
                 (context, state, transaction) => {
                     // Generate a random TxId that is _not_ present in the state
@@ -454,8 +359,8 @@ object Generators {
 
                     val bogusTxIn = TransactionInput(transactionId = bogusInputId, index = 0)
 
-                    val newTx: L2EventTransaction = {
-                        val underlyingOriginal = transaction.transaction
+                    val newTx: L2Tx = {
+                        val underlyingOriginal = transaction.tx
                         val underlyingModified = underlyingOriginal
                             |>
                                 // First focus on the inputs of the transaction
@@ -476,11 +381,11 @@ object Generators {
                                         )
                                     )
 
-                        L2EventTransaction(underlyingModified)
+                        ??? // L2Tx(underlyingModified)
                     }
 
                     val expectedException = new TransactionException.BadAllInputsUTxOException(
-                      transactionId = newTx.transaction.id,
+                      transactionId = newTx.tx.id,
                       missingInputs = Set(bogusTxIn),
                       missingCollateralInputs = Set.empty,
                       missingReferenceInputs = Set.empty
@@ -492,10 +397,53 @@ object Generators {
         }
 
         // TODO: improve
-        def genEventId: Gen[LedgerEventId] = for {
-            peerNumber <- Gen.choose(0, 10)
-            eventNumber <- Gen.choose(0, 1024)
-        } yield LedgerEventId(peerNumber, eventNumber)
+        def genRequestId: Gen[RequestId] = for {
+            headPeerNumber <- Gen.choose(0, 10)
+            requestNumber <- Gen.choose[Long](0, 1024)
+        } yield RequestId(
+          headPeerNumber,
+          requestNumber
+        )
+
+        /** Warning:
+          *   - can loop infinitely if:
+          *     - entries is negative
+          *     - genEvacuationKey does not produce enough distinct keys to reach entires
+          */
+        def genEvacuationMap(
+            nEntries: Int,
+            generateEvacuationKey: Gen[EvacuationKey] = Arbitrary.arbitrary[EvacuationKey],
+        )(using network: CardanoNetwork.Section): Gen[EvacuationMap] = {
+            if nEntries == 0
+            then Gen.const(EvacuationMap.empty)
+            else
+                for {
+                    // Recursively generate keys, retrying if we hit duplicates.
+                    // This can possibly infinitely loop, but not with sane parameters.
+                    // The main goal was to be able to generate large sets with small generators and not throw out all
+                    // the work done every time we hit a duplicate with `_.suchThat`
+                    // Feel free to revise.
+                    keys <- Gen.tailRecM(List.empty[EvacuationKey])(keys => {
+                        def recur = for {
+                            newKey <- generateEvacuationKey
+                            // We use distinct here rather than `suchThat` so that we don't throw
+                            // away all of the generation when we hit a duplicate. We re-roll instead.
+                        } yield Left(keys.prepended(newKey).distinct)
+
+                        () match {
+                            case _ if keys.size == nEntries => Gen.const(Right(keys))
+                            case _                          => recur
+                        }
+                    })
+                    valueDist <- Other.genSequencedValueDistribution(
+                      nEntries,
+                      v => genPayoutObligation(Gen.const(v))
+                    )
+
+                } yield EvacuationMap(
+                  evacuationMap = TreeMap.from(keys.zip(valueDist.toList))
+                )
+        }
 
         /** NOTE: These will generate _fully_ arbitrary data. It is probably not what you want, but
           * may be a good starting point. For example, an arbitrary payout obligation may be for a
@@ -521,19 +469,20 @@ object Generators {
                       datumOption = Some(Inline(datum.toData)),
                       scriptRef = None
                     )
-                } yield Payout.Obligation(l2UtxoId = l2Input, utxo = output)
+                } yield Payout
+                    .Obligation(
+                      KeepRaw(output),
+                      CardanoNetwork.fromOrdinal(address.network.networkId.toInt)
+                    )
+                    .toOption
+                    .get
             }
 
-            given Arbitrary[LedgerEvent] = Arbitrary {
+            given Arbitrary[EvacuationKey] = Arbitrary {
                 for {
-                    eventId <- genEventId
-                    // genesisObligation <-genGenesisObligation()
-                    event <- Gen.frequency(
-                      // TODO: improve
-                      2 -> Gen.const(TxL2Event(eventId, Array.empty))
-                      // 8 -> Gen.const(RegisterDeposit(eventId, Array.empty))
-                    )
-                } yield event
+                    bs <- genByteStringOfN(32)
+                } yield EvacuationKey(bs).get
+
             }
         }
     }
@@ -558,7 +507,7 @@ object Generators {
             require(
               n > 0,
               "`normalizedWeights(n : Int) : Gen[NormalizedWeights]` requires a positive `n`, but it " +
-                  s"received ${n}"
+                  s"received $n"
             )
             // One entry gets everything, other entries get none
             val singletonDistributions: Gen[NormalizedWeights] =
@@ -602,11 +551,11 @@ object Generators {
           * this initial distribution, it is evenly spread across the shares (in order) until it is
           * exhausted.
           */
-        def distribution(amount: SafeLong, n: Int): Gen[NonEmptyList[SafeLong]] = {
+        def genDistribution(amount: SafeLong, n: Int): Gen[NonEmptyList[SafeLong]] = {
             require(
               n > 0,
               "`distribution(amount: SafeLong, n : Int) : Gen[NonEmptyList[SafeLong]]` requires a positive `n`, but it " +
-                  s"received ${n}"
+                  s"received $n"
             )
             for {
                 weights <- normalizedWeights(n)
@@ -614,65 +563,169 @@ object Generators {
         }
 
         /** Generate a coin distribution among `n` bags. Note: Some bags may be empty
-          * @param coin
-          * @param n
-          * @return
           */
         def genCoinDistribution(coin: Coin, n: Int): Gen[NonEmptyList[Coin]] = {
             require(
               n > 0,
               "`genCoinDistribution(coin: Coin, n : Int) : Gen[NonEmptyList[Coin]]` requires a positive `n`, but it " +
-                  s"received ${n}"
+                  s"received $n"
             )
-            distribution(SafeLong(coin.value), n).map(nel => nel.map(sl => Coin(sl.toLong)))
+            genDistribution(SafeLong(coin.value), n).map(nel => nel.map(sl => Coin(sl.toLong)))
         }
 
-        /** Distribute an amount of coin over transaction outputs, ensuring that min ada
+        def genValueDistribution(value: Value, n: Int): Gen[NonEmptyList[Value]] = {
+            require(
+              n > 0,
+              "`genValueDistribution(value: Value, n : Int) : Gen[NonEmptyList[Value]]` requires a positive `n`, but it " +
+                  s"received $n"
+            )
+            val genCoinDist: Gen[NonEmptyList[Value]] =
+                genCoinDistribution(value.coin, n).map(_.map(Value(_)))
+
+            val flat: Iterable[(PolicyId, AssetName, Long)] =
+                value.assets.assets.flatMap((policyId, innerMap) =>
+                    innerMap.map((assetName, amount) => (policyId, assetName, amount))
+                )
+
+            // Strategy:
+            //   - Start with a constant generator of the coin dist accumulator
+            //   - For each policyId, assetName, amount in the (flattened) total to be distributed:
+            //     - Do a single (scalar) distribution of the amount
+            //     - convert it to a multiasset distribution
+            //     - map over the accumulator generator, zip the generator distribution with the
+            //       multiasset distribution and sum element-wise (can these be fused?)
+            flat.foldLeft(genCoinDist) { case (genDist, (policyId, assetName, amount)) =>
+                for {
+                    singleAssetDist <- genDistribution(SafeLong(amount), n)
+
+                    res <- genDist.map(dist =>
+                        dist.zip(singleAssetDist)
+                            .map((baseDist, additionalAmount) =>
+                                val asValue = Value(
+                                  Coin.zero,
+                                  MultiAsset.asset(policyId, assetName, additionalAmount.toLong)
+                                )
+                                baseDist + asValue
+                            )
+                    )
+                } yield res
+            }
+        }
+
+        /** Distribute an amount of value over transaction outputs, ensuring that min ada
           * requirements are first met. This will ONLY increase the lovelace in each transaction
           * output and will throw an exception if there is not enough ada to cover min ada.
-          * @param coin
-          * @param transactionOutputs
+          * @param additionalValue
+          *   additional value to add to the existing value in [[transactionOutputs]]
           */
-        def genCoinDistributionWithMinAda(
-            coin: Coin,
+        def genAdditionalValueDistributionWithMinAda(
+            additionalValue: Value,
             transactionOutputs: NonEmptyList[TransactionOutput],
-            params: ProtocolParams
-        ): Gen[NonEmptyList[TransactionOutput]] =
+        )(using params: CardanoNetwork.Section): Gen[NonEmptyList[TransactionOutput]] =
 
-            val sumBefore = transactionOutputs.toList.map(_.value.coin.value).sum
-            val withMinAda = transactionOutputs.toList.map(ensureMinAda(_, params))
+            val coinSumBefore = transactionOutputs.toList.map(_.value.coin.value).sum
+            val withMinAda =
+                transactionOutputs.toList.map(ensureMinAda(_, params.cardanoProtocolParams))
             val withMinAdaSum = withMinAda.map(_.value.coin.value).sum
-            val remainderToDistribute = coin.value - (withMinAdaSum - sumBefore)
+            val remainderCoinToDistribute =
+                additionalValue.coin.value - (withMinAdaSum - coinSumBefore)
             require(
-              remainderToDistribute >= 0,
+              remainderCoinToDistribute >= 0,
               "genCoinDistribution: there is not enough lovelace" +
                   " to distribute while ensuring minAda is met."
             )
             for {
-                coinDist <- genCoinDistribution(
-                  Coin(remainderToDistribute),
+                valueDist <- genValueDistribution(
+                  Value(coin = Coin(remainderCoinToDistribute), additionalValue.assets),
                   transactionOutputs.length
                 )
-                zipped = withMinAda.zip(coinDist.toList)
+
+                zipped = withMinAda.zip(valueDist.toList)
                 summed: List[TransactionOutput] = zipped.foldRight(List.empty)((x, acc) => {
                     val to: TransactionOutput = x._1
-                    val coin: Coin = x._2
-                    (to |> valueLens
-                        .andThen(Focus[Value](_.coin.value))
-                        .modify(_ + coin.value)) :: acc
+                    val extraValue = x._2
+                    (to |> valueLens.modify(_ + extraValue)) :: acc
                 })
             } yield NonEmptyList.fromListUnsafe(summed)
 
-        def genCoinDistributionWithMinAdaUtxo(
-            coin: Coin,
+        /** Like [[genAdditionalValueDistributionWithMinAda]], but replaces the transaction output
+          * for a given list of utxos.
+          */
+        def genValueDistributionWithMinAdaUtxo(
+            value: Value,
             utxoList: NonEmptyList[Utxo],
-            params: ProtocolParams
-        ): Gen[NonEmptyList[Utxo]] =
+        )(using params: CardanoNetwork.Section): Gen[NonEmptyList[Utxo]] =
             val transactionOutputs = utxoList.map(_.output)
             for {
-                outputDist <- genCoinDistributionWithMinAda(coin, transactionOutputs, params)
+                outputDist <- genAdditionalValueDistributionWithMinAda(
+                  value,
+                  transactionOutputs
+                )
             } yield utxoList.map(_.input).zip(outputDist).map(Utxo(_))
 
+        /** We need to be able to generate deposit utxos and payouts with a consistent set of
+          * allowed assets, otherwise the treasury utxo will exceed size limits (i.e., if we do 10
+          * deposits and payouts which each have 10 unique policy id <> assetname pairs, we end up
+          * with 200 pairs total).
+          *
+          * This helps with that by distributing a single value.
+          */
+        def genSequencedValueDistribution[A](
+            nValues: Int,
+            mapping: Value => Gen[A],
+            minCoin: Coin = Coin.zero
+        ): Gen[NonEmptyList[A]] =
+            for {
+                totalValue <- genPositiveValue
+                valueDist <- genValueDistribution(totalValue, nValues)
+                valueDistWithMinAda = valueDist.map(_.focus(_.coin).modify(_ + minCoin))
+                res <- valueDistWithMinAda.map(mapping).sequence
+            } yield res
+
     }
+
+}
+
+object GeneratorTests extends Properties("Generator Tests") {
+    given network: CardanoNetwork.Section = CardanoNetwork.Mainnet
+
+    val _ = property("distribution sums to original amount") =
+        Prop.forAll(Gen.posNum[Long], Gen.posNum[Int])((amount, n) =>
+            Prop.forAll(Generators.Other.genDistribution(SafeLong(amount), n))(distribution =>
+                distribution.toList.map(_.toLong).sum == amount
+            )
+        )
+
+    val _ = property("value distribution sums to original amount") =
+        Prop.forAll(Arbitrary.arbitrary[Value], Gen.posNum[Int])((amount, n) =>
+            Prop.forAll(Generators.Other.genValueDistribution(amount, n))(distribution =>
+                distribution.foldLeft(Value.zero)(_ + _) == amount
+            )
+        )
+
+    val _ = property("genValueDistributionWithMinAda sums to original amount") = Prop.forAll(
+      arbitrary[ShelleyAddress]
+    )(address =>
+        Prop.forAll(
+          Arbitrary.arbitrary[Value],
+          Gen.posNum[Int],
+          Gen.nonEmptyListOf(
+            genPubKeyUtxo(address, genValue = Arbitrary.arbitrary[Value])
+          )
+        )((amount, n, utxos) =>
+            Prop.forAll(
+              Generators.Other.genValueDistributionWithMinAdaUtxo(
+                value = amount,
+                utxoList = NonEmptyList.fromListUnsafe(utxos),
+              )
+            )(distribution =>
+                val expectedAmount =
+                    distribution.toList.map(_.output.value).foldLeft(Value.zero)(_ + _)
+                expectedAmount == amount + utxos
+                    .map(_.output.value)
+                    .foldLeft(Value.zero)(_ + _)
+            )
+        )
+    )
 
 }

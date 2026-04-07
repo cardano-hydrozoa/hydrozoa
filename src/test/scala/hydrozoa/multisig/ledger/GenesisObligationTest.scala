@@ -1,22 +1,37 @@
 package hydrozoa.multisig.ledger
 
 import cats.data.NonEmptyList
-import hydrozoa.multisig.ledger.virtual.GenesisObligation
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.network.CardanoNetworkGen.given_Arbitrary_CardanoNetwork
+import hydrozoa.multisig.ledger.eutxol2.tx.GenesisObligation
 import io.bullet.borer.Cbor
 import org.scalacheck.*
-import scalus.cardano.ledger.{Coin, OriginalCborByteArray, TransactionOutput}
-import test.Generators.Hydrozoa.genGenesisObligation
-import test.TestPeer.Alice
+import org.scalacheck.Arbitrary.arbitrary
+import scalus.cardano.address.ArbitraryInstances.given_Arbitrary_ShelleyAddress
+import scalus.cardano.address.ShelleyAddress
+import scalus.cardano.ledger.TransactionOutput
+import test.Generators.Hydrozoa.{genGenesisObligation, genPositiveValue}
 
-case object GenesisObligationTest extends Properties("Genesis Obligation Properties") {
-    val _ = property("Cbor Rount Trip") = Prop.forAll(
-      Gen.nonEmptyListOf(genGenesisObligation(Alice, minimumCoin = Coin.ada(5)))
-          .map(NonEmptyList.fromListUnsafe)
+object GenesisObligationTest extends Properties("Genesis Obligation Properties"):
+
+    val _ = property("Cbor Round Trip") = Prop.forAll(
+      arbitrary[CardanoNetwork]
+          .flatMap(cardanoNetwork => arbitrary[ShelleyAddress].map(cardanoNetwork -> _))
+          .flatMap((cardanoNetwork, address) =>
+              Gen.nonEmptyListOf(
+                genGenesisObligation(
+                  address,
+                  genValue = genPositiveValue
+                )(using cardanoNetwork)
+              ).map(NonEmptyList.fromListUnsafe)
+          )
     )(genesisObligations =>
         val bytes = Cbor
-            .encode(genesisObligations.toList.map(_.toBabbage.asInstanceOf[TransactionOutput]))
+            .encode(
+              genesisObligations.toList
+                  .map(_.toTransactionOutput.asInstanceOf[TransactionOutput])
+            )
             .toByteArray
-        given OriginalCborByteArray = OriginalCborByteArray(bytes)
 
         val roundTrippedList: List[TransactionOutput] =
             Cbor
@@ -27,6 +42,6 @@ case object GenesisObligationTest extends Properties("Genesis Obligation Propert
         val roundTripped = NonEmptyList.fromListUnsafe(
           roundTrippedList.map(GenesisObligation.fromTransactionOutput)
         )
+
         genesisObligations.map(Right(_)) == roundTripped
     )
-}

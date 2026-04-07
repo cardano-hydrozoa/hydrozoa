@@ -1,22 +1,48 @@
-//enablePlugins(
-//  JavaAppPackaging,
-//  DockerPlugin
-//)
+enablePlugins(
+    JavaAppPackaging,
+    DockerPlugin
+)
 
-// Locally-built scalus version with the fix from https://github.com/scalus3/scalus/pull/172 applied.
-// Previous version tracking scalus:main was "0.13.0+387-8e7c3b8e-SNAPSHOT" 
-val scalusVersion = "0.14.1"
-val bloxbeanVersion = "0.7.0"
+Compile / mainClass := Some("hydrozoa.app.Main")
 
-Compile / mainClass := Some("hydrozoa.HydrozoaNode")
-// Docker / packageName := "cardano-hydrozoa/hydrozoa"
-// dockerBaseImage := "openjdk:21-jdk"
-// dockerExposedPorts ++= Seq(4937)
-//dockerEnvVars ++= Map(("COCKROACH_HOST", "dev.localhost"))
-//dockerExposedVolumes := Seq("/opt/docker/.logs", "/opt/docker/.keys")
+// Docker settings
+Docker / packageName := "cardano-hydrozoa/hydrozoa"
+Docker / version := version.value
+Docker / daemonUser := "hydrozoa"
+Docker / daemonGroup := "hydrozoa"
+dockerBaseImage := "eclipse-temurin:21-jre-jammy"  // Use Debian-based image for better compatibility
+dockerExposedPorts ++= Seq(8080)
+
+// Skip documentation generation for Docker
+Compile / packageDoc / mappings := Seq()
+Compile / doc / sources := Seq()
+
+Global / excludeLintKeys += Docker / dockerLabels
+Global / excludeLintKeys += Docker / dockerEnvVars
+
+Docker / dockerLabels := Map(
+  "org.opencontainers.image.title" -> "Hydrozoa",
+  "org.opencontainers.image.description" -> "Cardano Hydrozoa L2 State Channel",
+  "org.opencontainers.image.version" -> version.value
+)
+
+Docker / dockerEnvVars := Map(
+  "JAVA_OPTS" -> "-Xmx2g -Xms512m"
+)
+
+// Ensure proper signal handling for graceful shutdown
+import com.typesafe.sbt.packager.docker._
+dockerCommands := dockerCommands.value.flatMap {
+  case cmd @ Cmd("FROM", _) => List(cmd, Cmd("STOPSIGNAL", "SIGTERM"))
+  case other => List(other)
+}
+
+val scalusVersion = "0.15.1"
+val bloxbeanVersion = "0.7.1"
+val http4sVersion = "0.23.32"
 
 // Main application
-lazy val core = (project in file("."))
+lazy val core: Project = (project in file("."))
     .settings(
       resolvers +=
           "Sonatype OSS New Snapshots" at "https://central.sonatype.com/repository/maven-snapshots/",
@@ -27,71 +53,67 @@ lazy val core = (project in file("."))
         // Using `org.scalus" %% "scalus` gives an error when using locally vendored version.
         "org.scalus" % "scalus_3" % scalusVersion withSources (),
         "org.scalus" % "scalus-cardano-ledger_3" % scalusVersion withSources (),
-        "org.scalus" % "scalus-bloxbean-cardano-client-lib_3" % scalusVersion withSources (),
         // Cardano Client library
-        "com.bloxbean.cardano" % "cardano-client-lib" % bloxbeanVersion,
         "com.bloxbean.cardano" % "cardano-client-backend-blockfrost" % bloxbeanVersion,
-        // Tapir for API definition
-        // "com.softwaremill.sttp.tapir" %% "tapir-netty-server-sync" % "1.11.14",
-        // "com.softwaremill.sttp.tapir" %% "tapir-swagger-ui-bundle" % "1.11.14",
-        // STTP4 Ox
-        // "com.softwaremill.sttp.client4" %% "ox" % "4.0.0-RC1", // FIXME: not the latest
-        // Argument parsing
-        // "com.monovore" %% "decline" % "2.5.0",
-        // Concurrency
-        // "com.softwaremill.ox" %% "core" % "0.5.11",
-        // "com.softwaremill.ox" %% "mdc-logback" % "0.5.13",
         // Logging
         "ch.qos.logback" % "logback-classic" % "1.5.18",
-        "com.typesafe.scala-logging" %% "scala-logging" % "3.9.6",
+        "org.typelevel" %% "log4cats-slf4j" % "2.7.1",
         // Used for input/output
         "org.scala-lang" %% "toolkit" % "0.7.0",
-        // jsoniter + tapit-jsoniter
-        // "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-core" % "2.33.2",
-        // "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-macros" % "2.33.2" % "compile-internal",
-        // "com.softwaremill.sttp.tapir" %% "tapir-jsoniter-scala" % "1.11.19",
-        // Prometheus Java "client"
-        // "io.prometheus" % "prometheus-metrics-core" % "1.3.6",
-        // "io.prometheus" % "prometheus-metrics-instrumentation-jvm" % "1.3.6",
-        // "io.prometheus" % "prometheus-metrics-exporter-httpserver" % "1.3.6",
-        // "io.bullet" %% "borer-core" % "1.12.0",
-        // "io.bullet" %% "borer-derivation" % "1.12.0",
         // cats
         "org.typelevel" %% "cats-core" % "2.13.0",
         "org.typelevel" %% "cats-effect" % "3.6.3",
         "com.github.suprnation.cats-actors" %% "cats-actors" % "2.0.1",
         "org.typelevel" %% "spire" % "0.18.0",
-        "com.lihaoyi" %% "sourcecode" % "0.3.0",
-        "org.typelevel" %% "spire" % "0.18.0",
         "org.scalactic" %% "scalactic" % "3.2.19",
-        "org.typelevel" %% "cats-core" % "2.13.0"
-        // "io.netty" % "netty-all" % "4.2.4.Final"
+        "org.typelevel" %% "cats-core" % "2.13.0",
+        // http4s - web server and websocket client
+        "org.http4s" %% "http4s-ember-server" % http4sVersion,
+        "org.http4s" %% "http4s-ember-client" % http4sVersion,
+        "org.http4s" %% "http4s-jdk-http-client" % "0.9.1",
+        "org.http4s" %% "http4s-dsl" % http4sVersion,
+        "org.http4s" %% "http4s-circe" % http4sVersion,
+        "com.comcast" %% "ip4s-core" % "3.6.0",
+        // circe for JSON
+        "io.circe" %% "circe-core" % "0.14.10",
+        "io.circe" %% "circe-generic" % "0.14.10",
+        "io.circe" %% "circe-parser" % "0.14.10",
+        // scodec for hex encoding
+        "org.scodec" %% "scodec-bits" % "1.2.1",
+        "io.github.cdimascio" % "dotenv-java" % "3.0.0"
       ),
       libraryDependencies ++= Seq(
-        "org.typelevel" %% "spire-laws" % "0.18.0",
-        "org.typelevel" %% "discipline-scalatest" % "2.3.0",
+        "org.typelevel" %% "spire-laws" % "0.18.0" % Test,
+        "org.typelevel" %% "discipline-scalatest" % "2.3.0" % Test,
         "org.scalatest" %% "scalatest" % "3.2.19" % Test,
         "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
         "org.typelevel" %% "cats-effect-testkit" % "3.6.3" % Test,
         "org.scalus" % "scalus-testkit_3" % scalusVersion % Test,
         "dev.optics" %% "monocle-core" % "3.3.0" % Test,
         "dev.optics" %% "monocle-macro" % "3.3.0" % Test
+      ),
+      // Fork JVM to properly pass system properties
+      run / fork := true,
+    )
+
+// Integration tests
+lazy val integration: Project = (project in file("integration"))
+    .dependsOn(core % "compile->compile;test->test")
+    .settings(
+      // Compile / mainClass := Some("hydrozoa.demo.Workload"),
+      publish / skip := true,
+      // Yaci suite requires a running Yaci DevKit instance; exclude from default test run.
+      // Run explicitly with: integration/testOnly hydrozoa.integration.stage1.Stage1PropertiesYaci
+      // NB: using * with testOnly still respects the excluded tests
+      Test / testOptions += Tests.Exclude(
+        Seq("hydrozoa.integration.stage1.Stage1PropertiesYaci")
+      ),
+      // test dependencies
+      libraryDependencies ++= Seq(
+        "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
+        "org.typelevel" %% "cats-effect" % "3.6.3" % Test
       )
     )
-// Integration tests
-//lazy val integration = (project in file("integration"))
-//    .dependsOn(core)
-//    .settings(
-//      Compile / mainClass := Some("hydrozoa.demo.Workload"),
-//      publish / skip := true,
-//      // test dependencies
-//      libraryDependencies ++= Seq(
-//        "com.softwaremill.sttp.tapir" %% "tapir-sttp-client4" % "1.11.25",
-//        "org.scalameta" %% "munit" % "1.1.0" % Test,
-//        "org.scalameta" %% "munit-scalacheck" % "1.1.0" % Test,
-//        "org.scalacheck" %% "scalacheck" % "1.18.1" % Test
-//      )
-//    )
 
 // Latest Scala 3 LTS version
 ThisBuild / scalaVersion := "3.3.6"
@@ -104,21 +126,24 @@ ThisBuild / scalacOptions ++= Seq(
   "-language:implicitConversions",
   "-Wvalue-discard",
   "-Wunused:all",
-  "-Wall"
+  "-Wall",
+  "-Yretain-trees", // Essential for incremental compilation
 )
 
 // Add the Scalus compiler plugin
 addCompilerPlugin("org.scalus" % "scalus-plugin_3" % scalusVersion)
-// Demo workload
-//lazy val demo = (project in file("demo"))
-//    .dependsOn(core, integration)
-//    .settings(
-//      Compile / mainClass := Some("hydrozoa.demo.Workload"),
-//      publish / skip := true,
-//      libraryDependencies ++= Seq(
-//        "org.scalacheck" %% "scalacheck" % "1.18.1"
-//      )
-//    )
+
+// Custom commands to format and lint all subprojects
+// TODO: Restore integration module to fmt and lint
+//addCommandAlias("fmtAll", ";core/scalafmtAll ;integration/scalafmtAll ;benchmark/scalafmtAll")
+//addCommandAlias("fmtCheckAll", ";core/scalafmtCheckAll ;integration/scalafmtCheckAll ;benchmark/scalafmtCheckAll")
+//addCommandAlias("lintAll", ";core/scalafixAll ;integration/scalafixAll ;benchmark/scalafixAll")
+//addCommandAlias("lintCheckAll", ";core/scalafixAll --check ;integration/scalafixAll --check ;benchmark/scalafixAll --check")
+addCommandAlias("fmtAll", ";core/scalafmtAll")
+addCommandAlias("fmtCheckAll", ";core/scalafmtCheckAll ")
+addCommandAlias("lintAll", ";core/scalafixAll ")
+addCommandAlias("lintCheckAll", ";core/scalafixAll --check ;")
+
 
 // Test dependencies
 ThisBuild / testFrameworks += new TestFramework("org.scalatest.tools.Framework")
@@ -132,7 +157,7 @@ inThisBuild(
 )
 
 // Benchmark subproject
-lazy val benchmark = (project in file("benchmark"))
+lazy val benchmark: Project = (project in file("benchmark"))
     .enablePlugins(JmhPlugin)
     .dependsOn(core) // access to your main code
     .settings(

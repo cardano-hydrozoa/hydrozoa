@@ -281,7 +281,7 @@ object PropertyBuilderTest extends Properties("PropertyBuilderTest") {
     import cats.effect.unsafe.implicits.global
 
     // Example 1: Dependent generation with labels
-    property("list generation") = PropertyBuilder.property { p =>
+    val _ = property("list generation") = PropertyBuilder.property { p =>
         val size = p.pick(Gen.choose(1, 10), "size")
         p.collect(s"size=$size")
 
@@ -292,7 +292,7 @@ object PropertyBuilderTest extends Properties("PropertyBuilderTest") {
     }
 
     // Example 2: Error handling
-    property("handles failures gracefully") = PropertyBuilder.property { p =>
+    val _ = property("handles failures gracefully") = PropertyBuilder.property { p =>
         val n = p.pick(Gen.choose(0, 10))
 
         p.pre(n > 0) // Skip if n is 0
@@ -304,7 +304,7 @@ object PropertyBuilderTest extends Properties("PropertyBuilderTest") {
     }
 
     // Example 3: Debugging with trace
-    property("trace example") = PropertyBuilder
+    val _ = property("trace example") = PropertyBuilder
         // .propertyWithSeed(Seed.fromBase64("TLR5sUXoUagIGs_9G_A6QLTLVqwAb5RJrH_EeGwc1eM=").get) {
         .property { p =>
             val x = p.pick(Gen.choose(1, 100), "x")
@@ -316,7 +316,7 @@ object PropertyBuilderTest extends Properties("PropertyBuilderTest") {
         }
 
     // Example 4: Using labels and collect
-    property("statistics collection") = PropertyBuilder.property { p =>
+    val _ = property("statistics collection") = PropertyBuilder.property { p =>
         val category = p.pick(Gen.oneOf("small", "medium", "large"), "category")
         p.collect(category)
         p.label(s"Testing $category category")
@@ -332,7 +332,7 @@ object PropertyBuilderTest extends Properties("PropertyBuilderTest") {
     }
 
     // Example 5: Multiple assertions with good error messages
-    property("multiple checks") = PropertyBuilder.property { p =>
+    val _ = property("multiple checks") = PropertyBuilder.property { p =>
         val numbers = p.pick(Gen.listOfN(5, Gen.choose(1, 100)), "numbers")
 
         p.assert(numbers.nonEmpty, "List should not be empty")

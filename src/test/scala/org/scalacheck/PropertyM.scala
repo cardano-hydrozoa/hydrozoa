@@ -252,12 +252,29 @@ object PropertyMTest extends Properties("PropertyM") {
 
     // `monadicIO` should catch otherwise-unhandled exceptions and turn them into properties with the Prop.Exception
     // status.
-
     val _ = property("demo: thrown exceptions") = {
         val prop = monadicIO(
           for {
               _ <- run(
                 throw new RuntimeException("This should just fail the test, not crash the suite")
+              )
+          } yield true
+        )
+        prop.map(eRes =>
+            eRes.status match {
+                case Prop.Exception(e) => eRes.copy(status = True)
+                case _                 => eRes.copy(status = False)
+            }
+        )
+    }
+
+    val _ = property("demo: IO.raiseError") = {
+        val prop = monadicIO(
+          for {
+              _ <- run(
+                IO.raiseError(
+                  new RuntimeException("This should just fail the test, not crash the suite")
+                )
               )
           } yield true
         )
@@ -354,12 +371,7 @@ object PropertyM:
       *
       * > {p} x ← e{q}
       *
-      * as
-      * ```
-      * pre p
-      * x <- run e
-      * assert q
-      * ```
+      * as `` pre p x <- run e assert q ``
       */
     def pre[M[_]](condition: Boolean)(using Monad[M]): PropertyM[M, Unit] =
         if condition then monadForPropM.pure(()) else stop(undecided)
@@ -474,7 +486,7 @@ object PropertyM:
         // This is adapted from the haskell equivalent:
         //        instance Testable prop => Testable (Gen prop) where
         //          property mp = MkProperty $ do p <- mp; unProperty (property p)
-        // but I'm not totally sure its correct. Do I need to slide the seed here?
+        // but I'm not totally sure it's correct. Do I need to slide the seed here?
         val testableGenProp: (Gen[Prop] => Prop) = mp =>
             Prop.apply(f = params => {
                 val (p, s) = Prop.startSeed(params)

@@ -21,17 +21,17 @@ object Property extends Properties("Coin/MultiAsset/Value") {
         p.withMinSuccessfulTests(10_000)
     }
 
-    property("MultiAsset.Unbounded subtracted from itself equals zero") =
+    val _ = property("MultiAsset.Unbounded subtracted from itself equals zero") =
         forAll(arbitrary[MultiAsset.Unbounded]) { ma =>
             ma - ma === MultiAsset.Unbounded.zero
         }
 
-    property("MultiAsset.Fractional subtracted from itself equals zero") =
+    val _ = property("MultiAsset.Fractional subtracted from itself equals zero") =
         forAll(arbitrary[MultiAsset.Fractional]) { ma =>
             ma - ma === MultiAsset.Fractional.zero
         }
 
-    property("Scale bounded multiasset by integral an inverse fractional") =
+    val _ = property("Scale bounded multiasset by integral an inverse fractional") =
         forAll(arbitrary[MultiAsset], genNonZeroSafeLong) { (ma, i) =>
             (ma *~ i /~ i).toMultiAsset === Right(ma)
         }
