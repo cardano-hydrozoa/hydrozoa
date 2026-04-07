@@ -30,25 +30,24 @@ import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfro
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, HeadPeerWallet}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap, evacuationKeyOrdering, evacuationKeyToData}
+import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap, evacuationKeyOrdering}
 import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
+import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.evacuationKeyToData
 import java.security.SecureRandom
 import monocle.Focus.focus
 import org.bouncycastle.crypto.generators.Ed25519KeyPairGenerator
 import org.bouncycastle.crypto.params.{Ed25519KeyGenerationParameters, Ed25519PrivateKeyParameters, Ed25519PublicKeyParameters}
-import scala.collection.immutable.SortedMap
-import scala.concurrent.duration.DurationInt
-import scalus.cardano.ledger.{Coin, PlutusScriptEvaluator, TransactionOutput, Utxo, Value}
 import scala.collection.immutable.{SortedMap, TreeMap}
-import scalus.cardano.address.{Address, Network}
+import scala.concurrent.duration.DurationInt
+import scalus.cardano.address.Address
 import scalus.cardano.ledger.{Coin, KeepRaw, PlutusScriptEvaluator, TransactionOutput, Utxo, Value}
 import scalus.cardano.txbuilder.TransactionBuilderStep.Spend
 import scalus.cardano.txbuilder.{TransactionBuilder, TransactionBuilderStep}
 import scalus.crypto.ed25519.{SigningKey, VerificationKey}
 import scalus.uplc.builtin.ByteString
 
-/** This generates the full Hydrozoa config out of a couple of
+/** This generates the full Hydrozoa config out of a couple of envvars.
   */
 object Bootstrap:
 
