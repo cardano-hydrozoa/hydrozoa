@@ -12,7 +12,6 @@ import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import scalus.*
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
-import scalus.cardano.ledger.{Language, Script}
 import scalus.cardano.onchain.plutus.prelude.*
 import scalus.cardano.onchain.plutus.prelude.Option.{None, Some}
 import scalus.cardano.onchain.plutus.prelude.crypto.bls12_381.G2
@@ -21,7 +20,7 @@ import scalus.cardano.onchain.plutus.v1.Value.+
 import scalus.cardano.onchain.plutus.v2.TxOut
 import scalus.cardano.onchain.plutus.v3.{Validator, *}
 import scalus.compiler.Compile
-import scalus.uplc.DeBruijnedProgram
+import scalus.uplc.PlutusV3
 import scalus.uplc.builtin.*
 import scalus.uplc.builtin.Builtins.*
 import scalus.uplc.builtin.ByteString.hex
@@ -430,44 +429,20 @@ object RuleBasedTreasuryValidator extends Validator {
 }
 
 object RuleBasedTreasuryScript {
-    // Compile the validator to Scalus Intermediate Representation (SIR)
-    private val compiledSir = compiler.compile(RuleBasedTreasuryValidator.validate)
+    // Compile the validator using PlutusV3.compile
+    given scalus.compiler.Options = scalus.compiler.Options.default
 
-    // Convert to optimized UPLC with error traces for PlutusV3
-    private val compiledUplc = compiledSir.toUplcOptimized(generateErrorTraces = true)
+    val compiledPlutusV3Program: PlutusV3[Data => Unit] =
+        PlutusV3.compile(RuleBasedTreasuryValidator.validate)
 
-    private val compiledPlutusV3Program = compiledUplc.plutusV3
-
-    // Native Scalus PlutusScript - no Bloxbean dependency needed
-    private val compiledDeBruijnedProgram: DeBruijnedProgram =
-        compiledPlutusV3Program.deBruijnedProgram
-
-    // Various encoding formats available natively in Scalus
-    // private def cborEncoded: Array[Byte] = compiledDeBruijnedProgram.cborEncoded
-    val flatEncoded: Array[Byte] = compiledDeBruijnedProgram.flatEncoded
-
-    val compiledCbor: Array[Byte] = compiledDeBruijnedProgram.cborEncoded
-
-    val compiledPlutusV3Script =
-        Script.PlutusV3(ByteString.fromArray(RuleBasedTreasuryScript.compiledCbor))
-
-    val compiledScriptHash = compiledPlutusV3Script.scriptHash
-
-    // Generate .plutus file if needed
-    def writePlutusFile(path: String): Unit = {
-        compiledPlutusV3Program.writePlutusFile(path, Language.PlutusV3)
-    }
-
-    //// For compatibility with existing code that expects hex representation
-    // def getScriptHex: String = compiledDoubleCborHex
-
-    // For compatibility with code that expects script hash as byte array
-    val getScriptHash: Array[Byte] = compiledScriptHash.bytes
+    private val compiledScriptHash: ScriptHash = compiledPlutusV3Program.script.scriptHash
 
     def address(n: Network): ShelleyAddress =
         ShelleyAddress(
           network = n,
-          payment = ShelleyPaymentPart.Script(RuleBasedTreasuryScript.compiledScriptHash),
+          payment = ShelleyPaymentPart.Script(
+            scalus.cardano.ledger.ScriptHash.fromArray(this.compiledScriptHash.bytes)
+          ),
           delegation = Null
         )
 }

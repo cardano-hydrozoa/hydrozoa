@@ -7,6 +7,7 @@ import cats.syntax.all.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.*
+import hydrozoa.config.HydrozoaBlueprint
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.node.NodePrivateConfig
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.{pubKeyHash, shelleyAddress}
@@ -18,7 +19,6 @@ import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.rulebased.DisputeActor.Error.NoSuitableCollateralUtxosFound
 import hydrozoa.rulebased.DisputeActor.Error.ParseError.Treasury.TreasuryResolved
 import hydrozoa.rulebased.DisputeActor.{Error, *}
-import hydrozoa.rulebased.ledger.l1.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.{AwaitingVote, Voted}
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
@@ -122,7 +122,7 @@ final case class DisputeActor(
             // Wrapped in EitherT because a Left doesn't signify an unrecoverable failure
             unparsedDisputeUtxos <- handleCardanoBackendError(
               cardanoBackend.utxosAt(
-                address = DisputeResolutionScript.address(config.cardanoInfo.network),
+                address = HydrozoaBlueprint.mkDisputeAddress(config.cardanoInfo.network),
                 asset = (config.headMultisigScript.policyId, config.headTokenNames.voteTokenName)
               )
             )
@@ -131,7 +131,7 @@ final case class DisputeActor(
 
             unparsedTreasuryUtxo <- handleCardanoBackendError(
               cardanoBackend.utxosAt(
-                address = RuleBasedTreasuryScript.address(config.cardanoInfo.network),
+                address = HydrozoaBlueprint.mkTreasuryAddress(config.cardanoInfo.network),
                 asset =
                     (config.headMultisigScript.policyId, config.headTokenNames.treasuryTokenName)
               )

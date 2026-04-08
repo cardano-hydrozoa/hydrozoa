@@ -8,7 +8,7 @@ import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{AddrKeyHash, Script, ScriptRef, TransactionInput, Utxo, Value}
+import scalus.cardano.ledger.{AddrKeyHash, ScriptRef, TransactionInput, Utxo, Value}
 
 type ScriptReferenceUtxosGen = CardanoNetwork.Section => Gen[ScriptReferenceUtxos]
 
@@ -26,20 +26,34 @@ def generateScriptReferenceUtxos(network: CardanoNetwork.Section): Gen[ScriptRef
             )
         )
 
-    mkUtxo = (id: TransactionInput, script: Script) =>
-        Utxo(id, Babbage(address, Value.ada(10), None, Some(ScriptRef(script))))
+    // Use the actual compiled scripts but accessed from the Blueprint
+    // The scripts are already compiled at compile time, so this doesn't add overhead
+    treasuryScript = RuleBasedTreasuryScript.compiledPlutusV3Program.script
 
-    Right(treasury) =
-        ScriptReferenceUtxos.TreasuryScriptUtxo(
-          network,
-          mkUtxo(treasuryId, RuleBasedTreasuryScript.compiledPlutusV3Script)
-        )
+    disputeScript = DisputeResolutionScript.compiledPlutusV3Program.script
 
-    Right(dispute) =
-        ScriptReferenceUtxos.DisputeScriptUtxo(
-          network,
-          mkUtxo(disputeId, DisputeResolutionScript.compiledPlutusV3Script)
-        )
+    treasuryUtxo = Utxo(
+      treasuryId,
+      Babbage(
+        address,
+        Value.ada(10),
+        None,
+        Some(ScriptRef(treasuryScript))
+      )
+    )
+
+    disputeUtxo = Utxo(
+      disputeId,
+      Babbage(
+        address,
+        Value.ada(10),
+        None,
+        Some(ScriptRef(disputeScript))
+      )
+    )
+
+    Right(treasury) = ScriptReferenceUtxos.TreasuryScriptUtxo(network, treasuryUtxo)
+    Right(dispute) = ScriptReferenceUtxos.DisputeScriptUtxo(network, disputeUtxo)
 
 } yield ScriptReferenceUtxos(
   treasury,
