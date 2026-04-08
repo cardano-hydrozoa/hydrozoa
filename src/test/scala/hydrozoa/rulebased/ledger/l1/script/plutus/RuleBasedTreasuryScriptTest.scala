@@ -21,19 +21,23 @@ class RuleBasedTreasuryScriptTest extends AnyFunSuite {
         assert(RuleBasedTreasuryScript.toString != null)
     }
 
-    // TODO: restore once hash issue is fixed in Scalus
-    ignore("Script compiles producing expected hash") {
+    test("Script compiles producing expected hash") {
+        val goldenHash =
+            ScriptHash.fromHex("75914bc23d8d9f9845486458f3a681a03af97b6da4d6a59aac0b301b")
+        if RuleBasedTreasuryScript.compiledScriptHash != goldenHash then {
+            RuleBasedTreasuryScript.writePlutusFile("ruleBasedTreasury.plutus")
+        }
         assertResult(
-          ScriptHash.fromHex("d5cc516d835e1abfdb448f02fdeb7d168c1bd48ec56a4ed3e2f70c7a"),
+          goldenHash,
           "Script hash should be stable. In case the script is modified or Scalus is bumped please update the test."
         ) {
             RuleBasedTreasuryScript.compiledScriptHash
         }
     }
 
-    ignore("Script compiles producing expected size") {
+    test("Script compiles producing expected size") {
         assertResult(
-          11244,
+          7768,
           "Script size should be stable. In case the script is modified por Scalus is bumped lease update the test."
         ) {
             RuleBasedTreasuryScript.flatEncoded.length
