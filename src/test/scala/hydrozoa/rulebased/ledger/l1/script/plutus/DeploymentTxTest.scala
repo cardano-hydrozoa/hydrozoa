@@ -12,7 +12,7 @@ import scalus.cardano.ledger.{Coin, ScriptRef, TransactionHash, TransactionInput
 import test.{SeedPhrase, TestPeers, TransactionChain}
 
 @nowarn("msg=unused value")
-class DeployTxTest extends AnyFunSuite {
+class DeploymentTxTest extends AnyFunSuite {
 
     test("Deploy RuleBasedTreasuryScript to L1 mock") {
         // 1. Initialize a fresh L1 mock using test sauce seed phrase
@@ -47,7 +47,7 @@ class DeployTxTest extends AnyFunSuite {
         val scriptRef = ScriptRef(treasuryScript)
 
         // 3. Build deploy transaction
-        val deployTxBuilder = DeployTxOps.Build(
+        val deployTxBuilder = DeploymentTxOps.Build(
           utxosToSpend = NonEmptyList.one(fundingUtxo),
           scriptToDeploy = scriptRef
         )
@@ -129,7 +129,7 @@ class DeployTxTest extends AnyFunSuite {
         val scriptRef = ScriptRef(disputeScript)
 
         // 3. Build deploy transaction
-        val deployTxBuilder = DeployTxOps.Build(
+        val deployTxBuilder = DeploymentTxOps.Build(
           utxosToSpend = NonEmptyList.one(fundingUtxo),
           scriptToDeploy = scriptRef
         )

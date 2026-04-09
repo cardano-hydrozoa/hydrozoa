@@ -22,20 +22,20 @@ import scalus.cardano.txbuilder.TransactionBuilderStep.{Send, Spend}
   * @param refScriptUtxo
   *   utxo id where the script is located
   */
-final case class DeployTx(
+final case class DeploymentTx(
     scriptDeployed: ScriptHash,
     // TODO: we may split up [[ScriptReferenceUtxos]] tp make it more specific
     refScriptUtxo: TransactionInput,
     override val tx: Transaction,
-    override val txLens: Lens[DeployTx, Transaction] = Focus[DeployTx](_.tx),
+    override val txLens: Lens[DeploymentTx, Transaction] = Focus[DeploymentTx](_.tx),
     override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
-) extends Tx[DeployTx]
+) extends Tx[DeploymentTx]
 
-object DeployTx {
-    export DeployTxOps.Config
+object DeploymentTx {
+    export DeploymentTxOps.Config
 }
 
-private object DeployTxOps {
+private object DeploymentTxOps {
 
     type Config = CardanoNetwork.Section
 
@@ -59,7 +59,7 @@ private object DeployTxOps {
         scriptToDeploy: ScriptRef
     ) {
 
-        def result(using config: Config): Either[SomeBuildError | Error, DeployTx] = {
+        def result(using config: Config): Either[SomeBuildError | Error, DeploymentTx] = {
 
             val burnAddress =
                 if config.network.isMainnet
@@ -97,7 +97,7 @@ private object DeployTxOps {
                   diffHandler = Change.changeOutputDiffHandler(1),
                   validators = nonSigningValidators
                 )
-            } yield DeployTx(
+            } yield DeploymentTx(
               scriptDeployed = scriptToDeploy.script.scriptHash,
               refScriptUtxo = TransactionInput(finalized.transaction.id, 0),
               tx = finalized.transaction,
