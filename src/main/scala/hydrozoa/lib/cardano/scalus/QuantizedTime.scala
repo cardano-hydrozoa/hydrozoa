@@ -186,6 +186,9 @@ object QuantizedTime {
               )
             )
 
+        def fromSlot(slotConfig: SlotConfig, slot: Long): QuantizedInstant =
+            Slot.apply(slot).toQuantizedInstant(slotConfig)
+
         def ofEpochSeconds(slotConfig: SlotConfig, posixSeconds: Long): QuantizedInstant =
             apply(slotConfig, Instant.ofEpochSecond(posixSeconds))
 

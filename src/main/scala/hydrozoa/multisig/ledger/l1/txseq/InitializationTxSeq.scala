@@ -79,6 +79,12 @@ private object InitializationTxSeqOps {
                 actual: Slot
             )
             case TTLValidityStartGapError(difference: Slot, actual: Slot)
+
+            // TODO: Finish cases
+            override def toString: String = this match {
+                case FallbackTxMismatch(expected, actual) =>
+                    s"Fallback Tx Mismatch.\n\tExpected:\n ${expected.tx}\n\tActual:\n$actual"
+            }
         }
 
     }
@@ -157,7 +163,7 @@ private object InitializationTxSeqOps {
                 }
 
                 _ <-
-                    if expectedFallbackTx.tx == fallbackTx then Right(())
+                    if expectedFallbackTx.tx.body == fallbackTx.body then Right(())
                     else
                         Left(
                           FallbackTxMismatch(

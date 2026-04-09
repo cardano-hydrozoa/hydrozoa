@@ -12,12 +12,8 @@ import scodec.bits.ByteVector
 object JsonCodecs {
     object CIP0116 {
         object Conway {
-            // Scalus VerificationKey codec (32 bytes as hex)
-            given Encoder[VerificationKey] =
-                Encoder.encodeString.contramap(vk => ByteVector(vk.bytes.toArray).toHex)
-
-            given Decoder[VerificationKey] =
-                Decoder.decodeString.emap { hexStr =>
+            object Helpers {
+                def verificationKeyFromText(hexStr: String): Either[String, VerificationKey] =
                     ByteVector
                         .fromHex(hexStr)
                         .toRight(s"Invalid hex string for verification key: $hexStr")
@@ -29,6 +25,15 @@ object JsonCodecs {
                                 )
                             else Left(s"Verification key must be 32 bytes, got ${bv.size}")
                         }
+            }
+
+            // Scalus VerificationKey codec (32 bytes as hex)
+            given Encoder[VerificationKey] =
+                Encoder.encodeString.contramap(vk => ByteVector(vk.bytes.toArray).toHex)
+
+            given Decoder[VerificationKey] =
+                Decoder.decodeString.emap {
+                    Helpers.verificationKeyFromText
                 }
 
             // Scalus Signature codec (64 bytes as hex)
@@ -197,12 +202,12 @@ object JsonCodecs {
 
             implicit val transactionInputDecoder: Decoder[TransactionInput] = c =>
                 for {
-                    txIdBytes <- c.downField("transaction_id").as[Array[Byte]]
+                    txIdHex <- c.downField("transaction_id").as[String]
                     index <- c.downField("index").as[Int]
                 } yield {
                     import scalus.cardano.ledger.{Blake2b_256, Hash, HashPurpose}
                     val txHash = Hash[Blake2b_256, HashPurpose.TransactionHash](
-                      scalus.uplc.builtin.ByteString.fromArray(txIdBytes)
+                      scalus.uplc.builtin.ByteString.fromHex(txIdHex)
                     )
                     TransactionInput(txHash, index)
                 }

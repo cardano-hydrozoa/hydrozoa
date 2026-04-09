@@ -332,7 +332,7 @@ case class RemoteL2LedgerCodecs(config: CardanoNetwork.Section) {
 
     // Payout.Obligation codec
     // Encode directly as TransactionOutput (without "utxo" wrapper) for API compatibility
-    given Encoder[Payout.Obligation] = Encoder.instance { po =>
+    given payoutObligationEncoder: Encoder[Payout.Obligation] = Encoder.instance { po =>
         po.utxo.asJson
     }
     given payoutObligationDecoder: Decoder[Payout.Obligation] = Decoder.instance { c =>

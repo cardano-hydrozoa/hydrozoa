@@ -42,7 +42,7 @@ import RequestTimes.*
   *   After a deposit utxo is mature, the head has until this duration elapses to attempt to absorb
   *   it. Defines _depositAbsorptionEnd_ point.
   */
-final case class TxTiming private (
+final case class TxTiming(
     override val minSettlementDuration: MinSettlementDuration,
     override val inactivityMarginDuration: InactivityMarginDuration,
     override val silenceDuration: SilenceDuration,
@@ -318,7 +318,7 @@ object TxTiming {
         given Conversion[FinalizationTxEndTime, QuantizedInstant] = identity
 
         opaque type FallbackTxStartTime = QuantizedInstant
-        private[timing] def FallbackTxStartTime(x: QuantizedInstant): FallbackTxStartTime = x
+        def FallbackTxStartTime(x: QuantizedInstant): FallbackTxStartTime = x
         given Conversion[FallbackTxStartTime, QuantizedInstant] = identity
 
         opaque type ForcedMajorBlockTime = QuantizedInstant
@@ -326,7 +326,7 @@ object TxTiming {
         given Conversion[ForcedMajorBlockTime, QuantizedInstant] = identity
 
         opaque type MajorBlockWakeupTime = QuantizedInstant
-        private[timing] def MajorBlockWakeupTime(x: QuantizedInstant): MajorBlockWakeupTime = x
+        def MajorBlockWakeupTime(x: QuantizedInstant): MajorBlockWakeupTime = x
         given Conversion[MajorBlockWakeupTime, QuantizedInstant] = identity
     }
 

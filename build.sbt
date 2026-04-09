@@ -1,6 +1,6 @@
 enablePlugins(
-    JavaAppPackaging,
-    DockerPlugin
+  JavaAppPackaging,
+  DockerPlugin
 )
 
 Compile / mainClass := Some("hydrozoa.app.Main")
@@ -10,7 +10,7 @@ Docker / packageName := "cardano-hydrozoa/hydrozoa"
 Docker / version := version.value
 Docker / daemonUser := "hydrozoa"
 Docker / daemonGroup := "hydrozoa"
-dockerBaseImage := "eclipse-temurin:21-jre-jammy"  // Use Debian-based image for better compatibility
+dockerBaseImage := "eclipse-temurin:21-jre-jammy" // Use Debian-based image for better compatibility
 dockerExposedPorts ++= Seq(8080)
 
 // Skip documentation generation for Docker
@@ -33,8 +33,8 @@ Docker / dockerEnvVars := Map(
 // Ensure proper signal handling for graceful shutdown
 import com.typesafe.sbt.packager.docker._
 dockerCommands := dockerCommands.value.flatMap {
-  case cmd @ Cmd("FROM", _) => List(cmd, Cmd("STOPSIGNAL", "SIGTERM"))
-  case other => List(other)
+    case cmd @ Cmd("FROM", _) => List(cmd, Cmd("STOPSIGNAL", "SIGTERM"))
+    case other                => List(other)
 }
 
 val scalusVersion = "0.15.1"
@@ -78,9 +78,11 @@ lazy val core: Project = (project in file("."))
         "io.circe" %% "circe-core" % "0.14.10",
         "io.circe" %% "circe-generic" % "0.14.10",
         "io.circe" %% "circe-parser" % "0.14.10",
+        // upickle, to wrap scalus's blockfrost encoding
+        "com.lihaoyi" %% "upickle" % "4.4.3",
         // scodec for hex encoding
         "org.scodec" %% "scodec-bits" % "1.2.1",
-        "io.github.cdimascio" % "dotenv-java" % "3.0.0"
+        "io.github.cdimascio" % "dotenv-java" % "3.0.0",
       ),
       libraryDependencies ++= Seq(
         "org.typelevel" %% "spire-laws" % "0.18.0" % Test,
@@ -143,7 +145,6 @@ addCommandAlias("fmtAll", ";core/scalafmtAll")
 addCommandAlias("fmtCheckAll", ";core/scalafmtCheckAll ")
 addCommandAlias("lintAll", ";core/scalafixAll ")
 addCommandAlias("lintCheckAll", ";core/scalafixAll --check ;")
-
 
 // Test dependencies
 ThisBuild / testFrameworks += new TestFramework("org.scalatest.tools.Framework")
