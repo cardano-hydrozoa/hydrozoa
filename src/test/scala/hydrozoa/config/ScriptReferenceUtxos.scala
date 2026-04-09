@@ -32,12 +32,14 @@ def generateScriptReferenceUtxos(network: CardanoNetwork.Section): Gen[ScriptRef
     Right(treasury) =
         ScriptReferenceUtxos.TreasuryScriptUtxo(
           network,
+          // TODO: use Blueprint
           mkUtxo(treasuryId, RuleBasedTreasuryScript.compiledPlutusV3Script)
         )
 
     Right(dispute) =
         ScriptReferenceUtxos.DisputeScriptUtxo(
           network,
+          // TODO: use Blueprint
           mkUtxo(disputeId, DisputeResolutionScript.compiledPlutusV3Script)
         )
 

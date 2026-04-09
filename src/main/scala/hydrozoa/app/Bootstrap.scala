@@ -5,6 +5,7 @@ import cats.effect.unsafe.implicits.global
 import cats.effect.{ExitCode, IO, IOApp}
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.app.Main.loadEnv
+import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.HeadConfig.Preinit
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
@@ -34,6 +35,7 @@ import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap, evacuationK
 import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.evacuationKeyToData
+import hydrozoa.rulebased.ledger.l1.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
 import java.security.SecureRandom
 import monocle.Focus.focus
 import org.bouncycastle.crypto.generators.Ed25519KeyPairGenerator
@@ -41,7 +43,8 @@ import org.bouncycastle.crypto.params.{Ed25519KeyGenerationParameters, Ed25519Pr
 import scala.collection.immutable.{SortedMap, TreeMap}
 import scala.concurrent.duration.DurationInt
 import scalus.cardano.address.Address
-import scalus.cardano.ledger.{Coin, KeepRaw, PlutusScriptEvaluator, TransactionOutput, Utxo, Value}
+import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger.{Coin, KeepRaw, PlutusScriptEvaluator, ScriptRef, TransactionHash, TransactionInput, TransactionOutput, Utxo, Value}
 import scalus.cardano.txbuilder.TransactionBuilderStep.Spend
 import scalus.cardano.txbuilder.{TransactionBuilder, TransactionBuilderStep}
 import scalus.crypto.ed25519.{SigningKey, VerificationKey}
@@ -297,9 +300,58 @@ object Bootstrap:
           // TODO: I assume that these will be pre-populated on preview, pre-prod, and mainnet, and that we'll have
           // a different utility to publish the utxo to a given network.
           // We should probably query these utxos using the backend, and then parse.
-          scriptReferenceUtxos = ???
+          scriptReferenceUtxos = fakeScriptReferenceUtxos(cardanoNetwork)
         ).get
     }
+
+    // TODO: remove once we have a proper way of doing things
+    def fakeScriptReferenceUtxos(network: CardanoNetwork.Section): ScriptReferenceUtxos =
+        val txId = TransactionHash.fromHex(
+          "3ea527455ed27000badf7567912a3fec796a35accf594fa86ab974bbb7f1dad2"
+        )
+
+        val burnAddress =
+            if network.network.isMainnet
+            then
+                Address.fromBech32(
+                  "addr1wxa7ec20249sqg87yu2aqkqp735qa02q6yd93u28gzul93ghspjnt"
+                )
+            else
+                Address.fromBech32(
+                  "addr_test1wza7ec20249sqg87yu2aqkqp735qa02q6yd93u28gzul93gvc4wuw"
+                )
+
+        // TODO: use Blueprint
+        val treasuryScript = RuleBasedTreasuryScript.compiledPlutusV3Script
+        val disputeScript = DisputeResolutionScript.compiledPlutusV3Script
+
+        val treasuryUtxo = Utxo(
+          TransactionInput(txId, 0),
+          Babbage(
+            burnAddress,
+            Value.ada(10),
+            None,
+            Some(ScriptRef(treasuryScript))
+          )
+        )
+
+        val disputeUtxo = Utxo(
+          TransactionInput(txId, 1),
+          Babbage(
+            burnAddress,
+            Value.ada(10),
+            None,
+            Some(ScriptRef(disputeScript))
+          )
+        )
+
+        val Right(treasury) = ScriptReferenceUtxos.TreasuryScriptUtxo(network, treasuryUtxo)
+        val Right(dispute) = ScriptReferenceUtxos.DisputeScriptUtxo(network, disputeUtxo)
+
+        ScriptReferenceUtxos(
+          treasury,
+          dispute
+        )
 
 end Bootstrap
 
