@@ -18,6 +18,15 @@ object HydrozoaBlueprint {
     enum Error extends Throwable:
         case BlueprintLoadError(message: String, cause: Option[Throwable] = None)
 
+        override def toString: String = this match
+            case BlueprintLoadError(message, cause) =>
+                cause match
+                    case Some(t) => s"BlueprintLoadError: $message (caused by: ${t.getMessage})"
+                    case None    => s"BlueprintLoadError: $message"
+
+        override def getMessage: String = this match
+            case BlueprintLoadError(message, _) => message
+
     /** Loads the blueprint from the classpath.
       *
       * This uses a lazy val to load once and cache the result.

@@ -30,10 +30,19 @@ object ScriptReferenceUtxos {
         )
     }
 
-    // TODO: Expand errors, add toString
     enum Error extends Throwable:
         case InvalidTreasuryScriptUtxo
         case InvalidDisputeScriptUtxo
+
+        override def toString: String = this match
+            case InvalidTreasuryScriptUtxo => "InvalidTreasuryScriptUtxo"
+            case InvalidDisputeScriptUtxo  => "InvalidDisputeScriptUtxo"
+
+        override def getMessage: String = this match
+            case InvalidTreasuryScriptUtxo =>
+                "The provided UTXO is not a valid treasury script reference UTXO"
+            case InvalidDisputeScriptUtxo =>
+                "The provided UTXO is not a valid dispute resolution script reference UTXO"
 
     case class TreasuryScriptUtxo private (utxo: Utxo)
 
