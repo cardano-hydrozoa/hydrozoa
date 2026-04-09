@@ -1,5 +1,6 @@
 package hydrozoa.rulebased.ledger.l1.script.plutus
 
+import hydrozoa.config.HydrozoaBlueprint
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.DisputeRedeemer
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatumOnchain
@@ -64,7 +65,7 @@ object Export {
       */
     def exportBlueprint(): Unit = {
         val blueprint = createBlueprint()
-        val outputPath = "src/main/resources/plutus.json"
+        val outputPath = HydrozoaBlueprint.blueprintFilePath
 
         // Create parent directories if they don't exist
         val outputFile = new File(outputPath)

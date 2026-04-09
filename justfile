@@ -39,6 +39,14 @@ token-recovery:
   - sbt "runMain hydrozoa.app.TokenRecovery"
   just notify "token-recovery"
 
+export:
+  - sbt "runMain hydrozoa.rulebased.ledger.l1.script.plutus.Export"
+  just notify "export"
+
+export-test:
+  - sbt "testOnly *ExportTest*"
+  just notify "export-test"
+
 migrate ADDRESS:
   - sbt "runMain hydrozoa.app.Migrate {{ADDRESS}}"
   just notify "migrate"

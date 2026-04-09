@@ -1,5 +1,6 @@
 package hydrozoa.rulebased.ledger.l1.script.plutus
 
+import hydrozoa.config.HydrozoaBlueprint
 import java.io.File
 import java.nio.file.Files
 import org.scalatest.funsuite.AnyFunSuite
@@ -9,7 +10,7 @@ import scalus.cardano.blueprint.Blueprint
 @nowarn("msg=unused value")
 class ExportTest extends AnyFunSuite {
 
-    private val blueprintPath = "src/main/resources/hydrozoa/scripts/plutus.json"
+    private val blueprintPath = HydrozoaBlueprint.blueprintFilePath
 
     test("Blueprint file exists") {
         val file = new File(blueprintPath)

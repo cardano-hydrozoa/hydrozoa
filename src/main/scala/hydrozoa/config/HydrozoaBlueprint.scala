@@ -1,5 +1,7 @@
 package hydrozoa.config
 
+import cats.effect.unsafe.implicits.global
+import cats.effect.{IO, Resource}
 import scala.util.{Failure, Success, Try}
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
@@ -27,28 +29,36 @@ object HydrozoaBlueprint {
         override def getMessage: String = this match
             case BlueprintLoadError(message, _) => message
 
+    /** Path to the blueprint file in the resources directory */
+    val blueprintResourcePath: String = "/plutus.json"
+
+    /** Path to the blueprint file in the source tree */
+    val blueprintFilePath: String = "src/main/resources/plutus.json"
+
     /** Loads the blueprint from the classpath.
       *
       * This uses a lazy val to load once and cache the result.
       */
     private lazy val loadBlueprint: Either[Error, Blueprint] = {
-        Try {
-            val resourcePath = "/plutus.json"
-            val stream = getClass.getResourceAsStream(resourcePath)
-            if stream == null then {
-                throw new IllegalStateException(
-                  s"Blueprint resource not found: $resourcePath. " +
-                      "Make sure to run 'nix develop --command sbtn compile' first."
-                )
-            }
-            val source = scala.io.Source.fromInputStream(stream)
-            try {
+        {
+            val result = (for {
+                stream <- Resource.fromAutoCloseable(IO {
+                    val s = getClass.getResourceAsStream(blueprintResourcePath)
+                    if s == null then {
+                        throw new IllegalStateException(
+                          s"Blueprint resource not found: $blueprintResourcePath. " +
+                              "Make sure to run 'nix develop --command sbtn compile' first."
+                        )
+                    }
+                    s
+                })
+                source <- Resource.fromAutoCloseable(IO(scala.io.Source.fromInputStream(stream)))
+            } yield {
                 val json = source.mkString
                 Blueprint.fromJson(json)
-            } finally {
-                source.close()
-                stream.close()
-            }
+            }).use(IO.pure).unsafeRunSync()
+
+            Try(result)
         } match {
             case Success(blueprint) => Right(blueprint)
             case Failure(exception) =>
