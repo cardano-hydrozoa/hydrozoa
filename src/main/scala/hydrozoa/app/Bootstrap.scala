@@ -5,7 +5,6 @@ import cats.effect.unsafe.implicits.global
 import cats.effect.{ExitCode, IO, IOApp}
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.app.Main.loadEnv
-import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.HeadConfig.Preinit
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
@@ -21,6 +20,7 @@ import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.config.node.NodeConfig
 import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
+import hydrozoa.config.{HydrozoaBlueprint, ScriptReferenceUtxos}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
@@ -35,7 +35,6 @@ import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap, evacuationK
 import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.evacuationKeyToData
-import hydrozoa.rulebased.ledger.l1.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
 import java.security.SecureRandom
 import monocle.Focus.focus
 import org.bouncycastle.crypto.generators.Ed25519KeyPairGenerator
@@ -321,9 +320,8 @@ object Bootstrap:
                   "addr_test1wza7ec20249sqg87yu2aqkqp735qa02q6yd93u28gzul93gvc4wuw"
                 )
 
-        // TODO: use Blueprint
-        val treasuryScript = RuleBasedTreasuryScript.compiledPlutusV3Script
-        val disputeScript = DisputeResolutionScript.compiledPlutusV3Script
+        val treasuryScript = HydrozoaBlueprint.treasuryScript
+        val disputeScript = HydrozoaBlueprint.disputeScript
 
         val treasuryUtxo = Utxo(
           TransactionInput(txId, 0),

@@ -6,7 +6,8 @@ import scala.util.{Failure, Success, Try}
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.blueprint.Blueprint
-import scalus.cardano.ledger.ScriptHash
+import scalus.cardano.ledger.{Script, ScriptHash}
+import scalus.uplc.builtin.ByteString
 
 /** Single source of truth for Hydrozoa script hashes and addresses, loaded from the CIP-57
   * blueprint.
@@ -113,6 +114,62 @@ object HydrozoaBlueprint {
         } yield ScriptHash.fromHex(hashHex)
     }
 
+    /** Gets the compiled PlutusV3 script for the Rule-Based Treasury validator from the blueprint.
+      */
+    private def getTreasuryScript: Either[Error, Script] = {
+        for {
+            blueprint <- loadBlueprint
+            validator <- blueprint.validators
+                .find(_.title == "Rule-Based Treasury Validator")
+                .toRight(
+                  Error.BlueprintLoadError(
+                    "Rule-Based Treasury Validator not found in blueprint",
+                    None
+                  )
+                )
+            compiledCodeHex <- validator.compiledCode.toRight(
+              Error.BlueprintLoadError(
+                "Rule-Based Treasury Validator compiledCode not present in blueprint",
+                None
+              )
+            )
+            scriptBytes <- Try(ByteString.fromHex(compiledCodeHex)).toEither.left.map(e =>
+                Error.BlueprintLoadError(
+                  s"Failed to parse treasury script hex: ${e.getMessage}",
+                  Some(e)
+                )
+            )
+        } yield Script.PlutusV3(scriptBytes)
+    }
+
+    /** Gets the compiled PlutusV3 script for the Dispute Resolution validator from the blueprint.
+      */
+    private def getDisputeScript: Either[Error, Script] = {
+        for {
+            blueprint <- loadBlueprint
+            validator <- blueprint.validators
+                .find(_.title == "Dispute Resolution Validator")
+                .toRight(
+                  Error.BlueprintLoadError(
+                    "Dispute Resolution Validator not found in blueprint",
+                    None
+                  )
+                )
+            compiledCodeHex <- validator.compiledCode.toRight(
+              Error.BlueprintLoadError(
+                "Dispute Resolution Validator compiledCode not present in blueprint",
+                None
+              )
+            )
+            scriptBytes <- Try(ByteString.fromHex(compiledCodeHex)).toEither.left.map(e =>
+                Error.BlueprintLoadError(
+                  s"Failed to parse dispute script hex: ${e.getMessage}",
+                  Some(e)
+                )
+            )
+        } yield Script.PlutusV3(scriptBytes)
+    }
+
     /** The canonical script hash for the Rule-Based Treasury validator.
       *
       * This is loaded from the blueprint and represents the hash of the compiled script. Throws if
@@ -131,6 +188,26 @@ object HydrozoaBlueprint {
     lazy val disputeScriptHash: ScriptHash = getDisputeScriptHash match {
         case Right(hash) => hash
         case Left(error) => throw error
+    }
+
+    /** The canonical PlutusV3 script for the Rule-Based Treasury validator.
+      *
+      * This is loaded from the blueprint and represents the compiled script. Throws if the
+      * blueprint cannot be loaded or the script is not found.
+      */
+    lazy val treasuryScript: Script = getTreasuryScript match {
+        case Right(script) => script
+        case Left(error)   => throw error
+    }
+
+    /** The canonical PlutusV3 script for the Dispute Resolution validator.
+      *
+      * This is loaded from the blueprint and represents the compiled script. Throws if the
+      * blueprint cannot be loaded or the script is not found.
+      */
+    lazy val disputeScript: Script = getDisputeScript match {
+        case Right(script) => script
+        case Left(error)   => throw error
     }
 
     /** Creates the Rule-Based Treasury script address for the given network.
