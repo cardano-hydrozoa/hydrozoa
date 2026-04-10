@@ -14,7 +14,6 @@ import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.commitment.TrustedSetup
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.rulebased.DisputeActor
-import hydrozoa.rulebased.ledger.l1.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.Voted
@@ -50,7 +49,7 @@ object DisputeActorTestHelpers {
     ): MultiNodeConfigTestM[scalus.cardano.ledger.Utxo] =
         for {
             env <- ask
-            disputeResAddress = DisputeResolutionScript.address(env.headConfig.network)
+            disputeResAddress = HydrozoaBlueprint.mkDisputeAddress(env.headConfig.network)
             ownVoteUtxoOutput = Babbage(
               address = disputeResAddress,
               value = Value.assets(
@@ -205,7 +204,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
 
         voteInput = TransactionInput(txHash, index)
         voteOutput = Babbage(
-          address = DisputeResolutionScript.address(env.headConfig.network),
+          address = HydrozoaBlueprint.mkDisputeAddress(env.headConfig.network),
           value = Value.assets(
             lovelace = Coin.ada(5),
             assets = Map(
@@ -314,7 +313,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
         _ <- lift(disputeActor.handleDisputeRes)
         queryRes <- lift(
           disputeActor.cardanoBackend.utxosAt(
-            DisputeResolutionScript.address(env.headConfig.network)
+            HydrozoaBlueprint.mkDisputeAddress(env.headConfig.network)
           )
         ).flatMap(MultiNodeConfig.failLeft)
 
@@ -420,7 +419,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
         _ <- lift(disputeActor.handleDisputeRes)
         queryRes <- lift(
           disputeActor.cardanoBackend.utxosAt(
-            DisputeResolutionScript.address(env.headConfig.network)
+            HydrozoaBlueprint.mkDisputeAddress(env.headConfig.network)
           )
         ).flatMap(MultiNodeConfig.failLeft)
 
@@ -466,11 +465,11 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
 
         _ <- lift(da.handleDisputeRes)
         utxosAtResolutionAddress <- lift(
-          da.cardanoBackend.utxosAt(DisputeResolutionScript.address(env.headConfig.network))
+          da.cardanoBackend.utxosAt(HydrozoaBlueprint.mkDisputeAddress(env.headConfig.network))
         )
             .flatMap(failLeft)
         utxosAtTreasuryAddress <- lift(
-          da.cardanoBackend.utxosAt(RuleBasedTreasuryScript.address(env.headConfig.network))
+          da.cardanoBackend.utxosAt(HydrozoaBlueprint.mkTreasuryAddress(env.headConfig.network))
         ).flatMap(failLeft)
 
         _ <- assertWith(

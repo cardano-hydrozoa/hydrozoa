@@ -1,5 +1,6 @@
 package hydrozoa.rulebased.ledger.l1.utxo
 
+import hydrozoa.config.HydrozoaBlueprint
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
@@ -7,7 +8,6 @@ import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.*
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
-import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.DisputeRedeemer
 import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.AwaitingVote
@@ -83,7 +83,7 @@ case class VoteOutput[Status <: VoteStatus](
     def toOutput(using config: VoteOutputConfig): Babbage =
 
         Babbage(
-          address = DisputeResolutionScript.address(config.network),
+          address = HydrozoaBlueprint.mkDisputeAddress(config.network),
           value = Value(
             coin = coin,
             assets = MultiAsset

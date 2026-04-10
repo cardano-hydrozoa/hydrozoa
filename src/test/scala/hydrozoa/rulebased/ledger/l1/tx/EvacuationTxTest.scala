@@ -2,6 +2,7 @@ package hydrozoa.rulebased.ledger.l1.tx
 
 import cats.effect.unsafe.implicits.global
 import hydrozoa.*
+import hydrozoa.config.HydrozoaBlueprint
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
@@ -9,7 +10,7 @@ import hydrozoa.multisig.ledger.commitment.KzgCommitment.asG1Element
 import hydrozoa.multisig.ledger.commitment.{KzgCommitment, Membership, TrustedSetup}
 import hydrozoa.multisig.ledger.eutxol2.toEvacuationMap
 import hydrozoa.multisig.ledger.joint.EvacuationMap
-import hydrozoa.rulebased.ledger.l1.script.plutus.{RuleBasedTreasuryScript, RuleBasedTreasuryValidator}
+import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Resolved
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.*
@@ -19,7 +20,7 @@ import monocle.syntax.all.*
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.{Arbitrary, Gen, Prop, Properties}
 import scalus.cardano.address.ShelleyPaymentPart.Key
-import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
+import scalus.cardano.address.{Network, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.onchain.plutus.prelude
@@ -46,9 +47,7 @@ def genResolvedTreasuryUtxo(
         value = Value(Coin(coin)) + Value.asset(headMp, AssetName(beaconTokenName), 1)
         outputIx <- Gen.choose(0, 5)
         txId = TransactionInput(fallbackTxId, outputIx)
-        // Use the correct treasury script hash
-        spp = ShelleyPaymentPart.Script(RuleBasedTreasuryScript.compiledScriptHash)
-        scriptAddr = ShelleyAddress(network, spp, ShelleyDelegationPart.Null)
+        scriptAddr = HydrozoaBlueprint.mkTreasuryAddress(network)
     } yield RuleBasedTreasuryUtxo(
       utxoId = txId,
       treasuryOutput = RuleBasedTreasuryOutput(

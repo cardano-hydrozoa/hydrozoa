@@ -2,20 +2,19 @@ package hydrozoa.rulebased.ledger.l1.tx
 
 import cats.effect.unsafe.implicits.global
 import hydrozoa.*
+import hydrozoa.config.HydrozoaBlueprint
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
-import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryScript
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Resolved
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.*
 import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import monocle.*
 import monocle.syntax.all.*
 import org.scalacheck.{Arbitrary, Gen, Properties}
-import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.{Utxo as _, *}
 import scalus.uplc.builtin.ByteString
@@ -49,8 +48,7 @@ def genEmptyResolvedTreasuryUtxo(
         outputIx <- Gen.choose(0, 5)
     } yield {
         val txId = TransactionInput(fallbackTxId, outputIx)
-        val spp = ShelleyPaymentPart.Script(RuleBasedTreasuryScript.compiledScriptHash)
-        val scriptAddr = ShelleyAddress(config.network, spp, ShelleyDelegationPart.Null)
+        val scriptAddr = HydrozoaBlueprint.mkTreasuryAddress(config.network)
         val value = Value(config.babbageUtxoMinLovelace(PositiveInt.unsafeApply(150)))
             + Value.asset(headMp, beaconTokenName, 1)
             + Value.asset(headMp, voteTokenName, voteTokensAmount)

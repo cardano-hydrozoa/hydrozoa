@@ -6,10 +6,10 @@ import cats.effect.IO
 import cats.syntax.all.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
-import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
+import hydrozoa.config.{HydrozoaBlueprint, ScriptReferenceUtxos}
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.ledger.commitment.Membership
@@ -17,7 +17,6 @@ import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap}
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.rulebased
 import hydrozoa.rulebased.EvacuationActor.*
-import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryScript
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.EvacuateRedeemer
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Resolved
@@ -138,7 +137,7 @@ case class EvacuationActor(
 
                 unparsedTreasuryUtxos <- EitherT(
                   cardanoBackend.utxosAt(
-                    address = RuleBasedTreasuryScript.address(config.cardanoInfo.network),
+                    address = HydrozoaBlueprint.mkTreasuryAddress(config.cardanoInfo.network),
                     asset = (
                       config.headMultisigScript.policyId,
                       config.headTokenNames.treasuryTokenName

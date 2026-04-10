@@ -15,12 +15,11 @@ import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import scala.annotation.tailrec
 import scalus.*
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
-import scalus.cardano.ledger.{Language, Script}
 import scalus.cardano.onchain.plutus.prelude.Option.{None, Some}
 import scalus.cardano.onchain.plutus.prelude.{!==, ===, List, Option, SortedMap, fail, log, require}
 import scalus.cardano.onchain.plutus.v1.Value.+
 import scalus.cardano.onchain.plutus.v3.*
-import scalus.uplc.DeBruijnedProgram
+import scalus.uplc.PlutusV3
 import scalus.uplc.builtin.Builtins.{serialiseData, verifyEd25519Signature}
 import scalus.uplc.builtin.ByteString.hex
 import scalus.uplc.builtin.Data.toData
@@ -45,28 +44,6 @@ object DisputeResolutionValidator extends Validator {
 
     given FromData[VoteRedeemer] = FromData.derived
     given ToData[VoteRedeemer] = ToData.derived
-
-    // TODO: Remove. Duplicate to multisig.ledger.block.Block.Minor.Onchain
-
-    //    /** After an attempt to make types form hydrozoa.multisig.protocol.types onchain-compatible we
-    //      * decided to go for having a separate type to use onchain. Mostly because opaque types don't
-    //      * seem to work well with deriving machinery.
-    //      *
-    //      * NB: The minor block header signing function should use this type.
-    //      */
-    //    case class BlockHeader.Minor.Onchain(
-    //        blockNum: BigInt,
-    //        blockType: BlockTypeL2, // this field is not used directly, but it's needed to verify the signatures
-    //        // make it milliseconds?
-    //        timeCreation: PosixTime, // the same
-    //        versionMajor: BigInt,
-    //        versionMinor: BigInt,
-    //        commitment: VoteState.KzgCommitment
-    //    ) derives FromData,
-    //          ToData
-    //
-    //    given FromData[BlockHeader.Minor.Onchain] = FromData.derived
-    //    given ToData[BlockHeader.Minor.Onchain] = ToData.derived
 
     // EdDSA / ed25519 signature
     private type Signature = ByteString
@@ -531,66 +508,20 @@ object DisputeResolutionValidator extends Validator {
 }
 
 object DisputeResolutionScript {
-    // Compile the validator to Scalus Intermediate Representation (SIR)
-    private val compiledSir = compiler.compile(DisputeResolutionValidator.validate)
+    // Compile the validator using PlutusV3.compile
+    given scalus.compiler.Options = scalus.compiler.Options.default
 
-    // Convert to optimized UPLC with error traces for PlutusV3
-    private val compiledUplc = compiledSir.toUplcOptimized(generateErrorTraces = true)
-    private val compiledPlutusV3Program = compiledUplc.plutusV3
+    val compiledPlutusV3Program: PlutusV3[Data => Unit] =
+        PlutusV3.compile(DisputeResolutionValidator.validate)
 
-    // Native Scalus PlutusScript - no Bloxbean dependency needed
-    private val compiledDeBruijnedProgram: DeBruijnedProgram =
-        compiledPlutusV3Program.deBruijnedProgram
-
-    // Various encoding formats available natively in Scalus
-    // private def cborEncoded: Array[Byte] = compiledDeBruijnedProgram.cborEncoded
-    val flatEncoded: Array[Byte] = compiledDeBruijnedProgram.flatEncoded
-
-    val compiledCbor: Array[Byte] = compiledDeBruijnedProgram.cborEncoded
-
-    val compiledPlutusV3Script =
-        Script.PlutusV3(ByteString.fromArray(DisputeResolutionScript.compiledCbor))
-
-    //// Hex representations - use the main program methods
-    // private def compiledDoubleCborHex: String = compiledDeBruijnedProgram.doubleCborHex
-
-    val compiledScriptHash = compiledPlutusV3Script.scriptHash
-
-    // Generate .plutus file if needed
-    def writePlutusFile(path: String): Unit = {
-        compiledPlutusV3Program.writePlutusFile(path, Language.PlutusV3)
-    }
-
-    //// For compatibility with existing code that expects hex representation
-    // def getScriptHex: String = compiledDoubleCborHex
-
-    // For compatibility with code that expects script hash as byte array
-    val getScriptHash: Array[Byte] = compiledScriptHash.bytes
+    private val compiledScriptHash: ScriptHash = compiledPlutusV3Program.script.scriptHash
 
     def address(n: Network): ShelleyAddress = ShelleyAddress(
       network = n,
-      payment = ShelleyPaymentPart.Script(this.compiledScriptHash),
+      payment = ShelleyPaymentPart.Script(
+        scalus.cardano.ledger.ScriptHash.fromArray(this.compiledScriptHash.bytes)
+      ),
       delegation = ShelleyDelegationPart.Null
     )
 
 }
-
-//// TODO: utxoActive
-//def mkDefVoteDatum(peersN: Int, _utxosActive: Unit): VoteDatum =
-//    VoteDatum(
-//      0,
-//      if peersN > 0 then 1 else 0,
-//      None,
-//      VoteStatus.Vote(VoteDetails(ByteString.empty, BigInt(0)))
-//    )
-
-//def hashVerificationKey(peer: VerificationKeyBytes): PubKeyHash =
-//    PubKeyHash(blake2b_224(peer.bytes))
-
-//def mkVoteDatum(key: Int, peersN: Int, peer: VerificationKeyBytes): VoteDatum =
-//    VoteDatum(
-//      key = key,
-//      link = if peersN > key then key + 1 else 0,
-//      peer = Some(hashVerificationKey(peer)),
-//      voteStatus = VoteStatus.NoVote
-//    )

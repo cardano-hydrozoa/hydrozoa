@@ -2,6 +2,7 @@ package hydrozoa.rulebased.ledger.l1.tx
 
 import cats.data.NonEmptyList
 import hydrozoa.*
+import hydrozoa.config.HydrozoaBlueprint
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.MultiNodeConfig
@@ -10,7 +11,6 @@ import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.commitment.TrustedSetup
 import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
-import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryScript
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import org.scalacheck.Arbitrary.arbitrary
@@ -97,8 +97,7 @@ object CommonGenerators {
 
             // Treasury is always the first output of the fallback tx
             txId = TransactionInput(fallbackTxId, 0)
-            spp = ShelleyPaymentPart.Script(RuleBasedTreasuryScript.compiledScriptHash)
-            scriptAddr = ShelleyAddress(config.network, spp, ShelleyDelegationPart.Null)
+            scriptAddr = HydrozoaBlueprint.mkTreasuryAddress(config.network)
 
             beaconTokenAssetName = AssetName(config.headTokenNames.treasuryTokenName.bytes)
             beaconToken = Value.asset(config.headMultisigScript.policyId, beaconTokenAssetName, 1)

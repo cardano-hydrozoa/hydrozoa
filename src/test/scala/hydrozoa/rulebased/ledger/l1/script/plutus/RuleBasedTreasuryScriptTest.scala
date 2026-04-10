@@ -5,7 +5,6 @@ import hydrozoa.multisig.ledger.commitment.{KzgCommitment, TrustedSetup}
 import org.scalatest.funsuite.AnyFunSuite
 import scala.annotation.nowarn
 import scala.io.Source
-import scalus.cardano.ledger.ScriptHash
 import scalus.cardano.onchain.plutus.prelude.List
 import scalus.cardano.onchain.plutus.prelude.crypto.bls12_381.G1
 import scalus.cardano.onchain.plutus.v3.ScriptContext
@@ -16,33 +15,6 @@ import supranational.blst.Scalar
 
 @nowarn("msg=unused value")
 class RuleBasedTreasuryScriptTest extends AnyFunSuite {
-
-    test("RuleBasedTreasuryScript object exists and can be referenced") {
-        assert(RuleBasedTreasuryScript.toString != null)
-    }
-
-    test("Script compiles producing expected hash") {
-        val goldenHash =
-            ScriptHash.fromHex("75914bc23d8d9f9845486458f3a681a03af97b6da4d6a59aac0b301b")
-        if RuleBasedTreasuryScript.compiledScriptHash != goldenHash then {
-            RuleBasedTreasuryScript.writePlutusFile("ruleBasedTreasury.plutus")
-        }
-        assertResult(
-          goldenHash,
-          "Script hash should be stable. In case the script is modified or Scalus is bumped please update the test."
-        ) {
-            RuleBasedTreasuryScript.compiledScriptHash
-        }
-    }
-
-    test("Script compiles producing expected size") {
-        assertResult(
-          7768,
-          "Script size should be stable. In case the script is modified por Scalus is bumped lease update the test."
-        ) {
-            RuleBasedTreasuryScript.flatEncoded.length
-        }
-    }
 
     test("Membership check: empty accumulator / subset") {
 

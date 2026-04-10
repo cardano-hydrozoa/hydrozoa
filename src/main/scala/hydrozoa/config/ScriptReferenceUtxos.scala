@@ -3,7 +3,6 @@ package hydrozoa.config
 import cats.syntax.all.*
 import hydrozoa.config
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.rulebased.ledger.l1.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
 import scalus.cardano.ledger.Utxo
 import scalus.cardano.txbuilder.TransactionBuilderStep.ReferenceOutput
 
@@ -31,10 +30,19 @@ object ScriptReferenceUtxos {
         )
     }
 
-    // TODO: Expand errors, add toString
     enum Error extends Throwable:
         case InvalidTreasuryScriptUtxo
-        case InvalidDisputeScriptUxo
+        case InvalidDisputeScriptUtxo
+
+        override def toString: String = this match
+            case InvalidTreasuryScriptUtxo => "InvalidTreasuryScriptUtxo"
+            case InvalidDisputeScriptUtxo  => "InvalidDisputeScriptUtxo"
+
+        override def getMessage: String = this match
+            case InvalidTreasuryScriptUtxo =>
+                "The provided UTXO is not a valid treasury script reference UTXO"
+            case InvalidDisputeScriptUtxo =>
+                "The provided UTXO is not a valid dispute resolution script reference UTXO"
 
     case class TreasuryScriptUtxo private (utxo: Utxo)
 
@@ -55,8 +63,10 @@ object ScriptReferenceUtxos {
                 scriptRef <- utxo.output.scriptRef.toRight(
                   ScriptReferenceUtxos.Error.InvalidTreasuryScriptUtxo
                 )
+
+                actualHash = scriptRef.script.scriptHash
                 _ <- Either.cond(
-                  scriptRef.script == RuleBasedTreasuryScript.compiledPlutusV3Script,
+                  actualHash == hydrozoa.config.HydrozoaBlueprint.treasuryScriptHash,
                   (),
                   ScriptReferenceUtxos.Error.InvalidTreasuryScriptUtxo
                 )
@@ -72,20 +82,22 @@ object ScriptReferenceUtxos {
         ): Either[ScriptReferenceUtxos.Error, DisputeScriptUtxo] =
             for {
                 actualNetwork <- utxo.output.address.getNetwork
-                    .toRight(ScriptReferenceUtxos.Error.InvalidDisputeScriptUxo)
+                    .toRight(ScriptReferenceUtxos.Error.InvalidDisputeScriptUtxo)
                 _ <- Either.cond(
                   actualNetwork == network.network,
                   (),
-                  ScriptReferenceUtxos.Error.InvalidDisputeScriptUxo
+                  ScriptReferenceUtxos.Error.InvalidDisputeScriptUtxo
                 )
 
                 scriptRef <- utxo.output.scriptRef.toRight(
-                  ScriptReferenceUtxos.Error.InvalidDisputeScriptUxo
+                  ScriptReferenceUtxos.Error.InvalidDisputeScriptUtxo
                 )
+
+                actualHash = scriptRef.script.scriptHash
                 _ <- Either.cond(
-                  scriptRef.script == DisputeResolutionScript.compiledPlutusV3Script,
-                  (()),
-                  ScriptReferenceUtxos.Error.InvalidDisputeScriptUxo
+                  actualHash == hydrozoa.config.HydrozoaBlueprint.disputeScriptHash,
+                  (),
+                  ScriptReferenceUtxos.Error.InvalidDisputeScriptUtxo
                 )
             } yield DisputeScriptUtxo(utxo)
     }

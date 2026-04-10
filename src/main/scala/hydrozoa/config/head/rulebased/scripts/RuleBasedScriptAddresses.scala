@@ -1,7 +1,7 @@
 package hydrozoa.config.head.rulebased.scripts
 
+import hydrozoa.config.HydrozoaBlueprint
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.rulebased.ledger.l1.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
 import scalus.cardano.address.{Network, ShelleyAddress}
 
 final case class RuleBasedScriptAddresses private (
@@ -17,8 +17,8 @@ object RuleBasedScriptAddresses {
 
     def apply(network: Network): RuleBasedScriptAddresses =
         new RuleBasedScriptAddresses(
-          ruleBasedTreasuryAddress = RuleBasedTreasuryScript.address(network),
-          ruleBasedDisputeResolutionAddress = DisputeResolutionScript.address(network)
+          ruleBasedTreasuryAddress = HydrozoaBlueprint.mkTreasuryAddress(network),
+          ruleBasedDisputeResolutionAddress = HydrozoaBlueprint.mkDisputeAddress(network)
         )
 
     trait Section {
