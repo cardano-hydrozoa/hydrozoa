@@ -1,6 +1,7 @@
 package hydrozoa.config.head.initialization
 
-import hydrozoa.config.head.HeadConfig
+import hydrozoa.config.head.InitParamsType.{BottomUp, Constant, TopDown}
+import hydrozoa.config.head.{HeadConfig, InitParamsType}
 import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.{BlockCreationEndTimeGen, currentTimeBlockCreationEndTime}
 import hydrozoa.config.head.multisig.fallback.{FallbackContingencyGen, generateFallbackContingency}
 import hydrozoa.config.head.multisig.settlement.{SettlementConfigGen, generateSettlementConfig}
@@ -14,6 +15,7 @@ import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import monocle.Focus.focus
 import org.scalacheck.Test.Parameters
 import org.scalacheck.{Gen, Prop, Properties}
+
 import scala.concurrent.duration.DurationInt
 import test.{TestPeers, TestPeersSpec}
 
@@ -23,9 +25,8 @@ def generateInitialBlock(testPeers: TestPeers)(
     generateDisputeResolutionConfig: DisputeResolutionConfigGen = generateDisputeResolutionConfig,
     generateHeadParameters: GenHeadParams = generateHeadParameters,
     generateBlockCreationEndTime: BlockCreationEndTimeGen = currentTimeBlockCreationEndTime,
-    generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
-        InitializationParametersGenTopDown.GenWithDeps | InitializationParameters =
-        InitializationParametersGenBottomUp.generateInitializationParameters,
+    generateInitializationParameters: InitParamsType =
+        BottomUp(InitializationParametersGenBottomUp.generateInitializationParameters),
     generateSettlementConfig: SettlementConfigGen = generateSettlementConfig
 ): Gen[InitialBlock] = {
     for {
@@ -39,19 +40,19 @@ def generateInitialBlock(testPeers: TestPeers)(
         )
 
         initializationParameters <- generateInitializationParameters match {
-            case g: InitializationParametersGenBottomUp.GenInitializationParameters =>
+            case BottomUp(g) =>
                 g(testPeers)(_ => Gen.const(headParams.fallbackContingency))
-            case InitializationParametersGenTopDown.GenWithDeps(
+            case TopDown(InitializationParametersGenTopDown.GenWithDeps(
                   generator,
                   generateGenesisUtxosL1,
                   equityRange
-                ) =>
+                )) =>
                 generator(testPeers)(
                   generateFallbackContingency,
                   generateGenesisUtxosL1,
                   equityRange
                 )
-            case ps: InitializationParameters => Gen.const(ps)
+            case Constant(ps) => Gen.const(ps)
         }
 
         config = HeadConfig

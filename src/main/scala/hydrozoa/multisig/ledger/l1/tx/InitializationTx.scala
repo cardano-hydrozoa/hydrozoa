@@ -25,6 +25,10 @@ import scalus.cardano.txbuilder.TxBalancingError.InsufficientFunds
 import scalus.uplc.builtin.Data
 import scalus.uplc.builtin.Data.toData
 
+// Output ordering:
+// - Treasury Utxo
+// - Multisig Regime Utxo
+// - Change outputs
 final case class InitializationTx(
     initializationTxEndTime: InitializationTxEndTime,
     override val treasuryProduced: MultisigTreasuryUtxo,
@@ -247,6 +251,7 @@ private object InitializationTxOps {
     }
 
     object Parse {
+        // TODO: Switch to ValidatedNel[Error, A]
         type ParseErrorOr[A] = Either[Error, A]
 
         enum Error extends Throwable {

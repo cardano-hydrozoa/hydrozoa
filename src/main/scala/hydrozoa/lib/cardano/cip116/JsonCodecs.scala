@@ -27,9 +27,17 @@ object JsonCodecs {
                         }
             }
 
+            given KeyEncoder[VerificationKey] =
+                KeyEncoder.encodeKeyString.contramap(vk => ByteVector(vk.bytes).toHex)
+
+            given KeyDecoder[VerificationKey] with {
+                override def apply(key: String): Option[VerificationKey] =
+                    Helpers.verificationKeyFromText(key).toOption
+            }
+
             // Scalus VerificationKey codec (32 bytes as hex)
             given Encoder[VerificationKey] =
-                Encoder.encodeString.contramap(vk => ByteVector(vk.bytes.toArray).toHex)
+                Encoder.encodeString.contramap(vk => ByteVector(vk.bytes).toHex)
 
             given Decoder[VerificationKey] =
                 Decoder.decodeString.emap {
@@ -38,7 +46,7 @@ object JsonCodecs {
 
             // Scalus Signature codec (64 bytes as hex)
             given Encoder[Signature] =
-                Encoder.encodeString.contramap(sig => ByteVector(sig.bytes.toArray).toHex)
+                Encoder.encodeString.contramap(sig => ByteVector(sig.bytes).toHex)
 
             given Decoder[Signature] =
                 Decoder.decodeString.emap { hexStr =>

@@ -6,6 +6,7 @@ import hydrozoa.config.head.initialization.{InitialBlock, InitializationParamete
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.multisig.settlement.SettlementConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.HeadParameters
 import hydrozoa.config.head.peers.HeadPeers
@@ -14,13 +15,17 @@ import hydrozoa.config.head.rulebased.scripts.RuleBasedScriptAddresses
 import hydrozoa.lib.logging.Logging
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
-import hydrozoa.multisig.ledger.block.Block
+import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects}
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.l1.token.CIP67
+import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.*
 import scalus.crypto.ed25519.VerificationKey
+import scalus.uplc.builtin.platform
+
+import scala.util.Try
 
 final case class HeadConfig private (
     override val headConfigPreinit: HeadConfig.Preinit,
@@ -32,12 +37,64 @@ final case class HeadConfig private (
 object HeadConfig {
     private val logger = Logging.logger("HeadConfig")
 
+
+
+    def apply(
+        headConfigPreinit: HeadConfig.Preinit,
+        blockBrief: BlockBrief.Initial,
+        initTx: Transaction,
+        fallbackTx: Transaction
+    ): Option[HeadConfig] = {
+        def isMultiSigned(tx: Transaction, headPeers: HeadPeers.Section): Boolean = {
+            val witnesses = tx.witnessSetRaw.value.vkeyWitnesses.toSet
+
+            headPeers.headPeerVKeys.forall(vKey =>
+                witnesses.find(witness => witness.vkey == vKey) match {
+                    case None => false
+                    case Some(witness) =>
+                        platform.verifyEd25519Signature(vKey, tx.id, witness.signature)
+                }
+            )
+        }
+
+        for {
+            expectedTxSeq <- InitializationTxSeq
+                .Build(headConfigPreinit)(blockBrief.endTime)
+                .result
+                .toOption
+            // Check that tx bodies are the same
+            hc <-
+                if expectedTxSeq.initializationTx.tx.body == initTx.body
+                    && expectedTxSeq.fallbackTx.tx.body == fallbackTx.body
+                    && isMultiSigned(initTx, headConfigPreinit)
+                    && isMultiSigned(fallbackTx, headConfigPreinit)
+                then
+                    Some(
+                      new HeadConfig(
+                        headConfigPreinit,
+                        Block.MultiSigned.Initial(
+                          blockBrief,
+                          BlockEffects.MultiSigned.Initial(
+                            expectedTxSeq.initializationTx,
+                            expectedTxSeq.fallbackTx
+                          )
+                        )
+                      )
+                    )
+                else None
+        } yield hc
+    }
+
+    // FIXME: Do a `ValidatedNel[Error, HeadConfig]` here
     def apply(
         headConfigPreinit: HeadConfig.Preinit,
         initialBlock: Block.MultiSigned.Initial
-    ): Option[HeadConfig] =
-        import headConfigPreinit.*
-        apply(cardanoNetwork, headParams, headPeers, initialBlock, initializationParams)
+    ): Option[HeadConfig] = HeadConfig(
+      headConfigPreinit,
+      initialBlock.blockBrief,
+      initialBlock.effects.initializationTx.tx,
+      initialBlock.effects.fallbackTx.tx
+    )
 
     def apply(
         cardanoNetwork: CardanoNetwork,
@@ -53,7 +110,7 @@ object HeadConfig {
               headPeers,
               initializationParams
             )
-            result <- Some(new HeadConfig(headConfigPreinit, initialBlock))
+            result <- HeadConfig(headConfigPreinit, initialBlock)
         } yield result
 
     }

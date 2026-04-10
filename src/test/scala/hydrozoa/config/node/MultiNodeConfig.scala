@@ -2,6 +2,7 @@ package hydrozoa.config.node
 
 import cats.data.NonEmptyList
 import cats.effect.unsafe.IORuntime
+import hydrozoa.config.head.InitParamsType.BottomUp
 import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.currentTimeBlockCreationEndTime
 import hydrozoa.config.head.initialization.{InitializationParametersGenBottomUp, InitializationParametersGenTopDown}
 import hydrozoa.config.head.multisig.fallback.{FallbackContingencyGen, generateFallbackContingency}
@@ -10,7 +11,7 @@ import hydrozoa.config.head.multisig.timing.{TxTimingGen, generateDefaultTxTimin
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.{GenHeadParams, generateHeadParameters}
 import hydrozoa.config.head.rulebased.{DisputeResolutionConfigGen, generateDisputeResolutionConfig}
-import hydrozoa.config.head.{HeadConfig, HeadConfigGen}
+import hydrozoa.config.head.{HeadConfig, HeadConfigGen, InitParamsType}
 import hydrozoa.config.node.operation.evacuation.{NodeOperationEvacuationConfigGen, generateNodeOperationEvacuationConfig}
 import hydrozoa.config.node.operation.multisig.{NodeOperationMultisigConfig, generateNodeOperationMultisigConfig}
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
@@ -107,9 +108,8 @@ object MultiNodeConfig {
         generateDisputeResolutionConfig: DisputeResolutionConfigGen =
             generateDisputeResolutionConfig,
         generateHeadParameters: GenHeadParams = generateHeadParameters,
-        generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
-            InitializationParametersGenTopDown.GenWithDeps =
-            InitializationParametersGenBottomUp.generateInitializationParameters,
+        generateInitializationParameters: InitParamsType =
+            BottomUp(InitializationParametersGenBottomUp.generateInitializationParameters),
         generateNodeOperationEvacuationConfig: NodeOperationEvacuationConfigGen =
             generateNodeOperationEvacuationConfig,
         generateNodeOperationMultisigConfig: Gen[NodeOperationMultisigConfig] =
@@ -140,9 +140,8 @@ object MultiNodeConfig {
         generateDisputeResolutionConfig: DisputeResolutionConfigGen =
             generateDisputeResolutionConfig,
         generateHeadParameters: GenHeadParams = generateHeadParameters,
-        generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
-            InitializationParametersGenTopDown.GenWithDeps =
-            InitializationParametersGenBottomUp.generateInitializationParameters,
+        generateInitializationParameters: InitParamsType = BottomUp(
+            InitializationParametersGenBottomUp.generateInitializationParameters),
         generateNodeOperationEvacuationConfig: NodeOperationEvacuationConfigGen =
             generateNodeOperationEvacuationConfig,
         generateNodeOperationMultisigConfig: Gen[NodeOperationMultisigConfig] =
@@ -159,6 +158,7 @@ object MultiNodeConfig {
               generateInitializationParameters = generateInitializationParameters,
             )
 
+            _ <- Gen.const(())
             nodePrivateConfigs <-
                 Gen.sequence[List[
                   (HeadPeerNumber, NodePrivateConfig)
@@ -188,9 +188,6 @@ object MultiNodeConfig {
 }
 
 object MultiNodeConfigTest extends Properties("Multi-node config") {
-    val _ = property("generates") = Prop.forAll(
-      TestPeersSpec
-          .generate()
-          .flatMap(MultiNodeConfig.generate(_)())
-    )(_ => true)
+    val _ = property("generates") = Prop.forAll(TestPeersSpec.generate().flatMap(MultiNodeConfig.generate(_)())
+    )(mnc => mnc.initialBlock.effects.initializationTx.tx.witnessSetRaw.value.vkeyWitnesses.toSet.nonEmpty)
 }

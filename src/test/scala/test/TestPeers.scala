@@ -34,10 +34,6 @@ import test.Generators.loggerGenerators
   * multi-node config: integration tests use it when setting up the environment (see
   * ModelBasedSuite.Env). This happens before the initial state is built, but we need to run some
   * transactions on behalf of prospective head peers.
-  *
-  * @param seedPhrase
-  * @param network
-  * @param peersNumber
   */
 case class TestPeers private (
     seedPhrase: SeedPhrase,

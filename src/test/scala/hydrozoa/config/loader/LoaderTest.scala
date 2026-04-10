@@ -7,10 +7,14 @@ import hydrozoa.config.loader.Codecs.given
 import hydrozoa.config.node.MultiNodeConfig
 import io.circe.syntax.*
 import io.circe.{Json, *}
-import org.scalacheck.Properties
+import org.scalacheck.rng.Seed
+import org.scalacheck.{Properties, Test}
 
 object LoaderTest extends Properties("Configuration Loader Properties") {
     import MultiNodeConfig.*
+
+    override def overrideParameters(p: Test.Parameters): Test.Parameters =
+            p.withInitialSeed(Seed.fromBase64("AIUK99d5Zgz2qjvWyA8NCvvkh9Q5mbFWbux4o6hfQZG=").get)
 
     val headConfigRoundTrip: MultiNodeConfigTestM[Boolean] =
         for {
@@ -36,7 +40,7 @@ object LoaderTest extends Properties("Configuration Loader Properties") {
 
     val _ = property("round tripping") = runDefault(
       for {
-//          _ <- dumpHeadConfig
+          _ <- dumpHeadConfig
           _ <- headConfigRoundTrip
       } yield true
     )
