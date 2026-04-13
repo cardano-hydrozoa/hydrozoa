@@ -4,7 +4,7 @@ import cats.data.NonEmptyList
 import cats.effect.unsafe.IORuntime
 import hydrozoa.config.head.InitParamsType.BottomUp
 import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.currentTimeBlockCreationEndTime
-import hydrozoa.config.head.initialization.{InitializationParametersGenBottomUp, InitializationParametersGenTopDown}
+import hydrozoa.config.head.initialization.InitializationParametersGenBottomUp
 import hydrozoa.config.head.multisig.fallback.{FallbackContingencyGen, generateFallbackContingency}
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.config.head.multisig.timing.{TxTimingGen, generateDefaultTxTiming}
@@ -108,8 +108,9 @@ object MultiNodeConfig {
         generateDisputeResolutionConfig: DisputeResolutionConfigGen =
             generateDisputeResolutionConfig,
         generateHeadParameters: GenHeadParams = generateHeadParameters,
-        generateInitializationParameters: InitParamsType =
-            BottomUp(InitializationParametersGenBottomUp.generateInitializationParameters),
+        generateInitializationParameters: InitParamsType = BottomUp(
+          InitializationParametersGenBottomUp.generateInitializationParameters
+        ),
         generateNodeOperationEvacuationConfig: NodeOperationEvacuationConfigGen =
             generateNodeOperationEvacuationConfig,
         generateNodeOperationMultisigConfig: Gen[NodeOperationMultisigConfig] =
@@ -141,7 +142,8 @@ object MultiNodeConfig {
             generateDisputeResolutionConfig,
         generateHeadParameters: GenHeadParams = generateHeadParameters,
         generateInitializationParameters: InitParamsType = BottomUp(
-            InitializationParametersGenBottomUp.generateInitializationParameters),
+          InitializationParametersGenBottomUp.generateInitializationParameters
+        ),
         generateNodeOperationEvacuationConfig: NodeOperationEvacuationConfigGen =
             generateNodeOperationEvacuationConfig,
         generateNodeOperationMultisigConfig: Gen[NodeOperationMultisigConfig] =
@@ -188,6 +190,9 @@ object MultiNodeConfig {
 }
 
 object MultiNodeConfigTest extends Properties("Multi-node config") {
-    val _ = property("generates") = Prop.forAll(TestPeersSpec.generate().flatMap(MultiNodeConfig.generate(_)())
-    )(mnc => mnc.initialBlock.effects.initializationTx.tx.witnessSetRaw.value.vkeyWitnesses.toSet.nonEmpty)
+    val _ = property("generates") = Prop.forAll(
+      TestPeersSpec.generate().flatMap(MultiNodeConfig.generate(_)())
+    )(mnc =>
+        mnc.initialBlock.effects.initializationTx.tx.witnessSetRaw.value.vkeyWitnesses.toSet.nonEmpty
+    )
 }

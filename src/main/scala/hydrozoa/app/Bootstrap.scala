@@ -41,7 +41,7 @@ import org.bouncycastle.crypto.params.{Ed25519KeyGenerationParameters, Ed25519Pr
 import scala.collection.immutable.{SortedMap, TreeMap}
 import scala.concurrent.duration.DurationInt
 import scalus.cardano.address.Address
-import scalus.cardano.ledger.{Coin, KeepRaw, PlutusScriptEvaluator, TransactionOutput, Utxo, Value}
+import scalus.cardano.ledger.{Coin, Hash32, KeepRaw, PlutusScriptEvaluator, TransactionOutput, Utxo, Value}
 import scalus.cardano.txbuilder.TransactionBuilderStep.Spend
 import scalus.cardano.txbuilder.{TransactionBuilder, TransactionBuilderStep}
 import scalus.crypto.ed25519.{SigningKey, VerificationKey}
@@ -88,6 +88,7 @@ object Bootstrap:
       *   - the initial l2 is empty
       *   - Cardano preview is used
       *   - utxos available on l1 VKey's enterprise address will be used for funding the head
+      *   - the initial l2 parameters are empty
       */
     def mkNodeConfig(cardanoNetwork: CardanoNetwork, backend: CardanoBackend[IO])(
         vKey: VerificationKey,
@@ -107,7 +108,8 @@ object Bootstrap:
             voteTxFee = Coin.ada(3)
           ),
           disputeResolutionConfig = DisputeResolutionConfig.default(cardanoNetwork.slotConfig),
-          settlementConfig = SettlementConfig(PositiveInt.unsafeApply(100))
+          settlementConfig = SettlementConfig(PositiveInt.unsafeApply(100)),
+          l2ParamsHash = Hash32.fromByteString(ByteString.empty)
         )
 
         // This is the temporary hard-coded evacuation map - 10 ADA

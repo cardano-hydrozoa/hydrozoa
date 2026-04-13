@@ -14,7 +14,7 @@ object LoaderTest extends Properties("Configuration Loader Properties") {
     import MultiNodeConfig.*
 
     override def overrideParameters(p: Test.Parameters): Test.Parameters =
-            p.withInitialSeed(Seed.fromBase64("AIUK99d5Zgz2qjvWyA8NCvvkh9Q5mbFWbux4o6hfQZG=").get)
+        p.withInitialSeed(Seed.fromBase64("AIUK99d5Zgz2qjvWyA8NCvvkh9Q5mbFWbux4o6hfQZG=").get)
 
     val headConfigRoundTrip: MultiNodeConfigTestM[Boolean] =
         for {

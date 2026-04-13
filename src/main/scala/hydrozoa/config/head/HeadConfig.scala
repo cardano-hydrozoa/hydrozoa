@@ -6,7 +6,6 @@ import hydrozoa.config.head.initialization.{InitialBlock, InitializationParamete
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.multisig.settlement.SettlementConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
-import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.HeadParameters
 import hydrozoa.config.head.peers.HeadPeers
@@ -25,8 +24,6 @@ import scalus.cardano.ledger.*
 import scalus.crypto.ed25519.VerificationKey
 import scalus.uplc.builtin.platform
 
-import scala.util.Try
-
 final case class HeadConfig private (
     override val headConfigPreinit: HeadConfig.Preinit,
     override val initialBlock: Block.MultiSigned.Initial,
@@ -36,8 +33,6 @@ final case class HeadConfig private (
 
 object HeadConfig {
     private val logger = Logging.logger("HeadConfig")
-
-
 
     def apply(
         headConfigPreinit: HeadConfig.Preinit,
@@ -68,20 +63,23 @@ object HeadConfig {
                     && expectedTxSeq.fallbackTx.tx.body == fallbackTx.body
                     && isMultiSigned(initTx, headConfigPreinit)
                     && isMultiSigned(fallbackTx, headConfigPreinit)
-                then
+                then {
+
                     Some(
                       new HeadConfig(
                         headConfigPreinit,
                         Block.MultiSigned.Initial(
                           blockBrief,
+                          // The "expectedTxSeq" contains the "enriched" tx types, but they are not signed,
+                          // so we steal the tx signatures here here.
                           BlockEffects.MultiSigned.Initial(
-                            expectedTxSeq.initializationTx,
-                            expectedTxSeq.fallbackTx
+                            expectedTxSeq.initializationTx.copy(tx = initTx),
+                            expectedTxSeq.fallbackTx.copy(tx = fallbackTx)
                           )
                         )
                       )
                     )
-                else None
+                } else None
         } yield hc
     }
 
@@ -130,6 +128,10 @@ object HeadConfig {
             headConfigPreinit.initializationParams
     }
 
+    /** @param l2Params
+      *   a black-box, L2-specific blake2b-256 hash of parameters that the peers must agree on
+      *   before initialization.
+      */
     final case class Preinit private[head] (
         override val cardanoNetwork: CardanoNetwork,
         override val headParams: HeadParameters,
@@ -168,6 +170,8 @@ object HeadConfig {
               HeadPeers.Section,
               InitializationParameters.Section {
             def headConfigPreinit: HeadConfig.Preinit
+
+            override transparent inline def l2ParamsHash: Hash32 = headParams.l2ParamsHash
 
             override transparent inline def settlementConfig: SettlementConfig =
                 headParams.settlementConfig

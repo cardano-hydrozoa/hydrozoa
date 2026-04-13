@@ -9,18 +9,21 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedFiniteDuration
 import hydrozoa.lib.number.PositiveInt
 import scalus.cardano.ledger.Hash32
 
+/** The parameters that peers agree upon to run the protocol. These parameters get hashed into the
+  * treasury datum.
+  */
 final case class HeadParameters(
     override val txTiming: TxTiming,
     override val fallbackContingency: FallbackContingency,
     override val disputeResolutionConfig: DisputeResolutionConfig,
-    override val settlementConfig: SettlementConfig
+    override val settlementConfig: SettlementConfig,
+    override val l2ParamsHash: Hash32
 ) extends HeadParameters.Section {
     override transparent inline def headParams: HeadParameters = this
 
     // TODO: We need this hash to put into the initialization tx's metadata,
     //  so that the head parameters are pinned by something signed by all peers.
     override lazy val headParamsHash: Hash32 = {
-        val cbor = ???
         ???
     }
 }
@@ -31,6 +34,12 @@ object HeadParameters {
           FallbackContingency.Section,
           DisputeResolutionConfig.Section,
           SettlementConfig.Section {
+
+        /** A black-box, L2-specific blake2b-256 hash of the L2 parameters that the peers agree upon
+          * during the negotiation phase.
+          */
+        def l2ParamsHash: Hash32
+
         def headParams: HeadParameters
 
         def headParamsHash: Hash32

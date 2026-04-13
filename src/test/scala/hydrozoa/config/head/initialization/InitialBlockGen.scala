@@ -1,7 +1,6 @@
 package hydrozoa.config.head.initialization
 
 import hydrozoa.config.head.InitParamsType.{BottomUp, Constant, TopDown}
-import hydrozoa.config.head.{HeadConfig, InitParamsType}
 import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.{BlockCreationEndTimeGen, currentTimeBlockCreationEndTime}
 import hydrozoa.config.head.multisig.fallback.{FallbackContingencyGen, generateFallbackContingency}
 import hydrozoa.config.head.multisig.settlement.{SettlementConfigGen, generateSettlementConfig}
@@ -10,13 +9,15 @@ import hydrozoa.config.head.multisig.timing.{TxTiming, TxTimingGen, generateDefa
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.{GenHeadParams, generateHeadParameters}
 import hydrozoa.config.head.rulebased.{DisputeResolutionConfigGen, generateDisputeResolutionConfig}
+import hydrozoa.config.head.{HeadConfig, InitParamsType}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import monocle.Focus.focus
 import org.scalacheck.Test.Parameters
-import org.scalacheck.{Gen, Prop, Properties}
-
+import org.scalacheck.{Arbitrary, Gen, Prop, Properties}
 import scala.concurrent.duration.DurationInt
+import scalus.cardano.ledger.ArbitraryInstances.given_Arbitrary_Hash
+import scalus.cardano.ledger.Hash32
 import test.{TestPeers, TestPeersSpec}
 
 def generateInitialBlock(testPeers: TestPeers)(
@@ -25,9 +26,11 @@ def generateInitialBlock(testPeers: TestPeers)(
     generateDisputeResolutionConfig: DisputeResolutionConfigGen = generateDisputeResolutionConfig,
     generateHeadParameters: GenHeadParams = generateHeadParameters,
     generateBlockCreationEndTime: BlockCreationEndTimeGen = currentTimeBlockCreationEndTime,
-    generateInitializationParameters: InitParamsType =
-        BottomUp(InitializationParametersGenBottomUp.generateInitializationParameters),
-    generateSettlementConfig: SettlementConfigGen = generateSettlementConfig
+    generateInitializationParameters: InitParamsType = BottomUp(
+      InitializationParametersGenBottomUp.generateInitializationParameters
+    ),
+    generateSettlementConfig: SettlementConfigGen = generateSettlementConfig,
+    generateL2ParamsHash: Gen[Hash32] = Arbitrary.arbitrary[Hash32]
 ): Gen[InitialBlock] = {
     for {
         cardanoNetwork <- Gen.const(testPeers.network)
@@ -36,17 +39,20 @@ def generateInitialBlock(testPeers: TestPeers)(
           generateTxTiming,
           generateFallbackContingency,
           generateDisputeResolutionConfig,
-          generateSettlementConfig
+          generateSettlementConfig,
+          generateL2ParamsHash
         )
 
         initializationParameters <- generateInitializationParameters match {
             case BottomUp(g) =>
                 g(testPeers)(_ => Gen.const(headParams.fallbackContingency))
-            case TopDown(InitializationParametersGenTopDown.GenWithDeps(
-                  generator,
-                  generateGenesisUtxosL1,
-                  equityRange
-                )) =>
+            case TopDown(
+                  InitializationParametersGenTopDown.GenWithDeps(
+                    generator,
+                    generateGenesisUtxosL1,
+                    equityRange
+                  )
+                ) =>
                 generator(testPeers)(
                   generateFallbackContingency,
                   generateGenesisUtxosL1,

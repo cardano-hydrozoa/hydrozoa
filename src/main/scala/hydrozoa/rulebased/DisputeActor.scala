@@ -25,11 +25,11 @@ import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.l1.tx.*
 import hydrozoa.rulebased.ledger.l1.utxo.*
 import scala.util.{Failure, Success, Try}
-import scalus.builtin.Data.fromData
 import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.{DatumOption, Transaction, TransactionOutput, Utxo, Utxos}
 import scalus.cardano.onchain.plutus.v3.PubKeyHash
+import scalus.uplc.builtin.Data.fromData
 
 // TODO: relocate
 extension (tx: Transaction) {

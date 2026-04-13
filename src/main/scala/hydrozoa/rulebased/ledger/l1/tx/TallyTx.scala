@@ -22,7 +22,7 @@ import monocle.*
 import scalus.cardano.ledger.{Utxo as _, *}
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
-import scalus.cardano.txbuilder.{ExpectedSigner, SomeBuildError, TransactionBuilder}
+import scalus.cardano.txbuilder.{SomeBuildError, TransactionBuilder}
 
 final case class TallyTx(
     continuingVoteUtxo: VoteUtxo[VoteStatus],
@@ -124,11 +124,11 @@ object TallyTxOps {
             val continuingRedeemer = DisputeRedeemer.Tally(TallyRedeemer.Continuing)
             val removedRedeemer = DisputeRedeemer.Tally(TallyRedeemer.Removed)
 
-            // TODO: The AddCollateral step should really add the signer to expected signers automatically,
-            //  but we don't have that yet. So I'll add it on the vote utxo instead.
-            val collateralSigner = ExpectedSigner(
-              collateralUtxo.collateralOutput.addrKeyHash
-            )
+//            // TODO: The AddCollateral step should really add the signer to expected signers automatically,
+//            //  but we don't have that yet. So I'll add it on the vote utxo instead.
+//            val collateralSigner = ExpectedSigner(
+//              collateralUtxo.collateralOutput.addrKeyHash
+//            )
 
             for {
                 context <- contextualscalus.TransactionBuilder

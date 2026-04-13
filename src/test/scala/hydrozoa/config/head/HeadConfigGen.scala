@@ -10,8 +10,9 @@ import hydrozoa.config.head.multisig.timing.{TxTimingGen, generateDefaultTxTimin
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.{GenHeadParams, generateHeadParameters}
 import hydrozoa.config.head.rulebased.{DisputeResolutionConfigGen, generateDisputeResolutionConfig}
-import org.scalacheck.{Gen, Prop, Properties}
-import scalus.cardano.ledger.SlotConfig
+import org.scalacheck.{Arbitrary, Gen, Prop, Properties}
+import scalus.cardano.ledger.ArbitraryInstances.given_Arbitrary_Hash
+import scalus.cardano.ledger.{Hash32, SlotConfig}
 import test.{TestPeers, TestPeersSpec}
 
 type HeadConfigGen =
@@ -31,8 +32,9 @@ def generateHeadConfig(testPeers: TestPeers)(
     generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
     generateDisputeResolutionConfig: DisputeResolutionConfigGen = generateDisputeResolutionConfig,
     generateHeadParameters: GenHeadParams = generateHeadParameters,
-    generateInitializationParameters: InitParamsType =
-        BottomUp(InitializationParametersGenBottomUp.generateInitializationParameters)
+    generateInitializationParameters: InitParamsType = BottomUp(
+      InitializationParametersGenBottomUp.generateInitializationParameters
+    )
 ): Gen[HeadConfig] =
     for {
         preinit <- generateHeadConfigPreInit(testPeers)(
@@ -44,7 +46,7 @@ def generateHeadConfig(testPeers: TestPeers)(
         )
         initialBlock <- generateInitialBlock(testPeers)(
           generateTxTiming = _ => Gen.const(preinit.headParams.txTiming),
-          generateHeadParameters = _ => (_, _, _, _) => Gen.const(preinit.headParams),
+          generateHeadParameters = _ => (_, _, _, _, _) => Gen.const(preinit.headParams),
           generateBlockCreationEndTime = generateBlockCreationEndTime,
           generateInitializationParameters = Constant(preinit.initializationParams)
         )
@@ -57,9 +59,11 @@ def generateHeadConfig(testPeers: TestPeers)(
     ).get
 
 enum InitParamsType:
-    case BottomUp(initializationParametersGenBottomUp: InitializationParametersGenBottomUp.GenInitializationParameters)
+    case BottomUp(
+        initializationParametersGenBottomUp: InitializationParametersGenBottomUp.GenInitializationParameters
+    )
     case TopDown(initializationParametersGenTopDown: InitializationParametersGenTopDown.GenWithDeps)
-    case Constant(params : InitializationParameters)
+    case Constant(params: InitializationParameters)
 
 def generateHeadConfigPreInit(testPeers: TestPeers)(
     generateBlockCreationEndTime: SlotConfig => Gen[BlockCreationEndTime] =
@@ -68,27 +72,32 @@ def generateHeadConfigPreInit(testPeers: TestPeers)(
     generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
     generateDisputeResolutionConfig: DisputeResolutionConfigGen = generateDisputeResolutionConfig,
     generateHeadParameters: GenHeadParams = generateHeadParameters,
-    generateInitializationParameters: InitParamsType =
-        InitParamsType.BottomUp(InitializationParametersGenBottomUp.generateInitializationParameters),
-    generateSettlementConfig: SettlementConfigGen = generateSettlementConfig
+    generateInitializationParameters: InitParamsType = InitParamsType.BottomUp(
+      InitializationParametersGenBottomUp.generateInitializationParameters
+    ),
+    generateSettlementConfig: SettlementConfigGen = generateSettlementConfig,
+    generateL2ParamsHash: Gen[Hash32] = Arbitrary.arbitrary[Hash32]
 ): Gen[HeadConfig.Preinit] = for {
     cardanoNetwork <- Gen.const(testPeers.network)
     headParams <- generateHeadParameters(cardanoNetwork)(
       generateTxTiming,
       generateFallbackContingency,
       generateDisputeResolutionConfig,
-      generateSettlementConfig
+      generateSettlementConfig,
+      generateL2ParamsHash
     )
     initializationParams <- generateInitializationParameters match {
-        case  InitParamsType.BottomUp(g) =>
+        case InitParamsType.BottomUp(g) =>
             g(testPeers)(
               generateFallbackContingency,
             )
-        case InitParamsType.TopDown(InitializationParametersGenTopDown.GenWithDeps(
-              generator,
-              generateGenesisUtxosL1,
-              equityRange
-            )) =>
+        case InitParamsType.TopDown(
+              InitializationParametersGenTopDown.GenWithDeps(
+                generator,
+                generateGenesisUtxosL1,
+                equityRange
+              )
+            ) =>
             generator(testPeers)(
               generateFallbackContingency,
               generateGenesisUtxosL1,
