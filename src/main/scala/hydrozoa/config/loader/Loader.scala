@@ -3,6 +3,8 @@ package hydrozoa.config.loader
 import cats.data.*
 import cats.effect.*
 import cats.effect.unsafe.implicits.global
+import hydrozoa.config.ScriptReferenceUtxos
+import hydrozoa.config.ScriptReferenceUtxos.*
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.initialization.InitializationParameters
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
@@ -15,10 +17,14 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.HeadParameters
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
+import hydrozoa.config.node.NodePrivateConfig
+import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
+import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
+import hydrozoa.config.node.owninfo.{OwnHeadPeerPrivate, OwnHeadPeerPublic}
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
 import hydrozoa.lib.number.PositiveInt
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber, HeadPeerWallet}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.joint.obligation.Payout
@@ -34,9 +40,10 @@ import scala.io.{BufferedSource, Source}
 import scala.util.Try
 import scalus.cardano.address.Network
 import scalus.cardano.ledger.*
-import scalus.crypto.ed25519.VerificationKey
+import scalus.crypto.ed25519.{SigningKey, VerificationKey}
 import scalus.uplc.builtin.ByteString
 import scalus.|>
+import scodec.bits.ByteVector
 
 object Loader {
     def file(name: String = "config.toml"): Resource[IO, BufferedSource] =
@@ -86,6 +93,63 @@ object Codecs {
     }
 
     object Derived {
+        given nodePrivateConfigEncoder: Encoder[NodePrivateConfig] =
+            deriveEncoder[NodePrivateConfig]
+        given nodePrivateConfigDecoder(using
+            config: HeadPeers.Section & CardanoNetwork.Section
+        ): Decoder[NodePrivateConfig] = deriveDecoder[NodePrivateConfig]
+
+        given dummyOwnHeadPeerPrivateEncoder: Encoder[OwnHeadPeerPrivate] =
+            Encoder.instance(ownHeadPeerPrivate =>
+                Json.obj(
+                  "ownHeadWallet" -> ownHeadPeerPrivate.ownHeadWallet.asJson(using
+                    dummyHeadPeerWalletEncoder
+                  ),
+                )
+            )
+
+        given ownHeadPeerPrivateDecoder(using
+            peers: HeadPeers.Section
+        ): Decoder[OwnHeadPeerPrivate] = Decoder
+            .instance(c =>
+                for {
+                    wallet <- c.downField("ownHeadWallet").as[HeadPeerWallet]
+                } yield OwnHeadPeerPrivate(wallet, peers.headPeers)
+            )
+            .emap {
+                case Some(ownHeadPeerPrivate: OwnHeadPeerPrivate) => Right(ownHeadPeerPrivate)
+                case None =>
+                    Left(
+                      "Could not construct head peer private section. Does the wallet's peer number correspond to " +
+                          "an existing HeadPeerNumber?"
+                    )
+            }
+
+        given nodeOperationEvacuationConfigEncoder: Encoder[NodeOperationEvacuationConfig] =
+            deriveEncoder[NodeOperationEvacuationConfig]
+        given nodeOperationEvacuationConfigDecoder: Decoder[NodeOperationEvacuationConfig] =
+            Decoder.instance(c =>
+                for {
+                    ebpp <- c.downField("evacuationBotPollingPeriod").as[FiniteDuration]
+                    ew <- c.downField("evacuationWallet").as[HeadPeerWallet]
+                } yield NodeOperationEvacuationConfig(ebpp, ew)
+            )
+
+        given ownHeadPeerPublicEncoder: Encoder[OwnHeadPeerPublic] =
+            deriveEncoder[OwnHeadPeerPublic]
+        given ownHeadPeerPublicDecoder: Decoder[OwnHeadPeerPublic] =
+            deriveDecoder[OwnHeadPeerPublic]
+
+        given Encoder[NodeOperationMultisigConfig] = deriveEncoder[NodeOperationMultisigConfig]
+        given Decoder[NodeOperationMultisigConfig] = deriveDecoder[NodeOperationMultisigConfig]
+
+        given headPeerIdEncoder: Encoder[HeadPeerId] = deriveEncoder[HeadPeerId]
+        given headPeerIdDecoder: Decoder[HeadPeerId] = deriveDecoder[HeadPeerId]
+
+        given Encoder[ScriptReferenceUtxos] = deriveEncoder[ScriptReferenceUtxos]
+        given scriptReferenceUtxos(using
+            network: CardanoNetwork.Section
+        ): Decoder[ScriptReferenceUtxos] = deriveDecoder[ScriptReferenceUtxos]
 
         given headConfigEncoder: Encoder[HeadConfig] with {
             override def apply(hc: HeadConfig): Json = {
@@ -128,6 +192,7 @@ object Codecs {
                 }
             } yield hc
         }
+
         given headConfigPreinitEncoder(using CardanoNetwork.Section): Encoder[HeadConfig.Preinit] =
             deriveEncoder[HeadConfig.Preinit]
 //            with {
@@ -332,6 +397,73 @@ object Codecs {
 
     }
 
+    // TODO This must be updated when we start getting script versions/hashses from the config
+    given Encoder[TreasuryScriptUtxo] = utxoEncoder.contramap(_.utxo)
+    given treasuryReferenceScriptUtxoDecoder(using
+        network: CardanoNetwork.Section
+    ): Decoder[TreasuryScriptUtxo] =
+        utxoDecoder.emap(utxo =>
+            TreasuryScriptUtxo(network, utxo).left.map(e =>
+                "Failed to construct rule-based treasury reference script utxo." +
+                    s"Failure: $e"
+            )
+        )
+
+    given Encoder[DisputeScriptUtxo] = utxoEncoder.contramap(_.utxo)
+    given disputeSrriptUtxoDecoder(using
+        network: CardanoNetwork.Section
+    ): Decoder[DisputeScriptUtxo] =
+        utxoDecoder.emap(utxo =>
+            DisputeScriptUtxo(network, utxo).left.map(e =>
+                "Failed to construct dispute script utxo." +
+                    s"Failure: $e"
+            )
+        )
+
+    val dummySigningKey: SigningKey =
+        SigningKey.fromByteString(ByteString.fromHex("00" * 32)) match {
+            case Right(sk) => sk
+            case Left(e) =>
+                throw RuntimeException(s"exception thrown when constructing dummy signing key $e")
+        }
+
+    given dummyHeadPeerWalletEncoder: Encoder[HeadPeerWallet] = new Encoder[HeadPeerWallet] {
+        override def apply(w: HeadPeerWallet): Json = Json.obj(
+          "peerNum" -> w.getPeerNum.asJson,
+          "verificationKey" -> w.exportVerificationKey.asJson,
+          "signingKey" -> dummySigningKey.asJson
+        )
+    }
+
+    given headPeerWalletDecoder: Decoder[HeadPeerWallet] = Decoder.instance(c =>
+        for {
+            peerNum <- c.downField("peerNum").as[HeadPeerNumber]
+            vkey <- c.downField("verificationKey").as[VerificationKey]
+            skey <- c.downField("signingKey").as[SigningKey]
+            w = HeadPeerWallet.scalusWallet(
+              peerNum = peerNum,
+              verificationKey = vkey,
+              signingKey = skey
+            )
+        } yield w
+    )
+
+    given signingKeyDecoder: Decoder[SigningKey] =
+        def signingKeyFromText(hexStr: String): Either[String, SigningKey] =
+            ByteVector
+                .fromHex(hexStr)
+                .toRight(s"Invalid hex string for signing key: $hexStr")
+                .flatMap { bv =>
+                    if bv.size == 32 then
+                        Right(
+                          SigningKey
+                              .unsafeFromByteString(ByteString.fromArray(bv.toArray))
+                        )
+                    else Left(s"Signing key must be 32 bytes, got ${bv.size}")
+                }
+
+        Decoder.decodeString.emap { signingKeyFromText }
+
     given quantizedFiniteDurationEncoder: Encoder[QuantizedFiniteDuration] with {
         override def apply(qfd: QuantizedFiniteDuration): Json = qfd.finiteDuration.asJson
     }
@@ -521,7 +653,7 @@ object Codecs {
         def apply(fd: FiniteDuration): Json = Encoder.encodeLong(fd.toMillis)
     }
 
-    given finiteDurationDecoder(using config: CardanoNetwork.Section): Decoder[FiniteDuration] =
+    given finiteDurationDecode: Decoder[FiniteDuration] =
         Decoder.decodeLong.map(l => l.millis)
 
     // FIXME (maybe?): combine with `given Encoder[KeepRaw[TransactionOutput]]` in RemoteL2LedgerCodecs(?)

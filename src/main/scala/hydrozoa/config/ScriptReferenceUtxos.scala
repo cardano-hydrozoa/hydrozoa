@@ -4,7 +4,7 @@ import cats.syntax.all.*
 import hydrozoa.config
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.rulebased.ledger.l1.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
-import scalus.cardano.ledger.Utxo
+import scalus.cardano.ledger.{TransactionInput, Utxo}
 import scalus.cardano.txbuilder.TransactionBuilderStep.ReferenceOutput
 
 final case class ScriptReferenceUtxos(
@@ -17,7 +17,22 @@ final case class ScriptReferenceUtxos(
 }
 
 object ScriptReferenceUtxos {
-    trait Section {
+    case class Unresolved(
+        override val rulebasedTreasuryScriptInput: TransactionInput,
+        override val disputeResolutionScriptInput: TransactionInput
+    ) extends Unresolved.Section {
+        override val scriptReferenceUtxosUnresolved: Unresolved = this
+    }
+
+    object Unresolved {
+        trait Section {
+            def scriptReferenceUtxosUnresolved: Unresolved
+            def rulebasedTreasuryScriptInput: TransactionInput
+            def disputeResolutionScriptInput: TransactionInput
+        }
+    }
+
+    trait Section extends Unresolved.Section {
         def scriptReferenceUtxos: ScriptReferenceUtxos
 
         def rulebasedTreasuryScriptUtxo: ScriptReferenceUtxos.TreasuryScriptUtxo
@@ -29,6 +44,18 @@ object ScriptReferenceUtxos {
         final def referenceDispute: ReferenceOutput = ReferenceOutput(
           disputeResolutionScriptUtxo.utxo
         )
+
+        override transparent inline def scriptReferenceUtxosUnresolved: Unresolved =
+            Unresolved(
+              rulebasedTreasuryScriptInput,
+              disputeResolutionScriptInput
+            )
+
+        override transparent inline def rulebasedTreasuryScriptInput: TransactionInput =
+            scriptReferenceUtxos.rulebasedTreasuryScriptUtxo.utxo.input
+
+        override transparent inline def disputeResolutionScriptInput: TransactionInput =
+            scriptReferenceUtxos.disputeResolutionScriptUtxo.utxo.input
     }
 
     // TODO: Expand errors, add toString
@@ -39,6 +66,7 @@ object ScriptReferenceUtxos {
     case class TreasuryScriptUtxo private (utxo: Utxo)
 
     object TreasuryScriptUtxo {
+        // TODO: Once we have a version script setup, we need to adjust this apply method
         def apply(
             network: CardanoNetwork.Section,
             utxo: Utxo
@@ -66,6 +94,7 @@ object ScriptReferenceUtxos {
     case class DisputeScriptUtxo private (utxo: Utxo)
 
     object DisputeScriptUtxo {
+        // TODO: Once we have a version script setup, we need to adjust this apply method
         def apply(
             network: CardanoNetwork.Section,
             utxo: Utxo

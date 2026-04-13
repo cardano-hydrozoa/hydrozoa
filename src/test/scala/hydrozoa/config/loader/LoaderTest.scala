@@ -3,45 +3,82 @@ package hydrozoa.config.loader
 import cats.effect.*
 import cats.effect.unsafe.implicits.global
 import hydrozoa.config.head.HeadConfig
-import hydrozoa.config.loader.Codecs.given
-import hydrozoa.config.node.MultiNodeConfig
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.peers.HeadPeers
+import hydrozoa.config.loader.Codecs.{dummySigningKey, given}
+import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
+import hydrozoa.config.node.{MultiNodeConfig, NodePrivateConfig}
+import hydrozoa.multisig.consensus.peer.HeadPeerWallet
 import io.circe.syntax.*
 import io.circe.{Json, *}
-import org.scalacheck.rng.Seed
-import org.scalacheck.{Properties, Test}
+import monocle.*
+import monocle.syntax.all.{as as _, *}
+import org.scalacheck.Properties
 
 object LoaderTest extends Properties("Configuration Loader Properties") {
     import MultiNodeConfig.*
 
-    override def overrideParameters(p: Test.Parameters): Test.Parameters =
-        p.withInitialSeed(Seed.fromBase64("AIUK99d5Zgz2qjvWyA8NCvvkh9Q5mbFWbux4o6hfQZG=").get)
+//    override def overrideParameters(p: Test.Parameters): Test.Parameters =
+//        p.withInitialSeed(Seed.fromBase64("AIUK99d5Zgz2qjvWyA8NCvvkh9Q5mbFWbux4o6hfQZG=").get)
 
     val headConfigRoundTrip: MultiNodeConfigTestM[Boolean] =
         for {
             mnc <- ask
             headConfig = mnc.headConfig
             encoded = headConfig.asJson
+//            _ <- lift(IO.println(encoded))
             decoded <- failLeft(encoded.as[HeadConfig])
             _ <- assertWith(
               headConfig == decoded,
               "HeadConfig should round trip through JSON." +
-                  "=" * 80 + s"\nMarshalled:\n\n ${headConfig} \n\n" +
-                  "=" * 80 + s"\nEncoded:\n\n ${encoded} \n\n" +
-                  "=" * 80 + s"\nDecoded:\n\n ${decoded} \n\n"
+                  "=" * 80 + s"\nMarshalled:\n\n $headConfig \n\n" +
+                  "=" * 80 + s"\nEncoded:\n\n $encoded \n\n" +
+                  "=" * 80 + s"\nDecoded:\n\n $decoded  \n\n"
             )
         } yield true
 
-    val dumpHeadConfig: MultiNodeConfigTestM[Unit] =
+    // We don't allow direct inspection of the signing key of wallets, and therefore we cannot serialize them directly.
+    // This tests replaces the signing keys with "dummy" all-zeros keys.
+    val dummyPrivateConfigRoundTrip: MultiNodeConfigTestM[Unit] = {
+        def mkDummyWallet(w: HeadPeerWallet): HeadPeerWallet =
+            HeadPeerWallet.scalusWallet(w.getPeerNum, w.exportVerificationKey, dummySigningKey)
+
+        def mkDummy(ncp: NodePrivateConfig, headPeers: HeadPeers): NodePrivateConfig = {
+            val dummyPrivate =
+                OwnHeadPeerPrivate(ncp.ownHeadPeerPrivate.ownHeadWallet, headPeers).get
+            ncp.focus(_.ownHeadPeerPrivate)
+                .replace(dummyPrivate)
+                .focus(_.nodeOperationEvacuationConfig.evacuationWallet)
+                .modify(mkDummyWallet)
+        }
+
         for {
             mnc <- ask
-            _ <- lift(IO.println(mnc.headConfig.asJson))
+            _ <- {
+                given (HeadPeers.Section & CardanoNetwork.Section) = mnc.headConfig
+                val npc = mnc.nodePrivateConfigs.head._2
+                val dummy = mkDummy(npc, mnc.headPeers)
+                val encoded = dummy.asJson
+                for {
+                    _ <- lift(IO.println(encoded))
+                    decoded <- failLeft(encoded.as[NodePrivateConfig])
+                    _ <- assertWith(
+                      dummy.nodeOperationEvacuationConfig == decoded.nodeOperationEvacuationConfig,
+                      "NodePrivateConfig should round trip through JSON." +
+                          "=" * 80 + s"\nMarshalled (dummy):\n\n $dummy \n\n" +
+                          "=" * 80 + s"\nEncoded:\n\n $encoded \n\n" +
+                          "=" * 80 + s"\nDecoded:\n\n $decoded \n\n"
+                    )
+                } yield ()
+            }
 
         } yield ()
+    }
 
     val _ = property("round tripping") = runDefault(
       for {
-          _ <- dumpHeadConfig
           _ <- headConfigRoundTrip
+          _ <- dummyPrivateConfigRoundTrip
       } yield true
     )
 }

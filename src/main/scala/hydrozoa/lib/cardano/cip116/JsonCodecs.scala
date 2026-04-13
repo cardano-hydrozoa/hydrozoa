@@ -5,7 +5,7 @@ import io.circe.{Decoder, Encoder, KeyDecoder, KeyEncoder}
 import scala.util.Try
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
-import scalus.crypto.ed25519.{Signature, VerificationKey}
+import scalus.crypto.ed25519.{Signature, SigningKey, VerificationKey}
 import scalus.uplc.builtin.ByteString
 import scodec.bits.ByteVector
 
@@ -25,6 +25,19 @@ object JsonCodecs {
                                 )
                             else Left(s"Verification key must be 32 bytes, got ${bv.size}")
                         }
+
+                def signingKeyFromText(hexStr: String): Either[String, SigningKey] =
+                    ByteVector
+                        .fromHex(hexStr)
+                        .toRight(s"Invalid hex string for signing key: $hexStr")
+                        .flatMap { bv =>
+                            if bv.size == 32 then
+                                Right(
+                                  SigningKey
+                                      .unsafeFromByteString(ByteString.fromArray(bv.toArray))
+                                )
+                            else Left(s"Signing key must be 32 bytes, got ${bv.size}")
+                        }
             }
 
             given KeyEncoder[VerificationKey] =
@@ -42,6 +55,14 @@ object JsonCodecs {
             given Decoder[VerificationKey] =
                 Decoder.decodeString.emap {
                     Helpers.verificationKeyFromText
+                }
+
+            given Encoder[SigningKey] =
+                Encoder.encodeString.contramap(sk => ByteVector(sk.bytes).toHex)
+
+            given Decoder[SigningKey] =
+                Decoder.decodeString.emap {
+                    Helpers.signingKeyFromText
                 }
 
             // Scalus Signature codec (64 bytes as hex)

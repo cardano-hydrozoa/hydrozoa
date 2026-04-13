@@ -15,6 +15,17 @@ final class HeadPeerWallet(
     verificationKey: walletModule.VerificationKey,
     signingKey: walletModule.SigningKey
 ) {
+    // extensional equality
+    override def equals(obj: Any): Boolean = obj match {
+        case other: HeadPeerWallet =>
+            this.getPeerNum == other.getPeerNum
+            && this.exportVerificationKey == other.exportVerificationKey
+            && (this.signMsg(IArray.from(Seq(0.toByte))) sameElements other.signMsg(
+              IArray.from(Seq(0.toByte))
+            ))
+        case _ => false
+    }
+
     def signMsg(msg: IArray[Byte]): IArray[Byte] = walletModule.signMsg(msg, signingKey)
 
     def getPeerNum: HeadPeerNumber = peerNum
