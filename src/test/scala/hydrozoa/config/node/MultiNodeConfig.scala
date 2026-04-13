@@ -43,7 +43,10 @@ case class MultiNodeConfig private (
                   pc.ownHeadWallet,
                   pc.nodeOperationEvacuationConfig,
                   pc.nodeOperationMultisigConfig,
-                  pc.scriptReferenceUtxos
+                  pc.scriptReferenceUtxos,
+                  pc.hydrozoaHost,
+                  pc.hydrozoaPort,
+                  pc.blockfrostApiKey
                 ).get
         )
 
@@ -179,7 +182,10 @@ object MultiNodeConfig {
                         // Re-using the same wallet for now, don't know if this will work
                         nodeOperationEvacuationConfig = noec,
                         nodeOperationMultisigConfig = nomc,
-                        scriptReferenceUtxos = sru
+                        scriptReferenceUtxos = sru,
+                        hydrozoaHost = "localhost",
+                        hydrozoaPort = "4973",
+                        blockfrostApiKey = "not a real blockfrost api key"
                       )
                   )
                 )

@@ -25,19 +25,32 @@ object NodeConfig {
         ownHeadWallet: HeadPeerWallet,
         nodeOperationEvacuationConfig: NodeOperationEvacuationConfig,
         nodeOperationMultisigConfig: NodeOperationMultisigConfig,
-        scriptReferenceUtxos: ScriptReferenceUtxos
+        scriptReferenceUtxos: ScriptReferenceUtxos,
+        hydrozoaHost: String,
+        hydrozoaPort: String,
+        blockfrostApiKey: String
     ): Option[NodeConfig] = for {
         ownHeadPeerPrivate <- OwnHeadPeerPrivate(ownHeadWallet, headConfig.headPeers)
         nodePrivateConfig = NodePrivateConfig(
           ownHeadPeerPrivate,
           nodeOperationEvacuationConfig,
           nodeOperationMultisigConfig,
-          scriptReferenceUtxos
+          scriptReferenceUtxos,
+          hydrozoaHost,
+          hydrozoaPort,
+          blockfrostApiKey
         )
     } yield NodeConfig(headConfig, nodePrivateConfig)
 
     trait Section extends NodePrivateConfig.Section, HeadConfig.Section {
         def nodeConfig: NodeConfig
+
+        override transparent inline def hydrozoaHost: String = nodePrivateConfig.hydrozoaHost
+
+        override transparent inline def hydrozoaPort: String = nodePrivateConfig.hydrozoaPort
+
+        override transparent inline def blockfrostApiKey: String =
+            nodePrivateConfig.blockfrostApiKey
 
         override transparent inline def headConfigPreinit: HeadConfig.Preinit =
             headConfig.headConfigPreinit

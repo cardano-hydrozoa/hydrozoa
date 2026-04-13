@@ -14,6 +14,9 @@ final case class NodePrivateConfig(
     override val nodeOperationMultisigConfig: NodeOperationMultisigConfig,
     // Adding this here because it's not something that the peers necessarily need to agree upon.
     override val scriptReferenceUtxos: ScriptReferenceUtxos,
+    override val hydrozoaHost: String,
+    override val hydrozoaPort: String,
+    override val blockfrostApiKey: String,
 ) extends NodePrivateConfig.Section {
     override transparent inline def nodePrivateConfig: NodePrivateConfig = this
 }
@@ -25,6 +28,13 @@ object NodePrivateConfig {
           OwnHeadPeerPrivate.Section,
           ScriptReferenceUtxos.Section {
         def nodePrivateConfig: NodePrivateConfig
+
+        def hydrozoaHost: String
+        def hydrozoaPort: String
+        def blockfrostApiKey: String
+
+        // Do we want http or https here?
+        final def hydrozoaUri: String = s"http://$hydrozoaHost:$hydrozoaPort"
 
         override transparent inline def ownHeadWallet: HeadPeerWallet =
             ownHeadPeerPrivate.ownHeadWallet

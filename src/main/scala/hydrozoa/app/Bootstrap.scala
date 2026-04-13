@@ -295,6 +295,9 @@ object Bootstrap:
             // NOTE: Reusing the same multisig wallet, in production this should be a different wallet
             evacuationWallet = ownHeadWallet
           ),
+          hydrozoaHost = ???,
+          hydrozoaPort = ???,
+          blockfrostApiKey = ???,
           nodeOperationMultisigConfig = NodeOperationMultisigConfig.default,
           // TODO: I assume that these will be pre-populated on preview, pre-prod, and mainnet, and that we'll have
           // a different utility to publish the utxo to a given network.
