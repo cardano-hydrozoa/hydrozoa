@@ -362,7 +362,7 @@ object Codecs {
         def helper(f: BlockHeader.Initial => QuantizedInstant)(using
             bh: BlockHeader.Initial
         ): Json =
-            f(bh).instant.asJson
+            f(bh).instant.toEpochMilli.asJson
 
         override def apply(initBH: BlockHeader.Initial): Json = {
             given BlockHeader.Initial = initBH
@@ -386,7 +386,7 @@ object Codecs {
                 c: HCursor
             ): Either[DecodingFailure, QuantizedInstant] =
                 for {
-                    instant <- c.downField(fieldName).as[java.time.Instant]
+                    instant <- c.downField(fieldName).as[Long].map(java.time.Instant.ofEpochMilli)
                     res = QuantizedInstant(config.slotConfig, instant)
                 } yield res
 
