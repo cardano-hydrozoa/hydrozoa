@@ -1,5 +1,6 @@
 package hydrozoa.multisig.server
 
+import com.bloxbean.cardano.client.cip.cip30.{CIP30DataSigner, DataSignature}
 import hydrozoa.config.head.initialization.InitializationParameters
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.lib.cardano.cip116
@@ -10,16 +11,17 @@ import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.server.ApiResponse.{Error, HeadInfo, RequestAccepted}
 import io.circe.generic.semiauto.*
 import io.circe.{Decoder, DecodingFailure, Encoder, Json}
+import scala.util.Try
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
-import scalus.crypto.ed25519.{Signature, VerificationKey}
+import scalus.crypto.ed25519.VerificationKey
 import scalus.uplc.builtin.ByteString
 
 /** JSON encoders and decoders for API types */
 object JsonCodecs {
 
     import cip116.JsonCodecs.CIP0116.Conway.given
-    import hydrozoa.config.head.initialization.InitializationParameters.HeadId.{given Encoder[HeadId], given Decoder[HeadId]}
+    import hydrozoa.config.head.initialization.InitializationParameters.HeadId.{given Decoder[HeadId], given Encoder[HeadId]}
 
     //// Make TransactionInput codecs available as given instances
     // given Encoder[TransactionInput] = transactionInputEncoder
@@ -77,51 +79,99 @@ object JsonCodecs {
           bodyHash
         )
 
-    // UserRequest codec (generic) - uses "deposit" or "transaction" as field name
-    given Encoder[UserRequest] with {
-        def apply(req: UserRequest): Json = {
-            val bodyFieldName = req.body match {
-                case _: UserRequestBody.DepositRequestBody     => "deposit"
-                case _: UserRequestBody.TransactionRequestBody => "transaction"
-            }
-            Json.obj(
-              "header" -> summon[Encoder[UserRequestHeader]].apply(req.header),
-              bodyFieldName -> (if bodyFieldName == "deposit"
-                                then
-                                    summon[Encoder[DepositRequestBody]]
-                                        .apply(req.body.asInstanceOf[DepositRequestBody])
-                                else
-                                    summon[Encoder[TransactionRequestBody]]
-                                        .apply(req.body.asInstanceOf[TransactionRequestBody])),
-              "userVk" -> summon[Encoder[VerificationKey]].apply(req.userVk),
-              "signature" -> summon[Encoder[Signature]].apply(req.signature)
-            )
-        }
-    }
+    // UserRequest cannot be encoded - we can only decode it, since the signatures are not needed
+    // once the parsing is done.
+
+    // 2Peter: is this an argument in favor of having separate types for encoding/decoding specifically?
+    // UserRequestRaw that can be rounded tripped, with no checks, just well-formedness.
+    // Then there is one way parseUserRequest :: UserRequestRaw -> Either[_, UserRequest]?
+
+    //// UserRequest codec (generic) - uses "deposit" or "transaction" as field name
+    // given Encoder[UserRequest] with {
+    //  ...
+    // }
 
     given Decoder[UserRequest] with {
+
+        object Error {
+            trait ValidationError extends Throwable {
+                override def getMessage: String = toString
+            }
+
+            /** The [[UserRequestHeader.body]] does not match the [[blake2b_256]] hash of the
+              * [[UserRequestBody]]
+              */
+            case object BodyHashMismatch extends ValidationError {
+                override def toString: String = "Body hash mismatch"
+            }
+
+            /** The COSE signature of the header does not match
+              */
+            case object SignatureMismatch extends ValidationError {
+                override def toString: String = "Signature mismatch"
+            }
+
+            case object VerificationKeyParsingFailure extends ValidationError {
+                override def toString: String = "Verification key parsing failure"
+            }
+        }
+
+        /** Validates COSE signature.
+          *
+          * @param bodyHash
+          * @param coseKeyCborHex
+          * @param coseSignatureCborHex
+          * @return
+          *   the verification key from the COSEKey if valid, an error otherwise
+          */
+        private def validateCoseSignature(
+            coseKeyCborHex: String,
+            coseSignatureCborHex: String
+        ): Either[Error.ValidationError, VerificationKey] = {
+            val bbDataSignature = DataSignature(coseSignatureCborHex, coseKeyCborHex)
+            for {
+                _ <- Either.cond(
+                  CIP30DataSigner.INSTANCE.verify(bbDataSignature),
+                  (),
+                  Error.SignatureMismatch
+                )
+                vKey <- Try(
+                  VerificationKey.unsafeFromArray(bbDataSignature.coseKey().keyId())
+                ).toEither.left.map(_ => Error.VerificationKeyParsingFailure)
+            } yield vKey
+        }
+
         def apply(c: io.circe.HCursor): Decoder.Result[UserRequest] =
             for {
+                // QUESTION: What exactly are these "ops" in DecodingFailure cons?
                 header <- c.downField("header").as[UserRequestHeader]
                 // Try both "deposit" and "transaction" fields
                 body <- c
                     .downField("deposit")
                     .as[DepositRequestBody]
                     .orElse(c.downField("transaction").as[TransactionRequestBody])
-                userVk <- c.downField("userVk").as[VerificationKey]
-                signature <- c.downField("signature").as[Signature]
-                // QUESTION: What exactly are these "ops"?
-                userRequest <- body match {
+                // Check body hash
+                _ <- Either.cond(
+                  body.hash == header.bodyHash,
+                  (),
+                  DecodingFailure(Error.BodyHashMismatch.getMessage, ops = List.empty)
+                )
+                // Validate the COSE signature
+                coseKeyCborHex <- c.downField("coseKey").as[String]
+                cosedSignatureCborHex <- c.downField("coseSignature").as[String]
+                vKey: VerificationKey <- validateCoseSignature(
+                  coseKeyCborHex,
+                  cosedSignatureCborHex
+                ).left
+                    .map(e => DecodingFailure(e.getMessage, ops = List.empty))
+                // Construct the result
+                userRequest = body match {
                     case d: DepositRequestBody =>
                         UserRequest
-                            .DepositRequest(header, d, userVk, signature)
-                            .left
-                            .map(e => DecodingFailure(e.getMessage, ops = List.empty))
+                            .DepositRequest(header, d, vKey)
                     case t: TransactionRequestBody =>
                         UserRequest
-                            .TransactionRequest(header, t, userVk, signature)
-                            .left
-                            .map(e => DecodingFailure(e.getMessage, ops = List.empty))
+                            .TransactionRequest(header, t, vKey)
                 }
 
             } yield userRequest

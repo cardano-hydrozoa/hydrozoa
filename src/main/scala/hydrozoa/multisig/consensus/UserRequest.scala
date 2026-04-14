@@ -30,82 +30,40 @@ enum UserRequest extends SyncRequest[IO, UserRequest, RequestId] {
     def header: UserRequestHeader
     def body: UserRequestBody
     def userVk: VerificationKey
-    def signature: Signature
 
     case DepositRequest private (
         override val header: UserRequestHeader,
         override val body: UserRequestBody.DepositRequestBody,
-        override val userVk: VerificationKey,
-        override val signature: Signature
+        override val userVk: VerificationKey
     ) extends UserRequest
 
     case TransactionRequest private (
         override val header: UserRequestHeader,
         override val body: UserRequestBody.TransactionRequestBody,
-        override val userVk: VerificationKey,
-        override val signature: Signature
+        override val userVk: VerificationKey
     ) extends UserRequest
 }
 
 object UserRequest {
+
     object DepositRequest {
         def apply(
             header: UserRequestHeader,
             body: DepositRequestBody,
-            userVk: VerificationKey,
-            signature: Signature
-        ): Either[Error.ValidationError, UserRequest] =
-            for {
-                _ <- Right(())
-                // TODO: commenting out since the hash is differently computed on the frontend
-                // _ <-
-                //    if body.hash == header.bodyHash
-                //    then Right(header)
-                //    else Left(BodyHashMismatch)
-                // TODO: commenting out since the signature check doesn't work for some reason - the frontend do it differently
-                // TODO: I believe signature checking should be done outside the apply function - it should be a separate error from "cannot parse"
-                // _ <-
-                //    if verifyEd25519Signature(userVk, header.byteString, signature)
-                //    then Right(signature)
-                //    else Left(SignatureMismatch)
-            } yield new UserRequest.DepositRequest(header, body, userVk, signature)
+            userVk: VerificationKey
+        ): UserRequest = new UserRequest.DepositRequest(header, body, userVk)
     }
 
     object TransactionRequest {
         def apply(
             header: UserRequestHeader,
             body: TransactionRequestBody,
-            userVk: VerificationKey,
-            signature: Signature
-        ): Either[Error.ValidationError, UserRequest] =
-            for {
-                _ <- Right(())
-                // _ <-
-                //    if body.hash == header.bodyHash
-                //    then Right(header)
-                //    else Left(BodyHashMismatch)
-                // TODO: Re-enable signature verification
-                // _ <-
-                //     if verifyEd25519Signature(userVk, header.byteString, signature)
-                //     then Right(signature)
-                //     else Left(SignatureMismatch)
-            } yield new UserRequest.TransactionRequest(header, body, userVk, signature)
+            userVk: VerificationKey
+        ): UserRequest = new UserRequest.TransactionRequest(header, body, userVk)
     }
 
     type Sync = SyncRequest.Envelope[IO, UserRequest, RequestId]
 
-    object Error {
-        trait ValidationError extends Throwable
-
-        /** The [[UserRequestHeader.body]] does not match the [[blake2b_256]] hash of the
-          * [[UserRequestBody]]
-          */
-        case object BodyHashMismatch extends ValidationError
-
-        /** The ed25519 signature of the header does not match
-          */
-        case object SignatureMismatch extends ValidationError
-    }
 }
 
 opaque type RequestValidityStartTimeRaw = Long
