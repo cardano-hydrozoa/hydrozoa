@@ -1,6 +1,8 @@
 package hydrozoa.config.head
 
-import cats.data.{NonEmptyList, NonEmptyMap}
+import cats.data.*
+import cats.data.Validated.{Invalid, Valid}
+import cats.syntax.all.*
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
@@ -11,6 +13,7 @@ import hydrozoa.config.head.parameters.HeadParameters
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.config.head.rulebased.scripts.RuleBasedScriptAddresses
+import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.given
 import hydrozoa.lib.logging.Logging
@@ -21,8 +24,11 @@ import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
+import io.circe.Decoder.Result
 import io.circe.generic.semiauto.*
+import io.circe.syntax.EncoderOps
 import io.circe.{Encoder, *}
+import scala.collection.immutable.SortedSet
 import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.*
 import scalus.crypto.ed25519.VerificationKey
@@ -74,10 +80,9 @@ object HeadConfig {
                         .downField("effects")
                         .downField("fallbackTx")
                         .as[Transaction]
-                    hc <- HeadConfig(preinit, brief, initTx, fallbackTx)
-                        .toRight(
-                          io.circe.DecodingFailure("Failed constructing head config", c.history)
-                        )
+                    hc <- HeadConfig(preinit, brief, initTx, fallbackTx).toEither.left.map(_ =>
+                        io.circe.DecodingFailure("Failed constructing head config", c.history)
+                    )
                 } yield hc
             }
         } yield hc
@@ -90,39 +95,76 @@ object HeadConfig {
         blockBrief: BlockBrief.Initial,
         initTx: Transaction,
         fallbackTx: Transaction
-    ): Option[HeadConfig] = {
-        def isMultiSigned(tx: Transaction, headPeers: HeadPeers.Section): Boolean = {
+    ): ValidatedNel[String, HeadConfig] = {
+        def isMultiSigned(
+            tx: Transaction,
+            headPeers: HeadPeers.Section
+        ): ValidatedNel[String, Unit] = {
             val witnesses = tx.witnessSetRaw.value.vkeyWitnesses.toSet
 
-            headPeers.headPeerVKeys.forall(vKey =>
-                witnesses.find(witness => witness.vkey == vKey) match {
-                    case None => false
-                    case Some(witness) =>
-                        platform.verifyEd25519Signature(vKey, tx.id, witness.signature)
-                }
-            )
+            headPeers.headPeerVKeys
+                .map(vKey =>
+                    witnesses.find(witness => witness.vkey == vKey) match {
+                        case None =>
+                            Invalid(
+                              s"Missing multisig witness for verification key $vKey in tx ${tx.id}"
+                            )
+                        case Some(witness)
+                            if platform.verifyEd25519Signature(vKey, tx.id, witness.signature) =>
+                            Valid(())
+                        case _ =>
+                            Invalid(
+                              s"Invalid multisig witness for verification key $vKey in tx ${tx.id}"
+                            )
+
+                    }
+                )
+                .foldLeft(Valid(()): ValidatedNel[String, Unit])((acc, v) =>
+                    acc.combine(v.leftMap(NonEmptyList.one))
+                )
         }
 
-        for {
-            expectedTxSeq <- InitializationTxSeq
-                .Build(headConfigPreinit)(blockBrief.endTime)
-                .result
-                .toOption
-            // Check that tx bodies are the same
-            hc <-
-                if expectedTxSeq.initializationTx.tx.body == initTx.body
-                    && expectedTxSeq.fallbackTx.tx.body == fallbackTx.body
-                    && isMultiSigned(initTx, headConfigPreinit)
-                    && isMultiSigned(fallbackTx, headConfigPreinit)
-                then {
+        val validatedInitTxSeq = Validated.fromEither(
+          InitializationTxSeq
+              .Build(headConfigPreinit)(blockBrief.endTime)
+              .result
+              .left
+              .map(error => NonEmptyList.one(error.getMessage))
+        )
 
-                    Some(
+        validatedInitTxSeq.andThen(expectedTxSeq => {
+            // Check that tx bodies are the same
+            val validatedInitTx =
+                Validated
+                    .cond(
+                      test = expectedTxSeq.initializationTx.tx.body == initTx.body,
+                      e = NonEmptyList.one(
+                        "initialization tx body mismatch when constructing preinit config"
+                      ),
+                      a = ()
+                    )
+                    .combine(isMultiSigned(initTx, headConfigPreinit))
+
+            val validatedFallbackTx =
+                Validated
+                    .cond(
+                      expectedTxSeq.fallbackTx.tx.body == fallbackTx.body,
+                      e = NonEmptyList.one(
+                        "Fallback tx body mismatch when constructing preinit config"
+                      ),
+                      a = ()
+                    )
+                    .combine(isMultiSigned(fallbackTx, headConfigPreinit))
+
+            validatedInitTx.combine(validatedFallbackTx) match {
+                case Valid(_) =>
+                    Valid(
                       new HeadConfig(
                         headConfigPreinit,
                         Block.MultiSigned.Initial(
                           blockBrief,
                           // The "expectedTxSeq" contains the "enriched" tx types, but they are not signed,
-                          // so we steal the tx signatures here here.
+                          // so we steal the tx signatures here.
                           BlockEffects.MultiSigned.Initial(
                             expectedTxSeq.initializationTx.copy(tx = initTx),
                             expectedTxSeq.fallbackTx.copy(tx = fallbackTx)
@@ -130,15 +172,19 @@ object HeadConfig {
                         )
                       )
                     )
-                } else None
-        } yield hc
+                case Invalid(errors: NonEmptyList[String]) =>
+                    // We log in the constructor rather than the pattern match. If this causes spurious errors,
+                    // it can be removed.
+                    errors.toList.foreach(logger.error)
+                    Invalid(errors)
+            }
+        })
     }
 
-    // FIXME: Do a `ValidatedNel[Error, HeadConfig]` here
     def apply(
         headConfigPreinit: HeadConfig.Preinit,
         initialBlock: Block.MultiSigned.Initial
-    ): Option[HeadConfig] = HeadConfig(
+    ): ValidatedNel[String, HeadConfig] = HeadConfig(
       headConfigPreinit,
       initialBlock.blockBrief,
       initialBlock.effects.initializationTx.tx,
@@ -151,17 +197,15 @@ object HeadConfig {
         headPeers: HeadPeers,
         initialBlock: Block.MultiSigned.Initial,
         initializationParams: InitializationParameters,
-    ): Option[HeadConfig] = {
-        for {
-            headConfigPreinit <- HeadConfig.Preinit(
+    ): ValidatedNel[String, HeadConfig] = {
+        HeadConfig
+            .Preinit(
               cardanoNetwork,
               headParams,
               headPeers,
               initializationParams
             )
-            result <- HeadConfig(headConfigPreinit, initialBlock)
-        } yield result
-
+            .andThen(headConfigPreinit => HeadConfig(headConfigPreinit, initialBlock))
     }
 
     trait Section extends HeadConfig.Preinit.Section, InitialBlock.Section {
@@ -198,105 +242,55 @@ object HeadConfig {
         // - vkey -> connection address
         // - vkey -> equity
         // - vkey -> peer number
-        given headConfigPreinitEncoder(using CardanoNetwork.Section): Encoder[HeadConfig.Preinit] =
-            deriveEncoder[HeadConfig.Preinit]
-        //            with {
-        //            override def apply(hc: HeadConfig.Preinit): Json = {
-        //                given HeadConfig.Preinit.Section = hc
-        //
-        //                val headPeersEquity: TreeMap[VerificationKey, Coin] =
-        //                    hc.initializationParams.initialEquityContributions.toNel
-        //                        .foldLeft(TreeMap.empty[VerificationKey, Coin]) { case (m, (peerNum, equity)) =>
-        //                            m.updated(hc.headPeers.headPeerVKey(peerNum).get, equity)
-        //                        }
-        //
-        //                Json.obj(
-        //                  "cardanoNetwork" -> hc.cardanoNetwork.asJson,
-        //                  "headParams" -> hc.headParams.asJson,
-        //                  "initialEvacuationMap" -> hc.initialEvacuationMap.asJson,
-        //                  "headPeersAndEquity" -> headPeersEquity.asJson,
-        //                  "seedUtxo" -> hc.initialSeedUtxo.asJson,
-        //                  "headId" -> hc.headId.asJson,
-        //                  "additionalFundingUtxos" -> hc.initialAdditionalFundingUtxos.asJson,
-        //                  "changeOutputs" -> hc.initialChangeOutputs.asJson
-        //                )
-        //            }
-        //        }
+        given headConfigPreinitEncoder(using CardanoNetwork.Section): Encoder[HeadConfig.Preinit]
+        with {
+            override def apply(hc: HeadConfig.Preinit): Json = {
+                given HeadConfig.Preinit.Section = hc
+                Json.obj(
+                  "cardanoNetwork" -> hc.cardanoNetwork.asJson,
+                  "headParams" -> hc.headParams.asJson,
+                  "headPeers" -> hc.headPeers.asJson,
+                  "initialEvacuationMap" -> hc.initialEvacuationMap.asJson,
+                  "initialEquityContributions" -> hc.initialEquityContributions.toSortedMap.asJson,
+                  "seedUtxo" -> hc.seedUtxo.asJson,
+                  "additionalFundingUtxos" -> hc.initialAdditionalFundingUtxos.asJson,
+                  "initialChangeOutputs" -> hc.initialChangeOutputs.asJson
+                )
+            }
+        }
 
-        given headConfigPreinitDecoder(using CardanoNetwork.Section): Decoder[HeadConfig.Preinit] =
-            deriveDecoder[HeadConfig.Preinit]
-        //         with {
-        //            override def apply(c: HCursor): Decoder.Result[HeadConfig.Preinit] =
-        //                for {
-        //                    cardanoNetwork <- c.downField("cardanoNetwork").as[CardanoNetwork]
-        //                    res <- {
-        //                        given CardanoNetwork.Section = cardanoNetwork
-        //
-        //                        for {
-        //                            headParams <- c.downField("headParams").as[HeadParameters]
-        //                            headPeersEquity <- c
-        //                                .downField("headPeersAndEquity")
-        //                                .as[Map[VerificationKey, Coin]]
-        //                            headPeers <-
-        //                                if headPeersEquity.nonEmpty
-        //                                then Right(HeadPeers(headPeersEquity.keys.toList).get)
-        //                                else
-        //                                    Left(
-        //                                      io.circe.DecodingFailure(
-        //                                        "headPeersAndEquity must contain at least one peer",
-        //                                        c.history
-        //                                      )
-        //                                    )
-        //                            initialEquityContributions = NonEmptyMap.fromMapUnsafe(
-        //                              headPeersEquity.values.zipWithIndex
-        //                                  .foldLeft(TreeMap.empty[HeadPeerNumber, Coin]) {
-        //                                      case (m, (coin, peerIdx)) =>
-        //                                          m ++ Seq((HeadPeerNumber(peerIdx), coin))
-        //                                  }
-        //                            )
-        //                            initialEvacuationMap <- c
-        //                                .downField("initialEvacuationMap")
-        //                                .as[EvacuationMap]
-        //                            initialSeedUtxo <- c.downField("seedUtxo").as[Utxo]
-        //                            headId <- c.downField("headId").as[HeadId]
-        //                            initialAdditionalFundingUtxos <- c
-        //                                .downField("additionalFundingUtxos")
-        //                                .as[Utxos]
-        //                            initialChangeOutputs <- c
-        //                                .downField("changeOutputs")
-        //                                .as[List[TransactionOutput]]
-        //                            initParams = InitializationParameters(
-        //                              initialEvacuationMap,
-        //                              initialEquityContributions,
-        //                              initialSeedUtxo,
-        //                              headId,
-        //                              initialAdditionalFundingUtxos,
-        //                              initialChangeOutputs
-        //                            )
-        //                            hcpi <- HeadConfig
-        //                                .Preinit(
-        //                                  cardanoNetwork,
-        //                                  headParams,
-        //                                  headPeers,
-        //                                  initParams
-        //                                )
-        //                                .toRight(
-        //                                  io.circe.DecodingFailure(
-        //                                    "Failed constructing HeadConfig.Preinit",
-        //                                    c.history
-        //                                  )
-        //                                )
-        //                        } yield hcpi
-        //                    }
-        //                } yield res
-        //        }
+        given headConfigPreinitDecoder(using CardanoNetwork.Section): Decoder[HeadConfig.Preinit]
+        with {
+            override def apply(c: HCursor): Result[Preinit] =
+                for {
+                    cardanoNetwork <- c.downField("cardanoNetwork").as[CardanoNetwork]
+                    headPeers <- c.downField("headPeers").as[HeadPeers]
+                    res <- {
+                        for {
+                            headParams <- c.downField("headParams").as[HeadParameters]
+                            initParams <- c.as[InitializationParameters]
+                            preInit <- Preinit(
+                              cardanoNetwork,
+                              headParams,
+                              headPeers,
+                              initParams
+                            ).toEither.left.map(e =>
+                                io.circe.DecodingFailure(
+                                  s"failure constructing head config preinit: $e",
+                                  c.history
+                                )
+                            )
+                        } yield preInit
+                    }
+                } yield res
+        }
 
         def apply(
             cardanoNetwork: CardanoNetwork,
             headParams: HeadParameters,
             headPeers: HeadPeers,
             initializationParams: InitializationParameters
-        ): Option[HeadConfig.Preinit] = {
+        ): ValidatedNel[String, HeadConfig.Preinit] = {
             val headConfigPreinit = new HeadConfig.Preinit(
               cardanoNetwork,
               headParams,
@@ -304,13 +298,35 @@ object HeadConfig {
               initializationParams
             )
 
-            val isBalancedInitializationFunding = headConfigPreinit.isBalancedInitializationFunding
+            val isBalanced = Validated.cond(
+              test = headConfigPreinit.isBalancedInitializationFunding,
+              a = (),
+              e = "Initialization funding is unbalanced"
+            )
 
-            if !isBalancedInitializationFunding then {
-                logger.error("Initialization funding is unbalanced.")
+            val vKeysCoherent = Validated.cond(
+              test =
+                  initializationParams.initialEquityContributions.keys == NonEmptySet.fromSetUnsafe(
+                    SortedSet.from(headPeers.headPeerNums.toList)
+                  ),
+              a = (),
+              e = "initialEquityContributions and headPeers don't contain the same peer numbers"
+            )
+
+            List(
+              isBalanced,
+              vKeysCoherent
+            ).foldLeft(Valid(()): ValidatedNel[String, Unit])((x, y) =>
+                x.combine(y.leftMap(NonEmptyList.one))
+            ) match {
+                case Valid(()) => Valid(headConfigPreinit)
+                case x @ Invalid(errors) => {
+                    // We log in the constructor rather than the pattern match. If this causes spurious errors,
+                    // it can be removed.
+                    errors.toList.foreach(logger.error)
+                    Invalid(errors)
+                }
             }
-
-            Option.when(isBalancedInitializationFunding)(headConfigPreinit)
         }
 
         trait Section
@@ -366,8 +382,8 @@ object HeadConfig {
             override transparent inline def initialEquityContributions
                 : NonEmptyMap[HeadPeerNumber, Coin] =
                 initializationParams.initialEquityContributions
-            override transparent inline def initialSeedUtxo: Utxo =
-                initializationParams.initialSeedUtxo
+            override transparent inline def seedUtxo: Utxo =
+                initializationParams.seedUtxo
             override transparent inline def headId: HeadId =
                 initializationParams.headId
             override transparent inline def initialAdditionalFundingUtxos: Utxos =

@@ -1,13 +1,12 @@
 package hydrozoa.app
 
-import cats.data.{NonEmptyList, NonEmptyMap}
+import cats.data.{NonEmptyList, NonEmptyMap, Validated}
 import cats.effect.unsafe.implicits.global
 import cats.effect.{ExitCode, IO, IOApp}
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.app.Main.loadEnv
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.HeadConfig.Preinit
-import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.multisig.fallback.FallbackContingency.mkFallbackContingencyWithDefaults
 import hydrozoa.config.head.multisig.settlement.SettlementConfig
@@ -31,7 +30,6 @@ import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, HeadPeerWallet}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap, evacuationKeyOrdering}
-import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.evacuationKeyToData
 import java.security.SecureRandom
@@ -214,13 +212,14 @@ object Bootstrap:
         seedUtxo = utxosSelected.head
         valueSelected = Value.combine(utxosSelected.map(_.output.value).toList)
 
+        headPeers = HeadPeers.apply(List(vKey)).get
+
         initializationParameters = InitializationParameters(
           initialEvacuationMap = evacMap,
           initialEquityContributions =
               NonEmptyMap(HeadPeerNumber.zero -> minEquity, SortedMap.empty),
-          initialSeedUtxo = seedUtxo,
-          headId = HeadId(CIP67.HeadTokenNames(seedUtxo.input).treasuryTokenName),
-          initialAdditionalFundingUtxos = utxosSelected.tail.map(_.toTuple).toMap,
+          seedUtxo = seedUtxo,
+          additionalFundingUtxos = utxosSelected.tail.map(_.toTuple).toMap,
           initialChangeOutputs = List(
             TransactionOutput.Babbage(
               address = peerAddress,
@@ -232,12 +231,19 @@ object Bootstrap:
           )
         )
 
-        preinit = Preinit(
-          cardanoNetwork = cardanoNetwork,
-          headParams = headParams,
-          headPeers = HeadPeers.apply(List(vKey)).get,
-          initializationParams = initializationParameters
-        ).get
+        preinit <- IO.fromEither(
+          Preinit(
+            cardanoNetwork = cardanoNetwork,
+            headParams = headParams,
+            headPeers = headPeers,
+            initializationParams = initializationParameters
+          ).toEither.left.map(errors =>
+              RuntimeException(
+                "could not construct HeadConfig.PreInit during bootstrap. Errors:" +
+                    s"${errors.foldLeft("\n\t")(_ ++ _)}"
+              )
+          )
+        )
 
         endTimeInstant <- IO.realTimeInstant.map(instant =>
             instant.quantize(cardanoNetwork.slotConfig)
@@ -259,8 +265,7 @@ object Bootstrap:
         forcedMajorBlockTime = headParams.txTiming.forcedMajorBlockTime(fallbackTxStartTime)
         majorBlockWakeupTime = TxTiming.majorBlockWakeupTime(forcedMajorBlockTime, None)
 
-    } yield {
-        val initialBlock = InitialBlock(
+        initialBlock = InitialBlock(
           Block.MultiSigned.Initial(
             blockBrief = BlockBrief.Initial(
               BlockHeader.Initial(
@@ -282,11 +287,17 @@ object Bootstrap:
           )
         )
 
-        val headConfig = HeadConfig(
+        headConfig <- HeadConfig(
           headConfigPreinit = preinit,
           initialBlock = initialBlock.initialBlock
-        ).get
-
+        ) match {
+            case Validated.Valid(hc) => IO.pure(hc)
+            case Validated.Invalid(_) =>
+                IO.raiseError(
+                  RuntimeException("failure building head config; get logs for details")
+                )
+        }
+    } yield {
         NodeConfig(
           headConfig = headConfig,
           ownHeadWallet = ownHeadWallet,

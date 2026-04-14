@@ -1,5 +1,6 @@
 package hydrozoa.config.head.initialization
 
+import cats.data.Validated
 import hydrozoa.config.head.InitParamsType.{BottomUp, Constant, TopDown}
 import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.{BlockCreationEndTimeGen, currentTimeBlockCreationEndTime}
 import hydrozoa.config.head.multisig.fallback.{FallbackContingencyGen, generateFallbackContingency}
@@ -67,8 +68,11 @@ def generateInitialBlock(testPeers: TestPeers)(
               headParams = headParams,
               headPeers = testPeers.mkHeadPeers,
               initializationParams = initializationParameters
-            )
-            .get
+            ) match {
+            case Validated.Valid(x) => x
+            case Validated.Invalid(errors) =>
+                throw RuntimeException(s"Generating HeadConfig.Preinit failed: $errors")
+        }
 
         blockCreationEndTime <- generateBlockCreationEndTime(config.slotConfig)
 

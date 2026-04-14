@@ -88,9 +88,9 @@ object CardanoNetwork {
 
     given cardanoNetworkDecoder: Decoder[CardanoNetwork] = {
         val knownNetworkDecoder = Decoder.decodeString.emap {
-            case "mainnet" => Right(CardanoNetwork.Mainnet)
-            case "preview" => Right(CardanoNetwork.Preview)
-            case "preprod" => Right(CardanoNetwork.Preprod)
+            case x if x.toLowerCase == "mainnet" => Right(CardanoNetwork.Mainnet)
+            case x if x.toLowerCase == "preview" => Right(CardanoNetwork.Preview)
+            case x if x.toLowerCase == "preprod" => Right(CardanoNetwork.Preprod)
             case other =>
                 Left(
                   "Error decoding the cardano network. Valid values are \"mainnet\", \"preview\","

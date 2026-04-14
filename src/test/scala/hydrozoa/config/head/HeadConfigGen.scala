@@ -1,5 +1,6 @@
 package hydrozoa.config.head
 
+import cats.data.Validated
 import hydrozoa.config.head.InitParamsType.{BottomUp, Constant}
 import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.currentTimeBlockCreationEndTime
 import hydrozoa.config.head.initialization.{InitializationParameters, InitializationParametersGenBottomUp, InitializationParametersGenTopDown, generateInitialBlock}
@@ -56,7 +57,11 @@ def generateHeadConfig(testPeers: TestPeers)(
       headPeers = preinit.headPeers,
       initializationParams = preinit.initializationParams,
       initialBlock = initialBlock.initialBlock
-    ).get
+    ) match {
+        case Validated.Valid(x) => x
+        case Validated.Invalid(errors) =>
+            throw RuntimeException(s"HeadConfig generation failed: $errors")
+    }
 
 enum InitParamsType:
     case BottomUp(
@@ -112,8 +117,11 @@ def generateHeadConfigPreInit(testPeers: TestPeers)(
       headParams = headParams,
       headPeers = testPeers.mkHeadPeers,
       initializationParams = initializationParams
-    )
-    .get
+    ) match {
+    case Validated.Valid(x) => x
+    case Validated.Invalid(errors) =>
+        throw RuntimeException(s"generating HeadConfig.Preinit failed: $errors")
+}
 
 object HeadConfigTest extends Properties("Head config") {
 

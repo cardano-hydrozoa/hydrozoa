@@ -31,10 +31,10 @@ export hydrozoa.config.head.initialization.InitializationParameters.isBalancedIn
   *   the ADA amounts (if any) that each peer contributed to the head's equity. The total ADA
   *   contributed must be sufficient for the initialization tx fee, and will also be used for all
   *   subsequent settlement, rollout, and finalization tx fees.
-  * @param initialSeedUtxo
+  * @param seedUtxo
   *   among the utxos funding the head's initialization, this utxo's ID determines the head's token
   *   names.
-  * @param initialAdditionalFundingUtxos
+  * @param additionalFundingUtxos
   *   the other funding utxos for initialization, additional to the seed utxo.
   * @param initialChangeOutputs
   *   change outputs that must contain all ADA and non-ADA assets from the funding utxos that are in
@@ -43,15 +43,14 @@ export hydrozoa.config.head.initialization.InitializationParameters.isBalancedIn
 final case class InitializationParameters(
     override val initialEvacuationMap: EvacuationMap,
     override val initialEquityContributions: NonEmptyMap[HeadPeerNumber, Coin],
-    // TODO: just seedUtxo?
-    override val initialSeedUtxo: Utxo,
-    override val headId: HeadId,
-    // TODO: just additionalFundingUtxos?
-    override val initialAdditionalFundingUtxos: Utxos,
+    override val seedUtxo: Utxo,
+    additionalFundingUtxos: Utxos,
     // TODO: just changeOutputs?
     override val initialChangeOutputs: List[TransactionOutput],
 ) extends InitializationParameters.Section {
     override transparent inline def initializationParams: InitializationParameters = this
+
+    override val initialAdditionalFundingUtxos: Utxos = additionalFundingUtxos
 
     override lazy val initialL2Value: Value =
         Value.combine(initialEvacuationMap.outputs.map(_.utxo.value.value))
@@ -63,22 +62,25 @@ final case class InitializationParameters(
         initialFundingUtxos.values.map(_.value).fold(Value.zero)(_ + _) -
             initialChangeOutputs.map(_.value).fold(Value.zero)(_ + _)
 
-    override lazy val headTokenNames: HeadTokenNames = HeadTokenNames(initialSeedUtxo.input)
+    override lazy val headTokenNames: HeadTokenNames = HeadTokenNames(seedUtxo.input)
 
     // TODO: We need this hash to put into the initialization tx's metadata,
     //  so that the equity contributions are pinned by something signed by all peers.
     override lazy val initialEquityContributionsHash: Hash32 = Hash[Blake2b_256, Any](
       platform.blake2b_256(ByteString.unsafeFromArray(???))
     )
+
+    override val headId: HeadId =
+        HeadId(HeadTokenNames(seedUtxo.input).treasuryTokenName)
 }
 
 object InitializationParameters {
     given initializationParametersEncoder(using
         config: CardanoNetwork.Section
-    ): Encoder[InitializationParameters] = deriveEncoder[InitializationParameters]
+    ): Encoder[InitializationParameters] = Encoder.derived[InitializationParameters]
 
     given initializationParametersDecoder(using
-        config: CardanoNetwork.Section
+        network: CardanoNetwork.Section
     ): Decoder[InitializationParameters] = deriveDecoder[InitializationParameters]
 
     trait Section extends HasTokenNames {
@@ -86,7 +88,7 @@ object InitializationParameters {
 
         def initialEvacuationMap: EvacuationMap
         def initialEquityContributions: NonEmptyMap[HeadPeerNumber, Coin]
-        def initialSeedUtxo: Utxo
+        def seedUtxo: Utxo
         def headId: HeadId
         def initialAdditionalFundingUtxos: Utxos
         def initialChangeOutputs: List[TransactionOutput]
@@ -98,11 +100,11 @@ object InitializationParameters {
         def initialEquityContributionsHash: Hash32
 
         final def initialFundingUtxos: Utxos =
-            initialAdditionalFundingUtxos + initialSeedUtxo.toTuple
+            initialAdditionalFundingUtxos + seedUtxo.toTuple
 
         // FIXME: Must be positive
         final def initialSeedIx: Int =
-            initialFundingUtxos.keys.toList.sorted.indexOf(initialSeedUtxo.input)
+            initialFundingUtxos.keys.toList.sorted.indexOf(seedUtxo.input)
     }
 
     extension (config: InitializationParameters.Section & HeadPeers.Section)

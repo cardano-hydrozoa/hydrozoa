@@ -4,8 +4,6 @@ import io.circe.{Decoder, Encoder}
 
 type PositiveInt = PositiveInt.PositiveInt
 
-// FIXME: This is called "PositiveInt", but it should really be "NonNegativeInt".
-//   We need 0 for peer number 0
 object PositiveInt {
     opaque type PositiveInt = scala.Int
 

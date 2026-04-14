@@ -3,7 +3,6 @@ package hydrozoa.config.head.initialization
 import cats.*
 import cats.data.*
 import cats.syntax.semigroup.*
-import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.multisig.fallback.{FallbackContingency, FallbackContingencyGen, generateFallbackContingency}
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.config.head.network.CardanoNetwork
@@ -19,7 +18,6 @@ import hydrozoa.multisig.ledger.eutxol2.tx.L2Genesis
 import hydrozoa.multisig.ledger.joint.given
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap}
-import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.given
 import java.time.Instant
 import org.scalacheck.{Gen, Prop, Properties}
@@ -185,9 +183,8 @@ object InitializationParametersGenTopDown {
         } yield InitializationParameters(
           initialEvacuationMap = initialEvacuationMap,
           initialEquityContributions = NonEmptyMap.fromMapUnsafe(peersEquity),
-          initialSeedUtxo = seedUtxo,
-          headId = HeadId(CIP67.HeadTokenNames(seedUtxo.input).treasuryTokenName),
-          initialAdditionalFundingUtxos = total.fundingUtxos.asUtxos - seedUtxo.input,
+          seedUtxo = seedUtxo,
+          additionalFundingUtxos = total.fundingUtxos.asUtxos - seedUtxo.input,
           initialChangeOutputs = total.changeOutputs
         )
 
@@ -485,9 +482,8 @@ object InitializationParametersGenBottomUp {
             )
           ),
           initialEquityContributions = equityContributions,
-          initialSeedUtxo = seedUtxo,
-          headId = HeadId(CIP67.HeadTokenNames(seedUtxo.input).treasuryTokenName),
-          initialAdditionalFundingUtxos = additionalFundingUtxos,
+          seedUtxo = seedUtxo,
+          additionalFundingUtxos = additionalFundingUtxos,
           initialChangeOutputs = changeUtxos.values.toList
         )
 
