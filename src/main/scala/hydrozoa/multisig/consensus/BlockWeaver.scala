@@ -769,7 +769,7 @@ object BlockWeaver {
                     req match {
                         case ur: UserRequestWithId =>
                             for {
-                                _ <- sendStartBlock(config)(currentBlockNumber)
+                                _ <- IO.whenA(requestCounter == 0)(sendStartBlock(config)(currentBlockNumber))
                                 _ <- connections.jointLedger ! ur
                                 newState <- if requestCounter < 1000 
                                         then pure(copy(requestCounter = requestCounter + 1))
