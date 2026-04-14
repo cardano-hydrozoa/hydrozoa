@@ -743,7 +743,8 @@ object BlockWeaver {
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
                 previousBlockConfirmed: Block.MultiSigned.NonFinal,
-                wakeupFiber: Fiber[IO, Throwable, Unit]
+                wakeupFiber: Fiber[IO, Throwable, Unit],
+                requestCounter: Int = 0
             ) extends Reactive {
                 override transparent inline def stateName: String = "Leader.AwaitingRequest"
 
@@ -770,7 +771,9 @@ object BlockWeaver {
                             for {
                                 _ <- sendStartBlock(config)(currentBlockNumber)
                                 _ <- connections.jointLedger ! ur
-                                newState <- completeBlock
+                                newState <- if requestCounter < 1000 
+                                        then pure(copy(requestCounter = requestCounter + 1))
+                                        else completeBlock
                             } yield newState
 
                         case w: Wakeup =>
