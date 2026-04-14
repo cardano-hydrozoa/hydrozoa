@@ -13,6 +13,7 @@ import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
 import hydrozoa.multisig.ledger.l1.tx.Metadata.Initialization
 import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.{BuilderResultSimple, explainConst}
 import hydrozoa.multisig.ledger.l1.utxo.{Equity, MultisigRegimeOutput, MultisigRegimeUtxo, MultisigTreasuryUtxo}
+import io.circe.*
 import monocle.{Focus, Lens}
 import scala.util.Try
 import scalus.cardano.ledger.*
@@ -22,8 +23,9 @@ import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, ModifyAuxiliaryData, Send, Spend, ValidityEndSlot}
 import scalus.cardano.txbuilder.TxBalancingError.InsufficientFunds
-import scalus.uplc.builtin.Data
 import scalus.uplc.builtin.Data.toData
+import scalus.uplc.builtin.{ByteString, Data}
+import scalus.|>
 
 // Output ordering:
 // - Treasury Utxo
@@ -45,6 +47,11 @@ final case class InitializationTx(
 
 object InitializationTx {
     export InitializationTxOps.{Build, Parse}
+
+    given initializationTxEncoder: Encoder[InitializationTx] =
+        Encoder.encodeString.contramap(initTx =>
+            initTx.tx.toCbor |> ByteString.fromArray |> (_.toHex)
+        )
 }
 
 private object InitializationTxOps {

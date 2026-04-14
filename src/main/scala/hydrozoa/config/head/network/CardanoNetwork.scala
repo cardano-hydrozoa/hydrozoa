@@ -1,7 +1,11 @@
 package hydrozoa.config.head.network
 
 import hydrozoa.config.head.rulebased.scripts.RuleBasedScriptAddresses
+import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.given
 import hydrozoa.lib.number.PositiveInt
+import io.circe.*
+import io.circe.generic.semiauto.*
+import io.circe.syntax.*
 import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.{CardanoInfo, Coin, EvaluatorMode, PlutusScriptEvaluator, ProtocolParams, ProtocolVersion, SlotConfig, TransactionOutput}
 import scalus.cardano.txbuilder.TransactionBuilder
@@ -69,4 +73,37 @@ object CardanoNetwork {
             case CardanoNetwork.Mainnet => CardanoInfo.mainnet
             case CardanoNetwork.Preprod => CardanoInfo.preprod
             case CardanoNetwork.Preview => CardanoInfo.preview
+
+    given cardanoNetworkEncoder: Encoder[CardanoNetwork] with {
+        override def apply(cn: CardanoNetwork): Json = cn match {
+            case CardanoNetwork.Mainnet => "mainnet".asJson
+            case CardanoNetwork.Preview => "preview".asJson
+            case CardanoNetwork.Preprod => "preprod".asJson
+            case CardanoNetwork.Custom(cardanoInfo) =>
+                Json.obj(
+                  "custom" -> cardanoInfo.asJson
+                )
+        }
+    }
+
+    given cardanoNetworkDecoder: Decoder[CardanoNetwork] = {
+        val knownNetworkDecoder = Decoder.decodeString.emap {
+            case "mainnet" => Right(CardanoNetwork.Mainnet)
+            case "preview" => Right(CardanoNetwork.Preview)
+            case "preprod" => Right(CardanoNetwork.Preprod)
+            case other =>
+                Left(
+                  "Error decoding the cardano network. Valid values are \"mainnet\", \"preview\","
+                      + "\"preprod\", or a map {\"custom\" : (...insert CardanoInfo here...)}."
+                )
+        }
+        val customNetworkDecoder = Decoder.instance(c =>
+            c.downField("custom")
+                .as[CardanoInfo]
+                .flatMap(ci => Right(CardanoNetwork.Custom(ci)))
+        )
+
+        List[Decoder[CardanoNetwork]](knownNetworkDecoder, customNetworkDecoder)
+            .reduceLeft(_ or _)
+    }
 }

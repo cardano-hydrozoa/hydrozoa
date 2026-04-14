@@ -1,12 +1,17 @@
 package hydrozoa.multisig.ledger.joint
 
 import cats.implicits.*
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.ledger.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
+import hydrozoa.multisig.ledger.joint.EvacuationKey.given
 import hydrozoa.multisig.ledger.joint.EvacuationMap.mkScalar
 import hydrozoa.multisig.ledger.joint.obligation.Payout
+import hydrozoa.multisig.ledger.remote.RemoteL2LedgerCodecs
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.given
+import io.circe.{Decoder, Encoder, *}
 import scala.collection.immutable.{SortedMap, TreeMap}
+import scala.util.Try
 import scalus.cardano.ledger.*
 import scalus.cardano.onchain.plutus.prelude.List as SList
 import scalus.cardano.onchain.plutus.v2.TxOut
@@ -31,6 +36,20 @@ final case class EvacuationKey private (byteString: ByteString)
 object EvacuationKey:
     def apply(bytes: ByteString): Option[EvacuationKey] = Some(new EvacuationKey(bytes))
     // if bytes.length == 32 then Some(new EvacuationKey(bytes)) else None
+
+    given evacuationKeyKeyEncoder: KeyEncoder[EvacuationKey] = {
+        KeyEncoder.encodeKeyString.contramap(_.byteString.toHex)
+    }
+
+    // FIXME: This is partial, but KeyDecoder lacks the "emap" method that Decoder has?
+    given evacuationKeyKeyDecoder: KeyDecoder[EvacuationKey] with {
+        override def apply(s: String): Option[EvacuationKey] =
+            for {
+                hex <- KeyDecoder.decodeKeyString(s)
+                bytes <- Try(ByteString.fromHex(s)).toOption
+                ek <- EvacuationKey(bytes)
+            } yield ek
+    }
 
 final case class EvacuationMap(
     evacuationMap: TreeMap[EvacuationKey, Payout.Obligation]
@@ -96,6 +115,27 @@ final case class EvacuationMap(
 }
 
 object EvacuationMap:
+
+    given evacuationMapEncoder(using config: CardanoNetwork.Section): Encoder[EvacuationMap] = {
+        val codecs = RemoteL2LedgerCodecs(config)
+        Encoder
+            .encodeMap[EvacuationKey, Payout.Obligation](using
+              evacuationKeyKeyEncoder,
+              codecs.payoutObligationEncoder
+            )
+            .contramap(emap => emap.evacuationMap)
+    }
+
+    given evacuationMapDecoder(using config: CardanoNetwork.Section): Decoder[EvacuationMap] = {
+        val codecs = RemoteL2LedgerCodecs(config)
+        Decoder
+            .decodeMap[EvacuationKey, Payout.Obligation](using
+              evacuationKeyKeyDecoder,
+              codecs.payoutObligationDecoder
+            )
+            .map(m => EvacuationMap.from(m))
+    }
+
     def empty: EvacuationMap = EvacuationMap(TreeMap.empty)
 
     def applyDiffs(evacuationMap: EvacuationMap, diffs: Seq[EvacuationDiff]): EvacuationMap =

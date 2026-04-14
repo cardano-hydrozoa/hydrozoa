@@ -1,11 +1,15 @@
 package hydrozoa.config.node
 
 import hydrozoa.config.ScriptReferenceUtxos
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.{OwnHeadPeerPrivate, OwnHeadPeerPublic}
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, HeadPeerWallet}
+import io.circe.*
+import io.circe.generic.semiauto.*
 import scala.concurrent.duration.FiniteDuration
 
 final case class NodePrivateConfig(
@@ -63,4 +67,11 @@ object NodePrivateConfig {
             : ScriptReferenceUtxos.DisputeScriptUtxo =
             scriptReferenceUtxos.disputeResolutionScriptUtxo
     }
+
+    given nodePrivateConfigEncoder: Encoder[NodePrivateConfig] =
+        deriveEncoder[NodePrivateConfig]
+
+    given nodePrivateConfigDecoder(using
+        config: HeadPeers.Section & CardanoNetwork.Section
+    ): Decoder[NodePrivateConfig] = deriveDecoder[NodePrivateConfig]
 }

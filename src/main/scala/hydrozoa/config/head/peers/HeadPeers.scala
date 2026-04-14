@@ -2,13 +2,18 @@ package hydrozoa.config.head.peers
 
 import cats.data.{NonEmptyList, NonEmptyMap}
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
 import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
+import io.circe.*
+import io.circe.generic.semiauto.*
 import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.AddrKeyHash
 import scalus.crypto.ed25519.VerificationKey
 import scalus.uplc.builtin.Builtins.blake2b_224
+
+import HeadPeerNumber.given
 
 final case class HeadPeers private (
     override val headPeerVKeys: NonEmptyList[VerificationKey]
@@ -37,6 +42,39 @@ final case class HeadPeers private (
 }
 
 object HeadPeers {
+    given headPeerEncoder: Encoder[HeadPeers] =
+        Encoder
+            .encodeMap(using headPeerNumberKeyEncoder, given_Encoder_VerificationKey)
+            .contramap(peerKeys =>
+                Map.from(
+                  peerKeys.headPeerVKeys.zipWithIndex
+                      .map((key, idx) => (HeadPeerNumber(idx), key))
+                      .toList
+                )
+            )
+
+    given headPeerDecoder: Decoder[HeadPeers] = {
+        def isContiguous(ns: List[Int]): Boolean =
+            ns.sorted == Range(0, ns.max + 1)
+
+        Decoder
+            .decodeMap(using headPeerNumberKeyDecoder, given_Decoder_VerificationKey)
+            .emap(m =>
+                for {
+                    _ <- Either.cond(
+                      test = m.nonEmpty,
+                      right = (),
+                      left = "headPeers cannot be empty"
+                    )
+                    _ <- Either.cond(
+                      test = isContiguous(m.keys.map(_.toInt).toList),
+                      right = (),
+                      left = "headPeers does not contain contiguous peer indices starting from zero"
+                    )
+                } yield HeadPeers(NonEmptyList.fromListUnsafe(m.values.toList))
+            )
+    }
+
     def apply(headPeerVKeys: NonEmptyList[VerificationKey]): HeadPeers =
         new HeadPeers(headPeerVKeys)
 

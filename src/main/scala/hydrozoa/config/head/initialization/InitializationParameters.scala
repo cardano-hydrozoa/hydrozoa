@@ -3,12 +3,17 @@ package hydrozoa.config.head.initialization
 import cats.data.NonEmptyMap
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
+import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
+import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.given
 import hydrozoa.lib.number.Distribution
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber.given
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.token.CIP67.{HasTokenNames, HeadTokenNames}
-import io.circe.{Decoder, Encoder}
+import io.circe.generic.semiauto.*
+import io.circe.{Decoder, Encoder, *}
 import scala.collection.immutable.TreeMap
 import scalus.cardano.ledger.{AssetName, Blake2b_256, Coin, Hash, Hash32, TransactionOutput, Utxo, Utxos, Value}
 import scalus.uplc.builtin.{ByteString, platform}
@@ -68,6 +73,14 @@ final case class InitializationParameters(
 }
 
 object InitializationParameters {
+    given initializationParametersEncoder(using
+        config: CardanoNetwork.Section
+    ): Encoder[InitializationParameters] = deriveEncoder[InitializationParameters]
+
+    given initializationParametersDecoder(using
+        config: CardanoNetwork.Section
+    ): Decoder[InitializationParameters] = deriveDecoder[InitializationParameters]
+
     trait Section extends HasTokenNames {
         def initializationParams: InitializationParameters
 

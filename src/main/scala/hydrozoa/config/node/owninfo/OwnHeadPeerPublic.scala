@@ -1,8 +1,11 @@
 package hydrozoa.config.node.owninfo
 
 import hydrozoa.config.head.peers.HeadPeers
+import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
+import io.circe.*
+import io.circe.generic.semiauto.*
 import scalus.crypto.ed25519.VerificationKey
 
 final case class OwnHeadPeerPublic private[owninfo] (
@@ -31,4 +34,10 @@ object OwnHeadPeerPublic {
 
         def ownHeadVKey: VerificationKey
     }
+
+    given ownHeadPeerPublicEncoder: Encoder[OwnHeadPeerPublic] =
+        deriveEncoder[OwnHeadPeerPublic]
+
+    given ownHeadPeerPublicDecoder: Decoder[OwnHeadPeerPublic] =
+        deriveDecoder[OwnHeadPeerPublic]
 }

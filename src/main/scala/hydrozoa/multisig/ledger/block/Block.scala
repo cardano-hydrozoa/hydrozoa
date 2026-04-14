@@ -2,6 +2,8 @@ package hydrozoa.multisig.ledger.block
 
 import hydrozoa.multisig.ledger.block.BlockHeader.Minor.HeaderSignature
 import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, FinalizationTx, InitializationTx, RefundTx, RolloutTx, SettlementTx}
+import io.circe.*
+import io.circe.generic.semiauto.*
 
 sealed trait Block extends Block.Section
 
@@ -105,6 +107,9 @@ object Block {
 
             override transparent inline def finalizationRequested: Boolean = false
         }
+
+        given blockMultisignedInitialEncoder: Encoder[Block.MultiSigned.Initial] =
+            deriveEncoder[Block.MultiSigned.Initial]
 
         final case class Minor(
             override val blockBrief: BlockBrief.Minor,

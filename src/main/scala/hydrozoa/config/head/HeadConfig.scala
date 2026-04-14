@@ -11,6 +11,8 @@ import hydrozoa.config.head.parameters.HeadParameters
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.config.head.rulebased.scripts.RuleBasedScriptAddresses
+import hydrozoa.lib.cardano.scalus.codecs.json.Codecs
+import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.given
 import hydrozoa.lib.logging.Logging
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
@@ -19,6 +21,8 @@ import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
+import io.circe.generic.semiauto.*
+import io.circe.{Encoder, *}
 import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.*
 import scalus.crypto.ed25519.VerificationKey
@@ -32,6 +36,53 @@ final case class HeadConfig private (
 }
 
 object HeadConfig {
+
+    given headConfigEncoder: Encoder[HeadConfig] with {
+        override def apply(hc: HeadConfig): Json = {
+            given HeadConfig.Section = hc
+
+            deriveEncoder[HeadConfig](hc)
+        }
+    }
+
+    given headConfigDecoder: Decoder[HeadConfig] = Decoder.instance { c =>
+        for {
+            network <- c
+                .downField("headConfigPreinit")
+                .downField("cardanoNetwork")
+                .as[CardanoNetwork]
+            preinit <- {
+                given CardanoNetwork = network
+
+                c.downField("headConfigPreinit").as[HeadConfig.Preinit]
+            }
+            hc <- {
+                given HeadConfig.Preinit.Section = preinit
+
+                for {
+                    brief <- c
+                        .downField("initialBlock")
+                        .downField("blockBrief")
+                        .as[BlockBrief.Initial]
+                    initTx <- c
+                        .downField("initialBlock")
+                        .downField("effects")
+                        .downField("initializationTx")
+                        .as[Transaction]
+                    fallbackTx <- c
+                        .downField("initialBlock")
+                        .downField("effects")
+                        .downField("fallbackTx")
+                        .as[Transaction]
+                    hc <- HeadConfig(preinit, brief, initTx, fallbackTx)
+                        .toRight(
+                          io.circe.DecodingFailure("Failed constructing head config", c.history)
+                        )
+                } yield hc
+            }
+        } yield hc
+    }
+
     private val logger = Logging.logger("HeadConfig")
 
     def apply(
@@ -142,6 +193,104 @@ object HeadConfig {
     }
 
     object Preinit {
+        // TODO This encoder should be a little bit more intelligent.
+        // We want explicit indicies from vkey -> info, such as
+        // - vkey -> connection address
+        // - vkey -> equity
+        // - vkey -> peer number
+        given headConfigPreinitEncoder(using CardanoNetwork.Section): Encoder[HeadConfig.Preinit] =
+            deriveEncoder[HeadConfig.Preinit]
+        //            with {
+        //            override def apply(hc: HeadConfig.Preinit): Json = {
+        //                given HeadConfig.Preinit.Section = hc
+        //
+        //                val headPeersEquity: TreeMap[VerificationKey, Coin] =
+        //                    hc.initializationParams.initialEquityContributions.toNel
+        //                        .foldLeft(TreeMap.empty[VerificationKey, Coin]) { case (m, (peerNum, equity)) =>
+        //                            m.updated(hc.headPeers.headPeerVKey(peerNum).get, equity)
+        //                        }
+        //
+        //                Json.obj(
+        //                  "cardanoNetwork" -> hc.cardanoNetwork.asJson,
+        //                  "headParams" -> hc.headParams.asJson,
+        //                  "initialEvacuationMap" -> hc.initialEvacuationMap.asJson,
+        //                  "headPeersAndEquity" -> headPeersEquity.asJson,
+        //                  "seedUtxo" -> hc.initialSeedUtxo.asJson,
+        //                  "headId" -> hc.headId.asJson,
+        //                  "additionalFundingUtxos" -> hc.initialAdditionalFundingUtxos.asJson,
+        //                  "changeOutputs" -> hc.initialChangeOutputs.asJson
+        //                )
+        //            }
+        //        }
+
+        given headConfigPreinitDecoder(using CardanoNetwork.Section): Decoder[HeadConfig.Preinit] =
+            deriveDecoder[HeadConfig.Preinit]
+        //         with {
+        //            override def apply(c: HCursor): Decoder.Result[HeadConfig.Preinit] =
+        //                for {
+        //                    cardanoNetwork <- c.downField("cardanoNetwork").as[CardanoNetwork]
+        //                    res <- {
+        //                        given CardanoNetwork.Section = cardanoNetwork
+        //
+        //                        for {
+        //                            headParams <- c.downField("headParams").as[HeadParameters]
+        //                            headPeersEquity <- c
+        //                                .downField("headPeersAndEquity")
+        //                                .as[Map[VerificationKey, Coin]]
+        //                            headPeers <-
+        //                                if headPeersEquity.nonEmpty
+        //                                then Right(HeadPeers(headPeersEquity.keys.toList).get)
+        //                                else
+        //                                    Left(
+        //                                      io.circe.DecodingFailure(
+        //                                        "headPeersAndEquity must contain at least one peer",
+        //                                        c.history
+        //                                      )
+        //                                    )
+        //                            initialEquityContributions = NonEmptyMap.fromMapUnsafe(
+        //                              headPeersEquity.values.zipWithIndex
+        //                                  .foldLeft(TreeMap.empty[HeadPeerNumber, Coin]) {
+        //                                      case (m, (coin, peerIdx)) =>
+        //                                          m ++ Seq((HeadPeerNumber(peerIdx), coin))
+        //                                  }
+        //                            )
+        //                            initialEvacuationMap <- c
+        //                                .downField("initialEvacuationMap")
+        //                                .as[EvacuationMap]
+        //                            initialSeedUtxo <- c.downField("seedUtxo").as[Utxo]
+        //                            headId <- c.downField("headId").as[HeadId]
+        //                            initialAdditionalFundingUtxos <- c
+        //                                .downField("additionalFundingUtxos")
+        //                                .as[Utxos]
+        //                            initialChangeOutputs <- c
+        //                                .downField("changeOutputs")
+        //                                .as[List[TransactionOutput]]
+        //                            initParams = InitializationParameters(
+        //                              initialEvacuationMap,
+        //                              initialEquityContributions,
+        //                              initialSeedUtxo,
+        //                              headId,
+        //                              initialAdditionalFundingUtxos,
+        //                              initialChangeOutputs
+        //                            )
+        //                            hcpi <- HeadConfig
+        //                                .Preinit(
+        //                                  cardanoNetwork,
+        //                                  headParams,
+        //                                  headPeers,
+        //                                  initParams
+        //                                )
+        //                                .toRight(
+        //                                  io.circe.DecodingFailure(
+        //                                    "Failed constructing HeadConfig.Preinit",
+        //                                    c.history
+        //                                  )
+        //                                )
+        //                        } yield hcpi
+        //                    }
+        //                } yield res
+        //        }
+
         def apply(
             cardanoNetwork: CardanoNetwork,
             headParams: HeadParameters,

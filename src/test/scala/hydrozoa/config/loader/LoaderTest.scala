@@ -5,12 +5,12 @@ import cats.effect.unsafe.implicits.global
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
-import hydrozoa.config.loader.Codecs.{dummySigningKey, given}
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.config.node.{MultiNodeConfig, NodePrivateConfig}
+import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.dummySigningKey
 import hydrozoa.multisig.consensus.peer.HeadPeerWallet
+import io.circe.*
 import io.circe.syntax.*
-import io.circe.{Json, *}
 import monocle.*
 import monocle.syntax.all.{as as _, *}
 import org.scalacheck.Properties
@@ -60,7 +60,7 @@ object LoaderTest extends Properties("Configuration Loader Properties") {
                 val dummy = mkDummy(npc, mnc.headPeers)
                 val encoded = dummy.asJson
                 for {
-                    _ <- lift(IO.println(encoded))
+//                    _ <- lift(IO.println(encoded))
                     decoded <- failLeft(encoded.as[NodePrivateConfig])
                     _ <- assertWith(
                       dummy.nodeOperationEvacuationConfig == decoded.nodeOperationEvacuationConfig,

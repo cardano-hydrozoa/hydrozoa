@@ -1,9 +1,12 @@
 package hydrozoa.config.head.multisig.timing
 
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, quantize}
 import hydrozoa.multisig.consensus.{RequestValidityEndTimeRaw, RequestValidityStartTimeRaw}
+import io.circe.syntax.*
+import io.circe.{Decoder, Encoder, HCursor, Json}
 import scala.annotation.targetName
-import scala.concurrent.duration.DurationInt
+import scala.concurrent.duration.{DurationInt, DurationLong, FiniteDuration}
 import scala.math.Ordered.orderingToOrdered
 import scalus.cardano.ledger.SlotConfig
 
@@ -11,6 +14,14 @@ import TxTiming.*
 import Durations.*
 import BlockTimes.*
 import RequestTimes.*
+
+given finiteDurationEncoder: Encoder[FiniteDuration] with {
+    // TODO: Should we encode as a string, like in CIP0116?
+    def apply(fd: FiniteDuration): Json = Encoder.encodeLong(fd.toMillis)
+}
+
+given finiteDurationDecoder: Decoder[FiniteDuration] =
+    Decoder.decodeLong.map(l => l.millis)
 
 /** The reason we measure time duration in real units is that slot length is different for different
   * networks.
@@ -146,6 +157,53 @@ final case class TxTiming(
   * For now, we just have to be careful to ensure that we're using millisecond precision everywhere
   */
 object TxTiming {
+    given txTimingEncoder: Encoder[TxTiming] with {
+
+        def helper(f: TxTiming => QuantizedFiniteDuration)(using txTiming: TxTiming): Json =
+            f(txTiming).finiteDuration.asJson(using finiteDurationEncoder)
+
+        override def apply(txTiming: TxTiming): Json = {
+            given TxTiming = txTiming
+
+            Json.obj(
+              "minSettlementDuration" -> helper(_.minSettlementDuration),
+              "inactivityMarginDuration" -> helper(_.inactivityMarginDuration),
+              "silenceDuration" -> helper(_.silenceDuration),
+              "depositSubmissionDuration" -> helper(_.depositSubmissionDuration),
+              "depositMaturityDuration" -> helper(_.depositMaturityDuration),
+              "depositAbsorptionDuration" -> helper(_.depositAbsorptionDuration)
+            )
+        }
+    }
+
+    given txTimingDecoder(using config: CardanoNetwork.Section): Decoder[TxTiming] =
+        Decoder.instance { c =>
+            given HCursor = c
+
+            def helper(fieldName: String)(using c: HCursor) =
+                for {
+                    fd <- c.downField(fieldName).as[FiniteDuration](using finiteDurationDecoder)
+                    res = QuantizedFiniteDuration(config.slotConfig, fd)
+                } yield res
+
+            for {
+                msd <- helper("minSettlementDuration")
+                imd <- helper("inactivityMarginDuration")
+                sd <- helper("silenceDuration")
+                dsd <- helper("depositSubmissionDuration")
+                dmd <- helper("depositMaturityDuration")
+                dad <- helper("depositAbsorptionDuration")
+            } yield TxTiming(
+              MinSettlementDuration(msd),
+              InactivityMarginDuration(imd),
+              SilenceDuration(sd),
+              DepositSubmissionDuration(dsd),
+              DepositMaturityDuration(dmd),
+              DepositAbsorptionDuration(dad)
+            )
+
+        }
+
     def checkRequestValidityInterval(
         blockCreationStartTime: BlockCreationStartTime,
         requestValidityStartTime: RequestValidityStartTime,

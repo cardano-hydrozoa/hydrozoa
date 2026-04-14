@@ -3,7 +3,10 @@ package hydrozoa.config
 import cats.syntax.all.*
 import hydrozoa.config
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.given
 import hydrozoa.rulebased.ledger.l1.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
+import io.circe.*
+import io.circe.generic.semiauto.*
 import scalus.cardano.ledger.{TransactionInput, Utxo}
 import scalus.cardano.txbuilder.TransactionBuilderStep.ReferenceOutput
 
@@ -118,4 +121,35 @@ object ScriptReferenceUtxos {
                 )
             } yield DisputeScriptUtxo(utxo)
     }
+
+    given Encoder[ScriptReferenceUtxos] = deriveEncoder[ScriptReferenceUtxos]
+
+    given scriptReferenceUtxos(using
+        network: CardanoNetwork.Section
+    ): Decoder[ScriptReferenceUtxos] = deriveDecoder[ScriptReferenceUtxos]
+
+    // TODO This must be updated when we start getting script versions/hashses from the config
+    given Encoder[TreasuryScriptUtxo] = utxoEncoder.contramap(_.utxo)
+
+    given treasuryReferenceScriptUtxoDecoder(using
+        network: CardanoNetwork.Section
+    ): Decoder[TreasuryScriptUtxo] =
+        utxoDecoder.emap(utxo =>
+            TreasuryScriptUtxo(network, utxo).left.map(e =>
+                "Failed to construct rule-based treasury reference script utxo." +
+                    s"Failure: $e"
+            )
+        )
+
+    given Encoder[DisputeScriptUtxo] = utxoEncoder.contramap(_.utxo)
+
+    given disputeSrriptUtxoDecoder(using
+        network: CardanoNetwork.Section
+    ): Decoder[DisputeScriptUtxo] =
+        utxoDecoder.emap(utxo =>
+            DisputeScriptUtxo(network, utxo).left.map(e =>
+                "Failed to construct dispute script utxo." +
+                    s"Failure: $e"
+            )
+        )
 }
