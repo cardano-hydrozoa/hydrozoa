@@ -1,8 +1,10 @@
 package hydrozoa.config.head.rulebased
 
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedFiniteDuration
 import org.scalacheck.Gen
+
 import scala.concurrent.duration.DurationInt
 import scalus.cardano.ledger.SlotConfig
 
@@ -10,16 +12,16 @@ import scalus.cardano.ledger.SlotConfig
 // be coherent with some other slot config, so it's better to force the user
 // to pass None explicitly.
 
-type DisputeResolutionConfigGen = Gen[SlotConfig] => Gen[DisputeResolutionConfig]
+type DisputeResolutionConfigGen = Gen[CardanoNetwork.Section ?=> DisputeResolutionConfig]
 
-def generateDisputeResolutionConfig(
-    genSlotConfig: Gen[SlotConfig]
-): Gen[DisputeResolutionConfig] =
+def generateDisputeResolutionConfig: Gen[CardanoNetwork.Section ?=> DisputeResolutionConfig] =
     for {
-        slotConfig <- genSlotConfig
         // 1 hour to 5 days
         seconds <- Gen.choose(60 * 60, 60 * 60 * 24 * 5)
-    } yield DisputeResolutionConfig(
-      votingDuration =
-          QuantizedFiniteDuration(slotConfig = slotConfig, finiteDuration = seconds.seconds)
-    )
+    } yield {
+        (cardanoNetwork: CardanoNetwork.Section) ?=>
+            DisputeResolutionConfig(
+                votingDuration =
+                    QuantizedFiniteDuration(slotConfig = cardanoNetwork.slotConfig, finiteDuration = seconds.seconds)
+            )
+    }

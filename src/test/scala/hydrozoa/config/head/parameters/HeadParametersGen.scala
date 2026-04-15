@@ -19,14 +19,17 @@ def generateHeadParameters(cardanoNetwork: CardanoNetwork)(
     generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
     generateDisputeResolutionConfig: DisputeResolutionConfigGen = generateDisputeResolutionConfig,
     generateSettlementConfig: Gen[SettlementConfig] = generateSettlementConfig
-): Gen[HeadParameters] = for {
-    txTiming <- generateTxTiming(cardanoNetwork.slotConfig)
-    fallbackContingency <- generateFallbackContingency(cardanoNetwork)
-    disputeResolutionConfig <- generateDisputeResolutionConfig(cardanoNetwork.slotConfig)
-    settlementConfig <- generateSettlementConfig
-} yield HeadParameters(
-  txTiming = txTiming,
-  fallbackContingency = fallbackContingency,
-  disputeResolutionConfig = disputeResolutionConfig,
-  settlementConfig = settlementConfig
-)
+): Gen[HeadParameters] = {
+    given CardanoNetwork = cardanoNetwork
+    for {
+        txTiming <- generateTxTiming
+        fallbackContingency <- generateFallbackContingency
+        disputeResolutionConfig <- generateDisputeResolutionConfig
+        settlementConfig <- generateSettlementConfig
+    } yield HeadParameters(
+        txTiming = txTiming,
+        fallbackContingency = fallbackContingency,
+        disputeResolutionConfig = disputeResolutionConfig,
+        settlementConfig = settlementConfig
+    )
+}

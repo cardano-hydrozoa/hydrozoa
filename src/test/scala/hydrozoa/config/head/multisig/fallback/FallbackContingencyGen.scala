@@ -4,14 +4,15 @@ import hydrozoa.config.head.network.CardanoNetwork
 import org.scalacheck.Gen
 import scalus.cardano.ledger.Coin
 
-type FallbackContingencyGen = CardanoNetwork => Gen[FallbackContingency]
+type FallbackContingencyGen =  Gen[CardanoNetwork.Section ?=> FallbackContingency]
 
 /** TODO: Improve?
   */
-def generateFallbackContingency(cardanoNetwork: CardanoNetwork): Gen[FallbackContingency] =
-    Gen.const(
+def mkFallbackContingency(using cardanoNetwork: CardanoNetwork.Section): FallbackContingency =
       cardanoNetwork.mkFallbackContingencyWithDefaults(
         tallyTxFee = Coin.ada(3),
         voteTxFee = Coin.ada(3)
-      )
     )
+
+def generateFallbackContingency : FallbackContingencyGen =
+    (_ : CardanoNetwork.Section) ?=> mkFallbackContingency

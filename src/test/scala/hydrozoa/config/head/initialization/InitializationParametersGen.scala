@@ -125,7 +125,7 @@ object InitializationParametersGenTopDown {
     ): Gen[InitializationParameters] =
         for {
             cardanoNetwork <- Gen.const(testPeers.network)
-            fallbackContingency <- generateFallbackContingency(cardanoNetwork)
+            fallbackContingency <- generateFallbackContingency
             genesisUtxos <- generateGenesisUtxosL1(cardanoNetwork)
 
             // We are calculating equity upfront to avoid using .suchThat
@@ -150,7 +150,7 @@ object InitializationParametersGenTopDown {
                       generatePeerContribution(
                         headPeerNumber = hpn,
                         peerUtxos = genesisUtxos(hpn),
-                        fallbackContingency = fallbackContingency,
+                        fallbackContingency = fallbackContingency(using cardanoNetwork),
                         peerEquity = peersEquity(hpn),
                         cardanoNetwork = cardanoNetwork
                       )
@@ -410,7 +410,7 @@ object InitializationParametersGenBottomUp {
             cardanoNetwork <- Gen.const(testPeers.network)
             headStartTime <- generateBlockCreationEndTime(cardanoNetwork.slotConfig)
 
-            fallbackContingency <- generateFallbackContingency(cardanoNetwork)
+            fallbackContingency <- generateFallbackContingency
 
             nUtxos <- Gen.choose(1, 20)
             // Pubkey utxos (at least one) at some peer address(es), with at least 5 ada
@@ -445,9 +445,9 @@ object InitializationParametersGenBottomUp {
 
             grossFundingAmount = equity
                 + l2Value
-                + Value(fallbackContingency.collectiveContingency.total)
+                + Value(fallbackContingency(using cardanoNetwork).collectiveContingency.total)
                 + Value.lovelace(
-                  fallbackContingency.individualContingency.total.value * testPeers.nHeadPeers
+                  fallbackContingency(using cardanoNetwork).individualContingency.total.value * testPeers.nHeadPeers
                 )
                 + changeAmount
 

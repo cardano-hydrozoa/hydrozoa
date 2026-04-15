@@ -2,7 +2,7 @@ package hydrozoa.config.head
 
 import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.currentTimeBlockCreationEndTime
 import hydrozoa.config.head.initialization.{InitializationParametersGenBottomUp, InitializationParametersGenTopDown, generateInitialBlock}
-import hydrozoa.config.head.multisig.fallback.{FallbackContingencyGen, generateFallbackContingency}
+import hydrozoa.config.head.multisig.fallback.{FallbackContingencyGen, generateFallbackContingency, mkFallbackContingency}
 import hydrozoa.config.head.multisig.settlement.{SettlementConfigGen, generateSettlementConfig}
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.config.head.multisig.timing.{TxTimingGen, generateDefaultTxTiming}
@@ -44,7 +44,7 @@ def generateHeadConfig(testPeers: TestPeers)(
           generateInitializationParameters = generateInitializationParameters
         )
         initialBlock <- generateInitialBlock(testPeers)(
-          generateTxTiming = _ => Gen.const(preinit.headParams.txTiming),
+          generateTxTiming = Gen.const((_ : CardanoNetwork.Section) ?=> preinit.headParams.txTiming),
           generateHeadParameters = _ => (_, _, _, _) => Gen.const(preinit.headParams),
           generateBlockCreationEndTime = generateBlockCreationEndTime,
           generateInitializationParameters = preinit.initializationParams

@@ -2,7 +2,7 @@ package hydrozoa.config.head.initialization
 
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.{BlockCreationEndTimeGen, currentTimeBlockCreationEndTime}
-import hydrozoa.config.head.multisig.fallback.{FallbackContingencyGen, generateFallbackContingency}
+import hydrozoa.config.head.multisig.fallback.{FallbackContingencyGen, generateFallbackContingency, mkFallbackContingency}
 import hydrozoa.config.head.multisig.settlement.{SettlementConfigGen, generateSettlementConfig}
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationStartTime
 import hydrozoa.config.head.multisig.timing.{TxTiming, TxTimingGen, generateDefaultTxTiming}
@@ -14,6 +14,7 @@ import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import monocle.Focus.focus
 import org.scalacheck.Test.Parameters
 import org.scalacheck.{Gen, Prop, Properties}
+
 import scala.concurrent.duration.DurationInt
 import test.{TestPeers, TestPeersSpec}
 
@@ -40,7 +41,7 @@ def generateInitialBlock(testPeers: TestPeers)(
 
         initializationParameters <- generateInitializationParameters match {
             case g: InitializationParametersGenBottomUp.GenInitializationParameters =>
-                g(testPeers)(_ => Gen.const(headParams.fallbackContingency))
+                g(testPeers)(Gen.const(_ ?=> headParams.fallbackContingency))
             case InitializationParametersGenTopDown.GenWithDeps(
                   generator,
                   generateGenesisUtxosL1,
