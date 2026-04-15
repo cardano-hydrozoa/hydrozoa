@@ -8,8 +8,8 @@ import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{build, f
 import hydrozoa.multisig.ledger.l1.tx.Tx
 import hydrozoa.multisig.ledger.l1.tx.Tx.Validators.nonSigningValidators
 import monocle.{Focus, Lens}
-import scalus.cardano.address.Address
-import scalus.cardano.ledger.{ScriptHash, ScriptRef, Transaction, TransactionInput, TransactionOutput, Utxo, Value}
+import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
+import scalus.cardano.ledger.{Script, ScriptHash, ScriptRef, Timelock, Transaction, TransactionInput, TransactionOutput, Utxo, Value}
 import scalus.cardano.txbuilder.SomeBuildError
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Send, Spend}
@@ -61,16 +61,7 @@ private object DeploymentTxOps {
 
         def result(using config: Config): Either[SomeBuildError | Error, DeploymentTx] = {
 
-            val burnAddress =
-                if config.network.isMainnet
-                then
-                    Address.fromBech32(
-                      "addr1wxa7ec20249sqg87yu2aqkqp735qa02q6yd93u28gzul93ghspjnt"
-                    )
-                else
-                    Address.fromBech32(
-                      "addr_test1wza7ec20249sqg87yu2aqkqp735qa02q6yd93u28gzul93gvc4wuw"
-                    )
+            val burnAddress = mkBurnAddress(config.network)
 
             val refScriptOutput = TransactionOutput(
               address = burnAddress,
@@ -106,4 +97,18 @@ private object DeploymentTxOps {
         }
 
     }
+
+    // According to https://cardano-tools.io/burn-address
+    // This seems to be a bit superfluous - why do we need AllOf, why just not
+    // Script.Native(Timelock.TimeExpire(0L))?
+    // Anyways, AllOf won't hurt.
+    private val burnScript: Script.Native =
+        Script.Native(Timelock.AllOf(IndexedSeq(Timelock.TimeExpire(0L))))
+
+    def mkBurnAddress(network: Network): ShelleyAddress =
+        ShelleyAddress(
+          network = network,
+          payment = ShelleyPaymentPart.Script(burnScript.scriptHash),
+          delegation = ShelleyDelegationPart.Null
+        )
 }

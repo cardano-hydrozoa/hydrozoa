@@ -7,6 +7,7 @@ import hydrozoa.config.{HydrozoaBlueprint, ScriptReferenceUtxos}
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import org.scalatest.funsuite.AnyFunSuite
 import scala.annotation.nowarn
+import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.ledger.rules.{Context, State}
 import scalus.cardano.ledger.{Coin, ScriptRef, TransactionHash, TransactionInput, TransactionOutput, Utxo, Value}
 import test.{SeedPhrase, TestPeers, TransactionChain}
@@ -175,6 +176,16 @@ class DeploymentTxTest extends AnyFunSuite {
         assert(
           scriptHash == HydrozoaBlueprint.disputeScriptHash,
           "Script hash mismatch"
+        )
+    }
+
+    test("Burn address is correct") {
+        assert(
+          DeploymentTxOps
+              .mkBurnAddress(Mainnet)
+              .toBech32
+              .get == "addr1wxa7ec20249sqg87yu2aqkqp735qa02q6yd93u28gzul93ghspjnt",
+          "Unexpected burn address"
         )
     }
 }
