@@ -1,6 +1,7 @@
 package hydrozoa.rulebased.ledger.l1.tx
 
 import cats.effect.unsafe.implicits.global
+import hydrozoa.config.HydrozoaBlueprint
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
@@ -8,7 +9,6 @@ import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
-import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.Voted
@@ -16,7 +16,6 @@ import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.*
 import hydrozoa.rulebased.ledger.l1.utxo.{VoteOutput, VoteUtxo}
 import org.scalacheck.{Arbitrary, Gen, Prop, Properties}
-import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given_Arbitrary_Hash
 import scalus.cardano.onchain.plutus.v1.ArbitraryInstances.genByteStringOfN
@@ -46,8 +45,7 @@ def genResolutionTallyVoteUtxo(
     config: HeadPeers.Section & HasTokenNames & CardanoNetwork.Section
 ): Gen[VoteUtxo[Voted]] = {
     val txId = TransactionInput(fallbackTxId, outputIndex)
-    val spp = ShelleyPaymentPart.Script(DisputeResolutionScript.compiledScriptHash)
-    val scriptAddr = ShelleyAddress(config.network, spp, ShelleyDelegationPart.Null)
+    val scriptAddr = HydrozoaBlueprint.mkDisputeAddress(config.network)
 
     val voteTokenAssetName = config.headTokenNames.voteTokenName
     val voteToken = Value.asset(

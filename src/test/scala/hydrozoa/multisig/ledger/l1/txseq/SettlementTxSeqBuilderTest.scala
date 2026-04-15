@@ -1,9 +1,9 @@
 package hydrozoa.multisig.ledger.l1.txseq
 
+import hydrozoa.config.HydrozoaBlueprint
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.multisig.ledger.l1.tx.*
 import hydrozoa.multisig.ledger.l1.txseq.SettlementTxSeq.{NoRollouts, WithRollouts}
-import hydrozoa.rulebased.ledger.l1.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.{Prop, Properties}
 import scala.collection.mutable
@@ -81,16 +81,12 @@ object SettlementTxSeqBuilderTest extends Properties("SettlementTxSeq") {
 
                             props.append(
                               "numPeers + 1 Utxos should appear at the dispute resolution address after the fallback" |: {
-                                  // Gets the number of utxos at the dispute resolution script hash
-                                  val helper: State => Int = s =>
-                                      s.utxos.values
-                                          .map(
-                                            _.address.scriptHashOption
-                                                .contains(
-                                                  DisputeResolutionScript.compiledScriptHash
-                                                )
-                                          )
-                                          .count(identity)
+                                  // Gets the number of utxos at the dispute resolution address
+                                  val disputeAddress = HydrozoaBlueprint.mkDisputeAddress(
+                                    multiNodeConfig.headConfig.network
+                                  )
+                                  val helper: State => Int =
+                                      s => s.utxos.values.count(_.address == disputeAddress)
                                   helper(beforeFallback) == 0 && helper(
                                     afterFallback
                                   ) == multiNodeConfig.headConfig.headPeers.nHeadPeers + 1
@@ -99,15 +95,11 @@ object SettlementTxSeqBuilderTest extends Properties("SettlementTxSeq") {
 
                             props.append(
                               "One utxo should appear at the rules based treasury script address after the fallback" |: {
-                                  val helper: State => Int = s =>
-                                      s.utxos.values
-                                          .map(
-                                            _.address.scriptHashOption
-                                                .contains(
-                                                  RuleBasedTreasuryScript.compiledScriptHash
-                                                )
-                                          )
-                                          .count(identity)
+                                  val treasuryAddress = HydrozoaBlueprint.mkTreasuryAddress(
+                                    multiNodeConfig.headConfig.network
+                                  )
+                                  val helper: State => Int =
+                                      s => s.utxos.values.count(_.address == treasuryAddress)
                                   helper(beforeFallback) == 0 && helper(afterFallback) == 1
                               }
                             )

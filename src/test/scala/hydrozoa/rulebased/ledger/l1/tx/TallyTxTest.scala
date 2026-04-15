@@ -1,19 +1,18 @@
 package hydrozoa.rulebased.ledger.l1.tx
 
 import cats.effect.unsafe.implicits.global
+import hydrozoa.config.HydrozoaBlueprint
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
-import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.*
 import hydrozoa.rulebased.ledger.l1.utxo.{VoteOutput, VoteUtxo}
 import org.scalacheck.{Gen, Properties}
-import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
 import scalus.cardano.onchain.plutus.v1.ArbitraryInstances.genByteStringOfN
 import scalus.uplc.builtin.Builtins.blake2b_224
@@ -72,8 +71,7 @@ def genTallyVoteUtxo(
     config: CardanoNetwork.Section & HasTokenNames & HeadPeers.Section
 ): Gen[VoteUtxo[VoteStatus]] = {
     val txId = TransactionInput(fallbackTxId, outputIndex)
-    val spp = ShelleyPaymentPart.Script(DisputeResolutionScript.compiledScriptHash)
-    val scriptAddr = ShelleyAddress(config.network, spp, ShelleyDelegationPart.Null)
+    val scriptAddr = HydrozoaBlueprint.mkDisputeAddress(config.network)
 
     val voteOutput = VoteOutput(
       key = voteDatum.key,

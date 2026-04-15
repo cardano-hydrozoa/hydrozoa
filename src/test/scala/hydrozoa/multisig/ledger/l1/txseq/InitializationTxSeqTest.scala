@@ -1,19 +1,17 @@
 package hydrozoa.multisig.ledger.l1.txseq
 
 import cats.data.NonEmptyList
+import hydrozoa.config.HydrozoaBlueprint
 import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.tx.{InitializationTx, Metadata as MD}
-import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.l1.state.VoteDatum
 import io.bullet.borer.Cbor
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.{Prop, Properties}
 import scala.collection.immutable.SortedMap
 import scala.collection.mutable
-import scalus.cardano.address.*
-import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
@@ -77,11 +75,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
             val expectedHeadNativeScript = config.headMultisigScript
             val iTxOutputs: Seq[TransactionOutput] = iTx.tx.body.value.outputs.map(_.value)
             val hns = expectedHeadNativeScript
-            val disputeResolutionAddress = ShelleyAddress(
-              network = config.network,
-              payment = ShelleyPaymentPart.Script(DisputeResolutionScript.compiledScriptHash),
-              delegation = Null
-            )
+            val disputeResolutionAddress = HydrozoaBlueprint.mkDisputeAddress(config.network)
 
             // ===================================
             // Initialization tx props
