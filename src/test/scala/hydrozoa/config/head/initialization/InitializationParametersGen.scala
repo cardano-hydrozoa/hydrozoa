@@ -21,8 +21,10 @@ import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap}
 import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.given
+
 import java.time.Instant
 import org.scalacheck.{Gen, Prop, Properties}
+
 import scala.collection.immutable.{SortedMap, TreeMap}
 import scala.concurrent.duration.DurationInt
 import scalus.cardano.address.Address
@@ -41,19 +43,19 @@ import test.{Generators, TestPeers, TestPeersSpec}
 //   - parameters -> params (and the same for types)
 
 object BlockCreationEndTimeGen {
-    type BlockCreationEndTimeGen = SlotConfig => Gen[BlockCreationEndTime]
+    type BlockCreationEndTimeGen =  Gen[CardanoNetwork.Section ?=> BlockCreationEndTime]
 
-    /** Generate [[blockCreationEndTime]] between 0 and 10 years from the zero slot time. Good for
+    /** Generate [[BlockCreationEndTime]] between 0 and 10 years from the zero slot time. Good for
       * all tests but Yaci-based ones.
       */
-    def generateBlockCreationEndTime(slotConfig: SlotConfig): Gen[BlockCreationEndTime] =
+    def generateBlockCreationEndTime: BlockCreationEndTimeGen =
         Gen
             .choose(0L, 10 * 365.days.toSeconds)
-            .map(offsetSeconds =>
+            .map(offsetSeconds => (cardanoNetwork : CardanoNetwork.Section) ?=>
                 BlockCreationEndTime(
                   QuantizedInstant(
-                    slotConfig = slotConfig,
-                    instant = Instant.ofEpochMilli(slotConfig.zeroTime + offsetSeconds * 1_000)
+                    slotConfig = cardanoNetwork.slotConfig,
+                    instant = Instant.ofEpochMilli(cardanoNetwork.slotConfig.zeroTime + offsetSeconds * 1_000)
                   )
                 )
             )
@@ -62,16 +64,19 @@ object BlockCreationEndTimeGen {
       * as the block creation end time under given slot configuration. This is supposed to be used
       * with Yaci, when we cannot set the time on L1.
       */
-    final def currentTimeBlockCreationEndTime(slotConfig: SlotConfig): Gen[BlockCreationEndTime] =
+    final def currentTimeBlockCreationEndTime : BlockCreationEndTimeGen =
         val now = Instant.now()
-        require(slotConfig.zeroSlot <= now.toEpochMilli, "zero slot time cannot be in the future")
-        Gen.const(
-          BlockCreationEndTime(
-            QuantizedInstant(
-              slotConfig = slotConfig,
-              instant = now
-            )
-          )
+        Gen.const({
+            (cardanoNetwork : CardanoNetwork.Section) ?=>
+                require(cardanoNetwork.slotConfig.zeroSlot <= now.toEpochMilli, "zero slot time cannot be in the future")
+
+                BlockCreationEndTime(
+                    QuantizedInstant(
+                        slotConfig = cardanoNetwork.slotConfig,
+                        instant = now
+                    )
+                )
+        }
         )
 }
 
@@ -408,7 +413,6 @@ object InitializationParametersGenBottomUp {
     ): Gen[InitializationParameters] =
         for {
             cardanoNetwork <- Gen.const(testPeers.network)
-            headStartTime <- generateBlockCreationEndTime(cardanoNetwork.slotConfig)
 
             fallbackContingency <- generateFallbackContingency
 

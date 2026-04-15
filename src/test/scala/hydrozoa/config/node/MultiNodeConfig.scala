@@ -2,7 +2,7 @@ package hydrozoa.config.node
 
 import cats.data.NonEmptyList
 import cats.effect.unsafe.IORuntime
-import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.currentTimeBlockCreationEndTime
+import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.{BlockCreationEndTimeGen, currentTimeBlockCreationEndTime}
 import hydrozoa.config.head.initialization.{InitializationParametersGenBottomUp, InitializationParametersGenTopDown}
 import hydrozoa.config.head.multisig.fallback.{FallbackContingencyGen, generateFallbackContingency, mkFallbackContingency}
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
@@ -100,12 +100,8 @@ object MultiNodeConfig {
 
     def generate(spec: TestPeersSpec)(
         generateHeadConfig: HeadConfigGen = hydrozoa.config.head.generateHeadConfig,
-        generateHeadStartTime: SlotConfig => Gen[BlockCreationEndTime] =
+        generateHeadStartTime: BlockCreationEndTimeGen =
             currentTimeBlockCreationEndTime,
-        generateTxTiming: TxTimingGen = generateDefaultTxTiming,
-        generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
-        generateDisputeResolutionConfig: DisputeResolutionConfigGen =
-            generateDisputeResolutionConfig,
         generateHeadParameters: GenHeadParams = generateHeadParameters(),
         generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
             InitializationParametersGenTopDown.GenWithDeps =
@@ -130,7 +126,7 @@ object MultiNodeConfig {
 
     def generateForTestPeers(testPeers: TestPeers)(
         generateHeadConfig: HeadConfigGen = hydrozoa.config.head.generateHeadConfig,
-        generateBlockCreationEndTime: SlotConfig => Gen[BlockCreationEndTime] =
+        generateBlockCreationEndTime: BlockCreationEndTimeGen =
             currentTimeBlockCreationEndTime,
         generateHeadParameters: GenHeadParams = generateHeadParameters(),
         generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |

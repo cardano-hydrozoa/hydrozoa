@@ -23,73 +23,78 @@ def generateInitialBlock(testPeers: TestPeers)(
     generateBlockCreationEndTime: BlockCreationEndTimeGen = currentTimeBlockCreationEndTime,
     generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
         InitializationParametersGenTopDown.GenWithDeps | InitializationParameters =
-        InitializationParametersGenBottomUp.generateInitializationParameters,
-    generateSettlementConfig: SettlementConfigGen = generateSettlementConfig
+        InitializationParametersGenBottomUp.generateInitializationParameters : InitializationParametersGenBottomUp.GenInitializationParameters,
 ): Gen[InitialBlock] = {
     for {
         cardanoNetwork <- Gen.const(testPeers.network)
 
-        headParams <- generateHeadParameters
+        res <- {
+            given CardanoNetwork.Section = cardanoNetwork
 
-        initializationParameters <- generateInitializationParameters match {
-            case g: InitializationParametersGenBottomUp.GenInitializationParameters =>
-                g(testPeers)(Gen.const(_ ?=> headParams(using cardanoNetwork).fallbackContingency))
-            case InitializationParametersGenTopDown.GenWithDeps(
-                  generator,
-                  generateGenesisUtxosL1,
-                  equityRange
-                ) =>
-                generator(testPeers)(
-                  generateFallbackContingency,
-                  generateGenesisUtxosL1,
-                  equityRange
+            for {
+                headParams <- generateHeadParameters
+
+                initializationParameters <- generateInitializationParameters match {
+                    case g: InitializationParametersGenBottomUp.GenInitializationParameters =>
+                        g(testPeers)(Gen.const(_ ?=> headParams.fallbackContingency))
+                    case InitializationParametersGenTopDown.GenWithDeps(
+                        generator,
+                        generateGenesisUtxosL1,
+                        equityRange
+                    ) =>
+                        generator(testPeers)(
+                            generateFallbackContingency,
+                            generateGenesisUtxosL1,
+                            equityRange
+                        )
+                    case ps: InitializationParameters => Gen.const(ps)
+                }
+
+                config = HeadConfig
+                    .Preinit(
+                        cardanoNetwork = cardanoNetwork,
+                        headParams = headParams,
+                        headPeers = testPeers.mkHeadPeers,
+                        initializationParams = initializationParameters
+                    )
+                    .get
+
+                blockCreationEndTime <- generateBlockCreationEndTime
+
+                initTxSeq =
+                    InitializationTxSeq.Build(config)(blockCreationEndTime).result match {
+                        case Left(e) =>
+                            throw new RuntimeException(e.toString, e)
+                        case Right(x) => x
+                    }
+
+                fallbackTxStartTime = initTxSeq.fallbackTx.fallbackTxStartTime
+                forcedMajorBlockTime = headParams.txTiming.forcedMajorBlockTime(fallbackTxStartTime)
+                majorBlockWakeupTime = TxTiming.majorBlockWakeupTime(forcedMajorBlockTime, None)
+
+            } yield InitialBlock(
+                Block.MultiSigned.Initial(
+                    blockBrief = BlockBrief.Initial(
+                        BlockHeader.Initial(
+                            startTime = BlockCreationStartTime(blockCreationEndTime - 10.seconds),
+                            endTime = blockCreationEndTime,
+                            fallbackTxStartTime = initTxSeq.fallbackTx.fallbackTxStartTime,
+                            majorBlockWakeupTime = majorBlockWakeupTime,
+                            kzgCommitment = initializationParameters.initialEvacuationMap.kzgCommitment
+                        )
+                    ),
+                    effects = BlockEffects.MultiSigned.Initial(
+                        initializationTx = initTxSeq.initializationTx
+                            .focus(_.tx)
+                            .modify(testPeers.multisignTx),
+                        fallbackTx = initTxSeq.fallbackTx
+                            .focus(_.tx)
+                            .modify(testPeers.multisignTx)
+                    )
                 )
-            case ps: InitializationParameters => Gen.const(ps)
-        }
-
-        config = HeadConfig
-            .Preinit(
-              cardanoNetwork = cardanoNetwork,
-              headParams = headParams(using cardanoNetwork),
-              headPeers = testPeers.mkHeadPeers,
-              initializationParams = initializationParameters
             )
-            .get
-
-        blockCreationEndTime <- generateBlockCreationEndTime(config.slotConfig)
-
-        initTxSeq =
-            InitializationTxSeq.Build(config)(blockCreationEndTime).result match {
-                case Left(e) =>
-                    throw new RuntimeException(e.toString, e)
-                case Right(x) => x
-            }
-
-        fallbackTxStartTime = initTxSeq.fallbackTx.fallbackTxStartTime
-        forcedMajorBlockTime = headParams(using cardanoNetwork).txTiming.forcedMajorBlockTime(fallbackTxStartTime)
-        majorBlockWakeupTime = TxTiming.majorBlockWakeupTime(forcedMajorBlockTime, None)
-
-    } yield InitialBlock(
-      Block.MultiSigned.Initial(
-        blockBrief = BlockBrief.Initial(
-          BlockHeader.Initial(
-            startTime = BlockCreationStartTime(blockCreationEndTime - 10.seconds),
-            endTime = blockCreationEndTime,
-            fallbackTxStartTime = initTxSeq.fallbackTx.fallbackTxStartTime,
-            majorBlockWakeupTime = majorBlockWakeupTime,
-            kzgCommitment = initializationParameters.initialEvacuationMap.kzgCommitment
-          )
-        ),
-        effects = BlockEffects.MultiSigned.Initial(
-          initializationTx = initTxSeq.initializationTx
-              .focus(_.tx)
-              .modify(testPeers.multisignTx),
-          fallbackTx = initTxSeq.fallbackTx
-              .focus(_.tx)
-              .modify(testPeers.multisignTx)
-        )
-      )
-    )
+        }
+        } yield res
 }
 
 object InitialBlockTest extends Properties("Initial block") {

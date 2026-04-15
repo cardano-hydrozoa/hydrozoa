@@ -1,6 +1,6 @@
 package hydrozoa.config.head
 
-import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.currentTimeBlockCreationEndTime
+import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.{BlockCreationEndTimeGen, currentTimeBlockCreationEndTime}
 import hydrozoa.config.head.initialization.{InitializationParametersGenBottomUp, InitializationParametersGenTopDown, generateInitialBlock}
 import hydrozoa.config.head.multisig.fallback.{FallbackContingencyGen, generateFallbackContingency, mkFallbackContingency}
 import hydrozoa.config.head.multisig.settlement.{SettlementConfigGen, generateSettlementConfig}
@@ -15,14 +15,14 @@ import test.{TestPeers, TestPeersSpec}
 
 type HeadConfigGen =
     (testPeers: TestPeers) => (
-        generateBlockCreationEndTime: SlotConfig => Gen[BlockCreationEndTime],
+        generateBlockCreationEndTime: BlockCreationEndTimeGen,
         generateHeadParameters: GenHeadParams,
         generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
             InitializationParametersGenTopDown.GenWithDeps
     ) => Gen[HeadConfig]
 
 def generateHeadConfig(testPeers: TestPeers)(
-    generateBlockCreationEndTime: SlotConfig => Gen[BlockCreationEndTime] =
+    generateBlockCreationEndTime: BlockCreationEndTimeGen =
         currentTimeBlockCreationEndTime,
     generateHeadParameters: GenHeadParams = generateHeadParameters(),
     generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
@@ -47,13 +47,10 @@ def generateHeadConfig(testPeers: TestPeers)(
     ).get
 
 def generateHeadConfigPreInit(testPeers: TestPeers)(
-    generateBlockCreationEndTime: SlotConfig => Gen[BlockCreationEndTime] =
-        currentTimeBlockCreationEndTime,
     generateHeadParams : GenHeadParams = generateHeadParameters(),
     generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
         InitializationParametersGenTopDown.GenWithDeps =
         InitializationParametersGenBottomUp.generateInitializationParameters,
-    generateSettlementConfig: SettlementConfigGen = generateSettlementConfig
 ): Gen[HeadConfig.Preinit] = for {
     cardanoNetwork <- Gen.const(testPeers.network)
     headParams <- generateHeadParams
