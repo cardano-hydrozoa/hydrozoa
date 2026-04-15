@@ -106,7 +106,7 @@ object MultiNodeConfig {
         generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
         generateDisputeResolutionConfig: DisputeResolutionConfigGen =
             generateDisputeResolutionConfig,
-        generateHeadParameters: GenHeadParams = generateHeadParameters,
+        generateHeadParameters: GenHeadParams = generateHeadParameters(),
         generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
             InitializationParametersGenTopDown.GenWithDeps =
             InitializationParametersGenBottomUp.generateInitializationParameters,
@@ -120,9 +120,6 @@ object MultiNodeConfig {
         ret <- generateForTestPeers(testPeers)(
           generateHeadConfig,
           generateHeadStartTime,
-          generateTxTiming,
-          generateFallbackContingency,
-          generateDisputeResolutionConfig,
           generateHeadParameters,
           generateInitializationParameters,
           generateNodeOperationEvacuationConfig,
@@ -135,11 +132,7 @@ object MultiNodeConfig {
         generateHeadConfig: HeadConfigGen = hydrozoa.config.head.generateHeadConfig,
         generateBlockCreationEndTime: SlotConfig => Gen[BlockCreationEndTime] =
             currentTimeBlockCreationEndTime,
-        generateTxTiming: TxTimingGen = generateDefaultTxTiming,
-        generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
-        generateDisputeResolutionConfig: DisputeResolutionConfigGen =
-            generateDisputeResolutionConfig,
-        generateHeadParameters: GenHeadParams = generateHeadParameters,
+        generateHeadParameters: GenHeadParams = generateHeadParameters(),
         generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
             InitializationParametersGenTopDown.GenWithDeps =
             InitializationParametersGenBottomUp.generateInitializationParameters,
@@ -152,9 +145,6 @@ object MultiNodeConfig {
         for {
             headConfig <- generateHeadConfig(testPeers)(
               generateBlockCreationEndTime = generateBlockCreationEndTime,
-              generateTxTiming = generateTxTiming,
-              generateFallbackContingency = generateFallbackContingency,
-              generateDisputeResolutionConfig = generateDisputeResolutionConfig,
               generateHeadParameters = generateHeadParameters,
               generateInitializationParameters = generateInitializationParameters,
             )

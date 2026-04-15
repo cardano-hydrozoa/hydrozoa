@@ -19,10 +19,7 @@ import scala.concurrent.duration.DurationInt
 import test.{TestPeers, TestPeersSpec}
 
 def generateInitialBlock(testPeers: TestPeers)(
-    generateTxTiming: TxTimingGen = generateDefaultTxTiming,
-    generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
-    generateDisputeResolutionConfig: DisputeResolutionConfigGen = generateDisputeResolutionConfig,
-    generateHeadParameters: GenHeadParams = generateHeadParameters,
+    generateHeadParameters: GenHeadParams = generateHeadParameters(),
     generateBlockCreationEndTime: BlockCreationEndTimeGen = currentTimeBlockCreationEndTime,
     generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
         InitializationParametersGenTopDown.GenWithDeps | InitializationParameters =
@@ -32,16 +29,11 @@ def generateInitialBlock(testPeers: TestPeers)(
     for {
         cardanoNetwork <- Gen.const(testPeers.network)
 
-        headParams <- generateHeadParameters(cardanoNetwork)(
-          generateTxTiming,
-          generateFallbackContingency,
-          generateDisputeResolutionConfig,
-          generateSettlementConfig
-        )
+        headParams <- generateHeadParameters
 
         initializationParameters <- generateInitializationParameters match {
             case g: InitializationParametersGenBottomUp.GenInitializationParameters =>
-                g(testPeers)(Gen.const(_ ?=> headParams.fallbackContingency))
+                g(testPeers)(Gen.const(_ ?=> headParams(using cardanoNetwork).fallbackContingency))
             case InitializationParametersGenTopDown.GenWithDeps(
                   generator,
                   generateGenesisUtxosL1,
@@ -58,7 +50,7 @@ def generateInitialBlock(testPeers: TestPeers)(
         config = HeadConfig
             .Preinit(
               cardanoNetwork = cardanoNetwork,
-              headParams = headParams,
+              headParams = headParams(using cardanoNetwork),
               headPeers = testPeers.mkHeadPeers,
               initializationParams = initializationParameters
             )
@@ -74,7 +66,7 @@ def generateInitialBlock(testPeers: TestPeers)(
             }
 
         fallbackTxStartTime = initTxSeq.fallbackTx.fallbackTxStartTime
-        forcedMajorBlockTime = headParams.txTiming.forcedMajorBlockTime(fallbackTxStartTime)
+        forcedMajorBlockTime = headParams(using cardanoNetwork).txTiming.forcedMajorBlockTime(fallbackTxStartTime)
         majorBlockWakeupTime = TxTiming.majorBlockWakeupTime(forcedMajorBlockTime, None)
 
     } yield InitialBlock(

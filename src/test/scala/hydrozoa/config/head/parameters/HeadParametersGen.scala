@@ -7,26 +7,20 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.rulebased.{DisputeResolutionConfigGen, generateDisputeResolutionConfig}
 import org.scalacheck.Gen
 
-type GenHeadParams = CardanoNetwork => (
-    TxTimingGen,
-    FallbackContingencyGen,
-    DisputeResolutionConfigGen,
-    Gen[SettlementConfig]
-) => Gen[HeadParameters]
+type GenHeadParams = Gen[CardanoNetwork.Section ?=> HeadParameters]
 
-def generateHeadParameters(cardanoNetwork: CardanoNetwork)(
+def generateHeadParameters(
     generateTxTiming: TxTimingGen = generateDefaultTxTiming,
     generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
     generateDisputeResolutionConfig: DisputeResolutionConfigGen = generateDisputeResolutionConfig,
     generateSettlementConfig: Gen[SettlementConfig] = generateSettlementConfig
-): Gen[HeadParameters] = {
-    given CardanoNetwork = cardanoNetwork
+): GenHeadParams = {
     for {
         txTiming <- generateTxTiming
         fallbackContingency <- generateFallbackContingency
         disputeResolutionConfig <- generateDisputeResolutionConfig
         settlementConfig <- generateSettlementConfig
-    } yield HeadParameters(
+    } yield (_ : CardanoNetwork.Section) ?=> HeadParameters(
         txTiming = txTiming,
         fallbackContingency = fallbackContingency,
         disputeResolutionConfig = disputeResolutionConfig,
