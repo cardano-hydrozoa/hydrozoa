@@ -4,11 +4,9 @@ import cats.syntax.all.*
 import hydrozoa.config
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.given
-import hydrozoa.rulebased.ledger.l1.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
 import io.circe.*
 import io.circe.generic.semiauto.*
 import scalus.cardano.ledger.{TransactionInput, Utxo}
-import scalus.cardano.ledger.Utxo
 import scalus.cardano.txbuilder.TransactionBuilderStep.ReferenceOutput
 
 final case class ScriptReferenceUtxos(

@@ -1,9 +1,8 @@
 package hydrozoa.lib.cardano.scalus.codecs.json
 
-import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import io.bullet.borer.Cbor
 import io.circe.generic.semiauto.{deriveDecoder, deriveEncoder}
-import io.circe.{Decoder, Encoder, Json, KeyDecoder, KeyEncoder, parser}
+import io.circe.{Decoder, DecodingFailure, Encoder, Json, KeyDecoder, KeyEncoder, parser}
 import scala.util.Try
 import scalus.cardano.address.Network
 import scalus.cardano.ledger.{CardanoInfo, ProtocolParams, SlotConfig, Transaction, TransactionHash, TransactionInput, TransactionOutput, Utxo}
@@ -90,6 +89,41 @@ object Codecs {
         } yield txOut
 
     }
+
+    /** NOTE: This encoder is NOT CIP-0116 compliant.
+      */
+    given transactionInputAlternateEncoder: Encoder[TransactionInput] =
+        Encoder.encodeString.contramap(ti => ti.transactionId.toHex ++ "#" ++ ti.index.toString)
+
+    /** NOTE: This decoder is NOT CIP-0116 compliant.
+      */
+    given transactionInputAlternateDecoder: Decoder[TransactionInput] = Decoder.instance(c =>
+        def helper[A](msg: String): DecodingFailure =
+            io.circe.DecodingFailure(msg, c.history)
+
+        for {
+            s <- c.as[String]
+            ti <- s.split("#").toList match {
+                case txIdStr :: idxStr :: Nil =>
+                    for {
+                        txId <- Try(TransactionHash.fromHex(txIdStr)).toEither.left.map(throwable =>
+                            helper(throwable.getMessage)
+                        )
+                        int <- parser.decode[Int](idxStr).left.map(e => helper(e.getMessage))
+                        idx <-
+                            if int >= 0 then Right(int)
+                            else Left(helper("TransactionInput index is negative"))
+                    } yield TransactionInput(txId, idx)
+                case _ =>
+                    Left(
+                      helper(
+                        "invalid format for transaction input. " +
+                            "Expected the transaction hash, followed by '#', followed by the index, as a JSON string."
+                      )
+                    )
+            }
+        } yield ti
+    )
 
     given transactionInputKeyEncoder: KeyEncoder[TransactionInput] =
         KeyEncoder.encodeKeyString.contramap(ti =>
