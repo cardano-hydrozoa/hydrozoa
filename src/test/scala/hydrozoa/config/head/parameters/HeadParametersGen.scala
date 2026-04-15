@@ -1,13 +1,15 @@
 package hydrozoa.config.head.parameters
 
+import cats.data.*
 import hydrozoa.config.head.multisig.fallback.{FallbackContingencyGen, generateFallbackContingency}
 import hydrozoa.config.head.multisig.settlement.{SettlementConfig, generateSettlementConfig}
 import hydrozoa.config.head.multisig.timing.{TxTimingGen, generateDefaultTxTiming}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.rulebased.{DisputeResolutionConfigGen, generateDisputeResolutionConfig}
 import org.scalacheck.Gen
+import test.given
 
-type GenHeadParams = Gen[CardanoNetwork.Section ?=> HeadParameters]
+type GenHeadParams = ReaderT[Gen, CardanoNetwork.Section, HeadParameters]
 
 def generateHeadParameters(
     generateTxTiming: TxTimingGen = generateDefaultTxTiming,
@@ -19,11 +21,11 @@ def generateHeadParameters(
         txTiming <- generateTxTiming
         fallbackContingency <- generateFallbackContingency
         disputeResolutionConfig <- generateDisputeResolutionConfig
-        settlementConfig <- generateSettlementConfig
-    } yield (_ : CardanoNetwork.Section) ?=> HeadParameters(
-        txTiming = txTiming,
-        fallbackContingency = fallbackContingency,
-        disputeResolutionConfig = disputeResolutionConfig,
-        settlementConfig = settlementConfig
+        settlementConfig <- ReaderT.liftF(generateSettlementConfig)
+    } yield HeadParameters(
+      txTiming = txTiming,
+      fallbackContingency = fallbackContingency.fallbackContingency,
+      disputeResolutionConfig = disputeResolutionConfig,
+      settlementConfig = settlementConfig
     )
 }

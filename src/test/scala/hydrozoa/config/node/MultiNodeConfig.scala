@@ -1,16 +1,9 @@
 package hydrozoa.config.node
 
-import cats.data.NonEmptyList
+import cats.data.Kleisli.liftF
+import cats.data.{NonEmptyList, ReaderT}
 import cats.effect.unsafe.IORuntime
-import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.{BlockCreationEndTimeGen, currentTimeBlockCreationEndTime}
-import hydrozoa.config.head.initialization.{InitializationParametersGenBottomUp, InitializationParametersGenTopDown}
-import hydrozoa.config.head.multisig.fallback.{FallbackContingencyGen, generateFallbackContingency, mkFallbackContingency}
-import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
-import hydrozoa.config.head.multisig.timing.{TxTimingGen, generateDefaultTxTiming}
-import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.config.head.parameters.{GenHeadParams, generateHeadParameters}
-import hydrozoa.config.head.rulebased.{DisputeResolutionConfigGen, generateDisputeResolutionConfig}
-import hydrozoa.config.head.{HeadConfig, HeadConfigGen}
+import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.node.operation.evacuation.{NodeOperationEvacuationConfigGen, generateNodeOperationEvacuationConfig}
 import hydrozoa.config.node.operation.multisig.{NodeOperationMultisigConfig, generateNodeOperationMultisigConfig}
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
@@ -22,8 +15,9 @@ import hydrozoa.multisig.ledger.block.Block.MultiSigned
 import hydrozoa.multisig.ledger.block.BlockHeader
 import org.scalacheck.util.Pretty
 import org.scalacheck.{Gen, Prop, Properties, PropertyM}
-import scalus.cardano.ledger.{AddrKeyHash, SlotConfig, Transaction, VKeyWitness}
+import scalus.cardano.ledger.{AddrKeyHash, Transaction, VKeyWitness}
 import scalus.uplc.builtin.Builtins.blake2b_224
+import test.given
 import test.{TestM, TestMFixedEnv, TestPeers, TestPeersSpec}
 
 /** Multi-node config is a tool for test suites that allows multisigning effects as well as giving
@@ -99,13 +93,8 @@ object MultiNodeConfig {
     def generateDefault: Gen[MultiNodeConfig] = generate(TestPeersSpec.default)()
 
     def generate(spec: TestPeersSpec)(
-        generateHeadConfig: HeadConfigGen = hydrozoa.config.head.generateHeadConfig,
-        generateHeadStartTime: BlockCreationEndTimeGen =
-            currentTimeBlockCreationEndTime,
-        generateHeadParameters: GenHeadParams = generateHeadParameters(),
-        generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
-            InitializationParametersGenTopDown.GenWithDeps =
-            InitializationParametersGenBottomUp.generateInitializationParameters,
+        generateHeadConfig: ReaderT[Gen, TestPeers, HeadConfig] =
+            hydrozoa.config.head.generateHeadConfig(),
         generateNodeOperationEvacuationConfig: NodeOperationEvacuationConfigGen =
             generateNodeOperationEvacuationConfig,
         generateNodeOperationMultisigConfig: Gen[NodeOperationMultisigConfig] =
@@ -113,58 +102,49 @@ object MultiNodeConfig {
         generateScriptReferenceUtxos: ScriptReferenceUtxosGen = generateScriptReferenceUtxos
     ): Gen[MultiNodeConfig] = for {
         testPeers <- TestPeers.generate(spec)
-        ret <- generateForTestPeers(testPeers)(
+        ret <- generateForTestPeers(
           generateHeadConfig,
-          generateHeadStartTime,
-          generateHeadParameters,
-          generateInitializationParameters,
           generateNodeOperationEvacuationConfig,
           generateNodeOperationMultisigConfig,
           generateScriptReferenceUtxos
-        )
+        ).run(testPeers)
     } yield ret
 
-    def generateForTestPeers(testPeers: TestPeers)(
-        generateHeadConfig: HeadConfigGen = hydrozoa.config.head.generateHeadConfig,
-        generateBlockCreationEndTime: BlockCreationEndTimeGen =
-            currentTimeBlockCreationEndTime,
-        generateHeadParameters: GenHeadParams = generateHeadParameters(),
-        generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
-            InitializationParametersGenTopDown.GenWithDeps =
-            InitializationParametersGenBottomUp.generateInitializationParameters,
+    def generateForTestPeers(
+        generateHeadConfig: ReaderT[Gen, TestPeers, HeadConfig] =
+            hydrozoa.config.head.generateHeadConfig(),
         generateNodeOperationEvacuationConfig: NodeOperationEvacuationConfigGen =
             generateNodeOperationEvacuationConfig,
         generateNodeOperationMultisigConfig: Gen[NodeOperationMultisigConfig] =
             generateNodeOperationMultisigConfig,
         generateScriptReferenceUtxos: ScriptReferenceUtxosGen = generateScriptReferenceUtxos
-    ): Gen[MultiNodeConfig] =
+    ): ReaderT[Gen, TestPeers, MultiNodeConfig] =
         for {
-            headConfig <- generateHeadConfig(testPeers)(
-              generateBlockCreationEndTime = generateBlockCreationEndTime,
-              generateHeadParameters = generateHeadParameters,
-              generateInitializationParameters = generateInitializationParameters,
-            )
+            testPeers <- ReaderT.ask
+            headConfig <- generateHeadConfig
 
             nodePrivateConfigs <-
-                Gen.sequence[List[
-                  (HeadPeerNumber, NodePrivateConfig)
-                ], (HeadPeerNumber, NodePrivateConfig)](
-                  testPeers.headPeerIds.toList.map(peerId =>
-                      for {
-                          nomc <- generateNodeOperationMultisigConfig
-                          ohpp = OwnHeadPeerPrivate(
-                            testPeers.walletFor(peerId._1),
-                            headConfig.headPeers
-                          ).get
-                          noec <- generateNodeOperationEvacuationConfig(ohpp.ownHeadWallet)
-                          sru <- generateScriptReferenceUtxos(headConfig)
-                      } yield peerId._1 -> NodePrivateConfig(
-                        ownHeadPeerPrivate = ohpp,
-                        // Re-using the same wallet for now, don't know if this will work
-                        nodeOperationEvacuationConfig = noec,
-                        nodeOperationMultisigConfig = nomc,
-                        scriptReferenceUtxos = sru
-                      )
+                liftF(
+                  Gen.sequence[List[
+                    (HeadPeerNumber, NodePrivateConfig)
+                  ], (HeadPeerNumber, NodePrivateConfig)](
+                    testPeers.headPeerIds.toList.map(peerId =>
+                        for {
+                            nomc <- generateNodeOperationMultisigConfig
+                            ohpp = OwnHeadPeerPrivate(
+                              testPeers.walletFor(peerId._1),
+                              headConfig.headPeers
+                            ).get
+                            noec <- generateNodeOperationEvacuationConfig(ohpp.ownHeadWallet)
+                            sru <- generateScriptReferenceUtxos(headConfig)
+                        } yield peerId._1 -> NodePrivateConfig(
+                          ownHeadPeerPrivate = ohpp,
+                          // Re-using the same wallet for now, don't know if this will work
+                          nodeOperationEvacuationConfig = noec,
+                          nodeOperationMultisigConfig = nomc,
+                          scriptReferenceUtxos = sru
+                        )
+                    )
                   )
                 )
         } yield new MultiNodeConfig(

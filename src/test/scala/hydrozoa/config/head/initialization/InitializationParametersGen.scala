@@ -2,7 +2,8 @@ package hydrozoa.config.head.initialization
 
 import cats.*
 import cats.data.*
-import cats.syntax.semigroup.*
+import cats.data.Kleisli.{ask, liftF}
+import cats.syntax.all.*
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.multisig.fallback.{FallbackContingency, FallbackContingencyGen, generateFallbackContingency}
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
@@ -21,10 +22,8 @@ import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap}
 import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.given
-
 import java.time.Instant
 import org.scalacheck.{Gen, Prop, Properties}
-
 import scala.collection.immutable.{SortedMap, TreeMap}
 import scala.concurrent.duration.DurationInt
 import scalus.cardano.address.Address
@@ -35,6 +34,7 @@ import spire.math.{Rational, SafeLong}
 import test.Generators.Hydrozoa.*
 import test.Generators.Other.genValueDistributionWithMinAdaUtxo
 import test.Generators.loggerGenerators
+import test.given
 import test.{Generators, TestPeers, TestPeersSpec}
 
 // TODO: George: what do you think of expanding our shortening citizenship?
@@ -43,40 +43,47 @@ import test.{Generators, TestPeers, TestPeersSpec}
 //   - parameters -> params (and the same for types)
 
 object BlockCreationEndTimeGen {
-    type BlockCreationEndTimeGen =  Gen[CardanoNetwork.Section ?=> BlockCreationEndTime]
+    type BlockCreationEndTimeGen = ReaderT[Gen, CardanoNetwork.Section, BlockCreationEndTime]
 
     /** Generate [[BlockCreationEndTime]] between 0 and 10 years from the zero slot time. Good for
       * all tests but Yaci-based ones.
       */
     def generateBlockCreationEndTime: BlockCreationEndTimeGen =
-        Gen
-            .choose(0L, 10 * 365.days.toSeconds)
-            .map(offsetSeconds => (cardanoNetwork : CardanoNetwork.Section) ?=>
-                BlockCreationEndTime(
-                  QuantizedInstant(
-                    slotConfig = cardanoNetwork.slotConfig,
-                    instant = Instant.ofEpochMilli(cardanoNetwork.slotConfig.zeroTime + offsetSeconds * 1_000)
-                  )
+        ReaderT(cardanoNetwork =>
+            Gen
+                .choose(0L, 10 * 365.days.toSeconds)
+                .map(offsetSeconds =>
+                    BlockCreationEndTime(
+                      QuantizedInstant(
+                        slotConfig = cardanoNetwork.slotConfig,
+                        instant = Instant.ofEpochMilli(
+                          cardanoNetwork.slotConfig.zeroTime + offsetSeconds * 1_000
+                        )
+                      )
+                    )
                 )
-            )
+        )
 
     /** This "generator" checks that [[slotConfig]] is usable right now and returns the current time
       * as the block creation end time under given slot configuration. This is supposed to be used
       * with Yaci, when we cannot set the time on L1.
       */
-    final def currentTimeBlockCreationEndTime : BlockCreationEndTimeGen =
+    final def currentTimeBlockCreationEndTime: BlockCreationEndTimeGen =
         val now = Instant.now()
-        Gen.const({
-            (cardanoNetwork : CardanoNetwork.Section) ?=>
-                require(cardanoNetwork.slotConfig.zeroSlot <= now.toEpochMilli, "zero slot time cannot be in the future")
+        ReaderT(cardanoNetwork =>
+            Gen.const {
+                require(
+                  cardanoNetwork.slotConfig.zeroSlot <= now.toEpochMilli,
+                  "zero slot time cannot be in the future"
+                )
 
                 BlockCreationEndTime(
-                    QuantizedInstant(
-                        slotConfig = cardanoNetwork.slotConfig,
-                        instant = now
-                    )
+                  QuantizedInstant(
+                    slotConfig = cardanoNetwork.slotConfig,
+                    instant = now
+                  )
                 )
-        }
+            }
         )
 }
 
@@ -85,13 +92,11 @@ object InitializationParametersGenTopDown {
     import BlockCreationEndTimeGen.*
 
     type GenInitializationParameters =
-        (testPeers: TestPeers) => (
+        (
             generateFallbackContingency: FallbackContingencyGen,
             generateGenesisUtxosL1: GenesisUtxosGen,
             equityRange: (Coin, Coin)
-        ) => Gen[
-          InitializationParameters
-        ]
+        ) => ReaderT[Gen, TestPeers, InitializationParameters]
 
     type GenInitializationParameters2 =
         (
@@ -103,7 +108,7 @@ object InitializationParametersGenTopDown {
           InitializationParameters
         ]
 
-    type GenesisUtxosGen = CardanoNetwork => Gen[Map[HeadPeerNumber, Utxos]]
+    type GenesisUtxosGen = ReaderT[Gen, CardanoNetwork.Section, Map[HeadPeerNumber, Utxos]]
 
     case class GenWithDeps(
         generator: GenInitializationParameters = generateInitializationParameters,
@@ -123,49 +128,54 @@ object InitializationParametersGenTopDown {
       *
       * Support multi assets.
       */
-    def generateInitializationParameters(testPeers: TestPeers)(
+    def generateInitializationParameters(
         generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
         generateGenesisUtxosL1: GenesisUtxosGen,
         equityRange: (Coin, Coin) = Coin(5_000_000) -> Coin(500_000_000)
-    ): Gen[InitializationParameters] =
+    ): ReaderT[Gen, TestPeers, InitializationParameters] =
         for {
-            cardanoNetwork <- Gen.const(testPeers.network)
+            testPeers <- ask
+            cardanoNetwork = testPeers.cardanoNetwork
             fallbackContingency <- generateFallbackContingency
-            genesisUtxos <- generateGenesisUtxosL1(cardanoNetwork)
+            genesisUtxos <- generateGenesisUtxosL1
 
             // We are calculating equity upfront to avoid using .suchThat
-            totalEquity <- Gen.choose(equityRange._1, equityRange._2)
+            totalEquity <- liftF(Gen.choose(equityRange._1, equityRange._2))
             peersEquity: SortedMap[HeadPeerNumber, Coin] <-
-                Gen.listOfN(
-                  testPeers.nHeadPeers - 1,
-                  Gen.frequency(3 -> Gen.const(0), 7 -> Gen.choose(1, 10))
-                ).map(tail => NonEmptyList.apply(1, tail))
-                    .map(ws => unsafeNormalizeWeights[Int](ws, Rational.apply))
-                    .map(_.distribute(SafeLong.apply(totalEquity.value)))
-                    .map(_.zipWithIndex)
-                    .map(
-                      _.map((coinSL, ix) => HeadPeerNumber(ix) -> Coin(coinSL.getLong.get)).toList
-                          .to(SortedMap)
-                    )
+                liftF(
+                  Gen.listOfN(
+                    testPeers.nHeadPeers - 1,
+                    Gen.frequency(3 -> Gen.const(0), 7 -> Gen.choose(1, 10))
+                  ).map(tail => NonEmptyList.apply(1, tail))
+                      .map(ws => unsafeNormalizeWeights[Int](ws, Rational.apply))
+                      .map(_.distribute(SafeLong.apply(totalEquity.value)))
+                      .map(_.zipWithIndex)
+                      .map(
+                        _.map((coinSL, ix) => HeadPeerNumber(ix) -> Coin(coinSL.getLong.get)).toList
+                            .to(SortedMap)
+                      )
+                )
 
             // Peers' contributions
-            contributions <- Gen.sequence[List[Contribution], Contribution](
-              testPeers.headPeerNums
-                  .map(hpn =>
-                      generatePeerContribution(
-                        headPeerNumber = hpn,
-                        peerUtxos = genesisUtxos(hpn),
-                        fallbackContingency = fallbackContingency(using cardanoNetwork),
-                        peerEquity = peersEquity(hpn),
-                        cardanoNetwork = cardanoNetwork
-                      )
-                  )
-                  .toList
+            contributions <- liftF(
+              Gen.sequence[List[Contribution], Contribution](
+                testPeers.headPeerNums
+                    .map(hpn =>
+                        generatePeerContribution(
+                          headPeerNumber = hpn,
+                          peerUtxos = genesisUtxos(hpn),
+                          fallbackContingency = fallbackContingency,
+                          peerEquity = peersEquity(hpn),
+                          cardanoNetwork = cardanoNetwork
+                        )
+                    )
+                    .toList
+              )
             )
 
             // Combining together, .get is safe since it's derived from non-empty [[testPeers]]
             total = Semigroup.combineAllOption(contributions).get
-            seedUtxo <- Gen.oneOf(total.fundingUtxos)
+            seedUtxo <- liftF(Gen.oneOf(total.fundingUtxos))
             genesisId = L2Genesis.mkGenesisId(seedUtxo.input)
 
             initialEvacuationMap =
@@ -388,7 +398,6 @@ end CappedValueGen
 // ===================================
 
 object InitializationParametersGenBottomUp {
-    import BlockCreationEndTimeGen.*
 
     /**   - An L2 utxo set that contains only pub key, ada-only utxos, spendable by some test peer
       *   - A seed utxo from a known peer with enough ada to cover the l2 utxo set
@@ -404,54 +413,58 @@ object InitializationParametersGenBottomUp {
       */
 
     type GenInitializationParameters =
-        TestPeers => (FallbackContingencyGen) => Gen[
-          InitializationParameters
-        ]
+        FallbackContingencyGen => ReaderT[Gen, TestPeers, InitializationParameters]
 
-    def generateInitializationParameters(testPeers: TestPeers)(
-        generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency
-    ): Gen[InitializationParameters] =
+    def generateInitializationParameters(
+        fallbackContingencyGen: FallbackContingencyGen = generateFallbackContingency
+    ): ReaderT[Gen, TestPeers, InitializationParameters] =
         for {
-            cardanoNetwork <- Gen.const(testPeers.network)
+            testPeers <- ask
+            cardanoNetwork = testPeers.cardanoNetwork
 
-            fallbackContingency <- generateFallbackContingency
+            fallbackContingency <- fallbackContingencyGen
 
-            nUtxos <- Gen.choose(1, 20)
+            nUtxos <- liftF(Gen.choose(1, 20))
             // Pubkey utxos (at least one) at some peer address(es), with at least 5 ada
             // We generate these up front so that we know they have the same multiassets
             utxos: Utxos <-
-                Generators.Other
-                    .genSequencedValueDistribution(
-                      nValues = nUtxos,
-                      minCoin = Coin.ada(5),
-                      mapping = v =>
-                          for {
-                              peer <- Gen.oneOf(testPeers.headPeerNums.toList)
-                              utxo <- genPubKeyUtxo(
-                                address = testPeers.addressFor(peer),
-                                genValue = Gen.const(v)
-                              )(using cardanoNetwork)
-                          } yield utxo
-                    )
-                    .map(nel => Map.from(nel.toList.map(_.toTuple)))
+                liftF(
+                  Generators.Other
+                      .genSequencedValueDistribution(
+                        nValues = nUtxos,
+                        minCoin = Coin.ada(5),
+                        mapping = v =>
+                            for {
+                                peer <- Gen.oneOf(testPeers.headPeerNums.toList)
+                                utxo <- genPubKeyUtxo(
+                                  address = testPeers.addressFor(peer),
+                                  genValue = Gen.const(v)
+                                )(using cardanoNetwork)
+                            } yield utxo
+                      )
+                      .map(nel => Map.from(nel.toList.map(_.toTuple)))
+                )
 
             // Results in at least one change utxo and zero or more l2 utxos
-            (changeUtxos, l2Utxos) <- Gen
-                .choose(1, utxos.size)
-                .map(index => utxos.splitAt(index))
+            changeAndL2Utxos <- liftF(
+              Gen
+                  .choose(1, utxos.size)
+                  .map(index => utxos.splitAt(index))
+            )
 
+            (changeUtxos, l2Utxos) = changeAndL2Utxos
             l2Value = l2Utxos.values.map(_.value).fold(Value.zero)(_ + _)
 
-            equityContributions <- generateEquityContributions(testPeers.nHeadPeers)
+            equityContributions <- liftF(generateEquityContributions(testPeers.nHeadPeers))
             equity = equityContributions.toSortedMap.values.map(Value(_)) |> Value.combine
 
             changeAmount = changeUtxos.map(_._2.value) |> Value.combine
 
             grossFundingAmount = equity
                 + l2Value
-                + Value(fallbackContingency(using cardanoNetwork).collectiveContingency.total)
+                + Value(fallbackContingency.collectiveContingency.total)
                 + Value.lovelace(
-                  fallbackContingency(using cardanoNetwork).individualContingency.total.value * testPeers.nHeadPeers
+                  fallbackContingency.individualContingency.total.value * testPeers.nHeadPeers
                 )
                 + changeAmount
 
@@ -466,14 +479,14 @@ object InitializationParametersGenBottomUp {
                 } yield utxo
 
             fundingUtxosList <-
-                for {
+                liftF(for {
                     nFundingUtxos <- Gen.choose(1, 20)
                     utxos <- Gen.listOfN(nFundingUtxos, genUtxoFromKnownPeer)
                     distributed <- genValueDistributionWithMinAdaUtxo(
                       value = grossFundingAmount,
                       utxoList = NonEmptyList.fromListUnsafe(utxos),
                     )(using cardanoNetwork)
-                } yield distributed
+                } yield distributed)
 
             seedUtxo = fundingUtxosList.head
             additionalFundingUtxos: Utxos = Map.from(
@@ -514,10 +527,14 @@ object InitializationParametersTest extends Properties("Initialization Parameter
           .generate()
           .flatMap(TestPeers.generate)
           .flatMap(testPeers =>
-              InitializationParametersGenTopDown.generateInitializationParameters(testPeers)(
-                generateGenesisUtxosL1 = cn =>
-                    yaciTestSauceGenesis(cn.network)(testPeers).map((k, v) => k.headPeerNumber -> v)
-              )
+              InitializationParametersGenTopDown
+                  .generateInitializationParameters(
+                    generateGenesisUtxosL1 = ReaderT((cn: CardanoNetwork.Section) =>
+                        yaciTestSauceGenesis(cn.network)(testPeers)
+                            .map((k, v) => k.headPeerNumber -> v)
+                    )
+                  )
+                  .run(testPeers)
           )
     )(_ => true)
 
@@ -525,7 +542,7 @@ object InitializationParametersTest extends Properties("Initialization Parameter
       TestPeersSpec
           .generate()
           .flatMap(TestPeers.generate)
-          .flatMap(InitializationParametersGenBottomUp.generateInitializationParameters(_)())
+          .flatMap(InitializationParametersGenBottomUp.generateInitializationParameters().run(_))
     )(_ => true)
 
 }
