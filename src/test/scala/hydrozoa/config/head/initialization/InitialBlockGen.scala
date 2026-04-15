@@ -2,27 +2,27 @@ package hydrozoa.config.head.initialization
 
 import cats.data.{Kleisli, ReaderT}
 import hydrozoa.config.head.HeadConfig
-import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.{BlockCreationEndTimeGen, currentTimeBlockCreationEndTime}
+import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.currentTimeBlockCreationEndTime
 import hydrozoa.config.head.multisig.fallback.generateFallbackContingency
 import hydrozoa.config.head.multisig.timing.TxTiming
-import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationStartTime
-import hydrozoa.config.head.parameters.{GenHeadParams, generateHeadParameters}
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
+import hydrozoa.config.head.parameters.{HeadParameters, generateHeadParameters}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import monocle.Focus.focus
 import org.scalacheck.Test.Parameters
 import org.scalacheck.{Gen, Prop, Properties}
 import scala.concurrent.duration.DurationInt
-import test.given
-import test.{TestPeers, TestPeersSpec}
+import test.{GenWithTestPeers, TestPeers, TestPeersSpec, given}
 
 def generateInitialBlock(
-    generateHeadParameters: GenHeadParams = generateHeadParameters(),
-    generateBlockCreationEndTime: BlockCreationEndTimeGen = currentTimeBlockCreationEndTime,
+    generateHeadParameters: GenWithTestPeers[HeadParameters] = generateHeadParameters(),
+    generateBlockCreationEndTime: GenWithTestPeers[BlockCreationEndTime] =
+        currentTimeBlockCreationEndTime,
     generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
         InitializationParametersGenTopDown.GenWithDeps | InitializationParameters =
         InitializationParametersGenBottomUp.generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters,
-): ReaderT[Gen, TestPeers, InitialBlock] = {
+): GenWithTestPeers[InitialBlock] = {
     for {
         testPeers <- Kleisli.ask
         cardanoNetwork = testPeers.cardanoNetwork

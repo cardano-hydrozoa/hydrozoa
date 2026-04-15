@@ -1,6 +1,6 @@
 package test
 
-import cats.data.NonEmptyList
+import cats.data.{NonEmptyList, ReaderT}
 import com.bloxbean.cardano.client.account.Account
 import com.bloxbean.cardano.client.common.model.Network as BloxbeanNetwork
 import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath.createExternalAddressDerivationPathForAccount
@@ -23,6 +23,8 @@ import scalus.cardano.ledger.ArbitraryInstances.*
 import scalus.cardano.ledger.{CardanoInfo, ProtocolParams, SlotConfig, Transaction, VKeyWitness}
 import scalus.crypto.ed25519.VerificationKey
 import test.Generators.loggerGenerators
+
+type GenWithTestPeers[A] = ReaderT[Gen, TestPeers, A]
 
 /** TestPeers object provides everything test suites may need to operate a peer in a head:
   *   - head peer numbers

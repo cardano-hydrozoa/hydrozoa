@@ -1,28 +1,29 @@
 package hydrozoa.config.head
 
-import cats.data.{Kleisli, ReaderT}
-import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.{BlockCreationEndTimeGen, currentTimeBlockCreationEndTime}
+import cats.data.Kleisli
+import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.currentTimeBlockCreationEndTime
 import hydrozoa.config.head.initialization.{InitializationParametersGenBottomUp, InitializationParametersGenTopDown, generateInitialBlock}
 import hydrozoa.config.head.multisig.fallback.generateFallbackContingency
-import hydrozoa.config.head.parameters.{GenHeadParams, generateHeadParameters}
-import org.scalacheck.{Gen, Prop, Properties}
-import test.given
-import test.{TestPeers, TestPeersSpec}
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
+import hydrozoa.config.head.parameters.{HeadParameters, generateHeadParameters}
+import org.scalacheck.{Prop, Properties}
+import test.{GenWithTestPeers, TestPeers, TestPeersSpec, given}
 
 type HeadConfigGen = (
-    generateBlockCreationEndTime: BlockCreationEndTimeGen,
-    generateHeadParameters: GenHeadParams,
+    generateBlockCreationEndTime: GenWithTestPeers[BlockCreationEndTime],
+    generateHeadParameters: GenWithTestPeers[HeadParameters],
     generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
         InitializationParametersGenTopDown.GenWithDeps
-) => ReaderT[Gen, TestPeers, HeadConfig]
+) => GenWithTestPeers[HeadConfig]
 
 def generateHeadConfig(
-    generateBlockCreationEndTime: BlockCreationEndTimeGen = currentTimeBlockCreationEndTime,
-    generateHeadParameters: GenHeadParams = generateHeadParameters(),
+    generateBlockCreationEndTime: GenWithTestPeers[BlockCreationEndTime] =
+        currentTimeBlockCreationEndTime,
+    generateHeadParameters: GenWithTestPeers[HeadParameters] = generateHeadParameters(),
     generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
         InitializationParametersGenTopDown.GenWithDeps =
         InitializationParametersGenBottomUp.generateInitializationParameters
-): ReaderT[Gen, TestPeers, HeadConfig] =
+): GenWithTestPeers[HeadConfig] =
     for {
         preinit <- generateHeadConfigPreInit(
           generateHeadParams = generateHeadParameters,
@@ -41,11 +42,11 @@ def generateHeadConfig(
     ).get
 
 def generateHeadConfigPreInit(
-    generateHeadParams: GenHeadParams = generateHeadParameters(),
+    generateHeadParams: GenWithTestPeers[HeadParameters] = generateHeadParameters(),
     generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
         InitializationParametersGenTopDown.GenWithDeps =
         InitializationParametersGenBottomUp.generateInitializationParameters,
-): ReaderT[Gen, TestPeers, HeadConfig.Preinit] =
+): GenWithTestPeers[HeadConfig.Preinit] =
     for {
         testPeers <- Kleisli.ask
         cardanoNetwork = testPeers.cardanoNetwork

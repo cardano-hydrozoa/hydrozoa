@@ -2,25 +2,14 @@ package hydrozoa.config.head.multisig.timing
 
 import cats.*
 import cats.data.*
-import hydrozoa.config.head.network
-import hydrozoa.config.head.network.CardanoNetwork
 import org.scalacheck.Gen
+import test.GenWithTestPeers
 
-type TxTimingGen = ReaderT[Gen, CardanoNetwork.Section, TxTiming]
+def generateDefaultTxTiming: GenWithTestPeers[TxTiming] =
+    ReaderT(network => Gen.const(TxTiming.default(network.slotConfig)))
 
-def generateDefaultTxTiming: TxTimingGen = ReaderT(network => Gen.const(mkDefaultTxTiming(network)))
+def generateYaciTxTiming: GenWithTestPeers[TxTiming] =
+    ReaderT(network => Gen.const(TxTiming.yaci(network.slotConfig)))
 
-def generateYaciTxTiming: TxTimingGen =
-    ReaderT(network => Gen.const(mkYaciTxTiming(network)))
-
-def generateTestnetTxTiming: TxTimingGen =
-    ReaderT(network => mkTestnetTxTiming(network))
-
-def mkDefaultTxTiming: Reader[CardanoNetwork.Section, TxTiming] =
-    Reader(cardanoNetwork => TxTiming.default(cardanoNetwork.slotConfig))
-
-def mkYaciTxTiming: Reader[CardanoNetwork.Section, TxTiming] =
-    Reader(cardanoNetwork => TxTiming.yaci(cardanoNetwork.slotConfig))
-
-def mkTestnetTxTiming: Reader[CardanoNetwork.Section, TxTiming] =
-    Reader(cardanoNetwork => TxTiming.testnet(cardanoNetwork.slotConfig))
+def generateTestnetTxTiming: GenWithTestPeers[TxTiming] =
+    ReaderT(network => TxTiming.testnet(network.slotConfig))

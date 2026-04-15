@@ -5,7 +5,7 @@ import cats.data.*
 import cats.data.Kleisli.{ask, liftF}
 import cats.syntax.all.*
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
-import hydrozoa.config.head.multisig.fallback.{FallbackContingency, FallbackContingencyGen, generateFallbackContingency}
+import hydrozoa.config.head.multisig.fallback.{FallbackContingency, generateFallbackContingency}
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
@@ -34,8 +34,7 @@ import spire.math.{Rational, SafeLong}
 import test.Generators.Hydrozoa.*
 import test.Generators.Other.genValueDistributionWithMinAdaUtxo
 import test.Generators.loggerGenerators
-import test.given
-import test.{Generators, TestPeers, TestPeersSpec}
+import test.{GenWithTestPeers, Generators, TestPeers, TestPeersSpec, given}
 
 // TODO: George: what do you think of expanding our shortening citizenship?
 //   - generate -> gen
@@ -43,12 +42,11 @@ import test.{Generators, TestPeers, TestPeersSpec}
 //   - parameters -> params (and the same for types)
 
 object BlockCreationEndTimeGen {
-    type BlockCreationEndTimeGen = ReaderT[Gen, CardanoNetwork.Section, BlockCreationEndTime]
 
     /** Generate [[BlockCreationEndTime]] between 0 and 10 years from the zero slot time. Good for
       * all tests but Yaci-based ones.
       */
-    def generateBlockCreationEndTime: BlockCreationEndTimeGen =
+    def generateBlockCreationEndTime: GenWithTestPeers[BlockCreationEndTime] =
         ReaderT(cardanoNetwork =>
             Gen
                 .choose(0L, 10 * 365.days.toSeconds)
@@ -68,7 +66,7 @@ object BlockCreationEndTimeGen {
       * as the block creation end time under given slot configuration. This is supposed to be used
       * with Yaci, when we cannot set the time on L1.
       */
-    final def currentTimeBlockCreationEndTime: BlockCreationEndTimeGen =
+    final def currentTimeBlockCreationEndTime: GenWithTestPeers[BlockCreationEndTime] =
         val now = Instant.now()
         ReaderT(cardanoNetwork =>
             Gen.const {
@@ -89,30 +87,27 @@ object BlockCreationEndTimeGen {
 
 object InitializationParametersGenTopDown {
     import CappedValueGen.*
-    import BlockCreationEndTimeGen.*
 
     type GenInitializationParameters =
         (
-            generateFallbackContingency: FallbackContingencyGen,
-            generateGenesisUtxosL1: GenesisUtxosGen,
+            generateFallbackContingency: GenWithTestPeers[FallbackContingency],
+            generateGenesisUtxosL1: GenWithTestPeers[Map[HeadPeerNumber, Utxos]],
             equityRange: (Coin, Coin)
-        ) => ReaderT[Gen, TestPeers, InitializationParameters]
+        ) => GenWithTestPeers[InitializationParameters]
 
     type GenInitializationParameters2 =
         (
-            generateHeadStartTime: BlockCreationEndTimeGen,
-            generateFallbackContingency: FallbackContingencyGen,
-            generateGenesisUtxosL1: GenesisUtxosGen,
+            generateHeadStartTime: GenWithTestPeers[BlockCreationEndTime],
+            generateFallbackContingency: GenWithTestPeers[FallbackContingency],
+            generateGenesisUtxosL1: GenWithTestPeers[Map[HeadPeerNumber, Utxos]],
             equityRange: (Coin, Coin)
         ) => Gen[
           InitializationParameters
         ]
 
-    type GenesisUtxosGen = ReaderT[Gen, CardanoNetwork.Section, Map[HeadPeerNumber, Utxos]]
-
     case class GenWithDeps(
         generator: GenInitializationParameters = generateInitializationParameters,
-        generateGenesisUtxosL1: GenesisUtxosGen,
+        generateGenesisUtxosL1: GenWithTestPeers[Map[HeadPeerNumber, Utxos]],
         equityRange: (Coin, Coin) = Coin(5_000_000) -> Coin(500_000_000)
     )
 
@@ -129,10 +124,11 @@ object InitializationParametersGenTopDown {
       * Support multi assets.
       */
     def generateInitializationParameters(
-        generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
-        generateGenesisUtxosL1: GenesisUtxosGen,
+        generateFallbackContingency: GenWithTestPeers[FallbackContingency] =
+            generateFallbackContingency,
+        generateGenesisUtxosL1: GenWithTestPeers[Map[HeadPeerNumber, Utxos]],
         equityRange: (Coin, Coin) = Coin(5_000_000) -> Coin(500_000_000)
-    ): ReaderT[Gen, TestPeers, InitializationParameters] =
+    ): GenWithTestPeers[InitializationParameters] =
         for {
             testPeers <- ask
             cardanoNetwork = testPeers.cardanoNetwork
@@ -413,11 +409,11 @@ object InitializationParametersGenBottomUp {
       */
 
     type GenInitializationParameters =
-        FallbackContingencyGen => ReaderT[Gen, TestPeers, InitializationParameters]
+        GenWithTestPeers[FallbackContingency] => GenWithTestPeers[InitializationParameters]
 
     def generateInitializationParameters(
-        fallbackContingencyGen: FallbackContingencyGen = generateFallbackContingency
-    ): ReaderT[Gen, TestPeers, InitializationParameters] =
+        fallbackContingencyGen: GenWithTestPeers[FallbackContingency] = generateFallbackContingency
+    ): GenWithTestPeers[InitializationParameters] =
         for {
             testPeers <- ask
             cardanoNetwork = testPeers.cardanoNetwork

@@ -1,22 +1,21 @@
 package hydrozoa.config.head.parameters
 
 import cats.data.*
-import hydrozoa.config.head.multisig.fallback.{FallbackContingencyGen, generateFallbackContingency}
+import hydrozoa.config.head.multisig.fallback.{FallbackContingency, generateFallbackContingency}
 import hydrozoa.config.head.multisig.settlement.{SettlementConfig, generateSettlementConfig}
-import hydrozoa.config.head.multisig.timing.{TxTimingGen, generateDefaultTxTiming}
-import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.config.head.rulebased.{DisputeResolutionConfigGen, generateDisputeResolutionConfig}
+import hydrozoa.config.head.multisig.timing.{TxTiming, generateDefaultTxTiming}
+import hydrozoa.config.head.rulebased.dispute.{DisputeResolutionConfig, generateDisputeResolutionConfig}
 import org.scalacheck.Gen
-import test.given
-
-type GenHeadParams = ReaderT[Gen, CardanoNetwork.Section, HeadParameters]
+import test.{GenWithTestPeers, given}
 
 def generateHeadParameters(
-    generateTxTiming: TxTimingGen = generateDefaultTxTiming,
-    generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
-    generateDisputeResolutionConfig: DisputeResolutionConfigGen = generateDisputeResolutionConfig,
+    generateTxTiming: GenWithTestPeers[TxTiming] = generateDefaultTxTiming,
+    generateFallbackContingency: GenWithTestPeers[FallbackContingency] =
+        generateFallbackContingency,
+    generateDisputeResolutionConfig: GenWithTestPeers[DisputeResolutionConfig] =
+        generateDisputeResolutionConfig,
     generateSettlementConfig: Gen[SettlementConfig] = generateSettlementConfig
-): GenHeadParams = {
+): GenWithTestPeers[HeadParameters] = {
     for {
         txTiming <- generateTxTiming
         fallbackContingency <- generateFallbackContingency

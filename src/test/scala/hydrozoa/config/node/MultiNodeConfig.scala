@@ -17,8 +17,7 @@ import org.scalacheck.util.Pretty
 import org.scalacheck.{Gen, Prop, Properties, PropertyM}
 import scalus.cardano.ledger.{AddrKeyHash, Transaction, VKeyWitness}
 import scalus.uplc.builtin.Builtins.blake2b_224
-import test.given
-import test.{TestM, TestMFixedEnv, TestPeers, TestPeersSpec}
+import test.{GenWithTestPeers, TestM, TestMFixedEnv, TestPeers, TestPeersSpec, given}
 
 /** Multi-node config is a tool for test suites that allows multisigning effects as well as giving
   * the access to the head config, which is common for all peers.
@@ -93,7 +92,7 @@ object MultiNodeConfig {
     def generateDefault: Gen[MultiNodeConfig] = generate(TestPeersSpec.default)()
 
     def generate(spec: TestPeersSpec)(
-        generateHeadConfig: ReaderT[Gen, TestPeers, HeadConfig] =
+        generateHeadConfig: GenWithTestPeers[HeadConfig] =
             hydrozoa.config.head.generateHeadConfig(),
         generateNodeOperationEvacuationConfig: NodeOperationEvacuationConfigGen =
             generateNodeOperationEvacuationConfig,
@@ -111,14 +110,14 @@ object MultiNodeConfig {
     } yield ret
 
     def generateForTestPeers(
-        generateHeadConfig: ReaderT[Gen, TestPeers, HeadConfig] =
+        generateHeadConfig: GenWithTestPeers[HeadConfig] =
             hydrozoa.config.head.generateHeadConfig(),
         generateNodeOperationEvacuationConfig: NodeOperationEvacuationConfigGen =
             generateNodeOperationEvacuationConfig,
         generateNodeOperationMultisigConfig: Gen[NodeOperationMultisigConfig] =
             generateNodeOperationMultisigConfig,
         generateScriptReferenceUtxos: ScriptReferenceUtxosGen = generateScriptReferenceUtxos
-    ): ReaderT[Gen, TestPeers, MultiNodeConfig] =
+    ): GenWithTestPeers[MultiNodeConfig] =
         for {
             testPeers <- ReaderT.ask
             headConfig <- generateHeadConfig
