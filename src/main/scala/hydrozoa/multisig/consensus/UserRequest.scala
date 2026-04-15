@@ -6,7 +6,7 @@ import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.ledger.event.RequestId
-import hydrozoa.multisig.server.JsonCodecs.{given_Encoder_UserRequestBody, given_Encoder_UserRequestHeader}
+import hydrozoa.multisig.server.JsonCodecs.given_Encoder_UserRequestHeader
 import io.circe.*
 import io.circe.syntax.*
 import scalus.cardano.ledger.{Hash, Hash32}
@@ -118,11 +118,17 @@ enum UserRequestBody {
         l2Payload: ByteString
     )
 
-    def hash: Hash32 =
-        this.asJson(given_Encoder_UserRequestBody).toString.getBytes("UTF-8")
-            |> ByteString.fromArray
-            |> blake2b_256
-            |> Hash.apply
+    def hash: Hash32 = {
+        val preimage = this match {
+            case UserRequestBody.DepositRequestBody(l1Payload, l2Payload) =>
+                l1Payload.concat(l2Payload)
+            case UserRequestBody.TransactionRequestBody(l2Payload) => l2Payload
+        }
+
+        println(s"preimage: $preimage")
+
+        preimage |> blake2b_256 |> Hash.apply
+    }
 }
 
 enum UserRequestWithId {

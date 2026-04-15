@@ -25,7 +25,6 @@ def generateScriptReferenceUtxos(network: CardanoNetwork.Section): Gen[ScriptRef
             )
         )
 
-
     mkUtxo = (id: TransactionInput, script: Script) =>
         Utxo(id, Babbage(address, Value.ada(10), None, Some(ScriptRef(script))))
 

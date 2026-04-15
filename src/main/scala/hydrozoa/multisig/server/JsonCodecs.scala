@@ -91,7 +91,7 @@ object JsonCodecs {
     //  ...
     // }
 
-    given Decoder[UserRequest] with {
+    object UserRequestDecoder extends Decoder[UserRequest] {
 
         object Error {
             trait ValidationError extends Throwable {
@@ -114,6 +114,10 @@ object JsonCodecs {
             case object VerificationKeyParsingFailure extends ValidationError {
                 override def toString: String = "Verification key parsing failure"
             }
+
+            case object WrongPayload extends ValidationError {
+                override def toString: String = "Signed payload should match the request header"
+            }
         }
 
         /** Validates COSE signature.
@@ -122,23 +126,27 @@ object JsonCodecs {
           * @param coseKeyCborHex
           * @param coseSignatureCborHex
           * @return
-          *   the verification key from the COSEKey if valid, an error otherwise
+          *   the verification key and signed payload from the COSEKey/COSESignature if valid, an
+          *   error otherwise
           */
-        private def validateCoseSignature(
+        def validateCoseSignature(
             coseKeyCborHex: String,
             coseSignatureCborHex: String
-        ): Either[Error.ValidationError, VerificationKey] = {
+        ): Either[Error.ValidationError, (VerificationKey, ByteString)] = {
             val bbDataSignature = DataSignature(coseSignatureCborHex, coseKeyCborHex)
             for {
+                // Verify the signature
                 _ <- Either.cond(
                   CIP30DataSigner.INSTANCE.verify(bbDataSignature),
                   (),
                   Error.SignatureMismatch
                 )
+                // Extract the public key from COSE key parameter -2 (x-coordinate for OKP/Ed25519 keys)
                 vKey <- Try(
-                  VerificationKey.unsafeFromArray(bbDataSignature.coseKey().keyId())
+                  VerificationKey.unsafeFromArray(bbDataSignature.coseKey().otherHeaderAsBytes(-2))
                 ).toEither.left.map(_ => Error.VerificationKeyParsingFailure)
-            } yield vKey
+                payload = ByteString.fromArray(bbDataSignature.coseSign1().payload())
+            } yield (vKey, payload)
         }
 
         def apply(c: io.circe.HCursor): Decoder.Result[UserRequest] =
@@ -159,11 +167,29 @@ object JsonCodecs {
                 // Validate the COSE signature
                 coseKeyCborHex <- c.downField("coseKey").as[String]
                 cosedSignatureCborHex <- c.downField("coseSignature").as[String]
-                vKey: VerificationKey <- validateCoseSignature(
+                ret <- validateCoseSignature(
                   coseKeyCborHex,
                   cosedSignatureCborHex
                 ).left
                     .map(e => DecodingFailure(e.getMessage, ops = List.empty))
+                (vKey, payload) = ret
+                // Check that payload is actually the serialized header from the request
+                payloadHeader <- io.circe.parser
+                    .decode[UserRequestHeader](
+                      new String(payload.bytes, java.nio.charset.StandardCharsets.UTF_8)
+                    )
+                    .left
+                    .map(e =>
+                        DecodingFailure(
+                          s"Failed to parse payload as UserRequestHeader: ${e.getMessage}",
+                          ops = List.empty
+                        )
+                    )
+                _ <- Either.cond(
+                  payloadHeader == header,
+                  (),
+                  DecodingFailure(Error.WrongPayload.getMessage, ops = List.empty)
+                )
                 // Construct the result
                 userRequest = body match {
                     case d: DepositRequestBody =>
@@ -176,6 +202,8 @@ object JsonCodecs {
 
             } yield userRequest
     }
+
+    given Decoder[UserRequest] = UserRequestDecoder
 
     // Specific body type encoders/decoders
     given Encoder[UserRequestBody.DepositRequestBody] =
