@@ -51,7 +51,7 @@ object UserRequest {
             header: UserRequestHeader,
             body: DepositRequestBody,
             userVk: VerificationKey
-        ): UserRequest = new UserRequest.DepositRequest(header, body, userVk)
+        ): DepositRequest = new UserRequest.DepositRequest(header, body, userVk)
     }
 
     object TransactionRequest {
@@ -59,7 +59,7 @@ object UserRequest {
             header: UserRequestHeader,
             body: TransactionRequestBody,
             userVk: VerificationKey
-        ): UserRequest = new UserRequest.TransactionRequest(header, body, userVk)
+        ): TransactionRequest = new UserRequest.TransactionRequest(header, body, userVk)
     }
 
     type Sync = SyncRequest.Envelope[IO, UserRequest, RequestId]
