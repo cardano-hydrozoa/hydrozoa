@@ -118,10 +118,14 @@ enum UserRequestBody {
         l2Payload: ByteString
     )
 
+    /** To keep the hash injective, we hash deposits twice, to avoid collapsing liek hash(abc + def) ==
+      * hash(ab + cdef)
+      */
     def hash: Hash32 = {
         val preimage = this match {
             case UserRequestBody.DepositRequestBody(l1Payload, l2Payload) =>
-                l1Payload.concat(l2Payload)
+                blake2b_256(l1Payload)
+                    .concat(blake2b_256(l2Payload))
             case UserRequestBody.TransactionRequestBody(l2Payload) => l2Payload
         }
 
