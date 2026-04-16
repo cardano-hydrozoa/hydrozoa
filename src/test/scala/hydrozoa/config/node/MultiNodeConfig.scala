@@ -41,7 +41,7 @@ case class MultiNodeConfig private (
                 ).get
         )
 
-    override def headConfigPreinit: HeadConfig.Preinit = headConfig.headConfigPreinit
+    override def headConfigBootstrap: HeadConfig.Bootstrap = headConfig.headConfigBootstrap
     override def initialBlock: MultiSigned.Initial = headConfig.initialBlock
 
     def multisignTx(tx: Transaction): Transaction =

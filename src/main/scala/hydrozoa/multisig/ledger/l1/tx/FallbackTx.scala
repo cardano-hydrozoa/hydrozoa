@@ -65,7 +65,7 @@ object FallbackTx {
 }
 
 private object FallbackTxOps {
-    type Config = HeadConfig.Preinit.Section & InitializationParameters.Section
+    type Config = HeadConfig.Bootstrap.Section & InitializationParameters.Section
 
     private val logger = org.slf4j.LoggerFactory.getLogger("FallbackTx")
 

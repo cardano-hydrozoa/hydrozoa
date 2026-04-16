@@ -12,19 +12,19 @@ import test.{GenWithTestPeers, TestPeers, TestPeersSpec, given}
 
 type HeadConfigGen = (
     generateBlockCreationEndTime: GenWithTestPeers[BlockCreationEndTime],
-    generateHeadConfigPreinit: GenWithTestPeers[HeadConfig.Preinit]
+    generateHeadConfigBootstrap: GenWithTestPeers[HeadConfig.Bootstrap]
 ) => GenWithTestPeers[HeadConfig]
 
 def generateHeadConfig(
-    genHeadConfigPreinit: GenWithTestPeers[HeadConfig.Preinit] = generateHeadConfigPreinit(),
-    generateInitialBlock: HeadConfig.Preinit => GenWithTestPeers[InitialBlock] = hcpi =>
-        generateInitialBlock(ReaderT.pure(hcpi))
+    genHeadConfigBootstrap: GenWithTestPeers[HeadConfig.Bootstrap] = generateHeadConfigBootstrap(),
+    generateInitialBlock: HeadConfig.Bootstrap => GenWithTestPeers[InitialBlock] =
+        bootstrapConfig => generateInitialBlock(ReaderT.pure(bootstrapConfig))
 ): GenWithTestPeers[HeadConfig] =
     for {
-        preinit <- genHeadConfigPreinit
-        initialBlock <- generateInitialBlock(preinit)
+        bootstrap <- genHeadConfigBootstrap
+        initialBlock <- generateInitialBlock(bootstrap)
     } yield HeadConfig(
-      headConfigPreinit = preinit,
+      headConfigBootstrap = bootstrap,
       initialBlock = initialBlock.initialBlock
     ) match {
         case Validated.Valid(x) => x
@@ -39,14 +39,14 @@ enum InitParamsType:
     case TopDown(initializationParametersGenTopDown: InitializationParametersGenTopDown.GenWithDeps)
     case Constant(params: InitializationParameters)
 
-def generateHeadConfigPreinit(
+def generateHeadConfigBootstrap(
     generateHeadParams: GenWithTestPeers[HeadParameters] = generateHeadParameters(),
     generateInitializationParameters: InitParamsType = BottomUp(
       InitializationParametersGenBottomUp.generateInitializationParameters
     ),
     generateScriptReferenceUtxos: GenWithTestPeers[ScriptReferenceUtxos] =
         generateScriptReferenceUtxos
-): GenWithTestPeers[HeadConfig.Preinit] =
+): GenWithTestPeers[HeadConfig.Bootstrap] =
     for {
         testPeers <- Kleisli.ask
         cardanoNetwork = testPeers.cardanoNetwork
@@ -71,7 +71,7 @@ def generateHeadConfigPreinit(
         scriptReferenceUtxos <- generateScriptReferenceUtxos
 
     } yield HeadConfig
-        .Preinit(
+        .Bootstrap(
           cardanoNetwork = cardanoNetwork,
           headParams = headParams,
           headPeers = testPeers.mkHeadPeers,
@@ -80,16 +80,16 @@ def generateHeadConfigPreinit(
         ) match {
         case Validated.Valid(x) => x
         case Validated.Invalid(errors) =>
-            throw RuntimeException(s"generating HeadConfig.Preinit failed: $errors")
+            throw RuntimeException(s"generating HeadConfig.Bootstrap failed: $errors")
     }
 
 object HeadConfigTest extends Properties("Head config") {
 
-    val _ = property("pre-init config generates") = Prop.forAll(
+    val _ = property("bootstrap config generates") = Prop.forAll(
       TestPeersSpec
           .generate()
           .flatMap(TestPeers.generate)
-          .flatMap(generateHeadConfigPreinit().run(_))
+          .flatMap(generateHeadConfigBootstrap().run(_))
     )(_ => true)
 
     val _ = property("full config generates") = Prop.forAll(

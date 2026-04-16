@@ -18,7 +18,7 @@ object InitializationTxSeq {
 }
 
 private object InitializationTxSeqOps {
-    type Config = HeadConfig.Preinit.Section
+    type Config = HeadConfig.Bootstrap.Section
 
     private val logger = org.slf4j.LoggerFactory.getLogger("InitializationTxSeq")
 

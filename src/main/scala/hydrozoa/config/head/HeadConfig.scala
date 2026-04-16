@@ -40,7 +40,7 @@ import scalus.crypto.ed25519.VerificationKey
 import scalus.uplc.builtin.platform
 
 final case class HeadConfig private (
-    override val headConfigPreinit: HeadConfig.Preinit,
+    override val headConfigBootstrap: HeadConfig.Bootstrap,
     override val initialBlock: Block.MultiSigned.Initial,
 ) extends HeadConfig.Section {
     override transparent inline def headConfig: HeadConfig = this
@@ -58,7 +58,7 @@ object HeadConfig {
             unresolved <- EitherT.fromEither[F] {
                 given onlyScripRefs: Decoder[ScriptReferenceUtxos.Unresolved] =
                     Decoder.instance(c =>
-                        c.downField("headConfigPreinit")
+                        c.downField("headConfigBootstrap")
                             .downField("scriptReferenceUtxos")
                             .as[ScriptReferenceUtxos.Unresolved](using given_Decoder_Unresolved)
                     )
@@ -66,7 +66,7 @@ object HeadConfig {
             }
             network <- EitherT.fromEither[F] {
                 given onlyNetwork: Decoder[CardanoNetwork] = Decoder.instance(c =>
-                    c.downField("headConfigPreinit")
+                    c.downField("headConfigBootstrap")
                         .downField("cardanoNetwork")
                         .as[CardanoNetwork](using cardanoNetworkDecoder)
                 )
@@ -96,15 +96,15 @@ object HeadConfig {
         Decoder.instance { c =>
             for {
                 network <- c
-                    .downField("headConfigPreinit")
+                    .downField("headConfigBootstrap")
                     .downField("cardanoNetwork")
                     .as[CardanoNetwork]
-                preinit <- {
+                bootstrap <- {
                     given CardanoNetwork = network
-                    c.downField("headConfigPreinit").as[HeadConfig.Preinit]
+                    c.downField("headConfigBootstrap").as[HeadConfig.Bootstrap]
                 }
                 hc <- {
-                    given HeadConfig.Preinit.Section = preinit
+                    given HeadConfig.Bootstrap.Section = bootstrap
 
                     for {
                         brief <- c
@@ -121,8 +121,9 @@ object HeadConfig {
                             .downField("effects")
                             .downField("fallbackTx")
                             .as[Transaction]
-                        hc <- HeadConfig(preinit, brief, initTx, fallbackTx).toEither.left.map(_ =>
-                            io.circe.DecodingFailure("Failed constructing head config", c.history)
+                        hc <- HeadConfig(bootstrap, brief, initTx, fallbackTx).toEither.left.map(
+                          _ =>
+                              io.circe.DecodingFailure("Failed constructing head config", c.history)
                         )
                     } yield hc
                 }
@@ -132,7 +133,7 @@ object HeadConfig {
     private val logger = Logging.logger("HeadConfig")
 
     def apply(
-        headConfigPreinit: HeadConfig.Preinit,
+        headConfigBootstrap: HeadConfig.Bootstrap,
         blockBrief: BlockBrief.Initial,
         initTx: Transaction,
         fallbackTx: Transaction
@@ -167,7 +168,7 @@ object HeadConfig {
 
         val validatedInitTxSeq = Validated.fromEither(
           InitializationTxSeq
-              .Build(headConfigPreinit)(blockBrief.endTime)
+              .Build(headConfigBootstrap)(blockBrief.endTime)
               .result
               .left
               .map(error => NonEmptyList.one(error.getMessage))
@@ -180,28 +181,28 @@ object HeadConfig {
                     .cond(
                       test = expectedTxSeq.initializationTx.tx.body == initTx.body,
                       e = NonEmptyList.one(
-                        "initialization tx body mismatch when constructing preinit config"
+                        "initialization tx body mismatch when constructing bootstrap config"
                       ),
                       a = ()
                     )
-                    .combine(isMultiSigned(initTx, headConfigPreinit))
+                    .combine(isMultiSigned(initTx, headConfigBootstrap))
 
             val validatedFallbackTx =
                 Validated
                     .cond(
                       expectedTxSeq.fallbackTx.tx.body == fallbackTx.body,
                       e = NonEmptyList.one(
-                        "Fallback tx body mismatch when constructing preinit config"
+                        "Fallback tx body mismatch when constructing bootstrap config"
                       ),
                       a = ()
                     )
-                    .combine(isMultiSigned(fallbackTx, headConfigPreinit))
+                    .combine(isMultiSigned(fallbackTx, headConfigBootstrap))
 
             validatedInitTx.combine(validatedFallbackTx) match {
                 case Valid(_) =>
                     Valid(
                       new HeadConfig(
-                        headConfigPreinit,
+                        headConfigBootstrap,
                         Block.MultiSigned.Initial(
                           blockBrief,
                           // The "expectedTxSeq" contains the "enriched" tx types, but they are not signed,
@@ -223,10 +224,10 @@ object HeadConfig {
     }
 
     def apply(
-        headConfigPreinit: HeadConfig.Preinit,
+        headConfigBootstrap: HeadConfig.Bootstrap,
         initialBlock: Block.MultiSigned.Initial
     ): ValidatedNel[String, HeadConfig] = HeadConfig(
-      headConfigPreinit,
+      headConfigBootstrap,
       initialBlock.blockBrief,
       initialBlock.effects.initializationTx.tx,
       initialBlock.effects.fallbackTx.tx
@@ -241,17 +242,17 @@ object HeadConfig {
         scriptReferenceUtxos: ScriptReferenceUtxos
     ): ValidatedNel[String, HeadConfig] = {
         HeadConfig
-            .Preinit(
+            .Bootstrap(
               cardanoNetwork,
               headParams,
               headPeers,
               initializationParams,
               scriptReferenceUtxos
             )
-            .andThen(headConfigPreinit => HeadConfig(headConfigPreinit, initialBlock))
+            .andThen(headConfigBootstrap => HeadConfig(headConfigBootstrap, initialBlock))
     }
 
-    trait Section extends HeadConfig.Preinit.Section, InitialBlock.Section {
+    trait Section extends HeadConfig.Bootstrap.Section, InitialBlock.Section {
         def headConfig: HeadConfig
 
         override transparent inline def initialBlockSection: InitialBlock = InitialBlock(
@@ -259,39 +260,40 @@ object HeadConfig {
         )
 
         override def scriptReferenceUtxos: ScriptReferenceUtxos =
-            headConfigPreinit.scriptReferenceUtxos
+            headConfigBootstrap.scriptReferenceUtxos
         override def cardanoNetwork: CardanoNetwork =
-            headConfigPreinit.cardanoNetwork
-        override def headParams: HeadParameters = headConfigPreinit.headParams
-        override def headPeers: HeadPeers = headConfigPreinit.headPeers
+            headConfigBootstrap.cardanoNetwork
+        override def headParams: HeadParameters = headConfigBootstrap.headParams
+        override def headPeers: HeadPeers = headConfigBootstrap.headPeers
         override def initializationParams: InitializationParameters =
-            headConfigPreinit.initializationParams
+            headConfigBootstrap.initializationParams
     }
 
     /** @param l2Params
       *   a black-box, L2-specific blake2b-256 hash of parameters that the peers must agree on
       *   before initialization.
       */
-    final case class Preinit private[head] (
+    final case class Bootstrap private[head] (
         override val cardanoNetwork: CardanoNetwork,
         override val headParams: HeadParameters,
         override val headPeers: HeadPeers,
         override val initializationParams: InitializationParameters,
         override val scriptReferenceUtxos: ScriptReferenceUtxos
-    ) extends Preinit.Section {
-        override transparent inline def headConfigPreinit: Preinit = this
+    ) extends Bootstrap.Section {
+        override transparent inline def headConfigBootstrap: Bootstrap = this
     }
 
-    object Preinit {
+    object Bootstrap {
         // TODO This encoder should be a little bit more intelligent.
         // We want explicit indicies from vkey -> info, such as
         // - vkey -> connection address
         // - vkey -> equity
         // - vkey -> peer number
-        given headConfigPreinitEncoder(using CardanoNetwork.Section): Encoder[HeadConfig.Preinit]
-        with {
-            override def apply(hc: HeadConfig.Preinit): Json = {
-                given HeadConfig.Preinit.Section = hc
+        given headConfigBootstrapEncoder(using CardanoNetwork.Section): Encoder[
+          HeadConfig.Bootstrap
+        ] with {
+            override def apply(hc: HeadConfig.Bootstrap): Json = {
+                given HeadConfig.Bootstrap.Section = hc
                 Json.obj(
                   "cardanoNetwork" -> hc.cardanoNetwork.asJson,
                   "headParams" -> hc.headParams.asJson,
@@ -307,10 +309,10 @@ object HeadConfig {
         }
 
         // The utxos are resolved during parsing; we fail fast.
-        given headConfigPreinitDecoder(using
+        given headConfigBootstrapDecoder(using
             network: CardanoNetwork.Section,
             resolved: ScriptReferenceUtxos
-        ): Decoder[HeadConfig.Preinit] = c => {
+        ): Decoder[HeadConfig.Bootstrap] = c => {
             for {
                 unresolved <- c
                     .downField("scriptReferenceUtxos")
@@ -330,7 +332,7 @@ object HeadConfig {
                     for {
                         headParams <- c.downField("headParams").as[HeadParameters]
                         initParams <- c.as[InitializationParameters]
-                        preInit <- Preinit(
+                        bootstrap <- Bootstrap(
                           cardanoNetwork,
                           headParams,
                           headPeers,
@@ -338,11 +340,11 @@ object HeadConfig {
                           resolved
                         ).toEither.left.map(e =>
                             io.circe.DecodingFailure(
-                              s"failure constructing head config preinit: $e",
+                              s"failure constructing head config bootstrap: $e",
                               c.history
                             )
                         )
-                    } yield preInit
+                    } yield bootstrap
                 }
             } yield res
         }
@@ -353,8 +355,8 @@ object HeadConfig {
             headPeers: HeadPeers,
             initializationParams: InitializationParameters,
             scriptReferenceUtxos: ScriptReferenceUtxos
-        ): ValidatedNel[String, HeadConfig.Preinit] = {
-            val headConfigPreinit = new HeadConfig.Preinit(
+        ): ValidatedNel[String, HeadConfig.Bootstrap] = {
+            val headConfigBootstrap = new HeadConfig.Bootstrap(
               cardanoNetwork,
               headParams,
               headPeers,
@@ -363,7 +365,7 @@ object HeadConfig {
             )
 
             val isBalanced = Validated.cond(
-              test = headConfigPreinit.isBalancedInitializationFunding,
+              test = headConfigBootstrap.isBalancedInitializationFunding,
               a = (),
               e = "Initialization funding is unbalanced"
             )
@@ -383,7 +385,7 @@ object HeadConfig {
             ).foldLeft(Valid(()): ValidatedNel[String, Unit])((x, y) =>
                 x.combine(y.leftMap(NonEmptyList.one))
             ) match {
-                case Valid(()) => Valid(headConfigPreinit)
+                case Valid(()) => Valid(headConfigBootstrap)
                 case x @ Invalid(errors) => {
                     // We log in the constructor rather than the pattern match. If this causes spurious errors,
                     // it can be removed.
@@ -399,7 +401,7 @@ object HeadConfig {
               HeadPeers.Section,
               InitializationParameters.Section,
               ScriptReferenceUtxos.Section {
-            def headConfigPreinit: HeadConfig.Preinit
+            def headConfigBootstrap: HeadConfig.Bootstrap
 
             override transparent inline def rulebasedTreasuryScriptUtxo: TreasuryScriptUtxo = {
                 scriptReferenceUtxos.rulebasedTreasuryScriptUtxo

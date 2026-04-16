@@ -4,7 +4,7 @@ import cats.data.ReaderT
 import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.currentTimeBlockCreationEndTime
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
-import hydrozoa.config.head.{HeadConfig, generateHeadConfigPreinit}
+import hydrozoa.config.head.{HeadConfig, generateHeadConfigBootstrap}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import monocle.Focus.focus
@@ -14,13 +14,13 @@ import scala.concurrent.duration.DurationInt
 import test.{GenWithTestPeers, TestPeers, TestPeersSpec, given}
 
 def generateInitialBlock(
-    genHeadConfigPreinit: GenWithTestPeers[HeadConfig.Preinit] = generateHeadConfigPreinit(),
+    genHeadConfigBootstrap: GenWithTestPeers[HeadConfig.Bootstrap] = generateHeadConfigBootstrap(),
     generateBlockCreationEndTime: GenWithTestPeers[BlockCreationEndTime] =
         currentTimeBlockCreationEndTime,
 ): GenWithTestPeers[InitialBlock] = {
     for {
         testPeers <- ReaderT.ask
-        config <- genHeadConfigPreinit
+        config <- genHeadConfigBootstrap
 
         blockCreationEndTime <- generateBlockCreationEndTime
 

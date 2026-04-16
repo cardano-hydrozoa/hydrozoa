@@ -6,7 +6,6 @@ import cats.effect.{ExitCode, IO, IOApp}
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.app.Main.loadEnv
 import hydrozoa.config.head.HeadConfig
-import hydrozoa.config.head.HeadConfig.Preinit
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.multisig.fallback.FallbackContingency.mkFallbackContingencyWithDefaults
 import hydrozoa.config.head.multisig.settlement.SettlementConfig
@@ -233,19 +232,23 @@ object Bootstrap:
           )
         )
 
-        preinit <- IO.fromEither(
-          Preinit(
-            cardanoNetwork = cardanoNetwork,
-            headParams = headParams,
-            headPeers = headPeers,
-            initializationParams = initializationParameters,
-            scriptReferenceUtxos = fakeScriptReferenceUtxos(cardanoNetwork)
-          ).toEither.left.map(errors =>
-              RuntimeException(
-                "could not construct HeadConfig.PreInit during bootstrap. Errors:" +
-                    s"${errors.foldLeft("\n\t")(_ ++ _)}"
+        bootstrap <- IO.fromEither(
+          HeadConfig
+              .Bootstrap(
+                cardanoNetwork = cardanoNetwork,
+                headParams = headParams,
+                headPeers = headPeers,
+                initializationParams = initializationParameters,
+                scriptReferenceUtxos = fakeScriptReferenceUtxos(cardanoNetwork)
               )
-          )
+              .toEither
+              .left
+              .map(errors =>
+                  RuntimeException(
+                    "could not construct HeadConfig.bootstrap during bootstrap. Errors:" +
+                        s"${errors.foldLeft("\n\t")(_ ++ _)}"
+                  )
+              )
         )
 
         endTimeInstant <- IO.realTimeInstant.map(instant =>
@@ -254,7 +257,7 @@ object Bootstrap:
         blockCreationEndTime = BlockCreationEndTime(endTimeInstant)
 
         initTxSeq = InitializationTxSeq
-            .Build(preinit)(blockCreationEndTime)
+            .Build(bootstrap)(blockCreationEndTime)
             .result
             .fold(
               e => {
@@ -291,7 +294,7 @@ object Bootstrap:
         )
 
         headConfig <- HeadConfig(
-          headConfigPreinit = preinit,
+          headConfigBootstrap = bootstrap,
           initialBlock = initialBlock.initialBlock
         ) match {
             case Validated.Valid(hc) => IO.pure(hc)

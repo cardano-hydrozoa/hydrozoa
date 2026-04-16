@@ -35,7 +35,7 @@ object NodeConfig {
         for {
             network <- EitherT.fromEither[IO] {
                 given onlyNetwork: Decoder[CardanoNetwork] = Decoder.instance(c =>
-                    c.downField("headConfigPreinit")
+                    c.downField("headConfigBootstrap")
                         .downField("cardanoNetwork")
                         .as[CardanoNetwork](using cardanoNetworkDecoder)
                 )
@@ -43,7 +43,7 @@ object NodeConfig {
             }
             headPeers <- EitherT.fromEither[IO] {
                 given onlyHeadPeers: Decoder[HeadPeers] = Decoder.instance(c =>
-                    c.downField("headConfigPreinit")
+                    c.downField("headConfigBootstrap")
                         .downField("headPeers")
                         .as[HeadPeers](using headPeersDecoder)
                 )
@@ -100,8 +100,8 @@ object NodeConfig {
         override transparent inline def blockfrostApiKey: String =
             nodePrivateConfig.blockfrostApiKey
 
-        override transparent inline def headConfigPreinit: HeadConfig.Preinit =
-            headConfig.headConfigPreinit
+        override transparent inline def headConfigBootstrap: HeadConfig.Bootstrap =
+            headConfig.headConfigBootstrap
 
         override transparent inline def cardanoNetwork: CardanoNetwork =
             headConfig.cardanoNetwork

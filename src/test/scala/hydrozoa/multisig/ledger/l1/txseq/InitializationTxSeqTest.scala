@@ -29,7 +29,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
     //
     // This is an important property: the actual cardano transaction that gets submitted must correspond to
     // the semantic tx we deal with internally. However, it is not the only property: we should also be checking
-    // that the semantic transaction reflects what we expect, i.e., we should performgenerateHeadConfigPreInit "black-box testing" to
+    // that the semantic transaction reflects what we expect, i.e., we should performgenerateHeadConfigBootstrap "black-box testing" to
     // ensure that the multisig regime utxo is actually carrying the correct script, with the correct value, and
     // sitting at the correct address.
     //
