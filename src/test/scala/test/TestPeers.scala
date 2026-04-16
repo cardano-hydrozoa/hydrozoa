@@ -1,6 +1,6 @@
 package test
 
-import cats.data.NonEmptyList
+import cats.data.{NonEmptyList, ReaderT}
 import com.bloxbean.cardano.client.account.Account
 import com.bloxbean.cardano.client.common.model.Network as BloxbeanNetwork
 import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath.createExternalAddressDerivationPathForAccount
@@ -8,6 +8,7 @@ import hydrozoa.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.network.CardanoNetworkGen.given_Arbitrary_CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
+import hydrozoa.config.head.rulebased.scripts.RuleBasedScriptAddresses
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.cardano.wallet.WalletModule
@@ -17,11 +18,13 @@ import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Test.Parameters
 import org.scalacheck.{Gen, Prop, Properties}
 import scala.collection.mutable
-import scalus.cardano.address.ShelleyAddress
+import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.ArbitraryInstances.*
-import scalus.cardano.ledger.{Transaction, VKeyWitness}
+import scalus.cardano.ledger.{CardanoInfo, ProtocolParams, SlotConfig, Transaction, VKeyWitness}
 import scalus.crypto.ed25519.VerificationKey
 import test.Generators.loggerGenerators
+
+type GenWithTestPeers[A] = ReaderT[Gen, TestPeers, A]
 
 /** TestPeers object provides everything test suites may need to operate a peer in a head:
   *   - head peer numbers
@@ -36,14 +39,15 @@ import test.Generators.loggerGenerators
   * transactions on behalf of prospective head peers.
   *
   * @param seedPhrase
-  * @param network
+  * @param cardanoNetwork
   * @param peersNumber
   */
+
 case class TestPeers private (
     seedPhrase: SeedPhrase,
-    network: CardanoNetwork,
+    override val cardanoNetwork: CardanoNetwork,
     peersNumber: Int
-) {
+) extends CardanoNetwork.Section {
     import TestPeerName.maxPeers
 
     require(
@@ -135,7 +139,7 @@ case class TestPeers private (
     private val accountCache: mutable.Map[TestPeerName, Account] = mutable.Map.empty
         .withDefault(peer =>
             Account.createFromMnemonic(
-              network.asBloxbeanNetwork,
+              cardanoNetwork.asBloxbeanNetwork,
               seedPhrase.mnemonic,
               createExternalAddressDerivationPathForAccount(peer.ordinal)
             )
@@ -145,7 +149,7 @@ case class TestPeers private (
 
     private val addressCache: mutable.Map[TestPeerName, ShelleyAddress] =
         mutable.Map.empty.withDefault(peer =>
-            verificationKeyFor(peer).shelleyAddress()(using network)
+            verificationKeyFor(peer).shelleyAddress()(using cardanoNetwork)
         )
 
     private val walletCache: mutable.Map[TestPeerName, HeadPeerWallet] = mutable.Map.empty
@@ -158,6 +162,22 @@ case class TestPeers private (
               hdKeyPair.getPrivateKey
             )
         })
+
+    override def cardanoInfo: CardanoInfo = cardanoNetwork.cardanoInfo
+
+    override def network: Network = cardanoNetwork.network
+
+    override def slotConfig: SlotConfig = cardanoNetwork.slotConfig
+
+    override def cardanoProtocolParams: ProtocolParams = cardanoNetwork.cardanoProtocolParams
+
+    override def ruleBasedScriptAddresses: RuleBasedScriptAddresses =
+        cardanoNetwork.ruleBasedScriptAddresses
+
+    override def ruleBasedTreasuryAddress: ShelleyAddress = cardanoNetwork.ruleBasedTreasuryAddress
+
+    override def ruleBasedDisputeResolutionAddress: ShelleyAddress =
+        cardanoNetwork.ruleBasedDisputeResolutionAddress
 }
 
 object TestPeers:

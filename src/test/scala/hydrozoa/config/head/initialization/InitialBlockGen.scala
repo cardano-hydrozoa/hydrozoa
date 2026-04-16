@@ -1,57 +1,48 @@
 package hydrozoa.config.head.initialization
 
+import cats.data.{Kleisli, ReaderT}
 import hydrozoa.config.head.HeadConfig
-import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.{BlockCreationEndTimeGen, currentTimeBlockCreationEndTime}
-import hydrozoa.config.head.multisig.fallback.{FallbackContingencyGen, generateFallbackContingency}
-import hydrozoa.config.head.multisig.settlement.{SettlementConfigGen, generateSettlementConfig}
-import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationStartTime
-import hydrozoa.config.head.multisig.timing.{TxTiming, TxTimingGen, generateDefaultTxTiming}
-import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.config.head.parameters.{GenHeadParams, generateHeadParameters}
-import hydrozoa.config.head.rulebased.{DisputeResolutionConfigGen, generateDisputeResolutionConfig}
+import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.currentTimeBlockCreationEndTime
+import hydrozoa.config.head.multisig.fallback.generateFallbackContingency
+import hydrozoa.config.head.multisig.timing.TxTiming
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
+import hydrozoa.config.head.parameters.{HeadParameters, generateHeadParameters}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import monocle.Focus.focus
 import org.scalacheck.Test.Parameters
 import org.scalacheck.{Gen, Prop, Properties}
 import scala.concurrent.duration.DurationInt
-import test.{TestPeers, TestPeersSpec}
+import test.{GenWithTestPeers, TestPeers, TestPeersSpec, given}
 
-def generateInitialBlock(testPeers: TestPeers)(
-    generateTxTiming: TxTimingGen = generateDefaultTxTiming,
-    generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
-    generateDisputeResolutionConfig: DisputeResolutionConfigGen = generateDisputeResolutionConfig,
-    generateHeadParameters: GenHeadParams = generateHeadParameters,
-    generateBlockCreationEndTime: BlockCreationEndTimeGen = currentTimeBlockCreationEndTime,
+def generateInitialBlock(
+    generateHeadParameters: GenWithTestPeers[HeadParameters] = generateHeadParameters(),
+    generateBlockCreationEndTime: GenWithTestPeers[BlockCreationEndTime] =
+        currentTimeBlockCreationEndTime,
     generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
         InitializationParametersGenTopDown.GenWithDeps | InitializationParameters =
-        InitializationParametersGenBottomUp.generateInitializationParameters,
-    generateSettlementConfig: SettlementConfigGen = generateSettlementConfig
-): Gen[InitialBlock] = {
+        InitializationParametersGenBottomUp.generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters,
+): GenWithTestPeers[InitialBlock] = {
     for {
-        cardanoNetwork <- Gen.const(testPeers.network)
+        testPeers <- Kleisli.ask
+        cardanoNetwork = testPeers.cardanoNetwork
 
-        headParams <- generateHeadParameters(cardanoNetwork)(
-          generateTxTiming,
-          generateFallbackContingency,
-          generateDisputeResolutionConfig,
-          generateSettlementConfig
-        )
+        headParams <- generateHeadParameters
 
         initializationParameters <- generateInitializationParameters match {
             case g: InitializationParametersGenBottomUp.GenInitializationParameters =>
-                g(testPeers)(_ => Gen.const(headParams.fallbackContingency))
+                g(Kleisli.liftF(Gen.const(headParams.fallbackContingency)))
             case InitializationParametersGenTopDown.GenWithDeps(
                   generator,
                   generateGenesisUtxosL1,
                   equityRange
                 ) =>
-                generator(testPeers)(
+                generator(
                   generateFallbackContingency,
                   generateGenesisUtxosL1,
                   equityRange
                 )
-            case ps: InitializationParameters => Gen.const(ps)
+            case ps: InitializationParameters => ReaderT.liftF(Gen.const(ps))
         }
 
         config = HeadConfig
@@ -63,7 +54,7 @@ def generateInitialBlock(testPeers: TestPeers)(
             )
             .get
 
-        blockCreationEndTime <- generateBlockCreationEndTime(config.slotConfig)
+        blockCreationEndTime <- generateBlockCreationEndTime
 
         initTxSeq =
             InitializationTxSeq.Build(config)(blockCreationEndTime).result match {
@@ -97,6 +88,7 @@ def generateInitialBlock(testPeers: TestPeers)(
         )
       )
     )
+
 }
 
 object InitialBlockTest extends Properties("Initial block") {
@@ -108,6 +100,6 @@ object InitialBlockTest extends Properties("Initial block") {
       TestPeersSpec
           .generate()
           .flatMap(TestPeers.generate)
-          .flatMap(generateInitialBlock(_)())
+          .flatMap(generateInitialBlock().run(_))
     )(_ => true)
 }
