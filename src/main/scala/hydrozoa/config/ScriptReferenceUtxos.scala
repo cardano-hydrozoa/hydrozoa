@@ -1,9 +1,12 @@
 package hydrozoa.config
 
+import cats.*
+import cats.data.*
 import cats.syntax.all.*
 import hydrozoa.config
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.given
+import hydrozoa.multisig.backend.cardano.CardanoBackend
 import io.circe.*
 import io.circe.generic.semiauto.*
 import scalus.cardano.ledger.{TransactionInput, Utxo}
@@ -16,6 +19,9 @@ final case class ScriptReferenceUtxos(
     override val scriptReferenceUtxos: ScriptReferenceUtxos = this
     def toList: List[Utxo] =
         List(rulebasedTreasuryScriptUtxo.utxo, disputeResolutionScriptUtxo.utxo)
+
+    def unresolved: ScriptReferenceUtxos.Unresolved =
+        ScriptReferenceUtxos.Unresolved(rulebasedTreasuryScriptInput, disputeResolutionScriptInput)
 }
 
 object ScriptReferenceUtxos {
@@ -24,6 +30,30 @@ object ScriptReferenceUtxos {
         override val disputeResolutionScriptInput: TransactionInput
     ) extends Unresolved.Section {
         override val scriptReferenceUtxosUnresolved: Unresolved = this
+
+        def resolve[F[_]](cardanoBackend: CardanoBackend[F])(using
+            network: CardanoNetwork.Section
+        ): F[Either[ScriptReferenceUtxos.Error, ScriptReferenceUtxos]] = {
+            given Monad[F] = cardanoBackend.monadF
+
+            // resolve helper
+            def r(ti: TransactionInput): EitherT[F, ScriptReferenceUtxos.Error, Utxo] =
+                EitherT(
+                  cardanoBackend
+                      .resolve(ti)
+                      .map(_.leftMap(ScriptReferenceUtxos.Error.CardanoBackendError(_)))
+                )
+
+            for {
+                treasury <- r(rulebasedTreasuryScriptInput)
+                treasuryUtxo <- EitherT.fromEither(TreasuryScriptUtxo(network, treasury))
+                dispute <- r(disputeResolutionScriptInput)
+                disputeUtxo <- EitherT.fromEither(DisputeScriptUtxo(network, dispute))
+            } yield ScriptReferenceUtxos(treasuryUtxo, disputeUtxo)
+        }.value
+
+        def isValidResolution(scriptReferenceUtxos: ScriptReferenceUtxos): Boolean =
+            scriptReferenceUtxos.unresolved == this
     }
 
     object Unresolved {
@@ -63,16 +93,20 @@ object ScriptReferenceUtxos {
     enum Error extends Throwable:
         case InvalidTreasuryScriptUtxo
         case InvalidDisputeScriptUtxo
+        case CardanoBackendError(e: CardanoBackend.Error)
 
         override def toString: String = this match
             case InvalidTreasuryScriptUtxo => "InvalidTreasuryScriptUtxo"
             case InvalidDisputeScriptUtxo  => "InvalidDisputeScriptUtxo"
+            case CardanoBackendError(e)    => s"CardanoBackendError: $e"
 
         override def getMessage: String = this match
             case InvalidTreasuryScriptUtxo =>
                 "The provided UTXO is not a valid treasury script reference UTXO"
             case InvalidDisputeScriptUtxo =>
                 "The provided UTXO is not a valid dispute resolution script reference UTXO"
+            case CardanoBackendError(e) =>
+                s"Cardano backend error encountered when resolving the reference utxos: $e"
 
     case class TreasuryScriptUtxo private (utxo: Utxo)
 
@@ -155,7 +189,7 @@ object ScriptReferenceUtxos {
 
     given Encoder[DisputeScriptUtxo] = utxoEncoder.contramap(_.utxo)
 
-    given disputeSrriptUtxoDecoder(using
+    given disputeScriptUtxoDecoder(using
         network: CardanoNetwork.Section
     ): Decoder[DisputeScriptUtxo] =
         utxoDecoder.emap(utxo =>
@@ -164,4 +198,7 @@ object ScriptReferenceUtxos {
                     s"Failure: $e"
             )
         )
+
+    given Encoder[ScriptReferenceUtxos.Unresolved] = deriveEncoder[ScriptReferenceUtxos.Unresolved]
+    given Decoder[ScriptReferenceUtxos.Unresolved] = deriveDecoder[ScriptReferenceUtxos.Unresolved]
 }

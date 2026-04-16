@@ -2,7 +2,9 @@ package hydrozoa.config.loader
 
 import cats.effect.*
 import cats.effect.unsafe.implicits.global
+import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.head.HeadConfig
+import hydrozoa.config.head.HeadConfig.given
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
@@ -27,7 +29,10 @@ object LoaderTest extends Properties("Configuration Loader Properties") {
             headConfig = mnc.headConfig
             encoded = headConfig.asJson
 //            _ <- lift(IO.println(encoded))
-            decoded <- failLeft(encoded.as[HeadConfig])
+            decoded <- {
+                given ScriptReferenceUtxos = headConfig.scriptReferenceUtxos
+                failLeft(encoded.as[HeadConfig])
+            }
             _ <- assertWith(
               headConfig == decoded,
               "HeadConfig should round trip through JSON." +

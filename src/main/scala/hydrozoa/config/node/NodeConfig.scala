@@ -1,6 +1,5 @@
 package hydrozoa.config.node
 
-import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.initialization.InitializationParameters
 import hydrozoa.config.head.network.CardanoNetwork
@@ -25,7 +24,6 @@ object NodeConfig {
         ownHeadWallet: HeadPeerWallet,
         nodeOperationEvacuationConfig: NodeOperationEvacuationConfig,
         nodeOperationMultisigConfig: NodeOperationMultisigConfig,
-        scriptReferenceUtxos: ScriptReferenceUtxos,
         hydrozoaHost: String,
         hydrozoaPort: String,
         blockfrostApiKey: String
@@ -35,7 +33,6 @@ object NodeConfig {
           ownHeadPeerPrivate,
           nodeOperationEvacuationConfig,
           nodeOperationMultisigConfig,
-          scriptReferenceUtxos,
           hydrozoaHost,
           hydrozoaPort,
           blockfrostApiKey
@@ -73,8 +70,5 @@ object NodeConfig {
             nodePrivateConfig.nodeOperationEvacuationConfig
         override transparent inline def nodeOperationMultisigConfig: NodeOperationMultisigConfig =
             nodePrivateConfig.nodeOperationMultisigConfig
-
-        override transparent inline def scriptReferenceUtxos: ScriptReferenceUtxos =
-            nodePrivateConfig.scriptReferenceUtxos
     }
 }

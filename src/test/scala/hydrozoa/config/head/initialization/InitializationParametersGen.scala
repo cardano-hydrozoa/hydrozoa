@@ -4,10 +4,7 @@ import cats.*
 import cats.data.*
 import cats.data.Kleisli.{ask, liftF}
 import cats.syntax.all.*
-import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.multisig.fallback.{FallbackContingency, generateFallbackContingency}
-import cats.syntax.semigroup.*
-import hydrozoa.config.head.multisig.fallback.{FallbackContingency, FallbackContingencyGen, generateFallbackContingency}
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda

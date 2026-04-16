@@ -1,8 +1,11 @@
 package hydrozoa.config.head
 
+import cats.*
 import cats.data.*
 import cats.data.Validated.{Invalid, Valid}
 import cats.syntax.all.*
+import hydrozoa.config.ScriptReferenceUtxos
+import hydrozoa.config.ScriptReferenceUtxos.{DisputeScriptUtxo, TreasuryScriptUtxo}
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
@@ -24,7 +27,6 @@ import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
-import io.circe.Decoder.Result
 import io.circe.generic.semiauto.*
 import io.circe.syntax.EncoderOps
 import io.circe.{Encoder, *}
@@ -51,42 +53,42 @@ object HeadConfig {
         }
     }
 
-    given headConfigDecoder: Decoder[HeadConfig] = Decoder.instance { c =>
-        for {
-            network <- c
-                .downField("headConfigPreinit")
-                .downField("cardanoNetwork")
-                .as[CardanoNetwork]
-            preinit <- {
-                given CardanoNetwork = network
+    given headConfigDecoder(using resolved: ScriptReferenceUtxos): Decoder[HeadConfig] =
+        Decoder.instance { c =>
+            for {
+                network <- c
+                    .downField("headConfigPreinit")
+                    .downField("cardanoNetwork")
+                    .as[CardanoNetwork]
+                preinit <- {
+                    given CardanoNetwork = network
+                    c.downField("headConfigPreinit").as[HeadConfig.Preinit]
+                }
+                hc <- {
+                    given HeadConfig.Preinit.Section = preinit
 
-                c.downField("headConfigPreinit").as[HeadConfig.Preinit]
-            }
-            hc <- {
-                given HeadConfig.Preinit.Section = preinit
-
-                for {
-                    brief <- c
-                        .downField("initialBlock")
-                        .downField("blockBrief")
-                        .as[BlockBrief.Initial]
-                    initTx <- c
-                        .downField("initialBlock")
-                        .downField("effects")
-                        .downField("initializationTx")
-                        .as[Transaction]
-                    fallbackTx <- c
-                        .downField("initialBlock")
-                        .downField("effects")
-                        .downField("fallbackTx")
-                        .as[Transaction]
-                    hc <- HeadConfig(preinit, brief, initTx, fallbackTx).toEither.left.map(_ =>
-                        io.circe.DecodingFailure("Failed constructing head config", c.history)
-                    )
-                } yield hc
-            }
-        } yield hc
-    }
+                    for {
+                        brief <- c
+                            .downField("initialBlock")
+                            .downField("blockBrief")
+                            .as[BlockBrief.Initial]
+                        initTx <- c
+                            .downField("initialBlock")
+                            .downField("effects")
+                            .downField("initializationTx")
+                            .as[Transaction]
+                        fallbackTx <- c
+                            .downField("initialBlock")
+                            .downField("effects")
+                            .downField("fallbackTx")
+                            .as[Transaction]
+                        hc <- HeadConfig(preinit, brief, initTx, fallbackTx).toEither.left.map(_ =>
+                            io.circe.DecodingFailure("Failed constructing head config", c.history)
+                        )
+                    } yield hc
+                }
+            } yield hc
+        }
 
     private val logger = Logging.logger("HeadConfig")
 
@@ -197,13 +199,15 @@ object HeadConfig {
         headPeers: HeadPeers,
         initialBlock: Block.MultiSigned.Initial,
         initializationParams: InitializationParameters,
+        scriptReferenceUtxos: ScriptReferenceUtxos
     ): ValidatedNel[String, HeadConfig] = {
         HeadConfig
             .Preinit(
               cardanoNetwork,
               headParams,
               headPeers,
-              initializationParams
+              initializationParams,
+              scriptReferenceUtxos
             )
             .andThen(headConfigPreinit => HeadConfig(headConfigPreinit, initialBlock))
     }
@@ -215,6 +219,8 @@ object HeadConfig {
           initialBlock
         )
 
+        override def scriptReferenceUtxos: ScriptReferenceUtxos =
+            headConfigPreinit.scriptReferenceUtxos
         override def cardanoNetwork: CardanoNetwork =
             headConfigPreinit.cardanoNetwork
         override def headParams: HeadParameters = headConfigPreinit.headParams
@@ -232,6 +238,7 @@ object HeadConfig {
         override val headParams: HeadParameters,
         override val headPeers: HeadPeers,
         override val initializationParams: InitializationParameters,
+        override val scriptReferenceUtxos: ScriptReferenceUtxos
     ) extends Preinit.Section {
         override transparent inline def headConfigPreinit: Preinit = this
     }
@@ -254,48 +261,64 @@ object HeadConfig {
                   "initialEquityContributions" -> hc.initialEquityContributions.toSortedMap.asJson,
                   "seedUtxo" -> hc.seedUtxo.asJson,
                   "additionalFundingUtxos" -> hc.initialAdditionalFundingUtxos.asJson,
-                  "initialChangeOutputs" -> hc.initialChangeOutputs.asJson
+                  "initialChangeOutputs" -> hc.initialChangeOutputs.asJson,
+                  "scriptReferenceUtxos" -> hc.scriptReferenceUtxos.scriptReferenceUtxosUnresolved.asJson
                 )
             }
         }
 
-        given headConfigPreinitDecoder(using CardanoNetwork.Section): Decoder[HeadConfig.Preinit]
-        with {
-            override def apply(c: HCursor): Result[Preinit] =
-                for {
-                    cardanoNetwork <- c.downField("cardanoNetwork").as[CardanoNetwork]
-                    headPeers <- c.downField("headPeers").as[HeadPeers]
-                    res <- {
-                        for {
-                            headParams <- c.downField("headParams").as[HeadParameters]
-                            initParams <- c.as[InitializationParameters]
-                            preInit <- Preinit(
-                              cardanoNetwork,
-                              headParams,
-                              headPeers,
-                              initParams
-                            ).toEither.left.map(e =>
-                                io.circe.DecodingFailure(
-                                  s"failure constructing head config preinit: $e",
-                                  c.history
-                                )
+        // The utxos are resolved during parsing; we fail fast.
+        given headConfigPreinitDecoder[F[_]](using
+            network: CardanoNetwork.Section,
+            resolved: ScriptReferenceUtxos
+        ): Decoder[HeadConfig.Preinit] = c => {
+            for {
+                unresolved <- c
+                    .downField("scriptReferenceUtxos")
+                    .as[ScriptReferenceUtxos.Unresolved]
+                _ <-
+                    if unresolved.isValidResolution(resolved)
+                    then Right(())
+                    else
+                        Left(
+                          DecodingFailure("invalid resolution for ScriptReferenceUtxos", c.history)
+                        )
+                cardanoNetwork <- c.downField("cardanoNetwork").as[CardanoNetwork]
+                headPeers <- c.downField("headPeers").as[HeadPeers]
+                res <- {
+                    for {
+                        headParams <- c.downField("headParams").as[HeadParameters]
+                        initParams <- c.as[InitializationParameters]
+                        preInit <- Preinit(
+                          cardanoNetwork,
+                          headParams,
+                          headPeers,
+                          initParams,
+                          resolved
+                        ).toEither.left.map(e =>
+                            io.circe.DecodingFailure(
+                              s"failure constructing head config preinit: $e",
+                              c.history
                             )
-                        } yield preInit
-                    }
-                } yield res
+                        )
+                    } yield preInit
+                }
+            } yield res
         }
 
         def apply(
             cardanoNetwork: CardanoNetwork,
             headParams: HeadParameters,
             headPeers: HeadPeers,
-            initializationParams: InitializationParameters
+            initializationParams: InitializationParameters,
+            scriptReferenceUtxos: ScriptReferenceUtxos
         ): ValidatedNel[String, HeadConfig.Preinit] = {
             val headConfigPreinit = new HeadConfig.Preinit(
               cardanoNetwork,
               headParams,
               headPeers,
-              initializationParams
+              initializationParams,
+              scriptReferenceUtxos
             )
 
             val isBalanced = Validated.cond(
@@ -333,8 +356,16 @@ object HeadConfig {
             extends CardanoNetwork.Section,
               HeadParameters.Section,
               HeadPeers.Section,
-              InitializationParameters.Section {
+              InitializationParameters.Section,
+              ScriptReferenceUtxos.Section {
             def headConfigPreinit: HeadConfig.Preinit
+
+            override transparent inline def rulebasedTreasuryScriptUtxo: TreasuryScriptUtxo = {
+                scriptReferenceUtxos.rulebasedTreasuryScriptUtxo
+            }
+
+            override transparent inline def disputeResolutionScriptUtxo: DisputeScriptUtxo =
+                scriptReferenceUtxos.disputeResolutionScriptUtxo
 
             override transparent inline def l2ParamsHash: Hash32 = headParams.l2ParamsHash
 

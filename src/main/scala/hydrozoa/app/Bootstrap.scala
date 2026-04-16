@@ -238,7 +238,8 @@ object Bootstrap:
             cardanoNetwork = cardanoNetwork,
             headParams = headParams,
             headPeers = headPeers,
-            initializationParams = initializationParameters
+            initializationParams = initializationParameters,
+            scriptReferenceUtxos = fakeScriptReferenceUtxos(cardanoNetwork)
           ).toEither.left.map(errors =>
               RuntimeException(
                 "could not construct HeadConfig.PreInit during bootstrap. Errors:" +
@@ -311,11 +312,7 @@ object Bootstrap:
           hydrozoaHost = ???,
           hydrozoaPort = ???,
           blockfrostApiKey = ???,
-          nodeOperationMultisigConfig = NodeOperationMultisigConfig.default,
-          // TODO: I assume that these will be pre-populated on preview, pre-prod, and mainnet, and that we'll have
-          // a different utility to publish the utxo to a given network.
-          // We should probably query these utxos using the backend, and then parse.
-          scriptReferenceUtxos = fakeScriptReferenceUtxos(cardanoNetwork)
+          nodeOperationMultisigConfig = NodeOperationMultisigConfig.default
         ).get
     }
 

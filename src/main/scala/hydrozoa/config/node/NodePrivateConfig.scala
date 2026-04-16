@@ -1,6 +1,5 @@
 package hydrozoa.config.node
 
-import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
@@ -16,8 +15,6 @@ final case class NodePrivateConfig(
     override val ownHeadPeerPrivate: OwnHeadPeerPrivate,
     override val nodeOperationEvacuationConfig: NodeOperationEvacuationConfig,
     override val nodeOperationMultisigConfig: NodeOperationMultisigConfig,
-    // Adding this here because it's not something that the peers necessarily need to agree upon.
-    override val scriptReferenceUtxos: ScriptReferenceUtxos,
     override val hydrozoaHost: String,
     override val hydrozoaPort: String,
     override val blockfrostApiKey: String,
@@ -29,8 +26,7 @@ object NodePrivateConfig {
     trait Section
         extends NodeOperationMultisigConfig.Section,
           NodeOperationEvacuationConfig.Section,
-          OwnHeadPeerPrivate.Section,
-          ScriptReferenceUtxos.Section {
+          OwnHeadPeerPrivate.Section {
         def nodePrivateConfig: NodePrivateConfig
 
         def hydrozoaHost: String
@@ -58,14 +54,6 @@ object NodePrivateConfig {
 
         override transparent inline def evacuationWallet: HeadPeerWallet =
             nodeOperationEvacuationConfig.evacuationWallet
-
-        override transparent inline def rulebasedTreasuryScriptUtxo
-            : ScriptReferenceUtxos.TreasuryScriptUtxo =
-            scriptReferenceUtxos.rulebasedTreasuryScriptUtxo
-
-        override transparent inline def disputeResolutionScriptUtxo
-            : ScriptReferenceUtxos.DisputeScriptUtxo =
-            scriptReferenceUtxos.disputeResolutionScriptUtxo
     }
 
     given nodePrivateConfigEncoder: Encoder[NodePrivateConfig] =
