@@ -4,6 +4,7 @@ import cats.*
 import cats.data.*
 import cats.syntax.all.*
 import hydrozoa.config
+import hydrozoa.config.ScriptReferenceUtxos.Error.UnresolvableScriptUtxo
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.given
 import hydrozoa.multisig.backend.cardano.CardanoBackend
@@ -32,17 +33,20 @@ object ScriptReferenceUtxos {
         override val scriptReferenceUtxosUnresolved: Unresolved = this
 
         def resolve[F[_]](cardanoBackend: CardanoBackend[F])(using
-            network: CardanoNetwork.Section
+            network: CardanoNetwork.Section,
+            monadF: Monad[F]
         ): F[Either[ScriptReferenceUtxos.Error, ScriptReferenceUtxos]] = {
-            given Monad[F] = cardanoBackend.monadF
 
             // resolve helper
             def r(ti: TransactionInput): EitherT[F, ScriptReferenceUtxos.Error, Utxo] =
-                EitherT(
-                  cardanoBackend
-                      .resolve(ti)
-                      .map(_.leftMap(ScriptReferenceUtxos.Error.CardanoBackendError(_)))
-                )
+                for {
+                    optionUtxo <- EitherT(cardanoBackend.resolve(ti))
+                        .leftMap(ScriptReferenceUtxos.Error.CardanoBackendError(_))
+                    utxo <- optionUtxo match {
+                        case None       => EitherT.left(monadF.pure(UnresolvableScriptUtxo(ti)))
+                        case Some(utxo) => EitherT.pure(utxo)
+                    }
+                } yield utxo
 
             for {
                 treasury <- r(rulebasedTreasuryScriptInput)
@@ -93,6 +97,7 @@ object ScriptReferenceUtxos {
     enum Error extends Throwable:
         case InvalidTreasuryScriptUtxo
         case InvalidDisputeScriptUtxo
+        case UnresolvableScriptUtxo(ti: TransactionInput)
         case CardanoBackendError(e: CardanoBackend.Error)
 
         override def toString: String = this match
@@ -105,6 +110,11 @@ object ScriptReferenceUtxos {
                 "The provided UTXO is not a valid treasury script reference UTXO"
             case InvalidDisputeScriptUtxo =>
                 "The provided UTXO is not a valid dispute resolution script reference UTXO"
+            case UnresolvableScriptUtxo(ti) =>
+                s"ScriptRefUtxo with TransactionInput $ti does not currently exist according to " +
+                    "the CardanoBackend. These utxos should be deployed prior to running a node. If they " +
+                    "were previously deployed, please ensure they have not been spent. If they were deployed" +
+                    "very recently, it may take some time for the transaction to appear onchain."
             case CardanoBackendError(e) =>
                 s"Cardano backend error encountered when resolving the reference utxos: $e"
 

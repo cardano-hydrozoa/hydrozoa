@@ -1,8 +1,7 @@
-package hydrozoa.config.loader
+package hydrozoa.config
 
 import cats.effect.*
 import cats.effect.unsafe.implicits.global
-import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.HeadConfig.given
 import hydrozoa.config.head.network.CardanoNetwork
@@ -10,14 +9,13 @@ import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.config.node.{MultiNodeConfig, NodePrivateConfig}
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.dummySigningKey
+import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
 import hydrozoa.multisig.consensus.peer.HeadPeerWallet
-import io.circe.*
 import io.circe.syntax.*
-import monocle.*
 import monocle.syntax.all.{as as _, *}
 import org.scalacheck.Properties
 
-object LoaderTest extends Properties("Configuration Loader Properties") {
+object ConfigurationCodecTest extends Properties("Configuration Codec Properties") {
     import MultiNodeConfig.*
 
 //    override def overrideParameters(p: Test.Parameters): Test.Parameters =
@@ -28,11 +26,24 @@ object LoaderTest extends Properties("Configuration Loader Properties") {
             mnc <- ask
             headConfig = mnc.headConfig
             encoded = headConfig.asJson
-//            _ <- lift(IO.println(encoded))
-            decoded <- {
-                given ScriptReferenceUtxos = headConfig.scriptReferenceUtxos
-                failLeft(encoded.as[HeadConfig])
-            }
+            encodedString = encoded.toString
+
+            cardanoBackend <- lift(
+              CardanoBackendMock.mockIO(
+                MockState(initialUtxos =
+                    Map(headConfig.seedUtxo.toTuple)
+                        ++ headConfig.initialAdditionalFundingUtxos
+                        ++ Map.from(headConfig.scriptReferenceUtxos.toList.map(_.toTuple))
+                )
+              )
+            )
+
+            _ <- lift(IO.println(encodedString))
+            decodingResult <- lift(
+              HeadConfig.fromJson(encodedString, cardanoBackend).value
+            )
+            decoded <- failLeft(decodingResult)
+
             _ <- assertWith(
               headConfig == decoded,
               "HeadConfig should round trip through JSON." +
@@ -65,7 +76,7 @@ object LoaderTest extends Properties("Configuration Loader Properties") {
                 val dummy = mkDummy(npc, mnc.headPeers)
                 val encoded = dummy.asJson
                 for {
-//                    _ <- lift(IO.println(encoded))
+                    _ <- lift(IO.println(encoded))
                     decoded <- failLeft(encoded.as[NodePrivateConfig])
                     _ <- assertWith(
                       dummy.nodeOperationEvacuationConfig == decoded.nodeOperationEvacuationConfig,

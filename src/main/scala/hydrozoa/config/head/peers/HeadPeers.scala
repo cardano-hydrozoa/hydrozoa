@@ -42,7 +42,7 @@ final case class HeadPeers private (
 }
 
 object HeadPeers {
-    given headPeerEncoder: Encoder[HeadPeers] =
+    given headPeersEncoder: Encoder[HeadPeers] =
         Encoder
             .encodeMap(using headPeerNumberKeyEncoder, given_Encoder_VerificationKey)
             .contramap(peerKeys =>
@@ -53,7 +53,7 @@ object HeadPeers {
                 )
             )
 
-    given headPeerDecoder: Decoder[HeadPeers] = {
+    given headPeersDecoder: Decoder[HeadPeers] = {
         def isContiguous(ns: List[Int]): Boolean =
             ns.sorted == Range(0, ns.max + 1)
 

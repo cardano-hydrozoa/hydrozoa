@@ -4,14 +4,16 @@ import cats.*
 import cats.data.*
 import cats.data.Validated.{Invalid, Valid}
 import cats.syntax.all.*
+import hydrozoa.config
 import hydrozoa.config.ScriptReferenceUtxos
-import hydrozoa.config.ScriptReferenceUtxos.{DisputeScriptUtxo, TreasuryScriptUtxo}
+import hydrozoa.config.ScriptReferenceUtxos.{DisputeScriptUtxo, TreasuryScriptUtxo, given_Decoder_Unresolved}
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.multisig.settlement.SettlementConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.network.CardanoNetwork.cardanoNetworkDecoder
 import hydrozoa.config.head.parameters.HeadParameters
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
@@ -21,6 +23,7 @@ import hydrozoa.lib.cardano.scalus.codecs.json.Codecs
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.given
 import hydrozoa.lib.logging.Logging
 import hydrozoa.lib.number.PositiveInt
+import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects}
 import hydrozoa.multisig.ledger.joint.EvacuationMap
@@ -28,7 +31,7 @@ import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import io.circe.generic.semiauto.*
-import io.circe.syntax.EncoderOps
+import io.circe.syntax.*
 import io.circe.{Encoder, *}
 import scala.collection.immutable.SortedSet
 import scalus.cardano.address.{Network, ShelleyAddress}
@@ -44,6 +47,42 @@ final case class HeadConfig private (
 }
 
 object HeadConfig {
+
+    def fromJson[F[_]](
+        jsonStr: String,
+        cardanoBackend: CardanoBackend[F]
+    )(using
+        monadF: Monad[F]
+    ): EitherT[F, ScriptReferenceUtxos.Error | io.circe.Error, HeadConfig] = {
+        for {
+            unresolved <- EitherT.fromEither[F] {
+                given onlyScripRefs: Decoder[ScriptReferenceUtxos.Unresolved] =
+                    Decoder.instance(c =>
+                        c.downField("headConfigPreinit")
+                            .downField("scriptReferenceUtxos")
+                            .as[ScriptReferenceUtxos.Unresolved](using given_Decoder_Unresolved)
+                    )
+                parser.decode[ScriptReferenceUtxos.Unresolved](jsonStr)
+            }
+            network <- EitherT.fromEither[F] {
+                given onlyNetwork: Decoder[CardanoNetwork] = Decoder.instance(c =>
+                    c.downField("headConfigPreinit")
+                        .downField("cardanoNetwork")
+                        .as[CardanoNetwork](using cardanoNetworkDecoder)
+                )
+                parser.decode[CardanoNetwork](jsonStr)
+            }
+            resolved <- {
+                given CardanoNetwork.Section = network
+                EitherT(unresolved.resolve(cardanoBackend))
+            }
+            headConfig <- EitherT.fromEither[F] {
+                given ScriptReferenceUtxos = resolved
+                parser.decode[HeadConfig](jsonStr)
+            }
+
+        } yield headConfig
+    }
 
     given headConfigEncoder: Encoder[HeadConfig] with {
         override def apply(hc: HeadConfig): Json = {
@@ -268,14 +307,14 @@ object HeadConfig {
         }
 
         // The utxos are resolved during parsing; we fail fast.
-        given headConfigPreinitDecoder[F[_]](using
+        given headConfigPreinitDecoder(using
             network: CardanoNetwork.Section,
             resolved: ScriptReferenceUtxos
         ): Decoder[HeadConfig.Preinit] = c => {
             for {
                 unresolved <- c
                     .downField("scriptReferenceUtxos")
-                    .as[ScriptReferenceUtxos.Unresolved]
+                    .as[ScriptReferenceUtxos.Unresolved](using given_Decoder_Unresolved)
                 _ <-
                     if unresolved.isValidResolution(resolved)
                     then Right(())
@@ -283,7 +322,9 @@ object HeadConfig {
                         Left(
                           DecodingFailure("invalid resolution for ScriptReferenceUtxos", c.history)
                         )
-                cardanoNetwork <- c.downField("cardanoNetwork").as[CardanoNetwork]
+                cardanoNetwork <- c
+                    .downField("cardanoNetwork")
+                    .as[CardanoNetwork](using cardanoNetworkDecoder)
                 headPeers <- c.downField("headPeers").as[HeadPeers]
                 res <- {
                     for {

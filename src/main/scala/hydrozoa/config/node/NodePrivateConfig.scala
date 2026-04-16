@@ -60,6 +60,7 @@ object NodePrivateConfig {
         deriveEncoder[NodePrivateConfig]
 
     given nodePrivateConfigDecoder(using
-        config: HeadPeers.Section & CardanoNetwork.Section
+        headPeers: HeadPeers.Section,
+        network: CardanoNetwork.Section
     ): Decoder[NodePrivateConfig] = deriveDecoder[NodePrivateConfig]
 }

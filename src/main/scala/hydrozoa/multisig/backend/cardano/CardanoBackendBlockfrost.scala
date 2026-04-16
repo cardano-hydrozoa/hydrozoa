@@ -21,6 +21,7 @@ import scala.concurrent.Future
 import scala.jdk.CollectionConverters.*
 import scala.util.Try
 import scalus.cardano.address.{Address, ShelleyAddress}
+import scalus.cardano.ledger
 import scalus.cardano.ledger.*
 import scalus.cardano.node.BlockfrostProvider
 import scalus.uplc.builtin.{ByteString, Data}
@@ -37,6 +38,7 @@ import scalus.uplc.builtin.{ByteString, Data}
   *   to maintain semantic we had before Scalus refactored [[BlockfrostProvider]], we want to deffer
   *   all errors till the time we actualy use the provider.
   */
+
 class CardanoBackendBlockfrost private (
     private val backendService: BackendService,
     private val pageSize: Int,
@@ -44,6 +46,30 @@ class CardanoBackendBlockfrost private (
 ) extends CardanoBackend[IO] {
 
     private val logger = Logging.logger(getClass)
+
+    override def resolve(input: Input): IO[Either[Error, Option[ledger.Utxo]]] =
+        (for {
+            res <- EitherT.fromEither[IO](
+              Try(
+                backendService.getUtxoService.getTxOutput(input.transactionId.toHex, input.index)
+              ).toEither.left.map(e => Error.ErrorResolving(input, e.getMessage))
+            )
+            mbUtxo <- res match {
+                // Resolution "successful", but no utxo found
+                case _ if res.code() == 404 => EitherT.right(IO.pure(None))
+                // Resolution genuinely successful: utxo was found
+                case _ if res.isSuccessful =>
+                    for {
+                        utxos <- EitherT(convertUtxosWithScripts(List(res.getValue)))
+                        utxo = ledger.Utxo(utxos.head)
+                    } yield Some(utxo)
+                // Resolution unsuccessful for some other reason
+                case _ =>
+                    EitherT.left(
+                      IO.pure(ErrorResolving(input, s"resolution response: ${res.getResponse}"))
+                    )
+            }
+        } yield mbUtxo).value
 
     override def utxosAt(address: ShelleyAddress): IO[Either[CardanoBackend.Error, Utxos]] =
         paginate(page =>
@@ -553,6 +579,7 @@ class CardanoBackendBlockfrost private (
                         if e.getCause != null then e.getCause.getMessage else "N/A"
                     }"))
             )
+
 }
 
 object CardanoBackendBlockfrost:
