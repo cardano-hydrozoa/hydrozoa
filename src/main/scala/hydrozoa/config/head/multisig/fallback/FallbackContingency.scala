@@ -66,8 +66,10 @@ object FallbackContingency {
     trait Section {
         def fallbackContingency: FallbackContingency
 
-        def collectiveContingency: FallbackContingency.Collective
-        def individualContingency: FallbackContingency.Individual
+        def collectiveContingency: FallbackContingency.Collective =
+            fallbackContingency.collectiveContingency
+        def individualContingency: FallbackContingency.Individual =
+            fallbackContingency.individualContingency
 
         final def totalContingencyFor(headPeerNumber: HeadPeerNumber): Coin =
             if headPeerNumber == HeadPeerNumber.zero

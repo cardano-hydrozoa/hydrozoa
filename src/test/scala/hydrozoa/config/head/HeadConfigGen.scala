@@ -31,13 +31,13 @@ def generateHeadConfig(
         )
         initialBlock <- generateInitialBlock(
           generateBlockCreationEndTime = generateBlockCreationEndTime,
-          generateInitializationParameters = preinit.initializationParams
+          generateInitializationParameters = preinit.initializationParameters
         )
     } yield HeadConfig(
       cardanoNetwork = preinit.cardanoNetwork,
-      headParams = preinit.headParams,
+      headParams = preinit.headParameters,
       headPeers = preinit.headPeers,
-      initializationParams = preinit.initializationParams,
+      initializationParams = preinit.initializationParameters,
       initialBlock = initialBlock.initialBlock
     ).get
 

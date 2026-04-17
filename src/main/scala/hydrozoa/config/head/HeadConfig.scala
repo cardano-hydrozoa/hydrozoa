@@ -1,30 +1,15 @@
 package hydrozoa.config.head
 
-import cats.data.{NonEmptyList, NonEmptyMap}
-import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
-import hydrozoa.config.head.multisig.fallback.FallbackContingency
-import hydrozoa.config.head.multisig.settlement.SettlementConfig
-import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.HeadParameters
 import hydrozoa.config.head.peers.HeadPeers
-import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
-import hydrozoa.config.head.rulebased.scripts.RuleBasedScriptAddresses
 import hydrozoa.lib.logging.Logging
-import hydrozoa.lib.number.PositiveInt
-import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
 import hydrozoa.multisig.ledger.block.Block
-import hydrozoa.multisig.ledger.joint.EvacuationMap
-import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.l1.token.CIP67
-import scalus.cardano.address.{Network, ShelleyAddress}
-import scalus.cardano.ledger.*
-import scalus.crypto.ed25519.VerificationKey
 
 final case class HeadConfig private (
     override val headConfigPreinit: HeadConfig.Preinit,
-    override val initialBlock: Block.MultiSigned.Initial,
+    override val initialBlockSection: InitialBlock,
 ) extends HeadConfig.Section {
     override transparent inline def headConfig: HeadConfig = this
 }
@@ -37,7 +22,7 @@ object HeadConfig {
         initialBlock: Block.MultiSigned.Initial
     ): Option[HeadConfig] =
         import headConfigPreinit.*
-        apply(cardanoNetwork, headParams, headPeers, initialBlock, initializationParams)
+        apply(cardanoNetwork, headParameters, headPeers, initialBlock, initializationParameters)
 
     def apply(
         cardanoNetwork: CardanoNetwork,
@@ -53,7 +38,7 @@ object HeadConfig {
               headPeers,
               initializationParams
             )
-            result <- Some(new HeadConfig(headConfigPreinit, initialBlock))
+            result <- Some(new HeadConfig(headConfigPreinit, InitialBlock(initialBlock)))
         } yield result
 
     }
@@ -61,23 +46,15 @@ object HeadConfig {
     trait Section extends HeadConfig.Preinit.Section, InitialBlock.Section {
         def headConfig: HeadConfig
 
-        override transparent inline def initialBlockSection: InitialBlock = InitialBlock(
-          initialBlock
-        )
-
-        override def cardanoNetwork: CardanoNetwork =
-            headConfigPreinit.cardanoNetwork
-        override def headParams: HeadParameters = headConfigPreinit.headParams
-        override def headPeers: HeadPeers = headConfigPreinit.headPeers
-        override def initializationParams: InitializationParameters =
-            headConfigPreinit.initializationParams
+        override def headConfigPreinit: Preinit = headConfig.headConfigPreinit
+        def initialBlockSection: InitialBlock = headConfig.initialBlockSection
     }
 
     final case class Preinit private[head] (
         override val cardanoNetwork: CardanoNetwork,
-        override val headParams: HeadParameters,
+        override val headParameters: HeadParameters,
         override val headPeers: HeadPeers,
-        override val initializationParams: InitializationParameters,
+        override val initializationParameters: InitializationParameters,
     ) extends Preinit.Section {
         override transparent inline def headConfigPreinit: Preinit = this
     }
@@ -112,77 +89,11 @@ object HeadConfig {
               InitializationParameters.Section {
             def headConfigPreinit: HeadConfig.Preinit
 
-            override transparent inline def settlementConfig: SettlementConfig =
-                headParams.settlementConfig
-            override transparent inline def cardanoInfo: CardanoInfo = cardanoNetwork.cardanoInfo
-            override transparent inline def network: Network = cardanoNetwork.network
-            override transparent inline def slotConfig: SlotConfig = cardanoNetwork.slotConfig
-            override transparent inline def cardanoProtocolParams: ProtocolParams =
-                cardanoNetwork.cardanoProtocolParams
-
-            override transparent inline def txTiming: TxTiming = headParams.txTiming
-
-            override transparent inline def fallbackContingency: FallbackContingency =
-                headParams.fallbackContingency
-
-            override transparent inline def disputeResolutionConfig: DisputeResolutionConfig =
-                headParams.disputeResolutionConfig
-
-            override transparent inline def headParamsHash: Hash32 =
-                headParams.headParamsHash
-
-            override def headPeerNums: NonEmptyList[HeadPeerNumber] =
-                headPeers.headPeerNums
-            override transparent inline def headPeerIds: NonEmptyList[HeadPeerId] =
-                headPeers.headPeerIds
-            override transparent inline def headPeerVKeys: NonEmptyList[VerificationKey] =
-                headPeers.headPeerVKeys
-            override transparent inline def headPeerVKey(
-                p: HeadPeerNumber
-            ): Option[VerificationKey] =
-                headPeers.headPeerVKey(p)
-            override transparent inline def headPeerVKey(
-                p: HeadPeerId
-            ): Option[VerificationKey] =
-                headPeers.headPeerVKey(p)
-            override transparent inline def nHeadPeers: PositiveInt =
-                headPeers.nHeadPeers
-            override transparent inline def headMultisigScript: HeadMultisigScript =
-                headPeers.headMultisigScript
-
-            // TODO: this type allows non-babbage outputs
-            override transparent inline def initialEvacuationMap: EvacuationMap =
-                initializationParams.initialEvacuationMap
-            override transparent inline def initialEquityContributions
-                : NonEmptyMap[HeadPeerNumber, Coin] =
-                initializationParams.initialEquityContributions
-            override transparent inline def initialSeedUtxo: Utxo =
-                initializationParams.initialSeedUtxo
-            override transparent inline def headId: HeadId =
-                initializationParams.headId
-            override transparent inline def initialAdditionalFundingUtxos: Utxos =
-                initializationParams.initialAdditionalFundingUtxos
-            override transparent inline def initialChangeOutputs: List[TransactionOutput] =
-                initializationParams.initialChangeOutputs
-            override transparent inline def initialEquityContributed: Coin =
-                initializationParams.initialEquityContributed
-            override transparent inline def initialFundingValue: Value =
-                initializationParams.initialFundingValue
-            override transparent inline def initialL2Value: Value =
-                initializationParams.initialL2Value
-            override transparent inline def headTokenNames: CIP67.HeadTokenNames =
-                initializationParams.headTokenNames
-            override transparent inline def initialEquityContributionsHash: Hash32 =
-                initializationParams.initialEquityContributionsHash
-
-            override transparent inline def ruleBasedScriptAddresses: RuleBasedScriptAddresses =
-                cardanoNetwork.ruleBasedScriptAddresses
-
-            override transparent inline def ruleBasedTreasuryAddress: ShelleyAddress =
-                ruleBasedScriptAddresses.ruleBasedTreasuryAddress
-
-            override transparent inline def ruleBasedDisputeResolutionAddress: ShelleyAddress =
-                ruleBasedScriptAddresses.ruleBasedDisputeResolutionAddress
+            def cardanoNetwork: CardanoNetwork = headConfigPreinit.cardanoNetwork
+            def headParameters: HeadParameters = headConfigPreinit.headParameters
+            def headPeers: HeadPeers = headConfigPreinit.headPeers
+            def initializationParameters: InitializationParameters =
+                headConfigPreinit.initializationParameters
         }
     }
 }

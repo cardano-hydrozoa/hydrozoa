@@ -14,8 +14,10 @@ object NodeOperationMultisigConfig {
     trait Section {
         def nodeOperationMultisigConfig: NodeOperationMultisigConfig
 
-        def cardanoLiaisonPollingPeriod: FiniteDuration
-        def peerLiaisonMaxEventsPerBatch: PositiveInt
+        def cardanoLiaisonPollingPeriod: FiniteDuration =
+            nodeOperationMultisigConfig.cardanoLiaisonPollingPeriod
+        def peerLiaisonMaxEventsPerBatch: PositiveInt =
+            nodeOperationMultisigConfig.peerLiaisonMaxEventsPerBatch
     }
 
     lazy val default = NodeOperationMultisigConfig(

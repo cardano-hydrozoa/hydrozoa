@@ -7,6 +7,7 @@ import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.number.Distribution
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.joint.EvacuationMap
+import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.token.CIP67.{HasTokenNames, HeadTokenNames}
 import io.circe.{Decoder, Encoder}
 import scala.collection.immutable.TreeMap
@@ -46,7 +47,7 @@ final case class InitializationParameters(
     // TODO: just changeOutputs?
     override val initialChangeOutputs: List[TransactionOutput],
 ) extends InitializationParameters.Section {
-    override transparent inline def initializationParams: InitializationParameters = this
+    override transparent inline def initializationParameters: InitializationParameters = this
 
     override lazy val initialL2Value: Value =
         Value.combine(initialEvacuationMap.outputs.map(_.utxo.value.value))
@@ -69,20 +70,26 @@ final case class InitializationParameters(
 
 object InitializationParameters {
     trait Section extends HasTokenNames {
-        def initializationParams: InitializationParameters
+        def initializationParameters: InitializationParameters
 
-        def initialEvacuationMap: EvacuationMap
-        def initialEquityContributions: NonEmptyMap[HeadPeerNumber, Coin]
-        def initialSeedUtxo: Utxo
-        def headId: HeadId
-        def initialAdditionalFundingUtxos: Utxos
-        def initialChangeOutputs: List[TransactionOutput]
+        def headTokenNames = CIP67.HeadTokenNames(initialSeedUtxo.input)
 
-        def initialEquityContributed: Coin
-        def initialFundingValue: Value
-        def initialL2Value: Value
+        def initialEvacuationMap: EvacuationMap = initializationParameters.initialEvacuationMap
+        def initialEquityContributions: NonEmptyMap[HeadPeerNumber, Coin] =
+            initializationParameters.initialEquityContributions
+        def initialSeedUtxo: Utxo = initializationParameters.initialSeedUtxo
+        def headId: HeadId = initializationParameters.headId
+        def initialAdditionalFundingUtxos: Utxos =
+            initializationParameters.initialAdditionalFundingUtxos
+        def initialChangeOutputs: List[TransactionOutput] =
+            initializationParameters.initialChangeOutputs
 
-        def initialEquityContributionsHash: Hash32
+        def initialEquityContributed: Coin = initializationParameters.initialEquityContributed
+        def initialFundingValue: Value = initializationParameters.initialFundingValue
+        def initialL2Value: Value = initializationParameters.initialL2Value
+
+        def initialEquityContributionsHash: Hash32 =
+            initializationParameters.initialEquityContributionsHash
 
         final def initialFundingUtxos: Utxos =
             initialAdditionalFundingUtxos + initialSeedUtxo.toTuple
