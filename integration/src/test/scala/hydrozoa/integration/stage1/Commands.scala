@@ -60,6 +60,7 @@ object Commands:
     /** Start a new block in the joint ledger. */
     final case class StartBlockCommand(
         blockNumber: BlockNumber,
+        // TODO: check whether we can get rid of that field
         creationTime: BlockCreationStartTime
     ) {
         override def toString: String =

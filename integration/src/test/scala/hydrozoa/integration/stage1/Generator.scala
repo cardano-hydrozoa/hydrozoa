@@ -272,14 +272,13 @@ object CommandGenerators:
         val config = state.multiNodeConfig
         val cardanoNetwork: CardanoNetwork = config.headConfig.cardanoNetwork
         val generateCappedValueC = generateCappedValue(cardanoNetwork)
-        val l2AddressesInUse = state.evacuationMap.outputsCooked.map(_.address).toSet
+        val l2AddressesInUse = state.utxosL2Active.map(_._2.address).toSet
 
-        val ownedUtxos = state.evacuationMap.cooked
+        val ownedUtxos = state.utxosL2Active
             .filter((_, o) =>
                 o.address.asInstanceOf[ShelleyAddress].payment.asHash == config
                     .addressOf(HeadPeerNumber.zero)
             )
-            .map((ek, to) => Cbor.decode(ek.byteString.bytes).to[TransactionInput].value -> to)
 
         for {
             // Inputs
@@ -620,7 +619,7 @@ object ScenarioGenerators:
                               1 -> CommandGenerators
                                   .genCompleteBlock(blockNumber, state.currentTime.instant)
                                   .map(AnyCommand.apply),
-                              10 -> (if state.evacuationMap.isEmpty
+                              10 -> (if state.utxosL2Active.isEmpty
                                      then Gen.const(noOp)
                                      else generateL2Tx(state).map(AnyCommand.apply))
                             )
@@ -662,7 +661,7 @@ object ScenarioGenerators:
 
                         case InProgress(blockNumber, _, _, _) =>
                             Gen.frequency(
-                              1 -> (if state.evacuationMap.size >= minL2Utxos
+                              1 -> (if state.utxosL2Active.size >= minL2Utxos
                                     then
                                         CommandGenerators
                                             .genCompleteBlockFinal(
@@ -749,7 +748,7 @@ object ScenarioGenerators:
                                     state.currentTime.instant
                                   )
                                   .map(cmd => Some(AnyCommand.apply(cmd))),
-                              3 -> (if state.evacuationMap.nonEmpty
+                              3 -> (if state.utxosL2Active.nonEmpty
                                     then
                                         CommandGenerators
                                             .genValidNonPlutusL2Tx(

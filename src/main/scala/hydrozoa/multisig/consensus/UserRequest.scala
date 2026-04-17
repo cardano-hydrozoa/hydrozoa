@@ -92,7 +92,9 @@ object RequestValidityEndTimeRaw:
   */
 case class UserRequestHeader(
     headId: HeadId,
+    // TODO: this should be optional, should be parsed by this time
     validityStart: RequestValidityStartTimeRaw,
+    // TODO: this should be optional, should be parsed by this time
     validityEnd: RequestValidityEndTimeRaw,
     bodyHash: Hash32
 ) {

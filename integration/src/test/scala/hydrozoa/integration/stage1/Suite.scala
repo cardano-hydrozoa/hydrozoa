@@ -333,13 +333,13 @@ case class Suite(
                   config.headConfig.txTiming.newFallbackStartTime(config.headConfig.headStartTime),
               evacuationMap = config.headConfig.initialEvacuationMap,
               peerUtxosL1 = peerL1GenesisUtxos,
-              peerGenesisUtxosL1 = peerL1GenesisUtxos,
+              preinitPeerUtxosL1 = peerL1GenesisUtxos,
               depositEnqueued = List.empty,
               depositsRegistered = List.empty,
               utxoLocked = Set.empty,
               depositSigned = Map.empty,
               depositSubmitted = List.empty,
-              depositRejected = List.empty,
+              depositsDeclined = List.empty,
             )
             .applyContinuingL1Tx(config.headConfig.initializationTx.tx)
     }
@@ -395,7 +395,7 @@ case class Suite(
                       network = multiNodeConfig.headConfig.cardanoInfo.network,
                       slotConfig = multiNodeConfig.headConfig.cardanoInfo.slotConfig,
                       protocolParams = multiNodeConfig.headConfig.cardanoInfo.protocolParams,
-                      genesisUtxos = state.peerGenesisUtxosL1
+                      genesisUtxos = state.preinitPeerUtxosL1
                     )
                 case Yaci(url, _) =>
                     CardanoBackendConfig.Blockfrost(
