@@ -12,8 +12,10 @@ import hydrozoa.integration.stage1.Commands.*
 import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.backend.cardano.CardanoBackend
+import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger
 import hydrozoa.multisig.consensus.CardanoLiaison.Timeout
 import hydrozoa.multisig.consensus.ack.AckBlock
+import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.consensus.{CardanoLiaison, ConsensusActor, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockNumber}
 import hydrozoa.multisig.ledger.joint.JointLedger
@@ -64,20 +66,24 @@ object AgentActor:
         type Sync = SyncRequest.Envelope[IO, CompleteBlock, Block.Unsigned.Next]
 
     type Request =
-        UserRequesWithId | StartBlock | CompleteBlock.Sync | ConsensusActor.Request |
+        UserRequestWithId | StartBlock | CompleteBlock.Sync | ConsensusActor.Request |
             CardanoLiaison.Timeout.type | Unit
 
     type Handle = ActorRef[IO, Request]
 
 case class AgentActor(
     jointLedgerD: Deferred[IO, JointLedger.Handle],
-    consensusActor: ConsensusActor.Handle,
+    consensusActorD: Deferred[IO, ConsensusActor.Handle],
     cardanoLiaison: CardanoLiaison.Handle
 ) extends Actor[IO, AgentActor.Request]:
 
     private val jointLedgerRef = Ref.unsafe[IO, Option[JointLedger.Handle]](None)
 
     private def jointLedger: IO[JointLedger.Handle] = jointLedgerRef.get.map(_.get)
+
+    private val consensusActorRef = Ref.unsafe[IO, Option[ConsensusActor.Handle]](None)
+
+    private val consensusActor: IO[ConsensusActor.Handle] = consensusActorRef.get.map(_.get)
 
     override def preStart: IO[Unit] = for {
         // Message to itself to get the jointLedger actor
@@ -89,6 +95,8 @@ case class AgentActor(
             for {
                 jointLedger <- jointLedgerD.get
                 _ <- jointLedgerRef.set(Some(jointLedger))
+                consensusActor <- consensusActorD.get
+                _ <- consensusActorRef.set(Some(consensusActor))
             } yield ()
 
         case t: CardanoLiaison.Timeout.type => cardanoLiaison ! t
@@ -101,20 +109,20 @@ case class AgentActor(
             } yield ()
 
         // Joint ledger - proxying
-        case x: UserRequesWithId => jointLedger >>= (_ ! x)
+        case x: UserRequestWithId => jointLedger >>= (_ ! x)
         case x: StartBlock  => jointLedger >>= (_ ! x)
 
         // Consensus actor
         // Intercepting unsigned blocks
         case x: Block.Unsigned.Next => proxyBlockUnsigned(x)
         // Direct proxying
-        case x: AckBlock => consensusActor ! x
+        case x: AckBlock => consensusActor >>= (_ ! x)
     }
 
     private val ref = Ref.unsafe[IO, Map[BlockNumber, CompleteBlock.Sync]](Map.empty)
 
     def proxyBlockUnsigned(block: Block.Unsigned.Next): IO[Unit] = for {
-        _ <- consensusActor ! block
+        _ <- consensusActor >>= (_ ! block)
         envelope <- ref.modify { map =>
             val blockNum = block.blockNum
             val v = map(blockNum)
@@ -161,16 +169,25 @@ object SutCommands:
     implicit given SutCommand[CompleteBlockCommand, BlockBrief, Stage1Sut] with {
         override def run(cmd: CompleteBlockCommand, sut: Stage1Sut): IO[BlockBrief] = for {
             _ <- logger.debug(
-              s">> CompleteBlockCommand(blockNumber=${cmd.blockNumber}, isFinal=${cmd.isFinal})"
+              s">> CompleteBlockCommand(blockNumber=${cmd.blockNumber}, " +
+                  s"blockCreationEndTime=${cmd.blockCreationEndTime}, " +
+                  s"isFinal=${cmd.isFinal})"
             )
-            headUtxosRet <- sut.cardanoBackend
+            headUtxos <- sut.cardanoBackend
                 .utxosAt(sut.headAddress)
                 .map(_.fold(err => throw RuntimeException(err.toString), _.keySet))
             block <- IO.pure(
               if cmd.isFinal
-              then CompleteBlockFinal(None)
-              // TODO: use mock state, not cmd.pollResults
-              else CompleteBlockRegular(None, headUtxosRet, false)
+              then CompleteBlockFinal(
+                  referenceBlockBrief = None, 
+                  blockCreationEndTime = cmd.blockCreationEndTime
+              )
+              else CompleteBlockRegular(
+                  referenceBlockBrief = None,
+                  pollResults = PollResults(headUtxos),
+                  finalizationLocallyTriggered = LocalFinalizationTrigger.NotTriggered, 
+                  blockCreationEndTime = cmd.blockCreationEndTime
+              )
             )
             // All sync commands should be timed out since the system may terminate
             d <- (sut.agent ?: AgentActor.CompleteBlock(block, cmd.blockNumber)).timeout(10.seconds)

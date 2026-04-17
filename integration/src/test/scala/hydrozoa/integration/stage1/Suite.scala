@@ -8,10 +8,11 @@ import com.suprnation.actor.ActorSystem
 import com.suprnation.typelevel.actors.syntax.*
 import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.BlockCreationEndTimeGen
 import hydrozoa.config.head.initialization.{CappedValueGen, InitializationParametersGenTopDown}
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.config.head.multisig.timing.TxTimingGen
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.config.node.MultiNodeConfig
-import hydrozoa.config.node.operation.liquidation.generateNodeOperationLiquidationConfig
+import hydrozoa.config.node.operation.evacuation.generateNodeOperationEvacuationConfig
 import hydrozoa.config.node.operation.multisig.generateNodeOperationMultisigConfig
 import hydrozoa.integration.stage1.Model.CurrentTime.{AfterCompetingFallbackStartTime, BeforeHappyPathExpiration}
 import hydrozoa.integration.stage1.Model.{BlockCycle, CurrentTime}
@@ -25,17 +26,15 @@ import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost.URL
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendMock, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, ConsensusActor, EventSequencer}
-import hydrozoa.multisig.ledger.block.{BlockEffects, BlockNumber, BlockVersion}
+import hydrozoa.multisig.ledger.block.{Block, BlockEffects, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l1.tx.{FinalizationTx, SettlementTx}
-import java.util.concurrent.TimeUnit
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.commands.{ModelBasedSuite, ScenarioGen}
 import org.scalacheck.{Gen, Prop}
 import org.typelevel.log4cats.Logger
-import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.rules.{Context, UtxoEnv}
 import scalus.cardano.ledger.{CardanoInfo, CertState, Coin, EvaluatorMode, PlutusScriptEvaluator, ProtocolParams, SlotConfig, Transaction, TransactionHash, TransactionOutput, Utxo, Utxos, Value}
@@ -43,6 +42,9 @@ import scalus.cardano.txbuilder.TransactionBuilderStep.{Send, Spend}
 import scalus.cardano.txbuilder.{Change, TransactionBuilder}
 import test.TestPeerName.Alice
 import test.{SeedPhrase, TestPeerName, TestPeers}
+
+import java.util.concurrent.TimeUnit
+import scala.concurrent.duration.{DurationInt, FiniteDuration}
 
 /** Integration Stage 1 (the simplest).
   *   - Only three real actors are involved: [[JointLedger]], [[ConsensusActor]], and
@@ -53,22 +55,20 @@ import test.{SeedPhrase, TestPeerName, TestPeers}
   *     blocks.
   */
 
-// TODO: copied from cardano liaison test suite
+// TODO: copied from Cardano Liaison test suite, which is temporarily disabled
+// used for tracing only, so it's only role is to call tracer.leaderStarted
 class BlockWeaverMock(
     tracer: ProtocolTracer,
     ownPeerNum: Int,
     numPeers: Int
 ) extends Actor[IO, BlockWeaver.Request] {
-    // The real BlockWeaver emits leader_started in switchToIdle:
-    //  - At startup for the first block (block 1)
-    //  - On BlockConfirmed(N) for the next block (N+1)
     override def preStart: IO[Unit] =
         if 1 % numPeers == ownPeerNum then tracer.leaderStarted(1, ownPeerNum)
         else IO.pure(())
 
     override def receive: Receive[IO, BlockWeaver.Request] = {
-        case bc: BlockWeaver.BlockConfirmed =>
-            val nextBlockNum = (bc.blockNum: Int) + 1
+        case b: Block.MultiSigned =>
+            val nextBlockNum = (b.blockNum: Int) + 1
             if nextBlockNum % numPeers == ownPeerNum then
                 tracer.leaderStarted(nextBlockNum, ownPeerNum)
             else IO.pure(())
@@ -114,12 +114,14 @@ case class Suite(
         case _       => false
     }
 
-    override def commandGenTweaker: [A] => (g: Gen[A]) => Gen[A] = suiteCardano match {
-        case _: SuiteCardano.Mock => [A] => (g: Gen[A]) => g
-        // When using Yaci and devnet we don't want to generate short sequences
-        case _: SuiteCardano.Yaci   => [A] => (g: Gen[A]) => Gen.resize(200, g)
-        case _: SuiteCardano.Public => [A] => (g: Gen[A]) => Gen.resize(200, g)
-    }
+    override def commandGenTweaker: [A] => (g: Gen[A]) => Gen[A] =
+        [A] => (g: Gen[A]) => suiteCardano match {
+            // When using L1 mock we do want to start with short sequences to find a failure ASAP
+            case _: SuiteCardano.Mock => g
+            // When using Yaci and devnet we don't want to generate short sequences - only long ones
+            case _: SuiteCardano.Yaci   => Gen.resize(200, g)
+            case _: SuiteCardano.Public => Gen.resize(200, g)
+        }
 
     override def initEnv: Env = suiteCardano match {
 
@@ -300,7 +302,7 @@ case class Suite(
 
         // Additional generators
         val generateHeadStartTime: BlockCreationEndTimeGen = slotConfig =>
-            Gen.const(env.startTime.quantize(slotConfig))
+            Gen.const(BlockCreationEndTime(env.startTime.quantize(slotConfig)))
         val generateTxTiming = txTimingGen
 
         for {
@@ -322,16 +324,17 @@ case class Suite(
             _ = logger.debug(s"peerL1GenesisUtxos: ${peerL1GenesisUtxos}")
 
             operationalMultisigConfig <- generateNodeOperationMultisigConfig
-            operationalLiquidationConfig <- generateNodeOperationLiquidationConfig
+            operationalLiquidationConfig <- generateNodeOperationEvacuationConfig(testPeers.walletFor(Alice))
         } yield Model
             .State(
               multiNodeConfig = config,
-              nextRequestNumber = LedgerEventNumber(0),
-              currentTime = BeforeHappyPathExpiration(config.headConfig.headStartTime),
+              nextRequestNumber = RequestNumber(0),
+              currentTime = BeforeHappyPathExpiration(config.headConfig.initialBlock.endTime.convert),
               blockCycle = BlockCycle.Done(BlockNumber.zero, BlockVersion.Full.zero),
               competingFallbackStartTime =
-                  config.headConfig.txTiming.newFallbackStartTime(config.headConfig.headStartTime),
-              evacuationMap = config.headConfig.initialEvacuationMap,
+                  config.headConfig.txTiming.newFallbackStartTime(config.headConfig.initialBlock.endTime),
+              // TODO: see https://linear.app/gummiworm-labs/issue/GUM-104/specify-how-ledger-configuration-is-handled
+              utxosL2Active = Map.empty,
               peerUtxosL1 = peerL1GenesisUtxos,
               preinitPeerUtxosL1 = peerL1GenesisUtxos,
               depositEnqueued = List.empty,
@@ -437,20 +440,11 @@ case class Suite(
                 override def receive: Receive[IO, EventSequencer.Request] = _ => IO.pure(())
             })
 
-            // Consensus actor
-            consensusConnections = ConsensusActor.Connections(
-              blockWeaver = blockWeaver,
-              cardanoLiaison = cardanoLiaison,
-              eventSequencer = eventSequencerStub,
-              peerLiaisons = List.empty,
-              tracer = tracer
-            )
-
-            consensusActor <- system.actorOf(ConsensusActor(nodeConfig, consensusConnections))
-
             // Agent actor
             jointLedgerD <- IO.deferred[JointLedger.Handle]
-            agent <- system.actorOf(AgentActor(jointLedgerD, consensusActor, cardanoLiaison))
+            consensusActorD <- IO.deferred[ConsensusActor.Handle]
+
+            agent <- system.actorOf(AgentActor(jointLedgerD, consensusActorD, cardanoLiaison))
 
             jointLedgerConnections = JointLedger.Connections(
               consensusActor = agent,
@@ -468,6 +462,20 @@ case class Suite(
             )
 
             _ <- jointLedgerD.complete(jointLedger)
+
+            // Consensus actor
+            consensusConnections = ConsensusActor.Connections(
+                blockWeaver = blockWeaver,
+                cardanoLiaison = cardanoLiaison,
+                eventSequencer = eventSequencerStub,
+                peerLiaisons = List.empty,
+                jointLedger = jointLedger,
+                tracer = tracer
+            )
+
+            consensusActor <- system.actorOf(ConsensusActor(nodeConfig, consensusConnections))
+
+            _ <- consensusActorD.complete(consensusActor)
 
         } yield Stage1Sut(
           headAddress = multiNodeConfig.headConfig.headMultisigAddress,
@@ -589,7 +597,7 @@ case class Suite(
         )
 
         _ <- IO.whenA(expectedEffects.nonEmpty)(
-          loggerIO.info(s"Utxo set size: ${lastState.evacuationMap.size}") >>
+          loggerIO.info(s"Utxo set size: ${lastState.utxosL2Active.size}") >>
               loggerIO.info("Expected effects:" + expectedEffects.map { case (label, hash) =>
                   s"\n\t- $label: $hash"
               }.mkString)
