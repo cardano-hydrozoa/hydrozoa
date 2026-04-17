@@ -33,7 +33,9 @@ final case class ResolutionTx(
     override val tx: Transaction,
     override val txLens: Lens[ResolutionTx, Transaction] = Focus[ResolutionTx](_.tx),
     override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
-) extends Tx[ResolutionTx]
+) extends Tx[ResolutionTx] {
+    override def transactionFamily: String = "Resolution"
+}
 
 object ResolutionTx {
     export ResolutionTxOps.{Build, Config}

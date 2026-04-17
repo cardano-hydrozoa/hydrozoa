@@ -31,7 +31,9 @@ final case class TallyTx(
     override val tx: Transaction,
     override val txLens: Lens[TallyTx, Transaction] = Focus[TallyTx](_.tx),
     override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
-) extends Tx[TallyTx]
+) extends Tx[TallyTx] {
+    override def transactionFamily: String = "TallyTx"
+}
 
 object TallyTx {
     export TallyTxOps.{Build, Config}

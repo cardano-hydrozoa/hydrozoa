@@ -50,8 +50,6 @@ final case class InitializationParameters(
 ) extends InitializationParameters.Section {
     override transparent inline def initializationParams: InitializationParameters = this
 
-    override val initialAdditionalFundingUtxos: Utxos = additionalFundingUtxos
-
     override lazy val initialL2Value: Value =
         Value.combine(initialEvacuationMap.outputs.map(_.utxo.value.value))
 
@@ -71,7 +69,7 @@ final case class InitializationParameters(
     )
 
     override val headId: HeadId =
-        HeadId(HeadTokenNames(seedUtxo.input).treasuryTokenName)
+        HeadId(headTokenNames.treasuryTokenName)
 }
 
 object InitializationParameters {
@@ -90,7 +88,7 @@ object InitializationParameters {
         def initialEquityContributions: NonEmptyMap[HeadPeerNumber, Coin]
         def seedUtxo: Utxo
         def headId: HeadId
-        def initialAdditionalFundingUtxos: Utxos
+        def additionalFundingUtxos: Utxos
         def initialChangeOutputs: List[TransactionOutput]
 
         def initialEquityContributed: Coin
@@ -100,7 +98,7 @@ object InitializationParameters {
         def initialEquityContributionsHash: Hash32
 
         final def initialFundingUtxos: Utxos =
-            initialAdditionalFundingUtxos + seedUtxo.toTuple
+            additionalFundingUtxos + seedUtxo.toTuple
 
         // FIXME: Must be positive
         final def initialSeedIx: Int =

@@ -32,7 +32,7 @@ object ConfigurationCodecTest extends Properties("Configuration Codec Properties
               CardanoBackendMock.mockIO(
                 MockState(initialUtxos =
                     Map(headConfig.seedUtxo.toTuple)
-                        ++ headConfig.initialAdditionalFundingUtxos
+                        ++ headConfig.additionalFundingUtxos
                         ++ Map.from(headConfig.scriptReferenceUtxos.toList.map(_.toTuple))
                 )
               )

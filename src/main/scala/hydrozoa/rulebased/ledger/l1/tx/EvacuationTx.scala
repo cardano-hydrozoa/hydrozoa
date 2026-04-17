@@ -36,7 +36,9 @@ final case class EvacuationTx(
     override val tx: Transaction,
     override val txLens: Lens[EvacuationTx, Transaction] = Focus[EvacuationTx](_.tx),
     override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
-) extends Tx[EvacuationTx]
+) extends Tx[EvacuationTx] {
+    override def transactionFamily: String = "EvacuationTx"
+}
 
 object EvacuationTx {
     export EvacuationTxOps.{Build, Config}

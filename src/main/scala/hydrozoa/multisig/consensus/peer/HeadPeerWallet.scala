@@ -1,5 +1,6 @@
 package hydrozoa.multisig.consensus.peer
 
+import cats.data.Validated.{Invalid, Valid}
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.dummySigningKey
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
@@ -7,7 +8,7 @@ import hydrozoa.lib.cardano.wallet.*
 import hydrozoa.multisig.consensus.ack.{AckBlock, AckId, AckNumber}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber.given
 import hydrozoa.multisig.ledger.block.{Block, BlockHeader}
-import hydrozoa.multisig.ledger.l1.tx.TxSignature
+import hydrozoa.multisig.ledger.l1.tx.{Tx, TxSignature}
 import io.circe.*
 import io.circe.syntax.*
 import scala.language.implicitConversions
@@ -50,6 +51,15 @@ final class HeadPeerWallet(
     def signTx(txUnsigned: Transaction): Transaction =
         val keyWitness = mkVKeyWitness(txUnsigned)
         txUnsigned.attachVKeyWitnesses(List(keyWitness))
+
+    def signTx[A <: Tx[A]](txUnsigned: A): A = {
+        val vKeyWitness = mkVKeyWitness(txUnsigned.tx)
+        txUnsigned.addSignatures(Set(vKeyWitness)) match {
+            case Valid(tx) => tx
+            // This should only happen if the public key and private key don't match
+            case Invalid(e) => throw e.head
+        }
+    }
 
     def mkMinorHeaderSignature(
         headerSerialized: BlockHeader.Minor.Onchain.Serialized

@@ -39,7 +39,9 @@ object RolloutTx {
             Focus[Last](_.tx).asInstanceOf[Lens[RolloutTx, Transaction]],
         override val payoutCount: Int,
         override val resolvedUtxos: ResolvedUtxos
-    ) extends RolloutTx
+    ) extends RolloutTx {
+        override def transactionFamily: String = "RolloutTx.Last"
+    }
 
     /** A rollout tx preceding the last one in the sequence. It both spends and produces a rollout
       * utxo.
@@ -55,7 +57,9 @@ object RolloutTx {
         override val payoutCount: Int,
         override val resolvedUtxos: ResolvedUtxos
     ) extends RolloutTx,
-          RolloutUtxo.Produced
+          RolloutUtxo.Produced {
+        override def transactionFamily: String = "RolloutTx.NotLast"
+    }
 }
 
 private object RolloutTxOps {

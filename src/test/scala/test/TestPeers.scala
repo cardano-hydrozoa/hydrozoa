@@ -1,5 +1,6 @@
 package test
 
+import cats.data.Validated.{Invalid, Valid}
 import cats.data.{NonEmptyList, ReaderT}
 import com.bloxbean.cardano.client.account.Account
 import com.bloxbean.cardano.client.common.model.Network as BloxbeanNetwork
@@ -14,6 +15,7 @@ import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.cardano.wallet.WalletModule
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber, HeadPeerWallet}
+import hydrozoa.multisig.ledger.l1.tx.Tx
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Test.Parameters
 import org.scalacheck.{Gen, Prop, Properties}
@@ -112,6 +114,14 @@ case class TestPeers private (
       */
     def multisignTx(tx: Transaction): Transaction =
         tx.attachVKeyWitnesses(mkVKeyWitnesses(tx).toList)
+
+    def multisignTx[A <: Tx[A]](tx: A): A =
+        val witnesses = mkVKeyWitnesses(tx.tx)
+        tx.addSignatures(Set.from(witnesses.toList)) match {
+            case Valid(a) =>
+                a
+            case Invalid(e) => throw RuntimeException(s"error multi-signing: $e")
+        }
 
     def mkVKeyWitnesses(tx: Transaction): NonEmptyList[VKeyWitness] =
         NonEmptyList.fromListUnsafe(

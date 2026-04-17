@@ -47,12 +47,8 @@ def generateInitialBlock(
           )
         ),
         effects = BlockEffects.MultiSigned.Initial(
-          initializationTx = initTxSeq.initializationTx
-              .focus(_.tx)
-              .modify(testPeers.multisignTx),
-          fallbackTx = initTxSeq.fallbackTx
-              .focus(_.tx)
-              .modify(testPeers.multisignTx)
+          initializationTx = testPeers.multisignTx(initTxSeq.initializationTx),
+          fallbackTx = testPeers.multisignTx(initTxSeq.fallbackTx)
         )
       )
     )

@@ -283,12 +283,8 @@ object Bootstrap:
               )
             ),
             effects = BlockEffects.MultiSigned.Initial(
-              initializationTx = initTxSeq.initializationTx
-                  .focus(_.tx)
-                  .modify(ownHeadWallet.signTx),
-              fallbackTx = initTxSeq.fallbackTx
-                  .focus(_.tx)
-                  .modify(ownHeadWallet.signTx)
+              initializationTx = ownHeadWallet.signTx(initTxSeq.initializationTx),
+              fallbackTx = ownHeadWallet.signTx(initTxSeq.fallbackTx)
             )
           )
         )

@@ -170,8 +170,11 @@ object Metadata {
 
     // FIXME: All of these must be non-negative.
     case class Initialization(
+        // Output index
         multisigTreasuryIx: Int,
+        // Output index
         multisigRegimeIx: Int,
+        // input index
         seedIx: Int
     ) extends Metadata(Tx.Type.Initialization) {
         override def asMap: Map[Metadatum, Metadatum] = Map.from(

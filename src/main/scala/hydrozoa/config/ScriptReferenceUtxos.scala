@@ -184,11 +184,10 @@ object ScriptReferenceUtxos {
         network: CardanoNetwork.Section
     ): Decoder[ScriptReferenceUtxos] = deriveDecoder[ScriptReferenceUtxos]
 
-    // TODO This must be updated when we start getting script versions/hashses from the config
-    given Encoder[TreasuryScriptUtxo] = utxoEncoder.contramap(_.utxo)
+    given Encoder[TreasuryScriptUtxo] = transactionInputAlternateEncoder.contramap(_.utxo.input)
 
     given treasuryReferenceScriptUtxoDecoder(using
-        network: CardanoNetwork.Section
+        network: CardanoNetwork.Section,
     ): Decoder[TreasuryScriptUtxo] =
         utxoDecoder.emap(utxo =>
             TreasuryScriptUtxo(network, utxo).left.map(e =>
@@ -197,7 +196,7 @@ object ScriptReferenceUtxos {
             )
         )
 
-    given Encoder[DisputeScriptUtxo] = utxoEncoder.contramap(_.utxo)
+    given Encoder[DisputeScriptUtxo] = transactionInputAlternateEncoder.contramap(_.utxo.input)
 
     given disputeScriptUtxoDecoder(using
         network: CardanoNetwork.Section

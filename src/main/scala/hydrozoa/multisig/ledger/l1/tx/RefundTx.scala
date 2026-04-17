@@ -38,6 +38,8 @@ object RefundTx {
           Tx[PostDated] {
         override val txLens: Lens[PostDated, Transaction] = Focus[PostDated](_.tx)
         override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
+
+        override def transactionFamily: String = "RefundTx.PostDated"
     }
 }
 
