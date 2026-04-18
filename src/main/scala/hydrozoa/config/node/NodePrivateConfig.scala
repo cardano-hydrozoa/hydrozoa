@@ -3,10 +3,7 @@ package hydrozoa.config.node
 import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
-import hydrozoa.config.node.owninfo.{OwnHeadPeerPrivate, OwnHeadPeerPublic}
-import hydrozoa.lib.number.PositiveInt
-import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, HeadPeerWallet}
-import scala.concurrent.duration.FiniteDuration
+import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 
 final case class NodePrivateConfig(
     override val ownHeadPeerPrivate: OwnHeadPeerPrivate,
@@ -26,31 +23,15 @@ object NodePrivateConfig {
           ScriptReferenceUtxos.Section {
         def nodePrivateConfig: NodePrivateConfig
 
-        override transparent inline def ownHeadWallet: HeadPeerWallet =
-            ownHeadPeerPrivate.ownHeadWallet
-        override transparent inline def ownHeadPeerPublic: OwnHeadPeerPublic =
-            ownHeadPeerPrivate.ownHeadPeerPublic
-        override transparent inline def ownHeadPeerNum: HeadPeerNumber =
-            ownHeadPeerPrivate.ownHeadPeerNum
+        def nodeOperationEvacuationConfig: NodeOperationEvacuationConfig =
+            nodePrivateConfig.nodeOperationEvacuationConfig
 
-        override transparent inline def evacuationBotPollingPeriod: FiniteDuration =
-            nodeOperationEvacuationConfig.evacuationBotPollingPeriod
+        override def nodeOperationMultisigConfig: NodeOperationMultisigConfig =
+            nodePrivateConfig.nodeOperationMultisigConfig
 
-        override transparent inline def cardanoLiaisonPollingPeriod: FiniteDuration =
-            nodeOperationMultisigConfig.cardanoLiaisonPollingPeriod
+        override def ownHeadPeerPrivate: OwnHeadPeerPrivate = nodePrivateConfig.ownHeadPeerPrivate
 
-        override transparent inline def peerLiaisonMaxEventsPerBatch: PositiveInt =
-            nodeOperationMultisigConfig.peerLiaisonMaxEventsPerBatch
-
-        override transparent inline def evacuationWallet: HeadPeerWallet =
-            nodeOperationEvacuationConfig.evacuationWallet
-
-        override transparent inline def rulebasedTreasuryScriptUtxo
-            : ScriptReferenceUtxos.TreasuryScriptUtxo =
-            scriptReferenceUtxos.rulebasedTreasuryScriptUtxo
-
-        override transparent inline def disputeResolutionScriptUtxo
-            : ScriptReferenceUtxos.DisputeScriptUtxo =
-            scriptReferenceUtxos.disputeResolutionScriptUtxo
+        override def scriptReferenceUtxos: ScriptReferenceUtxos =
+            nodePrivateConfig.scriptReferenceUtxos
     }
 }
