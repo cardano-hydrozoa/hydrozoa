@@ -24,7 +24,9 @@ object RuleBasedScriptAddresses {
     trait Section {
         def ruleBasedScriptAddresses: RuleBasedScriptAddresses
 
-        def ruleBasedTreasuryAddress: ShelleyAddress
-        def ruleBasedDisputeResolutionAddress: ShelleyAddress
+        def ruleBasedTreasuryAddress: ShelleyAddress =
+            ruleBasedScriptAddresses.ruleBasedTreasuryAddress
+        def ruleBasedDisputeResolutionAddress: ShelleyAddress =
+            ruleBasedScriptAddresses.ruleBasedDisputeResolutionAddress
     }
 }

@@ -32,7 +32,9 @@ def generateInitialBlock(
             }
 
         fallbackTxStartTime = initTxSeq.fallbackTx.fallbackTxStartTime
-        forcedMajorBlockTime = config.headParams.txTiming.forcedMajorBlockTime(fallbackTxStartTime)
+        forcedMajorBlockTime = config.headParameters.txTiming.forcedMajorBlockTime(
+          fallbackTxStartTime
+        )
         majorBlockWakeupTime = TxTiming.majorBlockWakeupTime(forcedMajorBlockTime, None)
 
     } yield InitialBlock(
@@ -43,7 +45,7 @@ def generateInitialBlock(
             endTime = blockCreationEndTime,
             fallbackTxStartTime = initTxSeq.fallbackTx.fallbackTxStartTime,
             majorBlockWakeupTime = majorBlockWakeupTime,
-            kzgCommitment = config.initializationParams.initialEvacuationMap.kzgCommitment
+            kzgCommitment = config.initializationParameters.initialEvacuationMap.kzgCommitment
           )
         ),
         effects = BlockEffects.MultiSigned.Initial(

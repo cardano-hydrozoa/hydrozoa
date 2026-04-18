@@ -4,10 +4,8 @@ import cats.data.EitherT
 import cats.effect.*
 import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.head.HeadConfig
-import hydrozoa.config.head.initialization.InitializationParameters
 import hydrozoa.config.head.network.CardanoNetwork.{Custom, cardanoNetworkDecoder}
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
-import hydrozoa.config.head.parameters.HeadParameters
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.head.peers.HeadPeers.headPeersDecoder
 import hydrozoa.config.node.NodePrivateConfig.given
@@ -16,7 +14,6 @@ import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost
 import hydrozoa.multisig.consensus.peer.HeadPeerWallet
-import hydrozoa.multisig.ledger.block.Block
 import io.circe.{parser, *}
 
 final case class NodeConfig private (
@@ -93,33 +90,7 @@ object NodeConfig {
     trait Section extends NodePrivateConfig.Section, HeadConfig.Section {
         def nodeConfig: NodeConfig
 
-        override transparent inline def hydrozoaHost: String = nodePrivateConfig.hydrozoaHost
-
-        override transparent inline def hydrozoaPort: String = nodePrivateConfig.hydrozoaPort
-
-        override transparent inline def blockfrostApiKey: String =
-            nodePrivateConfig.blockfrostApiKey
-
-        override transparent inline def headConfigBootstrap: HeadConfig.Bootstrap =
-            headConfig.headConfigBootstrap
-
-        override transparent inline def cardanoNetwork: CardanoNetwork =
-            headConfig.cardanoNetwork
-        override transparent inline def headParams: HeadParameters =
-            headConfig.headParams
-        override transparent inline def headPeers: HeadPeers =
-            headConfig.headPeers
-        override transparent inline def initialBlock: Block.MultiSigned.Initial =
-            headConfig.initialBlock
-        override transparent inline def initializationParams: InitializationParameters =
-            headConfig.initializationParams
-
-        override transparent inline def ownHeadPeerPrivate: OwnHeadPeerPrivate =
-            nodePrivateConfig.ownHeadPeerPrivate
-        override transparent inline def nodeOperationEvacuationConfig
-            : NodeOperationEvacuationConfig =
-            nodePrivateConfig.nodeOperationEvacuationConfig
-        override transparent inline def nodeOperationMultisigConfig: NodeOperationMultisigConfig =
-            nodePrivateConfig.nodeOperationMultisigConfig
+        def headConfig: HeadConfig = nodeConfig.headConfig
+        def nodePrivateConfig: NodePrivateConfig = nodeConfig.nodePrivateConfig
     }
 }

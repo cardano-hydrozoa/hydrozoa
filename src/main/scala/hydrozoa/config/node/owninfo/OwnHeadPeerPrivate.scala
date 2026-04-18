@@ -2,7 +2,7 @@ package hydrozoa.config.node.owninfo
 
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.multisig.consensus.peer.HeadPeerWallet.dummyHeadPeerWalletEncoder
-import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber, HeadPeerWallet}
+import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, HeadPeerWallet}
 import io.circe.*
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
@@ -27,11 +27,8 @@ object OwnHeadPeerPrivate {
     trait Section extends OwnHeadPeerPublic.Section {
         def ownHeadPeerPrivate: OwnHeadPeerPrivate
 
-        def ownHeadWallet: HeadPeerWallet
-
-        override def ownHeadPeerId: HeadPeerId = ownHeadPeerPublic.ownHeadPeerId
-        override def ownHeadPeerNum: HeadPeerNumber = ownHeadPeerPublic.ownHeadPeerNum
-        override def ownHeadVKey: VerificationKey = ownHeadPeerPublic.ownHeadVKey
+        def ownHeadWallet: HeadPeerWallet = ownHeadPeerPrivate.ownHeadWallet
+        def ownHeadPeerPublic: OwnHeadPeerPublic = ownHeadPeerPrivate.ownHeadPeerPublic
     }
 
     given dummyOwnHeadPeerPrivateEncoder: Encoder[OwnHeadPeerPrivate] =

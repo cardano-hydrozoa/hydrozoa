@@ -28,11 +28,11 @@ object OwnHeadPeerPublic {
     trait Section {
         def ownHeadPeerPublic: OwnHeadPeerPublic
 
-        def ownHeadPeerNum: HeadPeerNumber
+        def ownHeadPeerNum: HeadPeerNumber = ownHeadPeerPublic.ownHeadPeerNum
 
-        def ownHeadPeerId: HeadPeerId
+        def ownHeadPeerId: HeadPeerId = ownHeadPeerPublic.ownHeadPeerId
 
-        def ownHeadVKey: VerificationKey
+        def ownHeadVKey: VerificationKey = ownHeadPeerPublic.ownHeadVKey
     }
 
     given ownHeadPeerPublicEncoder: Encoder[OwnHeadPeerPublic] =

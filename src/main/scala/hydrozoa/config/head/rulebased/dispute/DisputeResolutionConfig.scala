@@ -18,7 +18,7 @@ object DisputeResolutionConfig {
     trait Section {
         def disputeResolutionConfig: DisputeResolutionConfig
 
-        def votingDuration: QuantizedFiniteDuration
+        def votingDuration: QuantizedFiniteDuration = disputeResolutionConfig.votingDuration
     }
 
     def default(slotConfig: SlotConfig): DisputeResolutionConfig =

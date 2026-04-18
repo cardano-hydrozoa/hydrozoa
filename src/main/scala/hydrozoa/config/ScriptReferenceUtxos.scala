@@ -71,8 +71,10 @@ object ScriptReferenceUtxos {
     trait Section extends Unresolved.Section {
         def scriptReferenceUtxos: ScriptReferenceUtxos
 
-        def rulebasedTreasuryScriptUtxo: ScriptReferenceUtxos.TreasuryScriptUtxo
-        def disputeResolutionScriptUtxo: ScriptReferenceUtxos.DisputeScriptUtxo
+        def rulebasedTreasuryScriptUtxo: ScriptReferenceUtxos.TreasuryScriptUtxo =
+            scriptReferenceUtxos.rulebasedTreasuryScriptUtxo
+        def disputeResolutionScriptUtxo: ScriptReferenceUtxos.DisputeScriptUtxo =
+            scriptReferenceUtxos.disputeResolutionScriptUtxo
 
         final def referenceTreasury: ReferenceOutput = ReferenceOutput(
           rulebasedTreasuryScriptUtxo.utxo

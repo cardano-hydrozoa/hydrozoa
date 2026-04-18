@@ -14,7 +14,7 @@ object SettlementConfig {
     trait Section {
         def settlementConfig: SettlementConfig
 
-        def maxDepositsAbsorbedPerBlock: PositiveInt
+        def maxDepositsAbsorbedPerBlock: PositiveInt = settlementConfig.maxDepositsAbsorbedPerBlock
     }
 
     given settlementConfigEncoder: Encoder[SettlementConfig] = deriveEncoder[SettlementConfig]

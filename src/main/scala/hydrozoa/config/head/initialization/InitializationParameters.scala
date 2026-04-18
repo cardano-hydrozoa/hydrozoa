@@ -1,7 +1,6 @@
 package hydrozoa.config.head.initialization
 
 import cats.data.NonEmptyMap
-import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
@@ -11,7 +10,8 @@ import hydrozoa.lib.number.Distribution
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber.given
 import hydrozoa.multisig.ledger.joint.EvacuationMap
-import hydrozoa.multisig.ledger.l1.token.CIP67.{HasTokenNames, HeadTokenNames}
+import hydrozoa.multisig.ledger.l1.token.CIP67
+import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import io.circe.generic.semiauto.*
 import io.circe.{Decoder, Encoder, *}
 import scala.collection.immutable.TreeMap
@@ -44,32 +44,11 @@ final case class InitializationParameters(
     override val initialEvacuationMap: EvacuationMap,
     override val initialEquityContributions: NonEmptyMap[HeadPeerNumber, Coin],
     override val seedUtxo: Utxo,
-    additionalFundingUtxos: Utxos,
+    override val additionalFundingUtxos: Utxos,
     // TODO: just changeOutputs?
     override val initialChangeOutputs: List[TransactionOutput],
 ) extends InitializationParameters.Section {
-    override transparent inline def initializationParams: InitializationParameters = this
-
-    override lazy val initialL2Value: Value =
-        Value.combine(initialEvacuationMap.outputs.map(_.utxo.value.value))
-
-    override lazy val initialEquityContributed: Coin =
-        initialEquityContributions.toSortedMap.values.fold(Coin.zero)(_ + _)
-
-    override lazy val initialFundingValue: Value =
-        initialFundingUtxos.values.map(_.value).fold(Value.zero)(_ + _) -
-            initialChangeOutputs.map(_.value).fold(Value.zero)(_ + _)
-
-    override lazy val headTokenNames: HeadTokenNames = HeadTokenNames(seedUtxo.input)
-
-    // TODO: We need this hash to put into the initialization tx's metadata,
-    //  so that the equity contributions are pinned by something signed by all peers.
-    override lazy val initialEquityContributionsHash: Hash32 = Hash[Blake2b_256, Any](
-      platform.blake2b_256(ByteString.unsafeFromArray(???))
-    )
-
-    override val headId: HeadId =
-        HeadId(headTokenNames.treasuryTokenName)
+    override transparent inline def initializationParameters: InitializationParameters = this
 }
 
 object InitializationParameters {
@@ -82,20 +61,32 @@ object InitializationParameters {
     ): Decoder[InitializationParameters] = deriveDecoder[InitializationParameters]
 
     trait Section extends HasTokenNames {
-        def initializationParams: InitializationParameters
+        def initializationParameters: InitializationParameters
 
-        def initialEvacuationMap: EvacuationMap
-        def initialEquityContributions: NonEmptyMap[HeadPeerNumber, Coin]
-        def seedUtxo: Utxo
-        def headId: HeadId
-        def additionalFundingUtxos: Utxos
-        def initialChangeOutputs: List[TransactionOutput]
+        def initialEvacuationMap: EvacuationMap = initializationParameters.initialEvacuationMap
+        def initialEquityContributions: NonEmptyMap[HeadPeerNumber, Coin] =
+            initializationParameters.initialEquityContributions
+        def additionalFundingUtxos: Utxos =
+            initializationParameters.additionalFundingUtxos
+        def initialChangeOutputs: List[TransactionOutput] =
+            initializationParameters.initialChangeOutputs
+        def seedUtxo: Utxo = initializationParameters.seedUtxo
 
-        def initialEquityContributed: Coin
-        def initialFundingValue: Value
-        def initialL2Value: Value
+        final def initialEquityContributed: Coin =
+            initialEquityContributions.toSortedMap.values.fold(Coin.zero)(_ + _)
+        final def headTokenNames = CIP67.HeadTokenNames(seedUtxo.input)
 
-        def initialEquityContributionsHash: Hash32
+        final def headId: HeadId = HeadId(headTokenNames.treasuryTokenName)
+        final def initialFundingValue: Value =
+            initialFundingUtxos.values.map(_.value).fold(Value.zero)(_ + _) -
+                initialChangeOutputs.map(_.value).fold(Value.zero)(_ + _)
+
+        def initialL2Value: Value =
+            Value.combine(initialEvacuationMap.outputs.map(_.utxo.value.value))
+
+        final def initialEquityContributionsHash: Hash32 = Hash[Blake2b_256, Any](
+          platform.blake2b_256(ByteString.unsafeFromArray(???))
+        )
 
         final def initialFundingUtxos: Utxos =
             additionalFundingUtxos + seedUtxo.toTuple

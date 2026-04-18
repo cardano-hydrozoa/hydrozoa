@@ -6,7 +6,7 @@ import hydrozoa.lib.number.PositiveInt
 import io.circe.*
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
-import scalus.cardano.address.{Network, ShelleyAddress}
+import scalus.cardano.address.Network
 import scalus.cardano.ledger.{CardanoInfo, Coin, EvaluatorMode, PlutusScriptEvaluator, ProtocolParams, ProtocolVersion, SlotConfig, TransactionOutput}
 import scalus.cardano.txbuilder.TransactionBuilder
 
@@ -28,25 +28,25 @@ enum CardanoNetwork(_cardanoInfo: CardanoInfo) extends CardanoNetwork.Section {
     override def slotConfig: SlotConfig = _cardanoInfo.slotConfig
     override def cardanoProtocolParams: ProtocolParams = _cardanoInfo.protocolParams
 
-    lazy val ruleBasedScriptAddresses: RuleBasedScriptAddresses = RuleBasedScriptAddresses(this)
-
-    override transparent inline def ruleBasedTreasuryAddress: ShelleyAddress =
-        ruleBasedScriptAddresses.ruleBasedTreasuryAddress
-    override transparent inline def ruleBasedDisputeResolutionAddress: ShelleyAddress =
-        ruleBasedScriptAddresses.ruleBasedDisputeResolutionAddress
+    override lazy val ruleBasedScriptAddresses: RuleBasedScriptAddresses = RuleBasedScriptAddresses(
+      this
+    )
 }
 
 object CardanoNetwork {
     trait Section extends RuleBasedScriptAddresses.Section {
         def cardanoNetwork: CardanoNetwork
 
-        def cardanoInfo: CardanoInfo
+        def ruleBasedScriptAddresses: RuleBasedScriptAddresses =
+            cardanoNetwork.ruleBasedScriptAddresses
 
-        def network: Network
+        def cardanoInfo: CardanoInfo = cardanoNetwork.cardanoInfo
 
-        def slotConfig: SlotConfig
+        def network: Network = cardanoNetwork.network
 
-        def cardanoProtocolParams: ProtocolParams
+        def slotConfig: SlotConfig = cardanoNetwork.slotConfig
+
+        def cardanoProtocolParams: ProtocolParams = cardanoNetwork.cardanoProtocolParams
 
         final def babbageUtxoMinLovelace(serializedSize: PositiveInt): Coin = Coin(
           (160 + serializedSize.convert) * cardanoProtocolParams.utxoCostPerByte

@@ -7,51 +7,40 @@ import cats.effect.*
 import cats.syntax.all.*
 import hydrozoa.config
 import hydrozoa.config.ScriptReferenceUtxos
-import hydrozoa.config.ScriptReferenceUtxos.{DisputeScriptUtxo, TreasuryScriptUtxo, given_Decoder_Unresolved}
+import hydrozoa.config.ScriptReferenceUtxos.given_Decoder_Unresolved
 import hydrozoa.config.head.HeadConfig.Bootstrap.HeadConfigBootstrapError
-import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
-import hydrozoa.config.head.multisig.fallback.FallbackContingency
-import hydrozoa.config.head.multisig.settlement.SettlementConfig
-import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.network.CardanoNetwork.{Custom, cardanoNetworkDecoder}
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.config.head.parameters.HeadParameters
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.head.peers.HeadPeers.headPeersDecoder
-import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
-import hydrozoa.config.head.rulebased.scripts.RuleBasedScriptAddresses
-import hydrozoa.config.node.NodePrivateConfig.nodePrivateConfigDecoder
+import hydrozoa.config.node.NodePrivateConfig.given
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.given
 import hydrozoa.lib.logging.Logging
-import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost}
-import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects}
 import hydrozoa.multisig.ledger.joint.EvacuationMap
-import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, InitializationTx, Metadata as MD, Tx}
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import io.circe.syntax.*
 import io.circe.{Encoder, *}
 import scala.collection.immutable.SortedSet
-import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.*
-import scalus.crypto.ed25519.VerificationKey
 
 /** Invariant: this _must_ be able to project down to a HeadConfig.Bootstrap
   */
 final case class HeadConfig private (
     override val cardanoNetwork: CardanoNetwork,
-    override val headParams: HeadParameters,
+    override val headParameters: HeadParameters,
     override val headPeers: HeadPeers,
     _initialEvacuationMap: EvacuationMap,
     _initialEquityContributions: NonEmptyMap[HeadPeerNumber, Coin],
     override val scriptReferenceUtxos: ScriptReferenceUtxos,
-    override val initialBlock: Block.MultiSigned.Initial,
+    override val initialBlockSection: InitialBlock,
 ) extends HeadConfig.Section {
     override transparent inline def headConfig: HeadConfig = this
 
@@ -67,7 +56,7 @@ final case class HeadConfig private (
         )
         new HeadConfig.Bootstrap(
           cardanoNetwork,
-          headParams,
+          headParameters,
           headPeers,
           initializationParameters,
           scriptReferenceUtxos
@@ -116,7 +105,7 @@ object HeadConfig {
             given HeadConfig.Section = hc
             Json.obj(
               "cardanoNetwork" -> hc.cardanoNetwork.asJson,
-              "headParams" -> hc.headParams.asJson,
+              "headParams" -> hc.headParameters.asJson,
               "headPeers" -> hc.headPeers.asJson,
               "initialEvacuationMap" -> hc.initialEvacuationMap.asJson,
               "initialEquityContributions" -> hc._initialEquityContributions.asJson,
@@ -210,16 +199,18 @@ object HeadConfig {
                 case (Valid(iTx), Valid(fTx)) =>
                     val hc = new HeadConfig(
                       cardanoNetwork = headConfigBootstrap.cardanoNetwork,
-                      headParams = headConfigBootstrap.headParams,
+                      headParameters = headConfigBootstrap.headParameters,
                       headPeers = headConfigBootstrap.headPeers,
                       _initialEvacuationMap = headConfigBootstrap.initialEvacuationMap,
                       _initialEquityContributions = headConfigBootstrap.initialEquityContributions,
                       scriptReferenceUtxos = headConfigBootstrap.scriptReferenceUtxos,
-                      Block.MultiSigned.Initial(
-                        blockBrief,
-                        // The "expectedTxSeq" contains the "enriched" tx types, but they are not signed,
-                        // so we steal the tx signatures here.
-                        BlockEffects.MultiSigned.Initial(iTx, fTx)
+                      InitialBlock(
+                        Block.MultiSigned.Initial(
+                          blockBrief,
+                          // The "expectedTxSeq" contains the "enriched" tx types, but they are not signed,
+                          // so we steal the tx signatures here.
+                          BlockEffects.MultiSigned.Initial(iTx, fTx)
+                        )
                       )
                     )
                     Valid(hc)
@@ -259,18 +250,8 @@ object HeadConfig {
     trait Section extends HeadConfig.Bootstrap.Section, InitialBlock.Section {
         def headConfig: HeadConfig
 
-        override transparent inline def initialBlockSection: InitialBlock = InitialBlock(
-          initialBlock
-        )
-
-        override def scriptReferenceUtxos: ScriptReferenceUtxos =
-            headConfigBootstrap.scriptReferenceUtxos
-        override def cardanoNetwork: CardanoNetwork =
-            headConfigBootstrap.cardanoNetwork
-        override def headParams: HeadParameters = headConfigBootstrap.headParams
-        override def headPeers: HeadPeers = headConfigBootstrap.headPeers
-        override def initializationParams: InitializationParameters =
-            headConfigBootstrap.initializationParams
+        override def headConfigBootstrap: Bootstrap = headConfig.headConfigBootstrap
+        def initialBlockSection: InitialBlock = headConfig.initialBlockSection
     }
 
     /** @param l2Params
@@ -279,9 +260,9 @@ object HeadConfig {
       */
     final case class Bootstrap private[head] (
         override val cardanoNetwork: CardanoNetwork,
-        override val headParams: HeadParameters,
+        override val headParameters: HeadParameters,
         override val headPeers: HeadPeers,
-        override val initializationParams: InitializationParameters,
+        override val initializationParameters: InitializationParameters,
         override val scriptReferenceUtxos: ScriptReferenceUtxos
     ) extends Bootstrap.Section {
         override transparent inline def headConfigBootstrap: Bootstrap = this
@@ -391,7 +372,7 @@ object HeadConfig {
                 given HeadConfig.Bootstrap.Section = hc
                 Json.obj(
                   "cardanoNetwork" -> hc.cardanoNetwork.asJson,
-                  "headParams" -> hc.headParams.asJson,
+                  "headParams" -> hc.headParameters.asJson,
                   "headPeers" -> hc.headPeers.asJson,
                   "initialEvacuationMap" -> hc.initialEvacuationMap.asJson,
                   "initialEquityContributions" -> hc.initialEquityContributions.toSortedMap.asJson,
@@ -585,87 +566,14 @@ object HeadConfig {
               InitializationParameters.Section,
               ScriptReferenceUtxos.Section {
             def headConfigBootstrap: HeadConfig.Bootstrap
+            def cardanoNetwork: CardanoNetwork = headConfigBootstrap.cardanoNetwork
+            def headParameters: HeadParameters = headConfigBootstrap.headParameters
+            def headPeers: HeadPeers = headConfigBootstrap.headPeers
+            def initializationParameters: InitializationParameters =
+                headConfigBootstrap.initializationParameters
+            def scriptReferenceUtxos: ScriptReferenceUtxos =
+                headConfigBootstrap.scriptReferenceUtxos
 
-            override transparent inline def rulebasedTreasuryScriptUtxo: TreasuryScriptUtxo = {
-                scriptReferenceUtxos.rulebasedTreasuryScriptUtxo
-            }
-
-            override transparent inline def disputeResolutionScriptUtxo: DisputeScriptUtxo =
-                scriptReferenceUtxos.disputeResolutionScriptUtxo
-
-            override transparent inline def l2ParamsHash: Hash32 = headParams.l2ParamsHash
-
-            override transparent inline def settlementConfig: SettlementConfig =
-                headParams.settlementConfig
-            override transparent inline def cardanoInfo: CardanoInfo = cardanoNetwork.cardanoInfo
-            override transparent inline def network: Network = cardanoNetwork.network
-            override transparent inline def slotConfig: SlotConfig = cardanoNetwork.slotConfig
-            override transparent inline def cardanoProtocolParams: ProtocolParams =
-                cardanoNetwork.cardanoProtocolParams
-
-            override transparent inline def txTiming: TxTiming = headParams.txTiming
-
-            override transparent inline def fallbackContingency: FallbackContingency =
-                headParams.fallbackContingency
-
-            override transparent inline def disputeResolutionConfig: DisputeResolutionConfig =
-                headParams.disputeResolutionConfig
-
-            override transparent inline def headParamsHash: Hash32 =
-                headParams.headParamsHash
-
-            override def headPeerNums: NonEmptyList[HeadPeerNumber] =
-                headPeers.headPeerNums
-            override transparent inline def headPeerIds: NonEmptyList[HeadPeerId] =
-                headPeers.headPeerIds
-            override transparent inline def headPeerVKeys: NonEmptyList[VerificationKey] =
-                headPeers.headPeerVKeys
-            override transparent inline def headPeerVKey(
-                p: HeadPeerNumber
-            ): Option[VerificationKey] =
-                headPeers.headPeerVKey(p)
-            override transparent inline def headPeerVKey(
-                p: HeadPeerId
-            ): Option[VerificationKey] =
-                headPeers.headPeerVKey(p)
-            override transparent inline def nHeadPeers: PositiveInt =
-                headPeers.nHeadPeers
-            override transparent inline def headMultisigScript: HeadMultisigScript =
-                headPeers.headMultisigScript
-
-            // TODO: this type allows non-babbage outputs
-            override transparent inline def initialEvacuationMap: EvacuationMap =
-                initializationParams.initialEvacuationMap
-            override transparent inline def initialEquityContributions
-                : NonEmptyMap[HeadPeerNumber, Coin] =
-                initializationParams.initialEquityContributions
-            override transparent inline def seedUtxo: Utxo =
-                initializationParams.seedUtxo
-            override transparent inline def headId: HeadId =
-                initializationParams.headId
-            override transparent inline def additionalFundingUtxos: Utxos =
-                initializationParams.additionalFundingUtxos
-            override transparent inline def initialChangeOutputs: List[TransactionOutput] =
-                initializationParams.initialChangeOutputs
-            override transparent inline def initialEquityContributed: Coin =
-                initializationParams.initialEquityContributed
-            override transparent inline def initialFundingValue: Value =
-                initializationParams.initialFundingValue
-            override transparent inline def initialL2Value: Value =
-                initializationParams.initialL2Value
-            override transparent inline def headTokenNames: CIP67.HeadTokenNames =
-                initializationParams.headTokenNames
-            override transparent inline def initialEquityContributionsHash: Hash32 =
-                initializationParams.initialEquityContributionsHash
-
-            override transparent inline def ruleBasedScriptAddresses: RuleBasedScriptAddresses =
-                cardanoNetwork.ruleBasedScriptAddresses
-
-            override transparent inline def ruleBasedTreasuryAddress: ShelleyAddress =
-                ruleBasedScriptAddresses.ruleBasedTreasuryAddress
-
-            override transparent inline def ruleBasedDisputeResolutionAddress: ShelleyAddress =
-                ruleBasedScriptAddresses.ruleBasedDisputeResolutionAddress
         }
     }
 }

@@ -4,12 +4,9 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
-import hydrozoa.config.node.owninfo.{OwnHeadPeerPrivate, OwnHeadPeerPublic}
-import hydrozoa.lib.number.PositiveInt
-import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, HeadPeerWallet}
+import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import io.circe.*
 import io.circe.generic.semiauto.*
-import scala.concurrent.duration.FiniteDuration
 
 final case class NodePrivateConfig(
     override val ownHeadPeerPrivate: OwnHeadPeerPrivate,
@@ -29,31 +26,19 @@ object NodePrivateConfig {
           OwnHeadPeerPrivate.Section {
         def nodePrivateConfig: NodePrivateConfig
 
-        def hydrozoaHost: String
-        def hydrozoaPort: String
-        def blockfrostApiKey: String
+        def ownHeadPeerPrivate: OwnHeadPeerPrivate = nodePrivateConfig.ownHeadPeerPrivate
 
-        // Do we want http or https here?
-        final def hydrozoaUri: String = s"http://$hydrozoaHost:$hydrozoaPort"
+        def nodeOperationEvacuationConfig: NodeOperationEvacuationConfig =
+            nodePrivateConfig.nodeOperationEvacuationConfig
 
-        override transparent inline def ownHeadWallet: HeadPeerWallet =
-            ownHeadPeerPrivate.ownHeadWallet
-        override transparent inline def ownHeadPeerPublic: OwnHeadPeerPublic =
-            ownHeadPeerPrivate.ownHeadPeerPublic
-        override transparent inline def ownHeadPeerNum: HeadPeerNumber =
-            ownHeadPeerPrivate.ownHeadPeerNum
+        def nodeOperationMultisigConfig: NodeOperationMultisigConfig =
+            nodePrivateConfig.nodeOperationMultisigConfig
 
-        override transparent inline def evacuationBotPollingPeriod: FiniteDuration =
-            nodeOperationEvacuationConfig.evacuationBotPollingPeriod
+        def hydrozoaHost: String = nodePrivateConfig.hydrozoaHost
 
-        override transparent inline def cardanoLiaisonPollingPeriod: FiniteDuration =
-            nodeOperationMultisigConfig.cardanoLiaisonPollingPeriod
+        def hydrozoaPort: String = nodePrivateConfig.hydrozoaPort
 
-        override transparent inline def peerLiaisonMaxEventsPerBatch: PositiveInt =
-            nodeOperationMultisigConfig.peerLiaisonMaxEventsPerBatch
-
-        override transparent inline def evacuationWallet: HeadPeerWallet =
-            nodeOperationEvacuationConfig.evacuationWallet
+        def blockfrostApiKey: String = nodePrivateConfig.blockfrostApiKey
     }
 
     given nodePrivateConfigEncoder: Encoder[NodePrivateConfig] =

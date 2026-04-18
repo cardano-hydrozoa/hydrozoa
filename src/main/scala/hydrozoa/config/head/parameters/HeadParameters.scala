@@ -3,12 +3,9 @@ package hydrozoa.config.head.parameters
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.multisig.settlement.SettlementConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
-import hydrozoa.config.head.multisig.timing.TxTiming.Durations.{DepositAbsorptionDuration, DepositMaturityDuration, DepositSubmissionDuration, InactivityMarginDuration, MinSettlementDuration, SilenceDuration}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedFiniteDuration
-import hydrozoa.lib.number.PositiveInt
 import io.circe.generic.semiauto.{deriveDecoder, deriveEncoder}
 import io.circe.{Decoder, Encoder}
 import scalus.cardano.ledger.Hash32
@@ -23,13 +20,7 @@ final case class HeadParameters(
     override val settlementConfig: SettlementConfig,
     override val l2ParamsHash: Hash32
 ) extends HeadParameters.Section {
-    override transparent inline def headParams: HeadParameters = this
-
-    // TODO: We need this hash to put into the initialization tx's metadata,
-    //  so that the head parameters are pinned by something signed by all peers.
-    override lazy val headParamsHash: Hash32 = {
-        ???
-    }
+    override transparent inline def headParameters: HeadParameters = this
 }
 
 object HeadParameters {
@@ -44,44 +35,24 @@ object HeadParameters {
           FallbackContingency.Section,
           DisputeResolutionConfig.Section,
           SettlementConfig.Section {
+        def headParameters: HeadParameters
 
         /** A black-box, L2-specific blake2b-256 hash of the L2 parameters that the peers agree upon
           * during the negotiation phase.
           */
-        def l2ParamsHash: Hash32
+        def l2ParamsHash: Hash32 = headParameters.l2ParamsHash
 
-        def headParams: HeadParameters
+        final def headParamsHash: Hash32 = ???
 
-        def headParamsHash: Hash32
+        def txTiming: TxTiming = headParameters.txTiming
 
-        override transparent inline def maxDepositsAbsorbedPerBlock: PositiveInt =
-            settlementConfig.maxDepositsAbsorbedPerBlock
+        def fallbackContingency: FallbackContingency =
+            headParameters.fallbackContingency
 
-        override transparent inline def minSettlementDuration: MinSettlementDuration =
-            txTiming.minSettlementDuration
+        def disputeResolutionConfig: DisputeResolutionConfig =
+            headParameters.disputeResolutionConfig
 
-        override transparent inline def inactivityMarginDuration: InactivityMarginDuration =
-            txTiming.inactivityMarginDuration
-
-        override transparent inline def silenceDuration: SilenceDuration =
-            txTiming.silenceDuration
-
-        override transparent inline def depositSubmissionDuration: DepositSubmissionDuration =
-            txTiming.depositSubmissionDuration
-
-        override transparent inline def depositMaturityDuration: DepositMaturityDuration =
-            txTiming.depositMaturityDuration
-
-        override transparent inline def depositAbsorptionDuration: DepositAbsorptionDuration =
-            txTiming.depositAbsorptionDuration
-
-        override transparent inline def collectiveContingency: FallbackContingency.Collective =
-            fallbackContingency.collectiveContingency
-
-        override transparent inline def individualContingency: FallbackContingency.Individual =
-            fallbackContingency.individualContingency
-
-        override transparent inline def votingDuration: QuantizedFiniteDuration =
-            disputeResolutionConfig.votingDuration
+        def settlementConfig: SettlementConfig =
+            headParameters.settlementConfig
     }
 }

@@ -305,12 +305,14 @@ object TxTiming {
     trait Section {
         def txTiming: TxTiming
 
-        def minSettlementDuration: MinSettlementDuration
-        def inactivityMarginDuration: InactivityMarginDuration
-        def silenceDuration: SilenceDuration
-        def depositSubmissionDuration: DepositSubmissionDuration
-        def depositMaturityDuration: DepositMaturityDuration
-        def depositAbsorptionDuration: DepositAbsorptionDuration
+        def minSettlementDuration: MinSettlementDuration = txTiming.minSettlementDuration
+        def inactivityMarginDuration: InactivityMarginDuration = txTiming.inactivityMarginDuration
+        def silenceDuration: SilenceDuration = txTiming.silenceDuration
+        def depositSubmissionDuration: DepositSubmissionDuration =
+            txTiming.depositSubmissionDuration
+        def depositMaturityDuration: DepositMaturityDuration = txTiming.depositMaturityDuration
+        def depositAbsorptionDuration: DepositAbsorptionDuration =
+            txTiming.depositAbsorptionDuration
     }
 
     object Durations {

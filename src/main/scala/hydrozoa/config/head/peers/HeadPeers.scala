@@ -85,17 +85,17 @@ object HeadPeers {
     trait Section {
         def headPeers: HeadPeers
 
-        def headPeerNums: NonEmptyList[HeadPeerNumber]
-        def headPeerIds: NonEmptyList[HeadPeerId]
+        def headPeerNums: NonEmptyList[HeadPeerNumber] = headPeers.headPeerNums
+        def headPeerIds: NonEmptyList[HeadPeerId] = headPeers.headPeerIds
 
-        def headPeerVKeys: NonEmptyList[VerificationKey]
+        def headPeerVKeys: NonEmptyList[VerificationKey] = headPeers.headPeerVKeys
 
-        def headPeerVKey(p: HeadPeerNumber): Option[VerificationKey]
-        def headPeerVKey(p: HeadPeerId): Option[VerificationKey]
+        def headPeerVKey(p: HeadPeerNumber): Option[VerificationKey] = headPeers.headPeerVKey(p)
+        def headPeerVKey(p: HeadPeerId): Option[VerificationKey] = headPeers.headPeerVKey(p)
 
-        def headMultisigScript: HeadMultisigScript
+        def headMultisigScript: HeadMultisigScript = headPeers.headMultisigScript
 
-        def nHeadPeers: PositiveInt
+        def nHeadPeers: PositiveInt = headPeers.nHeadPeers
     }
 
     extension (config: HeadPeers.Section & CardanoNetwork.Section)

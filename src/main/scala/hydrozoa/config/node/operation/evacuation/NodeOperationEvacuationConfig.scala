@@ -18,9 +18,10 @@ object NodeOperationEvacuationConfig {
     trait Section {
         def nodeOperationEvacuationConfig: NodeOperationEvacuationConfig
 
-        def evacuationBotPollingPeriod: FiniteDuration
+        def evacuationBotPollingPeriod: FiniteDuration =
+            nodeOperationEvacuationConfig.evacuationBotPollingPeriod
 
-        def evacuationWallet: HeadPeerWallet
+        def evacuationWallet: HeadPeerWallet = nodeOperationEvacuationConfig.evacuationWallet
     }
 
     given nodeOperationEvacuationConfigEncoder: Encoder[NodeOperationEvacuationConfig] =

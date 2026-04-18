@@ -248,7 +248,7 @@ object InitializationTx {
                       multisigRegimeProduced = multisigRegimeProduced,
                       headTokenNames = config.headTokenNames,
                       resolvedUtxos = finalized.resolvedUtxos,
-                      seedUtxo = config.initializationParams.seedUtxo,
+                      seedUtxo = config.initializationParameters.seedUtxo,
                       additionalFundingUtxos = config.additionalFundingUtxos,
                       changeUtxos = config.initialChangeOutputs
                     )
