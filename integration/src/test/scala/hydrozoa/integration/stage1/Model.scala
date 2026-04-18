@@ -510,7 +510,7 @@ object Model:
             lazy val newFallbackTxStartTime = txTiming.newFallbackStartTime(blockEndTime)
             lazy val newForcedMajorBlockTime = txTiming.forcedMajorBlockTime(newFallbackTxStartTime)
             lazy val newMajorBlockWakeupTime =
-                TxTiming.majorBlockWakeupTime(forcedMajorBlockTime, None)
+                TxTiming.majorBlockWakeupTime(newForcedMajorBlockTime, None)
 
             lazy val majorBlock = Major(
               header = BlockHeader.Major(
