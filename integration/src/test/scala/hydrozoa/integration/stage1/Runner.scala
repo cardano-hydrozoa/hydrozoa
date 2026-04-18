@@ -29,7 +29,7 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
       * not strictly needed for testing block promotion, which must work on empty blocks, but we
       * additionally decided to check block brief at the same time.
       */
-    lazy val _ = property("Block promotion with real L2 txs") = Suite(
+    val _ = property("Block promotion with real L2 txs") = Suite(
       suiteCardano = Mock(preprod),
       txTimingGen = generateDefaultTxTiming,
       scenarioGen = NoWithdrawalsScenarioGen,
@@ -69,7 +69,7 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
       *   - [[RegisterDepositCommand]]
       *   - [[SubmitDepositCommand]]
       */
-    val _ = property("Deposits") = Suite(
+    lazy val _ = property("Deposits") = Suite(
       suiteCardano = Mock(preprod),
       txTimingGen = generateDefaultTxTiming,
       scenarioGen = DepositsScenarioGen,
@@ -107,7 +107,7 @@ object Stage1PropertiesYaci extends YetAnotherProperties("Integration Stage 1 wi
       label = "dusty-finalization-yaci"
     ).property()
 
-    val _ = property("Deposits on Yaci") = Suite(
+    lazy val _ = property("Deposits on Yaci") = Suite(
       suiteCardano = Yaci(
         protocolParams = DevKit.yaciParams
       ),
@@ -127,25 +127,25 @@ object Stage1PropertiesPublic extends YetAnotherProperties("Integration Stage 1 
             .withMinSuccessfulTests(1)
     }
 
-    // lazy val _ = property("Block promotion Yaci") = Suite(
-    //    suiteCardano = Yaci(
-    //        protocolParams = DevKit.yaciParams
-    //    ),
-    //    txTimingGen = generateYaciTxTiming,
-    //    scenarioGen = NoWithdrawalsScenarioGen,
-    //    label = "block-promotion-public"
-    // ).property()
-    //
-    // lazy val _ = property("Dusty head finalization Yaci") = Suite(
-    //    suiteCardano = Yaci(
-    //        protocolParams = DevKit.yaciParams
-    //    ),
-    //    txTimingGen = generateYaciTxTiming,
-    //    scenarioGen = MakeDustScenarioGen(minL2Utxos = 500),
-    //    label = "dusty-finalization-public"
-    // ).property()
+     lazy val _ = property("Block promotion Yaci") = Suite(
+        suiteCardano = Yaci(
+            protocolParams = DevKit.yaciParams
+        ),
+        txTimingGen = generateYaciTxTiming,
+        scenarioGen = NoWithdrawalsScenarioGen,
+        label = "block-promotion-public"
+     ).property()
 
-    val _ = property("Deposits on Preview") = Suite(
+     lazy val _ = property("Dusty head finalization Yaci") = Suite(
+        suiteCardano = Yaci(
+            protocolParams = DevKit.yaciParams
+        ),
+        txTimingGen = generateYaciTxTiming,
+        scenarioGen = MakeDustScenarioGen(minL2Utxos = 500),
+        label = "dusty-finalization-public"
+     ).property()
+
+    lazy val _ = property("Deposits on Preview") = Suite(
       suiteCardano = Public(
         cardanoNetwork = CardanoNetwork.Preview,
         blockfrostKey = "previewQQFamFAznFQgz0uRG9OntxgqJczreq9z",

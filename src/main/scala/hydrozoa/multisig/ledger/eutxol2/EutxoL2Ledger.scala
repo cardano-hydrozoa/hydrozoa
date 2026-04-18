@@ -51,6 +51,16 @@ extension (utxos: Utxos) {
         } yield em
 }
 
+extension (ek: EvacuationKey) {
+    // As above: technically partial, but used in the context of the EutxoL2Ledger, it's not.
+    def toTransactionInput: TransactionInput =
+        Cbor.decode(ek.byteString.bytes).to[TransactionInput].value
+}
+
+extension (em: EvacuationMap) {
+    def toUtxos = em.cooked.map((ti, to) => ti.toTransactionInput -> to)
+}
+
 object EutxoL2Ledger {
     type Config = CardanoNetwork.Section & InitializationParameters.Section
 
@@ -62,10 +72,6 @@ object EutxoL2Ledger {
         headId: Option[HeadId],
     )
 
-    // As above: technically partial, but used in the context of the EutxoL2Ledger, it's not.
-    private def toTransactionInput(ek: EvacuationKey): TransactionInput =
-        Cbor.decode(ek.byteString.bytes).to[TransactionInput].value
-
     def apply(
         config: EutxoL2Ledger.Config,
     ): IO[EutxoL2Ledger] = {
@@ -73,9 +79,7 @@ object EutxoL2Ledger {
         for {
             ref <- Ref[IO].of(
               State(
-                activeUtxos = config.initialEvacuationMap.cooked.map((ti, to) =>
-                    toTransactionInput(ti) -> to
-                ),
+                activeUtxos = config.initialEvacuationMap.toUtxos,
                 pendingDeposits = Map.empty,
                 errors = Map.empty,
                 confirmations = Map.empty,

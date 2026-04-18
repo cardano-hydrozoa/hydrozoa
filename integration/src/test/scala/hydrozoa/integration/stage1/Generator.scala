@@ -21,7 +21,7 @@ import hydrozoa.lib.cardano.scalus.txbuilder.DiffHandler.prebalancedLovelaceDiff
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.consensus.{RequestValidityEndTimeRaw, UserRequest, UserRequestHeader, UserRequestWithId}
+import hydrozoa.multisig.consensus.{RequestValidityEndTimeRaw, RequestValidityStartTimeRaw, UserRequest, UserRequestHeader, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.eutxol2.tx.GenesisObligation
 import hydrozoa.multisig.ledger.event.RequestId
@@ -276,8 +276,7 @@ object CommandGenerators:
 
         val ownedUtxos = state.utxosL2Active
             .filter((_, o) =>
-                o.address.asInstanceOf[ShelleyAddress].payment.asHash == config
-                    .addressOf(HeadPeerNumber.zero)
+                o.address.asInstanceOf[ShelleyAddress] == config.addressOf(HeadPeerNumber.zero)
             )
 
         for {
@@ -323,20 +322,31 @@ object CommandGenerators:
 
             _ = logger.trace(s"signed l2Tx: ${HexUtil.encodeHexString(txSigned.toCbor)}")
 
+            body = TransactionRequestBody(
+              l2Payload = ByteString.fromArray(txSigned.toCbor)
+            )
+
+            header = UserRequestHeader(
+              headId = config.headConfig.headId,
+              validityStart = RequestValidityStartTimeRaw(
+                (state.currentTime.instant - 5.seconds).getEpochSecond
+              ),
+              validityEnd = RequestValidityEndTimeRaw(
+                (state.currentTime.instant + 2.minutes).getEpochSecond
+              ),
+              bodyHash = body.hash
+            )
+
+            // Get verification key for peer 0, though it's not needed for EUTXO ledger
+            userVk = config.nodeConfigs(HeadPeerNumber.zero).ownHeadWallet.exportVerificationKey
+
         } yield L2TxCommand(
           request = UserRequestWithId.TransactionRequest(
             requestId = state.nextRequestId,
-            request = UserRequest.TransactionRequest.apply(
-              header = UserRequestHeader(
-                headId = ???,
-                validityStart = ???,
-                validityEnd = ???,
-                bodyHash = ???
-              ),
-              body = TransactionRequestBody(
-                l2Payload = ByteString.fromArray(txSigned.toCbor)
-              ),
-              userVk = ???
+            request = UserRequest.TransactionRequest(
+              header = header,
+              body = body.asInstanceOf[TransactionRequestBody],
+              userVk = userVk
             )
           ),
           txStrategy = txStrategy,
@@ -476,23 +486,37 @@ object CommandGenerators:
                                           s"deposit tx signed: ${HexUtil.encodeHexString(depositTxSigned.toCbor)}"
                                         )
 
+                                        body = DepositRequestBody(
+                                          l1Payload = ByteString
+                                              .fromArray(depositRefundSeq.depositTx.tx.toCbor),
+                                          l2Payload = GenesisObligation.serialize(l2Outputs)
+                                        )
+
+                                        header = UserRequestHeader(
+                                          headId = multiNodeConfig.headConfig.headId,
+                                          validityStart = RequestValidityStartTimeRaw(
+                                            (state.currentTime.instant - 5.seconds).getEpochSecond
+                                          ),
+                                          validityEnd = RequestValidityEndTimeRaw(
+                                            requestValidityEndTime.getEpochSecond
+                                          ),
+                                          bodyHash = body.hash
+                                        )
+
+                                        // Get verification key for peer 0
+                                        userVk = multiNodeConfig
+                                            .nodeConfigs(HeadPeerNumber.zero)
+                                            .ownHeadWallet
+                                            .exportVerificationKey
+
                                     } yield Some(
                                       RegisterDepositCommand(
                                         request = UserRequestWithId.DepositRequest(
                                           requestId = requestId,
                                           request = UserRequest.DepositRequest(
-                                            header = UserRequestHeader(
-                                              headId = ???,
-                                              validityStart = ???,
-                                              validityEnd = ???,
-                                              bodyHash = ???
-                                            ),
-                                            body = DepositRequestBody(
-                                              l1Payload = ByteString
-                                                  .fromArray(depositRefundSeq.depositTx.tx.toCbor),
-                                              l2Payload = GenesisObligation.serialize(l2Outputs),
-                                            ),
-                                            userVk = ???
+                                            header = header,
+                                            body = body.asInstanceOf[DepositRequestBody],
+                                            userVk = userVk
                                           )
                                         ),
                                         depositRefundTxSeq = depositRefundSeq,

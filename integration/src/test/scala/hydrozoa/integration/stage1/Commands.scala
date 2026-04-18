@@ -124,7 +124,7 @@ object Commands:
         isFinal: Boolean,
     ) {
         override def toString: String =
-            s"CompleteBlockCommand(block=$blockNumber, isFinal=$isFinal)"
+            s"CompleteBlockCommand(block=$blockNumber, blockCreationEndTime=$blockCreationEndTime, isFinal=$isFinal)"
     }
 
     /** Postcondition for [[CompleteBlockCommand]]: verifies model and SUT agree on the block brief.
