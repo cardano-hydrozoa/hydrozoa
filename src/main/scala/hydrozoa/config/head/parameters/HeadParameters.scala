@@ -18,6 +18,9 @@ final case class HeadParameters(
     override val fallbackContingency: FallbackContingency,
     override val disputeResolutionConfig: DisputeResolutionConfig,
     override val settlementConfig: SettlementConfig,
+    // QUESTION: (from Peter to Ilia): I don't think we need to pin the coil quorum here, do we?
+    //   It will be in the multisig native script; the hash will change if the peers don't agree.
+    override val coilQuorum: Int,
     override val l2ParamsHash: Hash32
 ) extends HeadParameters.Section {
     override transparent inline def headParameters: HeadParameters = this
@@ -41,6 +44,8 @@ object HeadParameters {
           * during the negotiation phase.
           */
         def l2ParamsHash: Hash32 = headParameters.l2ParamsHash
+
+        def coilQuorum: Int = headParameters.coilQuorum
 
         final def headParamsHash: Hash32 = ???
 

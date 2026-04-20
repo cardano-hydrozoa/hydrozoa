@@ -15,87 +15,123 @@ import scalus.uplc.builtin.Builtins.blake2b_224
 
 import HeadPeerNumber.given
 
-final case class HeadPeers private (
-    override val headPeerVKeys: NonEmptyList[VerificationKey]
-) extends HeadPeers.Section {
-    require(headPeerVKeys.size > 0)
+/** @param webSocketAddress
+  *   The connection address for the head peer, i.e. "ws://192.168.10.8081"
+  */
+final case class HeadPeerData(verificationKey: VerificationKey, webSocketAddress: String)
+
+/** Invariant: Peer numbers must be contiguous, starting from 0.
+  * @param headPeerData
+  */
+final case class HeadPeers private (headPeerData: NonEmptyMap[HeadPeerNumber, HeadPeerData])
+    extends HeadPeers.Section {
 
     override transparent inline def headPeers: HeadPeers = this
-
-    override def headPeerNums: NonEmptyList[HeadPeerNumber] =
-        NonEmptyList.fromListUnsafe(
-          Range.Exclusive(0, nHeadPeers, 1).map(HeadPeerNumber.apply).toList
-        )
-
-    override def headPeerIds: NonEmptyList[HeadPeerId] =
-        headPeerNums.map(HeadPeerId(_, nHeadPeers))
-
-    override def headPeerVKey(p: HeadPeerNumber): Option[VerificationKey] =
-        Option.when(p < nHeadPeers)(headPeerVKeys.toList(p))
-
-    override def headPeerVKey(p: HeadPeerId): Option[VerificationKey] =
-        Option.when(p.nHeadPeers == nHeadPeers)(headPeerVKeys.toList(p.peerNum))
-
-    override lazy val headMultisigScript: HeadMultisigScript = HeadMultisigScript(this)
-
-    override val nHeadPeers: PositiveInt = PositiveInt.unsafeApply(headPeerVKeys.size)
 }
 
 object HeadPeers {
-    given headPeersEncoder: Encoder[HeadPeers] =
-        Encoder
-            .encodeMap(using headPeerNumberKeyEncoder, given_Encoder_VerificationKey)
-            .contramap(peerKeys =>
-                Map.from(
-                  peerKeys.headPeerVKeys.zipWithIndex
-                      .map((key, idx) => (HeadPeerNumber(idx), key))
-                      .toList
-                )
-            )
 
-    given headPeersDecoder: Decoder[HeadPeers] = {
+    def apply(headPeerDataMap: NonEmptyMap[HeadPeerNumber, HeadPeerData]): Option[HeadPeers] = {
         def isContiguous(ns: List[Int]): Boolean =
             ns.sorted == Range(0, ns.max + 1)
 
-        Decoder
-            .decodeMap(using headPeerNumberKeyDecoder, given_Decoder_VerificationKey)
-            .emap(m =>
-                for {
-                    _ <- Either.cond(
-                      test = m.nonEmpty,
-                      right = (),
-                      left = "headPeers cannot be empty"
-                    )
-                    _ <- Either.cond(
-                      test = isContiguous(m.keys.map(_.toInt).toList),
-                      right = (),
-                      left = "headPeers does not contain contiguous peer indices starting from zero"
-                    )
-                } yield HeadPeers(NonEmptyList.fromListUnsafe(m.values.toList))
-            )
+        val predicate: Boolean = isContiguous(
+          headPeerDataMap.keys.toNonEmptyList.toList.map(_.toInt)
+        )
+
+        if predicate
+        then Some(new HeadPeers(headPeerDataMap))
+        else None
     }
 
-    def apply(headPeerVKeys: NonEmptyList[VerificationKey]): HeadPeers =
-        new HeadPeers(headPeerVKeys)
+    // Encode a single field of the HeadPeerData as a list from VKey to the field
+    private def headPeerDataFieldEncoder[A](
+        headPeerDataField: HeadPeerData => A
+    )(using encoderA: Encoder[A]): Encoder[HeadPeers] =
+        Encoder
+            .encodeMap(using headPeerNumberKeyEncoder, encoderA)
+            .contramap((headPeers: HeadPeers) =>
+                headPeers.headPeerData.map(headPeerDataField).toSortedMap
+            )
 
-    def apply(headPeerVKeys: List[VerificationKey]): Option[HeadPeers] = for {
-        neHeadPeerVKeys <- NonEmptyList.fromList(headPeerVKeys)
-    } yield new HeadPeers(neHeadPeerVKeys)
+    private def headPeerDataFieldDecoder[A](using
+        decoderA: Decoder[A]
+    ): Decoder[NonEmptyMap[HeadPeerNumber, A]] =
+        Decoder.decodeNonEmptyMap
+
+    given headPeersEncoder: Encoder[HeadPeers] =
+        Encoder.instance(headPeers =>
+            Json.obj(
+              "headPeerVKeys" -> headPeerDataFieldEncoder(_.verificationKey)(headPeers),
+              "headPeerAddresses" -> headPeerDataFieldEncoder(_.webSocketAddress)(headPeers)
+            )
+        )
+
+    given headPeersDecoder: Decoder[HeadPeers] = {
+
+        Decoder.instance(c =>
+            for {
+                vKeys <- headPeerDataFieldDecoder[VerificationKey].tryDecode(
+                  c.downField("headPeerVKeys")
+                )
+                addresses <- headPeerDataFieldDecoder[String].tryDecode(
+                  c.downField("headPeerAddresses")
+                )
+
+                _ <-
+                    if vKeys.keys == addresses.keys
+                    then Right(())
+                    else
+                        Left(
+                          io.circe.DecodingFailure(
+                            "Could not decode HeadPeers: HeadPeerNumbers do not match between" +
+                                " fields.",
+                            c.history
+                          )
+                        )
+
+                rawDataMap = vKeys.mapBoth((hpn, vKey) =>
+                    (hpn, HeadPeerData(vKey, addresses(hpn).get))
+                )
+
+                headPeers <- HeadPeers(rawDataMap) match {
+                    case None =>
+                        Left(
+                          io.circe.DecodingFailure(
+                            "Could not decode HeadPeers: HeadPeerNumbers must" +
+                                "be contiguous starting from zero.",
+                            c.history
+                          )
+                        )
+                    case Some(headPeers: HeadPeers) => Right(headPeers)
+                }
+            } yield headPeers
+        )
+    }
 
     trait Section {
         def headPeers: HeadPeers
 
-        def headPeerNums: NonEmptyList[HeadPeerNumber] = headPeers.headPeerNums
-        def headPeerIds: NonEmptyList[HeadPeerId] = headPeers.headPeerIds
+        final def headPeerNums: NonEmptyList[HeadPeerNumber] =
+            NonEmptyList.fromListUnsafe(headPeers.headPeerData.toSortedMap.keys.toList)
 
-        def headPeerVKeys: NonEmptyList[VerificationKey] = headPeers.headPeerVKeys
+        final def headPeerIds: NonEmptyList[HeadPeerId] =
+            headPeerNums.map(HeadPeerId(_, nHeadPeers))
 
-        def headPeerVKey(p: HeadPeerNumber): Option[VerificationKey] = headPeers.headPeerVKey(p)
-        def headPeerVKey(p: HeadPeerId): Option[VerificationKey] = headPeers.headPeerVKey(p)
+        final def headPeerVKeys: NonEmptyList[VerificationKey] =
+            NonEmptyList.fromListUnsafe(
+              headPeers.headPeerData.map(hpd => hpd.verificationKey).toSortedMap.values.toList
+            )
 
-        def headMultisigScript: HeadMultisigScript = headPeers.headMultisigScript
+        final def headPeerVKey(p: HeadPeerNumber): Option[VerificationKey] =
+            Option.when(p < nHeadPeers)(headPeerVKeys.toList(p))
 
-        def nHeadPeers: PositiveInt = headPeers.nHeadPeers
+        final def headPeerVKey(p: HeadPeerId): Option[VerificationKey] =
+            Option.when(p.nHeadPeers == nHeadPeers)(headPeerVKeys.toList(p.peerNum))
+
+        final def headMultisigScript: HeadMultisigScript = HeadMultisigScript(this)
+
+        final def nHeadPeers: PositiveInt = PositiveInt.unsafeApply(headPeerVKeys.size)
     }
 
     extension (config: HeadPeers.Section & CardanoNetwork.Section)

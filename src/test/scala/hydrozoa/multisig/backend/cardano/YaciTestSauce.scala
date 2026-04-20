@@ -26,7 +26,7 @@ def mkGenesis(setup: List[(String, TestPeerName)])(network: Network)(
                   ),
                   TransactionOutput
                       .Babbage(
-                        address = testPeers.addressFor(peerName),
+                        address = testPeers.shelleyAddressFor(peerName),
                         value = Value.lovelace(10_000_000_000L)
                       )
                 )

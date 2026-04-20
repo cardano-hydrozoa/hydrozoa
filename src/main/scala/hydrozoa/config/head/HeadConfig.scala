@@ -9,6 +9,7 @@ import hydrozoa.config
 import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.ScriptReferenceUtxos.given_Decoder_Unresolved
 import hydrozoa.config.head.HeadConfig.Bootstrap.HeadConfigBootstrapError
+import hydrozoa.config.head.coil.CoilPeer
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.network.CardanoNetwork.{Custom, cardanoNetworkDecoder}
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
@@ -37,6 +38,7 @@ final case class HeadConfig private (
     override val cardanoNetwork: CardanoNetwork,
     override val headParameters: HeadParameters,
     override val headPeers: HeadPeers,
+    override val coilPeers: List[CoilPeer],
     _initialEvacuationMap: EvacuationMap,
     _initialEquityContributions: NonEmptyMap[HeadPeerNumber, Coin],
     override val scriptReferenceUtxos: ScriptReferenceUtxos,
@@ -58,6 +60,7 @@ final case class HeadConfig private (
           cardanoNetwork,
           headParameters,
           headPeers,
+          coilPeers,
           initializationParameters,
           scriptReferenceUtxos
         )
@@ -107,6 +110,7 @@ object HeadConfig {
               "cardanoNetwork" -> hc.cardanoNetwork.asJson,
               "headParams" -> hc.headParameters.asJson,
               "headPeers" -> hc.headPeers.asJson,
+              "coilPeers" -> hc.coilPeers.asJson,
               "initialEvacuationMap" -> hc.initialEvacuationMap.asJson,
               "initialEquityContributions" -> hc._initialEquityContributions.asJson,
               "scriptReferenceUtxos" -> hc.scriptReferenceUtxos.unresolved.asJson,
@@ -201,6 +205,7 @@ object HeadConfig {
                       cardanoNetwork = headConfigBootstrap.cardanoNetwork,
                       headParameters = headConfigBootstrap.headParameters,
                       headPeers = headConfigBootstrap.headPeers,
+                      coilPeers = headConfigBootstrap.coilPeers,
                       _initialEvacuationMap = headConfigBootstrap.initialEvacuationMap,
                       _initialEquityContributions = headConfigBootstrap.initialEquityContributions,
                       scriptReferenceUtxos = headConfigBootstrap.scriptReferenceUtxos,
@@ -232,6 +237,7 @@ object HeadConfig {
         cardanoNetwork: CardanoNetwork,
         headParams: HeadParameters,
         headPeers: HeadPeers,
+        coilPeers: List[CoilPeer],
         initialBlock: Block.MultiSigned.Initial,
         initializationParams: InitializationParameters,
         scriptReferenceUtxos: ScriptReferenceUtxos
@@ -241,6 +247,7 @@ object HeadConfig {
               cardanoNetwork,
               headParams,
               headPeers,
+              coilPeers,
               initializationParams,
               scriptReferenceUtxos
             )
@@ -254,7 +261,9 @@ object HeadConfig {
         def initialBlockSection: InitialBlock = headConfig.initialBlockSection
     }
 
-    /** @param l2Params
+    /** @param coilPeers
+      *   A mapping from the coil peer verification key to their head peer number
+      * @param l2Params
       *   a black-box, L2-specific blake2b-256 hash of parameters that the peers must agree on
       *   before initialization.
       */
@@ -262,6 +271,7 @@ object HeadConfig {
         override val cardanoNetwork: CardanoNetwork,
         override val headParameters: HeadParameters,
         override val headPeers: HeadPeers,
+        override val coilPeers: List[CoilPeer],
         override val initializationParameters: InitializationParameters,
         override val scriptReferenceUtxos: ScriptReferenceUtxos
     ) extends Bootstrap.Section {
@@ -374,6 +384,7 @@ object HeadConfig {
                   "cardanoNetwork" -> hc.cardanoNetwork.asJson,
                   "headParams" -> hc.headParameters.asJson,
                   "headPeers" -> hc.headPeers.asJson,
+                  "coilPeers" -> hc.coilPeers.asJson,
                   "initialEvacuationMap" -> hc.initialEvacuationMap.asJson,
                   "initialEquityContributions" -> hc.initialEquityContributions.toSortedMap.asJson,
                   "seedUtxo" -> hc.seedUtxo.asJson,
@@ -404,14 +415,30 @@ object HeadConfig {
                     .downField("cardanoNetwork")
                     .as[CardanoNetwork](using cardanoNetworkDecoder)
                 headPeers <- c.downField("headPeers").as[HeadPeers]
+                headParams <- c.downField("headParams").as[HeadParameters]
+                coilPeers <- c
+                    .downField("coilPeers")
+                    .as[List[CoilPeer]]
+                _ <-
+                    if coilPeers.length < headParams.coilQuorum
+                    then
+                        Left(
+                          io.circe.DecodingFailure(
+                            s"Error decoding HeadConfig.Bootstrap: the number of coil peers ${coilPeers.length}" +
+                                s" is less than the coil quorum ${headParams.coilQuorum}",
+                            c.history
+                          )
+                        )
+                    else Right(())
+
                 res <- {
                     for {
-                        headParams <- c.downField("headParams").as[HeadParameters]
                         initParams <- c.as[InitializationParameters]
                         bootstrap <- Bootstrap(
                           cardanoNetwork,
                           headParams,
                           headPeers,
+                          coilPeers,
                           initParams,
                           resolved
                         ).toEither.left.map(e =>
@@ -439,6 +466,7 @@ object HeadConfig {
             for {
                 headParams <- c.downField("headParams").as[HeadParameters]
                 headPeers <- c.downField("headPeers").as[HeadPeers]
+                coilPeers <- c.downField("coilPeers").as[List[CoilPeer]]
                 initialEvacuationMap <- c
                     .downField("initialEvacuationMap")
                     .as[EvacuationMap]
@@ -496,6 +524,7 @@ object HeadConfig {
                       network.cardanoNetwork,
                       headParams,
                       headPeers,
+                      coilPeers,
                       initParams,
                       srus
                     )
@@ -517,6 +546,7 @@ object HeadConfig {
             cardanoNetwork: CardanoNetwork,
             headParams: HeadParameters,
             headPeers: HeadPeers,
+            coilPeers: List[CoilPeer],
             initializationParams: InitializationParameters,
             scriptReferenceUtxos: ScriptReferenceUtxos
         ): ValidatedNel[HeadConfigBootstrapError, HeadConfig.Bootstrap] = {
@@ -524,6 +554,7 @@ object HeadConfig {
               cardanoNetwork,
               headParams,
               headPeers,
+              coilPeers,
               initializationParams,
               scriptReferenceUtxos
             )
@@ -569,6 +600,7 @@ object HeadConfig {
             def cardanoNetwork: CardanoNetwork = headConfigBootstrap.cardanoNetwork
             def headParameters: HeadParameters = headConfigBootstrap.headParameters
             def headPeers: HeadPeers = headConfigBootstrap.headPeers
+            def coilPeers: List[CoilPeer] = headConfigBootstrap.coilPeers
             def initializationParameters: InitializationParameters =
                 headConfigBootstrap.initializationParameters
             def scriptReferenceUtxos: ScriptReferenceUtxos =

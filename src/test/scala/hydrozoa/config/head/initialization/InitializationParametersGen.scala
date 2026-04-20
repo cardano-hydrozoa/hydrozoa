@@ -430,7 +430,7 @@ object InitializationParametersGenBottomUp {
                             for {
                                 peer <- Gen.oneOf(testPeers.headPeerNums.toList)
                                 utxo <- genPubKeyUtxo(
-                                  address = testPeers.addressFor(peer),
+                                  address = testPeers.shelleyAddressFor(peer),
                                   genValue = Gen.const(v)
                                 )(using cardanoNetwork)
                             } yield utxo
@@ -466,7 +466,7 @@ object InitializationParametersGenBottomUp {
                 for {
                     peer <- Gen.oneOf(testPeers.headPeerNums.toList)
                     utxo <- genPubKeyUtxo(
-                      address = testPeers.addressFor(peer),
+                      address = testPeers.shelleyAddressFor(peer),
                       genValue = Gen.const(Value.zero)
                     )(using cardanoNetwork)
                 } yield utxo

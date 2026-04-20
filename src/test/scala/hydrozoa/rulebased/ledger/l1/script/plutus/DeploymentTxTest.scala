@@ -26,7 +26,7 @@ class DeploymentTxTest extends AnyFunSuite {
 
         // Get the first peer's address and create a UTXO with funds
         import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-        val fundingAddress = testPeers.addressFor(HeadPeerNumber(0))
+        val fundingAddress = testPeers.shelleyAddressFor(HeadPeerNumber(0))
         val fundingValue = Value(Coin(50_000_000)) // 50 ADA for fees and min ADA
         val fundingTxInput = TransactionInput(TransactionHash.fromHex("0" * 64), 0)
         val fundingUtxo = Utxo(
@@ -108,7 +108,7 @@ class DeploymentTxTest extends AnyFunSuite {
 
         // Get the first peer's address and create a UTXO with funds
         import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-        val fundingAddress = testPeers.addressFor(HeadPeerNumber(0))
+        val fundingAddress = testPeers.shelleyAddressFor(HeadPeerNumber(0))
         val fundingValue = Value(Coin(50_000_000)) // 50 ADA for fees and min ADA
         val fundingTxInput = TransactionInput(TransactionHash.fromHex("0" * 64), 0)
         val fundingUtxo = Utxo(

@@ -13,7 +13,7 @@ import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.config.head.parameters.HeadParameters
-import hydrozoa.config.head.peers.HeadPeers
+import hydrozoa.config.head.peers.{HeadPeerData, HeadPeers}
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.config.node.NodeConfig
 import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
@@ -108,7 +108,8 @@ object Bootstrap:
           ),
           disputeResolutionConfig = DisputeResolutionConfig.default(cardanoNetwork.slotConfig),
           settlementConfig = SettlementConfig(PositiveInt.unsafeApply(100)),
-          l2ParamsHash = Hash32.fromByteString(ByteString.empty)
+          coilQuorum = 0,
+          l2ParamsHash = Hash32.fromByteString(ByteString.empty),
         )
 
         // This is the temporary hard-coded evacuation map - 10 ADA
@@ -213,7 +214,7 @@ object Bootstrap:
         seedUtxo = utxosSelected.head
         valueSelected = Value.combine(utxosSelected.map(_.output.value).toList)
 
-        headPeers = HeadPeers.apply(List(vKey)).get
+        headPeers = HeadPeers(NonEmptyMap.one(HeadPeerNumber.zero, HeadPeerData(vKey, "FIXME"))).get
 
         initializationParameters = InitializationParameters(
           initialEvacuationMap = evacMap,
@@ -238,6 +239,7 @@ object Bootstrap:
                 cardanoNetwork = cardanoNetwork,
                 headParams = headParams,
                 headPeers = headPeers,
+                coilPeers = List.empty,
                 initializationParams = initializationParameters,
                 scriptReferenceUtxos = fakeScriptReferenceUtxos(cardanoNetwork)
               )

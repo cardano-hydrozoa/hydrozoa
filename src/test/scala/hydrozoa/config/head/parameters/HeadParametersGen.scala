@@ -30,6 +30,8 @@ def generateHeadParameters(
       fallbackContingency = fallbackContingency.fallbackContingency,
       disputeResolutionConfig = disputeResolutionConfig,
       settlementConfig = settlementConfig,
+      // TODO: Generate
+      coilQuorum = 0,
       l2ParamsHash = l2ParamsHash
     )
 }

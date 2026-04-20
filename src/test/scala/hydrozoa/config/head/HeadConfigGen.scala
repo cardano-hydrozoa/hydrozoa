@@ -74,7 +74,8 @@ def generateHeadConfigBootstrap(
         .Bootstrap(
           cardanoNetwork = cardanoNetwork,
           headParams = headParams,
-          headPeers = testPeers.mkHeadPeers,
+          headPeers = testPeers.headPeers,
+          coilPeers = List.empty,
           initializationParams = initializationParams,
           scriptReferenceUtxos = scriptReferenceUtxos
         ) match {
