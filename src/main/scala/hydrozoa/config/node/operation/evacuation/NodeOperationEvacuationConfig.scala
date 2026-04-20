@@ -1,6 +1,9 @@
 package hydrozoa.config.node.operation.evacuation
 
+import hydrozoa.config.head.multisig.timing.given
 import hydrozoa.multisig.consensus.peer.HeadPeerWallet
+import io.circe.*
+import io.circe.generic.semiauto.*
 import scala.concurrent.duration.FiniteDuration
 
 final case class NodeOperationEvacuationConfig(
@@ -20,4 +23,15 @@ object NodeOperationEvacuationConfig {
 
         def evacuationWallet: HeadPeerWallet = nodeOperationEvacuationConfig.evacuationWallet
     }
+
+    given nodeOperationEvacuationConfigEncoder: Encoder[NodeOperationEvacuationConfig] =
+        deriveEncoder[NodeOperationEvacuationConfig]
+
+    given nodeOperationEvacuationConfigDecoder: Decoder[NodeOperationEvacuationConfig] =
+        Decoder.instance(c =>
+            for {
+                ebpp <- c.downField("evacuationBotPollingPeriod").as[FiniteDuration]
+                ew <- c.downField("evacuationWallet").as[HeadPeerWallet]
+            } yield NodeOperationEvacuationConfig(ebpp, ew)
+        )
 }

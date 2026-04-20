@@ -51,7 +51,7 @@ case class HeadMultisigScript(private val script0: Script.Native) {
 }
 
 object HeadMultisigScript:
-    def apply(headPeers: HeadPeers): HeadMultisigScript =
+    def apply(headPeers: HeadPeers.Section): HeadMultisigScript =
         HeadMultisigScript(
           Script.Native(
             AllOf(

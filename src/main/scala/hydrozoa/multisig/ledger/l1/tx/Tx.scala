@@ -1,33 +1,157 @@
 package hydrozoa.multisig.ledger.l1.tx
 
-import monocle.Lens
+import cats.data.Validated.{Invalid, Valid}
+import cats.data.{NonEmptyList, Validated, ValidatedNel}
+import hydrozoa.config.head.peers.HeadPeers
+import monocle.{Focus, Lens}
 import scala.Function.const
-import scalus.cardano.ledger.Transaction
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
+import scalus.cardano.ledger.TransactionWitnessSet.given
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.rules.{AllInputsMustBeInUtxoValidator, EmptyInputsValidator, FeesOkValidator, InputsAndReferenceInputsDisjointValidator, MissingOrExtraScriptHashesValidator, OutputsHaveNotEnoughCoinsValidator, OutputsHaveTooBigValueStorageSizeValidator, OutsideForecastValidator, OutsideValidityIntervalValidator, TransactionSizeValidator, ValueNotConservedUTxOValidator}
+import scalus.cardano.ledger.{TaggedSortedSet, Transaction, TransactionWitnessSet, VKeyWitness}
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
-import scalus.cardano.txbuilder.{SomeBuildError, TransactionBuilder}
-import scalus.uplc.builtin.ByteString
+import scalus.cardano.txbuilder.{SomeBuildError, TransactionBuilder, keepRawL}
+import scalus.crypto.ed25519.{SigningKey, VerificationKey}
+import scalus.uplc.builtin.{ByteString, platform}
+import scalus.|>
 import sourcecode.*
 
 // FIXME: This trait and parts of the companion object are applicable to the rulebased regime.
 //   Lets move it out
 trait Tx[Self <: Tx[Self]] extends HasResolvedUtxos { self: Self =>
+
+    /** A human-readable name, primarily for error reporting
+      */
+    // TODO: Is there a performant way to do this automatically?
+    def transactionFamily: String
+
     def tx: Transaction
 
-    // TODO: Replace this with a more straightforward method to replace unsigned tx with signed tx
+    enum SignatureError extends Throwable:
+        case MissingSignature(vkey: VerificationKey)
+        case InvalidSignature(witness: VKeyWitness)
+        case TransactionBodyMismatch(otherTx: Transaction)
+
+        override def getMessage: String = this match {
+            case MissingSignature(vKey) =>
+                s"Missing multisig witness for verification key $vKey in $transactionFamily: $tx"
+            case InvalidSignature(witness) =>
+                s"Invalid multisig witness $witness for $transactionFamily: $tx"
+            case TransactionBodyMismatch(otherTx: Transaction) =>
+                s"$transactionFamily bodies don't match; cannot add signatures" +
+                    s"\n\t This transaction: $this" +
+                    s"\n\t Other transaction: $otherTx"
+        }
+
     /** Lens for accessing the transaction field. Implementations should use:
       * `override val txLens: Lens[ConcreteType, Transaction] = Focus[ConcreteType](_.tx)`
       * Unfortunately this can't be generalized since Focus requires a concrete type.
       */
-    def txLens: Lens[Self, Transaction]
+    protected def txLens: Lens[Self, Transaction]
 
     /** This excludes the lens from equality. */
     override def equals(obj: Any): Boolean = obj match {
         case that: Tx[?] =>
             this.tx == that.tx
         case _ => false
+    }
+
+    /** @return
+      *   - Invalid[SignatureError.InvalidSignature] if the verification key and signing key don't
+      *     match
+      *   - The signed `Tx` otherwise
+      */
+    final def signTx(
+        signingKey: SigningKey,
+        verificationKey: VerificationKey
+    ): Validated[SignatureError.InvalidSignature, Self] = {
+
+        val signature = platform.signEd25519(signingKey, tx.id)
+        addSignatures(Set(VKeyWitness(vkey = verificationKey, signature = signature))).leftMap(
+          nel => nel.head
+        )
+    }
+
+    /** Validates and adds the given witnesses to the transaction
+      * @param vkw
+      * @return
+      *   - Invalid[NonEmptyList[SignatureError.InvalidSignature]] if any signatures (including
+      *     existing signatures) are incorrect
+      *   - Valid[Transaction] with the signatures applied otherwise
+      */
+    final def addSignatures(
+        vkw: Set[VKeyWitness]
+    ): ValidatedNel[SignatureError.InvalidSignature, Self] =
+        val signed = this |> txLens
+            .andThen(Focus[Transaction](_.witnessSetRaw))
+            .andThen(keepRawL())
+            .andThen(Focus[TransactionWitnessSet](_.vkeyWitnesses))
+            .modify((tss: TaggedSortedSet[VKeyWitness]) => TaggedSortedSet(tss.toSet ++ vkw))
+
+        validateSignatures match {
+            case Valid(_)   => Valid(signed)
+            case Invalid(e) => Invalid(e)
+        }
+
+    /** Checks the transaction to ensure that all signatures in VKeyWitnesses are valid
+      */
+    final def validateSignatures: ValidatedNel[SignatureError.InvalidSignature, Unit] =
+        tx.witnessSetRaw.value.vkeyWitnesses.toSet.filter(witness =>
+            !platform.verifyEd25519Signature(witness.vkey, tx.id, witness.signature)
+        ) match {
+            case invalidWitnesses if invalidWitnesses.nonEmpty =>
+                Invalid(
+                  NonEmptyList.fromListUnsafe(
+                    invalidWitnesses.toList.map(SignatureError.InvalidSignature(_))
+                  )
+                )
+            case _ => Valid(())
+        }
+
+    /** Checks that:
+      *   - The given transaction's body matches this transaction's body.
+      *   - The given transaction is properly multisigned by all head peers.
+      *   - Checks all signatures (including ones not from the head peers -- eventually this will
+      *     include the coil peers)
+      * Then:
+      *   - Takes all the given transaction's signatures and applies it to this Tx[A]
+      */
+    final def validateAndAddMultiSignatures(
+        headPeers: HeadPeers,
+        otherTx: Transaction
+    ): ValidatedNel[SignatureError, Self] = {
+        // The Transaction type isn't very type safe... I think it's best to compare the bodies directly rather
+        // than just hashes.
+        val bodiesMatch =
+            if tx.body == otherTx.body
+            then Valid(this)
+            else Invalid(NonEmptyList.one(SignatureError.TransactionBodyMismatch(otherTx)))
+
+        val containsHeadPeerWitnesses = {
+            val witnessVKeys = otherTx.witnessSetRaw.value.vkeyWitnesses.toSet.map(_.vkey)
+            val errors: List[SignatureError] = headPeers.headPeerVKeys
+                .filter(vKey => !witnessVKeys.contains(vKey))
+                .map(SignatureError.MissingSignature(_))
+
+            if errors.isEmpty
+            then Valid(this)
+            else Invalid(NonEmptyList.fromListUnsafe(errors))
+        }
+
+        val addedSignatures = addSignatures(otherTx.witnessSetRaw.value.vkeyWitnesses.toSet)
+
+        // It's a little bit clunky, but order matters here. We are right-biased in the fold, so addedSignatures must
+        // come last
+        List(bodiesMatch, containsHeadPeerWitnesses, addedSignatures).foldLeft(
+          Valid(this): ValidatedNel[SignatureError, Self]
+        ) {
+            case (Valid(v1), Valid(v2))     => Valid(v2)
+            case (Valid(_), e @ Invalid(_)) => e
+            case (e @ Invalid(_), Valid(_)) => e
+            case (Invalid(e1), Invalid(e2)) => Invalid(e1 ++ e2.toList)
+        }
+
     }
 
 }

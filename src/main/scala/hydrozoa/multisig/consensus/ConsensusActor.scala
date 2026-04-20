@@ -1,5 +1,6 @@
 package hydrozoa.multisig.consensus
 
+import cats.data.Validated.{Invalid, Valid}
 import cats.effect.{IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
@@ -7,7 +8,6 @@ import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
-import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{AckBlock, AckId}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
@@ -742,22 +742,14 @@ class ConsensusActor(
             someTx: T,
             vkeysAndSigs: List[(VerificationKey, TxSignature)]
         ): IO[T] = {
-            import someTx.*
-            for {
-                txId <- IO.pure(tx.id)
-                vkeyWitnesses <- IO.pure(
-                  vkeysAndSigs.map((vk, sig) => VKeyWitness.apply(vk, sig))
-                )
-                _ <- IO.traverse_(vkeyWitnesses)(w =>
-                    IO.delay(platform.verifyEd25519Signature(w.vkey, txId, w.signature))
-                        .handleErrorWith {
-                            case NonFatal(_) =>
-                                IO.raiseError(CompletionError.WrongTxSignature(txId, w.vkey))
-                            case e => IO.raiseError(e)
-                        }
-                )
-                signedTx = tx.attachVKeyWitnesses(vkeyWitnesses)
-            } yield txLens.replace(signedTx)(someTx)
+            someTx.addSignatures(Set.from(vkeysAndSigs.map(x => VKeyWitness(x._1, x._2)))) match {
+                case Valid(x) => IO.pure(x)
+                // TODO: Report all signature errors
+                case Invalid(e) =>
+                    IO.raiseError(
+                      CompletionError.WrongTxSignature(someTx.tx.id, e.head.witness.vkey)
+                    )
+            }
         }
 
         // ===================================

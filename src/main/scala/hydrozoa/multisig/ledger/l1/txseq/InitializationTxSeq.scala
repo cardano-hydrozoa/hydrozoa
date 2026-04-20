@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.l1.txseq
 
 import hydrozoa.config.head.HeadConfig
+import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.*
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.SomeBuildErrorOnly
@@ -17,7 +18,7 @@ object InitializationTxSeq {
 }
 
 private object InitializationTxSeqOps {
-    type Config = HeadConfig.Preinit.Section
+    type Config = HeadConfig.Bootstrap.Section
 
     private val logger = org.slf4j.LoggerFactory.getLogger("InitializationTxSeq")
 
@@ -79,6 +80,12 @@ private object InitializationTxSeqOps {
                 actual: Slot
             )
             case TTLValidityStartGapError(difference: Slot, actual: Slot)
+
+            // TODO: Finish cases
+            override def toString: String = this match {
+                case FallbackTxMismatch(expected, actual) =>
+                    s"Fallback Tx Mismatch.\n\tExpected:\n ${expected.tx}\n\tActual:\n$actual"
+            }
         }
 
     }
@@ -94,9 +101,6 @@ private object InitializationTxSeqOps {
       * secure. We are parsing primarily to ensure that the given transaction won't result in a head
       * that will immediately crash.
       *
-      * @param config
-      * @param transactionSequence
-      * @param resolvedUtxos
       * @return
       */
     final case class Parse(config: Config)(
@@ -157,7 +161,7 @@ private object InitializationTxSeqOps {
                 }
 
                 _ <-
-                    if expectedFallbackTx.tx == fallbackTx then Right(())
+                    if expectedFallbackTx.tx.body == fallbackTx.body then Right(())
                     else
                         Left(
                           FallbackTxMismatch(

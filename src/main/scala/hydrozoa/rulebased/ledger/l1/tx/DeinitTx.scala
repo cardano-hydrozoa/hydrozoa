@@ -28,7 +28,9 @@ final case class DeinitTx(
     override val tx: Transaction,
     override val txLens: Lens[DeinitTx, Transaction] = Focus[DeinitTx](_.tx),
     override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
-) extends Tx[DeinitTx]
+) extends Tx[DeinitTx] {
+    override def transactionFamily: String = "Deinit"
+}
 
 /** The deinit tx spends an empty (i.e. not containing any l2 utxos) treasury utxo, distributing the
   * residual _head equity_ according to peers' shares. If a share happens to be less than min ada,

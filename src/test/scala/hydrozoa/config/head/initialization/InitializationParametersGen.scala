@@ -4,7 +4,6 @@ import cats.*
 import cats.data.*
 import cats.data.Kleisli.{ask, liftF}
 import cats.syntax.all.*
-import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.multisig.fallback.{FallbackContingency, generateFallbackContingency}
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.config.head.network.CardanoNetwork
@@ -20,7 +19,6 @@ import hydrozoa.multisig.ledger.eutxol2.tx.L2Genesis
 import hydrozoa.multisig.ledger.joint.given
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap}
-import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.given
 import java.time.Instant
 import org.scalacheck.{Gen, Prop, Properties}
@@ -196,9 +194,8 @@ object InitializationParametersGenTopDown {
         } yield InitializationParameters(
           initialEvacuationMap = initialEvacuationMap,
           initialEquityContributions = NonEmptyMap.fromMapUnsafe(peersEquity),
-          initialSeedUtxo = seedUtxo,
-          headId = HeadId(CIP67.HeadTokenNames(seedUtxo.input).treasuryTokenName),
-          initialAdditionalFundingUtxos = total.fundingUtxos.asUtxos - seedUtxo.input,
+          seedUtxo = seedUtxo,
+          additionalFundingUtxos = total.fundingUtxos.asUtxos - seedUtxo.input,
           initialChangeOutputs = total.changeOutputs
         )
 
@@ -433,7 +430,7 @@ object InitializationParametersGenBottomUp {
                             for {
                                 peer <- Gen.oneOf(testPeers.headPeerNums.toList)
                                 utxo <- genPubKeyUtxo(
-                                  address = testPeers.addressFor(peer),
+                                  address = testPeers.shelleyAddressFor(peer),
                                   genValue = Gen.const(v)
                                 )(using cardanoNetwork)
                             } yield utxo
@@ -469,7 +466,7 @@ object InitializationParametersGenBottomUp {
                 for {
                     peer <- Gen.oneOf(testPeers.headPeerNums.toList)
                     utxo <- genPubKeyUtxo(
-                      address = testPeers.addressFor(peer),
+                      address = testPeers.shelleyAddressFor(peer),
                       genValue = Gen.const(Value.zero)
                     )(using cardanoNetwork)
                 } yield utxo
@@ -498,9 +495,8 @@ object InitializationParametersGenBottomUp {
             )
           ),
           initialEquityContributions = equityContributions,
-          initialSeedUtxo = seedUtxo,
-          headId = HeadId(CIP67.HeadTokenNames(seedUtxo.input).treasuryTokenName),
-          initialAdditionalFundingUtxos = additionalFundingUtxos,
+          seedUtxo = seedUtxo,
+          additionalFundingUtxos = additionalFundingUtxos,
           initialChangeOutputs = changeUtxos.values.toList
         )
 

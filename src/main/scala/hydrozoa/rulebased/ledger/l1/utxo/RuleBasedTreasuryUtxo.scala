@@ -9,8 +9,6 @@ import hydrozoa.rulebased.ledger.l1.utxo.RuleBasedTreasuryOutput.{Config, *}
 import scala.collection.immutable.SortedMap
 import scala.util.{Failure, Success, Try}
 import scalus.*
-import scalus.builtin.Data
-import scalus.builtin.Data.{fromData, toData}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
@@ -20,6 +18,7 @@ import scalus.cardano.txbuilder.ScriptSource.PlutusScriptAttached
 import scalus.cardano.txbuilder.ThreeArgumentPlutusScriptWitness
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, ReferenceOutput, Send, Spend}
 import scalus.uplc.builtin.Data
+import scalus.uplc.builtin.Data.{fromData, toData}
 
 final case class RuleBasedTreasuryUtxo(
     utxoId: TransactionInput,
@@ -127,7 +126,14 @@ object RuleBasedTreasuryOutput {
 
             datum <- Try(fromData[RuleBasedTreasuryDatumOnchain](d2.data)) match {
                 case Success(d) if d.toOffchain.nonEmpty => Right(d.toOffchain.get)
-                case Failure(e) => Left(TreasuryDatumDeserializationError(output, e))
+                case Success(_) =>
+                    Left(
+                      TreasuryDatumDeserializationError(
+                        output,
+                        Left("Onchain-to-offchain parsing of the treasury datum failed")
+                      )
+                    )
+                case Failure(e) => Left(TreasuryDatumDeserializationError(output, Right(e)))
             }
 
             address <- output.address match {
@@ -177,10 +183,15 @@ object RuleBasedTreasuryOutput {
             s"Treasury datum is not inline for output: $output"
     }
 
-    case class TreasuryDatumDeserializationError(output: TransactionOutput, e: Throwable)
-        extends ParseError {
+    case class TreasuryDatumDeserializationError(
+        output: TransactionOutput,
+        e: Either[String, Throwable]
+    ) extends ParseError {
         override def getMessage: String =
-            s"Failed to deserialize treasury datum for output ${output}. Error: ${e.getMessage}"
+            s"Failed to deserialize treasury datum for output ${output}. Error: ${e match {
+                    case Left(s)  => s
+                    case Right(t) => t.getMessage
+                }}"
     }
 
     case class TreasuryAtWrongAddress(output: TransactionOutput)(using config: Config)

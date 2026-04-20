@@ -25,5 +25,9 @@ object TransactionBuilder {
                   PlutusScriptEvaluator(config.cardanoInfo, EvaluatorMode.EvaluateAndComputeCost),
               validators = validators,
             )
+
+        def empty(using config: CardanoNetwork.Section): scalusTx.TransactionBuilder.Context = {
+            scalusTx.TransactionBuilder.Context.empty(config.network)
+        }
     }
 }

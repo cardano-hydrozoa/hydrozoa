@@ -1,6 +1,8 @@
 package hydrozoa.config.head.multisig.settlement
 
 import hydrozoa.lib.number.PositiveInt
+import io.circe.*
+import io.circe.generic.semiauto.*
 
 final case class SettlementConfig(
     override val maxDepositsAbsorbedPerBlock: PositiveInt
@@ -14,4 +16,8 @@ object SettlementConfig {
 
         def maxDepositsAbsorbedPerBlock: PositiveInt = settlementConfig.maxDepositsAbsorbedPerBlock
     }
+
+    given settlementConfigEncoder: Encoder[SettlementConfig] = deriveEncoder[SettlementConfig]
+
+    given settlementConfigDecoder: Decoder[SettlementConfig] = deriveDecoder[SettlementConfig]
 }

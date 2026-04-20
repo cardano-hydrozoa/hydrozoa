@@ -2,6 +2,8 @@ package hydrozoa.multisig.consensus.peer
 
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.ledger.block.BlockNumber
+import io.circe.*
+import io.circe.generic.semiauto.*
 import scala.annotation.targetName
 
 final case class HeadPeerId(peerNum: HeadPeerNumber, nHeadPeers: PositiveInt) {
@@ -34,5 +36,8 @@ object HeadPeerId {
             self.peerNum.convert.compare(other.peerNum.convert)
         }
     }
+
+    given headPeerIdEncoder: Encoder[HeadPeerId] = deriveEncoder[HeadPeerId]
+    given headPeerIdDecoder: Decoder[HeadPeerId] = deriveDecoder[HeadPeerId]
 
 }

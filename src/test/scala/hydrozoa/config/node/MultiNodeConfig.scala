@@ -7,7 +7,6 @@ import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.node.operation.evacuation.{NodeOperationEvacuationConfigGen, generateNodeOperationEvacuationConfig}
 import hydrozoa.config.node.operation.multisig.{NodeOperationMultisigConfig, generateNodeOperationMultisigConfig}
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
-import hydrozoa.config.{ScriptReferenceUtxosGen, generateScriptReferenceUtxos}
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
@@ -15,6 +14,7 @@ import hydrozoa.multisig.ledger.block.Block.MultiSigned
 import hydrozoa.multisig.ledger.block.BlockHeader
 import org.scalacheck.util.Pretty
 import org.scalacheck.{Gen, Prop, Properties, PropertyM}
+import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.{AddrKeyHash, Transaction, VKeyWitness}
 import scalus.uplc.builtin.Builtins.blake2b_224
 import test.{GenWithTestPeers, TestM, TestMFixedEnv, TestPeers, TestPeersSpec, given}
@@ -31,15 +31,17 @@ case class MultiNodeConfig private (
         nodePrivateConfigs.map((n, pc) =>
             n ->
                 NodeConfig(
-                  headConfig,
-                  pc.ownHeadWallet,
-                  pc.nodeOperationEvacuationConfig,
-                  pc.nodeOperationMultisigConfig,
-                  pc.scriptReferenceUtxos
+                  headConfig = headConfig,
+                  ownHeadWallet = pc.ownHeadWallet,
+                  nodeOperationEvacuationConfig = pc.nodeOperationEvacuationConfig,
+                  nodeOperationMultisigConfig = pc.nodeOperationMultisigConfig,
+                  pc.hydrozoaHost,
+                  pc.hydrozoaPort,
+                  pc.blockfrostApiKey
                 ).get
         )
 
-    override def headConfigPreinit: HeadConfig.Preinit = headConfig.headConfigPreinit
+    override def headConfigBootstrap: HeadConfig.Bootstrap = headConfig.headConfigBootstrap
     override def initialBlock: MultiSigned.Initial = headConfig.initialBlock
 
     def multisignTx(tx: Transaction): Transaction =
@@ -58,7 +60,7 @@ case class MultiNodeConfig private (
           nodePrivateConfigs.map(_._2.ownHeadWallet.mkMinorHeaderSignature(serialized)).toList
         )
 
-    def addressOf(peerNumber: HeadPeerNumber) = nodeConfigs(
+    def addressOf(peerNumber: HeadPeerNumber): ShelleyAddress = nodeConfigs(
       peerNumber
     ).ownHeadWallet.exportVerificationKey.shelleyAddress()(using headConfig)
 
@@ -98,14 +100,12 @@ object MultiNodeConfig {
             generateNodeOperationEvacuationConfig,
         generateNodeOperationMultisigConfig: Gen[NodeOperationMultisigConfig] =
             generateNodeOperationMultisigConfig,
-        generateScriptReferenceUtxos: ScriptReferenceUtxosGen = generateScriptReferenceUtxos
     ): Gen[MultiNodeConfig] = for {
         testPeers <- TestPeers.generate(spec)
         ret <- generateForTestPeers(
           generateHeadConfig,
           generateNodeOperationEvacuationConfig,
-          generateNodeOperationMultisigConfig,
-          generateScriptReferenceUtxos
+          generateNodeOperationMultisigConfig
         ).run(testPeers)
     } yield ret
 
@@ -116,12 +116,10 @@ object MultiNodeConfig {
             generateNodeOperationEvacuationConfig,
         generateNodeOperationMultisigConfig: Gen[NodeOperationMultisigConfig] =
             generateNodeOperationMultisigConfig,
-        generateScriptReferenceUtxos: ScriptReferenceUtxosGen = generateScriptReferenceUtxos
     ): GenWithTestPeers[MultiNodeConfig] =
         for {
             testPeers <- ReaderT.ask
             headConfig <- generateHeadConfig
-
             nodePrivateConfigs <-
                 liftF(
                   Gen.sequence[List[
@@ -135,13 +133,15 @@ object MultiNodeConfig {
                               headConfig.headPeers
                             ).get
                             noec <- generateNodeOperationEvacuationConfig(ohpp.ownHeadWallet)
-                            sru <- generateScriptReferenceUtxos(headConfig)
+
                         } yield peerId._1 -> NodePrivateConfig(
                           ownHeadPeerPrivate = ohpp,
                           // Re-using the same wallet for now, don't know if this will work
                           nodeOperationEvacuationConfig = noec,
                           nodeOperationMultisigConfig = nomc,
-                          scriptReferenceUtxos = sru
+                          hydrozoaHost = "localhost",
+                          hydrozoaPort = "4973",
+                          blockfrostApiKey = "not a real blockfrost api key"
                         )
                     )
                   )
@@ -154,8 +154,8 @@ object MultiNodeConfig {
 
 object MultiNodeConfigTest extends Properties("Multi-node config") {
     val _ = property("generates") = Prop.forAll(
-      TestPeersSpec
-          .generate()
-          .flatMap(MultiNodeConfig.generate(_)())
-    )(_ => true)
+      TestPeersSpec.generate().flatMap(MultiNodeConfig.generate(_)())
+    )(mnc =>
+        mnc.initialBlock.effects.initializationTx.tx.witnessSetRaw.value.vkeyWitnesses.toSet.nonEmpty
+    )
 }

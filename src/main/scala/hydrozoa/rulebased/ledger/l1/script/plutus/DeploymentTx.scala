@@ -29,7 +29,9 @@ final case class DeploymentTx(
     override val tx: Transaction,
     override val txLens: Lens[DeploymentTx, Transaction] = Focus[DeploymentTx](_.tx),
     override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
-) extends Tx[DeploymentTx]
+) extends Tx[DeploymentTx] {
+    override def transactionFamily: String = "DeploymentTx"
+}
 
 object DeploymentTx {
     export DeploymentTxOps.Config

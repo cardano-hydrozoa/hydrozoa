@@ -39,7 +39,9 @@ final case class VoteTx(
     override val tx: Transaction,
     override val txLens: Lens[VoteTx, Transaction] = Focus[VoteTx](_.tx),
     override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
-) extends Tx[VoteTx]
+) extends Tx[VoteTx] {
+    override def transactionFamily: String = "VoteTx"
+}
 
 object VoteTx {
     export VoteTxOps.{Build, Config}

@@ -1,6 +1,8 @@
 package hydrozoa.multisig.ledger.block
 
 import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, FinalizationTx, InitializationTx, RefundTx, RolloutTx, SettlementTx}
+import io.circe.*
+import io.circe.generic.semiauto.*
 
 sealed trait BlockEffects extends BlockEffects.Section
 
@@ -61,6 +63,9 @@ object BlockEffects {
               BlockEffects.MultiSigned.Initial.Section {
             override transparent inline def effects: BlockEffects.MultiSigned.Initial = this
         }
+
+        given blockEffectsMultiSignedInitialEncoder: Encoder[BlockEffects.MultiSigned.Initial] =
+            deriveEncoder[BlockEffects.MultiSigned.Initial]
 
         final case class Minor(
             override val headerSerialized: BlockHeader.Minor.Onchain.Serialized,

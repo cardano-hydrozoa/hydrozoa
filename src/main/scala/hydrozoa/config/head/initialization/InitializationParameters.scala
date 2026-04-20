@@ -1,15 +1,19 @@
 package hydrozoa.config.head.initialization
 
 import cats.data.NonEmptyMap
-import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
+import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
+import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.given
 import hydrozoa.lib.number.Distribution
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber.given
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.token.CIP67
-import hydrozoa.multisig.ledger.l1.token.CIP67.{HasTokenNames, HeadTokenNames}
-import io.circe.{Decoder, Encoder}
+import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
+import io.circe.generic.semiauto.*
+import io.circe.{Decoder, Encoder, *}
 import scala.collection.immutable.TreeMap
 import scalus.cardano.ledger.{AssetName, Blake2b_256, Coin, Hash, Hash32, TransactionOutput, Utxo, Utxos, Value}
 import scalus.uplc.builtin.{ByteString, platform}
@@ -27,10 +31,10 @@ export hydrozoa.config.head.initialization.InitializationParameters.isBalancedIn
   *   the ADA amounts (if any) that each peer contributed to the head's equity. The total ADA
   *   contributed must be sufficient for the initialization tx fee, and will also be used for all
   *   subsequent settlement, rollout, and finalization tx fees.
-  * @param initialSeedUtxo
+  * @param seedUtxo
   *   among the utxos funding the head's initialization, this utxo's ID determines the head's token
   *   names.
-  * @param initialAdditionalFundingUtxos
+  * @param additionalFundingUtxos
   *   the other funding utxos for initialization, additional to the seed utxo.
   * @param initialChangeOutputs
   *   change outputs that must contain all ADA and non-ADA assets from the funding utxos that are in
@@ -39,64 +43,57 @@ export hydrozoa.config.head.initialization.InitializationParameters.isBalancedIn
 final case class InitializationParameters(
     override val initialEvacuationMap: EvacuationMap,
     override val initialEquityContributions: NonEmptyMap[HeadPeerNumber, Coin],
-    // TODO: just seedUtxo?
-    override val initialSeedUtxo: Utxo,
-    override val headId: HeadId,
-    // TODO: just additionalFundingUtxos?
-    override val initialAdditionalFundingUtxos: Utxos,
+    override val seedUtxo: Utxo,
+    override val additionalFundingUtxos: Utxos,
     // TODO: just changeOutputs?
     override val initialChangeOutputs: List[TransactionOutput],
 ) extends InitializationParameters.Section {
     override transparent inline def initializationParameters: InitializationParameters = this
-
-    override lazy val initialL2Value: Value =
-        Value.combine(initialEvacuationMap.outputs.map(_.utxo.value.value))
-
-    override lazy val initialEquityContributed: Coin =
-        initialEquityContributions.toSortedMap.values.fold(Coin.zero)(_ + _)
-
-    override lazy val initialFundingValue: Value =
-        initialFundingUtxos.values.map(_.value).fold(Value.zero)(_ + _) -
-            initialChangeOutputs.map(_.value).fold(Value.zero)(_ + _)
-
-    override lazy val headTokenNames: HeadTokenNames = HeadTokenNames(initialSeedUtxo.input)
-
-    // TODO: We need this hash to put into the initialization tx's metadata,
-    //  so that the equity contributions are pinned by something signed by all peers.
-    override lazy val initialEquityContributionsHash: Hash32 = Hash[Blake2b_256, Any](
-      platform.blake2b_256(ByteString.unsafeFromArray(???))
-    )
 }
 
 object InitializationParameters {
+    given initializationParametersEncoder(using
+        config: CardanoNetwork.Section
+    ): Encoder[InitializationParameters] = Encoder.derived[InitializationParameters]
+
+    given initializationParametersDecoder(using
+        network: CardanoNetwork.Section
+    ): Decoder[InitializationParameters] = deriveDecoder[InitializationParameters]
+
     trait Section extends HasTokenNames {
         def initializationParameters: InitializationParameters
-
-        def headTokenNames = CIP67.HeadTokenNames(initialSeedUtxo.input)
 
         def initialEvacuationMap: EvacuationMap = initializationParameters.initialEvacuationMap
         def initialEquityContributions: NonEmptyMap[HeadPeerNumber, Coin] =
             initializationParameters.initialEquityContributions
-        def initialSeedUtxo: Utxo = initializationParameters.initialSeedUtxo
-        def headId: HeadId = initializationParameters.headId
-        def initialAdditionalFundingUtxos: Utxos =
-            initializationParameters.initialAdditionalFundingUtxos
+        def additionalFundingUtxos: Utxos =
+            initializationParameters.additionalFundingUtxos
         def initialChangeOutputs: List[TransactionOutput] =
             initializationParameters.initialChangeOutputs
+        def seedUtxo: Utxo = initializationParameters.seedUtxo
 
-        def initialEquityContributed: Coin = initializationParameters.initialEquityContributed
-        def initialFundingValue: Value = initializationParameters.initialFundingValue
-        def initialL2Value: Value = initializationParameters.initialL2Value
+        final def initialEquityContributed: Coin =
+            initialEquityContributions.toSortedMap.values.fold(Coin.zero)(_ + _)
+        final def headTokenNames = CIP67.HeadTokenNames(seedUtxo.input)
 
-        def initialEquityContributionsHash: Hash32 =
-            initializationParameters.initialEquityContributionsHash
+        final def headId: HeadId = HeadId(headTokenNames.treasuryTokenName)
+        final def initialFundingValue: Value =
+            initialFundingUtxos.values.map(_.value).fold(Value.zero)(_ + _) -
+                initialChangeOutputs.map(_.value).fold(Value.zero)(_ + _)
+
+        def initialL2Value: Value =
+            Value.combine(initialEvacuationMap.outputs.map(_.utxo.value.value))
+
+        final def initialEquityContributionsHash: Hash32 = Hash[Blake2b_256, Any](
+          platform.blake2b_256(ByteString.unsafeFromArray(???))
+        )
 
         final def initialFundingUtxos: Utxos =
-            initialAdditionalFundingUtxos + initialSeedUtxo.toTuple
+            additionalFundingUtxos + seedUtxo.toTuple
 
         // FIXME: Must be positive
         final def initialSeedIx: Int =
-            initialFundingUtxos.keys.toList.sorted.indexOf(initialSeedUtxo.input)
+            initialFundingUtxos.keys.toList.sorted.indexOf(seedUtxo.input)
     }
 
     extension (config: InitializationParameters.Section & HeadPeers.Section)
