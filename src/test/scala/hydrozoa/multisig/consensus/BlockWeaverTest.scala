@@ -25,7 +25,6 @@ import org.scalacheck.{Arbitrary, Gen, Properties, PropertyBuilder, Test}
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
 import scalus.cardano.ledger.{Blake2b_256, Hash}
-import scalus.crypto.ed25519.Signature
 import scalus.uplc.builtin.ByteString
 import test.Generators.Hydrozoa.genRequestId
 import test.TestPeerName.{Bob, Carol}
@@ -65,9 +64,8 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
                 bodyHash = Hash[Blake2b_256, Any](ByteString.fromArray(Array.fill[Byte](32)(0)))
               ),
               body = TransactionRequestBody(ByteString.empty),
-              userVk = multiNodeConfig.headConfig.headPeerVKeys.head,
-              signature = Signature.unsafeFromArray(Array.fill[Byte](64)(0))
-            ).toOption.get
+              userVk = multiNodeConfig.headConfig.headPeerVKeys.head
+            )
         } yield UserRequestWithId(userRequest = userRequest, requestId = requestId)
     }
 

@@ -433,12 +433,11 @@ object JointLedgerTestHelpers {
                       IArray.genericWrapArray(userWallet.signMsg(IArray.from(header.bytes))).toArray
                     )
 
-                Right(request) = UserRequest.DepositRequest(
+                request = UserRequest.DepositRequest(
                   header = header,
                   body = body,
-                  userVk = userVk,
-                  signature = signature
-                ): @unchecked
+                  userVk = userVk
+                )
 
                 req =
                     UserRequestWithId(
