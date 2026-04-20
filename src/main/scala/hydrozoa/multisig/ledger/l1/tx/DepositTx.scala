@@ -29,7 +29,9 @@ final case class DepositTx(
     override val tx: Transaction,
     override val txLens: Lens[DepositTx, Transaction] = Focus[DepositTx](_.tx),
     override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
-) extends Tx[DepositTx]
+) extends Tx[DepositTx] {
+    override def transactionFamily: String = "DepositTx"
+}
 
 object DepositTx {
     export DepositTxOps.{Build, Parse}

@@ -3,8 +3,11 @@ package hydrozoa.config.head.multisig.fallback
 import cats.data.NonEmptyMap
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
+import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import io.circe.*
+import io.circe.generic.semiauto.*
 import scalus.cardano.ledger.Coin
 import spire.math.Rational
 
@@ -19,6 +22,23 @@ final case class FallbackContingency(
 }
 
 object FallbackContingency {
+    given fallbackContingencyEncoder: Encoder[FallbackContingency] =
+        deriveEncoder[FallbackContingency]
+
+    given fallbackContingencyDecoder: Decoder[FallbackContingency] =
+        deriveDecoder[FallbackContingency]
+
+    given fallbackContingencyCollectiveEncoder: Encoder[FallbackContingency.Collective] =
+        deriveEncoder[FallbackContingency.Collective]
+
+    given fallbackContingencyCollectiveDecoder: Decoder[FallbackContingency.Collective] =
+        deriveDecoder[FallbackContingency.Collective]
+
+    given fallbackContingencyIndividualEncoder: Encoder[FallbackContingency.Individual] =
+        deriveEncoder[FallbackContingency.Individual]
+
+    given fallbackContingencyIndividualDecoder: Decoder[FallbackContingency.Individual] =
+        deriveDecoder[FallbackContingency.Individual]
 
     /** This amount is collected from the first peer, in addition to the first peer's
       * [[FallbackContingency.Individual]]. Technically, this is on behalf of the whole group, but
@@ -66,8 +86,10 @@ object FallbackContingency {
     trait Section {
         def fallbackContingency: FallbackContingency
 
-        def collectiveContingency: FallbackContingency.Collective
-        def individualContingency: FallbackContingency.Individual
+        def collectiveContingency: FallbackContingency.Collective =
+            fallbackContingency.collectiveContingency
+        def individualContingency: FallbackContingency.Individual =
+            fallbackContingency.individualContingency
 
         final def totalContingencyFor(headPeerNumber: HeadPeerNumber): Coin =
             if headPeerNumber == HeadPeerNumber.zero

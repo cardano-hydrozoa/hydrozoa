@@ -1,8 +1,12 @@
 package hydrozoa.config.head.network
 
 import hydrozoa.config.head.rulebased.scripts.RuleBasedScriptAddresses
+import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.given
 import hydrozoa.lib.number.PositiveInt
-import scalus.cardano.address.{Network, ShelleyAddress}
+import io.circe.*
+import io.circe.generic.semiauto.*
+import io.circe.syntax.*
+import scalus.cardano.address.Network
 import scalus.cardano.ledger.{CardanoInfo, Coin, EvaluatorMode, PlutusScriptEvaluator, ProtocolParams, ProtocolVersion, SlotConfig, TransactionOutput}
 import scalus.cardano.txbuilder.TransactionBuilder
 
@@ -24,25 +28,25 @@ enum CardanoNetwork(_cardanoInfo: CardanoInfo) extends CardanoNetwork.Section {
     override def slotConfig: SlotConfig = _cardanoInfo.slotConfig
     override def cardanoProtocolParams: ProtocolParams = _cardanoInfo.protocolParams
 
-    lazy val ruleBasedScriptAddresses: RuleBasedScriptAddresses = RuleBasedScriptAddresses(this)
-
-    override transparent inline def ruleBasedTreasuryAddress: ShelleyAddress =
-        ruleBasedScriptAddresses.ruleBasedTreasuryAddress
-    override transparent inline def ruleBasedDisputeResolutionAddress: ShelleyAddress =
-        ruleBasedScriptAddresses.ruleBasedDisputeResolutionAddress
+    override lazy val ruleBasedScriptAddresses: RuleBasedScriptAddresses = RuleBasedScriptAddresses(
+      this
+    )
 }
 
 object CardanoNetwork {
     trait Section extends RuleBasedScriptAddresses.Section {
         def cardanoNetwork: CardanoNetwork
 
-        def cardanoInfo: CardanoInfo
+        def ruleBasedScriptAddresses: RuleBasedScriptAddresses =
+            cardanoNetwork.ruleBasedScriptAddresses
 
-        def network: Network
+        def cardanoInfo: CardanoInfo = cardanoNetwork.cardanoInfo
 
-        def slotConfig: SlotConfig
+        def network: Network = cardanoNetwork.network
 
-        def cardanoProtocolParams: ProtocolParams
+        def slotConfig: SlotConfig = cardanoNetwork.slotConfig
+
+        def cardanoProtocolParams: ProtocolParams = cardanoNetwork.cardanoProtocolParams
 
         final def babbageUtxoMinLovelace(serializedSize: PositiveInt): Coin = Coin(
           (160 + serializedSize.convert) * cardanoProtocolParams.utxoCostPerByte
@@ -69,4 +73,37 @@ object CardanoNetwork {
             case CardanoNetwork.Mainnet => CardanoInfo.mainnet
             case CardanoNetwork.Preprod => CardanoInfo.preprod
             case CardanoNetwork.Preview => CardanoInfo.preview
+
+    given cardanoNetworkEncoder: Encoder[CardanoNetwork] with {
+        override def apply(cn: CardanoNetwork): Json = cn match {
+            case CardanoNetwork.Mainnet => "mainnet".asJson
+            case CardanoNetwork.Preview => "preview".asJson
+            case CardanoNetwork.Preprod => "preprod".asJson
+            case CardanoNetwork.Custom(cardanoInfo) =>
+                Json.obj(
+                  "custom" -> cardanoInfo.asJson
+                )
+        }
+    }
+
+    given cardanoNetworkDecoder: Decoder[CardanoNetwork] = {
+        val knownNetworkDecoder = Decoder.decodeString.emap {
+            case x if x.toLowerCase == "mainnet" => Right(CardanoNetwork.Mainnet)
+            case x if x.toLowerCase == "preview" => Right(CardanoNetwork.Preview)
+            case x if x.toLowerCase == "preprod" => Right(CardanoNetwork.Preprod)
+            case other =>
+                Left(
+                  "Error decoding the cardano network. Valid values are \"mainnet\", \"preview\","
+                      + "\"preprod\", or a map {\"custom\" : (...insert CardanoInfo here...)}."
+                )
+        }
+        val customNetworkDecoder = Decoder.instance(c =>
+            c.downField("custom")
+                .as[CardanoInfo]
+                .flatMap(ci => Right(CardanoNetwork.Custom(ci)))
+        )
+
+        List[Decoder[CardanoNetwork]](knownNetworkDecoder, customNetworkDecoder)
+            .reduceLeft(_ or _)
+    }
 }

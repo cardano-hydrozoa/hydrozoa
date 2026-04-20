@@ -50,7 +50,9 @@ object FinalizationTx {
         override val resolvedUtxos: ResolvedUtxos,
         override val txLens: Lens[FinalizationTx, Transaction] =
             Focus[NoPayouts](_.tx).asInstanceOf[Lens[FinalizationTx, Transaction]]
-    ) extends NoRollouts
+    ) extends NoRollouts {
+        override def transactionFamily: String = "FinalizationTx.NoRollouts"
+    }
 
     case class WithOnlyDirectPayouts(
         override val finalizationTxEndTime: FinalizationTxEndTime,
@@ -63,7 +65,9 @@ object FinalizationTx {
         override val txLens: Lens[FinalizationTx, Transaction] =
             Focus[WithOnlyDirectPayouts](_.tx).asInstanceOf[Lens[FinalizationTx, Transaction]]
     ) extends WithPayouts,
-          NoRollouts
+          NoRollouts {
+        override def transactionFamily: String = "FinalizationTx.WithOnlyDirectPayouts"
+    }
 
     case class WithRollouts(
         override val finalizationTxEndTime: FinalizationTxEndTime,
@@ -77,7 +81,9 @@ object FinalizationTx {
         override val txLens: Lens[FinalizationTx, Transaction] =
             Focus[WithRollouts](_.tx).asInstanceOf[Lens[FinalizationTx, Transaction]]
     ) extends WithPayouts,
-          RolloutUtxo.Produced
+          RolloutUtxo.Produced {
+        override def transactionFamily: String = "FinalizationTx.WithRollouts"
+    }
 
 }
 

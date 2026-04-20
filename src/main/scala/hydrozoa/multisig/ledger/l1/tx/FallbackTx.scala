@@ -15,6 +15,8 @@ import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.U
 import hydrozoa.rulebased.ledger.l1.state.VoteDatum as VD
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteDatum
 import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
+import io.circe.*
+import io.circe.generic.semiauto.*
 import monocle.{Focus, Lens}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.DatumOption.Inline
@@ -26,8 +28,9 @@ import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
 import scalus.uplc.builtin.Builtins.blake2b_224
-import scalus.uplc.builtin.Data
 import scalus.uplc.builtin.Data.toData
+import scalus.uplc.builtin.{ByteString, Data}
+import scalus.|>
 
 /** Output order:
   *   - Treasury Utxo (1)
@@ -50,14 +53,21 @@ final case class FallbackTx(
 ) extends MultisigTreasuryUtxo.Spent,
       MultisigRegimeUtxo.Spent,
       RuleBasedTreasuryUtxo.Produced,
-      Tx[FallbackTx] {}
+      Tx[FallbackTx] {
+    override def transactionFamily: String = "FallbackTx"
+}
 
 object FallbackTx {
     export FallbackTxOps.Build
+
+    given fallbackTxEncoder: Encoder[FallbackTx] =
+        Encoder.encodeString.contramap(fallbackTx =>
+            fallbackTx.tx.toCbor |> ByteString.fromArray |> (_.toHex)
+        )
 }
 
 private object FallbackTxOps {
-    type Config = HeadConfig.Preinit.Section & InitializationParameters.Section
+    type Config = HeadConfig.Bootstrap.Section & InitializationParameters.Section
 
     private val logger = org.slf4j.LoggerFactory.getLogger("FallbackTx")
 

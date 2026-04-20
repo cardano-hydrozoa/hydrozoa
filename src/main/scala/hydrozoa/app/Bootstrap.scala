@@ -1,13 +1,11 @@
 package hydrozoa.app
 
-import cats.data.{NonEmptyList, NonEmptyMap}
+import cats.data.{NonEmptyList, NonEmptyMap, Validated}
 import cats.effect.unsafe.implicits.global
 import cats.effect.{ExitCode, IO, IOApp}
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.app.Main.loadEnv
 import hydrozoa.config.head.HeadConfig
-import hydrozoa.config.head.HeadConfig.Preinit
-import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.multisig.fallback.FallbackContingency.mkFallbackContingencyWithDefaults
 import hydrozoa.config.head.multisig.settlement.SettlementConfig
@@ -15,7 +13,7 @@ import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.config.head.parameters.HeadParameters
-import hydrozoa.config.head.peers.HeadPeers
+import hydrozoa.config.head.peers.{HeadPeerData, HeadPeers}
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.config.node.NodeConfig
 import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
@@ -32,7 +30,6 @@ import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, HeadPeerWallet}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap, evacuationKeyOrdering}
-import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.evacuationKeyToData
 import java.security.SecureRandom
@@ -43,7 +40,7 @@ import scala.collection.immutable.{SortedMap, TreeMap}
 import scala.concurrent.duration.DurationInt
 import scalus.cardano.address.Address
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{Coin, KeepRaw, PlutusScriptEvaluator, ScriptRef, TransactionHash, TransactionInput, TransactionOutput, Utxo, Value}
+import scalus.cardano.ledger.{Coin, Hash32, KeepRaw, PlutusScriptEvaluator, ScriptRef, TransactionHash, TransactionInput, TransactionOutput, Utxo, Value}
 import scalus.cardano.txbuilder.TransactionBuilderStep.Spend
 import scalus.cardano.txbuilder.{TransactionBuilder, TransactionBuilderStep}
 import scalus.crypto.ed25519.{SigningKey, VerificationKey}
@@ -90,6 +87,7 @@ object Bootstrap:
       *   - the initial l2 is empty
       *   - Cardano preview is used
       *   - utxos available on l1 VKey's enterprise address will be used for funding the head
+      *   - the initial l2 parameters are empty
       */
     def mkNodeConfig(cardanoNetwork: CardanoNetwork, backend: CardanoBackend[IO])(
         vKey: VerificationKey,
@@ -109,7 +107,9 @@ object Bootstrap:
             voteTxFee = Coin.ada(3)
           ),
           disputeResolutionConfig = DisputeResolutionConfig.default(cardanoNetwork.slotConfig),
-          settlementConfig = SettlementConfig(PositiveInt.unsafeApply(100))
+          settlementConfig = SettlementConfig(PositiveInt.unsafeApply(100)),
+          coilQuorum = 0,
+          l2ParamsHash = Hash32.fromByteString(ByteString.empty),
         )
 
         // This is the temporary hard-coded evacuation map - 10 ADA
@@ -214,13 +214,14 @@ object Bootstrap:
         seedUtxo = utxosSelected.head
         valueSelected = Value.combine(utxosSelected.map(_.output.value).toList)
 
+        headPeers = HeadPeers(NonEmptyMap.one(HeadPeerNumber.zero, HeadPeerData(vKey, "FIXME"))).get
+
         initializationParameters = InitializationParameters(
           initialEvacuationMap = evacMap,
           initialEquityContributions =
               NonEmptyMap(HeadPeerNumber.zero -> minEquity, SortedMap.empty),
-          initialSeedUtxo = seedUtxo,
-          headId = HeadId(CIP67.HeadTokenNames(seedUtxo.input).treasuryTokenName),
-          initialAdditionalFundingUtxos = utxosSelected.tail.map(_.toTuple).toMap,
+          seedUtxo = seedUtxo,
+          additionalFundingUtxos = utxosSelected.tail.map(_.toTuple).toMap,
           initialChangeOutputs = List(
             TransactionOutput.Babbage(
               address = peerAddress,
@@ -232,12 +233,25 @@ object Bootstrap:
           )
         )
 
-        preinit = Preinit(
-          cardanoNetwork = cardanoNetwork,
-          headParams = headParams,
-          headPeers = HeadPeers.apply(List(vKey)).get,
-          initializationParams = initializationParameters
-        ).get
+        bootstrap <- IO.fromEither(
+          HeadConfig
+              .Bootstrap(
+                cardanoNetwork = cardanoNetwork,
+                headParams = headParams,
+                headPeers = headPeers,
+                coilPeers = List.empty,
+                initializationParams = initializationParameters,
+                scriptReferenceUtxos = fakeScriptReferenceUtxos(cardanoNetwork)
+              )
+              .toEither
+              .left
+              .map(errors =>
+                  RuntimeException(
+                    "could not construct HeadConfig.bootstrap during bootstrap. Errors:" +
+                        s"${errors.foldLeft("\n\t")(_ ++ _)}"
+                  )
+              )
+        )
 
         endTimeInstant <- IO.realTimeInstant.map(instant =>
             instant.quantize(cardanoNetwork.slotConfig)
@@ -245,7 +259,7 @@ object Bootstrap:
         blockCreationEndTime = BlockCreationEndTime(endTimeInstant)
 
         initTxSeq = InitializationTxSeq
-            .Build(preinit)(blockCreationEndTime)
+            .Build(bootstrap)(blockCreationEndTime)
             .result
             .fold(
               e => {
@@ -259,8 +273,7 @@ object Bootstrap:
         forcedMajorBlockTime = headParams.txTiming.forcedMajorBlockTime(fallbackTxStartTime)
         majorBlockWakeupTime = TxTiming.majorBlockWakeupTime(forcedMajorBlockTime, None)
 
-    } yield {
-        val initialBlock = InitialBlock(
+        initialBlock = InitialBlock(
           Block.MultiSigned.Initial(
             blockBrief = BlockBrief.Initial(
               BlockHeader.Initial(
@@ -272,21 +285,23 @@ object Bootstrap:
               )
             ),
             effects = BlockEffects.MultiSigned.Initial(
-              initializationTx = initTxSeq.initializationTx
-                  .focus(_.tx)
-                  .modify(ownHeadWallet.signTx),
-              fallbackTx = initTxSeq.fallbackTx
-                  .focus(_.tx)
-                  .modify(ownHeadWallet.signTx)
+              initializationTx = ownHeadWallet.signTx(initTxSeq.initializationTx),
+              fallbackTx = ownHeadWallet.signTx(initTxSeq.fallbackTx)
             )
           )
         )
 
-        val headConfig = HeadConfig(
-          headConfigPreinit = preinit,
+        headConfig <- HeadConfig(
+          headConfigBootstrap = bootstrap,
           initialBlock = initialBlock.initialBlock
-        ).get
-
+        ) match {
+            case Validated.Valid(hc) => IO.pure(hc)
+            case Validated.Invalid(_) =>
+                IO.raiseError(
+                  RuntimeException("failure building head config; get logs for details")
+                )
+        }
+    } yield {
         NodeConfig(
           headConfig = headConfig,
           ownHeadWallet = ownHeadWallet,
@@ -295,11 +310,10 @@ object Bootstrap:
             // NOTE: Reusing the same multisig wallet, in production this should be a different wallet
             evacuationWallet = ownHeadWallet
           ),
-          nodeOperationMultisigConfig = NodeOperationMultisigConfig.default,
-          // TODO: I assume that these will be pre-populated on preview, pre-prod, and mainnet, and that we'll have
-          // a different utility to publish the utxo to a given network.
-          // We should probably query these utxos using the backend, and then parse.
-          scriptReferenceUtxos = fakeScriptReferenceUtxos(cardanoNetwork)
+          hydrozoaHost = ???,
+          hydrozoaPort = ???,
+          blockfrostApiKey = ???,
+          nodeOperationMultisigConfig = NodeOperationMultisigConfig.default
         ).get
     }
 

@@ -1,9 +1,12 @@
 package hydrozoa.config.head.multisig.timing
 
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, quantize}
 import hydrozoa.multisig.consensus.{RequestValidityEndTimeRaw, RequestValidityStartTimeRaw}
+import io.circe.syntax.*
+import io.circe.{Decoder, Encoder, HCursor, Json}
 import scala.annotation.targetName
-import scala.concurrent.duration.DurationInt
+import scala.concurrent.duration.{DurationInt, DurationLong, FiniteDuration}
 import scala.math.Ordered.orderingToOrdered
 import scalus.cardano.ledger.SlotConfig
 
@@ -11,6 +14,14 @@ import TxTiming.*
 import Durations.*
 import BlockTimes.*
 import RequestTimes.*
+
+given finiteDurationEncoder: Encoder[FiniteDuration] with {
+    // TODO: Should we encode as a string, like in CIP0116?
+    def apply(fd: FiniteDuration): Json = Encoder.encodeLong(fd.toMillis)
+}
+
+given finiteDurationDecoder: Decoder[FiniteDuration] =
+    Decoder.decodeLong.map(l => l.millis)
 
 /** The reason we measure time duration in real units is that slot length is different for different
   * networks.
@@ -42,7 +53,7 @@ import RequestTimes.*
   *   After a deposit utxo is mature, the head has until this duration elapses to attempt to absorb
   *   it. Defines _depositAbsorptionEnd_ point.
   */
-final case class TxTiming private (
+final case class TxTiming(
     override val minSettlementDuration: MinSettlementDuration,
     override val inactivityMarginDuration: InactivityMarginDuration,
     override val silenceDuration: SilenceDuration,
@@ -146,6 +157,53 @@ final case class TxTiming private (
   * For now, we just have to be careful to ensure that we're using millisecond precision everywhere
   */
 object TxTiming {
+    given txTimingEncoder: Encoder[TxTiming] with {
+
+        def helper(f: TxTiming => QuantizedFiniteDuration)(using txTiming: TxTiming): Json =
+            f(txTiming).finiteDuration.asJson(using finiteDurationEncoder)
+
+        override def apply(txTiming: TxTiming): Json = {
+            given TxTiming = txTiming
+
+            Json.obj(
+              "minSettlementDuration" -> helper(_.minSettlementDuration),
+              "inactivityMarginDuration" -> helper(_.inactivityMarginDuration),
+              "silenceDuration" -> helper(_.silenceDuration),
+              "depositSubmissionDuration" -> helper(_.depositSubmissionDuration),
+              "depositMaturityDuration" -> helper(_.depositMaturityDuration),
+              "depositAbsorptionDuration" -> helper(_.depositAbsorptionDuration)
+            )
+        }
+    }
+
+    given txTimingDecoder(using config: CardanoNetwork.Section): Decoder[TxTiming] =
+        Decoder.instance { c =>
+            given HCursor = c
+
+            def helper(fieldName: String)(using c: HCursor) =
+                for {
+                    fd <- c.downField(fieldName).as[FiniteDuration](using finiteDurationDecoder)
+                    res = QuantizedFiniteDuration(config.slotConfig, fd)
+                } yield res
+
+            for {
+                msd <- helper("minSettlementDuration")
+                imd <- helper("inactivityMarginDuration")
+                sd <- helper("silenceDuration")
+                dsd <- helper("depositSubmissionDuration")
+                dmd <- helper("depositMaturityDuration")
+                dad <- helper("depositAbsorptionDuration")
+            } yield TxTiming(
+              MinSettlementDuration(msd),
+              InactivityMarginDuration(imd),
+              SilenceDuration(sd),
+              DepositSubmissionDuration(dsd),
+              DepositMaturityDuration(dmd),
+              DepositAbsorptionDuration(dad)
+            )
+
+        }
+
     def checkRequestValidityInterval(
         blockCreationStartTime: BlockCreationStartTime,
         requestValidityStartTime: RequestValidityStartTime,
@@ -247,12 +305,14 @@ object TxTiming {
     trait Section {
         def txTiming: TxTiming
 
-        def minSettlementDuration: MinSettlementDuration
-        def inactivityMarginDuration: InactivityMarginDuration
-        def silenceDuration: SilenceDuration
-        def depositSubmissionDuration: DepositSubmissionDuration
-        def depositMaturityDuration: DepositMaturityDuration
-        def depositAbsorptionDuration: DepositAbsorptionDuration
+        def minSettlementDuration: MinSettlementDuration = txTiming.minSettlementDuration
+        def inactivityMarginDuration: InactivityMarginDuration = txTiming.inactivityMarginDuration
+        def silenceDuration: SilenceDuration = txTiming.silenceDuration
+        def depositSubmissionDuration: DepositSubmissionDuration =
+            txTiming.depositSubmissionDuration
+        def depositMaturityDuration: DepositMaturityDuration = txTiming.depositMaturityDuration
+        def depositAbsorptionDuration: DepositAbsorptionDuration =
+            txTiming.depositAbsorptionDuration
     }
 
     object Durations {
@@ -318,7 +378,7 @@ object TxTiming {
         given Conversion[FinalizationTxEndTime, QuantizedInstant] = identity
 
         opaque type FallbackTxStartTime = QuantizedInstant
-        private[timing] def FallbackTxStartTime(x: QuantizedInstant): FallbackTxStartTime = x
+        def FallbackTxStartTime(x: QuantizedInstant): FallbackTxStartTime = x
         given Conversion[FallbackTxStartTime, QuantizedInstant] = identity
 
         opaque type ForcedMajorBlockTime = QuantizedInstant
@@ -326,7 +386,7 @@ object TxTiming {
         given Conversion[ForcedMajorBlockTime, QuantizedInstant] = identity
 
         opaque type MajorBlockWakeupTime = QuantizedInstant
-        private[timing] def MajorBlockWakeupTime(x: QuantizedInstant): MajorBlockWakeupTime = x
+        def MajorBlockWakeupTime(x: QuantizedInstant): MajorBlockWakeupTime = x
         given Conversion[MajorBlockWakeupTime, QuantizedInstant] = identity
     }
 

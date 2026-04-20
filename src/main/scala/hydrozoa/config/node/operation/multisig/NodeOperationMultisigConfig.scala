@@ -1,6 +1,9 @@
 package hydrozoa.config.node.operation.multisig
 
+import hydrozoa.config.head.multisig.timing.given
 import hydrozoa.lib.number.PositiveInt
+import io.circe.*
+import io.circe.generic.semiauto.*
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 
 final case class NodeOperationMultisigConfig(
@@ -14,12 +17,18 @@ object NodeOperationMultisigConfig {
     trait Section {
         def nodeOperationMultisigConfig: NodeOperationMultisigConfig
 
-        def cardanoLiaisonPollingPeriod: FiniteDuration
-        def peerLiaisonMaxEventsPerBatch: PositiveInt
+        def cardanoLiaisonPollingPeriod: FiniteDuration =
+            nodeOperationMultisigConfig.cardanoLiaisonPollingPeriod
+        def peerLiaisonMaxEventsPerBatch: PositiveInt =
+            nodeOperationMultisigConfig.peerLiaisonMaxEventsPerBatch
     }
 
     lazy val default = NodeOperationMultisigConfig(
       cardanoLiaisonPollingPeriod = 10.seconds,
       peerLiaisonMaxEventsPerBatch = PositiveInt.unsafeApply(42)
     )
+
+    given Encoder[NodeOperationMultisigConfig] = deriveEncoder[NodeOperationMultisigConfig]
+
+    given Decoder[NodeOperationMultisigConfig] = deriveDecoder[NodeOperationMultisigConfig]
 }

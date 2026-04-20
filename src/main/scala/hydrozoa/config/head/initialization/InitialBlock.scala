@@ -5,6 +5,7 @@ import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, InitializationTx}
 import hydrozoa.multisig.ledger.l1.utxo.MultisigRegimeUtxo
 
+// Why do we need this wrapper? Is there is no semantic boundary here.
 final case class InitialBlock(
     override val initialBlock: Block.MultiSigned.Initial
 ) extends InitialBlock.Section {
@@ -14,7 +15,7 @@ final case class InitialBlock(
 object InitialBlock {
     trait Section {
         def initialBlockSection: InitialBlock
-        def initialBlock: Block.MultiSigned.Initial
+        def initialBlock: Block.MultiSigned.Initial = initialBlockSection.initialBlock
 
         def initialKzgCommitment: KzgCommitment = initialBlock.kzgCommitment
 

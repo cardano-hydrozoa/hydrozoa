@@ -1,10 +1,16 @@
 package hydrozoa.multisig.consensus.peer
 
+import cats.data.Validated.{Invalid, Valid}
+import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
+import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.dummySigningKey
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.cardano.wallet.*
 import hydrozoa.multisig.consensus.ack.{AckBlock, AckId, AckNumber}
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber.given
 import hydrozoa.multisig.ledger.block.{Block, BlockHeader}
-import hydrozoa.multisig.ledger.l1.tx.TxSignature
+import hydrozoa.multisig.ledger.l1.tx.{Tx, TxSignature}
+import io.circe.*
+import io.circe.syntax.*
 import scala.language.implicitConversions
 import scalus.cardano.ledger.{Transaction, VKeyWitness}
 import scalus.crypto.ed25519.{SigningKey, VerificationKey}
@@ -15,6 +21,17 @@ final class HeadPeerWallet(
     verificationKey: walletModule.VerificationKey,
     signingKey: walletModule.SigningKey
 ) {
+    // extensional equality
+    override def equals(obj: Any): Boolean = obj match {
+        case other: HeadPeerWallet =>
+            this.getPeerNum == other.getPeerNum
+            && this.exportVerificationKey == other.exportVerificationKey
+            && (this.signMsg(IArray.from(Seq(0.toByte))) sameElements other.signMsg(
+              IArray.from(Seq(0.toByte))
+            ))
+        case _ => false
+    }
+
     def signMsg(msg: IArray[Byte]): IArray[Byte] = walletModule.signMsg(msg, signingKey)
 
     def getPeerNum: HeadPeerNumber = peerNum
@@ -34,6 +51,15 @@ final class HeadPeerWallet(
     def signTx(txUnsigned: Transaction): Transaction =
         val keyWitness = mkVKeyWitness(txUnsigned)
         txUnsigned.attachVKeyWitnesses(List(keyWitness))
+
+    def signTx[A <: Tx[A]](txUnsigned: A): A = {
+        val vKeyWitness = mkVKeyWitness(txUnsigned.tx)
+        txUnsigned.addSignatures(Set(vKeyWitness)) match {
+            case Valid(tx) => tx
+            // This should only happen if the public key and private key don't match
+            case Invalid(e) => throw e.head
+        }
+    }
 
     def mkMinorHeaderSignature(
         headerSerialized: BlockHeader.Minor.Onchain.Serialized
@@ -119,4 +145,29 @@ object HeadPeerWallet:
       walletModule = WalletModule.Scalus,
       verificationKey = verificationKey,
       signingKey = signingKey
+    )
+
+    /** We can't directly access the signing key of a head peer wallet, so we use a "dummy"
+      * all-zeros signing key instead
+      * @return
+      */
+    given dummyHeadPeerWalletEncoder: Encoder[HeadPeerWallet] = new Encoder[HeadPeerWallet] {
+        override def apply(w: HeadPeerWallet): Json = Json.obj(
+          "peerNum" -> w.getPeerNum.asJson,
+          "verificationKey" -> w.exportVerificationKey.asJson(using given_Encoder_VerificationKey),
+          "signingKey" -> dummySigningKey.asJson
+        )
+    }
+
+    given headPeerWalletDecoder: Decoder[HeadPeerWallet] = Decoder.instance(c =>
+        for {
+            peerNum <- c.downField("peerNum").as[HeadPeerNumber]
+            vkey <- c.downField("verificationKey").as[VerificationKey]
+            skey <- c.downField("signingKey").as[SigningKey]
+            w = HeadPeerWallet.scalusWallet(
+              peerNum = peerNum,
+              verificationKey = vkey,
+              signingKey = skey
+            )
+        } yield w
     )

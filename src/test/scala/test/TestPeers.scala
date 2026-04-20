@@ -1,27 +1,32 @@
 package test
 
-import cats.data.NonEmptyList
+import cats.data.Validated.{Invalid, Valid}
+import cats.data.{NonEmptyList, NonEmptyMap, ReaderT}
 import com.bloxbean.cardano.client.account.Account
 import com.bloxbean.cardano.client.common.model.Network as BloxbeanNetwork
 import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath.createExternalAddressDerivationPathForAccount
 import hydrozoa.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.network.CardanoNetworkGen.given_Arbitrary_CardanoNetwork
-import hydrozoa.config.head.peers.HeadPeers
+import hydrozoa.config.head.peers.HeadPeers.*
+import hydrozoa.config.head.peers.{HeadPeerData, HeadPeers}
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.cardano.wallet.WalletModule
-import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber, HeadPeerWallet}
+import hydrozoa.multisig.ledger.l1.tx.Tx
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Test.Parameters
 import org.scalacheck.{Gen, Prop, Properties}
+import scala.collection.immutable.SortedMap
 import scala.collection.mutable
 import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.ArbitraryInstances.*
 import scalus.cardano.ledger.{Transaction, VKeyWitness}
 import scalus.crypto.ed25519.VerificationKey
+import scalus.|>
 import test.Generators.loggerGenerators
+
+type GenWithTestPeers[A] = ReaderT[Gen, TestPeers, A]
 
 /** TestPeers object provides everything test suites may need to operate a peer in a head:
   *   - head peer numbers
@@ -34,17 +39,23 @@ import test.Generators.loggerGenerators
   * multi-node config: integration tests use it when setting up the environment (see
   * ModelBasedSuite.Env). This happens before the initial state is built, but we need to run some
   * transactions on behalf of prospective head peers.
-  *
-  * @param seedPhrase
-  * @param network
-  * @param peersNumber
   */
+
 case class TestPeers private (
     seedPhrase: SeedPhrase,
-    network: CardanoNetwork,
+    override val cardanoNetwork: CardanoNetwork,
     peersNumber: Int
-) {
+) extends CardanoNetwork.Section,
+      HeadPeers.Section {
     import TestPeerName.maxPeers
+
+    private val peerNumbers: List[Int] = List.range(0, peersNumber)
+
+    private def _require(peer: TestPeerName): Unit =
+        require(
+          peer.ordinal < peersNumber,
+          s"Can't access peer $peer there is only $peersNumber is the head"
+        )
 
     require(
       peersNumber <= maxPeers,
@@ -55,45 +66,51 @@ case class TestPeers private (
     // API
     // ===================================
 
-    def mkHeadPeers: HeadPeers = HeadPeers(headPeerVKeys)
+    override def headPeers: HeadPeers = {
+        def helper[A](f: TestPeerName => A) =
+            NonEmptyList.fromListUnsafe(
+              peerNumbers.map(ix => f(TestPeerName.fromOrdinal(ix)))
+            )
 
-    def nHeadPeers: PositiveInt = PositiveInt.unsafeApply(peersNumber)
+        val headPeerVKeys: NonEmptyList[VerificationKey] = helper(verificationKeyFor)
 
-    private val peerNumbers: List[Int] = List.range(0, peersNumber)
+        val headPeersAddresses: NonEmptyList[String] = helper(webSocketAddressFor)
 
-    def headPeerNums: NonEmptyList[HeadPeerNumber] =
-        NonEmptyList.fromListUnsafe(
-          peerNumbers.map(ix => HeadPeerNumber(ix))
-        )
+        headPeerVKeys
+            .zip(headPeersAddresses)
+            .map(HeadPeerData(_, _))
+            .zipWithIndex
+            .map(_.swap)
+            .map((idx, data) => (HeadPeerNumber(idx), data))
+            .toList
+            |> SortedMap.from
+            |> NonEmptyMap.fromMapUnsafe
+            |> HeadPeers.apply
+            |> (x => x.get)
 
-    def headPeerIds: NonEmptyList[HeadPeerId] =
-        NonEmptyList.fromListUnsafe(
-          peerNumbers.map(ix => HeadPeerId(ix, peersNumber))
-        )
+    }
 
-    def headPeerVKeys: NonEmptyList[VerificationKey] =
-        NonEmptyList.fromListUnsafe(
-          peerNumbers.map(ix => verificationKeyFor(TestPeerName.fromOrdinal(ix)))
-        )
+    def webSocketAddressFor(peerNumber: HeadPeerNumber): String =
+        webSocketAddressFor(TestPeerName.fromOrdinal(peerNumber))
+
+    // TODO: What do we want here?
+    def webSocketAddressFor(peer: TestPeerName): String = {
+        _require(peer)
+        s"ws://localhost/${peer.name}"
+    }
 
     def verificationKeyFor(peerNumber: HeadPeerNumber): VerificationKey =
         verificationKeyFor(TestPeerName.fromOrdinal(peerNumber))
 
     def verificationKeyFor(peer: TestPeerName): VerificationKey =
-        require(
-          peer.ordinal < peersNumber,
-          s"Can't access peer $peer there is only $peersNumber is the head"
-        )
+        _require(peer)
         VerificationKey.unsafeFromArray(bloxbeanAccountFor(peer).publicKeyBytes())
 
-    def addressFor(peerNumber: HeadPeerNumber): ShelleyAddress =
-        addressFor(TestPeerName.fromOrdinal(peerNumber))
+    def shelleyAddressFor(peerNumber: HeadPeerNumber): ShelleyAddress =
+        shelleyAddressFor(TestPeerName.fromOrdinal(peerNumber))
 
-    def addressFor(peer: TestPeerName): ShelleyAddress = {
-        require(
-          peer.ordinal < peersNumber,
-          s"Can't access peer $peer there is only $peersNumber is the head"
-        )
+    def shelleyAddressFor(peer: TestPeerName): ShelleyAddress = {
+        _require(peer)
         addressCache.useOrCreate(peer)
     }
 
@@ -112,6 +129,14 @@ case class TestPeers private (
       */
     def multisignTx(tx: Transaction): Transaction =
         tx.attachVKeyWitnesses(mkVKeyWitnesses(tx).toList)
+
+    def multisignTx[A <: Tx[A]](tx: A): A =
+        val witnesses = mkVKeyWitnesses(tx.tx)
+        tx.addSignatures(Set.from(witnesses.toList)) match {
+            case Valid(a) =>
+                a
+            case Invalid(e) => throw RuntimeException(s"error multi-signing: $e")
+        }
 
     def mkVKeyWitnesses(tx: Transaction): NonEmptyList[VKeyWitness] =
         NonEmptyList.fromListUnsafe(
@@ -135,7 +160,7 @@ case class TestPeers private (
     private val accountCache: mutable.Map[TestPeerName, Account] = mutable.Map.empty
         .withDefault(peer =>
             Account.createFromMnemonic(
-              network.asBloxbeanNetwork,
+              cardanoNetwork.asBloxbeanNetwork,
               seedPhrase.mnemonic,
               createExternalAddressDerivationPathForAccount(peer.ordinal)
             )
@@ -145,7 +170,7 @@ case class TestPeers private (
 
     private val addressCache: mutable.Map[TestPeerName, ShelleyAddress] =
         mutable.Map.empty.withDefault(peer =>
-            verificationKeyFor(peer).shelleyAddress()(using network)
+            verificationKeyFor(peer).shelleyAddress()(using cardanoNetwork)
         )
 
     private val walletCache: mutable.Map[TestPeerName, HeadPeerWallet] = mutable.Map.empty
@@ -158,6 +183,7 @@ case class TestPeers private (
               hdKeyPair.getPrivateKey
             )
         })
+
 }
 
 object TestPeers:

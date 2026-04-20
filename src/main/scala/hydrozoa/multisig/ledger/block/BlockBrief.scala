@@ -1,6 +1,9 @@
 package hydrozoa.multisig.ledger.block
 
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
+import hydrozoa.config.head.network.CardanoNetwork
+import io.circe.*
+import io.circe.generic.semiauto.*
 
 sealed trait BlockBrief extends BlockBrief.Section {
     def asUnsigned: this.type & BlockStatus.Unsigned =
@@ -10,6 +13,13 @@ sealed trait BlockBrief extends BlockBrief.Section {
 }
 
 object BlockBrief {
+
+    given blockBriefInitialEncoder: Encoder[BlockBrief.Initial] =
+        deriveEncoder[BlockBrief.Initial]
+
+    given blockBriefInitialDecoder(using CardanoNetwork.Section): Decoder[BlockBrief.Initial] =
+        deriveDecoder[BlockBrief.Initial]
+
     final case class Initial(
         override val header: BlockHeader.Initial
     ) extends BlockBrief,

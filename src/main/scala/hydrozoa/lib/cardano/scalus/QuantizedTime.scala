@@ -2,6 +2,10 @@ package hydrozoa.lib.cardano.scalus
 
 import cats.effect.*
 import cats.effect.IO.*
+import hydrozoa.config.head.multisig.timing.given
+import hydrozoa.config.head.network.CardanoNetwork
+import io.circe.*
+import io.circe.syntax.*
 import java.time.Instant
 import scala.concurrent.duration.{FiniteDuration, MILLISECONDS}
 import scala.math.Ordered.orderingToOrdered
@@ -186,6 +190,9 @@ object QuantizedTime {
               )
             )
 
+        def fromSlot(slotConfig: SlotConfig, slot: Long): QuantizedInstant =
+            Slot.apply(slot).toQuantizedInstant(slotConfig)
+
         def ofEpochSeconds(slotConfig: SlotConfig, posixSeconds: Long): QuantizedInstant =
             apply(slotConfig, Instant.ofEpochSecond(posixSeconds))
 
@@ -207,6 +214,20 @@ object QuantizedTime {
                 MILLISECONDS
               )
             )
+
+        given quantizedFiniteDurationEncoder: Encoder[QuantizedFiniteDuration] with {
+            override def apply(qfd: QuantizedFiniteDuration): Json = qfd.finiteDuration.asJson
+        }
+
+        // Silently quantizes according to slot config. Is this what we want?
+        given quantizedFiniteDurationDecoder(using
+            config: CardanoNetwork.Section
+        ): Decoder[QuantizedFiniteDuration] =
+            Decoder.instance { c =>
+                for {
+                    fd <- c.as[FiniteDuration]
+                } yield QuantizedFiniteDuration(config.slotConfig, fd)
+            }
     }
 
     extension (instant: java.time.Instant) {

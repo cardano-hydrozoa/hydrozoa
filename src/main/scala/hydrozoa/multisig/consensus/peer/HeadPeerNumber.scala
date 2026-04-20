@@ -1,11 +1,38 @@
 package hydrozoa.multisig.consensus.peer
 
 import cats.Order
+import hydrozoa.lib.number.NonNegativeInt
 import hydrozoa.multisig.ledger.block.BlockHeader
+import io.circe.*
 
 type HeadPeerNumber = HeadPeerNumber.HeadPeerNumber
 
 object HeadPeerNumber {
+
+    given headPeerNumberEncoder: Encoder[HeadPeerNumber] = Encoder.encodeInt
+
+    given headPeerNumberDecoder: Decoder[HeadPeerNumber] = Decoder.decodeInt.emap(i =>
+        Either.cond(
+          i >= 0 && i < (1 << 8),
+          right = i,
+          left = s"Expected a number `i` such  that `i >= 0 && i < (1 << 8)`, but got $i"
+        )
+    )
+
+    given headPeerNumberKeyEncoder: KeyEncoder[HeadPeerNumber] =
+        KeyEncoder.encodeKeyInt
+
+    given headPeerNumberKeyDecoder: KeyDecoder[HeadPeerNumber] with {
+        override def apply(s: String): Option[HeadPeerNumber] = {
+
+            for {
+                i <- KeyDecoder.decodeKeyInt(s)
+                pi <- NonNegativeInt(i)
+            } yield i
+
+        }
+    }
+
     opaque type HeadPeerNumber = Int
 
     def apply(i: Int): HeadPeerNumber = {

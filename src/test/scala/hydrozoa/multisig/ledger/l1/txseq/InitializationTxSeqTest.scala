@@ -29,7 +29,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
     //
     // This is an important property: the actual cardano transaction that gets submitted must correspond to
     // the semantic tx we deal with internally. However, it is not the only property: we should also be checking
-    // that the semantic transaction reflects what we expect, i.e., we should performgenerateHeadConfigPreInit "black-box testing" to
+    // that the semantic transaction reflects what we expect, i.e., we should performgenerateHeadConfigBootstrap "black-box testing" to
     // ensure that the multisig regime utxo is actually carrying the correct script, with the correct value, and
     // sitting at the correct address.
     //
@@ -69,9 +69,9 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
             val multisigTreasuryUtxo = iTx.treasuryProduced
             val multisigRegimeUtxo = iTx.multisigRegimeProduced
             val expectedHeadTokenName =
-                CIP67.HeadTokenNames(config.initialSeedUtxo.input).treasuryTokenName
+                CIP67.HeadTokenNames(config.seedUtxo.input).treasuryTokenName
             val expectedMulitsigRegimeTokenName =
-                CIP67.HeadTokenNames(config.initialSeedUtxo.input).multisigRegimeTokenName
+                CIP67.HeadTokenNames(config.seedUtxo.input).multisigRegimeTokenName
             val expectedHeadNativeScript = config.headMultisigScript
             val iTxOutputs: Seq[TransactionOutput] = iTx.tx.body.value.outputs.map(_.value)
             val hns = expectedHeadNativeScript
@@ -82,14 +82,14 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
             // ===================================
             props.append(
               "Configured inputs are spent" |:
-                  (config.initialFundingUtxos + config.initialSeedUtxo.toTuple)
+                  (config.initialFundingUtxos + config.seedUtxo.toTuple)
                       .map(utxo => iTx.tx.body.value.inputs.toSeq.contains(utxo._1))
                       .reduce(_ && _)
             )
 
             props.append(
               "Seed input is spent" |:
-                  iTx.tx.body.value.inputs.toSeq.contains(config.initialSeedUtxo.input)
+                  iTx.tx.body.value.inputs.toSeq.contains(config.seedUtxo.input)
             )
 
             props.append(
@@ -180,7 +180,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
                     MD.Initialization(
                       multisigTreasuryIx = 0,
                       multisigRegimeIx = 1,
-                      seedIx = iTx.tx.body.value.inputs.toSeq.indexOf(config.initialSeedUtxo.input)
+                      seedIx = iTx.tx.body.value.inputs.toSeq.indexOf(config.seedUtxo.input)
                     ).asAuxData(config.headId)
 
                 s"Unexpected metadata value.\n\tActual: $actual\n\tExpected: $expected" |: actual
@@ -213,8 +213,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
                       MD.Initialization(
                         multisigTreasuryIx = 0,
                         multisigRegimeIx = 1,
-                        seedIx =
-                            iTx.tx.body.value.inputs.toSeq.indexOf(config.initialSeedUtxo.input)
+                        seedIx = iTx.tx.body.value.inputs.toSeq.indexOf(config.seedUtxo.input)
                       )
                     )
                 val parsedMetadata = MD.Initialization.parse(
@@ -340,7 +339,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
                     Babbage(
                       address = disputeResolutionAddress,
                       value = Value(
-                        config.headParams.fallbackContingency.collectiveContingency.defaultVoteDeposit,
+                        config.headParameters.fallbackContingency.collectiveContingency.defaultVoteDeposit,
                         MultiAsset(
                           SortedMap(
                             expectedHeadNativeScript.policyId -> SortedMap(

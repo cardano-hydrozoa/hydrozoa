@@ -13,7 +13,7 @@ import monocle.Focus.focus
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.rules.STS.Mutator
 import scalus.cardano.ledger.rules.{CardanoMutator, Context, State as LedgerState}
-import scalus.cardano.ledger.{AssetName, PolicyId, ProtocolParams, RedeemerTag, Slot, Transaction, TransactionHash, Utxos, Value}
+import scalus.cardano.ledger.{AssetName, PolicyId, ProtocolParams, RedeemerTag, Slot, Transaction, TransactionHash, TransactionInput, Utxo, Utxos, Value}
 import scalus.uplc.builtin.Data
 
 val logger = Logging.logger("test.CardanoBackendMock")
@@ -40,6 +40,14 @@ class CardanoBackendMock private (
 ) extends CardanoBackend[MockStateF] {
     import CardanoBackend.*
     import State.*
+
+    override def resolve(
+        input: TransactionInput
+    ): MockStateF[Either[CardanoBackend.Error, Option[Utxo]]] =
+        for {
+            state <- get[MockState]
+            res = state.ledgerState.utxos.get(input).map(output => Utxo(input, output))
+        } yield Right(res)
 
     override def utxosAt(
         address: ShelleyAddress
@@ -243,6 +251,9 @@ object CardanoBackendMock {
 
                 def fetchLatestParams: IO[Either[Error, ProtocolParams]] =
                     transformer(mock.fetchLatestParams)
+
+                override def resolve(input: TransactionInput): IO[Either[Error, Option[Utxo]]] =
+                    transformer(mock.resolve(input))
             }
         }
     }

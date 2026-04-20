@@ -1,120 +1,102 @@
 package hydrozoa.config.head
 
-import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.currentTimeBlockCreationEndTime
-import hydrozoa.config.head.initialization.{InitializationParametersGenBottomUp, InitializationParametersGenTopDown, generateInitialBlock}
-import hydrozoa.config.head.multisig.fallback.{FallbackContingencyGen, generateFallbackContingency}
-import hydrozoa.config.head.multisig.settlement.{SettlementConfigGen, generateSettlementConfig}
+import cats.data.{Kleisli, ReaderT, Validated}
+import hydrozoa.config.head.InitParamsType.{BottomUp, Constant, TopDown}
+import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters, InitializationParametersGenBottomUp, InitializationParametersGenTopDown, generateInitialBlock}
+import hydrozoa.config.head.multisig.fallback.generateFallbackContingency
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
-import hydrozoa.config.head.multisig.timing.{TxTimingGen, generateDefaultTxTiming}
-import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.config.head.parameters.{GenHeadParams, generateHeadParameters}
-import hydrozoa.config.head.rulebased.{DisputeResolutionConfigGen, generateDisputeResolutionConfig}
-import org.scalacheck.{Gen, Prop, Properties}
-import scalus.cardano.ledger.SlotConfig
-import test.{TestPeers, TestPeersSpec}
+import hydrozoa.config.head.parameters.{HeadParameters, generateHeadParameters}
+import hydrozoa.config.{ScriptReferenceUtxos, generateScriptReferenceUtxos}
+import org.scalacheck.{Prop, Properties}
+import test.{GenWithTestPeers, TestPeers, TestPeersSpec, given}
 
-type HeadConfigGen =
-    (testPeers: TestPeers) => (
-        generateBlockCreationEndTime: SlotConfig => Gen[BlockCreationEndTime],
-        generateTxTiming: TxTimingGen,
-        generateFallbackContingency: FallbackContingencyGen,
-        generateDisputeResolutionConfig: DisputeResolutionConfigGen,
-        generateHeadParameters: GenHeadParams,
-        generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
-            InitializationParametersGenTopDown.GenWithDeps
-    ) => Gen[HeadConfig]
+type HeadConfigGen = (
+    generateBlockCreationEndTime: GenWithTestPeers[BlockCreationEndTime],
+    generateHeadConfigBootstrap: GenWithTestPeers[HeadConfig.Bootstrap]
+) => GenWithTestPeers[HeadConfig]
 
-def generateHeadConfig(testPeers: TestPeers)(
-    generateBlockCreationEndTime: SlotConfig => Gen[BlockCreationEndTime] =
-        currentTimeBlockCreationEndTime,
-    generateTxTiming: TxTimingGen = generateDefaultTxTiming,
-    generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
-    generateDisputeResolutionConfig: DisputeResolutionConfigGen = generateDisputeResolutionConfig,
-    generateHeadParameters: GenHeadParams = generateHeadParameters,
-    generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
-        InitializationParametersGenTopDown.GenWithDeps =
-        InitializationParametersGenBottomUp.generateInitializationParameters
-): Gen[HeadConfig] =
+def generateHeadConfig(
+    genHeadConfigBootstrap: GenWithTestPeers[HeadConfig.Bootstrap] = generateHeadConfigBootstrap(),
+    generateInitialBlock: HeadConfig.Bootstrap => GenWithTestPeers[InitialBlock] =
+        bootstrapConfig => generateInitialBlock(ReaderT.pure(bootstrapConfig))
+): GenWithTestPeers[HeadConfig] =
     for {
-        preinit <- generateHeadConfigPreInit(testPeers)(
-          generateTxTiming = generateTxTiming,
-          generateFallbackContingency = generateFallbackContingency,
-          generateDisputeResolutionConfig = generateDisputeResolutionConfig,
-          generateHeadParameters = generateHeadParameters,
-          generateInitializationParameters = generateInitializationParameters
-        )
-        initialBlock <- generateInitialBlock(testPeers)(
-          generateTxTiming = _ => Gen.const(preinit.headParams.txTiming),
-          generateHeadParameters = _ => (_, _, _, _) => Gen.const(preinit.headParams),
-          generateBlockCreationEndTime = generateBlockCreationEndTime,
-          generateInitializationParameters = preinit.initializationParams
-        )
+        bootstrap <- genHeadConfigBootstrap
+        initialBlock <- generateInitialBlock(bootstrap)
     } yield HeadConfig(
-      cardanoNetwork = preinit.cardanoNetwork,
-      headParams = preinit.headParams,
-      headPeers = preinit.headPeers,
-      initializationParams = preinit.initializationParams,
+      headConfigBootstrap = bootstrap,
       initialBlock = initialBlock.initialBlock
-    ).get
-
-def generateHeadConfigPreInit(testPeers: TestPeers)(
-    generateBlockCreationEndTime: SlotConfig => Gen[BlockCreationEndTime] =
-        currentTimeBlockCreationEndTime,
-    generateTxTiming: TxTimingGen = generateDefaultTxTiming,
-    generateFallbackContingency: FallbackContingencyGen = generateFallbackContingency,
-    generateDisputeResolutionConfig: DisputeResolutionConfigGen = generateDisputeResolutionConfig,
-    generateHeadParameters: GenHeadParams = generateHeadParameters,
-    generateInitializationParameters: InitializationParametersGenBottomUp.GenInitializationParameters |
-        InitializationParametersGenTopDown.GenWithDeps =
-        InitializationParametersGenBottomUp.generateInitializationParameters,
-    generateSettlementConfig: SettlementConfigGen = generateSettlementConfig
-): Gen[HeadConfig.Preinit] = for {
-    cardanoNetwork <- Gen.const(testPeers.network)
-    headParams <- generateHeadParameters(cardanoNetwork)(
-      generateTxTiming,
-      generateFallbackContingency,
-      generateDisputeResolutionConfig,
-      generateSettlementConfig
-    )
-    initializationParams <- generateInitializationParameters match {
-        case g: InitializationParametersGenBottomUp.GenInitializationParameters =>
-            g(testPeers)(
-              generateFallbackContingency,
-            )
-        case InitializationParametersGenTopDown.GenWithDeps(
-              generator,
-              generateGenesisUtxosL1,
-              equityRange
-            ) =>
-            generator(testPeers)(
-              generateFallbackContingency,
-              generateGenesisUtxosL1,
-              equityRange
-            )
+    ) match {
+        case Validated.Valid(x) => x
+        case Validated.Invalid(errors) =>
+            throw RuntimeException(s"HeadConfig generation failed: $errors")
     }
 
-} yield HeadConfig
-    .Preinit(
-      cardanoNetwork = cardanoNetwork,
-      headParams = headParams,
-      headPeers = testPeers.mkHeadPeers,
-      initializationParams = initializationParams
+enum InitParamsType:
+    case BottomUp(
+        initializationParametersGenBottomUp: InitializationParametersGenBottomUp.GenInitializationParameters
     )
-    .get
+    case TopDown(initializationParametersGenTopDown: InitializationParametersGenTopDown.GenWithDeps)
+    case Constant(params: InitializationParameters)
+
+def generateHeadConfigBootstrap(
+    generateHeadParams: GenWithTestPeers[HeadParameters] = generateHeadParameters(),
+    generateInitializationParameters: InitParamsType = BottomUp(
+      InitializationParametersGenBottomUp.generateInitializationParameters
+    ),
+    generateScriptReferenceUtxos: GenWithTestPeers[ScriptReferenceUtxos] =
+        generateScriptReferenceUtxos
+): GenWithTestPeers[HeadConfig.Bootstrap] =
+    for {
+        testPeers <- Kleisli.ask
+        cardanoNetwork = testPeers.cardanoNetwork
+        headParams <- generateHeadParams
+        initializationParams <- generateInitializationParameters match {
+            case BottomUp(g) =>
+                g(generateFallbackContingency)
+            case TopDown(
+                  InitializationParametersGenTopDown.GenWithDeps(
+                    generator,
+                    generateGenesisUtxosL1,
+                    equityRange
+                  )
+                ) =>
+                generator(
+                  generateFallbackContingency,
+                  generateGenesisUtxosL1,
+                  equityRange
+                )
+            case Constant(p) => ReaderT.pure(p)(using genMonad)
+        }
+        scriptReferenceUtxos <- generateScriptReferenceUtxos
+
+    } yield HeadConfig
+        .Bootstrap(
+          cardanoNetwork = cardanoNetwork,
+          headParams = headParams,
+          headPeers = testPeers.headPeers,
+          coilPeers = List.empty,
+          initializationParams = initializationParams,
+          scriptReferenceUtxos = scriptReferenceUtxos
+        ) match {
+        case Validated.Valid(x) => x
+        case Validated.Invalid(errors) =>
+            throw RuntimeException(s"generating HeadConfig.Bootstrap failed: $errors")
+    }
 
 object HeadConfigTest extends Properties("Head config") {
 
-    val _ = property("pre-init config generates") = Prop.forAll(
+    val _ = property("bootstrap config generates") = Prop.forAll(
       TestPeersSpec
           .generate()
           .flatMap(TestPeers.generate)
-          .flatMap(generateHeadConfigPreInit(_)())
+          .flatMap(generateHeadConfigBootstrap().run(_))
     )(_ => true)
 
     val _ = property("full config generates") = Prop.forAll(
       TestPeersSpec
           .generate()
           .flatMap(TestPeers.generate)
-          .flatMap(generateHeadConfig(_)())
+          .flatMap(generateHeadConfig().run(_))
     )(_ => true)
 }

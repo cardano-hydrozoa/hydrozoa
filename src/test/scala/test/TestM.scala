@@ -131,7 +131,7 @@ final class TestMFixedEnv[R](dummy: Boolean = true) {
 
     def fail[A](msg: String): TestM[R, A] = TestM.fail[R, A](msg)
 
-    def assertWith(condition: Boolean, msg: String): TestM[R, Unit] =
+    def assertWith(condition: Boolean, msg: => String): TestM[R, Unit] =
         TestM.assertWith[R](condition, msg)
 
     def assert(condition: Boolean): TestM[R, Unit] = TestM.assert(condition)

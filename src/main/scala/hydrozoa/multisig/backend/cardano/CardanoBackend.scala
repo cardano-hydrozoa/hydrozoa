@@ -1,7 +1,7 @@
 package hydrozoa.multisig.backend.cardano
 
 import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.{AssetName, PolicyId, ProtocolParams, Transaction, TransactionHash, Utxos}
+import scalus.cardano.ledger.{AssetName, PolicyId, ProtocolParams, Transaction, TransactionHash, TransactionInput, Utxo, Utxos}
 import scalus.uplc.builtin.Data
 
 /** Notes:
@@ -11,6 +11,14 @@ import scalus.uplc.builtin.Data
   */
 trait CardanoBackend[F[_]]:
     import CardanoBackend.*
+
+    /** @return
+      *   - Left(error) if resolution itself fails; i.e., if an unhandled exception is thrown during
+      *     the resolution process
+      *   - Right(None) if resolution was successful, but the Utxo was not found
+      *   - Right(Some(utxo)) if the utxo was found
+      */
+    def resolve(input: TransactionInput): F[Either[Error, Option[Utxo]]]
 
     /** All utxos at the [[address]]. The ordering of items from the point of view of the blockchain -
       * oldest first, newest last.
@@ -72,6 +80,10 @@ object CardanoBackend:
             extends Error(s"The redeemer for input with index $ix was not found for tx $txId")
         case ErrorDecodingRedeemerCbor(hex: String)
             extends Error(s"Error decoding redeemer Data from hex: $hex")
+        case ErrorResolving(ti: TransactionInput, msg: String)
+            extends Error(
+              s"Error resolving transaction input $ti: $msg"
+            )
 
         override def toString: String = getMessage
         override def getMessage: String = msg

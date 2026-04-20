@@ -3,7 +3,12 @@ package hydrozoa.multisig.ledger.block
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime, FallbackTxStartTime, MajorBlockWakeupTime}
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.DepositAbsorptionStartTime
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.commitment.KzgCommitment
+import io.circe.*
+import io.circe.syntax.*
 
 import KzgCommitment.KzgCommitment
 
@@ -201,6 +206,57 @@ object BlockHeader {
     object Initial {
         final transparent inline def blockNum: BlockNumber = BlockNumber.zero
         final transparent inline def blockVersion: BlockVersion.Full = BlockVersion.Full.zero
+
+        given blockHeaderInitialEncoder: Encoder[BlockHeader.Initial] with {
+            def helper(f: BlockHeader.Initial => QuantizedInstant)(using
+                bh: BlockHeader.Initial
+            ): Json =
+                f(bh).instant.toEpochMilli.asJson
+
+            override def apply(initBH: BlockHeader.Initial): Json = {
+                given BlockHeader.Initial = initBH
+
+                Json.obj(
+                  "startTime" -> helper(_.startTime),
+                  "endTime" -> helper(_.endTime),
+                  "fallbackTxStartTime" -> helper(_.fallbackTxStartTime),
+                  "majorBlockWakeupTime" -> helper(_.majorBlockWakeupTime),
+                  "kzgCommitment" -> initBH.kzgCommitment.asJson
+                )
+            }
+        }
+
+        given blockHeaderInitialDecoder(using
+            config: CardanoNetwork.Section
+        ): Decoder[BlockHeader.Initial] =
+            Decoder.instance { c =>
+                given HCursor = c
+
+                def helper(fieldName: String)(using
+                    c: HCursor
+                ): Either[DecodingFailure, QuantizedInstant] =
+                    for {
+                        instant <- c
+                            .downField(fieldName)
+                            .as[Long]
+                            .map(java.time.Instant.ofEpochMilli)
+                        res = QuantizedInstant(config.slotConfig, instant)
+                    } yield res
+
+                for {
+                    startTime <- helper("startTime")
+                    endTime <- helper("endTime")
+                    fbtx <- helper("fallbackTxStartTime")
+                    mbwt <- helper("majorBlockWakeupTime")
+                    kzg <- c.downField("kzgCommitment").as[KzgCommitment]
+                } yield BlockHeader.Initial(
+                  BlockCreationStartTime(startTime),
+                  BlockCreationEndTime(endTime),
+                  FallbackTxStartTime(fbtx),
+                  MajorBlockWakeupTime(mbwt),
+                  kzg
+                )
+            }
     }
 
     object Minor {
