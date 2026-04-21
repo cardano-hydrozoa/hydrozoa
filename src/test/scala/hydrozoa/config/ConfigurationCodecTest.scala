@@ -38,7 +38,7 @@ object ConfigurationCodecTest extends Properties("Configuration Codec Properties
               )
             )
 
-            _ <- lift(IO.println(encodedString))
+//            _ <- lift(IO.println(encodedString))
             decodingResult <- lift(
               HeadConfig.fromJson(encodedString, cardanoBackend).value
             )
@@ -76,7 +76,7 @@ object ConfigurationCodecTest extends Properties("Configuration Codec Properties
                 val dummy = mkDummy(npc, mnc.headPeers)
                 val encoded = dummy.asJson
                 for {
-                    _ <- lift(IO.println(encoded))
+//                    _ <- lift(IO.println(encoded))
                     decoded <- failLeft(encoded.as[NodePrivateConfig])
                     _ <- assertWith(
                       dummy.nodeOperationEvacuationConfig == decoded.nodeOperationEvacuationConfig,
