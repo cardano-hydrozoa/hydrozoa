@@ -1,6 +1,6 @@
 package hydrozoa.config.node.operation.multisig
 
-import hydrozoa.config.head.multisig.timing.given
+import hydrozoa.lib.cardano.scalus.QuantizedTime.given
 import hydrozoa.lib.number.PositiveInt
 import io.circe.*
 import io.circe.generic.semiauto.*

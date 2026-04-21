@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.block
 
 import hydrozoa.config.head.multisig.timing.TxTiming
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.given
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime, FallbackTxStartTime, MajorBlockWakeupTime}
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.DepositAbsorptionStartTime
 import hydrozoa.config.head.network.CardanoNetwork
@@ -8,6 +9,7 @@ import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.commitment.KzgCommitment
 import io.circe.*
+import io.circe.generic.semiauto.*
 import io.circe.syntax.*
 
 import KzgCommitment.KzgCommitment
@@ -37,6 +39,8 @@ object BlockHeader {
         override transparent inline def header: BlockHeader.Initial = this
     }
 
+    given (using CardanoNetwork.Section): Codec[BlockHeader.Minor] = deriveCodec[BlockHeader.Minor]
+
     final case class Minor(
         override val blockNum: BlockNumber,
         override val blockVersion: BlockVersion.Full,
@@ -55,6 +59,8 @@ object BlockHeader {
             Minor.Onchain.Serialized(onchain)
     }
 
+    given (using CardanoNetwork.Section): Codec[BlockHeader.Major] = deriveCodec[BlockHeader.Major]
+
     final case class Major(
         override val blockNum: BlockNumber,
         override val blockVersion: BlockVersion.Full,
@@ -69,6 +75,7 @@ object BlockHeader {
         override transparent inline def header: BlockHeader.Major = this
     }
 
+    given (using cardanoNetwork: CardanoNetwork.Section): Codec[Final] = deriveCodec[Final]
     final case class Final(
         override val blockNum: BlockNumber,
         override val blockVersion: BlockVersion.Full,

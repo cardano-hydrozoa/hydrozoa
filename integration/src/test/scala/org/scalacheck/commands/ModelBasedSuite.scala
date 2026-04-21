@@ -374,13 +374,13 @@ trait ModelBasedSuite {
                             prop
 
                         } else {
-                            logger.error("WARNING: you should never not see that")
+                            logger.error("WARNING: you should never see that")
                             Prop.undecided
                         }
 
                     case None =>
                         // Here we might wait until canCreateNewSut is true
-                        logger.error("WARNING: you should never not see that")
+                        logger.error("WARNING: you should never see that")
                         Prop.undecided
                 }
             } catch {

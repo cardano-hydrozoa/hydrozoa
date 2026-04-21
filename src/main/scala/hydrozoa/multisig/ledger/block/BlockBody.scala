@@ -1,6 +1,8 @@
 package hydrozoa.multisig.ledger.block
 
 import hydrozoa.multisig.ledger.event.RequestId
+import io.circe.Codec
+import io.circe.generic.semiauto.*
 
 import RequestId.ValidityFlag
 
@@ -19,6 +21,7 @@ object BlockBody {
         override transparent inline def depositsRefunded: List[RequestId] = List()
     }
 
+    given Codec[Minor] = deriveCodec[Minor]
     final case class Minor(
         override val events: List[(RequestId, ValidityFlag)],
         override val depositsRefunded: List[RequestId]
@@ -28,6 +31,7 @@ object BlockBody {
         override transparent inline def depositsAbsorbed: List[RequestId] = List()
     }
 
+    given Codec[Major] = deriveCodec[Major]
     final case class Major(
         override val events: List[(RequestId, ValidityFlag)],
         override val depositsAbsorbed: List[RequestId],
@@ -37,6 +41,7 @@ object BlockBody {
         override transparent inline def body: BlockBody.Major = this
     }
 
+    given Codec[Final] = deriveCodec[Final]
     final case class Final(
         override val events: List[(RequestId, ValidityFlag)],
         override val depositsRefunded: List[RequestId]
