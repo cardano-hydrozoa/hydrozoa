@@ -6,10 +6,10 @@ import com.bloxbean.cardano.client.util.HexUtil
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorSystem
 import com.suprnation.typelevel.actors.syntax.*
-import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.BlockCreationEndTimeGen
+import cats.data.ReaderT
 import hydrozoa.config.head.initialization.{CappedValueGen, InitializationParametersGenTopDown}
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
-import hydrozoa.config.head.multisig.timing.TxTimingGen
+import hydrozoa.config.head.InitParamsType
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.config.node.operation.evacuation.generateNodeOperationEvacuationConfig
@@ -41,7 +41,7 @@ import scalus.cardano.ledger.{CardanoInfo, CertState, Coin, EvaluatorMode, Plutu
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Send, Spend}
 import scalus.cardano.txbuilder.{Change, TransactionBuilder}
 import test.TestPeerName.Alice
-import test.{SeedPhrase, TestPeerName, TestPeers}
+import test.{GenWithTestPeers, SeedPhrase, TestPeerName, TestPeers, given}
 
 import java.util.concurrent.TimeUnit
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
@@ -93,7 +93,7 @@ enum SuiteCardano:
 case class Suite(
     suiteCardano: SuiteCardano,
     override val scenarioGen: ScenarioGen[Model.State, Stage1Sut],
-    txTimingGen: TxTimingGen,
+    txTimingGen: GenWithTestPeers[hydrozoa.config.head.multisig.timing.TxTiming],
     label: String = "unknown",
 ) extends ModelBasedSuite {
 
@@ -169,7 +169,7 @@ case class Suite(
             )
 
             // Topup Alice's address
-            val aliceAddress = testPeers.addressFor(Alice)
+            val aliceAddress = testPeers.shelleyAddressFor(Alice)
             logger.info(s"Topping up Alice's address ${aliceAddress.toBech32.get}")
             DevKit.topup(aliceAddress, Coin(20_000_000_000L))
 
@@ -208,7 +208,7 @@ case class Suite(
               1
             )
 
-            val aliceAddress = testPeers.addressFor(Alice)
+            val aliceAddress = testPeers.shelleyAddressFor(Alice)
             val backend = CardanoBackendBlockfrost.apply_(Left(cardanoNetwork), blockfrostKey)
             logger.info(s"Splitting up utxos at Alice's address ${aliceAddress.toBech32.get}")
             val mixSplitTx = mkMixSplitTx(cardanoNetwork, backend, aliceAddress)
@@ -300,19 +300,41 @@ case class Suite(
         import env.testPeers
         val testPeerToUtxos = env.genesisUtxo(testPeers)
 
-        // Additional generators
-        val generateHeadStartTime: BlockCreationEndTimeGen = slotConfig =>
-            Gen.const(BlockCreationEndTime(env.startTime.quantize(slotConfig)))
-        val generateTxTiming = txTimingGen
+        // Build custom HeadConfig generator with the environment's start time
+        val generateHeadStartTime: GenWithTestPeers[BlockCreationEndTime] =
+            ReaderT(tp => Gen.const(BlockCreationEndTime(env.startTime.quantize(tp.slotConfig))))
+
+        // Use the custom txTimingGen provided to Suite
+        val generateHeadParams: GenWithTestPeers[hydrozoa.config.head.parameters.HeadParameters] =
+            hydrozoa.config.head.parameters.generateHeadParameters(
+              generateTxTiming = txTimingGen
+            )
+
+        val generateHeadConfigBootstrap: GenWithTestPeers[hydrozoa.config.head.HeadConfig.Bootstrap] =
+            hydrozoa.config.head.generateHeadConfigBootstrap(
+              generateHeadParams = generateHeadParams,
+              generateInitializationParameters = InitParamsType.TopDown(
+                InitializationParametersGenTopDown.GenWithDeps(
+                  generateGenesisUtxosL1 = ReaderT((tp: TestPeers) =>
+                      Gen.const(testPeerToUtxos.map((k, v) => k.headPeerNumber -> v))
+                  )
+                )
+              )
+            )
+
+        val generateHeadConfig: GenWithTestPeers[hydrozoa.config.head.HeadConfig] =
+            hydrozoa.config.head.generateHeadConfig(
+              genHeadConfigBootstrap = generateHeadConfigBootstrap,
+              generateInitialBlock = bootstrap =>
+                  hydrozoa.config.head.initialization.generateInitialBlock(
+                    genHeadConfigBootstrap = ReaderT.pure[Gen, TestPeers, hydrozoa.config.head.HeadConfig.Bootstrap](bootstrap),
+                    generateBlockCreationEndTime = generateHeadStartTime
+                  )
+            )
 
         for {
-            config <- MultiNodeConfig.generateForTestPeers(testPeers)(
-              generateBlockCreationEndTime = generateHeadStartTime,
-              generateTxTiming = generateTxTiming,
-              generateInitializationParameters = InitializationParametersGenTopDown.GenWithDeps(
-                generateGenesisUtxosL1 =
-                    network => Gen.const(testPeerToUtxos.map((k, v) => k.headPeerNumber -> v))
-              )
+            config <- MultiNodeConfig.generateWith(testPeers)(
+              generateHeadConfig = generateHeadConfig
             )
 
             _ = logger.debug(s"total contingency: ${config.headConfig.fallbackContingency}")
@@ -334,7 +356,7 @@ case class Suite(
               competingFallbackStartTime =
                   config.headConfig.txTiming.newFallbackStartTime(config.headConfig.initialBlock.endTime),
               // TODO: see https://linear.app/gummiworm-labs/issue/GUM-104/specify-how-ledger-configuration-is-handled
-              utxosL2Active = config.initializationParams.initialEvacuationMap.toUtxos,
+              utxosL2Active = config.headConfig.initializationParameters.initialEvacuationMap.toUtxos,
               peerUtxosL1 = peerL1GenesisUtxos,
               preinitPeerUtxosL1 = peerL1GenesisUtxos,
               depositEnqueued = List.empty,
