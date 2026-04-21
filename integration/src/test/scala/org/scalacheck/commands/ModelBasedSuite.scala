@@ -774,7 +774,23 @@ object ModelBasedSuite {
         override def run(): Unit = {
             val simNanos = totalSimulatedNanos.get
 
-            val simDays = simNanos / 86_400_000_000_000L
+            val simSecs = simNanos / 1_000_000_000L
+            val simMins = simSecs / 60L
+            val simHours = simMins / 60L
+            val simDays = simHours / 24L
+            val simRemHours = simHours % 24L
+            val simRemMins = simMins % 60L
+            val simRemSecs = simSecs % 60L
+
+            val simTimeStr = if simDays > 0 then
+                f"${simDays}d ${simRemHours}h ${simRemMins}m ${simRemSecs}s"
+            else if simHours > 0 then
+                f"${simHours}h ${simRemMins}m ${simRemSecs}s"
+            else if simMins > 0 then
+                f"${simMins}m ${simRemSecs}s"
+            else
+                f"${simSecs}s"
+
             val realNanos = System.nanoTime() - startNanoTime
             val realSecs = realNanos / 1_000_000_000L
             val realMins = realSecs / 60L
@@ -782,7 +798,7 @@ object ModelBasedSuite {
 
             println
             println(
-              s"---- TestControl ---- GRAND TOTAL simulated time: ${simDays} days (across all test cases)"
+              s"---- TestControl ---- GRAND TOTAL simulated time: $simTimeStr (across all test cases)"
             )
             println(
               s"---- TestControl ---- GRAND TOTAL real time:      ${realMins}m ${realRemSec}s"

@@ -172,6 +172,7 @@ object InitializationParametersGenTopDown {
             seedUtxo <- liftF(Gen.oneOf(total.fundingUtxos))
             genesisId = L2Genesis.mkGenesisId(seedUtxo.input)
 
+            // TODO: how do we initialize the eutxo ledger?
             initialEvacuationMap =
                 EvacuationMap(
                   TreeMap.from(

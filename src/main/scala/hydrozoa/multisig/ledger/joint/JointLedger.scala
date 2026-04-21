@@ -481,8 +481,15 @@ final case class JointLedger(
                             if decisions.rejected.isEmpty then IO.pure(p.l2LedgerState)
                             else executeL2Command(p, depositEventDecisions)
                         _ <- logger.trace(s"New evacuation map: ${newEvacuationMap.evacuationMap}")
+
+                        // Update the state with the new evacuation map
+                        newJLState = p
+                            .setL2LedgerState(newL2State)
+                            .focus(_.evacuationMap)
+                            .replace(newEvacuationMap)
+
                     } yield (
-                      p,
+                      newJLState,
                       previousHeader.nextHeaderIntermediate(
                         txTiming,
                         blockCreationStartTime,

@@ -109,6 +109,23 @@ object MultiNodeConfig {
         ).run(testPeers)
     } yield ret
 
+    /** Generate MultiNodeConfig using an existing TestPeers instance. This is useful when you need
+      * to use a specific TestPeers (e.g., from test environment) rather than generating a new one.
+      */
+    def generateWith(testPeers: TestPeers)(
+        generateHeadConfig: GenWithTestPeers[HeadConfig] =
+            hydrozoa.config.head.generateHeadConfig(),
+        generateNodeOperationEvacuationConfig: NodeOperationEvacuationConfigGen =
+            generateNodeOperationEvacuationConfig,
+        generateNodeOperationMultisigConfig: Gen[NodeOperationMultisigConfig] =
+            generateNodeOperationMultisigConfig,
+    ): Gen[MultiNodeConfig] =
+        generateForTestPeers(
+          generateHeadConfig,
+          generateNodeOperationEvacuationConfig,
+          generateNodeOperationMultisigConfig
+        ).run(testPeers)
+
     def generateForTestPeers(
         generateHeadConfig: GenWithTestPeers[HeadConfig] =
             hydrozoa.config.head.generateHeadConfig(),

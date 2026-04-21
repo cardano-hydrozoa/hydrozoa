@@ -10,7 +10,7 @@
     </root>
     <logger name="org.scalacheck.commands.ModelBasedSuite" level="info"/>
     <logger name="Stage1.Commands" level="warn"/>
-    <logger name="Stage1.CommandGennerators" level="trace"/>
+    <logger name="Stage1.CommandGenerators" level="trace"/>
     <logger name="Stage1.ScenarioGenerators" level="warn"/>
     <logger name="Stage1.Model" level="trace"/>
     <logger name="Stage1.Sut" level="trace"/>

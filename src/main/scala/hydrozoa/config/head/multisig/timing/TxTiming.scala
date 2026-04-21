@@ -42,7 +42,7 @@ given finiteDurationDecoder: Decoder[FiniteDuration] =
   * @param depositSubmissionDuration
   *   The fixed amount of time reserved for submitting the deposit txs by users. It's materialized
   *   as the ttl for deposit txs, which SHOULD be exactly [[UserRequestHeader.validityEnd]] +
-  *   [[depositSubmissionDurationdefines]].
+  *   [[depositSubmissionDuration]].
   *
   * @param depositMaturityDuration
   *   The head waits for this duration after a deposit tx's validity end time to check whether a
