@@ -90,7 +90,7 @@ object RequestValidityEndTimeRaw:
   *   Epoch time in seconds, block creation start time must be before this time in order for the
   *   request to be actionable
   */
-case class UserRequestHeader(
+case class gUserRequestHeader(
     headId: HeadId,
     // TODO: this should be optional, should be parsed by this time
     validityStart: RequestValidityStartTimeRaw,

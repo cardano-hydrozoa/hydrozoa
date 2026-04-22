@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.block
 
 import cats.implicits.catsSyntaxOrder
+import io.circe.*
 
 object BlockVersion {
     type Full = Full.Full
@@ -8,6 +9,9 @@ object BlockVersion {
     type Minor = Minor.Minor
 
     object Full {
+        given Encoder[Full] = Encoder.encodeTuple2[Int, Int]
+        given Decoder[Full] = Decoder.decodeTuple2[Int, Int]
+
         opaque type Full = (Int, Int)
 
         def apply(i: Int, j: Int): Full = (i, j)

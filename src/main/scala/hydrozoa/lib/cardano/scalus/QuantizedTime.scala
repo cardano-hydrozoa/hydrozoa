@@ -2,13 +2,13 @@ package hydrozoa.lib.cardano.scalus
 
 import cats.effect.*
 import cats.effect.IO.*
-import hydrozoa.config.head.multisig.timing.given
 import hydrozoa.config.head.network.CardanoNetwork
 import io.circe.*
 import io.circe.syntax.*
 import java.time.Instant
-import scala.concurrent.duration.{FiniteDuration, MILLISECONDS}
+import scala.concurrent.duration.{DurationLong, FiniteDuration, MILLISECONDS}
 import scala.math.Ordered.orderingToOrdered
+import scala.util.Try
 import scalus.cardano.ledger.{Slot, SlotConfig}
 import scalus.cardano.onchain.plutus.v3.PosixTime
 
@@ -47,6 +47,30 @@ TODO:
       always equal to QuantizedInstant(quantizedInstant.instant + finiteDuration, quantizedInstant.slotConfig) ?
  */
 object QuantizedTime {
+    given finiteDurationEncoder: Encoder[FiniteDuration] with {
+        // TODO: Should we encode as a string, like in CIP0116?
+        def apply(fd: FiniteDuration): Json = Encoder.encodeLong(fd.toMillis)
+    }
+
+    given finiteDurationDecoder: Decoder[FiniteDuration] =
+        Decoder.decodeLong.map(l => l.millis)
+
+    given instantEncoder: Encoder[java.time.Instant] =
+        Encoder.instance(instant => instant.toEpochMilli.asJson)
+
+    given instantDecoder: Decoder[java.time.Instant] =
+        Decoder.decodeLong.map(java.time.Instant.ofEpochMilli)
+
+    given quantizedInstantEncoder: Encoder[QuantizedInstant] =
+        instantEncoder.contramap(qi => qi.instant)
+    given quantizedInstantDecoder(using config: CardanoNetwork.Section): Decoder[QuantizedInstant] =
+        instantDecoder.emap(instant =>
+            Try(QuantizedInstant(config.slotConfig, instant)).toEither.left.map(e =>
+                s"Could not decode quantized instant $instant according to slot config $config: $e"
+            )
+        )
+    given quantizedInstantCodec(using config: CardanoNetwork.Section): Codec[QuantizedInstant] =
+        Codec.from(quantizedInstantDecoder, quantizedInstantEncoder)
 
     given Ordering[QuantizedInstant] with {
         override def compare(self: QuantizedInstant, other: QuantizedInstant): Int = {

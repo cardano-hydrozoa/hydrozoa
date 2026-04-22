@@ -2,6 +2,10 @@ package hydrozoa.multisig.ledger.event
 
 import cats.implicits.catsSyntaxOrder
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag.{Invalid, Valid}
+import io.circe.*
+import io.circe.generic.semiauto.*
+import io.circe.syntax.*
 import scala.annotation.targetName
 
 type RequestId = RequestId.Id
@@ -19,6 +23,32 @@ object RequestId {
     enum ValidityFlag:
         case Valid
         case Invalid
+
+    given Codec[ValidityFlag] = Codec.from(
+      decodeA = Decoder.instance(c =>
+          c.as[String].flatMap {
+              case "Valid"   => Right(Valid)
+              case "Invalid" => Right(Invalid)
+          }
+      ),
+      encodeA = Encoder.instance {
+          case Valid   => "Valid".asJson
+          case Invalid => "Invalid".asJson
+      }
+    )
+
+    given Encoder[Id] = Encoder.instance(id =>
+        Json.obj(
+          "headPeerNumber" -> id._1.asJson,
+          "requestNumber" -> id._2.asJson
+        )
+    )
+    given Decoder[Id] = Decoder.instance(c =>
+        for {
+            hpn <- c.downField("headPeerNumber").as[HeadPeerNumber]
+            rn <- c.downField("requstNumber").as[RequestNumber]
+        } yield (hpn, rn)
+    )
 
     opaque type Id = (HeadPeerNumber, RequestNumber)
 

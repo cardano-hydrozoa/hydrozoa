@@ -394,7 +394,6 @@ final case class JointLedger(
         args: CompleteBlockRegular
     ): IO[Unit] = {
         import args.*
-        import config.txTiming
 
         for {
             p <- unsafeGetProducing
@@ -642,7 +641,6 @@ final case class JointLedger(
     //   - Send a panic to the multisig regime manager in a suicide note
     def completeBlockFinal(args: CompleteBlockFinal): IO[Unit] = {
         import args.*
-        import config.txTiming
 
         for {
             p <- unsafeGetProducing

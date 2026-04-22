@@ -3,7 +3,7 @@ package hydrozoa.integration.stage1
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime, FallbackTxStartTime}
-import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.RequestValidityEndTime
+import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{DepositAbsorptionStartTime, RequestValidityEndTime}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.integration.stage1.Commands.*
@@ -509,6 +509,12 @@ object Model:
 
             lazy val newFallbackTxStartTime = txTiming.newFallbackStartTime(blockEndTime)
             lazy val newForcedMajorBlockTime = txTiming.forcedMajorBlockTime(newFallbackTxStartTime)
+            lazy val mAbsorptionStartTime : Option[DepositAbsorptionStartTime] = {
+                depositsSubmitted
+                    .map(requestId => 
+                        depositEnqueued.find(registerDepositCmd => registerDepositCmd.request.requestId == requestId))
+                    .
+            }
             lazy val newMajorBlockWakeupTime =
                 TxTiming.majorBlockWakeupTime(newForcedMajorBlockTime, None)
 
@@ -529,10 +535,11 @@ object Model:
               )
             )
 
+            lazy val mbDepositAbsorptionTime = ???
             lazy val forcedMajorBlockTime =
                 txTiming.forcedMajorBlockTime(competingFallbackStartTime)
             lazy val majorBlockWakeupTime =
-                TxTiming.majorBlockWakeupTime(forcedMajorBlockTime, None)
+                TxTiming.majorBlockWakeupTime(forcedMajorBlockTime, mbDepositAbsorptionTime)
 
             lazy val minorBlock = Minor(
               header = BlockHeader.Minor(

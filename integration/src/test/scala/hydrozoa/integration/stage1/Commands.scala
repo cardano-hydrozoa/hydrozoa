@@ -1,6 +1,8 @@
 package hydrozoa.integration.stage1
 
+import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.integration.stage1.CommandGenerators.{TxMutator, TxStrategy}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
 import hydrozoa.lib.logging.Logging
@@ -12,6 +14,8 @@ import org.scalacheck.Prop
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.commands.{CommandLabel, CommandProp}
 import scalus.cardano.ledger.Transaction
+import hydrozoa.multisig.ledger.block.BlockBrief.given
+import io.circe.syntax.*
 
 object Commands:
 
@@ -141,10 +145,12 @@ object Commands:
             logger.trace(s"expected result: $expectedResult")
             logger.trace(s"actual result: $result")
 
+            given CardanoNetwork.Section = stateBefore.multiNodeConfig.headConfig
+
             (expectedResult == result) :|
                 "block briefs should be identical: " +
-                s"\n\texpected: $expectedResult" +
-                s"\n\tgot: $result"
+                s"\n\texpected: ${expectedResult.asJson}" +
+                s"\n\tgot: ${result.asJson}"
 
     implicit given CommandLabel[CompleteBlockCommand] with
         override def label(cmd: CompleteBlockCommand): String =
