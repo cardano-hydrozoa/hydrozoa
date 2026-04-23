@@ -3,13 +3,16 @@ package hydrozoa.multisig.server
 import com.bloxbean.cardano.client.cip.cip30.{CIP30DataSigner, DataSignature}
 import hydrozoa.config.head.initialization.InitializationParameters
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
+import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{*, given}
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.cip116
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.consensus.{RequestValidityEndTimeRaw, RequestValidityStartTimeRaw, UserRequest, UserRequestBody, UserRequestHeader}
+import hydrozoa.multisig.consensus.{UserRequest, UserRequestBody, UserRequestHeader}
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.server.ApiResponse.{Error, HeadInfo, RequestAccepted}
 import io.circe.generic.semiauto.*
+import io.circe.syntax.*
 import io.circe.{Decoder, DecodingFailure, Encoder, Json}
 import scala.util.Try
 import scalus.cardano.address.ShelleyAddress
@@ -58,24 +61,24 @@ object JsonCodecs {
     given Encoder[UserRequestHeader] =
         (header: UserRequestHeader) =>
             Json.obj(
-              "headId" -> InitializationParameters.HeadId.given_Encoder_HeadId(header.headId),
-              "validityStart" -> Json.fromLong(header.validityStart.toLong),
-              "validityEnd" -> Json.fromLong(header.validityEnd.toLong),
-              "bodyHash" -> summon[Encoder[Hash32]].apply(header.bodyHash)
+              "headId" -> header.headId.asJson,
+              "validityStart" -> header.validityStart.asJson,
+              "validityEnd" -> header.validityEnd.asJson,
+              "bodyHash" -> header.bodyHash.asJson
             )
 
-    given Decoder[UserRequestHeader] = c =>
+    given (using config: CardanoNetwork.Section): Decoder[UserRequestHeader] = c =>
         for {
             headId <- c
                 .downField("headId")
                 .as[HeadId](using InitializationParameters.HeadId.given_Decoder_HeadId)
-            validityStart <- c.downField("validityStart").as[Long]
-            validityEnd <- c.downField("validityEnd").as[Long]
+            validityStart <- c.downField("validityStart").as[RequestValidityStartTime]
+            validityEnd <- c.downField("validityEnd").as[RequestValidityEndTime]
             bodyHash <- c.downField("bodyHash").as[Hash32]
         } yield UserRequestHeader(
           headId,
-          RequestValidityStartTimeRaw(validityStart),
-          RequestValidityEndTimeRaw(validityEnd),
+          validityStart,
+          validityEnd,
           bodyHash
         )
 
@@ -91,7 +94,7 @@ object JsonCodecs {
     //  ...
     // }
 
-    object UserRequestDecoder extends Decoder[UserRequest] {
+    case class UserRequestDecoder()(using CardanoNetwork.Section) extends Decoder[UserRequest] {
 
         object Error {
             trait ValidationError extends Throwable {
@@ -203,7 +206,7 @@ object JsonCodecs {
             } yield userRequest
     }
 
-    given Decoder[UserRequest] = UserRequestDecoder
+    given (using config: CardanoNetwork.Section): Decoder[UserRequest] = UserRequestDecoder()
 
     // Specific body type encoders/decoders
     given Encoder[UserRequestBody.DepositRequestBody] =

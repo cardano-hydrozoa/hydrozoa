@@ -4,6 +4,7 @@ import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.integration.stage1.CommandGenerators.{TxMutator, TxStrategy}
+import hydrozoa.integration.stage1.model.Deposits.DepositStatus
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.consensus.UserRequestWithId
@@ -16,6 +17,7 @@ import org.scalacheck.commands.{CommandLabel, CommandProp}
 import scalus.cardano.ledger.Transaction
 import hydrozoa.multisig.ledger.block.BlockBrief.given
 import io.circe.syntax.*
+import scala.collection.immutable.Queue
 
 object Commands:
 
@@ -184,12 +186,13 @@ object Commands:
     /** The command submits the deposit transaction from the corresponding register deposit event.
       */
     final case class SubmitDepositsCommand(
-        depositsForSubmission: List[(RequestId, Transaction)],
-        depositsForRejection: List[RequestId]
+        depositsForSubmission: Queue[DepositStatus.Registered],
+        depositsToDecline: Queue[DepositStatus.Registered]
     ) {
         override def toString: String =
             s"SubmitDepositsCommand(for submission=${depositsForSubmission.map(_._1).mkString("[", ", ", "]")}, " +
-                s"for rejection=${depositsForRejection.mkString("[", ", ", "]")})"
+                s"for rejection=${depositsToDecline.mkString("[", ", ", "]")})"
+
     }
 
     implicit given CommandProp[SubmitDepositsCommand, Unit, Model.State] with {}

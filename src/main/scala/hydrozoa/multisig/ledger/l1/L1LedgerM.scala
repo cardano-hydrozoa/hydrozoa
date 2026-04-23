@@ -85,7 +85,7 @@ object L1LedgerM {
         import request.*
         for {
             config <- ask
-            validityEndTime = RequestValidityEndTime(config.slotConfig, header.validityEnd)
+            validityEndTime = RequestValidityEndTime(header.validityEnd)
 
             parseRes =
                 DepositRefundTxSeq

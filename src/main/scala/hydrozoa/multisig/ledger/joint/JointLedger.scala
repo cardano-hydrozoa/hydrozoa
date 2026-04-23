@@ -8,7 +8,6 @@ import com.suprnation.typelevel.actors.syntax.BroadcastOps
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime, FallbackTxStartTime}
-import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.actor.*
 import hydrozoa.lib.logging.Logging
@@ -32,7 +31,6 @@ import hydrozoa.multisig.ledger.l1.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerCommand, L2LedgerError, L2LedgerState}
 import monocle.Focus.focus
-import scalus.cardano.ledger.SlotConfig
 import scalus.uplc.builtin.ByteString
 
 private case class UserRequestState(
@@ -205,15 +203,14 @@ final case class JointLedger(
     }
 
     private def checkRequestValidityInterval(
-        slotConfig: SlotConfig,
         req: UserRequestWithId,
         blockCreationStartTime: BlockCreationStartTime
     ): Boolean = {
         val header = req.request.header
         TxTiming.checkRequestValidityInterval(
           blockCreationStartTime,
-          RequestValidityStartTime(slotConfig, header.validityStart),
-          RequestValidityEndTime(slotConfig, header.validityEnd)
+          header.validityStart,
+          header.validityEnd
         )
     }
 
@@ -258,7 +255,7 @@ final case class JointLedger(
             currentBlockNum = p.nextBlockNumber
 
             _ <-
-                if !checkRequestValidityInterval(config.slotConfig, req, blockStartTime) then
+                if !checkRequestValidityInterval(req, blockStartTime) then
                     rejectEvent(
                       requestId,
                       JointLedger.UserRequestError.BlockOutOfRequestValidityInterval(blockStartTime)
@@ -328,7 +325,7 @@ final case class JointLedger(
             currentBlockNum = p.nextBlockNumber
 
             _ <-
-                if !checkRequestValidityInterval(config.slotConfig, req, blockStartTime) then
+                if !checkRequestValidityInterval(req, blockStartTime) then
                     rejectEvent(
                       requestId,
                       JointLedger.UserRequestError.BlockOutOfRequestValidityInterval(blockStartTime)
