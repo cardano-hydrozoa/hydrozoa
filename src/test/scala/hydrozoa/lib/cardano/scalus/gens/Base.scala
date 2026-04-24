@@ -1,6 +1,6 @@
 package hydrozoa.lib.cardano.scalus.gens
 
-import _root_.scalus.cardano.address.{Address, StakeAddress, Network, StakePayload}
+import _root_.scalus.cardano.address.*
 import _root_.scalus.cardano.ledger.*
 import _root_.scalus.cardano.ledger.ArbitraryInstances.given
 import _root_.scalus.cardano.ledger.ArbitraryInstances.genByteStringOfN
@@ -12,7 +12,17 @@ import registry.scalacheck.*
 
 import scala.collection.immutable.SortedMap
 
-import hydrozoa.lib.cardano.scalus.gens.Containers.{keepRaw, sized, sortedMapOf, taggedOrderedSetOf, taggedOrderedStrictSetOf, taggedSortedMapOf, taggedSortedSetOf, taggedSortedStrictMapOf}
+import hydrozoa.lib.cardano.scalus.gens.Containers.{
+    keepRaw,
+    preludeListOf,
+    sized,
+    sortedMapOf,
+    taggedOrderedSetOf,
+    taggedOrderedStrictSetOf,
+    taggedSortedMapOf,
+    taggedSortedSetOf,
+    taggedSortedStrictMapOf
+}
 // `KeyOf[K, A]` typeclass instances used by the Tagged*Map combinators
 // (e.g. KeyOf[ScriptHash, Script.Native]) live in the TransactionWitnessSet companion.
 import _root_.scalus.cardano.ledger.TransactionWitnessSet.given
@@ -22,26 +32,26 @@ import _root_.scalus.cardano.ledger.TransactionWitnessSet.given
   * Constrained `genX: Gen[X]` are defined ahead of `registry` so the registry sees
   * fully-initialized values. Every type whose constructor enforces an invariant via `require(...)`
   * has a hand-written generator below; types without such invariants (Coin, Word64, ExUnits,
-  * Constitution) use `genFun`.
+  * Constitution) use `gen`.
   */
 object Base:
 
-    lazy val registry =
-        genFun[BlockFile] *:
-            genFun[Block] *:
+    lazy val gens =
+        gen[BlockFile] *:
+            gen[Block] *:
             mapOf[Int, KeepRaw[AuxiliaryData]] *:
             indexedSeqOf[KeepRaw[TransactionBody]] *:
             indexedSeqOf[KeepRaw[TransactionWitnessSet]] *:
             indexedSeqOf[Int] *:
-            genFun[BlockHeader] *:
-            value(genBlockHeaderBody) *:
-            genFun[Transaction] *:
+            gen[BlockHeader] *:
+            gen(genBlockHeaderBody) *:
+            gen[Transaction] *:
             optionOf[KeepRaw[AuxiliaryData]] *:
             keepRaw[TransactionBody] *:
             keepRaw[TransactionWitnessSet] *:
             keepRaw[AuxiliaryData] *:
-            genFun[TransactionBody] *:
-            genFun[TransactionWitnessSet] *:
+            gen[TransactionBody] *:
+            gen[TransactionWitnessSet] *:
             taggedSortedSetOf[VKeyWitness] *:
             taggedSortedSetOf[BootstrapWitness] *:
             taggedSortedMapOf[ScriptHash, Script.Native] *:
@@ -53,45 +63,47 @@ object Base:
             keepRaw[Data] *:
             optionOf[KeepRaw[Redeemers]] *:
             keepRaw[Redeemers] *:
-            genSum[Redeemers] *:
-            genSum[AuxiliaryData] *:
+            gen[Redeemers] *:
+            gen[AuxiliaryData] *:
             optionOf[Map[Word64, Metadatum]] *:
             mapOf[Word64, Metadatum] *:
             indexedSeqOf[Timelock] *:
             indexedSeqOf[ByteString] *:
+            listOf[ByteString] *:
+            preludeListOf[ByteString] *:
             taggedSortedSetOf[TransactionInput] *:
-            genFun[TransactionInput] *:
+            gen[TransactionInput] *:
             indexedSeqOf[Sized[TransactionOutput]] *:
             optionOf[Sized[TransactionOutput]] *:
             sized[TransactionOutput] *:
-            genSum[TransactionOutput] *:
-            value(genVKeyWitness) *:
-            value(genBootstrapWitness) *:
-            value(genOperationalCert) *:
-            value(genVrfCert) *:
+            gen[TransactionOutput] *:
+            gen(genVKeyWitness) *:
+            gen(genBootstrapWitness) *:
+            gen(genOperationalCert) *:
+            gen(genVrfCert) *:
             optionOf[VotingProcedures] *:
-            genFun[VotingProcedures] *:
+            gen[VotingProcedures] *:
             sortedMapOf[Voter, SortedMap[GovActionId, VotingProcedure]] *:
             sortedMapOf[GovActionId, VotingProcedure] *:
-            genFun[VotingProcedure] *:
+            gen[VotingProcedure] *:
             taggedOrderedSetOf[ProposalProcedure] *:
-            genFun[ProposalProcedure] *:
-            genSum[GovAction] *:
-            genFun[Constitution] *:
+            gen[ProposalProcedure] *:
+            gen[GovAction] *:
+            gen[Constitution] *:
             taggedOrderedStrictSetOf[Certificate] *:
-            genSum[Certificate] *:
-            genFun[VotingProcedure] *:
-            genSum[Voter] *:
+            gen[Certificate] *:
+            gen[VotingProcedure] *:
+            gen[Voter] *:
             optionOf[Withdrawals] *:
-            genFun[Withdrawals] *:
+            gen[Withdrawals] *:
             sortedMapOf[RewardAccount, Coin] *:
-            genFun[ProtocolParamUpdate] *:
+            gen[ProtocolParamUpdate] *:
             optionOf[CostModels] *:
-            genFun[CostModels] *:
+            gen[CostModels] *:
             mapOf[Int, IndexedSeq[Long]] *:
             indexedSeqOf[Long] *:
             indexedSeqOf[Relay] *:
-            genSum[Relay] *:
+            gen[Relay] *:
             optionOf[ByteString] *:
             optionOf[NonNegativeInterval] *:
             optionOf[UnitInterval] *:
@@ -113,63 +125,69 @@ object Base:
             optionOf[GovActionId] *:
             optionOf[Mint] *:
             taggedSortedSetOf[AddrKeyHash] *:
-            value(genGovActionId) *:
+            gen(genGovActionId) *:
             optionOf[PoolMetadata] *:
-            value(genPoolMetadata) *:
+            gen(genPoolMetadata) *:
             mapOf[RewardAccount, Coin] *:
             setOf[AddrKeyHash] *:
-            genFun[ExUnitPrices] *:
-            genFun[PoolVotingThresholds] *:
-            genFun[DRepVotingThresholds] *:
-            genFun[ScriptRef] *:
-            genSum[Script] *:
-            genSum[PlutusScript] *:
+            gen[ExUnitPrices] *:
+            gen[PoolVotingThresholds] *:
+            gen[DRepVotingThresholds] *:
+            gen[ScriptRef] *:
+            gen[ShelleyPaymentPart] *:
+            gen[StakeAddress] *:
+            gen[StakePayload] *:
+            gen[ShelleyDelegationPart] *:
+            gen[Script] *:
+            gen[PlutusScript] *:
             genTimelock *:
-            genSum[DatumOption] *:
-            genFun[Value] *:
-            genFun[RewardAccount] *:
+            gen[DatumOption] *:
+            gen[Value] *:
+            gen[RewardAccount] *:
             mapOf[Credential, Long] *:
             setOf[Credential] *:
-            genSum[Credential] *:
-            genSum[DRep] *:
-            genSum[Voter] *:
-            genSum[Vote] *:
-            genSum[RedeemerTag] *:
-            genFun[StakeAddress] *:
-            genSum[StakePayload] *:
-            genFun[Coin] *:
-            genFun[Word64] *:
-            genFun[ExUnits] *:
-            genSum[Language] *:
-            value(arbitrary[Mint]) *:
-            value(arbitrary[Data]) *:
-            value(arbitrary[Address]) *:
-            value(arbitrary[MultiAsset]) *:
-            value(genAnchor) *:
-            value(genAddrKeyHash) *:
-            value(genScriptHash) *:
-            value(genPoolKeyHash) *:
-            value(genStakeKeyHash) *:
-            value(genTransactionHash) *:
-            value(genAuxiliaryDataHash) *:
-            value(genScriptDataHash) *:
-            value(genDataHash) *:
-            value(genMetadataHash) *:
-            value(genVrfKeyHash) *:
-            value(genBlockHash) *:
-            value(genAssetName) *:
-            value(genUnitInterval) *:
-            value(genNonNegativeInterval) *:
-            value(genSlot) *:
-            value(genProtocolVersion) *:
-            value(genNetwork) *:
-            value(arbitrary[Word64]) *:
-            value(arbitrary[Metadatum]) *:
-            value(arbitrary[Boolean]) *:
-            value(arbitrary[Long]) *:
-            value(arbitrary[String]) *:
-            value(arbitrary[Int]) *:
-            value(arbitrary[ByteString])
+            gen[Credential] *:
+            gen[DRep] *:
+            gen[Voter] *:
+            gen[Vote] *:
+            gen[RedeemerTag] *:
+            gen[StakeAddress] *:
+            gen[StakePayload] *:
+            gen[Coin] *:
+            gen[Word64] *:
+            gen[ExUnits] *:
+            gen[Pointer] *:
+            gen[Language] *:
+            arb[Mint] *:
+            arb[Data] *:
+            arb[Address] *:
+            arb[MultiAsset] *:
+            gen(genAnchor) *:
+            gen(genAddrKeyHash) *:
+            gen(genScriptHash) *:
+            gen(genPoolKeyHash) *:
+            gen(genStakeKeyHash) *:
+            gen(genTransactionHash) *:
+            gen(genAuxiliaryDataHash) *:
+            gen(genScriptDataHash) *:
+            gen(genDataHash) *:
+            gen(genMetadataHash) *:
+            gen(genVrfKeyHash) *:
+            gen(genBlockHash) *:
+            gen(genAssetName) *:
+            gen(genUnitInterval) *:
+            gen(genNonNegativeInterval) *:
+            gen(genSlot) *:
+            gen(genProtocolVersion) *:
+            gen(genNetwork) *:
+            arb[Word64] *:
+            arb[Metadatum] *:
+            arb[Boolean] *:
+            arb[BigInt] *:
+            arb[Long] *:
+            arb[String] *:
+            arb[Int] *:
+            arb[ByteString]
 
     val genAddrKeyHash: Gen[AddrKeyHash] = genHash[Blake2b_224, HashPurpose.KeyHash]
     val genScriptHash: Gen[ScriptHash] = genHash[Blake2b_224, HashPurpose.ScriptHash]
@@ -315,7 +333,7 @@ object Base:
               xs <- Gen.listOf(self)
           yield Timelock.MOf(m, xs.toIndexedSeq): Timelock
         )
-    } *: genFun(genTimelockLeaf)
+    } *: gen(genTimelockLeaf)
 
     /** Leaf-only `Timelock` generator — the three non-recursive variants. Used as the base case by
       * the `genRecursive[Timelock]` entry above; the recursive variants (AllOf / AnyOf / MOf) are

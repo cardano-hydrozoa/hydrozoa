@@ -8,6 +8,7 @@ import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.*
@@ -91,14 +92,13 @@ def genTallyTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[TallyTx.Build
     for {
 
         versionMajor <- Gen.choose(1L, 99L).map(BigInt(_))
-        treasuryDatum <- genTreasuryUnresolvedDatum(
-          versionMajor
-        )
+        treasuryDatum <- gens.make[Gen[Unresolved]]
 
         fallbackTxId <- genByteStringOfN(32).map(TransactionHash.fromByteString)
         treasuryUtxo <- genRuleBasedTreasuryUtxo(
-          fallbackTxId,
-          treasuryDatum
+          section = config,
+          fallbackTxId = fallbackTxId,
+          unresolvedDatum = treasuryDatum
         )
 
         // Generate compatible vote datums for tallying

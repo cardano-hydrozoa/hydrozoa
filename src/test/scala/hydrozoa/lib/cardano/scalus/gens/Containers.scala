@@ -9,6 +9,7 @@ import _root_.scalus.cardano.ledger.{
     TaggedSortedSet,
     TaggedSortedStrictMap
 }
+import _root_.scalus.cardano.onchain.plutus.prelude.List as PreludeList
 import io.bullet.borer.Encoder
 import izumi.reflect.Tag
 import org.scalacheck.Gen
@@ -95,6 +96,28 @@ object Containers:
             invoke = args =>
                 val gA = args(0).asInstanceOf[Gen[A]]
                 Gen.listOf(gA).map(xs => TaggedOrderedStrictSet.from(xs))
+          )
+        )
+
+    /** Register `Gen[A] => Gen[scalus.cardano.onchain.plutus.prelude.List[A]]`.
+      *
+      * Builds a scalus Plutus-prelude linked list (`Cons`/`Nil`) by folding right over a regular
+      * `scala.List[A]` produced by `Gen.listOf`. The prelude `List` is a different type from
+      * `scala.List`, so a separate combinator is needed.
+      */
+    def preludeListOf[A](using
+        inTag: Tag[Gen[A]],
+        outTag: Tag[Gen[PreludeList[A]]]
+    ): TypedEntry[Gen[A] *: EmptyTuple, Gen[PreludeList[A]]] =
+        TypedEntry(
+          Entry(
+            inputs = List(inTag.tag),
+            output = outTag.tag,
+            invoke = args =>
+                val gA = args(0).asInstanceOf[Gen[A]]
+                Gen.listOf(gA).map(xs =>
+                    xs.foldRight(PreludeList.Nil: PreludeList[A])((h, t) => PreludeList.Cons(h, t))
+                )
           )
         )
 

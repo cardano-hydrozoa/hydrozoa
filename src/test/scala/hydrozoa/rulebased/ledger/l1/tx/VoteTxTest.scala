@@ -9,6 +9,7 @@ import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.AwaitingVote
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
@@ -71,11 +72,9 @@ def genVoteTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[VoteTx.Build] 
     given config: VoteTx.Config = multiNodeConfig.nodeConfigs.head._2
 
     for {
-        versionMajor <- Gen.choose(1L, 99L).map(BigInt(_))
         // Generate a treasury UTXO to use a reference input
-        treasuryDatum <- genTreasuryUnresolvedDatum(
-          versionMajor
-        )
+        versionMajor <- gens.make[Gen[VersionMajor]]
+        treasuryDatum <- gens.make[Gen[Unresolved]]
         fallbackTxId <- genByteStringOfN(32).map(TransactionHash.fromByteString)
 
         // This is 4 bytes shorter to accommodate CIP-67 prefixes
@@ -83,8 +82,9 @@ def genVoteTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[VoteTx.Build] 
         headTokenSuffix <- genByteStringOfN(28)
 
         treasuryUtxo <- genRuleBasedTreasuryUtxo(
+          section = config,
           fallbackTxId = fallbackTxId,
-          treasuryDatum
+          unresolvedDatum = treasuryDatum
         )
 
         // Generate a vote UTXO with NoVote status (input)

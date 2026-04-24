@@ -104,7 +104,7 @@ def genSimpleDeinitTxBuilder(using
           config.nHeadPeers.toInt + 1
         )
         akh <- Arbitrary.arbitrary[AddrKeyHash]
-        collateralUtxo <- genCollateralUtxo(akh)(using config)
+        collateralUtxo <- genCollateralUtxo(akh)
 
     } yield {
         DeinitTx.Build(

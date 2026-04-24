@@ -78,12 +78,13 @@ def genTreasuryResolvedDatum(
 // Feel free to trim down the config argument
 def genEvacuationTxBuild(using config: MultiNodeConfig): Gen[EvacuationTx.Build] =
     for {
-        // Generate a set of 64-1000 L2 utxos
-        l2UtxoCount <- Gen.choose(64, 1000)
-        // FIXME: this is partial, but I'm just trying to restore the old test for now
-        Right(evacMap) <- genUtxosL2(l2UtxoCount).map(
-          _.toEvacuationMap(config.headConfig)
-        )
+        // Generate a set of L2 utxos via the registry. Network is pinned to the test config's
+        // network through `tweak[Network]`; the L2-shape `Gen[TransactionOutput]` registered
+        // in `CommonGenerators.gens` shadows Base's generic one (LIFO resolution).
+        Right(evacMap) <- gens
+            .tweak[Network](_ => config.headConfig.network)
+            .make[Gen[Utxos]]
+            .map(_.toEvacuationMap(config.headConfig))
         _ = println(s"evac map: ${evacMap.size}")
 
         // Calculate the whole L2 utxo set commitment
@@ -150,7 +151,7 @@ def genEvacuationTxBuild(using config: MultiNodeConfig): Gen[EvacuationTx.Build]
               genValue = Gen.const(Value.ada(100))
             )
 
-        collateralUtxo <- genCollateralUtxo(addr.payment.asInstanceOf[Key].hash)(using config)
+        collateralUtxo <- genCollateralUtxo(addr.payment.asInstanceOf[Key].hash)
 
     } yield EvacuationTx.Build(
       treasuryUtxo = adjustedTreasuryUtxo,

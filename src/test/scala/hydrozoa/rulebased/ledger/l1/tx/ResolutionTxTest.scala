@@ -75,12 +75,11 @@ def genResolutionTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[Resoluti
         fallbackTxId <- Arbitrary.arbitrary[TransactionHash]
         // Generate a treasury UTXO with Unresolved datum
 
-        treasuryDatum <- genTreasuryUnresolvedDatum(
-          BigInt(10)
-        )
+        treasuryDatum <- gens.make[Gen[Unresolved]]
         treasuryUtxo <- genRuleBasedTreasuryUtxo(
-          fallbackTxId,
-          treasuryDatum
+          section = config,
+          fallbackTxId = fallbackTxId,
+          unresolvedDatum = treasuryDatum
         )
 
         // Generate a tallied vote datum with Vote status (the result of a tally)
