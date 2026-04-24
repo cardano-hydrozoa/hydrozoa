@@ -15,7 +15,7 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
         p: org.scalacheck.Test.Parameters
     ): org.scalacheck.Test.Parameters = {
         p.withWorkers(1)
-            .withPropFilter(Some("Deposits"))
+//            .withPropFilter(Some("Deposits"))
         // NB: careful, this will override -s from the command line
         // .withMinSuccessfulTests(100) // 10000
         // .withMaxSize(100) // 500
@@ -70,7 +70,7 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
       *   - [[RegisterDepositCommand]]
       *   - [[SubmitDepositCommand]]
       */
-    lazy val _ = property("Deposits") = Suite(
+    val _ = property("Deposits") = Suite(
       suiteCardano = Mock(preprod),
       txTimingGen = generateDefaultTxTiming,
       scenarioGen = DepositsScenarioGen,

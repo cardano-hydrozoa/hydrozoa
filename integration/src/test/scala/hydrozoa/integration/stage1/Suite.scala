@@ -17,6 +17,7 @@ import hydrozoa.config.node.operation.multisig.generateNodeOperationMultisigConf
 import hydrozoa.integration.stage1.Model.CurrentTime.{AfterCompetingFallbackStartTime, BeforeHappyPathExpiration}
 import hydrozoa.integration.stage1.Model.{BlockCycle, CurrentTime}
 import hydrozoa.integration.stage1.SuiteCardano.*
+import hydrozoa.integration.stage1.model.Deposits
 import hydrozoa.integration.yaci.DevKit
 import hydrozoa.integration.yaci.DevKit.DevnetInfo
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
@@ -359,12 +360,8 @@ case class Suite(
               utxosL2Active = config.headConfig.initializationParameters.initialEvacuationMap.toUtxos,
               peerUtxosL1 = peerL1GenesisUtxos,
               preinitPeerUtxosL1 = peerL1GenesisUtxos,
-              depositEnqueued = List.empty,
-              depositsRegistered = List.empty,
+              deposits = Deposits.empty,
               utxoLocked = Set.empty,
-              depositSigned = Map.empty,
-              depositSubmitted = List.empty,
-              depositsDeclined = List.empty,
             )
             .applyContinuingL1Tx(config.headConfig.initializationTx.tx)
     }

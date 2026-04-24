@@ -1,8 +1,8 @@
 package hydrozoa.multisig.ledger.l1.tx
 
 import cats.data.NonEmptyList
-import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.unsafeRequestValidityEndTime
-import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
+import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.*
+import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.cardano.scalus.given_Choose_Coin
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.eutxol2.tx.GenesisObligation
@@ -41,7 +41,7 @@ def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = 
         requestValidityEndTime <- Gen
             .posNum[Long]
             .map(sec =>
-                unsafeRequestValidityEndTime(
+                RequestValidityEndTime(
                   config.initialBlock.endTime + FiniteDuration(sec, TimeUnit.SECONDS)
                 )
             )

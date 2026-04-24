@@ -3,6 +3,7 @@ package hydrozoa.multisig.consensus
 import cats.effect.IO
 import cats.syntax.all.*
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
+import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
 import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.ledger.event.RequestId
@@ -66,18 +67,6 @@ object UserRequest {
 
 }
 
-opaque type RequestValidityStartTimeRaw = Long
-
-object RequestValidityStartTimeRaw:
-    def apply(bi: Long): RequestValidityStartTimeRaw = bi
-    extension (self: RequestValidityStartTimeRaw) def toLong: Long = self
-
-opaque type RequestValidityEndTimeRaw = Long
-
-object RequestValidityEndTimeRaw:
-    def apply(bi: Long): RequestValidityEndTimeRaw = bi
-    extension (self: RequestValidityEndTimeRaw) def toLong: Long = self
-
 /** @param headId
   *   The blake2b_224 hash of the cbor-encoded seed utxo [[TransactionInput]] appended to the CIP-67
   *   prefix HYDR. This is the asset name of the treasury token
@@ -90,12 +79,10 @@ object RequestValidityEndTimeRaw:
   *   Epoch time in seconds, block creation start time must be before this time in order for the
   *   request to be actionable
   */
-case class gUserRequestHeader(
+case class UserRequestHeader(
     headId: HeadId,
-    // TODO: this should be optional, should be parsed by this time
-    validityStart: RequestValidityStartTimeRaw,
-    // TODO: this should be optional, should be parsed by this time
-    validityEnd: RequestValidityEndTimeRaw,
+    validityStart: RequestValidityStartTime,
+    validityEnd: RequestValidityEndTime,
     bodyHash: Hash32
 ) {
     def signEd25519(privateKey: ByteString): Signature =

@@ -110,7 +110,7 @@ case class AgentActor(
 
         // Joint ledger - proxying
         case x: UserRequestWithId => jointLedger >>= (_ ! x)
-        case x: StartBlock  => jointLedger >>= (_ ! x)
+        case x: StartBlock        => jointLedger >>= (_ ! x)
 
         // Consensus actor
         // Intercepting unsigned blocks
@@ -178,16 +178,18 @@ object SutCommands:
                 .map(_.fold(err => throw RuntimeException(err.toString), _.keySet))
             block <- IO.pure(
               if cmd.isFinal
-              then CompleteBlockFinal(
-                  referenceBlockBrief = None, 
-                  blockCreationEndTime = cmd.blockCreationEndTime
-              )
-              else CompleteBlockRegular(
-                  referenceBlockBrief = None,
-                  pollResults = PollResults(headUtxos),
-                  finalizationLocallyTriggered = LocalFinalizationTrigger.NotTriggered, 
-                  blockCreationEndTime = cmd.blockCreationEndTime
-              )
+              then
+                  CompleteBlockFinal(
+                    referenceBlockBrief = None,
+                    blockCreationEndTime = cmd.blockCreationEndTime
+                  )
+              else
+                  CompleteBlockRegular(
+                    referenceBlockBrief = None,
+                    pollResults = PollResults(headUtxos),
+                    finalizationLocallyTriggered = LocalFinalizationTrigger.NotTriggered,
+                    blockCreationEndTime = cmd.blockCreationEndTime
+                  )
             )
             // All sync commands should be timed out since the system may terminate
             d <- (sut.agent ?: AgentActor.CompleteBlock(block, cmd.blockNumber)).timeout(10.seconds)
@@ -207,9 +209,12 @@ object SutCommands:
         // This uses only depositsForSubmission and ignores rejected deposits
         override def run(cmd: SubmitDepositsCommand, sut: Stage1Sut): IO[Unit] = for {
             _ <- logger.debug(s">> SubmitDepositCommand (${cmd.depositsForSubmission.map(_._1)})")
-            ret <- IO.traverse(cmd.depositsForSubmission)((id, tx) =>
+            ret <- IO.traverse(cmd.depositsForSubmission)(cmd => {
+                val id = cmd.request.requestId
+                val tx = cmd.depositTxBytesSigned
+
                 sut.cardanoBackend.submitTx(tx) >>= (ret => IO.pure((id, tx) -> ret))
-            )
+            })
 
             submissionErrors = ret.filter(_._2.isLeft)
             _ <- IO.whenA(submissionErrors.nonEmpty)(

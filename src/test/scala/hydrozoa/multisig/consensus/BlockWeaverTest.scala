@@ -9,7 +9,9 @@ import com.suprnation.typelevel.actors.syntax.*
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
+import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.*
 import hydrozoa.config.node.MultiNodeConfig
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.multisig.consensus.UserRequest.TransactionRequest
 import hydrozoa.multisig.consensus.UserRequestBody.TransactionRequestBody
@@ -54,13 +56,14 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
     // In block weaver test we don't care about the content of user requests.
     // What we are interested in is request ids though.
     given dummyUserRequestWithId: Arbitrary[UserRequestWithId] = Arbitrary {
+        val zeroQI = QuantizedInstant(multiNodeConfig.slotConfig, Instant.ofEpochSecond(0))
         for {
             requestId <- genRequestId
             userRequest = TransactionRequest(
               header = UserRequestHeader(
                 headId = multiNodeConfig.headConfig.headId,
-                validityStart = RequestValidityStartTimeRaw.apply(0),
-                validityEnd = RequestValidityEndTimeRaw.apply(0),
+                validityStart = RequestValidityStartTime(zeroQI),
+                validityEnd = RequestValidityEndTime(zeroQI),
                 bodyHash = Hash[Blake2b_256, Any](ByteString.fromArray(Array.fill[Byte](32)(0)))
               ),
               body = TransactionRequestBody(ByteString.empty),
