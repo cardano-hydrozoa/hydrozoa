@@ -27,7 +27,7 @@ final case class BlockWeaver(
 ) extends Actor[IO, BlockWeaver.Request] {
     import BlockWeaver.*
 
-    private val logger = Logging.loggerIO("BlockWeaver")
+    private val logger = Logging.loggerIO(s"BlockWeaver.${config.ownHeadPeerNum}")
 
     override def preStart: IO[Unit] = for {
         _ <- context.self ! BlockWeaver.PreStart

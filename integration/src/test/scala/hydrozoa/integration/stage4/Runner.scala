@@ -1,97 +1,12 @@
 package hydrozoa.integration.stage4
 
-import cats.data.ReaderT
-import hydrozoa.config.head.InitParamsType
-import hydrozoa.config.head.initialization.{InitializationParametersGenTopDown, generateInitialBlock}
-import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
-import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.config.head.multisig.timing.generateYaciTxTiming
-import hydrozoa.config.head.parameters.generateHeadParameters
-import hydrozoa.config.head.{generateHeadConfig, generateHeadConfigBootstrap}
-import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.integration.stage4.Model.*
-import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
-import hydrozoa.multisig.backend.cardano.yaciTestSauceGenesis
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.eutxol2.toUtxos
-import hydrozoa.multisig.ledger.event.RequestNumber
-import org.scalacheck.Gen
 import org.scalacheck.commands.{AnyCommand, LoggingControl}
-import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.{TransactionInput, Utxos}
-import test.{SeedPhrase, TestPeers, given}
 
-import scala.concurrent.duration.{DurationInt, FiniteDuration}
+import scala.concurrent.duration.DurationInt
 
 object Stage4Runner:
-
-    def genInitialState(
-        nPeers: Int = 2,
-        absorptionSlack: FiniteDuration = 60.seconds,
-        meanInterArrivalTime: HeadPeerNumber => FiniteDuration = _ => 12.seconds,
-    ): Gen[ModelState] =
-        val cardanoNetwork = CardanoNetwork.Preprod
-        val testPeers = TestPeers.apply(SeedPhrase.Yaci, cardanoNetwork, nPeers)
-        val testPeerToUtxos = yaciTestSauceGenesis(cardanoNetwork.network)(testPeers)
-
-        val generateHeadStartTime = ReaderT((tp: TestPeers) =>
-            Gen.const(BlockCreationEndTime(java.time.Instant.now().quantize(tp.slotConfig)))
-        )
-
-        val generateHeadConfigBootstrap_ = generateHeadConfigBootstrap(
-            generateHeadParams = generateHeadParameters(generateTxTiming = generateYaciTxTiming),
-            generateInitializationParameters = InitParamsType.TopDown(
-                InitializationParametersGenTopDown.GenWithDeps(
-                    generateGenesisUtxosL1 = ReaderT((tp: TestPeers) =>
-                        Gen.const(testPeerToUtxos.map((k, v) => k.headPeerNumber -> v))
-                    )
-                )
-            )
-        )
-
-        val generateHeadConfig_ = generateHeadConfig(
-            genHeadConfigBootstrap = generateHeadConfigBootstrap_,
-            generateInitialBlock = bootstrap =>
-                generateInitialBlock(
-                    genHeadConfigBootstrap =
-                        ReaderT.pure[Gen, TestPeers, hydrozoa.config.head.HeadConfig.Bootstrap](bootstrap),
-                    generateBlockCreationEndTime = generateHeadStartTime
-                )
-        )
-
-        for
-            config <- MultiNodeConfig.generateWith(testPeers)(
-                generateHeadConfig = generateHeadConfig_
-            )
-
-            preinitPeerUtxosL1 = testPeerToUtxos.map((k, v) => k.headPeerNumber -> v)
-
-            initTx = config.headConfig.initializationTx.tx
-            spentInputs = initTx.body.value.inputs.toSet
-            initOutputsList = initTx.body.value.outputs.toList.map(_.value).zipWithIndex
-
-            peers = config.nodeConfigs.keys.toSeq.sortBy(p => p: Int)
-
-            peerUtxosL1 = peers.map { pn =>
-                val peerAddr = config.addressOf(pn)
-                val survived: Utxos = preinitPeerUtxosL1(pn) -- spentInputs
-                val newOutputs: Utxos = initOutputsList
-                    .filter((out, _) => out.address.asInstanceOf[ShelleyAddress] == peerAddr)
-                    .map((out, ix) => TransactionInput(initTx.id, ix) -> out)
-                    .toMap
-                pn -> (survived ++ newOutputs)
-            }.toMap
-
-            startTime = config.headConfig.initialBlock.endTime.convert
-        yield ModelState(
-            params = Params(config, absorptionSlack, peers.map(pn => pn -> meanInterArrivalTime(pn)).toMap),
-            preinitPeerUtxosL1 = preinitPeerUtxosL1,
-            currentModelTimes = peers.map(_ -> startTime).toMap,
-            utxosL2Active = config.headConfig.initializationParameters.initialEvacuationMap.toUtxos,
-            peerUtxosL1 = peerUtxosL1,
-            nextRequestNumbers = peers.map(_ -> RequestNumber(0)).toMap,
-            pendingDeposits = peers.map(_ -> Nil).toMap,
-        )
 
     def generateCommands(
         initialState: ModelState,
@@ -169,7 +84,7 @@ object Stage4Runner:
 
 @main def stage4PrintCommandSequence(): Unit =
     LoggingControl.withSuppressedLogs("stage4 command sequence generation") {
-        val gen = Stage4Runner.genInitialState(
+        val gen = Stage4Suite.genInitialState(
             nPeers = 3,
             meanInterArrivalTime = p => (p: Int) match
                 case 0 => 30.seconds

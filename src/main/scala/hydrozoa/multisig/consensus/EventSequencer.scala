@@ -28,7 +28,7 @@ trait EventSequencer(
     private val connections = Ref.unsafe[IO, Option[EventSequencer.Connections]](None)
     private val state = State()
 
-    private given logger: Logger[IO] = Logging.loggerIO("EventSequencer")
+    private given logger: Logger[IO] = Logging.loggerIO(s"EventSequencer.${config.ownHeadPeerNum}")
 
     private def getConnections: IO[Connections] = for {
         mConn <- this.connections.get
@@ -90,7 +90,7 @@ trait EventSequencer(
         private val nLedgerEvent = Ref.unsafe[IO, RequestNumber](RequestNumber(0))
 
         def nextLedgerEventNum(): IO[RequestNumber] =
-            nLedgerEvent.updateAndGet(x => x.increment)
+            nLedgerEvent.getAndUpdate(_.increment)
     }
 }
 

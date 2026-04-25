@@ -9,14 +9,30 @@
         <appender-ref ref="STDOUT"/>
     </root>
     <logger name="org.scalacheck.commands.ModelBasedSuite" level="info"/>
+
+    <logger name="test.CardanoBackendMock" level="warn"/>
+
     <logger name="Stage1.Commands" level="warn"/>
     <logger name="Stage1.CommandGenerators" level="trace"/>
     <logger name="Stage1.ScenarioGenerators" level="warn"/>
     <logger name="Stage1.Model" level="trace"/>
     <logger name="Stage1.Sut" level="trace"/>
     <logger name="Stage1.Suite" level="trace"/>
+
+    <logger name="Stage4.Commands" level="trace"/>
+    <logger name="Stage4.CommandGenerators" level="trace"/>
+    <logger name="Stage4.ScenarioGenerators" level="trace"/>
+    <logger name="Stage4.Model" level="trace"/>
+    <logger name="Stage4.Sut" level="trace"/>
+    <logger name="Stage4.Suite" level="trace"/>
+
+    <logger name="BlockWeaver" level="trace"/>
+    <logger name="ConsensusActor" level="debug"/>
+    <logger name="EventSequencer" level="trace"/>
     <logger name="CardanoLiaison" level="warn"/>
-    <logger name="JointLedger" level="warn"/>
-    <logger name="test.CardanoBackendMock" level="warn"/>
+    <logger name="JointLedger" level="trace"/>
+    <logger name="PeerLiaison" level="trace"/>
+
+
     <logger name="scalus" level="error"/>
 </configuration>

@@ -48,7 +48,7 @@ final case class JointLedger(
 ) extends Actor[IO, Requests.Request] {
     import config.*
 
-    private val logger = Logging.loggerIO("JointLedger")
+    private val logger = Logging.loggerIO(s"JointLedger.${ownHeadPeerNum}")
 
     private val connections = Ref.unsafe[IO, Option[Connections]](None)
 
@@ -135,12 +135,10 @@ final case class JointLedger(
         s <- state.get
         p <- s match {
             case _: Done =>
-                throw new RuntimeException(
-                  "Expected a `Producing` State, but got `Done`. This indicates" +
-                      " that a request was issued to the JointLedger that is only valid when the hydrozoa node is producing" +
-                      " a block."
-                )
-
+                val msg = "Expected a `Producing` State, but got `Done`. This indicates" +
+                    " that a request was issued to the JointLedger that is only valid when the hydrozoa node is producing" +
+                    " a block."
+                logger.error(msg) >> IO.raiseError(RuntimeException(msg))
             case p: Producing => IO.pure(p)
         }
     } yield p
@@ -394,7 +392,6 @@ final case class JointLedger(
         args: CompleteBlockRegular
     ): IO[Unit] = {
         import args.*
-        import config.txTiming
 
         for {
             p <- unsafeGetProducing
@@ -642,7 +639,6 @@ final case class JointLedger(
     //   - Send a panic to the multisig regime manager in a suicide note
     def completeBlockFinal(args: CompleteBlockFinal): IO[Unit] = {
         import args.*
-        import config.txTiming
 
         for {
             p <- unsafeGetProducing
