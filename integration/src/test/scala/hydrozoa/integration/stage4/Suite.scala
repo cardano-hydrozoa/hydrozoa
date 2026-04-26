@@ -40,7 +40,7 @@ import scala.concurrent.duration.{DurationInt, FiniteDuration}
 // Stage 4 suite
 // ===================================
 
-case class Stage4Suite(label: String = "stage4") extends ModelBasedSuite:
+case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelBasedSuite:
 
     override type Env = Unit
     override type State = ModelState
@@ -55,7 +55,7 @@ case class Stage4Suite(label: String = "stage4") extends ModelBasedSuite:
     override def initEnv: Unit = ()
 
     override def genInitialState(env: Unit): Gen[ModelState] =
-        Stage4Suite.genInitialState()
+        Stage4Suite.genInitialState(nPeers = nPeers)
 
     override def canStartupNewSut(): Boolean = true
 
@@ -265,5 +265,8 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
     override def overrideParameters(p: org.scalacheck.Test.Parameters): org.scalacheck.Test.Parameters =
         p.withWorkers(1).withMinSuccessfulTests(1)
 
-    val _ = property("Multi-peer L2 transactions and deposits") =
-        Stage4Suite(label = "stage4-mock").property()
+    lazy val _ = property("two peers head") =
+        Stage4Suite(label = "stage4-two-peers", nPeers = 2).property()
+
+    val _ = property("three peers head") =
+        Stage4Suite(label = "stage4-three-peers", nPeers = 3).property()
