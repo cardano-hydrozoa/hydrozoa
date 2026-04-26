@@ -27,7 +27,7 @@ final case class BlockWeaver(
 ) extends Actor[IO, BlockWeaver.Request] {
     import BlockWeaver.*
 
-    private val logger = Logging.loggerIO("BlockWeaver")
+    private val logger = Logging.loggerIO(s"BlockWeaver.${config.ownHeadPeerNum}")
 
     override def preStart: IO[Unit] = for {
         _ <- context.self ! BlockWeaver.PreStart
@@ -149,24 +149,22 @@ object BlockWeaver {
             _ <- connections.jointLedger ! completeBlockMsg
         } yield ()
 
-        final def sendCompleteBlockAsFollower(config: Config)(
+        final def sendCompleteBlockAsFollower(
             blockBrief: BlockBrief.Next
-        ): IO[Unit] = for {
-            now <- realTimeQuantizedInstant(config.slotConfig)
-            blockCreationEndTime = BlockCreationEndTime(now)
-            completeBlockMsg = blockBrief match {
+        ): IO[Unit] = {
+            val completeBlockMsg = blockBrief match {
                 case x: BlockBrief.Intermediate =>
                     CompleteBlockRegular(
                       Some(x),
                       pollResults,
                       finalizationLocallyTriggered,
-                      blockCreationEndTime
+                      x.endTime
                     )
                 case x: BlockBrief.Final =>
-                    CompleteBlockFinal(Some(x), blockCreationEndTime)
+                    CompleteBlockFinal(Some(x), x.endTime)
             }
-            _ <- connections.jointLedger ! completeBlockMsg
-        } yield ()
+            connections.jointLedger ! completeBlockMsg
+        }
 
     }
 
@@ -337,6 +335,11 @@ object BlockWeaver {
                             ) >>
                                 pure(this)
 
+                        case bc: Block.MultiSigned =>
+                            logger.trace(
+                              s"Ignoring confirmed block ${bc.blockNum} — was leader, now follower."
+                            ) >> pure(this)
+
                         case unexpected: Unexpected =>
                             panicUnexpectedRequest(this, unexpected)
                     }
@@ -345,7 +348,7 @@ object BlockWeaver {
             object AwaitingBlockBrief {
                 type NextReactiveState = Follower.AwaitingBlockBrief |
                     Follower.ProcessingReadyRequests.NextReactiveState
-                type Unexpected = PreStart.type | Block.MultiSigned
+                type Unexpected = PreStart.type
 
                 private[State] def apply(
                     state: State,
@@ -363,6 +366,8 @@ object BlockWeaver {
                     )
             }
 
+            /** Processing ready requests, i.e. those, which are already in the mempool.
+              */
             final case class ProcessingReadyRequests private (
                 override val connections: Connections,
                 override val logger: Logger[IO],
@@ -379,15 +384,18 @@ object BlockWeaver {
 
                 def act(config: Config): IO[Some[NextReactiveState]] = for {
                     _ <- logStateTransition
+                    _ <- connections.jointLedger ! StartBlock(
+                      reproducingBlockBrief.blockNum,
+                      reproducingBlockBrief.startTime
+                    )
                     extractionResult <- extractAndSendRequestsFromMempool
                     newState <- extractionResult match {
                         case Mempool.Extraction.Complete(extractedRequests, survivingMempool) =>
                             val nextBlockNumber = reproducingBlockBrief.blockNum.increment
                             for {
+                                _ <- sendCompleteBlockAsFollower(reproducingBlockBrief)
                                 newState <- DecidingRole(this, survivingMempool, nextBlockNumber)
-                                    .act(
-                                      config
-                                    )
+                                    .act(config)
                             } yield newState
                         case result: Mempool.Extraction.Incomplete =>
                             pure(Follower.AwaitingRequest(this, reproducingBlockBrief, result))
@@ -401,10 +409,12 @@ object BlockWeaver {
                     for {
                         _ <- logger.trace(
                           "Extracted requests from mempool. Sending them to joint ledger: " +
-                              s"${extractedRequests.map(_.requestId.asI64)}"
+                              s"${extractedRequests.map(r =>
+                                      s"(${r.requestId.peerNum}:${r.requestId.requestNum})"
+                                  )}"
                         )
                         _ <- extractedRequests.traverse_(connections.jointLedger ! _)
-                    } yield mempool.extractRequestsWhile(requestIds)
+                    } yield newExtractionResult
                 }
             }
 
@@ -453,10 +463,16 @@ object BlockWeaver {
                                                 .Complete(extractedRequests, survivingMempool) =>
                                             val nextBlockNumber =
                                                 reproducingBlockBrief.blockNum.increment
-                                            DecidingRole(this, survivingMempool, nextBlockNumber)
-                                                .act(
-                                                  config
+                                            for {
+                                                _ <- sendCompleteBlockAsFollower(
+                                                  reproducingBlockBrief
                                                 )
+                                                newState <- DecidingRole(
+                                                  this,
+                                                  survivingMempool,
+                                                  nextBlockNumber
+                                                ).act(config)
+                                            } yield newState
                                         case result: Mempool.Extraction.Incomplete =>
                                             pure(
                                               Follower.AwaitingRequest(
@@ -487,6 +503,11 @@ object BlockWeaver {
                             ) >>
                                 pure(this)
 
+                        case bc: Block.MultiSigned =>
+                            logger.trace(
+                              s"Ignoring confirmed block ${bc.blockNum} — was leader, now follower."
+                            ) >> pure(this)
+
                         case unexpected: Unexpected =>
                             panicUnexpectedRequest(this, unexpected)
                     }
@@ -500,7 +521,9 @@ object BlockWeaver {
                     for {
                         _ <- logger.trace(
                           "Extracted more requests from mempool: " +
-                              s"${newExtractionResult.extractedRequests.map(_.requestId.asI64)}"
+                              s"${newExtractionResult.extractedRequests.map(r =>
+                                      s"(${r.requestId.peerNum}:${r.requestId.requestNum})"
+                                  )}"
                         )
                         _ <- extractedRequests.traverse_(connections.jointLedger ! _)
                     } yield newExtractionResult
@@ -509,7 +532,7 @@ object BlockWeaver {
 
             private object AwaitingRequest {
                 type NextReactiveState = DecidingRole.NextReactiveState | Follower.AwaitingRequest
-                type Unexpected = PreStart.type | BlockBrief.Next | Block.MultiSigned
+                type Unexpected = PreStart.type | BlockBrief.Next
 
                 private[State] def apply(
                     state: State,
@@ -569,7 +592,7 @@ object BlockWeaver {
                     for {
                         _ <- logger.trace(
                           "Extracting remaining requests from mempool in order of arrival. " +
-                              s"First twenty request IDs: ${requests.iterator.take(20).map(_.requestId.asI64)}"
+                              s"First twenty request IDs: ${requests.iterator.take(20).map(r => s"(${r.requestId.peerNum}:${r.requestId.requestNum})").mkString(", ")}"
                         )
 
                     } yield requests
@@ -615,7 +638,7 @@ object BlockWeaver {
                             // the DecidingRole state.
                             def completeFirstBlock = for {
                                 _ <- logger.trace(
-                                  s"Completing first block immediately with request ${ur.requestId.asI64}"
+                                  s"Completing first block immediately with request (${ur.requestId.peerNum}:${ur.requestId.requestNum})"
                                 ) >> sendCompleteRegularBlockAsLeader(config)
                                 newState <- DecidingRole(
                                   connections,
@@ -633,7 +656,7 @@ object BlockWeaver {
                                 )
 
                                 _ <- logger.trace(
-                                  s"Sending to joint ledger: request ${ur.requestId.asI64}"
+                                  s"Sending to joint ledger: request (${ur.requestId.peerNum}:${ur.requestId.requestNum})"
                                 )
                                 _ <- connections.jointLedger ! ur
                                 res <-

@@ -8,6 +8,7 @@ import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
+import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{AckBlock, AckId}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
@@ -306,6 +307,8 @@ class ConsensusActor(
     import ConsensusActor.*
     import ConsensusCell.*
 
+    private val logger = Logging.loggerIO(s"ConsensusActor.${config.ownHeadPeerNum}")
+
     private val connections = Ref.unsafe[IO, Option[ConsensusActor.Connections]](None)
 
     private def getConnections: IO[Connections] = for {
@@ -356,8 +359,9 @@ class ConsensusActor(
       * responsible for sending acks only.
       */
     def handleBlock(block: Block.Unsigned.Next): IO[Unit] = for {
-        // _ <- IO.println(s"---- CA ----: handleBlock: $block")
-        // _ <- IO.println(s"---- CA ----: handleBlock")
+        _ <- logger.debug(
+          s"handleBlock: block=${block.blockNum} type=${block.getClass.getSimpleName}"
+        )
         state <- stateRef.get
         // This is a bit annoying but Scala cannot infer types unless we PM explicitly
         _ <- block match {
@@ -388,6 +392,7 @@ class ConsensusActor(
             case _: AckBlock.Final1 => "final1"
             case _: AckBlock.Final2 => "final2"
         }
+        _ <- logger.debug(s"handleAck: block=${ack.blockNum} type=$ackTypeName peer=${ack.peerNum}")
         _ <- conn.tracer.ack(ack.blockNum: Int, ack.peerNum: Int, ackTypeName)
         state <- stateRef.get
         // This is a bit annoying but Scala cannot infer types unless we PM explicitly
@@ -461,6 +466,9 @@ class ConsensusActor(
                                         case _                  => "unknown"
                                     }
                                     for {
+                                        _ <- logger.debug(
+                                          s"round 1 complete: block=$blockNum type=$roundBlockType"
+                                        )
                                         _ <- conn.tracer.roundComplete(
                                           blockNum: Int,
                                           roundBlockType,
@@ -549,6 +557,7 @@ class ConsensusActor(
           *       the only way that cell N-1 can be absent is if block N-1 is confirmed.
           */
         def scheduleOwnImmediateAck(ack: RoundOneOwnAck): IO[Unit] = for {
+            _ <- logger.debug(s"scheduleOwnImmediateAck: block=${ack.blockNum}")
             // Check again it's our own ack
             _ <- IO.raiseWhen(ack.peerNum != config.ownHeadPeerNum)(Error.AlienAckAnnouncement)
             // The number of the block an ack may depend - the previous block
@@ -582,7 +591,7 @@ class ConsensusActor(
         private def spawnCell(msg: Block.Unsigned.Next | AckBlock): IO[ConsensusFor[msg.type]] = {
             for {
                 blockNum <- IO.pure(msgBlockNum(msg))
-                // _ <- IO.println(s"spawnCell: $blockNum")
+                _ <- logger.debug(s"spawnCell: block=$blockNum")
                 result <- msg match {
                     case _: (Block.Unsigned.Minor | AckBlock.Minor) =>
                         MinorConsensusCell.apply(blockNum)
@@ -673,6 +682,9 @@ class ConsensusActor(
                           b.header.blockVersion.minor: Int
                         )
                 }
+                _ <- logger.info(
+                  s"block confirmed: block=${blockConfirmed.blockNum} type=$confirmedBlockType v$vMajor.$vMinor"
+                )
                 _ <- conn.tracer.blockConfirmed(
                   blockConfirmed.blockNum: Int,
                   confirmedBlockType,
@@ -702,10 +714,7 @@ class ConsensusActor(
           * Note: The actual broadcast mechanism depends on the peer liaison implementation.
           */
         private def announceAck(ack: AckBlock): IO[Unit] =
-            // TODO: Implement actual broadcast logic via peer liaison
-            // This will likely involve creating a NewMsgBatch with the ack
-            // and sending it to config.peerLiaison
-            IO.unit
+            getConnections.flatMap(conn => (conn.peerLiaisons ! ack).parallel)
     }
 
     enum Error extends Throwable:

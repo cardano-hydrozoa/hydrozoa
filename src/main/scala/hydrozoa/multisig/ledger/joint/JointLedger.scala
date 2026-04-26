@@ -46,7 +46,7 @@ final case class JointLedger(
 ) extends Actor[IO, Requests.Request] {
     import config.*
 
-    private val logger = Logging.loggerIO("JointLedger")
+    private val logger = Logging.loggerIO(s"JointLedger.${ownHeadPeerNum}")
 
     private val connections = Ref.unsafe[IO, Option[Connections]](None)
 
@@ -133,12 +133,10 @@ final case class JointLedger(
         s <- state.get
         p <- s match {
             case _: Done =>
-                throw new RuntimeException(
-                  "Expected a `Producing` State, but got `Done`. This indicates" +
-                      " that a request was issued to the JointLedger that is only valid when the hydrozoa node is producing" +
-                      " a block."
-                )
-
+                val msg = "Expected a `Producing` State, but got `Done`. This indicates" +
+                    " that a request was issued to the JointLedger that is only valid when the hydrozoa node is producing" +
+                    " a block."
+                logger.error(msg) >> IO.raiseError(RuntimeException(msg))
             case p: Producing => IO.pure(p)
         }
     } yield p
@@ -725,11 +723,10 @@ final case class JointLedger(
     }
 
     /** When a block is finished, we handle it by:
-      *   - sending the pure (with no effects) block to peer liaisons for circulation
-      *   - sending the block brief to the peer liaisons
-      *   - sending the block to the consensus actor
-      *   - signing block's effects and producing our own set of acks
-      *   - sending block's ack(s) to the consensus actor
+      *   1. Sending the block brief to the peer liaisons - only when leading a block
+      *   2. Signing block's effects and producing our own set of acks
+      *   3. Sending the block to the consensus actor
+      *   4. Sending own set of block ack(s) to the consensus actor
       */
     private def handleBlock(
         block: Block.Unsigned.Next,
@@ -746,9 +743,15 @@ final case class JointLedger(
               vMin,
               evtCnt
             )
+            // 1. Sending the block brief to the peer liaisons - only when leading a block
+            _ <- IO.whenA(config.ownHeadPeerId.isLeader(block.blockNum))(
+              (conn.peerLiaisons ! block.blockBriefNext).parallel
+            )
+            //  2. Signing block's effects and producing our own set of acks
             acks = ownHeadWallet.mkAcks(block, localFinalization.asBoolean)
-            _ <- (conn.peerLiaisons ! block.blockBriefNext).parallel
+            // 3. Sending the block to the consensus actor
             _ <- conn.consensusActor ! block
+            // 4. Sending own set of block ack(s) to the consensus actor
             _ <- IO.traverse_(acks)(ack => conn.consensusActor ! ack)
         } yield ()
 
@@ -756,9 +759,11 @@ final case class JointLedger(
         expectedBlockBrief: Option[BlockBrief],
         actualBlock: Block
     ): IO[Unit] =
-        IO.unlessA(expectedBlockBrief.fold(true)(_ == actualBlock))(
+        IO.unlessA(expectedBlockBrief.fold(true)(_ == actualBlock.blockBrief))(
           panic(
-            "Reference block didn't match actual block; consensus is broken."
+            "Reference block brief didn't match actual block brief; consensus is broken.\n" +
+                s"actual block brief: ${actualBlock.blockBrief}\n" +
+                s"expected block brief: $expectedBlockBrief"
           ) >> context.self.stop
         )
 
