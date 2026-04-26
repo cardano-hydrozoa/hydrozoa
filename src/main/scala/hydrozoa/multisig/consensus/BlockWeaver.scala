@@ -149,24 +149,22 @@ object BlockWeaver {
             _ <- connections.jointLedger ! completeBlockMsg
         } yield ()
 
-        final def sendCompleteBlockAsFollower(config: Config)(
+        final def sendCompleteBlockAsFollower(
             blockBrief: BlockBrief.Next
-        ): IO[Unit] = for {
-            now <- realTimeQuantizedInstant(config.slotConfig)
-            blockCreationEndTime = BlockCreationEndTime(now)
-            completeBlockMsg = blockBrief match {
+        ): IO[Unit] = {
+            val completeBlockMsg = blockBrief match {
                 case x: BlockBrief.Intermediate =>
                     CompleteBlockRegular(
                       Some(x),
                       pollResults,
                       finalizationLocallyTriggered,
-                      blockCreationEndTime
+                      x.endTime
                     )
                 case x: BlockBrief.Final =>
-                    CompleteBlockFinal(Some(x), blockCreationEndTime)
+                    CompleteBlockFinal(Some(x), x.endTime)
             }
-            _ <- connections.jointLedger ! completeBlockMsg
-        } yield ()
+            connections.jointLedger ! completeBlockMsg
+        }
 
     }
 
@@ -395,7 +393,7 @@ object BlockWeaver {
                         case Mempool.Extraction.Complete(extractedRequests, survivingMempool) =>
                             val nextBlockNumber = reproducingBlockBrief.blockNum.increment
                             for {
-                                _ <- sendCompleteBlockAsFollower(config)(reproducingBlockBrief)
+                                _ <- sendCompleteBlockAsFollower(reproducingBlockBrief)
                                 newState <- DecidingRole(this, survivingMempool, nextBlockNumber)
                                     .act(config)
                             } yield newState
@@ -466,7 +464,7 @@ object BlockWeaver {
                                             val nextBlockNumber =
                                                 reproducingBlockBrief.blockNum.increment
                                             for {
-                                                _ <- sendCompleteBlockAsFollower(config)(
+                                                _ <- sendCompleteBlockAsFollower(
                                                   reproducingBlockBrief
                                                 )
                                                 newState <- DecidingRole(
