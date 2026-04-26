@@ -90,7 +90,7 @@ trait PeerLiaison(
             case x: GetMsgBatch =>
                 for {
                     _ <- logger.debug(
-                      s"GetMsgBatch: batch=${x.batchNum}, ack=${x.ackNum}, block=${x.blockNum}, req=${x.requestNum}"
+                      s"Got GetMsgBatch: batch=${x.batchNum}, ack=${x.ackNum}, block=${x.blockNum}, req=${x.requestNum}"
                     )
                     eNewBatch <- state.buildNewMsgBatch(x, config.peerLiaisonMaxRequestsPerBatch)
                     _ <- eNewBatch match {
@@ -109,7 +109,7 @@ trait PeerLiaison(
             case x: NewMsgBatch =>
                 for {
                     _ <- logger.debug(
-                      s"NewMsgBatch: batch=${x.batchNum}, ack=${x.ack.map(_.ackNum)}, block=${x.blockBrief.map(_.blockNum)}, reqs=${x.requests.size}"
+                      s"got NewMsgBatch: batch=${x.batchNum}, ack=${x.ack.map(_.ackNum)}, block=${x.blockBrief.map(_.blockNum)}, reqs=${x.requests.size}"
                     )
                     next: GetMsgBatch <- state.verifyBatchAndGetNext(x)
                     _ <- conn.remotePeerLiaison ! next
@@ -119,7 +119,7 @@ trait PeerLiaison(
                 } yield ()
 
             case x: (BlockConfirmed & BlockType.NonFinal) =>
-                logger.debug(s"BlockConfirmed (non-final): block=${x.blockNum}") >>
+                logger.debug(s"Got BlockConfirmed (non-final): block=${x.blockNum}") >>
                     state.dequeueConfirmed(x)
 
             // TODO: when the final block is confirmed, inform the counterpart that
@@ -127,7 +127,7 @@ trait PeerLiaison(
             //   When both sides have received the final confirmed block, the connection can be closed and
             //   the peer liaison can terminate.
             case x: (BlockConfirmed & BlockType.Final) =>
-                logger.debug(s"BlockConfirmed (final): block=${x.blockNum}") >>
+                logger.debug(s"Got BlockConfirmed (final): block=${x.blockNum}") >>
                     state.dequeueConfirmed(x)
         }
 
@@ -259,16 +259,19 @@ trait PeerLiaison(
               requests = events.toList
             )).attemptNarrow
 
-        def dequeueConfirmed(x: BlockConfirmed): IO[Unit] = {
-            import x.*
-            val ackNum: AckNumber = AckNumber.neededToConfirm(header)
-            val requestNum: RequestNumber = events.collect {
+        def dequeueConfirmed(block: BlockConfirmed): IO[Unit] = {
+            val ackNum: AckNumber = AckNumber.neededToConfirm(block.header)
+            val ownConfirmedRequests: List[RequestNumber] = block.events.collect {
                 case x if x._1.peerNum == config.ownHeadPeerId.peerNum => x._1.requestNum
-            }.max
+            }
             for {
                 _ <- this.qAck.update(q => q.dropWhile(_.ackId._2 <= ackNum))
-                _ <- this.qBlock.update(q => q.dropWhile(_.blockNum <= blockNum))
-                _ <- this.qEvent.update(q => q.dropWhile(_.requestId.requestNum <= requestNum))
+                _ <- this.qBlock.update(q => q.dropWhile(_.blockNum <= block.blockNum))
+                _ <- IO.whenA(ownConfirmedRequests.nonEmpty)(
+                  this.qEvent.update(q =>
+                      q.dropWhile(_.requestId.requestNum <= ownConfirmedRequests.max)
+                  )
+                )
             } yield ()
         }
 
