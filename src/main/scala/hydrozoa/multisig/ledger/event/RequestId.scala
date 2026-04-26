@@ -31,28 +31,7 @@ object RequestId {
     def unapply(self: Id): (HeadPeerNumber, RequestNumber) =
         (HeadPeerNumber(self._1), RequestNumber(self._2))
 
-    /*
-      1. Compiler elaborates given Conversion[Id, (Int, Long)] = identity
-      2. It infers identity[Id], giving it type Id => Id
-      3. Expected type is Id => (Int, Long), so return type Id must coerce to (Int, Long)
-      4. Compiler searches for Conversion[Id, (Int, Long)] in implicit scope
-      5. It finds the given being defined right now — Scala 3 puts a given in scope during
-      elaboration of its own body
-      6. To use it, the compiler must elaborate it — goes back to step 1
-     */
-    // given Conversion[Id, (Int, Long)] = identity
-
-    /*
-      When the compiler sees id._1: Int inside the lambda body:
-      - id._1 gives HeadPeerNumber, which doesn't conform to Int
-      - It needs a conversion. Two candidates:
-        - Conversion[HeadPeerNumber, Int] — in implicit scope (remote companion)
-        - Conversion[Id, (Int, Long)] — in local scope (current object)
-      - Local scope wins. The compiler rewrites id._1: Int as given_Conversion.apply(id)._1 —
-      applying the whole conversion to id to get a (Int, Long), then ._1: Int directly
-      - That calls the lambda again with the same id → infinite loop
-     */
-    // given Conversion[Id, (Int, Long)] = id => id._1 -> id._2
+    // See docs/style-guide.md — opaque tuple conversions must call .convert explicitly on each element.
     given Conversion[Id, (Int, Long)] = id => id._1.convert -> id._2.convert
 
     given Ordering[Id] with {
