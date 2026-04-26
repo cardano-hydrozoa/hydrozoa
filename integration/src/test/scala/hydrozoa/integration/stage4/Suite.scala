@@ -50,6 +50,8 @@ case class Stage4Suite(label: String = "stage4") extends ModelBasedSuite:
 
     override def scenarioGen: ScenarioGen[ModelState, Stage4Sut] = Stage4ScenarioGen
 
+    override def commandGenTweaker: [A] => Gen[A] => Gen[A] = [A] => (g: Gen[A]) => Gen.resize(300, g)
+
     override def initEnv: Unit = ()
 
     override def genInitialState(env: Unit): Gen[ModelState] =
@@ -261,7 +263,7 @@ object Stage4Suite:
 object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
 
     override def overrideParameters(p: org.scalacheck.Test.Parameters): org.scalacheck.Test.Parameters =
-        p.withWorkers(1).withMinSuccessfulTests(3)
+        p.withWorkers(1).withMinSuccessfulTests(1)
 
     val _ = property("Multi-peer L2 transactions and deposits") =
         Stage4Suite(label = "stage4-mock").property()

@@ -79,17 +79,17 @@ final case class Mempool(
                 )
             else {
                 val requestId = requestIds.next()
-                extractRequest(requestId) match {
+                survivingMempool.extractRequest(requestId) match {
                     case None =>
                         Mempool.Extraction.Incomplete(
                           extractedRequests,
                           survivingMempool,
                           requestId
                         )
-                    case Some(request) =>
+                    case Some((newSurvivingMempool, extractedRequest)) =>
                         val newAcc = Mempool.Extraction.InProgress(
-                          extractedRequests,
-                          survivingMempool
+                          extractedRequests :+ extractedRequest,
+                          newSurvivingMempool
                         )
                         extractRequestsWhile(newAcc, requestIds)
                 }

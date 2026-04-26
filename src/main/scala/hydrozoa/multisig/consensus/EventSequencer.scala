@@ -20,6 +20,8 @@ import org.typelevel.log4cats.Logger
   * [[RequestId]]s.
   *
   * The messages are subsequently passed to the [[BlockWeaver]] and [[PeerLiaison]]s.
+  *
+  * TODO: rename to RequestSequencer (and EventSequencer companion object accordingly).
   */
 trait EventSequencer(
     config: Config,
@@ -76,7 +78,9 @@ trait EventSequencer(
                         userRequest = userRequest,
                         requestId = newId
                       )
-                      _ <- logger.debug(s"Assigned request ID ${newId.asI64}")
+                      _ <- logger.debug(
+                        s"Assigned request ID (${newId.peerNum}:${newId.requestNum})"
+                      )
                       _ <- req.dResponse.complete(newId)
                       _ <- conn.blockWeaver ! newRequestWithId
                       _ <- (conn.peerLiaisons ! newRequestWithId).parallel
