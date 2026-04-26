@@ -337,6 +337,11 @@ object BlockWeaver {
                             ) >>
                                 pure(this)
 
+                        case bc: Block.MultiSigned =>
+                            logger.trace(
+                              s"Ignoring confirmed block ${bc.blockNum} — was leader, now follower."
+                            ) >> pure(this)
+
                         case unexpected: Unexpected =>
                             panicUnexpectedRequest(this, unexpected)
                     }
@@ -345,7 +350,7 @@ object BlockWeaver {
             object AwaitingBlockBrief {
                 type NextReactiveState = Follower.AwaitingBlockBrief |
                     Follower.ProcessingReadyRequests.NextReactiveState
-                type Unexpected = PreStart.type | Block.MultiSigned
+                type Unexpected = PreStart.type
 
                 private[State] def apply(
                     state: State,
@@ -411,7 +416,7 @@ object BlockWeaver {
                                   )}"
                         )
                         _ <- extractedRequests.traverse_(connections.jointLedger ! _)
-                    } yield mempool.extractRequestsWhile(requestIds)
+                    } yield newExtractionResult
                 }
             }
 
@@ -500,6 +505,11 @@ object BlockWeaver {
                             ) >>
                                 pure(this)
 
+                        case bc: Block.MultiSigned =>
+                            logger.trace(
+                              s"Ignoring confirmed block ${bc.blockNum} — was leader, now follower."
+                            ) >> pure(this)
+
                         case unexpected: Unexpected =>
                             panicUnexpectedRequest(this, unexpected)
                     }
@@ -524,7 +534,7 @@ object BlockWeaver {
 
             private object AwaitingRequest {
                 type NextReactiveState = DecidingRole.NextReactiveState | Follower.AwaitingRequest
-                type Unexpected = PreStart.type | BlockBrief.Next | Block.MultiSigned
+                type Unexpected = PreStart.type | BlockBrief.Next
 
                 private[State] def apply(
                     state: State,
