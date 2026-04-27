@@ -19,6 +19,9 @@ import hydrozoa.integration.stage4.Model.*
 import hydrozoa.integration.stage4.Stage4SutCommands.given
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import hydrozoa.lib.tracing.ProtocolTracer
+import hydrozoa.multisig.ledger.block.BlockBrief
+import hydrozoa.multisig.ledger.event.RequestId
+import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendMock, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
@@ -111,6 +114,19 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
                 yield peerNum -> PeerStack(blockWeaver, cardanoLiaison, eventSequencer, jointLedger, consensusActor)
             }.map(_.toMap)
 
+            // Create brief-collecting observers wrapping each peer's ConsensusActor.
+            // Injected via Connections so JointLedger is unaware; captures both leader-produced
+            // and follower-reproduced blocks (both go through JointLedger.handleBlock).
+            blockBriefsMap <- peers.traverse { peerNum =>
+                Ref[IO].of(Vector.empty[BlockBrief.Intermediate]).map(peerNum -> _)
+            }.map(_.toMap)
+
+            observerMap <- peers.traverse { peerNum =>
+                system.actorOf(
+                  BlockBriefObserver(peerStackMap(peerNum).consensusActor, blockBriefsMap(peerNum))
+                ).map(peerNum -> _)
+            }.map(_.toMap)
+
             // Create one PeerLiaison per (local, remote) pair.
             // peerLiaisonMap(A)(B.id) = the liaison at A directed to B.
             peerLiaisonMap <- peers.traverse { peerNum =>
@@ -137,7 +153,7 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
                     MultisigRegimeManager.Connections(
                         blockWeaver = stack.blockWeaver,
                         cardanoLiaison = stack.cardanoLiaison,
-                        consensusActor = stack.consensusActor,
+                        consensusActor = observerMap(peerNum),
                         eventSequencer = stack.eventSequencer,
                         jointLedger = stack.jointLedger,
                         peerLiaisons = localLiaisons,
@@ -153,6 +169,8 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
                 case _ => IO.unit
             }.foreverM.start
 
+            submittedRequestIds <- Ref[IO].of(Vector.empty[RequestId])
+
         yield Stage4Sut(
             system = system,
             cardanoBackend = cardanoBackend,
@@ -161,24 +179,90 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
             },
             sutErrors = sutErrors,
             errorDrainer = errorDrainer,
+            blockBriefs = blockBriefsMap,
+            submittedRequestIds = submittedRequestIds,
         )
 
     override def shutdownSut(lastState: ModelState, sut: Stage4Sut): IO[Prop] =
         // BlockWeaver's IO.sleep inside sleepSendWakeup keeps _isIdle=false for the full sleep
         // duration, so waitForIdle would always time out. Terminate directly after a brief settle
         // window that lets any in-flight fault-handling chains flush to eventStream.
-        // TODO: oracle — collect block briefs from all JointLedgers, re-run model in SUT's
-        // total order, compare predicted ValidityFlags against actual accept/reject per brief.
         for
             _ <- sut.system.terminate()
             _ <- IO.sleep(100.millis)  // settle: let the drainer consume any last-cycle errors
             _ <- sut.errorDrainer.cancel
             errors <- sut.sutErrors.get
+            oracleProp <- analyzeBlockBriefs(sut)
         yield
-            if errors.isEmpty then Prop.passed
-            else Prop.exception(
-                RuntimeException(s"SUT actor errors:\n${errors.mkString("\n")}")
-            )
+            if errors.nonEmpty then
+                Prop.exception(RuntimeException(s"SUT actor errors:\n${errors.mkString("\n")}"))
+            else oracleProp
+
+    private def analyzeBlockBriefs(sut: Stage4Sut): IO[Prop] = for
+        briefsByPeer <- sut.blockBriefs.toList
+            .traverse { case (p, ref) => ref.get.map(p -> _) }
+            .map(_.toMap)
+
+        sortedPeers     = briefsByPeer.keys.toSeq.sortBy(p => p: Int)
+        nPeers          = sortedPeers.length
+        canonicalBriefs = briefsByPeer(sortedPeers.head)
+        submittedIds    <- sut.submittedRequestIds.get
+
+        _ <- IO {
+            val blkWidth = 18
+            val colWidth = 38
+            val divider  = s"+${"-" * (blkWidth + 2)}+${sortedPeers.map(_ => s"-${"-" * colWidth}-").mkString("+")}+"
+            val header   = s"| ${"Block".padTo(blkWidth, ' ')} |" + sortedPeers.map { p =>
+                s" Peer ${p: Int}".padTo(colWidth + 2, ' ')
+            }.mkString("|") + "|"
+
+            def cellFor(brief: BlockBrief.Intermediate, peerInt: Int): String =
+                val evs = brief.events
+                    .filter(_._1.peerNum.convert == peerInt)
+                    .map { case (reqId, flag) =>
+                        val f = if flag == ValidityFlag.Valid then "V" else "I"
+                        s"r${reqId.requestNum.convert}=$f"
+                    }
+                val abs = brief.depositsAbsorbed
+                    .filter(_.peerNum.convert == peerInt)
+                    .map(r => s"abs:r${r.requestNum.convert}")
+                val ref = brief.depositsRefunded
+                    .filter(_.peerNum.convert == peerInt)
+                    .map(r => s"ref:r${r.requestNum.convert}")
+                (evs ++ abs ++ ref).mkString(" ").take(colWidth).padTo(colWidth, ' ')
+
+            println(divider)
+            println(header)
+            println(divider)
+
+            canonicalBriefs.foreach { brief =>
+                val blockType  = brief match { case _: BlockBrief.Minor => "Min"; case _: BlockBrief.Major => "Maj" }
+                val vMaj       = brief.blockVersion.major.convert
+                val vMin       = brief.blockVersion.minor.convert
+                val leaderPeer = (brief.blockNum: Int) % nPeers
+                val blkLabel   = s"#${brief.blockNum: Int} $blockType v$vMaj.$vMin p$leaderPeer"
+                    .padTo(blkWidth, ' ')
+                val row = s"| $blkLabel |" + sortedPeers.map(p => s" ${cellFor(brief, p: Int)} |").mkString
+                println(row)
+            }
+
+            println(divider)
+
+            val totalEvents  = canonicalBriefs.map(_.events.length).sum
+            val totalValid   = canonicalBriefs.flatMap(_.events).count(_._2 == ValidityFlag.Valid)
+            val totalInvalid = totalEvents - totalValid
+            val validPct     = if totalEvents == 0 then 0.0 else totalValid.toDouble / totalEvents * 100
+
+            val processedIds    = canonicalBriefs.flatMap(b => b.events.map(_._1) ++ b.depositsAbsorbed).toSet
+            val commonPrefixLen = submittedIds.takeWhile(processedIds.contains).length
+
+            println(f"Total: $totalEvents events in ${canonicalBriefs.length} blocks — valid=$totalValid ($validPct%.1f%%)  invalid=$totalInvalid")
+            println(s"Peers: ${sortedPeers.map(p => s"p${p: Int}=${briefsByPeer(p).length}blks").mkString("  ")}")
+            println(s"Common prefix: $commonPrefixLen / ${submittedIds.length} submitted IDs in block order")
+            println("Legend: Min=Minor Maj=Major v=version p=leader r=requestNum V=valid I=invalid abs=deposit absorbed ref=refunded")
+        }
+
+    yield Prop.passed
 
 
 // ===================================
@@ -265,8 +349,8 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
     override def overrideParameters(p: org.scalacheck.Test.Parameters): org.scalacheck.Test.Parameters =
         p.withWorkers(1).withMinSuccessfulTests(1)
 
-    lazy val _ = property("two peers head") =
+    val _ = property("two peers head") =
         Stage4Suite(label = "stage4-two-peers", nPeers = 2).property()
 
-    val _ = property("three peers head") =
+    lazy val _ = property("three peers head") =
         Stage4Suite(label = "stage4-three-peers", nPeers = 3).property()
