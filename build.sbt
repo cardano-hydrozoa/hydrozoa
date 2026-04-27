@@ -37,7 +37,10 @@ dockerCommands := dockerCommands.value.flatMap {
     case other                => List(other)
 }
 
-val scalusVersion = "0.15.1"
+ThisBuild / resolvers +=
+    "Sonatype OSS New Snapshots" at "https://central.sonatype.com/repository/maven-snapshots/"
+
+val scalusVersion = "0.16.0+262-3314a0df-SNAPSHOT"
 val bloxbeanVersion = "0.7.1"
 val http4sVersion = "0.23.32"
 
@@ -118,7 +121,7 @@ lazy val integration: Project = (project in file("integration"))
     )
 
 // Latest Scala 3 LTS version
-ThisBuild / scalaVersion := "3.3.6"
+ThisBuild / scalaVersion := "3.3.7"
 
 ThisBuild / scalacOptions ++= Seq(
   "-feature",
@@ -133,7 +136,7 @@ ThisBuild / scalacOptions ++= Seq(
 )
 
 // Add the Scalus compiler plugin
-addCompilerPlugin("org.scalus" % "scalus-plugin_3" % scalusVersion)
+addCompilerPlugin("org.scalus" %% "scalus-plugin" % scalusVersion cross CrossVersion.full)
 
 // Custom commands to format and lint all subprojects
 // TODO: Restore integration module to fmt and lint
@@ -151,7 +154,7 @@ ThisBuild / testFrameworks += new TestFramework("org.scalatest.tools.Framework")
 
 inThisBuild(
   List(
-    scalaVersion := "3.3.6",
+    scalaVersion := "3.3.7",
     semanticdbEnabled := true,
     semanticdbVersion := scalafixSemanticdb.revision
   )
