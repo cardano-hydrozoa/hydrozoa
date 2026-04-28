@@ -27,6 +27,12 @@ trait PeerLiaison(
     private val logger =
         Logging.loggerIO(s"PeerLiaison.${config.ownHeadPeerNum}->${remotePeerId.peerNum}")
 
+    private val loggerMmd =
+        Logging.loggerIO("Mermaid.PeerLiaison")
+
+    private def mermaid(s: String): IO[Unit] =
+        loggerMmd.info(s"\t${config.ownHeadPeerNum}->>${remotePeerId.peerNum}: ${s}")
+
     private def getConnections: IO[Connections] = for {
         mConn <- this.connections.get
         conn <- mConn.fold(
@@ -65,9 +71,11 @@ trait PeerLiaison(
 
     private def receiveTotal(req: Request, conn: Connections): IO[Unit] =
         req match {
+
             case PeerLiaison.PreStart =>
                 // Should never reach here since PreStart is handled in receive
                 IO.raiseError(new IllegalStateException("PreStart handled in receive"))
+
             case x: RemoteBroadcast =>
                 for {
                     _ <- x match {
@@ -87,6 +95,7 @@ trait PeerLiaison(
                     // Pretend we just received the cached batch request that we need to send immediately (if any)
                     _ <- mbBatchReq.fold(IO.unit)(batchReq => receiveTotal(batchReq, conn))
                 } yield ()
+
             case x: GetMsgBatch =>
                 for {
                     _ <- logger.debug(
@@ -95,10 +104,17 @@ trait PeerLiaison(
                     eNewBatch <- state.buildNewMsgBatch(x, config.peerLiaisonMaxRequestsPerBatch)
                     _ <- eNewBatch match {
                         case Right(newBatch) =>
-                            logger.debug(
-                              s"sending NewMsgBatch: batch=${newBatch.batchNum}, ack=${newBatch.ack.map(_.ackNum)}, block=${newBatch.blockBrief.map(_.blockNum)}, reqs=${newBatch.requests.size}"
-                            ) >>
-                                (conn.remotePeerLiaison ! newBatch)
+                            for {
+                                msg <- IO.pure(
+                                  s"NewMsgBatch: batch=${newBatch.batchNum}, " +
+                                      s"ack=${newBatch.ack.map(_.ackNum)}, " +
+                                      s"block=${newBatch.blockBrief.map(_.blockNum)}, " +
+                                      s"reqs=${newBatch.requests.map(_.requestId)}"
+                                )
+                                _ <- logger.debug(s"sending $msg")
+                                _ <- mermaid(msg)
+                                _ <- conn.remotePeerLiaison ! newBatch
+                            } yield ()
                         case Left(state.EmptyNewMsgBatch) =>
                             state.sendNextBatchImmediatelyUponNewMsg(x)
                         case Left(state.OutOfBoundsGetMsgBatch) =>
@@ -112,6 +128,10 @@ trait PeerLiaison(
                       s"got NewMsgBatch: batch=${x.batchNum}, ack=${x.ack.map(_.ackNum)}, block=${x.blockBrief.map(_.blockNum)}, reqs=${x.requests.size}"
                     )
                     next: GetMsgBatch <- state.verifyBatchAndGetNext(x)
+                    msg <- IO.pure(
+                      s"GetMsgBatch: batch=${next.batchNum}, ack=${next.ackNum}, block=${next.blockNum}, req=${next.requestNum}"
+                    )
+                    // _ <- mermaid(msg)
                     _ <- conn.remotePeerLiaison ! next
                     _ <- x.ack.traverse_(conn.consensusActor ! _)
                     _ <- x.blockBrief.traverse_(conn.blockWeaver ! _)
@@ -136,6 +156,7 @@ trait PeerLiaison(
             _ <- logger.info(s"starting, remote peer: ${remotePeerId.peerNum}")
             _ <- initializeConnections
             conn <- getConnections
+            _ <- mermaid("GetMsgBatch.initial")
             _ <- conn.remotePeerLiaison ! GetMsgBatch.initial
         yield ()
 

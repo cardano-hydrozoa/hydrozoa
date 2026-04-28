@@ -455,39 +455,57 @@ object BlockWeaver {
                 override def react(config: Config)(req: Request): IO[Option[NextReactiveState]] =
                     req match {
                         case ur: UserRequestWithId =>
-                            if ur.requestId == incompleteExtraction.awaitingRequestId then
-                                for {
-                                    newExtractionResult <- extractAndSendRequestsFromMempool
-                                    newState <- newExtractionResult match {
-                                        case Mempool.Extraction
-                                                .Complete(extractedRequests, survivingMempool) =>
-                                            val nextBlockNumber =
-                                                reproducingBlockBrief.blockNum.increment
-                                            for {
-                                                _ <- sendCompleteBlockAsFollower(
-                                                  reproducingBlockBrief
-                                                )
-                                                newState <- DecidingRole(
-                                                  this,
-                                                  survivingMempool,
-                                                  nextBlockNumber
-                                                ).act(config)
-                                            } yield newState
-                                        case result: Mempool.Extraction.Incomplete =>
-                                            pure(
-                                              Follower.AwaitingRequest(
-                                                this,
-                                                reproducingBlockBrief,
-                                                result
-                                              )
+                            for {
+                                // Store first
+                                _ <- logger.info(
+                                  s"Storing request in the mempool (${ur.requestId})"
+                                )
+                                newMempool <- storeRequest(ur)
+                                // Then decide what to do
+                                newState <-
+                                    if ur.requestId == incompleteExtraction.awaitingRequestId then
+                                        for {
+                                            _ <- logger.info(
+                                              s"Awaited request received (${ur.requestId}), continue feeding block events"
                                             )
-                                    }
-                                } yield newState
-                            else
-                                for {
-                                    newMempool <- storeRequest(ur)
-                                    newState <- pure(copy(mempool = newMempool))
-                                } yield newState
+                                            newExtractionResult <-
+                                                extractAndSendRequestsFromMempool(newMempool)
+                                            newState <- newExtractionResult match {
+                                                case Mempool.Extraction
+                                                        .Complete(
+                                                          extractedRequests,
+                                                          survivingMempool
+                                                        ) =>
+                                                    val nextBlockNumber =
+                                                        reproducingBlockBrief.blockNum.increment
+                                                    for {
+                                                        _ <- sendCompleteBlockAsFollower(
+                                                          reproducingBlockBrief
+                                                        )
+                                                        newState <- DecidingRole(
+                                                          this,
+                                                          survivingMempool,
+                                                          nextBlockNumber
+                                                        ).act(config)
+                                                    } yield newState
+                                                case result: Mempool.Extraction.Incomplete =>
+                                                    pure(
+                                                      Follower.AwaitingRequest(
+                                                        this,
+                                                        reproducingBlockBrief,
+                                                        result
+                                                      )
+                                                    )
+                                            }
+                                        } yield newState
+                                    else
+                                        for {
+                                            _ <- logger.info(
+                                              s"Another request received (${ur.requestId}), keep waiting for (${incompleteExtraction.awaitingRequestId})..."
+                                            )
+                                            newState <- pure(copy(mempool = newMempool))
+                                        } yield newState
+                            } yield newState
 
                         case pr: PollResults =>
                             logger.trace("New poll results.") >>
@@ -512,7 +530,9 @@ object BlockWeaver {
                             panicUnexpectedRequest(this, unexpected)
                     }
 
-                private def extractAndSendRequestsFromMempool: IO[Mempool.Extraction.Result] = {
+                private def extractAndSendRequestsFromMempool(
+                    mempool: Mempool
+                ): IO[Mempool.Extraction.Result] = {
                     val allRequestIds: List[RequestId] = reproducingBlockBrief.events.map(_._1)
                     val requestIds =
                         allRequestIds.dropWhile(_ != incompleteExtraction.awaitingRequestId)

@@ -53,7 +53,7 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
 
     override def scenarioGen: ScenarioGen[ModelState, Stage4Sut] = Stage4ScenarioGen
 
-    override def commandGenTweaker: [A] => Gen[A] => Gen[A] = [A] => (g: Gen[A]) => Gen.resize(300, g)
+    override def commandGenTweaker: [A] => Gen[A] => Gen[A] = [A] => (g: Gen[A]) => Gen.resize(500, g)
 
     override def initEnv: Unit = ()
 
@@ -209,41 +209,28 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
         submittedIds    <- sut.submittedRequestIds.get
 
         _ <- IO {
-            val blkWidth = 18
-            val colWidth = 38
-            val divider  = s"+${"-" * (blkWidth + 2)}+${sortedPeers.map(_ => s"-${"-" * colWidth}-").mkString("+")}+"
-            val header   = s"| ${"Block".padTo(blkWidth, ' ')} |" + sortedPeers.map { p =>
-                s" Peer ${p: Int}".padTo(colWidth + 2, ' ')
-            }.mkString("|") + "|"
-
-            def cellFor(brief: BlockBrief.Intermediate, peerInt: Int): String =
-                val evs = brief.events
-                    .filter(_._1.peerNum.convert == peerInt)
-                    .map { case (reqId, flag) =>
-                        val f = if flag == ValidityFlag.Valid then "V" else "I"
-                        s"r${reqId.requestNum.convert}=$f"
-                    }
-                val abs = brief.depositsAbsorbed
-                    .filter(_.peerNum.convert == peerInt)
-                    .map(r => s"abs:r${r.requestNum.convert}")
-                val ref = brief.depositsRefunded
-                    .filter(_.peerNum.convert == peerInt)
-                    .map(r => s"ref:r${r.requestNum.convert}")
-                (evs ++ abs ++ ref).mkString(" ").take(colWidth).padTo(colWidth, ' ')
+            val colWidth = 72
+            val divider  = s"+${"-" * (colWidth + 2)}+"
+            val header   = s"| ${"Block".padTo(colWidth, ' ')} |"
 
             println(divider)
             println(header)
             println(divider)
 
             canonicalBriefs.foreach { brief =>
-                val blockType  = brief match { case _: BlockBrief.Minor => "Min"; case _: BlockBrief.Major => "Maj" }
-                val vMaj       = brief.blockVersion.major.convert
-                val vMin       = brief.blockVersion.minor.convert
-                val leaderPeer = (brief.blockNum: Int) % nPeers
-                val blkLabel   = s"#${brief.blockNum: Int} $blockType v$vMaj.$vMin p$leaderPeer"
-                    .padTo(blkWidth, ' ')
-                val row = s"| $blkLabel |" + sortedPeers.map(p => s" ${cellFor(brief, p: Int)} |").mkString
-                println(row)
+                val blockType = brief match { case _: BlockBrief.Minor => "Min"; case _: BlockBrief.Major => "Maj" }
+                val vMaj      = brief.blockVersion.major.convert
+                val vMin      = brief.blockVersion.minor.convert
+                val leader    = (brief.blockNum: Int) % nPeers
+                val evs = brief.events.map { case (reqId, flag) =>
+                    val f = if flag == ValidityFlag.Valid then "V" else "I"
+                    s"p${reqId.peerNum.convert}:r${reqId.requestNum.convert}=$f"
+                }
+                val abs = brief.depositsAbsorbed.map(r => s"abs:p${r.peerNum.convert}:r${r.requestNum.convert}")
+                val ref = brief.depositsRefunded.map(r => s"ref:p${r.peerNum.convert}:r${r.requestNum.convert}")
+                val events = (evs ++ abs ++ ref).mkString(" ")
+                val label  = s"#${brief.blockNum: Int} $blockType v$vMaj.$vMin lead=p$leader | $events"
+                println(s"| ${label.take(colWidth).padTo(colWidth, ' ')} |")
             }
 
             println(divider)
@@ -259,7 +246,7 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
             println(f"Total: $totalEvents events in ${canonicalBriefs.length} blocks — valid=$totalValid ($validPct%.1f%%)  invalid=$totalInvalid")
             println(s"Peers: ${sortedPeers.map(p => s"p${p: Int}=${briefsByPeer(p).length}blks").mkString("  ")}")
             println(s"Common prefix: $commonPrefixLen / ${submittedIds.length} submitted IDs in block order")
-            println("Legend: Min=Minor Maj=Major v=version p=leader r=requestNum V=valid I=invalid abs=deposit absorbed ref=refunded")
+            println("Legend: Min=Minor Maj=Major v=version lead=leader p=peer r=requestNum V=valid I=invalid abs=deposit-absorbed ref=refunded")
         }
 
     yield Prop.passed
@@ -349,8 +336,11 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
     override def overrideParameters(p: org.scalacheck.Test.Parameters): org.scalacheck.Test.Parameters =
         p.withWorkers(1).withMinSuccessfulTests(1)
 
-    val _ = property("two peers head") =
+    lazy val _ = property("two peers head") =
         Stage4Suite(label = "stage4-two-peers", nPeers = 2).property()
 
     lazy val _ = property("three peers head") =
         Stage4Suite(label = "stage4-three-peers", nPeers = 3).property()
+
+    val _ = property("twenty peers head") =
+        Stage4Suite(label = "stage4-twenty-peers", nPeers = 20).property()

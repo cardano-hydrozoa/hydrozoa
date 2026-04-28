@@ -59,6 +59,7 @@
             #    https://github.com/oracle/visualvm/issues/403
             visualvm
             nodejs_24 # this is needed by IDEA's MCP Server
+            mermaid-cli
           ];
           inherit (pre-commit-check) shellHook;
         };
