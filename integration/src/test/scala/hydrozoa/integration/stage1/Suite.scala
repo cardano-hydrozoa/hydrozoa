@@ -136,7 +136,8 @@ case class Suite(
             )
 
             Stage1Env(
-              startTime = java.time.Instant.now(),
+              //  Tuesday, April 28, 2026 at 12:54:03 PM GMT+00:00
+              startTime = java.time.Instant.ofEpochSecond(1777380843),
               cardanoNetwork = cardanoNetwork,
               genesisUtxo = yaciTestSauceGenesis(cardanoNetwork.network),
               testPeers = testPeers
