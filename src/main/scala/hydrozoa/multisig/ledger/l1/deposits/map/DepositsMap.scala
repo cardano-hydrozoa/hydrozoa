@@ -163,7 +163,7 @@ object DepositsMap {
         val surviving = unabsorbed.concat(immature)
         val decisions = Decisions(
           absorbed = absorbed.unzip,
-          rejected = rejected.unzip,
+          refunded = rejected.unzip,
           mNextAbsorptionStartTime = surviving.treeMap.keys.minOption
         )
 
@@ -180,7 +180,7 @@ object DepositsMap {
 
     final case class Decisions private[map] (
         absorbed: Unzip,
-        rejected: Unzip,
+        refunded: Unzip,
         mNextAbsorptionStartTime: Option[DepositAbsorptionStartTime]
     )
 

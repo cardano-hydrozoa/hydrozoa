@@ -9,12 +9,13 @@ import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.integration.stage1.Commands.*
 import hydrozoa.integration.stage1.Model.Error.UnexpectedState
 import hydrozoa.integration.stage1.model.Deposits
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant.mkOrderingOps
 import hydrozoa.lib.logging.Logging
 import cats.syntax.all.*
 import cats.*
 import hydrozoa.integration.stage1.Model.logger
+import hydrozoa.integration.stage1.model.Deposits.DepositStatus
 import hydrozoa.integration.stage1.model.Deposits.DepositStatus.*
 import hydrozoa.integration.stage1.model.Deposits.depositAbsorptionStart
 import scalus.|>
@@ -39,6 +40,7 @@ import org.scalacheck.commands.ModelCommand
 import scalus.cardano.ledger.{AssetName, KeepRaw, SlotConfig, Transaction, TransactionHash, TransactionInput, TransactionOutput, Utxos}
 
 import scala.collection.immutable.{Queue, TreeMap}
+import scala.concurrent.duration.FiniteDuration
 import scala.util.chaining.*
 
 object Model:
@@ -119,6 +121,24 @@ object Model:
                 .filter((output, _) => peerAddresses.contains(output.address))
                 .map((output, ix) => TransactionInput(l1Tx.id, ix) -> output)
             this.copy(peerUtxosL1 = newUtxos)
+        }
+
+        /**
+         * Calculate the current major block wakeup time according to the current state of the deposits. This is the
+         * earliest DepositAbsorptionStateTime of any deposit that hydrozoa will check for absorption
+         *
+         * @param config
+         * @return
+         */
+        def mAbsorptionStartTime: Option[DepositAbsorptionStartTime] = {
+            val absorptionBounds: Queue[(DepositAbsorptionStartTime, DepositAbsorptionEndTime)] =
+                deposits.hydrozoaKnownRegisteredDeposits.map(cmd =>
+                    val validityEnd = cmd.request.request.header.validityEnd
+                    (multiNodeConfig.txTiming.depositAbsorptionStartTime(validityEnd),
+                     multiNodeConfig.txTiming.depositAbsorptionEndTime(validityEnd))
+                )
+
+            absorptionBounds.map(_._1).minOption
         }
     }
 
@@ -299,15 +319,15 @@ object Model:
                             registeredThisBlock = regOrReject._1
                             rejectedThisBlock = regOrReject._2
 
-                            absorbedThisBlock <- absorb
+                            absorbedThisBlock <- absorb(cmd.blockCreationEndTime)
 
-                            refundedThisBlock <- refund(cmd.isFinal)
+                            refundedThisBlock <- refund(cmd.isFinal, cmd.blockCreationEndTime)
 
                             newEvacuationMap <- updateEvacuationMap
 
                             blockBrief <- mkBlockBrief(
                               cmd.isFinal,
-                              cmd.blockCreationEndTime,
+                              cmd.blockDuration,
                               cmd.blockNumber,
                               prevVersion,
                               newEvacuationMap,
@@ -323,12 +343,7 @@ object Model:
                                     else BlockCycle.Done(cmd.blockNumber, blockBrief.blockVersion)
                                 state.copy(blockCycle = nextBlockCycle)
                             })
-                            // tick time
-                            _ <- cats.data.State.modify[State](state =>
-                                state.copy(currentTime =
-                                    state.currentTime.advance(blockBrief.endTime.convert)
-                                )
-                            )
+
                         } yield blockBrief
 
                     s.run(state).swapF.value
@@ -336,9 +351,6 @@ object Model:
                     throw UnexpectedState("CompleteBlockCommand requires BlockCycle.InProgress")
             }
         }
-
-        private def liftEndo(endo: State => State): cats.data.State[State, Unit] =
-            cats.data.State[State, Unit](s => (endo(s), ()))
 
         private def getBlockCreationStartTime: cats.data.State[State, BlockCreationStartTime] =
             cats.data.State.get.map(state => BlockCreationStartTime(state.currentTime.instant))
@@ -358,21 +370,21 @@ object Model:
                 newForcedMajorBlockTime =
                     state.multiNodeConfig.txTiming.forcedMajorBlockTime(fallbackTxStartTime)
                 mAbsorptionStartTime: Option[DepositAbsorptionStartTime] =
-                    state.deposits.mAbsorptionStartTime(using state.multiNodeConfig)
+                    state.mAbsorptionStartTime
                 wakeupTime =
                     TxTiming.majorBlockWakeupTime(newForcedMajorBlockTime, mAbsorptionStartTime)
 
             } yield wakeupTime
 
         /** Register or reject [[Enqueued]] deposits depending on their [[ValidityFlag]], as derived
-          * from the [[BlockAccumulator]]
+          * from the [[BlockAccumulator]].
           * @param events
           * @return
           *   a tuple of (registeredEvents, rejectedEvents)
           */
         private def registerOrReject(
             events: List[(RequestId, ValidityFlag)]
-        ): cats.data.State[State, (Queue[Enqueued], Queue[Enqueued])] = for {
+        ): cats.data.State[State, (Queue[Registered], Queue[Rejected])] = for {
             state <- cats.data.State.get[State]
             // FIXME: this could be done probably in a single fold, and perhaps more performant for large
             // lists of events by using a `Map[RequestId, ValidityFlag]` instead.
@@ -400,41 +412,49 @@ object Model:
             ) = requestsInAccumulator
                 .partition(_._1 == Valid)
                 .bimap(_.map(_._2), _.map(_._2))
-            _ <- liftEndo(Deposits.register(depositsToRegisterOrReject._1))
-            _ <- liftEndo(Deposits.reject(depositsToRegisterOrReject._2))
-        } yield depositsToRegisterOrReject
+            registered <- DepositStatus.Registered.register(depositsToRegisterOrReject._1)
+            rejected <- DepositStatus.Rejected.reject(depositsToRegisterOrReject._2)
+        } yield (registered, rejected)
 
-        // TODO: Don't we need to limit the max number we absorb? That's not being done here
-        private val absorb: cats.data.State[State, Queue[Submitted]] = for {
+        def absorb(blockCreationEndTime : BlockCreationEndTime): cats.data.State[State, Queue[Absorbed]] = for {
             state <- cats.data.State.get[State]
-            blockStartTime <- getBlockCreationStartTime
             settlementValidityEnd <- getSettlementValidityEnd
 
-            depositsToAbsorb: Queue[Submitted] = state.deposits.depositsSubmitted
-                .filter(submitted => {
-                    given TxTiming.Section = state.multiNodeConfig
+            depositsToAbsorb: Queue[Submitted] = {
+                given TxTiming.Section = state.multiNodeConfig
+                val eligible = state.deposits.depositsSubmitted
+                    .filter({
+                        submitted => {
 
-                    logger.trace(
-                      s"MODEL deposit absorption check: ${submitted.request.requestId},\n" +
-                          s"depositAbsorptionStart=${submitted.depositAbsorptionStart}, " +
-                          s"depositAbsorptionEnd=${submitted.depositAbsorptionEnd}"
-                    )
 
-                    // Check all the conditions
-                    submitted.depositAbsorptionStart.convert <= blockStartTime
-                    && submitted.depositAbsorptionEnd.convert >= settlementValidityEnd.convert
-                })
+                            logger.trace(
+                                s"MODEL deposit absorption check: ${submitted.request.requestId},\n" +
+                                    s"depositAbsorptionStart=${submitted.depositAbsorptionStart}, " +
+                                    s"depositAbsorptionEnd=${submitted.depositAbsorptionEnd}"
+                            )
+
+                            // Check all the conditions
+                            // mature
+                            submitted.depositAbsorptionStart.convert <= blockCreationEndTime
+                                // Fits in validity window
+                                && submitted.depositAbsorptionEnd.convert >= settlementValidityEnd.convert
+                        }
+                    })
+                val byStartTime = eligible.sortBy(_.depositAbsorptionStart)
+                byStartTime.take(state.multiNodeConfig.headConfig.maxDepositsAbsorbedPerBlock)
+            }
+
 
             _ = logger.trace(s"depositsToAbsorb: $depositsToAbsorb")
 
-            _ <- liftEndo(Deposits.absorb(depositsToAbsorb))
-        } yield depositsToAbsorb
+            depositsAbsorbed <- DepositStatus.Absorbed.absorb(depositsToAbsorb)
+        } yield depositsAbsorbed
 
         private def refund(
-            isFinal: Boolean
-        ): cats.data.State[State, Queue[Refundable]] = for {
+            isFinal: Boolean,
+            blockCreationEndTime: BlockCreationEndTime
+        ): cats.data.State[State, Queue[Refunded]] = for {
             state <- cats.data.State.get[State]
-            blockStartTime <- getBlockCreationStartTime
             settlementValidityEnd <- getSettlementValidityEnd
 
             depositsToRefund: Queue[Refundable] =
@@ -447,16 +467,17 @@ object Model:
 
                         logger.trace(
                           s"MODEL deposit refund check: ${refundable.request.requestId},\n" +
-                              s"depositAbsorptionEnd=$refundable.depositAbsorptionEnd, " +
+                              s"depositAbsorptionEnd=${refundable.depositAbsorptionEnd}, " +
                               s"settlementValidityEnd=$settlementValidityEnd"
                         )
 
-                        settlementValidityEnd.convert > refundable.depositAbsorptionEnd.convert
-                        || (refundable.depositAbsorptionStart.convert < blockStartTime)
+                        // Doesn't fit validity window
+                        refundable.depositAbsorptionEnd.convert < settlementValidityEnd.convert
+                        || (refundable.depositAbsorptionStart.convert <= blockCreationEndTime && !refundable.isInstanceOf[Submitted])
                     )
             _ = logger.trace(s"depositToRefund: $depositsToRefund")
-            _ <- liftEndo(Deposits.refund(depositsToRefund))
-        } yield depositsToRefund
+            refunded <- DepositStatus.Refunded.refund(depositsToRefund)
+        } yield refunded
 
         private val updateEvacuationMap: cats.data.State[State, EvacuationMap] =
             for {
@@ -495,8 +516,8 @@ object Model:
             blockVersion: BlockVersion.Full,
             newEvacuationMap: EvacuationMap,
             events: List[(RequestId, ValidityFlag)],
-            absorbedThisBlock: Queue[Submitted],
-            refundedThisBlock: Queue[Refundable]
+            absorbedThisBlock: Queue[Absorbed],
+            refundedThisBlock: Queue[Refunded]
         ): cats.data.State[State, BlockBrief.Major] =
             for {
                 state <- cats.data.State.get[State]
@@ -539,10 +560,10 @@ object Model:
             blockVersion: BlockVersion.Full,
             newEvacuationMap: EvacuationMap,
             events: List[(RequestId, ValidityFlag)],
-            refundedThisBlock: Queue[Refundable]
+            refundedThisBlock: Queue[Refunded]
         ): cats.data.State[State, BlockBrief.Minor] = for {
             state <- cats.data.State.get[State]
-            blockStartTime = BlockCreationStartTime(state.currentTime.instant)
+            blockStartTime <- getBlockCreationStartTime
             majorBlockWakeupTime <- getMajorBlockWakeupTime(state.competingFallbackStartTime)
             minorBlock = Minor(
               header = BlockHeader.Minor(
@@ -566,7 +587,7 @@ object Model:
             blockNumber: BlockNumber,
             blockVersion: BlockVersion.Full,
             events: List[(RequestId, ValidityFlag)],
-            refundedThisBlock: Queue[Refundable]
+            refundedThisBlock: Queue[Refunded]
         ): cats.data.State[State, BlockBrief.Final] = for {
             _ <- cats.data.State
                 .modify[State](_.copy(blockCycle = BlockCycle.HeadFinalized))
@@ -589,16 +610,17 @@ object Model:
 
         private def mkBlockBrief(
             isFinal: Boolean,
-            blockEndTime: BlockCreationEndTime,
+            blockDuration: QuantizedFiniteDuration,
             blockNumber: BlockNumber,
             prevVersion: BlockVersion.Full,
             newEvacuationMap: EvacuationMap,
             accumulator: BlockAccumulator,
-            absorbedThisBlock: Queue[Submitted],
-            refundedThisBlock: Queue[Refundable]
+            absorbedThisBlock: Queue[Absorbed],
+            refundedThisBlock: Queue[Refunded]
         ): cats.data.State[State, BlockBrief] =
             for {
                 state <- cats.data.State.get[State]
+                blockEndTime = BlockCreationEndTime(state.currentTime.instant + blockDuration)
 
                 events = accumulator.map((req, _, flag) => (req.requestId, flag))
 
@@ -651,7 +673,14 @@ object Model:
                         else doMinorBlock
                     } else doMajorBlock
 
-                _ = logger.trace(s"block brief: $brief")
+                _ = logger.trace(s"block brief: ${brief}")
+
+                // tick time
+                _ <- cats.data.State.modify[State](state =>
+                    state.copy(currentTime =
+                        state.currentTime.advance(brief.endTime.convert)
+                    )
+                )
             } yield brief
 
         override def preCondition(cmd: CompleteBlockCommand, state: State): Boolean =
@@ -660,6 +689,8 @@ object Model:
                     cmd.blockNumber == currentBlockNumber
                 case _ => false
             }
+
+        override def delay(cmd: CompleteBlockCommand): FiniteDuration = cmd.blockDuration.finiteDuration
     }
 
     // ===================================
@@ -773,7 +804,7 @@ object Model:
                       .andThen(contentLens)
                       .modify(_ :+ (cmd.request, depositUtxo, ValidityFlag.Valid))
                 )
-                .pipe(Deposits.enqueue(Queue(cmd)))
+                .pipe(DepositStatus.Enqueued.enqueue(Queue(cmd)))
                 .focus(_.utxoLocked)
                 .modify(_ ++ seq.depositTx.tx.body.value.inputs.toSeq)
                 .focus(_.nextRequestNumber)
@@ -809,28 +840,12 @@ object Model:
                   s"for rejection: ${cmd.depositsToDecline.size}"
             )
 
-            // TODO: Move this into the Deposits.submit method
-            val applyContinuingL1TxEndo: (Transaction => State => State) = tx =>
-                original => original.applyContinuingL1Tx(tx)
+            val s : cats.data.State[State, Unit] = for {
+                _ <- DepositStatus.Submitted.submit(cmd.depositsForSubmission)
+                _ <- DepositStatus.Declined.decline(cmd.depositsToDecline)
+            } yield ()
 
-            // TODO: move this into the Deposits.decline method
-            val unlockUtxosEndo: (Set[TransactionInput] => State => State) = inputs =>
-                original => original.focus(_.utxoLocked).modify(_ -- inputs)
-
-            // TODO: If we switch to the state monad, this can be done with traverse
-            val endos: Queue[State => State] =
-                cmd.depositsForSubmission
-                    .map(registered => applyContinuingL1TxEndo(registered.depositTxBytesSigned))
-                    .appended(Deposits.submit(cmd.depositsForSubmission))
-                    .appended(Deposits.decline(cmd.depositsToDecline))
-                    .appendedAll(
-                      cmd.depositsToDecline.map(registered =>
-                          unlockUtxosEndo(registered.depositTxBytesSigned.body.value.inputs.toSet)
-                      )
-                    )
-
-            val newState = endos.foldLeft(state)(_ |> _)
-            () -> newState
+            s.run(state).value.swap
         }
     }
 

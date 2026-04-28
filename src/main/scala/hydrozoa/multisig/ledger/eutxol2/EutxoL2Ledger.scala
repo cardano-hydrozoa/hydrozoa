@@ -210,7 +210,7 @@ case class EutxoL2Ledger private (
                     .focus(_.activeUtxos)
                     .modify(_ ++ addedL2Utxos.map((i, o) => i -> o.value))
                     .focus(_.pendingDeposits)
-                    .modify(_.removedAll(req.absorbedDeposits ++ req.rejectedDeposits))
+                    .modify(_.removedAll(req.absorbedDeposits ++ req.refundedDeposits))
             _ <- EitherT.right(state.set(newState))
             evacuationDiffs <-
                 EitherT.fromEither(

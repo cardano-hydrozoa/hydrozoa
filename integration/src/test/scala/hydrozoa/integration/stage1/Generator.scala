@@ -131,12 +131,13 @@ object CommandGenerators:
     // Complete block
     // ===================================
 
-    def genBlockDuration(currentTime: QuantizedInstant): Gen[BlockCreationEndTime] =
+    def genBlockDuration(currentTime: QuantizedInstant): Gen[QuantizedFiniteDuration] =
         Gen
             .choose(10, 60_000) // 10ms - 1m, should be shorter than deposit's validity end
             .map(blockDurationMs =>
-                BlockCreationEndTime(
-                  currentTime + FiniteDuration(blockDurationMs, TimeUnit.MILLISECONDS)
+                QuantizedFiniteDuration(
+                  currentTime.slotConfig,
+                  FiniteDuration(blockDurationMs, TimeUnit.MILLISECONDS)
                 )
             )
 
@@ -144,15 +145,15 @@ object CommandGenerators:
         blockNumber: BlockNumber,
         currentTime: QuantizedInstant
     ): Gen[CompleteBlockCommand] = for {
-        blockCreationEndTime <- genBlockDuration(currentTime)
-    } yield CompleteBlockCommand(blockNumber, blockCreationEndTime, false)
-    
+        blockDuration <- genBlockDuration(currentTime)
+    } yield CompleteBlockCommand(blockNumber, blockDuration, BlockCreationEndTime(currentTime + blockDuration), false)
+
     def genCompleteBlockFinal(
         blockNumber: BlockNumber,
         currentTime: QuantizedInstant
     ): Gen[CompleteBlockCommand] = for {
-        blockCreationEndTime <- genBlockDuration(currentTime)
-    } yield CompleteBlockCommand(blockNumber, blockCreationEndTime, true)
+        blockDuration <- genBlockDuration(currentTime)
+    } yield CompleteBlockCommand(blockNumber, blockDuration, BlockCreationEndTime(currentTime + blockDuration), true)
 
     def genCompleteBlock(
         blockNumber: BlockNumber,
@@ -330,10 +331,10 @@ object CommandGenerators:
             header = UserRequestHeader(
               headId = config.headConfig.headId,
               validityStart = RequestValidityStartTime(
-                (state.currentTime.instant - 5.seconds)
+                state.currentTime.instant - 5.seconds
               ),
               validityEnd = RequestValidityEndTime(
-                (state.currentTime.instant + 2.minutes)
+                state.currentTime.instant + 2.minutes
               ),
               bodyHash = body.hash
             )
@@ -454,7 +455,7 @@ object CommandGenerators:
                                         // This should be bigger than the longest possible block duration, see [[genCompleteBlock]].
                                         requestValidityEndTime = RequestValidityEndTime(
                                           RequestValidityEndTime(
-                                            (state.currentTime.instant + 2.minutes)
+                                            state.currentTime.instant + 2.minutes
                                           )
                                         )
 
@@ -495,10 +496,9 @@ object CommandGenerators:
                                         header = UserRequestHeader(
                                           headId = multiNodeConfig.headConfig.headId,
                                           validityStart = RequestValidityStartTime(
-                                            (state.currentTime.instant - 5.seconds)
+                                            state.currentTime.instant - 5.seconds
                                           ),
-                                          validityEnd =
-                                            requestValidityEndTime,
+                                          validityEnd = requestValidityEndTime,
                                           bodyHash = body.hash
                                         )
 
@@ -538,7 +538,7 @@ object CommandGenerators:
         state: Model.State
     ): Gen[SubmitDepositsCommand] = {
         val registeredDeposits = state.deposits.depositsRegistered
-        
+
         // Prefix is easier to think about, though we can pick up arbitrary elements
         Gen.choose(1, registeredDeposits.size).map { n =>
             logger.trace(
@@ -601,7 +601,7 @@ object ScenarioGenerators:
             state: Model.State
         ): Gen[AnyCommand[Model.State, Stage1Sut]] = {
             import hydrozoa.integration.stage1.Model.BlockCycle.*
-    import hydrozoa.integration.stage1.Model.CurrentTime.BeforeHappyPathExpiration
+            import hydrozoa.integration.stage1.Model.CurrentTime.BeforeHappyPathExpiration
 
             state.currentTime match {
                 case BeforeHappyPathExpiration(_) =>
@@ -648,7 +648,7 @@ object ScenarioGenerators:
             state: Model.State
         ): Gen[AnyCommand[Model.State, Stage1Sut]] = {
             import hydrozoa.integration.stage1.Model.BlockCycle.*
-    import hydrozoa.integration.stage1.Model.CurrentTime.BeforeHappyPathExpiration
+            import hydrozoa.integration.stage1.Model.CurrentTime.BeforeHappyPathExpiration
 
             state.currentTime match {
                 case BeforeHappyPathExpiration(_) =>
@@ -715,7 +715,7 @@ object ScenarioGenerators:
             state: Model.State
         ): Gen[AnyCommand[Model.State, Stage1Sut]] = {
             import hydrozoa.integration.stage1.Model.BlockCycle.*
-    import hydrozoa.integration.stage1.Model.CurrentTime.BeforeHappyPathExpiration
+            import hydrozoa.integration.stage1.Model.CurrentTime.BeforeHappyPathExpiration
 
             state.currentTime match {
                 case BeforeHappyPathExpiration(_) =>

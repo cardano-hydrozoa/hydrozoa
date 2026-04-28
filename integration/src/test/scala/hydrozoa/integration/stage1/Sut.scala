@@ -7,6 +7,7 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.actor.ActorSystem
 import hydrozoa.integration.stage1
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.integration.stage1.AgentActor.CompleteBlock
 import hydrozoa.integration.stage1.Commands.*
 import hydrozoa.lib.actor.SyncRequest
@@ -18,6 +19,7 @@ import hydrozoa.multisig.consensus.ack.AckBlock
 import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.consensus.{CardanoLiaison, ConsensusActor, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockNumber}
+import hydrozoa.multisig.ledger.joint
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import org.scalacheck.commands.SutCommand
@@ -67,7 +69,7 @@ object AgentActor:
 
     type Request =
         UserRequestWithId | StartBlock | CompleteBlock.Sync | ConsensusActor.Request |
-            CardanoLiaison.Timeout.type | Unit
+            CardanoLiaison.Timeout.type | Unit | joint.JointLedger.Requests.GetState.Sync
 
     type Handle = ActorRef[IO, Request]
 
@@ -117,6 +119,7 @@ case class AgentActor(
         case x: Block.Unsigned.Next => proxyBlockUnsigned(x)
         // Direct proxying
         case x: AckBlock => consensusActor >>= (_ ! x)
+
     }
 
     private val ref = Ref.unsafe[IO, Map[BlockNumber, CompleteBlock.Sync]](Map.empty)
@@ -170,6 +173,7 @@ object SutCommands:
         override def run(cmd: CompleteBlockCommand, sut: Stage1Sut): IO[BlockBrief] = for {
             _ <- logger.debug(
               s">> CompleteBlockCommand(blockNumber=${cmd.blockNumber}, " +
+                  s"blockDuration=${cmd.blockDuration}, " +
                   s"blockCreationEndTime=${cmd.blockCreationEndTime}, " +
                   s"isFinal=${cmd.isFinal})"
             )

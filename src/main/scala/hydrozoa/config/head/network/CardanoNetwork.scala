@@ -15,14 +15,17 @@ export CardanoNetwork.ensureMinAda
 type StandardCardanoNetwork =
     CardanoNetwork.Mainnet.type | CardanoNetwork.Preprod.type | CardanoNetwork.Preview.type
 
-enum CardanoNetwork(_cardanoInfo: CardanoInfo) extends CardanoNetwork.Section {
-    case Mainnet extends CardanoNetwork(CardanoInfo.mainnet)
-    case Preprod extends CardanoNetwork(CardanoInfo.preprod)
-    case Preview extends CardanoNetwork(CardanoInfo.preview)
-    case Custom(override val cardanoInfo: CardanoInfo) extends CardanoNetwork(cardanoInfo)
+enum CardanoNetwork(_cardanoInfo: CardanoInfo, _protocolMagic: Long)
+    extends CardanoNetwork.Section {
+    case Mainnet extends CardanoNetwork(CardanoInfo.mainnet, 764824073)
+    case Preprod extends CardanoNetwork(CardanoInfo.preprod, 1)
+    case Preview extends CardanoNetwork(CardanoInfo.preview, 2)
+    case Custom(override val cardanoInfo: CardanoInfo, override val protocolMagic: Long)
+        extends CardanoNetwork(cardanoInfo, protocolMagic)
 
     override transparent inline def cardanoNetwork: CardanoNetwork = this
 
+    override def protocolMagic: Long = _protocolMagic
     override def cardanoInfo: CardanoInfo = _cardanoInfo
     override def network: Network = _cardanoInfo.network
     override def slotConfig: SlotConfig = _cardanoInfo.slotConfig
@@ -39,6 +42,8 @@ object CardanoNetwork {
 
         def ruleBasedScriptAddresses: RuleBasedScriptAddresses =
             cardanoNetwork.ruleBasedScriptAddresses
+
+        def protocolMagic: Long = cardanoNetwork.protocolMagic
 
         def cardanoInfo: CardanoInfo = cardanoNetwork.cardanoInfo
 
@@ -79,9 +84,10 @@ object CardanoNetwork {
             case CardanoNetwork.Mainnet => "mainnet".asJson
             case CardanoNetwork.Preview => "preview".asJson
             case CardanoNetwork.Preprod => "preprod".asJson
-            case CardanoNetwork.Custom(cardanoInfo) =>
+            case CardanoNetwork.Custom(cardanoInfo, protocolMagic) =>
                 Json.obj(
-                  "custom" -> cardanoInfo.asJson
+                  "custom" -> cardanoInfo.asJson,
+                  "protocolMagic" -> cardanoInfo.protocolParams.asJson
                 )
         }
     }
@@ -98,9 +104,10 @@ object CardanoNetwork {
                 )
         }
         val customNetworkDecoder = Decoder.instance(c =>
-            c.downField("custom")
-                .as[CardanoInfo]
-                .flatMap(ci => Right(CardanoNetwork.Custom(ci)))
+            for {
+                cardanoInfo <- c.downField("custom").as[CardanoInfo]
+                protocolMagic <- c.downField("protocolMagic").as[Long]
+            } yield CardanoNetwork.Custom(cardanoInfo, protocolMagic)
         )
 
         List[Decoder[CardanoNetwork]](knownNetworkDecoder, customNetworkDecoder)

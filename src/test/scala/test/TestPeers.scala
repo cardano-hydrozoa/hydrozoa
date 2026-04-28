@@ -287,14 +287,8 @@ object TestPeersSpec:
 
 extension (self: CardanoNetwork)
     def asBloxbeanNetwork: BloxbeanNetwork =
-        import CardanoNetwork.*
 
-        self match {
-            case Preprod => BloxbeanNetwork(0, 1)
-            case Preview => BloxbeanNetwork(0, 2)
-            case Mainnet => BloxbeanNetwork(1, 764824073)
-            case _       => throw RuntimeException("Unexpected Cardano network")
-        }
+        BloxbeanNetwork(self.cardanoInfo.network.networkId.toInt, self.protocolMagic)
 
 enum PeersNumberSpec:
     case Random
