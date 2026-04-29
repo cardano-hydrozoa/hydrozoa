@@ -705,6 +705,7 @@ object BlockWeaver {
                                 then completeBlockFinal
                                 else completeBlockRegular
 
+                            // TODO: introduce thee-way data Confirmation = Expected | Belated | Unexpected
                             // Iff the block confirmed is the previous block
                             if bc.blockNum.increment == leadingBlockNumber
                             then
@@ -724,9 +725,29 @@ object BlockWeaver {
                                         )
                                     } yield ret
                             else {
-                                val msg = "Received wrong block number for confirmed block. We are producing" +
-                                    s" $leadingBlockNumber, but the confirmed block that we received is ${bc.blockNum}"
-                                logger.error(msg) >> IO.raiseError(RuntimeException(msg))
+                                // If it's not for the previsous block, two cases are possible.
+                                // It might be a late confirmation for a previous block, consider this sequence:
+                                // INFO  BlockWeaver.0 New block brief 20. // Start 20 as follower
+                                // INFO  BlockWeaver.0 Becoming Follower.ProcessingReadyRequests. // Feed the content
+                                // INFO  BlockWeaver.0 Becoming DecidingRole. // Done
+                                // INFO  BlockWeaver.0 Becoming Leader.ProcessingReadyRequests. // Leading 21
+                                // INFO  BlockWeaver.0 Becoming Leader.AwaitingConfirmation. // Waiting for confirmation for 20, but may receive her for 19
+                                //
+                                // This is totally fine, just ignore the confirmation we are not interested in.
+                                // On the other hand, since we are the leader working on the edge, a confirmation for a higher block number is a panic.
+                                val belatedPreviousConfirmation =
+                                    bc.blockNum.increment < leadingBlockNumber
+
+                                if belatedPreviousConfirmation
+                                then
+                                    logger.info(
+                                      s"Received belated block confirmation ${bc.blockNum} when producing" +
+                                          s" $leadingBlockNumber, ignoring."
+                                    ) >> pure(this)
+                                else
+                                    val msg = "Received block confirmation for a future block. We are producing" +
+                                        s" $leadingBlockNumber, but the confirmed block that we received is ${bc.blockNum}"
+                                    logger.error(msg) >> IO.raiseError(RuntimeException(msg))
                             }
 
                         case pr: PollResults =>
