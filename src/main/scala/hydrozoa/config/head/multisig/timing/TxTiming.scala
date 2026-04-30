@@ -78,7 +78,7 @@ final case class TxTiming(
         FinalizationTxEndTime(newSettlementEndTime(competingFallbackStartTime))
 
     /** A major/initial block's fallback tx's start time should be set to this time relative to the
-      * block's start time.
+      * block's end time.
       */
     def newFallbackStartTime(blockCreationEndTime: BlockCreationEndTime): FallbackTxStartTime =
         FallbackTxStartTime(

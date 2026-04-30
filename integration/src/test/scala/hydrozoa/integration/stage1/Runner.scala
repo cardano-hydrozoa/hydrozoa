@@ -20,7 +20,7 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
     ): org.scalacheck.Test.Parameters = {
         p.withWorkers(1)
             .withPropFilter(Some("Deposits"))
-            .withInitialSeed(Some(Seed.fromBase64("lr7yvfMC6Qxtovs5UjWZSfTcqzr7pHrzQ4_mcWApnUP=").get))
+//            .withInitialSeed(Some(Seed.fromBase64("lr7yvfMC6Qxtovs5UjWZSfTcqzr7pHrzQ4_mcWApnUP=").get))
         // NB: careful, this will override -s from the command line
         // .withMinSuccessfulTests(100) // 10000
         // .withMaxSize(100) // 500
@@ -77,7 +77,7 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
       */
     val _ = property("Deposits") = Suite(
       suiteCardano = Mock(preprod),
-      txTimingGen = generateYaciTxTiming,
+      txTimingGen = generateDefaultTxTiming,
       scenarioGen = DepositsScenarioGen,
       label = "deposits-mock"
     ).property()
@@ -94,7 +94,7 @@ object Stage1PropertiesYaci extends YetAnotherProperties("Integration Stage 1 wi
         p.withWorkers(1)
             .withMinSuccessfulTests(1)
             .withPropFilter(Some("Deposits"))
-//            .withInitialSeed(Seed.fromBase64("sfxC9wp_Ttys_QDR5naVw4MSXqfAAkNk0o7cFxK0jfO").get)
+            .withInitialSeed(Seed.fromBase64("kdqbX1llgJbMBREgISxpsBoZFXhC0vKu6IDQxUiStZB=").get)
     }
 
     val _ = property("Block promotion Yaci") = Suite(

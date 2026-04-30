@@ -22,6 +22,7 @@ import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag.{Invalid, Valid}
 import hydrozoa.multisig.ledger.joint.EvacuationMap.applyDiffs
+import hydrozoa.multisig.ledger.joint.EvacuationMap.given
 import hydrozoa.multisig.ledger.joint.JointLedger.*
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.*
 import hydrozoa.multisig.ledger.l1.L1LedgerM
@@ -31,6 +32,8 @@ import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import hydrozoa.multisig.ledger.l1.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerCommand, L2LedgerError, L2LedgerState}
+import hydrozoa.multisig.ledger.remote.RemoteL2LedgerCodecs.given
+import io.circe.syntax.*
 import monocle.Focus.focus
 import scalus.uplc.builtin.ByteString
 
@@ -445,6 +448,7 @@ final case class JointLedger(
         blockCreationEndTime: BlockCreationEndTime,
         decisions: DepositsMap.Decisions,
     ): IO[(JointLedger.Producing, BlockBrief.Intermediate)] = {
+        given CardanoNetwork.Section = config.cardanoNetwork
         val blockCreationStartTime = p.blockCreationStartTime
         val previousHeader = p.previousBlockHeader
         val blockWithdrawnUtxos = p.l2LedgerState.payouts
@@ -452,7 +456,7 @@ final case class JointLedger(
         for {
             _ <- logger.trace(
               s"mkBlockBrief: previousHeader=$previousHeader\n" +
-                  s"mkBlockBrief: blockWithdrawnUtxos=$blockWithdrawnUtxos\n" +
+                  s"mkBlockBrief: blockWithdrawnUtxos=${blockWithdrawnUtxos.asJson}\n" +
                   s"mkBlockBrief: blockStartTime=$blockCreationStartTime\n" +
                   s"mkBlockBrief: competingFallbackValidityStart=${p.competingFallbackTxTime}\n" +
                   s"mkBlockBrief: events=$events\n" +
@@ -477,7 +481,7 @@ final case class JointLedger(
                         newL2State <-
                             if decisions.refunded.isEmpty then IO.pure(p.l2LedgerState)
                             else executeL2Command(p, depositEventDecisions)
-                        _ <- logger.trace(s"New evacuation map: ${newEvacuationMap.evacuationMap}")
+                        _ <- logger.trace(s"New evacuation map: ${newEvacuationMap.asJson}")
 
                         // Update the state with the new evacuation map
                         newJLState = p
@@ -501,7 +505,7 @@ final case class JointLedger(
                     for {
                         newL2State <- executeL2Command(p, depositEventDecisions)
                         newEvacuationMap = applyDiffs(p.evacuationMap, newL2State.diffs)
-                        _ <- logger.trace(s"New evacuation map: ${newEvacuationMap.evacuationMap}")
+                        _ <- logger.trace(s"New evacuation map: ${newEvacuationMap.asJson}")
                         newJLState = p
                             .setL2LedgerState(newL2State)
                             .focus(_.evacuationMap)

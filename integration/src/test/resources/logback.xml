@@ -8,15 +8,15 @@
     <root level="error">
         <appender-ref ref="STDOUT"/>
     </root>
-    <logger name="org.scalacheck.commands.ModelBasedSuite" level="info"/>
+    <logger name="org.scalacheck.commands.ModelBasedSuite" level="trace"/>
     <logger name="Stage1.Commands" level="warn"/>
     <logger name="Stage1.CommandGenerators" level="trace"/>
     <logger name="Stage1.ScenarioGenerators" level="warn"/>
     <logger name="Stage1.Model" level="trace"/>
     <logger name="Stage1.Sut" level="trace"/>
     <logger name="Stage1.Suite" level="trace"/>
-    <logger name="CardanoLiaison" level="warn"/>
-    <logger name="JointLedger" level="warn"/>
-    <logger name="test.CardanoBackendMock" level="warn"/>
+    <logger name="CardanoLiaison" level="trace"/>
+    <logger name="JointLedger" level="trace"/>
+    <logger name="test.CardanoBackendMock" level="trace"/>
     <logger name="scalus" level="error"/>
 </configuration>

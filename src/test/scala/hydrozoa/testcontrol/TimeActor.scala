@@ -26,7 +26,7 @@ class TimeActor extends Actor[IO, TimeMsg] {
         case PrintTime() =>
             for {
                 now <- IO.realTimeInstant
-                _ <- IO.println(s"Current time: $now")
+                _ <- IO.println(s"Current time: $now (${now.toEpochMilli})")
             } yield ()
 
         case WaitAndPrint(delay) =>
@@ -34,7 +34,7 @@ class TimeActor extends Actor[IO, TimeMsg] {
                 _ <- IO.println(s"Waiting for $delay...")
                 _ <- IO.sleep(delay)
                 now <- IO.realTimeInstant
-                _ <- IO.println(s"After waiting: $now")
+                _ <- IO.println(s"After waiting: $now (${now.toEpochMilli})")
             } yield ()
     }
 }

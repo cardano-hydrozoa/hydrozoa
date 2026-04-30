@@ -27,6 +27,7 @@ import org.typelevel.log4cats.Logger
 
 import scala.concurrent.duration.DurationInt
 import scalus.cardano.address.ShelleyAddress
+import scalus.cardano.ledger.Transaction
 
 // ===================================
 // Stage 1 SUT
@@ -149,7 +150,7 @@ object SutCommands:
         override def run(cmd: DelayCommand, sut: Stage1Sut): IO[Unit] = for {
             _ <- logger.debug(s">> DelayCommand(delay=${cmd.delaySpec})")
             now <- IO.realTimeInstant
-            _ <- logger.debug(s"Current time: $now")
+            _ <- logger.debug(s"\tCurrent time: ${now.toEpochMilli}")
             _ <- sut.agent ! Timeout
         } yield ()
     }
@@ -222,7 +223,7 @@ object SutCommands:
 
             submissionErrors = ret.filter(_._2.isLeft)
             _ <- IO.whenA(submissionErrors.nonEmpty)(
-              logger.info(
+              logger.error(
                 "Submit deposit errors:" + submissionErrors
                     .map(a =>
                         s"\n\t- ${a._1._1}, error: ${a._2.left}, cbor: ${HexUtil.encodeHexString(a._1._2.toCbor)}"

@@ -1,6 +1,6 @@
 package hydrozoa.integration.stage1
 
-import hydrozoa.config.head.HeadConfig
+import hydrozoa.config.head.{HeadConfig, network}
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime, FallbackTxStartTime, MajorBlockWakeupTime, SettlementTxEndTime}
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.*
@@ -14,6 +14,9 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant
 import hydrozoa.lib.logging.Logging
 import cats.syntax.all.*
 import cats.*
+import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.given
+import io.circe.syntax.*
+import hydrozoa.multisig.ledger.joint.EvacuationMap.given
 import hydrozoa.integration.stage1.Model.logger
 import hydrozoa.integration.stage1.model.Deposits.DepositStatus
 import hydrozoa.integration.stage1.model.Deposits.DepositStatus.*
@@ -35,6 +38,7 @@ import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import io.bullet.borer.Cbor
 import monocle.Lens
+import hydrozoa.multisig.ledger.remote.RemoteL2LedgerCodecs.given
 import monocle.syntax.all.focus
 import org.scalacheck.commands.ModelCommand
 import scalus.cardano.ledger.{AssetName, KeepRaw, SlotConfig, Transaction, TransactionHash, TransactionInput, TransactionOutput, Utxos}
@@ -70,7 +74,7 @@ object Model:
         // "Mutable" part
         //
         nextRequestNumber: RequestNumber,
-        currentTime: CurrentTime,
+        private val currentTime: CurrentTime,
 
         // This is stored here to avoid tossing it over block cycle stages like Done/Ready/InProgress.
         competingFallbackStartTime: FallbackTxStartTime,
@@ -123,22 +127,48 @@ object Model:
             this.copy(peerUtxosL1 = newUtxos)
         }
 
-        /**
-         * Calculate the current major block wakeup time according to the current state of the deposits. This is the
-         * earliest DepositAbsorptionStateTime of any deposit that hydrozoa will check for absorption
-         *
-         * @param config
-         * @return
-         */
+        /** Calculate the current major block wakeup time according to the current state of the
+          * deposits. This is the earliest DepositAbsorptionStateTime of any deposit that hydrozoa
+          * will check for absorption
+          *
+          * @param config
+          * @return
+          */
         def mAbsorptionStartTime: Option[DepositAbsorptionStartTime] = {
             val absorptionBounds: Queue[(DepositAbsorptionStartTime, DepositAbsorptionEndTime)] =
                 deposits.hydrozoaKnownRegisteredDeposits.map(cmd =>
                     val validityEnd = cmd.request.request.header.validityEnd
-                    (multiNodeConfig.txTiming.depositAbsorptionStartTime(validityEnd),
-                     multiNodeConfig.txTiming.depositAbsorptionEndTime(validityEnd))
+                    (
+                      multiNodeConfig.txTiming.depositAbsorptionStartTime(validityEnd),
+                      multiNodeConfig.txTiming.depositAbsorptionEndTime(validityEnd)
+                    )
                 )
 
             absorptionBounds.map(_._1).minOption
+        }
+
+        def getCurrentTime: CurrentTime = {
+            logger.trace(
+              s"Model current time: ${currentTime}"
+            )
+            currentTime
+        }
+        def advanceCurrentTime(quantizedInstant: QuantizedInstant): State = {
+            val newTime = this.currentTime.advance(quantizedInstant)
+            logger.trace(
+              s"Model current time advancing to $newTime from ${this.currentTime}"
+            )
+            this.copy(
+              currentTime = newTime
+            )
+        }
+
+        def setCurrentTime(newTime: CurrentTime): State = {
+            logger.trace(s"Model current time changing to $newTime from ${this.currentTime}")
+            this.copy(
+              currentTime = newTime
+            )
+
         }
     }
 
@@ -236,7 +266,7 @@ object Model:
                     BlockCycle.Ready(blockNumber = blockNumber, prevVersion = version)
                 case _ => throw Error.UnexpectedState("DelayCommand requires BlockCycle.Done")
             }
-            val instant = state.currentTime.instant + cmd.delaySpec.duration
+            val instant = state.getCurrentTime.instant + cmd.delaySpec.duration
             val currentTime = cmd.delaySpec match {
                 case Delay.EndsBeforeHappyPathExpires(_) =>
                     CurrentTime.BeforeHappyPathExpiration(instant)
@@ -246,10 +276,11 @@ object Model:
                     CurrentTime.AfterCompetingFallbackStartTime(instant)
             }
 
-            () -> state.copy(
-              blockCycle = newBlock,
-              currentTime = currentTime
-            )
+            () -> state
+                .copy(
+                  blockCycle = newBlock
+                )
+                .setCurrentTime(currentTime)
         }
 
         override def delay(cmd: DelayCommand): scala.concurrent.duration.FiniteDuration =
@@ -266,7 +297,7 @@ object Model:
 
             logger.debug(s"MODEL>> StartBlockCommand for block number: ${cmd.blockNumber}")
 
-            state.currentTime match {
+            state.getCurrentTime match {
                 case CurrentTime.BeforeHappyPathExpiration(_) =>
                     val newBlock = state.blockCycle match {
                         case BlockCycle.Ready(prevBlockNumber, prevVersion)
@@ -274,7 +305,7 @@ object Model:
                             BlockCycle.InProgress(
                               blockNumber = cmd.blockNumber,
                               // blockStartTime = cmd.creationTime,
-                              blockStartTime = BlockCreationStartTime(state.currentTime.instant),
+                              blockStartTime = BlockCreationStartTime(state.getCurrentTime.instant),
                               prevVersion = prevVersion
                             )
                         case _ =>
@@ -323,17 +354,22 @@ object Model:
 
                             refundedThisBlock <- refund(cmd.isFinal, cmd.blockCreationEndTime)
 
-                            newEvacuationMap <- updateEvacuationMap
+                            newEvacuationMap <- updateEvacuationMap(absorbedThisBlock)
 
                             blockBrief <- mkBlockBrief(
                               cmd.isFinal,
-                              cmd.blockDuration,
+                              cmd.blockCreationEndTime,
                               cmd.blockNumber,
                               prevVersion,
                               newEvacuationMap,
                               accumulator,
                               absorbedThisBlock,
                               refundedThisBlock
+                            )
+
+                            // tick time
+                            _ <- cats.data.State.modify[State](state =>
+                                state.advanceCurrentTime(cmd.blockCreationEndTime.convert)
                             )
 
                             // update block cycle
@@ -353,7 +389,7 @@ object Model:
         }
 
         private def getBlockCreationStartTime: cats.data.State[State, BlockCreationStartTime] =
-            cats.data.State.get.map(state => BlockCreationStartTime(state.currentTime.instant))
+            cats.data.State.get.map(state => BlockCreationStartTime(state.getCurrentTime.instant))
 
         private def getSettlementValidityEnd: cats.data.State[State, SettlementTxEndTime] =
             cats.data.State.get.map(state =>
@@ -416,34 +452,34 @@ object Model:
             rejected <- DepositStatus.Rejected.reject(depositsToRegisterOrReject._2)
         } yield (registered, rejected)
 
-        def absorb(blockCreationEndTime : BlockCreationEndTime): cats.data.State[State, Queue[Absorbed]] = for {
+        def absorb(
+            blockCreationEndTime: BlockCreationEndTime
+        ): cats.data.State[State, Queue[Absorbed]] = for {
             state <- cats.data.State.get[State]
             settlementValidityEnd <- getSettlementValidityEnd
 
             depositsToAbsorb: Queue[Submitted] = {
                 given TxTiming.Section = state.multiNodeConfig
                 val eligible = state.deposits.depositsSubmitted
-                    .filter({
-                        submitted => {
-
+                    .filter { submitted =>
+                        {
 
                             logger.trace(
-                                s"MODEL deposit absorption check: ${submitted.request.requestId},\n" +
-                                    s"depositAbsorptionStart=${submitted.depositAbsorptionStart}, " +
-                                    s"depositAbsorptionEnd=${submitted.depositAbsorptionEnd}"
+                              s"MODEL deposit absorption check: ${submitted.request.requestId},\n" +
+                                  s"depositAbsorptionStart=${submitted.depositAbsorptionStart}, " +
+                                  s"depositAbsorptionEnd=${submitted.depositAbsorptionEnd}"
                             )
 
                             // Check all the conditions
                             // mature
                             submitted.depositAbsorptionStart.convert <= blockCreationEndTime
-                                // Fits in validity window
-                                && submitted.depositAbsorptionEnd.convert >= settlementValidityEnd.convert
+                            // Fits in validity window
+                            && submitted.depositAbsorptionEnd.convert >= settlementValidityEnd.convert
                         }
-                    })
+                    }
                 val byStartTime = eligible.sortBy(_.depositAbsorptionStart)
                 byStartTime.take(state.multiNodeConfig.headConfig.maxDepositsAbsorbedPerBlock)
             }
-
 
             _ = logger.trace(s"depositsToAbsorb: $depositsToAbsorb")
 
@@ -473,26 +509,28 @@ object Model:
 
                         // Doesn't fit validity window
                         refundable.depositAbsorptionEnd.convert < settlementValidityEnd.convert
-                        || (refundable.depositAbsorptionStart.convert <= blockCreationEndTime && !refundable.isInstanceOf[Submitted])
+                        || (refundable.depositAbsorptionStart.convert <= blockCreationEndTime && !refundable
+                            .isInstanceOf[Submitted])
                     )
             _ = logger.trace(s"depositToRefund: $depositsToRefund")
             refunded <- DepositStatus.Refunded.refund(depositsToRefund)
         } yield refunded
 
-        private val updateEvacuationMap: cats.data.State[State, EvacuationMap] =
+        // TODO: This can probably just be combined with `absorb`
+        private def updateEvacuationMap(absorbedThisBlock : Queue[Absorbed]): cats.data.State[State, EvacuationMap] =
             for {
                 state <- cats.data.State.get[State]
                 // An "L2 genesis" is what we now call deposit compartment, keeping them for now.
                 depositCompartments: Queue[L2Genesis] =
-                    state.deposits.depositsAbsorbed
+                    absorbedThisBlock
                         .map(rdc => {
                             val l2Payload: Array[Byte] =
-                                rdc.depositRefundTxSeq.depositTx.depositProduced.l2Payload.bytes
+                                rdc.cmd.depositRefundTxSeq.depositTx.depositProduced.l2Payload.bytes
                             val obligations =
                                 Cbor.decode(l2Payload).to[Queue[GenesisObligation]].value.toList
                             val genesisId =
                                 mkGenesisId(
-                                  rdc.depositRefundTxSeq.depositTx.depositProduced.utxoId
+                                  rdc.cmd.depositRefundTxSeq.depositTx.depositProduced.utxoId
                                 )
                             L2Genesis(Queue.from(obligations), genesisId)
                         })
@@ -508,6 +546,12 @@ object Model:
                     .toEvacuationMap(state.multiNodeConfig)
                     .toOption
                     .getOrElse(throw RuntimeException("cannot build the evacuation map"))
+
+                _ = logger.trace {
+                    given CardanoNetwork.Section = state.multiNodeConfig
+                    s"newEvacuationMap: ${newEvacuationMap.asJson}"
+                }
+
             } yield newEvacuationMap
 
         private def majorBlock(
@@ -549,7 +593,7 @@ object Model:
                   _.copy(competingFallbackStartTime = newFallbackTxStartTime)
                 )
                 _ = logger.debug(
-                  s"newCompetingFallbackStartTime: $newFallbackTxStartTime"
+                  s"[CompleteBlockCommand.majorBlock]: $majorBlock"
                 )
 
             } yield majorBlock
@@ -580,6 +624,8 @@ object Model:
                 depositsRefunded = refundedThisBlock.map(_.cmd.request.requestId).toList
               )
             )
+
+            _ = logger.trace(s"[CompleteBlockCommand.minorBlock]: $minorBlock")
         } yield minorBlock
 
         def finalBlock(
@@ -605,12 +651,12 @@ object Model:
                 depositsRefunded = refundedThisBlock.map(_.cmd.request.requestId).toList
               )
             )
-
+            _ = logger.trace(s"[CompleteBlockCommand.finalBlock]: ${finalBlock}")
         } yield finalBlock
 
         private def mkBlockBrief(
             isFinal: Boolean,
-            blockDuration: QuantizedFiniteDuration,
+            blockEndTime: BlockCreationEndTime,
             blockNumber: BlockNumber,
             prevVersion: BlockVersion.Full,
             newEvacuationMap: EvacuationMap,
@@ -620,7 +666,6 @@ object Model:
         ): cats.data.State[State, BlockBrief] =
             for {
                 state <- cats.data.State.get[State]
-                blockEndTime = BlockCreationEndTime(state.currentTime.instant + blockDuration)
 
                 events = accumulator.map((req, _, flag) => (req.requestId, flag))
 
@@ -674,13 +719,6 @@ object Model:
                     } else doMajorBlock
 
                 _ = logger.trace(s"block brief: ${brief}")
-
-                // tick time
-                _ <- cats.data.State.modify[State](state =>
-                    state.copy(currentTime =
-                        state.currentTime.advance(brief.endTime.convert)
-                    )
-                )
             } yield brief
 
         override def preCondition(cmd: CompleteBlockCommand, state: State): Boolean =
@@ -690,7 +728,8 @@ object Model:
                 case _ => false
             }
 
-        override def delay(cmd: CompleteBlockCommand): FiniteDuration = cmd.blockDuration.finiteDuration
+        override def delay(cmd: CompleteBlockCommand): FiniteDuration =
+            cmd.blockDuration.finiteDuration
     }
 
     // ===================================
@@ -700,6 +739,7 @@ object Model:
     given ModelCommand[L2TxCommand, Unit, State] with {
 
         override def runState(cmd: L2TxCommand, state: State): (Unit, State) =
+            given CardanoNetwork.Section = state.multiNodeConfig
 
             logger.debug(s"MODEL>> L2TxCommand for event ID: ${cmd.request.requestId}")
 
@@ -715,7 +755,7 @@ object Model:
 
             val ret = HydrozoaTransactionMutator.transit(
               config = state.multiNodeConfig.headConfig,
-              time = state.currentTime.instant,
+              time = state.getCurrentTime.instant,
               state = state.utxosL2Active,
               l2Tx = l2Tx
             )
@@ -745,6 +785,13 @@ object Model:
 
             logger.trace(
               s"OUTPUT finalState.blockCycle event IDs: ${finalEvents.map(_._1.requestId)}"
+            )
+            logger.trace(
+              s"[L2TxCommand] payout obligations for ${l2Tx.tx.id}: ${l2Tx.payoutObligations(state.multiNodeConfig).map(_.asJson)}"
+            )
+            logger.trace(
+              s"[L2TxCommand] L2 Utxos for ${l2Tx.tx.id}:" +
+                  s" ${Map.from(l2Tx.l2utxos.map((ti, babbage) => (ti, babbage.asInstanceOf[TransactionOutput]))).asJson}"
             )
 
             () -> finalState
@@ -840,7 +887,7 @@ object Model:
                   s"for rejection: ${cmd.depositsToDecline.size}"
             )
 
-            val s : cats.data.State[State, Unit] = for {
+            val s: cats.data.State[State, Unit] = for {
                 _ <- DepositStatus.Submitted.submit(cmd.depositsForSubmission)
                 _ <- DepositStatus.Declined.decline(cmd.depositsToDecline)
             } yield ()

@@ -4,8 +4,10 @@ import cats.effect.IO
 import cats.effect.testkit.TestControl
 import cats.effect.unsafe.implicits.global
 import ch.qos.logback.classic.Level
+import hydrozoa.lib.logging.Logging.loggerIO
 import org.scalacheck.{Gen, Prop, Shrink}
 import org.slf4j.{Logger, LoggerFactory}
+
 import scala.annotation.tailrec
 import scala.concurrent.duration.{Duration, DurationInt, FiniteDuration}
 
@@ -607,6 +609,8 @@ trait ModelBasedSuite {
                     if hasFailed then IO.pure((sut, p, s, lastCmd, true))
                     else
                         for {
+                            now <- IO.realTimeInstant
+                            _ = logger.trace(s"[innerIO] time before wait: ${now}")
                             // Sleep for the settling window so the outer can tick actors
                             // and let pending messages propagate before the advancing the time
                             // and after, before running the command.
@@ -615,6 +619,8 @@ trait ModelBasedSuite {
                             _ <- IO.cede.whileM_(IO(!gate.get))
                             _ <- IO(gate.set(false))
                             _ <- IO.sleep(settling)
+                            now <- IO.realTimeInstant
+                            _ = logger.trace(s"[innerIO] time after wait: ${now}")
                             pred <- c.runPC(sut)
                             (newPredResult, newState) = LoggingControl.withSuppressedLogs(
                               "predicate evaluation and state advancement"

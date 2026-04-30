@@ -415,7 +415,7 @@ trait CardanoLiaison(
       *   - by receiving timeout
       */
     private def runEffects: IO[Unit] = for {
-
+        _ <- loggerIO.trace("entering `runEffects`")
         // 1. Get the L1 state, i.e. the list of utxo ids at the multisig address  + the current time
         resp <- cardanoBackend.utxosAt(config.initializationTx.treasuryProduced.address)
 

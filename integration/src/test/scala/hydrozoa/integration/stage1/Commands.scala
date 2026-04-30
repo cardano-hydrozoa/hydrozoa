@@ -72,7 +72,7 @@ object Commands:
         creationTime: BlockCreationStartTime
     ) {
         override def toString: String =
-            s"StartBlockCommand(block=$blockNumber, time=${creationTime.instant})"
+            s"StartBlockCommand(block=$blockNumber, time=${creationTime.instant.toEpochMilli})"
     }
 
     implicit given CommandProp[StartBlockCommand, Unit, Model.State] with {}

@@ -136,8 +136,7 @@ case class Suite(
             )
 
             Stage1Env(
-              //  Tuesday, April 28, 2026 at 12:54:03 PM GMT+00:00
-              startTime = java.time.Instant.ofEpochSecond(1777380843),
+              startTime = java.time.Instant.ofEpochSecond(2000000000),
               cardanoNetwork = cardanoNetwork,
               genesisUtxo = yaciTestSauceGenesis(cardanoNetwork.network),
               testPeers = testPeers
@@ -402,12 +401,12 @@ case class Suite(
                 // Will take almost forever if is run after the actor system is spun up
                 _ <- IO.sleep(
                   FiniteDuration(
-                    state.currentTime.instant.instant.toEpochMilli,
+                    state.getCurrentTime.instant.instant.toEpochMilli,
                     TimeUnit.MILLISECONDS
                   )
                 )
                 now <- IO.realTimeInstant
-                _ <- loggerIO.info(s"Current time: $now")
+                _ <- loggerIO.info(s"[startupSut] Current time: ${now.toEpochMilli}")
             } yield ())
 
             _ <- loggerIO.debug(s"peerKeys: ${multiNodeConfig.headConfig.headPeers.headPeerVKeys}")
@@ -513,14 +512,17 @@ case class Suite(
 
             _ <- consensusActorD.complete(consensusActor)
 
-        } yield Stage1Sut(
-          headAddress = multiNodeConfig.headConfig.headMultisigAddress,
-          system = system,
-          cardanoBackend = cardanoBackend,
-          agent = agent,
-          runId = runId,
-          traceRef = traceRef
-        )
+            sut = Stage1Sut(
+                headAddress = multiNodeConfig.headConfig.headMultisigAddress,
+                system = system,
+                cardanoBackend = cardanoBackend,
+                agent = agent,
+                runId = runId,
+                traceRef = traceRef
+            )
+
+            _ <- loggerIO.trace(s"finished SUT startup: $sut")
+        } yield sut
     }
 
     enum CardanoBackendConfig:
@@ -629,7 +631,7 @@ case class Suite(
           lastState.multiNodeConfig.headConfig.initialBlock.initializationTx.tx.id,
           lastState.multiNodeConfig.headConfig.initialBlock.fallbackTx.tx.id,
           effects,
-          lastState.currentTime
+          lastState.getCurrentTime
         )
 
         _ <- IO.whenA(expectedEffects.nonEmpty)(

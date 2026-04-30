@@ -21,7 +21,7 @@ import scalus.uplc.builtin.ByteString
 import scodec.bits.ByteVector
 
 /** JSON codecs for RemoteL2Ledger WebSocket protocol */
-case class RemoteL2LedgerCodecs(config: CardanoNetwork.Section) {
+object RemoteL2LedgerCodecs {
 
     // Reuse codecs from the HTTP server, excluding types we override for sugar-rush-ledger compatibility
     // We exclude certain codecs here to provide sugar-rush-ledger compatible format
@@ -237,7 +237,8 @@ case class RemoteL2LedgerCodecs(config: CardanoNetwork.Section) {
 
     // Response codecs
     implicit val responseSuccessEncoder: Encoder[Response.Success] = deriveEncoder
-    implicit val responseSuccessDecoder: Decoder[Response.Success] = deriveDecoder
+    given responseSuccessDecoder(using CardanoNetwork.Section): Decoder[Response.Success] =
+        deriveDecoder
 
     implicit val responseFailureEncoder: Encoder[Response.Failure] = deriveEncoder
     implicit val responseFailureDecoder: Decoder[Response.Failure] = deriveDecoder
@@ -247,7 +248,7 @@ case class RemoteL2LedgerCodecs(config: CardanoNetwork.Section) {
         case e: Response.Failure => e.asJson
     }
 
-    implicit val responseDecoder: Decoder[Response] = Decoder.instance { c =>
+    given responseDecoder(using CardanoNetwork.Section): Decoder[Response] = Decoder.instance { c =>
         c.keys
             .flatMap(_.headOption)
             .toRight(
@@ -316,26 +317,29 @@ case class RemoteL2LedgerCodecs(config: CardanoNetwork.Section) {
             )
     }
 
-    given evacuationDiffDecoder: Decoder[EvacuationDiff] = Decoder.instance { c =>
-        c.downField("tag").as[String].flatMap {
-            case "Update" =>
-                for {
-                    key <- c.downField("key").as[EvacuationKey]
-                    value <- c.downField("value").as[Payout.Obligation]
-                } yield EvacuationDiff.Update(key, value)
-            case "Delete" =>
-                c.downField("key").as[EvacuationKey].map(EvacuationDiff.Delete.apply)
-            case other =>
-                Left(io.circe.DecodingFailure(s"Unknown EvacuationDiff tag: $other", c.history))
+    given evacuationDiffDecoder(using config: CardanoNetwork.Section): Decoder[EvacuationDiff] =
+        Decoder.instance { c =>
+            c.downField("tag").as[String].flatMap {
+                case "Update" =>
+                    for {
+                        key <- c.downField("key").as[EvacuationKey]
+                        value <- c.downField("value").as[Payout.Obligation]
+                    } yield EvacuationDiff.Update(key, value)
+                case "Delete" =>
+                    c.downField("key").as[EvacuationKey].map(EvacuationDiff.Delete.apply)
+                case other =>
+                    Left(io.circe.DecodingFailure(s"Unknown EvacuationDiff tag: $other", c.history))
+            }
         }
-    }
 
     // Payout.Obligation codec
     // Encode directly as TransactionOutput (without "utxo" wrapper) for API compatibility
     given payoutObligationEncoder: Encoder[Payout.Obligation] = Encoder.instance { po =>
         po.utxo.asJson
     }
-    given payoutObligationDecoder: Decoder[Payout.Obligation] = Decoder.instance { c =>
+    given payoutObligationDecoder(using
+        config: CardanoNetwork.Section
+    ): Decoder[Payout.Obligation] = Decoder.instance { c =>
         for {
             unvalidated <- c.as[KeepRaw[TransactionOutput]]
             value <- Payout
