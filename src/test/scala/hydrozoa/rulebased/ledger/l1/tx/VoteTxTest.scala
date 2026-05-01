@@ -2,10 +2,8 @@ package hydrozoa.rulebased.ledger.l1.tx
 
 import cats.effect.unsafe.implicits.global
 import hydrozoa.*
-import hydrozoa.config.HydrozoaBlueprint
+import hydrozoa.config.node
 import hydrozoa.config.node.NodeConfig
-import hydrozoa.config.head.HeadConfig
-import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
@@ -16,39 +14,49 @@ import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.U
 import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.AwaitingVote
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
-import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.{gens => _, *}
+import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.{gens as _, *}
 import hydrozoa.rulebased.ledger.l1.tx.CommonGeneratorsTypes.*
 import hydrozoa.rulebased.ledger.l1.utxo.{VoteOutput, VoteUtxo}
 import org.scalacheck.{Gen, Properties}
 import scalus.cardano.ledger.*
-import scalus.cardano.onchain.plutus.v1.ArbitraryInstances.genByteStringOfN
 import scalus.cardano.onchain.plutus.v1.PubKeyHash
 import scalus.uplc.builtin.Builtins.blake2b_224
 import scalus.uplc.builtin.ByteString
 import registry.scalacheck.*
 
-def gens(using config: MultiNodeConfig) =
+lazy val gens =
+    // same OnChain needed in headersList and OnChain block header
+    const[Onchain] +:
+    // same tx hash in genRuleBasedTreasuryUtxo and genTransactionInput (used by voteUtxo)
+    const[TransactionHash] +:
+    const[VersionMajor] +:
+    // use the same multi-node config for the whole test
+    const[MultiNodeConfig] +:
     gen[VoteTx.Build] +:
-    listOf[HeaderSignature] +:
-    gen[HeaderSignature] +:
-    gen[Onchain] +:
-    gen((v: VoteUtxo[VoteStatus]) => v. asInstanceOf[VoteUtxo[VoteStatus.AwaitingVote]]) +:
-    gen[VoteUtxo[VoteStatus]] +:
-    gen[VoteOutput[VoteStatus]] +:
-    gen[VoteStatus.AwaitingVote] +:
+    gen(headersList) +:
+    gen(voteUtxo) +:
+    gen(genTransactionInput) +:
+    gen(genRuleBasedTreasuryUtxo) +:
+    gen(genCollateralUtxo) +:
+    gen(addressKeyHash) +:
     gen(genPeerVoteDatumAwaitingVote) +:
-    gen((c: HeadConfig) => c.headPeers) +:
-    gen((c: NodeConfig) => c.headConfig) +:
-    gen((c: MultiNodeConfig) => c.nodeConfigs.head._2) +:
-    const[Version] +:
-    gen(config) +:
+    gen((_: NodeConfig).headConfig.headPeers) +:
+    gen((_: MultiNodeConfig).nodeConfigs.head._2) +:
+    gen(MultiNodeConfig.generateDefault) +:
     CommonGenerators.gens
 
-/** key != 0
-  *
-  * @param peersVKs
-  * @return
-  */
+def addressKeyHash(voteDatum: VoteDatum, voteTxConfig: VoteTx.Config) =
+    val peerAddresses =
+        voteTxConfig.headPeerVKeys.map(_.shelleyAddress()(using voteTxConfig))
+    peerAddresses
+        .toList(voteDatum.key.intValue - 1)
+        .keyHashOption
+        .get
+        .asInstanceOf[AddrKeyHash]
+
+def headersList(header: Onchain, config: node.MultiNodeConfig) =
+    config.multisignHeader(header).toList
+
 def genPeerVoteDatumAwaitingVote(config: HeadPeers.Section): Gen[VoteDatum] = {
     val peersVKs = config.headPeerVKeys
     for {
@@ -63,116 +71,42 @@ def genPeerVoteDatumAwaitingVote(config: HeadPeers.Section): Gen[VoteDatum] = {
     )
 }
 
+def genTransactionInput(fallbackTxId: TransactionHash, config: VoteTx.Config):Gen[TransactionInput] =
+    Gen.choose(1, config.nHeadPeers.toInt).map(outputIx => TransactionInput(fallbackTxId, outputIx))
+
 // TODO: Determine what *Config.Section this should take
-def genVoteUtxo(
-    fallbackTxId: TransactionHash,
+def voteUtxo(
+    transactionInput: TransactionInput,
     voteDatum: VoteDatum,
-)(using
-    config: HeadPeers.Section & HasTokenNames & CardanoNetwork.Section
-): Gen[VoteUtxo[VoteStatus]] =
-    for {
-        outputIx <- Gen.choose(1, config.nHeadPeers.toInt)
-        txId = TransactionInput(fallbackTxId, outputIx)
-        scriptAddr = HydrozoaBlueprint.mkDisputeAddress(config.network)
-
-        voteTokenAssetName = config.headTokenNames.voteTokenName
-
+    config: VoteTx.Config): VoteUtxo[VoteStatus.AwaitingVote] =
+    VoteUtxo(
+        input = transactionInput,
         voteOutput = VoteOutput(
-          key = voteDatum.key,
-          link = voteDatum.link,
-          coin = Coin.ada(10),
-          voteTokens = PositiveInt.unsafeApply(1),
-          status = voteDatum.voteStatus
+            key = voteDatum.key,
+            link = voteDatum.link,
+            coin = Coin.ada(10),
+            voteTokens = PositiveInt.unsafeApply(1),
+            status = voteDatum.voteStatus.asInstanceOf[VoteStatus.AwaitingVote]
         )
-
-    } yield VoteUtxo(
-      input = txId,
-      voteOutput = voteOutput
     )
-
-def genVoteTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[VoteTx.Build] = {
-    given config: VoteTx.Config = multiNodeConfig.nodeConfigs.head._2
-
-    for {
-        // Generate a treasury UTXO to use a reference input
-        versionMajor <- gens.make[Gen[VersionMajor]]
-        treasuryDatum <- gens.make[Gen[Unresolved]]
-        fallbackTxId <- genByteStringOfN(32).map(TransactionHash.fromByteString)
-
-        // This is 4 bytes shorter to accommodate CIP-67 prefixes
-        // NB: we use the same token name _suffix_ for all head tokens so far, which is not the case in reality
-        headTokenSuffix <- genByteStringOfN(28)
-
-        treasuryUtxo <- genRuleBasedTreasuryUtxo(
-          section = config,
-          fallbackTxId = fallbackTxId,
-          unresolvedDatum = treasuryDatum
-        )
-
-        // Generate a vote UTXO with NoVote status (input)
-        voteDatum <- gens.make[Gen[VoteDatum]]
-        voteUtxo <- genVoteUtxo(
-          fallbackTxId = fallbackTxId,
-          voteDatum = voteDatum
-        ).map(_.asInstanceOf[VoteUtxo[AwaitingVote]])
-
-        // Generate an onchain block header and sign using peers' wallets
-        blockHeader <- genOnchainBlockHeader(versionMajor)
-
-        signatures = multiNodeConfig.multisignHeader(blockHeader)
-
-        // Make vote details
-        // TODO: simplify getting peers addresses
-        peerAddresses = config.headPeerVKeys.map(_.shelleyAddress()(using config))
-        collateralUtxo <- genCollateralUtxo(
-          // FIXME Being lazy here, do this better
-          peerAddresses
-              .toList(voteDatum.key.intValue - 1)
-              .keyHashOption
-              .get
-              .asInstanceOf[AddrKeyHash]
-        )
-
-        // Create builder context (not needed for Recipe anymore)
-        allUtxos = Map(
-          voteUtxo.toUtxo.input -> voteUtxo.toUtxo.output,
-          treasuryUtxo.toUtxo.toTuple._1 -> treasuryUtxo.toUtxo.toTuple._2,
-          collateralUtxo._1 -> collateralUtxo._2
-        )
-
-    } yield VoteTx.Build(
-      voteUtxo,
-      treasuryUtxo,
-      collateralUtxo,
-      blockHeader,
-      signatures.toList,
-    )
-}
 
 object VoteTxTest extends Properties("Vote Tx Test") {
     import MultiNodeConfig.*
 
     val _ = property("Vote Tx") = runDefault(
       for {
-          mnc <- ask
-          _ <- {
-              given MultiNodeConfig = mnc
-              given VoteTx.Config = mnc.nodeConfigs.head._2
-              for {
-                  builder <- forAll[VoteTx.Build](gens)
-                  tx <- failLeft(builder.result)
-                  // Verify VoteTx structure
-                  _ <- assertWith(
-                    tx.voteUtxoSpent == builder.uncastVoteUtxo,
-                    "Spent vote UTXO should match recipe input"
-                  )
-                  _ <- assertWith(
-                    tx.voteUtxoProduced != null,
-                    "Vote UTXO produced should not be null"
-                  )
-                  _ <- assertWith(tx.tx != null, "Transaction should not be null")
-              } yield ()
-          }
+          nc <- forAll[NodeConfig](gens)
+          builder <- forAll[VoteTx.Build](gens)
+          tx <- failLeft(builder.result(using nc))
+          _ <- assertWith(
+            tx.voteUtxoSpent == builder.uncastVoteUtxo,
+            "Spent vote UTXO should match recipe input"
+          )
+          _ <- assertWith(
+            tx.voteUtxoProduced != null,
+            "Vote UTXO produced should not be null"
+          )
+          _ <- assertWith(tx.tx != null, "Transaction should not be null")
       } yield true
     )
 

@@ -4,6 +4,7 @@ import _root_.scalus.cardano.address.*
 import _root_.scalus.cardano.ledger.*
 import _root_.scalus.cardano.ledger.ArbitraryInstances.given
 import _root_.scalus.cardano.ledger.ArbitraryInstances.genByteStringOfN
+import _root_.scalus.cardano.ledger.TransactionWitnessSet.given
 import _root_.scalus.uplc.builtin.{ByteString, Data}
 import _root_.scalus.cardano.onchain.plutus.v1.PubKeyHash
 import org.scalacheck.Gen
@@ -13,27 +14,9 @@ import registry.scalacheck.*
 
 import scala.collection.immutable.SortedMap
 
-import hydrozoa.lib.cardano.scalus.gens.Containers.{
-    keepRaw,
-    preludeListOf,
-    sized,
-    sortedMapOf,
-    taggedOrderedSetOf,
-    taggedOrderedStrictSetOf,
-    taggedSortedMapOf,
-    taggedSortedSetOf,
-    taggedSortedStrictMapOf
-}
-// `KeyOf[K, A]` typeclass instances used by the Tagged*Map combinators
-// (e.g. KeyOf[ScriptHash, Script.Native]) live in the TransactionWitnessSet companion.
-import _root_.scalus.cardano.ledger.TransactionWitnessSet.given
+import hydrozoa.lib.cardano.scalus.gens.Containers.*
 
 /** Base generators.
-  *
-  * Constrained `genX: Gen[X]` are defined ahead of `registry` so the registry sees
-  * fully-initialized values. Every type whose constructor enforces an invariant via `require(...)`
-  * has a hand-written generator below; types without such invariants (Coin, Word64, ExUnits,
-  * Constitution) use `gen`.
   */
 object Base:
 
@@ -74,7 +57,7 @@ object Base:
             listOf[ByteString] *:
             preludeListOf[ByteString] *:
             taggedSortedSetOf[TransactionInput] *:
-            gen[TransactionInput] *:
+            gen(genTransactionInput) *:
             indexedSeqOf[Sized[TransactionOutput]] *:
             optionOf[Sized[TransactionOutput]] *:
             listOf[TransactionOutput] *:
@@ -206,6 +189,11 @@ object Base:
     val genMetadataHash: Gen[MetadataHash] = genHash[Blake2b_256, HashPurpose.MetadataHash]
     val genVrfKeyHash: Gen[VrfKeyHash] = genHash[Blake2b_256, HashPurpose.VrfKeyHash]
     val genBlockHash: Gen[BlockHash] = genHash[Blake2b_256, HashPurpose.BlockHash]
+
+    // Make sure that the transaction input index is positive
+    def genTransactionInput(transactionId: TransactionHash) =
+        Gen.frequency(5 -> Gen.choose(0, 10), 1 -> Gen.choose(11, 65535)).map(index =>
+            TransactionInput(transactionId, index))
 
     private def genHash[HF: HashSize, Purpose]: Gen[Hash[HF, Purpose]] =
         genByteStringOfN(summon[HashSize[HF]].size).map(Hash.apply[HF, Purpose])
