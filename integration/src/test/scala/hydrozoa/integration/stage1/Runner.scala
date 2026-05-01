@@ -19,7 +19,7 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
         p: org.scalacheck.Test.Parameters
     ): org.scalacheck.Test.Parameters = {
         p.withWorkers(1)
-            .withPropFilter(Some("Deposits"))
+//            .withPropFilter(Some("Deposits"))
 //            .withInitialSeed(Some(Seed.fromBase64("lr7yvfMC6Qxtovs5UjWZSfTcqzr7pHrzQ4_mcWApnUP=").get))
         // NB: careful, this will override -s from the command line
         // .withMinSuccessfulTests(100) // 10000
@@ -93,8 +93,8 @@ object Stage1PropertiesYaci extends YetAnotherProperties("Integration Stage 1 wi
     ): org.scalacheck.Test.Parameters = {
         p.withWorkers(1)
             .withMinSuccessfulTests(1)
-            .withPropFilter(Some("Deposits"))
-            .withInitialSeed(Seed.fromBase64("kdqbX1llgJbMBREgISxpsBoZFXhC0vKu6IDQxUiStZB=").get)
+//            .withPropFilter(Some("Deposits"))
+//            .withInitialSeed(Seed.fromBase64("kdqbX1llgJbMBREgISxpsBoZFXhC0vKu6IDQxUiStZB=").get)
     }
 
     val _ = property("Block promotion Yaci") = Suite(

@@ -336,10 +336,14 @@ case class Deposits private (
     depositsRefunded: Queue[Refunded] = Queue.empty
 ) {
 
-    /** All the registered deposits that hydrozoa "knows" about at rest
+    /** All the registered deposits that hydrozoa "knows" about at rest, sorted according to
+      * absorption start time. See also: [[DepositsMap]] for a similar structure used in the
+      * JointLedger
       */
     def hydrozoaKnownRegisteredDeposits: Queue[Registered | Declined | Submitted] =
-        (depositsRegistered ++ depositsSubmitted ++ depositsDeclined).map(
-          _.asInstanceOf[Registered | Declined | Submitted]
-        )
+        (depositsRegistered ++ depositsSubmitted ++ depositsDeclined)
+            .sortBy(_.depositRefundTxSeq.depositTx.depositProduced.absorptionStartTime)
+            .map(
+              _.asInstanceOf[Registered | Declined | Submitted]
+            )
 }
