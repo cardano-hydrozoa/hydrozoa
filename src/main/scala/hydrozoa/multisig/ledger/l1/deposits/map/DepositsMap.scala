@@ -3,11 +3,14 @@ package hydrozoa.multisig.ledger.l1.deposits.map
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, SettlementTxEndTime}
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.DepositAbsorptionStartTime
 import hydrozoa.config.head.multisig.timing.{TxTiming, given_Ordering_DepositAbsorptionStartTime}
+import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.given
+import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap.Entry
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap.Partition.Compartment
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
+import io.circe.syntax.*
 import scala.collection.immutable.{Queue, TreeMap}
 
 /** deposits in a TreeMap according to their absorption start time. The Tree map ensures that the
@@ -18,6 +21,8 @@ import scala.collection.immutable.{Queue, TreeMap}
 final case class DepositsMap private[map] (
     treeMap: TreeMap[DepositAbsorptionStartTime, Queue[Entry]]
 ) {
+
+    private val logger = Logging.logger("DepositsMap")
 
     /** Append a request to the end of the queue of requests with the same start time.
       */
@@ -68,13 +73,19 @@ final case class DepositsMap private[map] (
       *   Queue order:
       *   - eligible for absorption
       *   - ineligible for absorption - (immature + mature but non-existent)
-      *   - rejected
+      *   - refunded
       */
     def partition(
         blockCreationEndTime: BlockCreationEndTime,
         settlementTxEndTime: SettlementTxEndTime,
         pollResults: PollResults
-    ): DepositsMap.Partition =
+    ): DepositsMap.Partition = {
+        logger.debug(
+          "[partition]" +
+              s"\n\t blockCreationEndTime: $blockCreationEndTime" +
+              s"\n\t settlementTxEndTime: $settlementTxEndTime" +
+              s"\n\t pollResults: ${pollResults.utxos.asJson}"
+        )
         treeMap.foldLeft(DepositsMap.Partition.empty) {
             case (outerAcc, (_absorptionStartTime, depositQueue)) =>
                 depositQueue.foldLeft(outerAcc) { case (innerAcc, entry) =>
@@ -94,15 +105,25 @@ final case class DepositsMap private[map] (
                     val isExistent = pollResults.utxos.contains(depositUtxo.toUtxo.input)
 
                     val compartment =
-                        if isImmature then Immature
-                        else if isExpired then Rejected
-                        else if isExistent then Eligible
-                        else Rejected
+                        if isImmature then {
+                            logger.debug(s"$entry is immature.")
+                            Immature
+                        } else if isExpired then {
+                            logger.debug(s"$entry is expired (rejected).")
+                            Refund
+                        } else if isExistent then {
+                            logger.debug(s"$entry is eligible")
+                            Eligible
+                        } else {
+                            logger.debug(s"$entry is mature, but not in the poll results.")
+                            Refund
+                        }
 
                     innerAcc.append(compartment, entry)
 
                 }
         }
+    }
 }
 
 object DepositsMap {
@@ -122,7 +143,7 @@ object DepositsMap {
     ) {
         def append(compartment: Compartment, x: Entry): Partition =
             compartment match {
-                case Compartment.Rejected => copy(rejected = rejected.append(x))
+                case Compartment.Refund   => copy(rejected = rejected.append(x))
                 case Compartment.Eligible => copy(eligible = eligible.append(x))
                 case Compartment.Immature => copy(immature = immature.append(x))
             }
@@ -148,7 +169,7 @@ object DepositsMap {
 
     object Partition {
         enum Compartment:
-            case Immature, Eligible, Rejected
+            case Immature, Eligible, Refund
 
         val empty = Partition(DepositsMap.empty, DepositsMap.empty, DepositsMap.empty)
     }

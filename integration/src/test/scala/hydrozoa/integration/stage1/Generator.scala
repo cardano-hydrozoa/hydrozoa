@@ -146,7 +146,7 @@ object CommandGenerators:
         currentTime: QuantizedInstant
     ): Gen[CompleteBlockCommand] = for {
         blockDuration <- genBlockDuration(currentTime)
-S    } yield CompleteBlockCommand(
+    } yield CompleteBlockCommand(
       blockNumber,
       blockDuration,
       BlockCreationEndTime(currentTime + blockDuration),
