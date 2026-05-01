@@ -30,6 +30,7 @@ import scalus.uplc.builtin.{BLS12_381_G1_Element, BLS12_381_G2_Element}
 import supranational.blst.Scalar
 import test.*
 import test.Generators.Hydrozoa.genPubKeyUtxo
+import CommonGeneratorsTypes.*
 
 /** Generator for resolved treasury UTXO with resolved datum */
 def genResolvedTreasuryUtxo(
@@ -63,7 +64,7 @@ def genTreasuryResolvedDatum(
     setupSize: Int
 ): Gen[Resolved] =
     for {
-        version <- genVersion
+        version <- gens.make[Gen[Version]]
         params <- genByteStringOfN(32)
         setup = TrustedSetup
             .takeSrsG2(setupSize)

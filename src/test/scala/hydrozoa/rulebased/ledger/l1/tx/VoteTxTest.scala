@@ -3,17 +3,21 @@ package hydrozoa.rulebased.ledger.l1.tx
 import cats.effect.unsafe.implicits.global
 import hydrozoa.*
 import hydrozoa.config.HydrozoaBlueprint
+import hydrozoa.config.node.NodeConfig
+import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.number.PositiveInt
+import hydrozoa.multisig.ledger.block.BlockHeader.Minor.{HeaderSignature, Onchain}
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.AwaitingVote
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
-import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.*
+import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.{gens => _, *}
+import hydrozoa.rulebased.ledger.l1.tx.CommonGeneratorsTypes.*
 import hydrozoa.rulebased.ledger.l1.utxo.{VoteOutput, VoteUtxo}
 import org.scalacheck.{Gen, Properties}
 import scalus.cardano.ledger.*
@@ -21,13 +25,31 @@ import scalus.cardano.onchain.plutus.v1.ArbitraryInstances.genByteStringOfN
 import scalus.cardano.onchain.plutus.v1.PubKeyHash
 import scalus.uplc.builtin.Builtins.blake2b_224
 import scalus.uplc.builtin.ByteString
+import registry.scalacheck.*
+
+def gens(using config: MultiNodeConfig) =
+    gen[VoteTx.Build] +:
+    listOf[HeaderSignature] +:
+    gen[HeaderSignature] +:
+    gen[Onchain] +:
+    gen((v: VoteUtxo[VoteStatus]) => v. asInstanceOf[VoteUtxo[VoteStatus.AwaitingVote]]) +:
+    gen[VoteUtxo[VoteStatus]] +:
+    gen[VoteOutput[VoteStatus]] +:
+    gen[VoteStatus.AwaitingVote] +:
+    gen(genPeerVoteDatumAwaitingVote) +:
+    gen((c: HeadConfig) => c.headPeers) +:
+    gen((c: NodeConfig) => c.headConfig) +:
+    gen((c: MultiNodeConfig) => c.nodeConfigs.head._2) +:
+    const[Version] +:
+    gen(config) +:
+    CommonGenerators.gens
 
 /** key != 0
   *
   * @param peersVKs
   * @return
   */
-def genPeerVoteDatumAwaitingVote(using config: HeadPeers.Section): Gen[VoteDatum] = {
+def genPeerVoteDatumAwaitingVote(config: HeadPeers.Section): Gen[VoteDatum] = {
     val peersVKs = config.headPeerVKeys
     for {
         // key == 0 is the default `NoVote`, here we need a datum for OwnVoteUtxo
@@ -88,7 +110,7 @@ def genVoteTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[VoteTx.Build] 
         )
 
         // Generate a vote UTXO with NoVote status (input)
-        voteDatum <- genPeerVoteDatumAwaitingVote
+        voteDatum <- gens.make[Gen[VoteDatum]]
         voteUtxo <- genVoteUtxo(
           fallbackTxId = fallbackTxId,
           voteDatum = voteDatum
@@ -137,7 +159,7 @@ object VoteTxTest extends Properties("Vote Tx Test") {
               given MultiNodeConfig = mnc
               given VoteTx.Config = mnc.nodeConfigs.head._2
               for {
-                  builder <- pick(genVoteTxBuilder)
+                  builder <- forAll[VoteTx.Build](gens)
                   tx <- failLeft(builder.result)
                   // Verify VoteTx structure
                   _ <- assertWith(

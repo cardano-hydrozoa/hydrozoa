@@ -8,6 +8,9 @@ import cats.effect.unsafe.implicits.*
 import cats.syntax.all.*
 import org.scalacheck.PropertyM.{monadForPropM, monadicIO}
 import org.scalacheck.{Gen, Prop, PropertyM}
+import izumi.reflect.Tag
+import registry.Registry
+import registry.scalacheck.makeGen
 
 private type PT[A] = PropertyM[IO, A]
 private type RT[R, A] = ReaderT[PT, R, A]
@@ -126,6 +129,9 @@ final class TestMFixedEnv[R](dummy: Boolean = true) {
     def asks[A](f: R => A): TestM[R, A] = TestM.asks[R, A](f)
 
     def pick[A](gen: Gen[A]): TestM[R, A] = TestM.pick[R, A](gen)
+
+    def forAll[A](using tag: Tag[Gen[A]]): Registry[?, ?] => TestM[R, A] =
+        gens => pick(gens.makeGen[A])
 
     def pure[A](a: A): TestM[R, A] = TestM.pure[R, A](a)
 

@@ -5,6 +5,7 @@ import _root_.scalus.cardano.ledger.*
 import _root_.scalus.cardano.ledger.ArbitraryInstances.given
 import _root_.scalus.cardano.ledger.ArbitraryInstances.genByteStringOfN
 import _root_.scalus.uplc.builtin.{ByteString, Data}
+import _root_.scalus.cardano.onchain.plutus.v1.PubKeyHash
 import org.scalacheck.Gen
 import org.scalacheck.Arbitrary.arbitrary
 import registry.value
@@ -68,6 +69,7 @@ object Base:
             optionOf[Map[Word64, Metadatum]] *:
             mapOf[Word64, Metadatum] *:
             indexedSeqOf[Timelock] *:
+            iArrayOf[Byte] *:
             indexedSeqOf[ByteString] *:
             listOf[ByteString] *:
             preludeListOf[ByteString] *:
@@ -75,6 +77,7 @@ object Base:
             gen[TransactionInput] *:
             indexedSeqOf[Sized[TransactionOutput]] *:
             optionOf[Sized[TransactionOutput]] *:
+            listOf[TransactionOutput] *:
             sized[TransactionOutput] *:
             gen[TransactionOutput] *:
             gen(genVKeyWitness) *:
@@ -124,6 +127,7 @@ object Base:
             optionOf[BlockHash] *:
             optionOf[GovActionId] *:
             optionOf[Mint] *:
+            gen[PubKeyHash] *:
             taggedSortedSetOf[AddrKeyHash] *:
             gen(genGovActionId) *:
             optionOf[PoolMetadata] *:
@@ -180,14 +184,15 @@ object Base:
             gen(genSlot) *:
             gen(genProtocolVersion) *:
             gen(genNetwork) *:
-            arb[Word64] *:
+            arb[String] *:
             arb[Metadatum] *:
             arb[Boolean] *:
             arb[BigInt] *:
             arb[Long] *:
             arb[String] *:
             arb[Int] *:
-            arb[ByteString]
+            arb[ByteString] *:
+            arb[Byte]
 
     val genAddrKeyHash: Gen[AddrKeyHash] = genHash[Blake2b_224, HashPurpose.KeyHash]
     val genScriptHash: Gen[ScriptHash] = genHash[Blake2b_224, HashPurpose.ScriptHash]

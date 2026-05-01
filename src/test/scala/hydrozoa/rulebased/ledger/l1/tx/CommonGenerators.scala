@@ -8,6 +8,7 @@ import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.cardano.scalus.ledger.{CollateralOutput, CollateralUtxo}
 import hydrozoa.lib.cardano.scalus.gens.Base
+import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.commitment.TrustedSetup
 import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
@@ -32,6 +33,7 @@ import scalus.uplc.builtin.bls12_381.G2Element
 import test.*
 import registry.*
 import registry.scalacheck.*
+import CommonGeneratorsTypes.*
 
 /** Common test generators for rule-based transaction tests.
   */
@@ -39,24 +41,23 @@ object CommonGenerators {
 
     lazy val gens =
             gen[EvacuationTx] +:
+            gen[CollateralUtxo] +:
+            gen(genOnchainBlockHeader) +:
             gen(genTreasuryUnresolvedDatum) +:
             gen[RuleBasedTreasuryUtxo] +:
             gen[RuleBasedTreasuryOutput] +:
             gen[RuleBasedTreasuryDatum] +:
             mapOfN[TransactionInput, TransactionOutput](2) +:
             gen[CollateralOutput] +:
-            listOf[TransactionOutput] +:
             gen(Focus[EvacuationTx](_.tx)) +:
             gen(ResolvedUtxos.empty) +:
             gen(genDeadlineVoting) +:
             gen(unresolvedSetup) +:
-            gen(genVersionMajor).share +:
             gen(genVersion) +:
+            gen(genVersionMajor) +:
+            gen(genVersionMinor) +:
+            gen(genPositiveInt) *:
             Base.gens
-
-    opaque type VersionMajor <: BigInt = BigInt
-    opaque type DeadlineVoting = BigInt
-    opaque type UnresolvedSetup = prelude.List[ByteString]
 
     // TODO: remove, looks redundant
     def genHeadParams: Gen[
@@ -89,28 +90,6 @@ object CommonGenerators {
           versionMajor,
           fallbackTxId
         )
-
-    def genTreasuryUnresolvedDatum(versionMajor: VersionMajor, deadlineVoting: DeadlineVoting, setup: UnresolvedSetup): Gen[Unresolved] =
-        Unresolved(
-          deadlineVoting,
-          versionMajor,
-          setup: prelude.List[ByteString]
-        )
-
-    def genVersionMajor: Gen[VersionMajor] =
-        Gen.choose(1L, 99L).map(BigInt(_))
-
-    def unresolvedSetup: UnresolvedSetup = {
-        TrustedSetup
-            .takeSrsG2(10)
-            .map(p2 => G2Element(p2).toCompressedByteString)
-    }
-
-    def genDeadlineVoting: Gen[DeadlineVoting] =
-        Gen
-            .choose(600_000, 1800_000)
-            .map(BigInt(_))
-            .map(System.currentTimeMillis() + _.abs)
 
     def genRuleBasedTreasuryUtxo(
         section: CardanoNetwork.Section & HasTokenNames & HeadPeers.Section,
@@ -146,7 +125,7 @@ object CommonGenerators {
           CollateralOutput(addrKeyHash, ShelleyDelegationPart.Null, coin, None, None)
         )
 
-    def genOnchainBlockHeader(versionMajor: BigInt): Gen[BlockHeader.Minor.Onchain] =
+    def genOnchainBlockHeader(versionMajor: VersionMajor): Gen[BlockHeader.Minor.Onchain] =
         for {
             blockNum <- Gen.choose(10L, 20L).map(BigInt(_))
             timeCreation <- Gen.choose(1591566491L, 1760000000L).map(BigInt(_))
@@ -160,9 +139,43 @@ object CommonGenerators {
           commitment = commitment
         )
 
-    def genVersion: Gen[(BigInt, BigInt)] =
-        for {
-            major <- Gen.choose(1, 10)
-            minor <- Gen.choose(0, 99)
-        } yield (BigInt(major), BigInt(minor))
+
+    def genPositiveInt(genInt: Gen[Int]): Gen[PositiveInt] =
+        genInt.flatMap(i => PositiveInt.apply(i).map(Gen.const).getOrElse(genPositiveInt(genInt)))
 }
+
+object CommonGeneratorsTypes:
+    opaque type Version <: (BigInt, BigInt) = (BigInt, BigInt)
+    opaque type VersionMajor <: BigInt = BigInt
+    opaque type VersionMinor <: BigInt = BigInt
+    opaque type DeadlineVoting = BigInt
+    opaque type UnresolvedSetup = prelude.List[ByteString]
+
+    def genVersion(major: VersionMajor, minor: VersionMinor): Version =
+        (major, minor)
+
+    def genVersionMajor: Gen[VersionMajor] =
+        Gen.choose(1L, 10L).map(BigInt(_))
+
+    def genVersionMinor: Gen[VersionMinor] =
+        Gen.choose(1L, 99L).map(BigInt(_))
+
+
+    def unresolvedSetup: UnresolvedSetup = {
+        TrustedSetup
+            .takeSrsG2(10)
+            .map(p2 => G2Element(p2).toCompressedByteString)
+    }
+
+    def genDeadlineVoting: Gen[DeadlineVoting] =
+        Gen
+            .choose(600_000, 1800_000)
+            .map(BigInt(_))
+            .map(System.currentTimeMillis() + _.abs)
+
+    def genTreasuryUnresolvedDatum(versionMajor: VersionMajor, deadlineVoting: DeadlineVoting, setup: UnresolvedSetup): Gen[Unresolved] =
+        Unresolved(
+            deadlineVoting,
+            versionMajor,
+            setup
+        )
