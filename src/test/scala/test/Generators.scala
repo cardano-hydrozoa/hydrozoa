@@ -18,7 +18,6 @@ import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.multisig.ledger.l1.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.evacuationKeyToData
-import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.genShelleyAddress
 import monocle.*
 import monocle.syntax.all.*
 import org.scalacheck.Arbitrary.arbitrary
@@ -39,6 +38,9 @@ import scalus.uplc.builtin.{ByteString, Data}
 import scalus.|>
 import spire.math.{Rational, SafeLong}
 import test.Generators.Hydrozoa.{genPositiveValue, genPubKeyUtxo}
+import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.{gens}
+
+import registry.{Registry}
 
 // Annoyingly, `Gen` doesn't have `Monad[Gen]` already. But I want to use `traverse`, so I'm vendoring it here
 given genMonad: Monad[Gen] = new Monad[Gen] {
@@ -287,8 +289,7 @@ object Generators {
             peer: TestPeerName
         )(using config: CardanoNetwork.Section): Gen[L2Tx] =
             for {
-                addr <- genShelleyAddress
-
+                addr <- gens.make[Gen[Address]]
                 inputValue: Value = inputUtxos.values.foldLeft(Value.zero)((acc, output) => {
                     acc + output.value
                 })

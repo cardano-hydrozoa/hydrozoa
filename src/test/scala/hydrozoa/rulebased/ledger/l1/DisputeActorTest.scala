@@ -129,8 +129,7 @@ object DisputeActorTestHelpers {
             disputeCollateralUtxo <- pick(
               genCollateralUtxo(
                 env.nodePrivateConfigs.head._2.ownHeadWallet.exportVerificationKey.addrKeyHash
-              )(using env.headConfig)
-                  .label("collateral utxo")
+              ).label("collateral utxo")
             )
 
             initialCommitment: VoteState.KzgCommitment = initialEvacuationMap.kzgCommitment
