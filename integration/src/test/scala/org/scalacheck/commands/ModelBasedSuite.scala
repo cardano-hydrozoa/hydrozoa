@@ -1,11 +1,13 @@
 package org.scalacheck.commands
 
-import cats.effect.IO
 import cats.effect.testkit.TestControl
 import cats.effect.unsafe.implicits.global
+import cats.effect.{Deferred, IO}
 import ch.qos.logback.classic.Level
+import hydrozoa.lib.logging.Logging
 import org.scalacheck.{Gen, Prop, Shrink}
 import org.slf4j.{Logger, LoggerFactory}
+
 import scala.annotation.tailrec
 import scala.concurrent.duration.{Duration, DurationInt, FiniteDuration}
 
@@ -21,6 +23,7 @@ object LoggingControl {
       */
     def withSuppressedLogs[A](reason: String)(block: => A): A = {
         import ch.qos.logback.classic.LoggerContext
+
         import scala.jdk.CollectionConverters.*
 
         val loggerContext = LoggerFactory.getILoggerFactory.asInstanceOf[LoggerContext]
@@ -238,7 +241,8 @@ trait ScenarioGen[State, Sut]:
   */
 trait ModelBasedSuite {
 
-    private val logger: Logger = org.slf4j.LoggerFactory.getLogger(ModelBasedSuite.getClass)
+    private val logger = org.slf4j.LoggerFactory.getLogger("org.scalacheck.commands.ModelBasedSuite")
+    private val loggerIO = Logging.loggerIO("org.scalacheck.commands.ModelBasedSuite")
 
     /** Represent [some parts of] the environment on which a test case is run.
       *
@@ -320,10 +324,16 @@ trait ModelBasedSuite {
     // TestControl
     // ===================================
 
-    /** Whether to use [[TestControl]] for time manipulation. When true (default), delays declared
-      * by commands are advanced via the [[TestControl]] virtual clock rather than real
-      * [[IO.sleep]]. Set to false for scenarios requiring a real backend (e.g. Yaci), where real
-      * wall-clock time must elapse.
+    /** When true, command delays are driven via [[TestControl]]'s virtual clock (simulating days in
+      * milliseconds). When false, delays are real [[IO.sleep]] (needed for Yaci/public backends).
+      *
+      * Inner IO runs on the TestControl runtime; outer driver runs on the real runtime. They
+      * coordinate via an `AtomicReference[(FiniteDuration, Deferred[IO,Unit])]`: inner posts
+      * `(delay, gate)` and blocks on `gate.get`; outer reads, advances the clock by exactly
+      * `delay`, completes the gate, then calls `tickUntil` — which ticks until `tickOne → false`
+      * (all actor fibers drained) before checking that the inner has posted the next signal.
+      *
+      * See `docs/testcontrol-driver.md` for full design documentation.
       */
     def useTestControl: Boolean
 
@@ -571,20 +581,18 @@ trait ModelBasedSuite {
       * ## Per-command flow
       *
       * Inner:
-      *   1. Post `delay` to `pendingDelay`.
-      *   2. Spin-wait on `gate` (via [[IO.cede]] loop — no virtual time consumed).
-      *   3. Run the command and evaluate the postcondition.
+      *   1. Allocate a fresh `Deferred[IO, Unit]` gate.
+      *   2. Post `(delay, gate)` to `pendingDelay`.
+      *   3. Block on `gate.get` — truly suspended, not immediately eligible.
+      *   4. Run the command and evaluate the postcondition.
       *
       * Outer:
-      *   1. Read `delay` from `pendingDelay`.
+      *   1. Read `(delay, gate)` from `pendingDelay`.
       *   2. Advance the virtual clock by exactly `delay` (skipped when zero).
-      *   3. Set `gate = true`.
-      *   4. `tickUntil` the inner posts the next `pendingDelay` (or finishes). The `tickOne` loop
-      *      drains all actor message processing; `nextInterval` fires when a timer (ping or sleep)
-      *      is the only remaining work.
+      *   3. `gate.complete(())` — unblock the inner.
+      *   4. `tickUntil`: tick until `tickOne → false` (all fibers exhausted), then assert signal.
       *
-      * `totalAdvanced` equals the sum of all command delays plus any `nextInterval` advances, which
-      * matches the virtual clock seen by the SUT.
+      * `totalAdvanced` equals the sum of all command delays; no drift from `nextInterval`.
       */
     private def runCommandsWithTestControl(
         testCase: TestCase,
@@ -592,11 +600,9 @@ trait ModelBasedSuite {
     ): (Sut, Prop, State, Int, TestCase) = {
         import java.util.concurrent.atomic.AtomicReference
 
-        // The inner writes a Some(delay) to request a time advance before its command runs.
-        // None means "not ready yet" / "waiting for outer to tick".
-        val pendingDelay = new AtomicReference[Option[FiniteDuration]](None)
-        // The outer sets this to true to release the inner after advancing time.
-        val gate = new AtomicReference[Boolean](false)
+        // Inner writes Some((delay, gate)) before blocking on gate.get.
+        // Outer reads, advances clock, drains, then gate.complete(()) releases inner.
+        val pendingDelay = new AtomicReference[Option[(FiniteDuration, Deferred[IO, Unit])]](None)
 
         logger.debug("Using TestControl to run the test case...")
 
@@ -609,9 +615,11 @@ trait ModelBasedSuite {
                     if hasFailed then IO.pure((sut, p, s, lastCmd, true))
                     else
                         for {
-                            _ <- IO(pendingDelay.set(Some(c.delay)))
-                            _ <- IO.cede.whileM_(IO(!gate.get))
-                            _ <- IO(gate.set(false))
+                            gate <- Deferred[IO, Unit]
+                            _ <- IO(pendingDelay.set(Some((c.delay, gate))))
+                            _ <- loggerIO.info("Suspend on the gate...")
+                            _ <- gate.get
+                            _ <- loggerIO.info("Running the command...")
                             pred <- c.runPC(sut)
                             (newPredResult, newState) = LoggingControl.withSuppressedLogs(
                               "predicate evaluation and state advancement"
@@ -624,14 +632,18 @@ trait ModelBasedSuite {
                 }
             }
             (sut, prop, s, lastCmd, _) = result
+            // Sentinel: signal outer that all commands are done before entering shutdownSut.
+            // shutdownSut calls waitForIdle → IO.sleep, which needs nextInterval advances.
+            // The sentinel lets the outer switch from tickUntil (strict) to tickUntilAdvancing.
+            shutdownGate <- Deferred[IO, Unit]
+            _ <- IO(pendingDelay.set(Some((Duration.Zero, shutdownGate))))
+            _ <- shutdownGate.get
             shutdownProp <- shutdownSut(s, sut)
         } yield (sut, prop && shutdownProp, s, lastCmd, testCase)
 
         // Outer driver: advances the virtual clock and drives tickOne loops between commands.
-        //
-        // tickAll / tick are not used: the per-actor 1 s ping loop and the gate spin both produce
-        // immediately-eligible fibers that would cause them to iterate indefinitely. Instead,
-        // tickOne loops stop when the inner signals via the AtomicReferences.
+        // tickAll / tick are not used — they iterate indefinitely over the per-actor 1 s ping loop.
+        // Instead, drainAll/tickUntil stop when the inner signals via pendingDelay (a Deferred gate).
         val outerIO: IO[(Sut, Prop, State, Int, TestCase)] = for {
             // 1. Start the inner on the mocked runtime. It's paused — nothing runs yet.
             tc <- TestControl.execute(innerIO)
@@ -655,7 +667,7 @@ trait ModelBasedSuite {
             // Drive each command: read delay → advance → release gate → tick until next signal.
             // If the program already finished (e.g. cs was empty), skip the command loop.
             _ <- tc.results.flatMap {
-                case Some(_) => IO.unit //   empty command list, done
+                case Some(_) => loggerIO.info("empty command list, done")
                 case None    =>
                     // 4. Otherwise, run per-command iteration.
                     // Note that the outer doesn't need the command object.
@@ -665,21 +677,21 @@ trait ModelBasedSuite {
                             case Some(_) => IO.unit // already finished, skip remaining
                             case None =>
                                 for {
-                                    // 5. Read the delay the inner posted and clear it atomically.
-                                    delay <- IO(pendingDelay.getAndSet(None).get)
+                                    // 5. Read (delay, gate) the inner posted and clear atomically.
+                                    ret <- IO(pendingDelay.getAndSet(None).get)
+                                    (delay, gate) = ret
                                     _ <- IO(totalAdvanced.addAndGet(delay.toNanos): Unit)
 
-                                    // 6. Advance exactly `delay`. Skipped when delay is zero
-                                    // (tc.advance requires strictly positive duration).
-                                    // If delay ≥ 1 s the per-actor ping fires and is drained
-                                    // by the tickOne loop in step 8; for shorter delays the
-                                    // ping may fire via nextInterval inside tickUntil.
-                                    _ <- if delay > Duration.Zero then tc.advance(delay) else IO.unit
+                                    // 6. Advance exactly `delay` (tc.advance requires > 0).
+                                    _ <-
+                                        if delay > Duration.Zero then tc.advance(delay) else IO.unit
 
                                     // 7. Release the inner to run the command.
-                                    _ <- IO(gate.set(true))
+                                    _ <- loggerIO.info("Opening the gate")
+                                    _ <- gate.complete(())
 
-                                    // 8. Tick until the inner posts the next delay or finishes.
+
+                                    // 8. Tick until all fibers exhaust, then check next signal.
                                     _ <- tickUntil(
                                       tc,
                                       IO(pendingDelay.get().isDefined).flatMap { pending =>
@@ -691,8 +703,14 @@ trait ModelBasedSuite {
                         }
                     }
             }
-            // 9. If results aren't available yet (shouldn't happen, but be safe), drain remaining.
-            _ <- tickUntil(tc, tc.results.map(_.isDefined))
+            // 9. Complete the sentinel gate (inner is blocked on it before shutdownSut), then
+            // drain shutdown using tickUntilAdvancing — shutdownSut calls waitForIdle → IO.sleep.
+            // If no sentinel (startup crashed / empty commands already resolved), just drain.
+            _ <- IO(pendingDelay.getAndSet(None)).flatMap {
+                case Some((_, gate)) => gate.complete(())
+                case None            => IO.unit
+            } >> tickUntilAdvancing(tc, tc.results.map(_.isDefined))
+
             // 10. Extract the result
             result <- tc.results
             _ <- IO {
@@ -716,51 +734,49 @@ trait ModelBasedSuite {
         outerIO.unsafeRunSync()
     }
 
-    /** Like [[tickUntil]] but falls back to `tc.nextInterval` when no fiber is immediately eligible.
-      * Used for the startup pump where `IO.sleep` (fast-forward) is expected. Also used after the
-      * first successful tick inside [[tickUntil]]. Logs a warning on each fallback so unintended
-      * timer advances (e.g. actor ping dependency during command execution) are visible.
+    /** Strict variant: ticks until `tickOne` returns `false` (all eligible fibers exhausted), then
+      * checks `done`. If `done` is false at that point, raises an error — between commands the SUT
+      * must always reach the next signal without needing a clock advance.
+      * Never calls [[tickUntilAdvancing]].
+      */
+    private def tickUntil[A](tc: TestControl[A], done: IO[Boolean]): IO[Unit] =
+        tc.tickOne.flatMap {
+            case true  => tickUntil(tc, done)
+            case false =>
+                done.flatMap {
+                    case true  => loggerIO.info("tickUntil is done")
+                    case false =>
+                        val msg =
+                            "tickUntil: fibers exhausted but signal not received — SUT deadlock or unexpected IO.sleep"
+                        loggerIO.error(msg) >> IO.raiseError(new RuntimeException(msg))
+                }
+        }
+
+    /** Drives the inner until all immediately-eligible fibers are exhausted, then checks `done`.
+      * Falls back to `tc.nextInterval` when no fiber is immediately eligible and `done` is false —
+      * logs a warning each time, since this should only occur during startup (`IO.sleep` advances).
       */
     private def tickUntilAdvancing[A](tc: TestControl[A], done: IO[Boolean]): IO[Unit] =
-        done.flatMap {
-            case true => IO.unit
+        tc.tickOne.flatMap {
+            case true => tickUntilAdvancing(tc, done)
             case false =>
-                tc.tickOne.flatMap {
-                    case true  => tickUntilAdvancing(tc, done)
+                done.flatMap {
+                    case true =>
+                        loggerIO.info("tickUntilAdvancing is done")
                     case false =>
-                        IO(logger.warn(
-                          "tickUntil: no eligible fibers — advancing to next timer "
-                        )) >> tc.nextInterval.flatMap { next =>
+                        tc.nextInterval.flatMap { next =>
                             if next > Duration.Zero then
-                                tc.advance(next) >> tickUntilAdvancing(tc, done)
-                            else
-                                IO.raiseError(
-                                  new RuntimeException(
-                                    "TestControl deadlock: no eligible fibers and predicate not satisfied"
-                                  )
-                                )
+                                loggerIO.warn(
+                                    s"tickUntilAdvancing: no eligible fibers — advancing $next to next timer"
+                                ) >> tc.advance(next) >> tickUntilAdvancing(tc, done)
+                            else {
+                                val msg = "TestControl deadlock: no eligible fibers and predicate not satisfied"
+                                loggerIO.error(msg) >> IO.raiseError(new RuntimeException(msg))
+                            }
                         }
                 }
         }
 
-    /** Strict variant: the very first `tickOne` must return `true` (inner must be immediately
-      * eligible), otherwise raises an error. After the first successful tick hands off to
-      * [[tickUntilAdvancing]]. Used between commands where the inner's gate spin guarantees
-      * immediate eligibility — if the first tick fails, something is wrong.
-      */
-    private def tickUntil[A](tc: TestControl[A], done: IO[Boolean]): IO[Unit] =
-        done.flatMap {
-            case true => IO.unit
-            case false =>
-                tc.tickOne.flatMap {
-                    case true => tickUntilAdvancing(tc, done)
-                    case false =>
-                        IO.raiseError(
-                            new RuntimeException(
-                            "tickUntil: no immediately eligible fibers on first tick — inner not responding"
-                        ))
-                }
-        }
 }
 
 object ModelBasedSuite {
@@ -787,14 +803,11 @@ object ModelBasedSuite {
             val simRemMins = simMins % 60L
             val simRemSecs = simSecs % 60L
 
-            val simTimeStr = if simDays > 0 then
-                f"${simDays}d ${simRemHours}h ${simRemMins}m ${simRemSecs}s"
-            else if simHours > 0 then
-                f"${simHours}h ${simRemMins}m ${simRemSecs}s"
-            else if simMins > 0 then
-                f"${simMins}m ${simRemSecs}s"
-            else
-                f"${simSecs}s"
+            val simTimeStr =
+                if simDays > 0 then f"${simDays}d ${simRemHours}h ${simRemMins}m ${simRemSecs}s"
+                else if simHours > 0 then f"${simHours}h ${simRemMins}m ${simRemSecs}s"
+                else if simMins > 0 then f"${simMins}m ${simRemSecs}s"
+                else f"${simSecs}s"
 
             val realNanos = System.nanoTime() - startNanoTime
             val realSecs = realNanos / 1_000_000_000L
