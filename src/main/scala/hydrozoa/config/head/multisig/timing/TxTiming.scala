@@ -2,7 +2,7 @@ package hydrozoa.config.head.multisig.timing
 
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, quantize, given}
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.{Level, LogEvent, Traced}
 import io.circe.syntax.*
 import io.circe.{Codec, Decoder, Encoder, HCursor, Json}
 import scala.annotation.targetName
@@ -57,8 +57,6 @@ final case class TxTiming(
     // TODO: do we need it?
     override transparent inline def txTiming: TxTiming = this
 
-    private val logger = Logging.logger("TxTiming")
-
     val absorptionStartOffsetDuration: AbsorptionStartOffsetDuration =
         AbsorptionStartOffsetDuration(
           depositSubmissionDuration + depositMaturityDuration
@@ -104,12 +102,19 @@ final case class TxTiming(
     def blockCanStayMinor(
         blockCreationEndTime: BlockCreationEndTime,
         competingFallbackStartTime: FallbackTxStartTime
-    ): Boolean = {
+    ): Traced[Boolean] = {
         val fmbt = forcedMajorBlockTime(competingFallbackStartTime).convert
-        logger.trace(
-          s"blockCanStayMinor: competingFallbackStartTime: ${competingFallbackStartTime}, forcedMajorBlockTime: ${fmbt}, blockCreationEndTime: ${blockCreationEndTime}"
+        val result = fmbt > blockCreationEndTime.convert
+        (
+          result,
+          List(
+            LogEvent(
+              Level.Trace,
+              s"blockCanStayMinor: competingFallbackStartTime: $competingFallbackStartTime, forcedMajorBlockTime: $fmbt, blockCreationEndTime: $blockCreationEndTime",
+              logger = "TxTiming"
+            )
+          )
         )
-        return fmbt > blockCreationEndTime.convert
     }
 
     def depositSubmissionDeadline(

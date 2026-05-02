@@ -1,6 +1,6 @@
 package hydrozoa.multisig.ledger.joint
 
-import cats.effect.{IO, Ref}
+import cats.effect.{IO, IOLocal, Ref}
 import com.bloxbean.cardano.client.util.HexUtil
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
@@ -10,7 +10,7 @@ import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime, FallbackTxStartTime}
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.actor.*
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.{Tracer, logWith}
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger.NotTriggered
@@ -42,11 +42,12 @@ final case class JointLedger(
     config: JointLedger.Config,
     pendingConnections: MultisigRegimeManager.PendingConnections | JointLedger.Connections,
     l2Ledger: L2Ledger[IO],
-    tracer: hydrozoa.lib.tracing.ProtocolTracer
+    tracer: hydrozoa.lib.tracing.ProtocolTracer,
+    tracerLocal: IOLocal[Tracer]
 ) extends Actor[IO, Requests.Request] {
     import config.*
 
-    private val logger = Logging.loggerIO(s"JointLedger.${ownHeadPeerNum}")
+    given IOLocal[Tracer] = tracerLocal
 
     private val connections = Ref.unsafe[IO, Option[Connections]](None)
 
@@ -60,7 +61,7 @@ final case class JointLedger(
         either <- IO.pure(runL1Action[T](state, action))
         ret <- either match {
             case Left(err) =>
-                logger.error(s"L1 action failed: $err") *> IO.raiseError(err)
+                Tracer.error(s"L1 action failed: $err") *> IO.raiseError(err)
             case Right(ret) => IO.pure(ret)
         }
     } yield ret
@@ -72,7 +73,7 @@ final case class JointLedger(
         either <- runL2Command(state, command)
         ret <- either match {
             case Left(err) =>
-                logger.error(s"L2 command failed: $err") *> IO.raiseError(err)
+                Tracer.error(s"L2 command failed: $err") *> IO.raiseError(err)
             case Right(ret) => IO.pure(ret)
         }
     } yield ret
@@ -82,7 +83,7 @@ final case class JointLedger(
     ): IO[Unit] = L2LedgerState
         .executeProxyCommand(l2Ledger, command)
         .handleErrorWith { err =>
-            logger.error(s"L2 proxy command failed: $err") *> IO.raiseError(err)
+            Tracer.error(s"L2 proxy command failed: $err") *> IO.raiseError(err)
         }
 
     private def runL1Action[T](
@@ -136,7 +137,7 @@ final case class JointLedger(
                 val msg = "Expected a `Producing` State, but got `Done`. This indicates" +
                     " that a request was issued to the JointLedger that is only valid when the hydrozoa node is producing" +
                     " a block."
-                logger.error(msg) >> IO.raiseError(RuntimeException(msg))
+                Tracer.error(msg) >> IO.raiseError(RuntimeException(msg))
             case p: Producing => IO.pure(p)
         }
     } yield p
@@ -157,7 +158,9 @@ final case class JointLedger(
         }
     } yield p
 
-    override def preStart: IO[Unit] = context.self ! Requests.PreStart
+    override def preStart: IO[Unit] =
+        Tracer.updateLocal(_.copy(logger = s"JointLedger.${config.ownHeadPeerNum}")) >>
+            (context.self ! Requests.PreStart)
 
     override def receive: Receive[IO, Requests.Request] = PartialFunction.fromFunction(receiveTotal)
 
@@ -194,10 +197,12 @@ final case class JointLedger(
         } yield ()
 
     private def applyUserRequestWithId(e: UserRequestWithId): IO[Unit] = {
-        e match {
-            case req: UserRequestWithId.DepositRequest     => registerDeposit(req)
-            case req: UserRequestWithId.TransactionRequest => applyTransaction(req)
-        }
+        Tracer.scopedCtx("requestId" -> e.requestId.toString)(
+          e match {
+              case req: UserRequestWithId.DepositRequest     => registerDeposit(req)
+              case req: UserRequestWithId.TransactionRequest => applyTransaction(req)
+          }
+        )
     }
 
     private def checkRequestValidityInterval(
@@ -223,7 +228,7 @@ final case class JointLedger(
                 .focus(_.userRequestState.requests)
                 .modify(_.appended((requestId, Invalid)))
             _ <- state.set(newState)
-            _ <- logger.warn(s"Request rejected ($requestId): $e")
+            _ <- Tracer.warn(s"Request rejected ($requestId): $e")
             _ <- tracer.eventProcessed(
               s"${requestId.peerNum}:${requestId.requestNum}",
               currentBlockNum.toLong,
@@ -246,7 +251,7 @@ final case class JointLedger(
         import body.*
 
         for {
-            _ <- logger.info(s"register new deposit, request id: $requestId)")
+            _ <- Tracer.info(s"register new deposit, request id: $requestId)")
 
             p <- unsafeGetProducing
             blockStartTime = p.BlockCreationStartTime
@@ -290,7 +295,7 @@ final case class JointLedger(
                                                   .focus(_.userRequestState.postDatedRefundTxs)
                                                   .modify(_.appended(refundTx))
                                             )
-                                            _ <- logger.debug(s"Request processed ($requestId)")
+                                            _ <- Tracer.debug(s"Request processed ($requestId)")
                                             _ <- tracer.eventProcessed(
                                               s"${requestId.peerNum}:${requestId.requestNum}",
                                               currentBlockNum.toLong,
@@ -316,7 +321,7 @@ final case class JointLedger(
         import body.*
 
         for {
-            _ <- logger.info(s"applying transaction, request id: $requestId)")
+            _ <- Tracer.info(s"applying transaction, request id: $requestId)")
 
             p <- unsafeGetProducing
             blockStartTime = p.BlockCreationStartTime
@@ -367,19 +372,21 @@ final case class JointLedger(
       */
     private def startBlock(args: StartBlock): IO[Unit] = {
         import args.*
-        for {
-            _ <- logger.info(s"start block: ${args.blockNum}...")
-            d <- unsafeGetDone
-            newState = d.producing(
-              l2LedgerState = L2LedgerState.empty,
-              startTime = blockCreationStartTime,
-              userRequestState = UserRequestState(
-                requests = List.empty,
-                postDatedRefundTxs = Vector.empty
-              )
-            )
-            _ <- state.set(newState)
-        } yield ()
+        Tracer.scopedCtx("blockNum" -> s"${args.blockNum: Int}") {
+            for {
+                _ <- Tracer.info(s"start block: ${args.blockNum}...")
+                d <- unsafeGetDone
+                newState = d.producing(
+                  l2LedgerState = L2LedgerState.empty,
+                  startTime = blockCreationStartTime,
+                  userRequestState = UserRequestState(
+                    requests = List.empty,
+                    postDatedRefundTxs = Vector.empty
+                  )
+                )
+                _ <- state.set(newState)
+            } yield ()
+        }
     }
 
     /** Complete a Minor or Major block If
@@ -389,50 +396,57 @@ final case class JointLedger(
         args: CompleteBlockRegular
     ): IO[Unit] = {
         import args.*
+        unsafeGetProducing.flatMap { p =>
+            Tracer.scopedCtx("blockNum" -> s"${p.nextBlockNumber: Int}") {
+                for {
+                    _ <- Tracer.info(s"completing block ${p.nextBlockNumber}")
 
-        for {
-            p <- unsafeGetProducing
-            _ <- logger.info(s"completing block ${p.nextBlockNumber}")
+                    partition = p.l1LedgerState.deposits.partition(
+                      blockCreationEndTime = blockCreationEndTime,
+                      settlementTxEndTime =
+                          config.txTiming.newSettlementEndTime(p.competingFallbackTxTime),
+                      pollResults = pollResults
+                    )
 
-            partition = p.l1LedgerState.deposits.partition(
-              blockCreationEndTime = blockCreationEndTime,
-              settlementTxEndTime = config.txTiming.newSettlementEndTime(p.competingFallbackTxTime),
-              pollResults = pollResults
-            )
+                    split = partition.split(maxDepositsAbsorbedPerBlock)
 
-            split = partition.split(maxDepositsAbsorbedPerBlock)
+                    // We don't need to trace this if we're tracing the `split`
+                    // Because `split` is a refinement of `partition`.
+                    // _ <- Tracer.trace(partition.toString)
 
-            // We don't need to trace this if we're tracing the `split`
-            // Because `split` is a refinement of `partition`.
-            // _ <- logger.trace(partition.toString)
+                    _ <- Tracer.trace(split.toString)
 
-            _ <- logger.trace(split.toString)
+                    blockBriefRes <- mkBlockBriefIntermediate(
+                      p,
+                      blockCreationEndTime,
+                      split.decisions
+                    )
+                    (pBlockBrief, blockBrief) = blockBriefRes
 
-            blockBriefRes <- mkBlockBriefIntermediate(p, blockCreationEndTime, split.decisions)
-            (pBlockBrief, blockBrief) = blockBriefRes
+                    blockRes <- mkBlockEffectsIntermediate(
+                      pBlockBrief,
+                      blockBrief,
+                      split.absorbed.unzip,
+                      pBlockBrief.userRequestState.postDatedRefundTxs.toList
+                    )
+                    (pBlock, block) = blockRes
 
-            blockRes <- mkBlockEffectsIntermediate(
-              pBlockBrief,
-              blockBrief,
-              split.absorbed.unzip,
-              pBlockBrief.userRequestState.postDatedRefundTxs.toList
-            )
-            (pBlock, block) = blockRes
+                    // Verify the block against the reference block
+                    _ <- panicOnMismatchWithExpectedBlock(referenceBlockBrief, block)
 
-            // Verify the block against the reference block
-            _ <- panicOnMismatchWithExpectedBlock(referenceBlockBrief, block)
+                    // Block is done
+                    res <- executeL1Action(pBlock, L1LedgerM.handleBlockBrief(split.surviving))
+                    (newL1State, ()) = res
 
-            // Block is done
-            res <- executeL1Action(pBlock, L1LedgerM.handleBlockBrief(split.surviving))
-            (newL1State, ()) = res
+                    newJlState = pBlock.setL1LedgerState(newL1State)
 
-            newJlState = pBlock.setL1LedgerState(newL1State)
+                    _ <- state.set(newJlState.done(block.header))
 
-            _ <- state.set(newJlState.done(block.header))
-
-            // Tell others about the block
-            _ <- handleBlock(block, finalizationLocallyTriggered)
-        } yield ()
+                    // Tell others about the block
+                    _ <- handleBlock(block, finalizationLocallyTriggered)
+                } yield ()
+            }
+        }
     }
 
     /** KZG commitment + block brief (which is a bit strange)
@@ -447,7 +461,7 @@ final case class JointLedger(
         val blockWithdrawnUtxos = p.l2LedgerState.payouts
         val events = p.userRequestState.requests
         for {
-            _ <- logger.trace(
+            _ <- Tracer.trace(
               s"mkBlockBrief: previousHeader=$previousHeader\n" +
                   s"mkBlockBrief: blockWithdrawnUtxos=$blockWithdrawnUtxos\n" +
                   s"mkBlockBrief: blockStartTime=$blockCreationStartTime\n" +
@@ -474,7 +488,7 @@ final case class JointLedger(
                         newL2State <-
                             if decisions.rejected.isEmpty then IO.pure(p.l2LedgerState)
                             else executeL2Command(p, depositEventDecisions)
-                        _ <- logger.trace(s"New evacuation map: ${newEvacuationMap.evacuationMap}")
+                        _ <- Tracer.trace(s"New evacuation map: ${newEvacuationMap.evacuationMap}")
 
                         // Update the state with the new evacuation map
                         newJLState = p
@@ -482,23 +496,23 @@ final case class JointLedger(
                             .focus(_.evacuationMap)
                             .replace(newEvacuationMap)
 
-                    } yield (
-                      newJLState,
-                      previousHeader.nextHeaderIntermediate(
-                        txTiming,
-                        blockCreationStartTime,
-                        blockCreationEndTime,
-                        decisions.mNextAbsorptionStartTime,
                         // TODO: We want this to be done in a separate actor in the future
                         // this doesn't include genesis
-                        newEvacuationMap.kzgCommitment
-                      )
-                    )
+                        headerIntermediate <- previousHeader
+                            .nextHeaderIntermediate(
+                              txTiming,
+                              blockCreationStartTime,
+                              blockCreationEndTime,
+                              decisions.mNextAbsorptionStartTime,
+                              newEvacuationMap.kzgCommitment
+                            )
+                            .logWith
+                    } yield (newJLState, headerIntermediate)
                 else {
                     for {
                         newL2State <- executeL2Command(p, depositEventDecisions)
                         newEvacuationMap = applyDiffs(p.evacuationMap, newL2State.diffs)
-                        _ <- logger.trace(s"New evacuation map: ${newEvacuationMap.evacuationMap}")
+                        _ <- Tracer.trace(s"New evacuation map: ${newEvacuationMap.evacuationMap}")
                         newJLState = p
                             .setL2LedgerState(newL2State)
                             .focus(_.evacuationMap)
@@ -506,13 +520,15 @@ final case class JointLedger(
 
                         // TODO: We want this to be done in a separate actor in the future
                         kzgCommitment = newEvacuationMap.kzgCommitment
-                        headerIntermediate = previousHeader.nextHeaderMajor(
-                          txTiming,
-                          blockCreationStartTime,
-                          blockCreationEndTime,
-                          decisions.mNextAbsorptionStartTime,
-                          kzgCommitment
-                        )
+                        headerIntermediate <- previousHeader
+                            .nextHeaderMajor(
+                              txTiming,
+                              blockCreationStartTime,
+                              blockCreationEndTime,
+                              decisions.mNextAbsorptionStartTime,
+                              kzgCommitment
+                            )
+                            .logWith
                     } yield (newJLState, headerIntermediate)
                 }
             (newJlState, headerIntermediate) = headerRes
@@ -531,7 +547,7 @@ final case class JointLedger(
                     BlockBrief.Major(header, blockBody)
             }
 
-            _ <- logger.trace(
+            _ <- Tracer.trace(
               "mkBlockBriefIntermediate result:\n" +
                   s"  Block type: ${blockBrief match {
                           case _: BlockBrief.Minor => "Minor"; case _: BlockBrief.Major => "Major"
@@ -548,7 +564,7 @@ final case class JointLedger(
         absorbedDeposits: DepositsMap.Unzip,
         postDatedRefundTxs: List[RefundTx.PostDated]
     ): IO[(JointLedger.Producing, Block.Unsigned.Intermediate)] = for {
-        _ <- logger.trace(
+        _ <- Tracer.trace(
           "mkBlockEffectsIntermediate:\n" +
               s"  Block type: ${next match {
                       case _: BlockBrief.Minor => "Minor"; case _: BlockBrief.Major => "Major"
@@ -566,7 +582,7 @@ final case class JointLedger(
                   postDatedRefundTxs = postDatedRefundTxs
                 )
                 for {
-                    _ <- logger.trace(
+                    _ <- Tracer.trace(
                       s"Building effects for minor block ${next.blockNum} with version ${next.blockVersion}." + "\n" +
                           s"Previous block (${p.previousBlockHeader.blockNum}) had version ${p.previousBlockHeader.blockVersion}."
                     )
@@ -574,12 +590,12 @@ final case class JointLedger(
             case blockBrief @ BlockBrief.Major(header, _) =>
                 for {
                     // TODO: pass in args: should not access the state directly
-                    _ <- logger.trace(
+                    _ <- Tracer.trace(
                       s"Building effects for major block ${next.blockNum} with version ${next.blockVersion}." + "\n" +
                           s"Previous block (${p.previousBlockHeader.blockNum}) had version ${p.previousBlockHeader.blockVersion}."
                     )
                     payoutObligations <- IO.pure(p.l2LedgerState.payouts)
-                    _ <- logger.trace(s"Remitting payouts: ${payoutObligations
+                    _ <- Tracer.trace(s"Remitting payouts: ${payoutObligations
                             .map(x => (x.utxo.value.address, x.utxo.value.value))}")
 
                     res <- executeL1Action(
@@ -602,21 +618,21 @@ final case class JointLedger(
                       postDatedRefundTxs = postDatedRefundTxs
                     )
 
-                    _ <- logger.trace("mkBlockEffectsIntermediate: Major block effects created")
+                    _ <- Tracer.trace("mkBlockEffectsIntermediate: Major block effects created")
 
-                    _ <- logger.trace(
+                    _ <- Tracer.trace(
                       s"Settlement tx (${blockEffects.settlementTx.tx.id}): ${HexUtil.encodeHexString(blockEffects.settlementTx.tx.toCbor)}"
                     )
-                    _ <- logger.trace(
+                    _ <- Tracer.trace(
                       s"Fallback tx (${blockEffects.fallbackTx.tx.id}): ${HexUtil.encodeHexString(blockEffects.fallbackTx.tx.toCbor)}"
                     )
                     _ <- IO.traverse_(blockEffects.rolloutTxs)(rolloutTx =>
-                        logger.trace(
+                        Tracer.trace(
                           s"Rollout tx (${rolloutTx.tx.id}): ${HexUtil.encodeHexString(rolloutTx.tx.toCbor)}"
                         )
                     )
                     _ <- IO.traverse_(blockEffects.postDatedRefundTxs)(refundTx =>
-                        logger.trace(
+                        Tracer.trace(
                           s"Post-dated refund tx (${refundTx.tx.id}): ${HexUtil.encodeHexString(refundTx.tx.toCbor)}"
                         )
                     )
@@ -636,57 +652,57 @@ final case class JointLedger(
     //   - Send a panic to the multisig regime manager in a suicide note
     def completeBlockFinal(args: CompleteBlockFinal): IO[Unit] = {
         import args.*
+        unsafeGetProducing.flatMap { p =>
+            Tracer.scopedCtx("blockNum" -> s"${p.nextBlockNumber: Int}") {
+                for {
+                    res <- executeL1Action(
+                      p,
+                      L1LedgerM.finalizeLedger(
+                        payoutObligationsRemaining = Vector.from(
+                          p.evacuationMap.evacuationMap.values
+                        ),
+                        competingFallbackValidityStart = p.competingFallbackTxTime
+                      )
+                    )
+                    (newL1State, finalizationTxSeq) = res
 
-        for {
-            p <- unsafeGetProducing
+                    newJlState = p.setL1LedgerState(newL1State)
 
-            res <- executeL1Action(
-              p,
-              L1LedgerM.finalizeLedger(
-                payoutObligationsRemaining = Vector.from(
-                  p.evacuationMap.evacuationMap.values
-                ),
-                competingFallbackValidityStart = p.competingFallbackTxTime
-              )
-            )
-            (newL1State, finalizationTxSeq) = res
+                    _ <- state.set(newJlState)
 
-            newJlState = p.setL1LedgerState(newL1State)
+                    block: Block.Unsigned.Final = {
+                        import newJlState.userRequestState.*
+                        val blockHeader =
+                            newJlState.previousBlockHeader
+                                .nextHeaderFinal(
+                                  newJlState.BlockCreationStartTime,
+                                  args.blockCreationEndTime
+                                )
 
-            _ <- state.set(newJlState)
-
-            block: Block.Unsigned.Final = {
-                import newJlState.userRequestState.*
-                val blockHeader =
-                    newJlState.previousBlockHeader
-                        .nextHeaderFinal(
-                          newJlState.BlockCreationStartTime,
-                          args.blockCreationEndTime
+                        val blockBody = BlockBody.Final(
+                          events = requests,
+                          // Final block should reject all the deposits known.
+                          depositsRefunded = newJlState.l1LedgerState.deposits.requestIds
                         )
 
-                val blockBody = BlockBody.Final(
-                  events = requests,
-                  // Final block should reject all the deposits known.
-                  depositsRefunded = newJlState.l1LedgerState.deposits.requestIds
-                )
+                        val blockBrief = BlockBrief.Final(blockHeader, blockBody)
 
-                val blockBrief = BlockBrief.Final(blockHeader, blockBody)
+                        val blockEffects = BlockEffects.Unsigned.Final(
+                          finalizationTx = finalizationTxSeq.finalizationTx,
+                          rolloutTxs = finalizationTxSeq.rolloutTxs
+                        )
 
-                val blockEffects = BlockEffects.Unsigned.Final(
-                  finalizationTx = finalizationTxSeq.finalizationTx,
-                  rolloutTxs = finalizationTxSeq.rolloutTxs
-                )
+                        Block.Unsigned.Final(blockBrief, blockEffects)
+                    }
 
-                Block.Unsigned.Final(blockBrief, blockEffects)
+                    _ <- panicOnMismatchWithExpectedBlock(referenceBlockBrief, block)
+
+                    _ <- state.set(newJlState.done(block.header))
+
+                    _ <- handleBlock(block, NotTriggered)
+                } yield ()
             }
-
-            _ <- panicOnMismatchWithExpectedBlock(referenceBlockBrief, block)
-
-            _ <- state.set(newJlState.done(block.header))
-
-            _ <- handleBlock(block, NotTriggered)
-
-        } yield ()
+        }
     }
 
     /** Extract trace metadata from a block for the tracer.
@@ -779,6 +795,7 @@ final case class JointLedger(
   * them to keep them aligned.
   */
 object JointLedger {
+
     type Handle = ActorRef[IO, Requests.Request]
 
     type Config = HeadConfig.Section & OwnHeadPeerPrivate.Section

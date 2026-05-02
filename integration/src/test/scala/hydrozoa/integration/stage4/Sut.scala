@@ -1,11 +1,11 @@
 package hydrozoa.integration.stage4
 
-import cats.effect.{Fiber, IO, Ref}
+import cats.effect.{Fiber, IO, IOLocal, Ref}
 import cats.syntax.all.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorSystem
 import hydrozoa.integration.stage4.Commands.*
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, ConsensusActor, EventSequencer, PeerLiaison, UserRequest, UserRequestWithId}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
@@ -66,6 +66,7 @@ case class Stage4Sut(
     errorDrainer: Fiber[IO, Throwable, Nothing],
     blockBriefs: Map[HeadPeerNumber, Ref[IO, Vector[BlockBrief.Intermediate]]],
     submittedRequestIds: Ref[IO, Vector[RequestId]],
+    tracerLocal: IOLocal[Tracer],
 )
 
 // ===================================
@@ -73,8 +74,6 @@ case class Stage4Sut(
 // ===================================
 
 object Stage4SutCommands:
-
-    private val logger = Logging.loggerIO("Stage4.Sut")
 
     // Delay: the framework's IO.sleep(cmd.delay) already advances simulated time under
     // TestControl. No actor message needed — delays exist only to pace model clock and
@@ -87,22 +86,28 @@ object Stage4SutCommands:
     // Result is always Valid (trivial); oracle check in shutdownSut compares model
     // predictions against actual block-brief outcomes.
     given SutCommand[L2TxCommand, ValidityFlag, Stage4Sut] with {
-        override def run(cmd: L2TxCommand, sut: Stage4Sut): IO[ValidityFlag] = for {
-            reqId <- sut.peers(cmd.peerNum).eventSequencer ?: cmd.request.asUserRequest
-            _ <- logger.trace(s"reqId=$reqId, cmd.request.requestId=${cmd.request.requestId}")
-            _ <- sut.submittedRequestIds.update(_ :+ cmd.request.requestId)
-        } yield ValidityFlag.Valid
+        override def run(cmd: L2TxCommand, sut: Stage4Sut): IO[ValidityFlag] = {
+            given IOLocal[Tracer] = sut.tracerLocal
+            for {
+                reqId <- sut.peers(cmd.peerNum).eventSequencer ?: cmd.request.asUserRequest
+                _ <- Tracer.trace(s"reqId=$reqId, cmd.request.requestId=${cmd.request.requestId}")
+                _ <- sut.submittedRequestIds.update(_ :+ cmd.request.requestId)
+            } yield ValidityFlag.Valid
+        }
     }
 
     // Deposit: register with EventSequencer AND submit the signed deposit tx to the shared
     // mock L1 backend so CardanoLiaison can observe it on-chain at the correct time.
     given SutCommand[RegisterAndSubmitDepositCommand, ValidityFlag, Stage4Sut] with {
-        override def run(cmd: RegisterAndSubmitDepositCommand, sut: Stage4Sut): IO[ValidityFlag] = for {
-            reqId <- sut.peers(cmd.peerNum).eventSequencer ?: cmd.request.asUserRequest
-            _ <- logger.trace(s"reqId=$reqId, cmd.request.requestId=${cmd.request.requestId}")
-            _ <- sut.submittedRequestIds.update(_ :+ cmd.request.requestId)
-            _ <- sut.cardanoBackend.submitTx(cmd.depositTxBytesSigned)
-        } yield ValidityFlag.Valid
+        override def run(cmd: RegisterAndSubmitDepositCommand, sut: Stage4Sut): IO[ValidityFlag] = {
+            given IOLocal[Tracer] = sut.tracerLocal
+            for {
+                reqId <- sut.peers(cmd.peerNum).eventSequencer ?: cmd.request.asUserRequest
+                _ <- Tracer.trace(s"reqId=$reqId, cmd.request.requestId=${cmd.request.requestId}")
+                _ <- sut.submittedRequestIds.update(_ :+ cmd.request.requestId)
+                _ <- sut.cardanoBackend.submitTx(cmd.depositTxBytesSigned)
+            } yield ValidityFlag.Valid
+        }
     }
 
 extension (self: UserRequestWithId)

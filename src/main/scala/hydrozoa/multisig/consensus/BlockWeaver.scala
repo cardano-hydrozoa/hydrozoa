@@ -1,5 +1,5 @@
 package hydrozoa.multisig.consensus
-import cats.effect.IO
+import cats.effect.{IO, IOLocal}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
@@ -10,7 +10,7 @@ import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedFiniteDuration
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.{Logging, Tracer}
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.BlockWeaver.State.Leader.AwaitingConfirmation.StartedBlock.{NotStarted, Started}
 import hydrozoa.multisig.consensus.mempool.Mempool
@@ -23,7 +23,8 @@ import org.typelevel.log4cats.Logger
 
 final case class BlockWeaver(
     config: BlockWeaver.Config,
-    pendingConnections: MultisigRegimeManager.PendingConnections | BlockWeaver.ConnectionsPartial
+    pendingConnections: MultisigRegimeManager.PendingConnections | BlockWeaver.ConnectionsPartial,
+    tracerLocal: IOLocal[Tracer]
 ) extends Actor[IO, BlockWeaver.Request] {
     import BlockWeaver.*
 
@@ -714,27 +715,40 @@ object BlockWeaver {
                                 then completeNextBlock
                                 else
                                     for {
-                                        _ <- logger.info(s"Handling confirmation for previous block ${bc.blockNum}")
+                                        _ <- logger.info(
+                                          s"Handling confirmation for previous block ${bc.blockNum}"
+                                        )
                                         now <- realTimeQuantizedInstant(config.slotConfig)
                                         sleepDuration = bc.headerNonFinal.majorBlockWakeupTime - now
-                                        ret <- if (sleepDuration.finiteDuration.toSeconds <= 0L)
-                                            then for
-                                                    _ <- logger.info(s"negative wakeup sleep duration, now=${now}, confirmed block wakeup time: ${bc.headerNonFinal.majorBlockWakeupTime}, sleepDuration=${sleepDuration}")
-                                                    //_ <- sendStartBlock(config)(leadingBlockNumber)
+                                        ret <-
+                                            if sleepDuration.finiteDuration.toSeconds <= 0L
+                                            then
+                                                for
+                                                    _ <- logger.info(
+                                                      s"negative wakeup sleep duration, now=${now}, confirmed block wakeup time: ${bc.headerNonFinal.majorBlockWakeupTime}, sleepDuration=${sleepDuration}"
+                                                    )
+                                                    // _ <- sendStartBlock(config)(leadingBlockNumber)
                                                     // ret <- completeNextBlock
-                                                    ret <- IO.raiseError(new RuntimeException(s"negative wakeup sleep duration, now=${now}, confirmed block wakeup time: ${bc.headerNonFinal.majorBlockWakeupTime}, sleepDuration=${sleepDuration}"))
+                                                    ret <- IO.raiseError(
+                                                      new RuntimeException(
+                                                        s"negative wakeup sleep duration, now=${now}, confirmed block wakeup time: ${bc.headerNonFinal.majorBlockWakeupTime}, sleepDuration=${sleepDuration}"
+                                                      )
+                                                    )
                                                 yield ret
-                                            else for
-                                                    _ <- logger.info(s"Starting wakeup fiber, sleepDuration=${sleepDuration}")
+                                            else
+                                                for
+                                                    _ <- logger.info(
+                                                      s"Starting wakeup fiber, sleepDuration=${sleepDuration}"
+                                                    )
                                                     _ <- sleepSendWakeup(sleepDuration).start
                                                     ret <- pure(
                                                       Leader.AwaitingRequest(
                                                         this,
                                                         previousBlockConfirmed = bc,
-                                                        //fiber
+                                                        // fiber
                                                       )
                                                     )
-                                            yield ret
+                                                yield ret
                                     } yield ret
                             else {
                                 // If it's not for the previous block, two cases are possible.
@@ -781,14 +795,19 @@ object BlockWeaver {
                     }
                 }
 
-                private def sleepSendWakeup(sleepDuration: QuantizedFiniteDuration): IO[Unit] = for {
-                    before <- IO.realTime
-                    _ <- logger.trace(s"Sleeping for ${sleepDuration.finiteDuration} started at now=$before")
-                    _ <- IO.sleep(sleepDuration.finiteDuration)
-                    after <- IO.realTime
-                    _ <- logger.trace(s"Sleeping for ${sleepDuration.finiteDuration} is done now=$after")
-                    _ <- connections.blockWeaver ! Wakeup(this.leadingBlockNumber)
-                } yield ()
+                private def sleepSendWakeup(sleepDuration: QuantizedFiniteDuration): IO[Unit] =
+                    for {
+                        before <- IO.realTime
+                        _ <- logger.trace(
+                          s"Sleeping for ${sleepDuration.finiteDuration} started at now=$before"
+                        )
+                        _ <- IO.sleep(sleepDuration.finiteDuration)
+                        after <- IO.realTime
+                        _ <- logger.trace(
+                          s"Sleeping for ${sleepDuration.finiteDuration} is done now=$after"
+                        )
+                        _ <- connections.blockWeaver ! Wakeup(this.leadingBlockNumber)
+                    } yield ()
             }
 
             object AwaitingConfirmation {
@@ -823,7 +842,7 @@ object BlockWeaver {
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
                 previousBlockConfirmed: Block.MultiSigned.NonFinal,
-                //wakeupFiber: Fiber[IO, Throwable, Unit]
+                // wakeupFiber: Fiber[IO, Throwable, Unit]
             ) extends Reactive {
                 override transparent inline def stateName: String = "Leader.AwaitingRequest"
 
@@ -900,7 +919,7 @@ object BlockWeaver {
                 private[State] def apply(
                     state: State,
                     previousBlockConfirmed: Block.MultiSigned.NonFinal,
-                    //wakeupFiber: Fiber[IO, Throwable, Unit]
+                    // wakeupFiber: Fiber[IO, Throwable, Unit]
                 ): Leader.AwaitingRequest =
                     import state.*
                     Leader.AwaitingRequest(
@@ -909,7 +928,7 @@ object BlockWeaver {
                       pollResults,
                       finalizationLocallyTriggered,
                       previousBlockConfirmed,
-                      //wakeupFiber
+                      // wakeupFiber
                     )
             }
         }

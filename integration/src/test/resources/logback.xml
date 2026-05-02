@@ -46,6 +46,7 @@
     <logger name="CardanoLiaison" level="warn"/>
     <logger name="JointLedger" level="trace"/>
     <logger name="PeerLiaison" level="trace"/>
+    <logger name="TxTiming" level="trace"/>
 
     <logger name="scalus" level="error"/>
 </configuration>

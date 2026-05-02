@@ -14,7 +14,8 @@ import hydrozoa.config.head.{InitParamsType, generateHeadConfig, generateHeadCon
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.integration.stage4.Model.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
-import hydrozoa.lib.logging.Logging
+import cats.effect.IOLocal
+import hydrozoa.lib.logging.{Logging, Tracer}
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.lib.tracing.ProtocolTracer
 import hydrozoa.multisig.MultisigRegimeManager
@@ -76,6 +77,7 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
 
         for
             _ <- IO.sleep(FiniteDuration(startEpochMs, TimeUnit.MILLISECONDS))
+            tracerLocal <- Tracer.makeLocal(label)
 
             system <- ActorSystem[IO](label).allocated.map(_._1)
 
@@ -110,14 +112,14 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
                     val nodeConfig = multiNodeConfig.nodeConfigs(peerNum)
                     val pending = pendingConnsMap(peerNum)
                     for
-                        blockWeaver <- system.actorOf(BlockWeaver(nodeConfig, pending))
+                        blockWeaver <- system.actorOf(BlockWeaver(nodeConfig, pending, tracerLocal))
                         cardanoLiaison <- system.actorOf(
                           CardanoLiaison(nodeConfig, cardanoBackend, pending)
                         )
                         eventSequencer <- system.actorOf(EventSequencer(nodeConfig, pending))
                         l2Ledger <- EutxoL2Ledger(nodeConfig)
                         jointLedger <- system.actorOf(
-                          JointLedger(nodeConfig, pending, l2Ledger, ProtocolTracer.noop)
+                          JointLedger(nodeConfig, pending, l2Ledger, ProtocolTracer.noop, tracerLocal)
                         )
                         consensusActor <- system.actorOf(ConsensusActor(nodeConfig, pending))
                     yield peerNum -> PeerStack(
@@ -220,6 +222,7 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
           errorDrainer = errorDrainer,
           blockBriefs = blockBriefsMap,
           submittedRequestIds = submittedRequestIds,
+          tracerLocal = tracerLocal,
         )
 
     override def shutdownSut(lastState: ModelState, sut: Stage4Sut): IO[Prop] =

@@ -478,7 +478,8 @@ case class Suite(
                 nodeConfig,
                 jointLedgerConnections,
                 l2Ledger,
-                tracer
+                tracer,
+                tracerLocal
               )
             )
 

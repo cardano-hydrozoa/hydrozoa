@@ -11,7 +11,7 @@ import hydrozoa.integration.stage1.Model.Error.UnexpectedState
 import hydrozoa.integration.stage1.model.Deposits
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant.mkOrderingOps
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.{Logging, value}
 import cats.syntax.all.*
 import cats.*
 import hydrozoa.integration.stage1.Model.logger
@@ -631,7 +631,7 @@ object Model:
                 blockCanStayMinor = state.multiNodeConfig.txTiming.blockCanStayMinor(
                   blockEndTime,
                   state.competingFallbackStartTime
-                )
+                ).value
 
                 hasWithdrawals = accumulator.exists(_._2 match {
                     case e: L2Tx => e.l1utxos.nonEmpty
