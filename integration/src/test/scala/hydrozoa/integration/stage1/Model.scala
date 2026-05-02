@@ -2,17 +2,24 @@ package hydrozoa.integration.stage1
 
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
-import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime, FallbackTxStartTime}
-import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.RequestValidityEndTime
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime, FallbackTxStartTime, MajorBlockWakeupTime, SettlementTxEndTime}
+import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.integration.stage1.Commands.*
 import hydrozoa.integration.stage1.Model.Error.UnexpectedState
+import hydrozoa.integration.stage1.model.Deposits
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant.mkOrderingOps
 import hydrozoa.lib.logging.Logging
+import cats.syntax.all.*
+import cats.*
+import hydrozoa.integration.stage1.Model.logger
+import hydrozoa.integration.stage1.model.Deposits.DepositStatus.*
+import hydrozoa.integration.stage1.model.Deposits.depositAbsorptionStart
+import scalus.|>
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.consensus.{RequestValidityEndTimeRaw, UserRequestWithId}
+import hydrozoa.multisig.consensus.UserRequestWithId
 import hydrozoa.multisig.ledger.block.BlockBrief.{Final, Major, Minor}
 import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.eutxol2.tx.L2Genesis.mkGenesisId
@@ -82,35 +89,11 @@ object Model:
         //
         // Deposits (mutable as well)
         //
+        deposits: Deposits,
 
-        // The queue of all generated deposits that Alice wants to register.
-        // At all times, all deposits in the list are disjoint in terms of their funding utxo, see [[utxosLocked]].
-        depositEnqueued: List[RegisterDepositCommand],
-        // Signed deposit transactions - we need them when we submit deposits.
-        depositSigned: Map[TransactionHash, Transaction],
         // Utxos used in the deposit enqueued as funding utxos.
         // We need this not to generate deposits that use the same utxos for funding many times.
         utxoLocked: Set[TransactionInput],
-
-        // A subset of depositEnqueued which has been registered by Hydrozoa, i.e.
-        // included in a block brief with positive validity flag.
-        depositsRegistered: List[RequestId],
-
-        // After a deposit was registered, we may submit it or cancel it depending on
-        // how much time is left until the deposit tx's TTL is up - I call it runway.
-        // Upon generating [[SubmitDepositsCommand]] we assess whether we have enough
-        // runway to take off the deposit - i.e. how much time we have from now to the
-        // ttl. This is needed, because the test fails if SUT can't submit deposit tx
-        // that model expects to see.
-        //
-        // So we have two partitions here:
-        //  - deposits that have been submitted, so they are expected to appear in the
-        // very first block that satisfies their absorption window
-        depositSubmitted: List[RequestId],
-        //
-        //  - deposits, that the model decided not to submit - their funding utxos get
-        // unlocked so they can be reused
-        depositsDeclined: List[RequestId],
     ) {
         override def toString: String = "<model state (hidden)>"
 
@@ -137,14 +120,6 @@ object Model:
                 .map((output, ix) => TransactionInput(l1Tx.id, ix) -> output)
             this.copy(peerUtxosL1 = newUtxos)
         }
-
-        def depositForSubmission: List[(RequestId, QuantizedInstant)] =
-            this.depositEnqueued
-                .map(cmd =>
-                    cmd.request.requestId -> cmd.depositRefundTxSeq.depositTx.submissionDeadline
-                )
-                .filter(e => depositsRegistered.contains(e._1))
-                .filterNot(e => depositSubmitted.contains(e._1) || depositsDeclined.contains(e._1))
     }
 
     enum CurrentTime(qi: QuantizedInstant):
@@ -304,10 +279,10 @@ object Model:
             cmd: CompleteBlockCommand,
             state: State
         ): (BlockBrief, State) = {
-
+            // cats.State[State, BlockBrief]
             logger.debug(s"MODEL>> CompleteBlockCommand for block number: ${cmd.blockNumber}")
-
             state.blockCycle match {
+
                 case BlockCycle.InProgress(blockNumber, _creationTime, prevVersion, accumulator) =>
 
                     logger.trace(
@@ -315,281 +290,369 @@ object Model:
                           s"with reqeust IDs: ${accumulator.map(_._1.requestId)}"
                     )
 
-                    val (blockBrief, newUtxosL2Active, _utxosWithdrawn) = mkBlockBrief(
-                      cmd.blockNumber,
-                      accumulator,
-                      state.competingFallbackStartTime,
-                      state.multiNodeConfig.cardanoNetwork,
-                      state.multiNodeConfig.txTiming,
-                      BlockCreationStartTime(state.currentTime.instant),
-                      cmd.blockCreationEndTime,
-                      prevVersion,
-                      cmd.isFinal,
-                      state.utxosL2Active,
-                      state.depositEnqueued,
-                      state.depositsRegistered,
-                      state.depositSubmitted,
-                      state.multiNodeConfig.headConfig.headTokenNames.treasuryTokenName
-                    )
+                    val events: List[(RequestId, ValidityFlag)] =
+                        accumulator.map((le, _, flag) => le.requestId -> flag)
 
-                    val newCompetingFallbackStartTime =
-                        if blockBrief.isInstanceOf[Major]
-                        then
-                            val newCompetingFallbackStartTime =
-                                state.multiNodeConfig.headConfig.txTiming
-                                    .newFallbackStartTime(cmd.blockCreationEndTime)
-                            logger.debug(
-                              s"newCompetingFallbackStartTime: $newCompetingFallbackStartTime"
+                    val s: cats.data.State[State, BlockBrief] =
+                        for {
+                            regOrReject <- registerOrReject(events)
+                            registeredThisBlock = regOrReject._1
+                            rejectedThisBlock = regOrReject._2
+
+                            absorbedThisBlock <- absorb
+
+                            refundedThisBlock <- refund(cmd.isFinal)
+
+                            newEvacuationMap <- updateEvacuationMap
+
+                            blockBrief <- mkBlockBrief(
+                              cmd.isFinal,
+                              cmd.blockCreationEndTime,
+                              cmd.blockNumber,
+                              prevVersion,
+                              newEvacuationMap,
+                              accumulator,
+                              absorbedThisBlock,
+                              refundedThisBlock
                             )
-                            newCompetingFallbackStartTime
-                        else state.competingFallbackStartTime
 
-                    val nextBlockCycle =
-                        if cmd.isFinal then BlockCycle.HeadFinalized
-                        else BlockCycle.Done(cmd.blockNumber, blockBrief.blockVersion)
-
-                    // Remove handled, i.e. absorbed and rejected deposits
-                    val newDepositsEnqueued = state.depositEnqueued
-                        .filterNot(registerDepositCommand =>
-                            (blockBrief.depositsAbsorbed ++ blockBrief.depositsRefunded)
-                                .contains(
-                                  registerDepositCommand.request.requestId
+                            // update block cycle
+                            _ <- cats.data.State.modify[State](state => {
+                                val nextBlockCycle =
+                                    if cmd.isFinal then BlockCycle.HeadFinalized
+                                    else BlockCycle.Done(cmd.blockNumber, blockBrief.blockVersion)
+                                state.copy(blockCycle = nextBlockCycle)
+                            })
+                            // tick time
+                            _ <- cats.data.State.modify[State](state =>
+                                state.copy(currentTime =
+                                    state.currentTime.advance(blockBrief.endTime.convert)
                                 )
-                        )
+                            )
+                        } yield blockBrief
 
-                    // Add newly registered deposits
-                    val newDepositsRegistered = state.depositsRegistered
-                        ++ blockBrief.events
-                            .filter(_._2 == Valid)
-                            .map(_._1)
-                            // TODO: do we need that? Why jsut not all deposits?
-                            .filter(e => state.depositEnqueued.map(_.request.requestId).contains(e))
-
-                    val newState = state.copy(
-                      blockCycle = nextBlockCycle,
-                      competingFallbackStartTime = newCompetingFallbackStartTime,
-                      depositEnqueued = newDepositsEnqueued,
-                      depositsRegistered = newDepositsRegistered,
-                      utxosL2Active = newUtxosL2Active,
-                      currentTime = state.currentTime.advance(blockBrief.endTime.convert)
-                    )
-
-                    logger.trace(
-                      s"block ${cmd.blockNumber}, newState.depositEnqueued=${newState.depositEnqueued}, " +
-                          s"newState.depositsRegistered=${newState.depositsRegistered}"
-                    )
-
-                    // Return
-                    blockBrief -> newState
+                    s.run(state).swapF.value
                 case _ =>
                     throw UnexpectedState("CompleteBlockCommand requires BlockCycle.InProgress")
             }
         }
 
-        private def mkBlockBrief(
-            blockNumber: BlockNumber,
-            accumulator: BlockAccumulator,
-            competingFallbackStartTime: FallbackTxStartTime,
-            cardanoNetwork: CardanoNetwork.Section,
-            txTiming: TxTiming,
-            blockStartTime: BlockCreationStartTime,
-            blockEndTime: BlockCreationEndTime,
-            prevVersion: BlockVersion.Full,
-            isFinal: Boolean,
-            activeUtxos: Utxos,
-            depositEnqueued: List[RegisterDepositCommand],
-            depositRegistered: List[RequestId],
-            depositsSubmitted: List[RequestId],
-            treasuryTokenName: AssetName
-        ): (BlockBrief, Utxos, Unit) = {
+        private def liftEndo(endo: State => State): cats.data.State[State, Unit] =
+            cats.data.State[State, Unit](s => (endo(s), ()))
 
-            logger.trace(s"mkBlockBrief: blockNumber: $blockNumber")
-            logger.trace(s"mkBlockBrief: blockStartTime: $blockStartTime")
+        private def getBlockCreationStartTime: cats.data.State[State, BlockCreationStartTime] =
+            cats.data.State.get.map(state => BlockCreationStartTime(state.currentTime.instant))
 
-            val settlementValidityEnd =
-                txTiming.newSettlementEndTime(competingFallbackStartTime)
-            logger.trace(s"settlementValidityEnd=$settlementValidityEnd")
+        private def getSettlementValidityEnd: cats.data.State[State, SettlementTxEndTime] =
+            cats.data.State.get.map(state =>
+                state.multiNodeConfig.txTiming.newSettlementEndTime(
+                  state.competingFallbackStartTime
+                )
+            )
 
-            val requestValidity = accumulator.map((le, _, flag) => le.requestId -> flag)
+        private def getMajorBlockWakeupTime(
+            fallbackTxStartTime: FallbackTxStartTime
+        ): cats.data.State[State, MajorBlockWakeupTime] =
+            for {
+                state <- cats.data.State.get[State]
+                newForcedMajorBlockTime =
+                    state.multiNodeConfig.txTiming.forcedMajorBlockTime(fallbackTxStartTime)
+                mAbsorptionStartTime: Option[DepositAbsorptionStartTime] =
+                    state.deposits.mAbsorptionStartTime(using state.multiNodeConfig)
+                wakeupTime =
+                    TxTiming.majorBlockWakeupTime(newForcedMajorBlockTime, mAbsorptionStartTime)
 
-            val depositsToCheck =
-                depositEnqueued.filter(d => depositRegistered.contains(d.request.requestId))
+            } yield wakeupTime
 
-            val depositsAbsorbed = depositsToCheck
-                .filter(registerDepositCommand => {
-
-                    // TODO: this should be done during parsing I guess?
-                    val requestValidityEnd = RequestValidityEndTime(
-                      cardanoNetwork.slotConfig,
-                      registerDepositCommand.request.request.header.validityEnd
+        /** Register or reject [[Enqueued]] deposits depending on their [[ValidityFlag]], as derived
+          * from the [[BlockAccumulator]]
+          * @param events
+          * @return
+          *   a tuple of (registeredEvents, rejectedEvents)
+          */
+        private def registerOrReject(
+            events: List[(RequestId, ValidityFlag)]
+        ): cats.data.State[State, (Queue[Enqueued], Queue[Enqueued])] = for {
+            state <- cats.data.State.get[State]
+            // FIXME: this could be done probably in a single fold, and perhaps more performant for large
+            // lists of events by using a `Map[RequestId, ValidityFlag]` instead.
+            // Or perhaps the accumulator should just store the full RegisterDepositCommand,
+            //
+            // I'm also not 100% certain how the accumulator gets populated right now -- is it meaningfully
+            // distinct from the new semantics of the Deposits.depositsEnqueued?
+            requestsInAccumulator: Queue[(ValidityFlag, Enqueued)] = {
+                // Look at all enqueued deposits
+                state.deposits.depositsEnqueued
+                    // map them with the validity flag, if its in the accumulator
+                    .map(cmd =>
+                        val thisEvent: Option[(RequestId, ValidityFlag)] =
+                            events.find(event => event._1 == cmd.request.requestId)
+                        thisEvent.map((requestId, validityFlag) => (validityFlag, cmd))
                     )
-                    val depositAbsorptionStart =
-                        txTiming.depositAbsorptionStartTime(requestValidityEnd)
-                    val depositAbsorptionEnd =
-                        txTiming.depositAbsorptionEndTime(requestValidityEnd)
+                    // Then filter out all the requests not in the accumulator
+                    .filter(_.isDefined)
+                    .map(_.get)
 
-                    val isDepositUtxoFound =
-                        depositsSubmitted.contains(registerDepositCommand.request.requestId)
+            }
+            depositsToRegisterOrReject: (
+                Queue[Enqueued],
+                Queue[Enqueued]
+            ) = requestsInAccumulator
+                .partition(_._1 == Valid)
+                .bimap(_.map(_._2), _.map(_._2))
+            _ <- liftEndo(Deposits.register(depositsToRegisterOrReject._1))
+            _ <- liftEndo(Deposits.reject(depositsToRegisterOrReject._2))
+        } yield depositsToRegisterOrReject
+
+        // TODO: Don't we need to limit the max number we absorb? That's not being done here
+        private val absorb: cats.data.State[State, Queue[Submitted]] = for {
+            state <- cats.data.State.get[State]
+            blockStartTime <- getBlockCreationStartTime
+            settlementValidityEnd <- getSettlementValidityEnd
+
+            depositsToAbsorb: Queue[Submitted] = state.deposits.depositsSubmitted
+                .filter(submitted => {
+                    given TxTiming.Section = state.multiNodeConfig
 
                     logger.trace(
-                      s"MODEL deposit absorption check: ${registerDepositCommand.request.requestId},\n" +
-                          s"depositAbsorptionStart=$depositAbsorptionStart, " +
-                          s"depositAbsorptionEnd=$depositAbsorptionEnd, " +
-                          s"utxo is found: $isDepositUtxoFound"
+                      s"MODEL deposit absorption check: ${submitted.request.requestId},\n" +
+                          s"depositAbsorptionStart=${submitted.depositAbsorptionStart}, " +
+                          s"depositAbsorptionEnd=${submitted.depositAbsorptionEnd}"
                     )
 
                     // Check all the conditions
-                    depositAbsorptionStart.convert <= blockStartTime
-                    && depositAbsorptionEnd.convert >= settlementValidityEnd.convert
-                    && isDepositUtxoFound
+                    submitted.depositAbsorptionStart.convert <= blockStartTime
+                    && submitted.depositAbsorptionEnd.convert >= settlementValidityEnd.convert
                 })
-                .map(_._1.requestId)
 
-            logger.trace(s"depositsAbsorbed: $depositsAbsorbed")
+            _ = logger.trace(s"depositsToAbsorb: $depositsToAbsorb")
 
-            val depositsRefunded =
-                (if isFinal
-                 then depositsToCheck // all known deposits should be refunded
-                 else
-                     depositsToCheck.filter(registerDepositCommand =>
+            _ <- liftEndo(Deposits.absorb(depositsToAbsorb))
+        } yield depositsToAbsorb
 
-                         // TODO: this should be done during parsing I guess?
-                         val requestValidityEnd = RequestValidityEndTime(
-                           cardanoNetwork.slotConfig,
-                           registerDepositCommand.request.request.header.validityEnd
-                         )
-                         val depositAbsorptionStart =
-                             txTiming.depositAbsorptionStartTime(requestValidityEnd)
-                         val depositAbsorptionEnd =
-                             txTiming.depositAbsorptionEndTime(requestValidityEnd)
-                         val settlementValidityEnd =
-                             txTiming.newSettlementEndTime(competingFallbackStartTime)
-                         val isDepositUtxoFound =
-                             depositsSubmitted.contains(registerDepositCommand.request.requestId)
+        private def refund(
+            isFinal: Boolean
+        ): cats.data.State[State, Queue[Refundable]] = for {
+            state <- cats.data.State.get[State]
+            blockStartTime <- getBlockCreationStartTime
+            settlementValidityEnd <- getSettlementValidityEnd
 
-                         logger.trace(
-                           s"MODEL deposit rejection check: ${registerDepositCommand.request.requestId},\n" +
-                               s"depositAbsorptionEnd=$depositAbsorptionEnd, " +
-                               s"settlementValidityEnd=$settlementValidityEnd"
-                         )
+            depositsToRefund: Queue[Refundable] =
+                if isFinal
+                then
+                    state.deposits.hydrozoaKnownRegisteredDeposits // all known deposits should be refunded
+                else
+                    state.deposits.hydrozoaKnownRegisteredDeposits.filter(refundable =>
+                        given TxTiming.Section = state.multiNodeConfig
 
-                         settlementValidityEnd.convert > depositAbsorptionEnd.convert
-                         || (depositAbsorptionStart.convert < blockStartTime && !isDepositUtxoFound)
-                     )
-                ).map(_._1.requestId)
+                        logger.trace(
+                          s"MODEL deposit refund check: ${refundable.request.requestId},\n" +
+                              s"depositAbsorptionEnd=$refundable.depositAbsorptionEnd, " +
+                              s"settlementValidityEnd=$settlementValidityEnd"
+                        )
 
-            logger.trace(s"depositsRefunded: $depositsRefunded")
-
-            // An "L2 genesis" is what we now call deposit compartment, keeping them for now.
-            val depositCompartments: List[L2Genesis] =
-                depositsAbsorbed
-                    .map(requestId =>
-                        depositEnqueued
-                            .find(_.request.requestId == requestId)
-                            .getOrElse(
-                              throw RuntimeException(s"deposit not found: $requestId")
-                            )
+                        settlementValidityEnd.convert > refundable.depositAbsorptionEnd.convert
+                        || (refundable.depositAbsorptionStart.convert < blockStartTime)
                     )
-                    .map(rdc => {
-                        val l2Payload: Array[Byte] =
-                            rdc.depositRefundTxSeq.depositTx.depositProduced.l2Payload.bytes
-                        val obligations =
-                            Cbor.decode(l2Payload).to[Queue[GenesisObligation]].value.toList
-                        val genesisId =
-                            mkGenesisId(rdc.depositRefundTxSeq.depositTx.depositProduced.utxoId)
-                        L2Genesis(Queue.from(obligations), genesisId)
-                    })
+            _ = logger.trace(s"depositToRefund: $depositsToRefund")
+            _ <- liftEndo(Deposits.refund(depositsToRefund))
+        } yield depositsToRefund
 
-            val newActiveUtxos =
-                activeUtxos ++ depositCompartments.flatMap(_.asUtxos.map((i, o) => i -> o.value))
-            val newEvacuationMap = newActiveUtxos
-                .toEvacuationMap(cardanoNetwork)
-                .toOption
-                .getOrElse(throw RuntimeException("cannot build the evacuation map"))
+        private val updateEvacuationMap: cats.data.State[State, EvacuationMap] =
+            for {
+                state <- cats.data.State.get[State]
+                // An "L2 genesis" is what we now call deposit compartment, keeping them for now.
+                depositCompartments: Queue[L2Genesis] =
+                    state.deposits.depositsAbsorbed
+                        .map(rdc => {
+                            val l2Payload: Array[Byte] =
+                                rdc.depositRefundTxSeq.depositTx.depositProduced.l2Payload.bytes
+                            val obligations =
+                                Cbor.decode(l2Payload).to[Queue[GenesisObligation]].value.toList
+                            val genesisId =
+                                mkGenesisId(
+                                  rdc.depositRefundTxSeq.depositTx.depositProduced.utxoId
+                                )
+                            L2Genesis(Queue.from(obligations), genesisId)
+                        })
 
-            lazy val newFallbackTxStartTime = txTiming.newFallbackStartTime(blockEndTime)
-            lazy val newForcedMajorBlockTime = txTiming.forcedMajorBlockTime(newFallbackTxStartTime)
-            lazy val newMajorBlockWakeupTime =
-                TxTiming.majorBlockWakeupTime(newForcedMajorBlockTime, None)
+                newActiveUtxos =
+                    state.utxosL2Active ++ depositCompartments.flatMap(
+                      _.asUtxos.map((i, o) => i -> o.value)
+                    )
 
-            lazy val majorBlock = Major(
-              header = BlockHeader.Major(
-                blockNum = blockNumber,
-                blockVersion = prevVersion.incrementMajor,
-                startTime = blockStartTime,
-                endTime = blockEndTime,
-                kzgCommitment = newEvacuationMap.kzgCommitment,
-                fallbackTxStartTime = newFallbackTxStartTime,
-                majorBlockWakeupTime = newMajorBlockWakeupTime
-              ),
-              body = BlockBody.Major(
-                events = requestValidity,
-                depositsAbsorbed = depositsAbsorbed,
-                depositsRefunded = depositsRefunded
-              )
-            )
+                _ <- cats.data.State.set[State](state.copy(utxosL2Active = newActiveUtxos))
 
-            lazy val forcedMajorBlockTime =
-                txTiming.forcedMajorBlockTime(competingFallbackStartTime)
-            lazy val majorBlockWakeupTime =
-                TxTiming.majorBlockWakeupTime(forcedMajorBlockTime, None)
+                newEvacuationMap = newActiveUtxos
+                    .toEvacuationMap(state.multiNodeConfig)
+                    .toOption
+                    .getOrElse(throw RuntimeException("cannot build the evacuation map"))
+            } yield newEvacuationMap
 
-            lazy val minorBlock = Minor(
+        private def majorBlock(
+            blockEndTime: BlockCreationEndTime,
+            blockNumber: BlockNumber,
+            blockVersion: BlockVersion.Full,
+            newEvacuationMap: EvacuationMap,
+            events: List[(RequestId, ValidityFlag)],
+            absorbedThisBlock: Queue[Submitted],
+            refundedThisBlock: Queue[Refundable]
+        ): cats.data.State[State, BlockBrief.Major] =
+            for {
+                state <- cats.data.State.get[State]
+                txTiming = state.multiNodeConfig.txTiming
+
+                blockStartTime <- getBlockCreationStartTime
+
+                newFallbackTxStartTime = txTiming.newFallbackStartTime(blockEndTime)
+                newMajorBlockWakeupTime <- getMajorBlockWakeupTime(newFallbackTxStartTime)
+
+                majorBlock = Major(
+                  header = BlockHeader.Major(
+                    blockNum = blockNumber,
+                    blockVersion = blockVersion,
+                    startTime = blockStartTime,
+                    endTime = blockEndTime,
+                    kzgCommitment = newEvacuationMap.kzgCommitment,
+                    fallbackTxStartTime = newFallbackTxStartTime,
+                    majorBlockWakeupTime = newMajorBlockWakeupTime
+                  ),
+                  body = BlockBody.Major(
+                    events = events,
+                    depositsAbsorbed = absorbedThisBlock.map(_.cmd.request.requestId).toList,
+                    depositsRefunded = refundedThisBlock.map(_.cmd.request.requestId).toList
+                  )
+                )
+
+                _ <- cats.data.State.modify[State](
+                  _.copy(competingFallbackStartTime = newFallbackTxStartTime)
+                )
+                _ = logger.debug(
+                  s"newCompetingFallbackStartTime: $newFallbackTxStartTime"
+                )
+
+            } yield majorBlock
+
+        private def minorBlock(
+            blockEndTime: BlockCreationEndTime,
+            blockNumber: BlockNumber,
+            blockVersion: BlockVersion.Full,
+            newEvacuationMap: EvacuationMap,
+            events: List[(RequestId, ValidityFlag)],
+            refundedThisBlock: Queue[Refundable]
+        ): cats.data.State[State, BlockBrief.Minor] = for {
+            state <- cats.data.State.get[State]
+            blockStartTime = BlockCreationStartTime(state.currentTime.instant)
+            majorBlockWakeupTime <- getMajorBlockWakeupTime(state.competingFallbackStartTime)
+            minorBlock = Minor(
               header = BlockHeader.Minor(
                 blockNum = blockNumber,
-                blockVersion = prevVersion.incrementMinor,
+                blockVersion = blockVersion,
                 startTime = blockStartTime,
                 endTime = blockEndTime,
                 kzgCommitment = newEvacuationMap.kzgCommitment,
-                fallbackTxStartTime = competingFallbackStartTime, // doesn't change
+                fallbackTxStartTime = state.competingFallbackStartTime, // doesn't change
                 majorBlockWakeupTime = majorBlockWakeupTime // doesn't change
               ),
               body = BlockBody.Minor(
-                events = accumulator.map((le, _, flag) => le.requestId -> flag),
-                depositsRefunded = depositsRefunded
+                events = events,
+                depositsRefunded = refundedThisBlock.map(_.cmd.request.requestId).toList
               )
             )
+        } yield minorBlock
 
-            lazy val finalBlock = Final(
+        def finalBlock(
+            blockEndTime: BlockCreationEndTime,
+            blockNumber: BlockNumber,
+            blockVersion: BlockVersion.Full,
+            events: List[(RequestId, ValidityFlag)],
+            refundedThisBlock: Queue[Refundable]
+        ): cats.data.State[State, BlockBrief.Final] = for {
+            _ <- cats.data.State
+                .modify[State](_.copy(blockCycle = BlockCycle.HeadFinalized))
+            blockStartTime <- getBlockCreationStartTime
+
+            finalBlock = Final(
               header = BlockHeader.Final(
                 blockNum = blockNumber,
-                blockVersion = prevVersion.incrementMajor,
+                blockVersion = blockVersion,
                 startTime = blockStartTime,
                 endTime = blockEndTime,
               ),
               body = BlockBody.Final(
-                events = accumulator.map((le, _, flag) => le.requestId -> flag),
-                depositsRefunded = depositsRefunded
+                events = events,
+                depositsRefunded = refundedThisBlock.map(_.cmd.request.requestId).toList
               )
             )
 
-            val brief =
-                if isFinal then finalBlock
-                else if txTiming.blockCanStayMinor(
-                      blockEndTime,
-                      competingFallbackStartTime
-                    )
-                then {
-                    val hasWithdrawals = accumulator.exists(_._2 match {
-                        case e: L2Tx => e.l1utxos.nonEmpty
-                        case _       => false
-                    })
-                    val hasDepositsAbsorbed: Boolean = depositsAbsorbed.nonEmpty
+        } yield finalBlock
 
-                    if hasWithdrawals || hasDepositsAbsorbed
-                    then majorBlock
-                    else minorBlock
-                } else majorBlock
+        private def mkBlockBrief(
+            isFinal: Boolean,
+            blockEndTime: BlockCreationEndTime,
+            blockNumber: BlockNumber,
+            prevVersion: BlockVersion.Full,
+            newEvacuationMap: EvacuationMap,
+            accumulator: BlockAccumulator,
+            absorbedThisBlock: Queue[Submitted],
+            refundedThisBlock: Queue[Refundable]
+        ): cats.data.State[State, BlockBrief] =
+            for {
+                state <- cats.data.State.get[State]
 
-            logger.trace(s"block brief: $brief")
+                events = accumulator.map((req, _, flag) => (req.requestId, flag))
 
-            // The idea was to reuse withdrawn utxos on L1.
-            // The problem with that is that the model knows nothing about the effects.
-            // As a consequence, we don't know utxo ids of withdrawn funds, and we cannot reuse them.
-            val withdrawnUtxos: Unit = ()
+                // Construct, but don't execute the state transitions -- we decide which one we need below
+                doMajorBlock = majorBlock(
+                  blockEndTime,
+                  blockNumber,
+                  prevVersion.incrementMajor,
+                  newEvacuationMap,
+                  events,
+                  absorbedThisBlock,
+                  refundedThisBlock
+                )
+                doMinorBlock = minorBlock(
+                  blockEndTime,
+                  blockNumber,
+                  prevVersion.incrementMinor,
+                  newEvacuationMap,
+                  events,
+                  refundedThisBlock
+                )
+                doFinalBlock = finalBlock(
+                  blockEndTime,
+                  blockNumber,
+                  prevVersion.incrementMajor,
+                  events,
+                  refundedThisBlock
+                )
 
-            (brief, newActiveUtxos, withdrawnUtxos)
-        }
+                blockCanStayMinor = state.multiNodeConfig.txTiming.blockCanStayMinor(
+                  blockEndTime,
+                  state.competingFallbackStartTime
+                )
+
+                hasWithdrawals = accumulator.exists(_._2 match {
+                    case e: L2Tx => e.l1utxos.nonEmpty
+                    case _       => false
+                })
+                hasDepositsAbsorbed: Boolean = absorbedThisBlock.nonEmpty
+
+                // I wanted to do this with pattern guards in a case expression, but the type checker
+                // complained
+                brief: BlockBrief <-
+                    if isFinal
+                    then doFinalBlock
+                    else if blockCanStayMinor
+                    then {
+                        if hasWithdrawals || hasDepositsAbsorbed
+                        then doMajorBlock
+                        else doMinorBlock
+                    } else doMajorBlock
+
+                _ = logger.trace(s"block brief: $brief")
+            } yield brief
 
         override def preCondition(cmd: CompleteBlockCommand, state: State): Boolean =
             state.blockCycle match {
@@ -667,7 +730,7 @@ object Model:
         ): (Unit, State) = {
 
             import cmd.request as req
-        import state.multiNodeConfig as config
+            import state.multiNodeConfig as config
 
             logger.debug(
               s"MODEL>> RegisterDepositCommand for event ID: ${cmd.request.requestId}"
@@ -677,10 +740,8 @@ object Model:
                 state.blockCycle: @unchecked
             logger.trace(s"INPUT state.blockCycle event IDs: ${currentEvents.map(_._1.requestId)}")
 
-            val requestValidityEndTime = RequestValidityEndTime(
-                config.slotConfig,
-                req.request.header.validityEnd
-            )
+            val requestValidityEndTime = req.request.header.validityEnd
+
             val seq =
                 DepositRefundTxSeq
                     .Parse(config.headConfig)(
@@ -696,7 +757,7 @@ object Model:
             require(blockStartTime < seq.depositTx.submissionDeadline)
 
             val depositAbsorptionEndTime = config.headConfig.txTiming.depositAbsorptionEndTime(
-                requestValidityEndTime
+              requestValidityEndTime
             )
             require(
               blockStartTime < depositAbsorptionEndTime
@@ -706,18 +767,15 @@ object Model:
 
             val depositUtxo = seq.depositTx.depositProduced
 
-            val newState = state
+            val newState: State = state
                 .pipe(
                   blockCycleLens
                       .andThen(contentLens)
                       .modify(_ :+ (cmd.request, depositUtxo, ValidityFlag.Valid))
                 )
-                .focus(_.depositEnqueued)
-                .modify(_ :+ cmd)
+                .pipe(Deposits.enqueue(Queue(cmd)))
                 .focus(_.utxoLocked)
                 .modify(_ ++ seq.depositTx.tx.body.value.inputs.toSeq)
-                .focus(_.depositSigned)
-                .modify(_ + (cmd.depositTxBytesSigned.id -> cmd.depositTxBytesSigned))
                 .focus(_.nextRequestNumber)
                 .modify(_.increment)
 
@@ -727,8 +785,10 @@ object Model:
               s"OUTPUT newState.blockCycle event IDs: ${finalEvents.map(_._1.requestId)}"
             )
             logger.trace(
-              s"OUTPUT newState.depositEnqueued IDs and submission deadlines: ${newState.depositEnqueued
-                      .map(e => e._1.requestId -> e._2.depositTx.submissionDeadline)}"
+              s"OUTPUT newState.depositEnqueued IDs and submission deadlines: ${newState.deposits.depositsEnqueued
+                      .map(e =>
+                          e.request.requestId -> e.cmd.depositRefundTxSeq.depositTx.submissionDeadline
+                      )}"
             )
 
             () -> newState
@@ -746,48 +806,30 @@ object Model:
         ): (Unit, State) = {
             logger.debug(
               s"MODEL>> SubmitDepositCommand, for submission: ${cmd.depositsForSubmission.size}, " +
-                  s"for rejection: ${cmd.depositsForRejection.size}"
+                  s"for rejection: ${cmd.depositsToDecline.size}"
             )
 
-            val allDeposits = cmd.depositsForSubmission.map(e => true -> e._1)
-                ++ cmd.depositsForRejection.map(e => false -> e)
+            // TODO: Move this into the Deposits.submit method
+            val applyContinuingL1TxEndo: (Transaction => State => State) = tx =>
+                original => original.applyContinuingL1Tx(tx)
 
-            // Attach corresponding register deposit commands
-            val depositsAug = allDeposits.map((flag, eventId) =>
-                val registerDepositCmd = state.depositEnqueued
-                    .find(_.request.requestId == eventId)
-                    .getOrElse(
-                      throw RuntimeException(
-                        s"Deposit with event ID $eventId not found in enqueued"
+            // TODO: move this into the Deposits.decline method
+            val unlockUtxosEndo: (Set[TransactionInput] => State => State) = inputs =>
+                original => original.focus(_.utxoLocked).modify(_ -- inputs)
+
+            // TODO: If we switch to the state monad, this can be done with traverse
+            val endos: Queue[State => State] =
+                cmd.depositsForSubmission
+                    .map(registered => applyContinuingL1TxEndo(registered.depositTxBytesSigned))
+                    .appended(Deposits.submit(cmd.depositsForSubmission))
+                    .appended(Deposits.decline(cmd.depositsToDecline))
+                    .appendedAll(
+                      cmd.depositsToDecline.map(registered =>
+                          unlockUtxosEndo(registered.depositTxBytesSigned.body.value.inputs.toSet)
                       )
                     )
-                (flag, eventId, registerDepositCmd)
-            )
 
-            // Apply each deposit transaction to peerUtxosL1, checking TTL
-            // Also collect deposit UTXO IDs (output 0 of deposit txs)
-            val newState =
-                depositsAug.foldLeft(state) { case (acc, (flag, eventId, registerDepositCmd)) =>
-                    val signedTx = registerDepositCmd.depositTxBytesSigned
-                    val fundingUtxos = signedTx.body.value.inputs.toSet
-
-                    if flag then
-                        // "submit" deposit tx
-                        logger.trace(s"Stepping model: submit deposit tx for event ID: $eventId")
-                        acc.copy(
-                          depositSubmitted = acc.depositSubmitted :+ eventId
-                        ).applyContinuingL1Tx(signedTx)
-                    else
-                        // Unlock funding utxos
-                        logger.info(
-                          s"Deposit $eventId is expired, unlocking funding utxos"
-                        )
-                        acc.copy(
-                          utxoLocked = acc.utxoLocked -- fundingUtxos,
-                          depositsDeclined = acc.depositsDeclined :+ eventId
-                        )
-                }
-
+            val newState = endos.foldLeft(state)(_ |> _)
             () -> newState
         }
     }

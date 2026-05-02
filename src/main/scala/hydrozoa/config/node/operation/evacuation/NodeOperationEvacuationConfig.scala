@@ -1,6 +1,6 @@
 package hydrozoa.config.node.operation.evacuation
 
-import hydrozoa.config.head.multisig.timing.given
+import hydrozoa.lib.cardano.scalus.QuantizedTime.given
 import hydrozoa.multisig.consensus.peer.HeadPeerWallet
 import io.circe.*
 import io.circe.generic.semiauto.*

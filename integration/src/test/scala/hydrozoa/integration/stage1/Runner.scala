@@ -15,6 +15,7 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
         p: org.scalacheck.Test.Parameters
     ): org.scalacheck.Test.Parameters = {
         p.withWorkers(1)
+//            .withPropFilter(Some("Deposits"))
         // NB: careful, this will override -s from the command line
         // .withMinSuccessfulTests(100) // 10000
         // .withMaxSize(100) // 500
@@ -43,7 +44,7 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
       * and once the target is hit finalizes the head immediately. Only command sequences that
       * satisfy the condition "head is finalized" are run.
       */
-    lazy val _ = property("Dusty head finalization") = Suite(
+    val _ = property("Dusty head finalization") = Suite(
       suiteCardano = Mock(preprod),
       txTimingGen = generateDefaultTxTiming,
       scenarioGen = MakeDustScenarioGen(minL2Utxos = 500),
@@ -56,7 +57,7 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
       *
       * TODO: do we want to test the rollout sequence with in the settlement tx seq specifically?
       */
-    lazy val _ = property("Ongoing withdrawals") = Suite(
+    val _ = property("Ongoing withdrawals") = Suite(
       suiteCardano = Mock(preprod),
       txTimingGen = generateDefaultTxTiming,
       scenarioGen = OngoingWithdrawalsScenarioGen,
@@ -69,7 +70,7 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
       *   - [[RegisterDepositCommand]]
       *   - [[SubmitDepositCommand]]
       */
-    lazy val _ = property("Deposits") = Suite(
+    val _ = property("Deposits") = Suite(
       suiteCardano = Mock(preprod),
       txTimingGen = generateDefaultTxTiming,
       scenarioGen = DepositsScenarioGen,

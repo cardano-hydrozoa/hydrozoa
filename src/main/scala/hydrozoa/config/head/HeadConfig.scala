@@ -167,10 +167,8 @@ object HeadConfig {
 
     private val logger = Logging.logger("HeadConfig")
 
-    type HeadConfigError = Tx[
-      InitializationTx
-    ]#SignatureError | Tx[FallbackTx]#SignatureError | InitializationTxSeq.Build.Error |
-        HeadConfigBootstrapError
+    type HeadConfigError = Tx.SignatureError[InitializationTx] | Tx.SignatureError[FallbackTx] |
+        InitializationTxSeq.Build.Error | HeadConfigBootstrapError
 
     def apply(
         headConfigBootstrap: HeadConfig.Bootstrap,
@@ -188,11 +186,11 @@ object HeadConfig {
 
         validatedUnsignedInitTxSeq.andThen(expectedTxSeq => {
             val validatedSignedInitTx
-                : ValidatedNel[Tx[InitializationTx]#SignatureError, InitializationTx] =
+                : ValidatedNel[Tx.SignatureError[InitializationTx], InitializationTx] =
                 expectedTxSeq.initializationTx
                     .validateAndAddMultiSignatures(headConfigBootstrap.headPeers, initTxSigned)
 
-            val validatedSignedFallbackTx: ValidatedNel[Tx[FallbackTx]#SignatureError, FallbackTx] =
+            val validatedSignedFallbackTx: ValidatedNel[Tx.SignatureError[FallbackTx], FallbackTx] =
                 expectedTxSeq.fallbackTx
                     .validateAndAddMultiSignatures(headConfigBootstrap.headPeers, fallbackTxSigned)
 

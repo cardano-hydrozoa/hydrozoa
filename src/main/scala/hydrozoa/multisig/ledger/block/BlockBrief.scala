@@ -6,6 +6,7 @@ import io.circe.*
 import io.circe.generic.semiauto.*
 
 sealed trait BlockBrief extends BlockBrief.Section {
+
     def asUnsigned: this.type & BlockStatus.Unsigned =
         this.asInstanceOf[this.type & BlockStatus.Unsigned]
     def asMultiSigned: this.type & BlockStatus.MultiSigned =
@@ -13,6 +14,8 @@ sealed trait BlockBrief extends BlockBrief.Section {
 }
 
 object BlockBrief {
+    given (using cardanoNetwork: CardanoNetwork.Section): Codec[BlockBrief] =
+        deriveCodec[BlockBrief]
 
     given blockBriefInitialEncoder: Encoder[BlockBrief.Initial] =
         deriveEncoder[BlockBrief.Initial]
@@ -27,6 +30,8 @@ object BlockBrief {
         override transparent inline def blockBrief: BlockBrief.Initial = this
         override transparent inline def body: BlockBody.Initial.type = BlockBody.Initial
     }
+
+    given (using CardanoNetwork.Section): Codec[BlockBrief.Minor] = deriveCodec[BlockBrief.Minor]
 
     final case class Minor(
         override val header: BlockHeader.Minor,

@@ -10,7 +10,7 @@ import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.actor.{ActorSystem, test as _}
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
-import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, unsafeRequestValidityEndTime}
+import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.actor.SyncRequest
@@ -20,7 +20,7 @@ import hydrozoa.lib.cardano.scalus.ledger.stripVKeyWitnesses
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.pollresults.PollResults
-import hydrozoa.multisig.consensus.{ConsensusActor, RequestValidityEndTimeRaw, RequestValidityStartTimeRaw, UserRequest, UserRequestBody, UserRequestHeader, UserRequestWithId}
+import hydrozoa.multisig.consensus.{ConsensusActor, UserRequest, UserRequestBody, UserRequestHeader, UserRequestWithId}
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.*
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Requests.*
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Scenarios.*
@@ -413,11 +413,8 @@ object JointLedgerTestHelpers {
 
                 header = UserRequestHeader(
                   headId = env.config.headId,
-                  validityStart =
-                      RequestValidityStartTimeRaw(blockCreationStartTime.getEpochSecond),
-                  validityEnd = RequestValidityEndTimeRaw(
-                    depositRefundTxSeq.depositTx.depositProduced.requestValidityEndTime.getEpochSecond
-                  ),
+                  validityStart = RequestValidityStartTime(blockCreationStartTime),
+                  validityEnd = depositRefundTxSeq.depositTx.depositProduced.requestValidityEndTime,
                   bodyHash = body.hash
                 )
 
@@ -554,7 +551,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                               newRequestIds,
                               actionQueue.appended(
                                 deposit(
-                                  requestValidityEndTime = unsafeRequestValidityEndTime(
+                                  requestValidityEndTime = RequestValidityEndTime(
                                     blockCreationStartTime + requestValidityEndTimeOffset
                                   ),
                                   requestId = RequestId(peer, lastRequestID.increment),
@@ -668,7 +665,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
           firstBlockCreationStartTime <- startBlockNow(firstBlockNumber)
           firstBlockCreationEndTime = BlockCreationEndTime(firstBlockCreationStartTime + 20.seconds)
           // Generate a deposit and observe that it appears in the dapp ledger correctly
-          firstDepositValidityEnd = unsafeRequestValidityEndTime(
+          firstDepositValidityEnd = RequestValidityEndTime(
             firstBlockCreationEndTime + 10.minutes
           )
           seqAndReq <- deposit(
@@ -857,7 +854,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               requestValidityEndTime <- pick(
                 Gen.choose(1, 10)
                     .map(s =>
-                        unsafeRequestValidityEndTime(
+                        RequestValidityEndTime(
                           blockStartTime + FiniteDuration(s, TimeUnit.SECONDS)
                         )
                     )
@@ -902,7 +899,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               requestValidityEndTime <- pick(
                 Gen.choose(0, 10)
                     .map(s =>
-                        unsafeRequestValidityEndTime(
+                        RequestValidityEndTime(
                           blockStartTime - FiniteDuration(s, TimeUnit.SECONDS)
                         )
                     )

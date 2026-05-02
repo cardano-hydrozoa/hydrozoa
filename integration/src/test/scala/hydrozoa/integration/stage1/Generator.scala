@@ -1,10 +1,11 @@
 package hydrozoa.integration.stage1
 
+import hydrozoa.integration.stage1.model.Deposits.DepositStatus
 import cats.data.NonEmptyList
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.config.head.initialization.CappedValueGen.{ensureMinAdaLenient, generateCappedValue}
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
-import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.RequestValidityEndTime
+import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.integration.stage1.CommandGenerators.L2txGen
 import hydrozoa.integration.stage1.CommandGenerators.TxMutator.Identity
@@ -21,7 +22,7 @@ import hydrozoa.lib.cardano.scalus.txbuilder.DiffHandler.prebalancedLovelaceDiff
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.consensus.{RequestValidityEndTimeRaw, RequestValidityStartTimeRaw, UserRequest, UserRequestHeader, UserRequestWithId}
+import hydrozoa.multisig.consensus.{UserRequest, UserRequestHeader, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.eutxol2.tx.GenesisObligation
 import hydrozoa.multisig.ledger.event.RequestId
@@ -328,11 +329,11 @@ object CommandGenerators:
 
             header = UserRequestHeader(
               headId = config.headConfig.headId,
-              validityStart = RequestValidityStartTimeRaw(
-                (state.currentTime.instant - 5.seconds).getEpochSecond
+              validityStart = RequestValidityStartTime(
+                (state.currentTime.instant - 5.seconds)
               ),
-              validityEnd = RequestValidityEndTimeRaw(
-                (state.currentTime.instant + 2.minutes).getEpochSecond
+              validityEnd = RequestValidityEndTime(
+                (state.currentTime.instant + 2.minutes)
               ),
               bodyHash = body.hash
             )
@@ -452,9 +453,8 @@ object CommandGenerators:
 
                                         // This should be bigger than the longest possible block duration, see [[genCompleteBlock]].
                                         requestValidityEndTime = RequestValidityEndTime(
-                                          multiNodeConfig.slotConfig,
-                                          RequestValidityEndTimeRaw(
-                                            (state.currentTime.instant + 2.minutes).getEpochSecond
+                                          RequestValidityEndTime(
+                                            (state.currentTime.instant + 2.minutes)
                                           )
                                         )
 
@@ -494,12 +494,11 @@ object CommandGenerators:
 
                                         header = UserRequestHeader(
                                           headId = multiNodeConfig.headConfig.headId,
-                                          validityStart = RequestValidityStartTimeRaw(
-                                            (state.currentTime.instant - 5.seconds).getEpochSecond
+                                          validityStart = RequestValidityStartTime(
+                                            (state.currentTime.instant - 5.seconds)
                                           ),
-                                          validityEnd = RequestValidityEndTimeRaw(
-                                            requestValidityEndTime.getEpochSecond
-                                          ),
+                                          validityEnd =
+                                            requestValidityEndTime,
                                           bodyHash = body.hash
                                         )
 
@@ -536,40 +535,29 @@ object CommandGenerators:
     //   because when executing we don't have access to the time
 
     def genSubmitDepositsCommand(
-        depositForSubmission: List[(RequestId, QuantizedInstant)],
         state: Model.State
     ): Gen[SubmitDepositsCommand] = {
+        val registeredDeposits = state.deposits.depositsRegistered
+        
         // Prefix is easier to think about, though we can pick up arbitrary elements
-        Gen.choose(1, depositForSubmission.size).map { n =>
+        Gen.choose(1, registeredDeposits.size).map { n =>
             logger.trace(
-              s"genSubmitDepositsCommand depositForSubmission: ${depositForSubmission.map(_._1)}, n=$n"
+              s"genSubmitDepositsCommand registered deposits: $registeredDeposits, n=$n"
             )
-            val selected = depositForSubmission.take(n)
+            val selected = registeredDeposits.take(n)
 
-            val partition = selected.map { (eventId, submissionDeadline) =>
+            val partition = selected.partition { registered =>
 
-                // Find the deposit command to get the signed transaction
-                val depositCmd = state.depositEnqueued
-                    .find(_.request.requestId == eventId)
-                    .getOrElse {
-                        throw RuntimeException(
-                          s"Deposit with event ID $eventId not found in enqueued"
-                        )
-                    }
-
-                val tuple = eventId -> depositCmd.depositTxBytesSigned
-                // TODO: parameter
+                val submissionDeadline = registered.cmd.request.request.header.validityEnd
                 val submissionRunway = state.currentTime.instant + 20.seconds
 
                 logger.trace(s"genSubmitDepositsCommand: submissionDeadline=$submissionDeadline")
                 logger.trace(s"genSubmitDepositsCommand: submissionRunway=$submissionRunway")
-                if submissionDeadline > submissionRunway
-                then (true, tuple)
-                else (false, tuple)
+                submissionDeadline.convert > submissionRunway
             }
             SubmitDepositsCommand(
-              depositsForSubmission = partition.filter(_._1).map(_._2),
-              depositsForRejection = partition.filterNot(_._1).map(_._2._1)
+              depositsForSubmission = partition._1,
+              depositsToDecline = partition._2
             )
         }
     }
@@ -754,16 +742,14 @@ object ScenarioGenerators:
 
                         case InProgress(blockNumber, _, _, _) =>
 
-                            val depositsForSubmission = state.depositForSubmission
-
                             Gen.frequency(
                               3 -> CommandGenerators
                                   .genRegisterDepositCommand(state)
                                   .map(_.map(AnyCommand.apply(_))),
-                              5 -> (if depositsForSubmission.nonEmpty
+                              5 -> (if state.deposits.depositsRegistered.nonEmpty
                                     then
                                         CommandGenerators
-                                            .genSubmitDepositsCommand(depositsForSubmission, state)
+                                            .genSubmitDepositsCommand(state)
                                             .map(cmd => Some(AnyCommand.apply(cmd)))
                                     else Gen.const(None)),
                               1 -> CommandGenerators

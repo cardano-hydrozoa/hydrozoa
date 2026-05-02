@@ -1,27 +1,19 @@
 package hydrozoa.config.head.multisig.timing
 
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, quantize}
-import hydrozoa.multisig.consensus.{RequestValidityEndTimeRaw, RequestValidityStartTimeRaw}
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, quantize, given}
 import io.circe.syntax.*
-import io.circe.{Decoder, Encoder, HCursor, Json}
+import io.circe.{Codec, Decoder, Encoder, HCursor, Json}
 import scala.annotation.targetName
-import scala.concurrent.duration.{DurationInt, DurationLong, FiniteDuration}
+import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scala.math.Ordered.orderingToOrdered
+import scala.util.Try
 import scalus.cardano.ledger.SlotConfig
 
 import TxTiming.*
 import Durations.*
 import BlockTimes.*
 import RequestTimes.*
-
-given finiteDurationEncoder: Encoder[FiniteDuration] with {
-    // TODO: Should we encode as a string, like in CIP0116?
-    def apply(fd: FiniteDuration): Json = Encoder.encodeLong(fd.toMillis)
-}
-
-given finiteDurationDecoder: Decoder[FiniteDuration] =
-    Decoder.decodeLong.map(l => l.millis)
 
 /** The reason we measure time duration in real units is that slot length is different for different
   * networks.
@@ -359,10 +351,12 @@ object TxTiming {
         opaque type BlockCreationStartTime = QuantizedInstant
         def BlockCreationStartTime(x: QuantizedInstant): BlockCreationStartTime = x
         given Conversion[BlockCreationStartTime, QuantizedInstant] = identity
+        given (using CardanoNetwork.Section): Codec[BlockCreationStartTime] = quantizedInstantCodec
 
         opaque type BlockCreationEndTime = QuantizedInstant
         def BlockCreationEndTime(x: QuantizedInstant): BlockCreationEndTime = x
         given Conversion[BlockCreationEndTime, QuantizedInstant] = identity
+        given (using CardanoNetwork.Section): Codec[BlockCreationEndTime] = quantizedInstantCodec
 
         opaque type InitializationTxEndTime = QuantizedInstant
         private[timing] def InitializationTxEndTime(x: QuantizedInstant): InitializationTxEndTime =
@@ -381,6 +375,8 @@ object TxTiming {
         def FallbackTxStartTime(x: QuantizedInstant): FallbackTxStartTime = x
         given Conversion[FallbackTxStartTime, QuantizedInstant] = identity
 
+        given (using CardanoNetwork.Section): Codec[FallbackTxStartTime] = quantizedInstantCodec
+
         opaque type ForcedMajorBlockTime = QuantizedInstant
         private[timing] def ForcedMajorBlockTime(x: QuantizedInstant): ForcedMajorBlockTime = x
         given Conversion[ForcedMajorBlockTime, QuantizedInstant] = identity
@@ -388,26 +384,35 @@ object TxTiming {
         opaque type MajorBlockWakeupTime = QuantizedInstant
         def MajorBlockWakeupTime(x: QuantizedInstant): MajorBlockWakeupTime = x
         given Conversion[MajorBlockWakeupTime, QuantizedInstant] = identity
+        given (using CardanoNetwork.Section): Codec[MajorBlockWakeupTime] = quantizedInstantCodec
+
     }
 
     object RequestTimes {
         opaque type RequestValidityStartTime = QuantizedInstant
-        def RequestValidityStartTime(
-            slotConfig: SlotConfig,
-            x: RequestValidityStartTimeRaw
-        ): RequestValidityStartTime =
-            QuantizedInstant.ofEpochSeconds(slotConfig, x.toLong)
+        def RequestValidityStartTime(x: QuantizedInstant): RequestValidityStartTime = x
         given Conversion[RequestValidityStartTime, QuantizedInstant] = identity
+        given Encoder[RequestValidityStartTime] =
+            Encoder.encodeLong.contramap(_.instant.getEpochSecond)
+        given (using config: CardanoNetwork.Section): Decoder[RequestValidityStartTime] =
+            Decoder.decodeLong.emap(l =>
+                Try(
+                  QuantizedInstant(config.slotConfig, java.time.Instant.ofEpochSecond(l))
+                ).toEither.left.map(e => s"could not decode RequestValidityStartTime: $e")
+            )
 
         opaque type RequestValidityEndTime = QuantizedInstant
-        def RequestValidityEndTime(
-            slotConfig: SlotConfig,
-            x: RequestValidityEndTimeRaw
-        ): RequestValidityEndTime =
-            QuantizedInstant.ofEpochSeconds(slotConfig, x.toLong)
-        // Used in tests
-        def unsafeRequestValidityEndTime(x: QuantizedInstant): RequestValidityEndTime = x
+        def RequestValidityEndTime(x: QuantizedInstant): RequestValidityEndTime = x
         given Conversion[RequestValidityEndTime, QuantizedInstant] = identity
+        given Encoder[RequestValidityEndTime] =
+            Encoder.encodeLong.contramap(_.instant.getEpochSecond)
+
+        given (using config: CardanoNetwork.Section): Decoder[RequestValidityEndTime] =
+            Decoder.decodeLong.emap(l =>
+                Try(
+                  QuantizedInstant(config.slotConfig, java.time.Instant.ofEpochSecond(l))
+                ).toEither.left.map(e => s"could not decode RequestValidityEndTime: $e")
+            )
 
         opaque type DepositSubmissionDeadline = QuantizedInstant
         private[timing] def DepositSubmissionDeadline(
@@ -421,6 +426,7 @@ object TxTiming {
             x: QuantizedInstant
         ): DepositAbsorptionStartTime = x
         given Conversion[DepositAbsorptionStartTime, QuantizedInstant] = identity
+        given Ordering[DepositAbsorptionStartTime] = Ordering.fromLessThan(_.instant < _.instant)
 
         opaque type DepositAbsorptionEndTime = QuantizedInstant
         private[timing] def DepositAbsorptionEndTime(

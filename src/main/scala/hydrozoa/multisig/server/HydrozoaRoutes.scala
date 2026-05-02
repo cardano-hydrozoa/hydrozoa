@@ -3,11 +3,12 @@ package hydrozoa.multisig.server
 import cats.effect.IO
 import fs2.Stream
 import hydrozoa.config.head.HeadConfig
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.consensus.{BlockWeaver, EventSequencer, UserRequest}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.server.ApiResponse.{CardanoNativeToken, Error, HeadInfo, RequestAccepted}
-import hydrozoa.multisig.server.JsonCodecs.given
+import hydrozoa.multisig.server.JsonCodecs.{UserRequestDecoder, given}
 import io.circe.syntax.*
 import org.http4s.circe.*
 import org.http4s.dsl.io.*
@@ -24,6 +25,7 @@ class HydrozoaRoutes(
     headConfig: HeadConfig,
     serverConfig: HydrozoaServer.Config
 ) {
+    private given HeadConfig = headConfig
 
     private given logger: Logger[IO] = Logging.loggerIO("HydrozoaRoutes")
 
@@ -36,8 +38,12 @@ class HydrozoaRoutes(
         }
 
     // Implicit decoders for request bodies
-    implicit val depositRequestEntityDecoder: EntityDecoder[IO, UserRequest] =
+    given depositRequestEntityDecoder(using
+        CardanoNetwork.Section
+    ): EntityDecoder[IO, UserRequest] =
         jsonOf[IO, UserRequest]
+
+    private val userRequestDecoder: JsonCodecs.UserRequestDecoder = UserRequestDecoder()
 
     val routes: HttpRoutes[IO] = HttpRoutes.of[IO] {
 
@@ -55,7 +61,7 @@ class HydrozoaRoutes(
                         )
                     case Right(json) =>
                         // Try to decode to UserRequest
-                        io.circe.Decoder[UserRequest].decodeJson(json) match {
+                        userRequestDecoder.decodeJson(json) match {
                             case Left(decodeError) =>
                                 logger.error(
                                   s"POST /api/l2/submit - JSON decode error: ${decodeError.getMessage}"

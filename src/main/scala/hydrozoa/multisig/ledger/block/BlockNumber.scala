@@ -1,8 +1,15 @@
 package hydrozoa.multisig.ledger.block
 
+import io.circe.*
+import scala.util.Try
+
 type BlockNumber = BlockNumber.BlockNumber
 
 object BlockNumber {
+    given Encoder[BlockNumber] = Encoder.encodeInt.contramap(identity)
+    given Decoder[BlockNumber] =
+        Decoder.decodeInt.emap(i => Try(BlockNumber(i)).toEither.left.map(e => e.getMessage))
+
     opaque type BlockNumber = Int
 
     def apply(i: Int): BlockNumber = {

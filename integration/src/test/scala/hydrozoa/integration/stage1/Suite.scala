@@ -17,10 +17,11 @@ import hydrozoa.config.node.operation.multisig.generateNodeOperationMultisigConf
 import hydrozoa.integration.stage1.Model.CurrentTime.{AfterCompetingFallbackStartTime, BeforeHappyPathExpiration}
 import hydrozoa.integration.stage1.Model.{BlockCycle, CurrentTime}
 import hydrozoa.integration.stage1.SuiteCardano.*
+import hydrozoa.integration.stage1.model.Deposits
 import hydrozoa.integration.yaci.DevKit
 import hydrozoa.integration.yaci.DevKit.DevnetInfo
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.{Logging, Tracer}
 import hydrozoa.lib.tracing.ProtocolTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost.URL
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendMock, MockState, yaciTestSauceGenesis}
@@ -359,12 +360,8 @@ case class Suite(
               utxosL2Active = config.headConfig.initializationParameters.initialEvacuationMap.toUtxos,
               peerUtxosL1 = peerL1GenesisUtxos,
               preinitPeerUtxosL1 = peerL1GenesisUtxos,
-              depositEnqueued = List.empty,
-              depositsRegistered = List.empty,
+              deposits = Deposits.empty,
               utxoLocked = Set.empty,
-              depositSigned = Map.empty,
-              depositSubmitted = List.empty,
-              depositsDeclined = List.empty,
             )
             .applyContinuingL1Tx(config.headConfig.initializationTx.tx)
     }
@@ -383,11 +380,13 @@ case class Suite(
         val runId = java.util.UUID.randomUUID().toString.take(8)
 
         for {
-            _ <- loggerIO.info(s"Creating new SUT [${label}/${runId}]")
+            tracerLocal <- Tracer.makeLocal(s"Stage1.Suite.$runId")
+            given cats.effect.IOLocal[Tracer] = tracerLocal
+            _ <- Tracer.info(s"Creating new SUT [${label}/${runId}]")
 
             // Fast-forward to the current time if TestControl is used
             _ <- IO.whenA(useTestControl)(for {
-                _ <- loggerIO.debug("Fast-forward to the current time...")
+                _ <- Tracer.debug("Fast-forward to the current time...")
 
                 // Before creating the actor system, if we are in the TestControl we need
                 // to fast-forward to the zero block creation time.
@@ -399,10 +398,10 @@ case class Suite(
                   )
                 )
                 now <- IO.realTimeInstant
-                _ <- loggerIO.info(s"Current time: $now")
+                _ <- Tracer.info(s"Current time: $now")
             } yield ())
 
-            _ <- loggerIO.debug(s"peerKeys: ${multiNodeConfig.headConfig.headPeers.headPeerVKeys}")
+            _ <- Tracer.debug(s"peerKeys: ${multiNodeConfig.headConfig.headPeers.headPeerVKeys}")
 
             nodeConfig = multiNodeConfig.nodeConfigs(HeadPeerNumber.zero)
 
@@ -504,6 +503,7 @@ case class Suite(
           system = system,
           cardanoBackend = cardanoBackend,
           agent = agent,
+          tracerLocal = tracerLocal,
           runId = runId,
           traceRef = traceRef
         )
