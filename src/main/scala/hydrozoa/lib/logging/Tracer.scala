@@ -1,9 +1,10 @@
 package hydrozoa.lib.logging
 
 import cats.effect.{IO, IOLocal}
+import cats.syntax.all.*
 
 enum Level:
-    case Debug, Info, Warn, Error
+    case Trace, Debug, Info, Warn, Error
 
 case class LogEvent(
     level: Level,
@@ -24,9 +25,19 @@ case class LogEvent(
   */
 type Tracer = LogEvent => IO[Unit]
 
+// Lightweight Writer monad for logging in pure code.
+// Pure functions return Traced[A] instead of A; IO callers emit events via logWith;
+// pure callers (e.g. test models) use .value to ignore them.
+type Traced[+A] = (A, List[LogEvent])
+
 extension (t: Tracer)
     def withCtx(f: Map[String, String] => Map[String, String]): Tracer =
         ev => t(ev.copy(ctx = f(ev.ctx)))
+
+extension [A](traced: Traced[A])
+    def value: A = traced._1
+    def logWith(using local: IOLocal[Tracer]): IO[A] =
+        traced._2.traverse_(e => local.get.flatMap(_(e))).as(traced._1)
 
 object Tracer:
 
@@ -37,6 +48,7 @@ object Tracer:
             else "[" + ev.ctx.map((k, v) => s"$k=$v").mkString(" ") + "] "
         val msg = prefix + ev.msg
         ev.level match
+            case Level.Trace => lg.trace(msg)
             case Level.Debug => lg.debug(msg)
             case Level.Info  => lg.info(msg)
             case Level.Warn  => lg.warn(msg)
@@ -45,6 +57,14 @@ object Tracer:
     /** Seeds the local with [[base]] pre-configured to route to [[name]] unless overridden. */
     def makeLocal(name: String): IO[IOLocal[Tracer]] =
         IOLocal(ev => base(ev.copy(logger = if ev.logger == "gummiworm" then name else ev.logger)))
+
+    /** Permanently contramaps the ambient tracer — no scope, no restore.
+      *
+      * Use in actor `preStart` to fix [[LogEvent.logger]] for the actor's lifetime. For transient
+      * per-message enrichment use [[scoped]] / [[scopedCtx]] instead.
+      */
+    def updateLocal(f: LogEvent => LogEvent)(using local: IOLocal[Tracer]): IO[Unit] =
+        local.update(tracer => ev => tracer(f(ev)))
 
     /** Enriches the ambient tracer for the duration of [[fa]], then restores. Use to set
       * [[LogEvent.logger]] (component routing) or [[LogEvent.ctx]] (ambient context).
@@ -57,6 +77,9 @@ object Tracer:
     /** Convenience: add key-value pairs to [[LogEvent.ctx]] only. */
     def scopedCtx[A](kvs: (String, String)*)(fa: IO[A])(using IOLocal[Tracer]): IO[A] =
         scoped(ev => ev.copy(ctx = ev.ctx ++ kvs))(fa)
+
+    def trace(msg: String)(using local: IOLocal[Tracer]): IO[Unit] =
+        local.get.flatMap(_(LogEvent(Level.Trace, msg)))
 
     def debug(msg: String)(using local: IOLocal[Tracer]): IO[Unit] =
         local.get.flatMap(_(LogEvent(Level.Debug, msg)))
