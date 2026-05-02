@@ -1,5 +1,5 @@
 package hydrozoa.multisig.consensus
-import cats.effect.{Fiber, IO}
+import cats.effect.IO
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
@@ -337,7 +337,7 @@ object BlockWeaver {
 
                         case bc: Block.MultiSigned =>
                             logger.trace(
-                              s"Ignoring confirmed block ${bc.blockNum} — was leader, now follower."
+                              s"Ignoring confirmed block ${bc.blockNum}."
                             ) >> pure(this)
 
                         case unexpected: Unexpected =>
@@ -523,13 +523,14 @@ object BlockWeaver {
 
                         case bc: Block.MultiSigned =>
                             logger.trace(
-                              s"Ignoring confirmed block ${bc.blockNum} — was leader, now follower."
+                              s"Ignoring confirmed block ${bc.blockNum}."
                             ) >> pure(this)
 
                         case unexpected: Unexpected =>
                             panicUnexpectedRequest(this, unexpected)
                     }
 
+                // TODO: pass awaited request not the whole mempool
                 private def extractAndSendRequestsFromMempool(
                     mempool: Mempool
                 ): IO[Mempool.Extraction.Result] = {
@@ -713,19 +714,30 @@ object BlockWeaver {
                                 then completeNextBlock
                                 else
                                     for {
+                                        _ <- logger.info(s"Handling confirmation for previous block ${bc.blockNum}")
                                         now <- realTimeQuantizedInstant(config.slotConfig)
                                         sleepDuration = bc.headerNonFinal.majorBlockWakeupTime - now
-                                        fiber <- sleepSendWakeup(sleepDuration).start
-                                        ret <- pure(
-                                          Leader.AwaitingRequest(
-                                            this,
-                                            previousBlockConfirmed = bc,
-                                            fiber
-                                          )
-                                        )
+                                        ret <- if (sleepDuration.finiteDuration.toSeconds <= 0L)
+                                            then for
+                                                    _ <- logger.info(s"negative wakeup sleep duration, now=${now}, confirmed block wakeup time: ${bc.headerNonFinal.majorBlockWakeupTime}, sleepDuration=${sleepDuration}")
+                                                    //_ <- sendStartBlock(config)(leadingBlockNumber)
+                                                    // ret <- completeNextBlock
+                                                    ret <- IO.raiseError(new RuntimeException(s"negative wakeup sleep duration, now=${now}, confirmed block wakeup time: ${bc.headerNonFinal.majorBlockWakeupTime}, sleepDuration=${sleepDuration}"))
+                                                yield ret
+                                            else for
+                                                    _ <- logger.info(s"Starting wakeup fiber, sleepDuration=${sleepDuration}")
+                                                    _ <- sleepSendWakeup(sleepDuration).start
+                                                    ret <- pure(
+                                                      Leader.AwaitingRequest(
+                                                        this,
+                                                        previousBlockConfirmed = bc,
+                                                        //fiber
+                                                      )
+                                                    )
+                                            yield ret
                                     } yield ret
                             else {
-                                // If it's not for the previsous block, two cases are possible.
+                                // If it's not for the previous block, two cases are possible.
                                 // It might be a late confirmation for a previous block, consider this sequence:
                                 // INFO  BlockWeaver.0 New block brief 20. // Start 20 as follower
                                 // INFO  BlockWeaver.0 Becoming Follower.ProcessingReadyRequests. // Feed the content
@@ -745,7 +757,7 @@ object BlockWeaver {
                                           s" $leadingBlockNumber, ignoring."
                                     ) >> pure(this)
                                 else
-                                    val msg = "Received block confirmation for a future block. We are producing" +
+                                    val msg = "Received block confirmation for the current or a future block. We are producing" +
                                         s" $leadingBlockNumber, but the confirmed block that we received is ${bc.blockNum}"
                                     logger.error(msg) >> IO.raiseError(RuntimeException(msg))
                             }
@@ -769,10 +781,14 @@ object BlockWeaver {
                     }
                 }
 
-                private def sleepSendWakeup(sleepDuration: QuantizedFiniteDuration): IO[Unit] = {
-                    IO.sleep(sleepDuration.finiteDuration) >>
-                        (connections.blockWeaver ! Wakeup(this.leadingBlockNumber))
-                }
+                private def sleepSendWakeup(sleepDuration: QuantizedFiniteDuration): IO[Unit] = for {
+                    before <- IO.realTime
+                    _ <- logger.trace(s"Sleeping for ${sleepDuration.finiteDuration} started at now=$before")
+                    _ <- IO.sleep(sleepDuration.finiteDuration)
+                    after <- IO.realTime
+                    _ <- logger.trace(s"Sleeping for ${sleepDuration.finiteDuration} is done now=$after")
+                    _ <- connections.blockWeaver ! Wakeup(this.leadingBlockNumber)
+                } yield ()
             }
 
             object AwaitingConfirmation {
@@ -807,7 +823,7 @@ object BlockWeaver {
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
                 previousBlockConfirmed: Block.MultiSigned.NonFinal,
-                wakeupFiber: Fiber[IO, Throwable, Unit]
+                //wakeupFiber: Fiber[IO, Throwable, Unit]
             ) extends Reactive {
                 override transparent inline def stateName: String = "Leader.AwaitingRequest"
 
@@ -841,7 +857,7 @@ object BlockWeaver {
                             def forceMajorBlock =
                                 for {
                                     _ <- logger.info(
-                                      "Wakeup for the current block is received, force major block"
+                                      "Wakeup for the current block is received, force block start/complete"
                                     )
                                     _ <- sendStartBlock(config)(currentBlockNumber)
                                     newState <- completeBlock
@@ -884,7 +900,7 @@ object BlockWeaver {
                 private[State] def apply(
                     state: State,
                     previousBlockConfirmed: Block.MultiSigned.NonFinal,
-                    wakeupFiber: Fiber[IO, Throwable, Unit]
+                    //wakeupFiber: Fiber[IO, Throwable, Unit]
                 ): Leader.AwaitingRequest =
                     import state.*
                     Leader.AwaitingRequest(
@@ -893,7 +909,7 @@ object BlockWeaver {
                       pollResults,
                       finalizationLocallyTriggered,
                       previousBlockConfirmed,
-                      wakeupFiber
+                      //wakeupFiber
                     )
             }
         }

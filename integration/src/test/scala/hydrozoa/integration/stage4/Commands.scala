@@ -6,7 +6,8 @@ import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import org.scalacheck.commands.{CommandLabel, CommandProp}
-import scalus.cardano.ledger.Transaction
+import scalus.cardano.ledger.{Transaction, TransactionInput}
+import scalus.uplc.builtin.ByteString
 
 import scala.concurrent.duration.FiniteDuration
 
@@ -86,7 +87,8 @@ object Commands:
     final case class RegisterAndSubmitDepositCommand(
         peerNum: HeadPeerNumber,
         request: UserRequestWithId.DepositRequest,
-        depositRefundTxSeq: DepositRefundTxSeq,
+        l2Payload: ByteString,
+        depositProduced: TransactionInput,
         depositTxBytesSigned: Transaction,
         interArrivalDelay: FiniteDuration,
         // Pre-computed at generation time as depositAbsorptionStartTime(validityEnd) + absorptionSlack.

@@ -2,26 +2,18 @@ package hydrozoa.integration.stage4
 
 import cats.data.NonEmptyList
 import hydrozoa.config.head.initialization.CappedValueGen.{ensureMinAdaLenient, generateCappedValue}
-import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.RequestValidityEndTime
-import hydrozoa.integration.stage4.Commands.*
-import hydrozoa.integration.stage4.Commands.given
-import hydrozoa.integration.stage4.Model.ModelState
-import hydrozoa.integration.stage4.Model.given
+import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
+import hydrozoa.integration.stage4.Commands.{*, given}
+import hydrozoa.integration.stage4.Model.{ModelState, given}
 import hydrozoa.integration.stage4.Stage4SutCommands.given
 import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant.mkOrderingOps
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedFiniteDuration
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
 import hydrozoa.lib.cardano.scalus.given_Choose_QuantizedInstant
 import hydrozoa.lib.cardano.scalus.ledger.{asUtxoList, withZeroFees}
 import hydrozoa.lib.cardano.scalus.txbuilder.DiffHandler.prebalancedLovelaceDiffHandler
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.consensus.{
-    RequestValidityEndTimeRaw,
-    RequestValidityStartTimeRaw,
-    UserRequest,
-    UserRequestHeader,
-    UserRequestWithId,
-}
+import hydrozoa.multisig.consensus.{UserRequest, UserRequestHeader, UserRequestWithId}
 import hydrozoa.multisig.ledger.eutxol2.tx.GenesisObligation
 import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
@@ -30,16 +22,7 @@ import org.scalacheck.commands.{AnyCommand, ScenarioGen, noOp}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{
-    AuxiliaryData,
-    Coin,
-    Metadatum,
-    TransactionInput,
-    TransactionOutput,
-    Utxo,
-    Value,
-    Word64,
-}
+import scalus.cardano.ledger.{AuxiliaryData, Coin, Metadatum, TransactionInput, TransactionOutput, Utxo, Value, Word64}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Fee, ModifyAuxiliaryData, Send, Spend}
 import scalus.cardano.txbuilder.{PubKeyWitness, TransactionBuilder}
 import scalus.uplc.builtin.ByteString
@@ -56,7 +39,8 @@ object CommandGenerators:
       * Each peer models an independent Poisson process: events arrive at rate λ = 1/mean, and the
       * time between successive events is exponentially distributed with that mean. This delay is
       * stored on the command and returned by ModelCommand.delay so the SUT fiber actually sleeps
-      * for this duration before issuing the command — giving realistic pacing without a global clock.
+      * for this duration before issuing the command — giving realistic pacing without a global
+      * clock.
       */
     private def genInterArrivalDelay(mean: FiniteDuration): Gen[FiniteDuration] =
         // Double.MinPositiveValue avoids log(0) = -Infinity; in practice the tail is negligible.
@@ -188,33 +172,43 @@ object CommandGenerators:
 
                 header = UserRequestHeader(
                   headId = config.headConfig.headId,
-                  validityStart = RequestValidityStartTimeRaw(
-                    (currentTime - 5.seconds).getEpochSecond
+                  validityStart = RequestValidityStartTime(
+                    QuantizedInstant.ofEpochSeconds(
+                      config.slotConfig,
+                      (currentTime - 5.seconds).getEpochSecond
+                    )
                   ),
-                  validityEnd = RequestValidityEndTimeRaw(
-                    (currentTime + 2.minutes).getEpochSecond
+                  validityEnd = RequestValidityEndTime(
+                    QuantizedInstant.ofEpochSeconds(
+                      config.slotConfig,
+                      (currentTime + 2.minutes).getEpochSecond
+                    )
                   ),
                   bodyHash = body.hash
                 )
 
                 userVk = config.nodeConfigs(peerNum).ownHeadWallet.exportVerificationKey
 
-                interArrivalDelay <- genInterArrivalDelay(state.params.meanInterArrivalTimes(peerNum))
-
-            } yield Some(L2TxCommand(
-              peerNum = peerNum,
-              request = UserRequestWithId.TransactionRequest(
-                requestId = state.nextRequestId(peerNum),
-                request = UserRequest.TransactionRequest(
-                  header = header,
-                  body = body.asInstanceOf[TransactionRequestBody],
-                  userVk = userVk
+                interArrivalDelay <- genInterArrivalDelay(
+                  state.params.meanInterArrivalTimes(peerNum)
                 )
-              ),
-              txStrategy = txStrategy,
-              txMutator = txMutator,
-              interArrivalDelay = interArrivalDelay,
-            ))
+
+            } yield Some(
+              L2TxCommand(
+                peerNum = peerNum,
+                request = UserRequestWithId.TransactionRequest(
+                  requestId = state.nextRequestId(peerNum),
+                  request = UserRequest.TransactionRequest(
+                    header = header,
+                    body = body.asInstanceOf[TransactionRequestBody],
+                    userVk = userVk
+                  )
+                ),
+                txStrategy = txStrategy,
+                txMutator = txMutator,
+                interArrivalDelay = interArrivalDelay,
+              )
+            )
     }
 
     def genRegisterDepositCommand(
@@ -287,8 +281,8 @@ object CommandGenerators:
                                         requestId = state.nextRequestId(peerNum)
 
                                         requestValidityEndTime = RequestValidityEndTime(
-                                          config.headConfig.slotConfig,
-                                          RequestValidityEndTimeRaw(
+                                          QuantizedInstant.ofEpochSeconds(
+                                            config.slotConfig,
                                             (currentTime + 2.minutes).getEpochSecond
                                           )
                                         )
@@ -324,11 +318,17 @@ object CommandGenerators:
 
                                         header = UserRequestHeader(
                                           headId = config.headConfig.headId,
-                                          validityStart = RequestValidityStartTimeRaw(
-                                            (currentTime - 5.seconds).getEpochSecond
+                                          validityStart = RequestValidityStartTime(
+                                            QuantizedInstant.ofEpochSeconds(
+                                              config.slotConfig,
+                                              (currentTime - 5.seconds).getEpochSecond
+                                            )
                                           ),
-                                          validityEnd = RequestValidityEndTimeRaw(
-                                            requestValidityEndTime.getEpochSecond
+                                          validityEnd = RequestValidityEndTime(
+                                            QuantizedInstant.ofEpochSeconds(
+                                              config.slotConfig,
+                                              requestValidityEndTime.getEpochSecond
+                                            )
                                           ),
                                           bodyHash = body.hash
                                         )
@@ -361,7 +361,10 @@ object CommandGenerators:
                                             userVk = userVk
                                           )
                                         ),
-                                        depositRefundTxSeq = depositRefundSeq,
+                                        l2Payload =
+                                            depositRefundSeq.depositTx.depositProduced.l2Payload,
+                                        depositProduced =
+                                            depositRefundSeq.depositTx.depositProduced.utxoId,
                                         depositTxBytesSigned = depositTxSigned,
                                         interArrivalDelay = interArrivalDelay,
                                         expectedAbsorptionTime = expectedAbsorptionTime,
@@ -372,9 +375,9 @@ object CommandGenerators:
             } yield ret
     }
 
-    /** Force-advance time until all pending deposits for this peer are absorbed.
-      * Jumps to max(absorptionStart + slack) + [0, 30s] jitter.
-      * Used when the peer has no L2 UTxOs and must wait for absorption.
+    /** Force-advance time until all pending deposits for this peer are absorbed. Jumps to
+      * max(absorptionStart + slack) + [0, 30s] jitter. Used when the peer has no L2 UTxOs and must
+      * wait for absorption.
       */
     def genDelayForAbsorption(
         peerNum: HeadPeerNumber,
@@ -419,12 +422,14 @@ object Stage4ScenarioGen extends ScenarioGen[ModelState, Stage4Sut]:
         // tail of the time-sorted table and fast peers to be underrepresented.
         val minMeanMs = peers.map(p => state.params.meanInterArrivalTimes(p).toMillis).min
         val weightedPeers = peers.map { p =>
-            val w = (minMeanMs.toDouble / state.params.meanInterArrivalTimes(p).toMillis * 100).toInt.max(1)
+            val w =
+                (minMeanMs.toDouble / state.params.meanInterArrivalTimes(p).toMillis * 100).toInt
+                    .max(1)
             w -> Gen.const(p)
         }
         for {
             peerNum <- Gen.frequency(weightedPeers*)
-            cmd     <- genCommandForPeer(peerNum, state)
+            cmd <- genCommandForPeer(peerNum, state)
         } yield cmd
     }
 

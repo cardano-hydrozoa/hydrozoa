@@ -15,7 +15,8 @@ import hydrozoa.multisig.ledger.event.RequestNumber.increment
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import io.bullet.borer.Cbor
 import org.scalacheck.commands.ModelCommand
-import scalus.cardano.ledger.Utxos
+import scalus.cardano.ledger.{TransactionInput, Utxos}
+import scalus.uplc.builtin.ByteString
 
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.FiniteDuration
@@ -39,7 +40,8 @@ object Model {
     case class PendingDeposit(
         requestId: RequestId,
         expectedAbsorptionTime: QuantizedInstant,
-        depositRefundTxSeq: DepositRefundTxSeq,
+        l2Payload: ByteString,
+        depositProduced: TransactionInput
     )
 
     case class ModelState(
@@ -96,11 +98,10 @@ object Model {
             }
 
         val newL2Utxos = nowAbsorbed.foldLeft(state.utxosL2Active) { (utxos, pd) =>
-            val l2Payload = pd.depositRefundTxSeq.depositTx.depositProduced.l2Payload.bytes
+            val l2Payload = pd.l2Payload.bytes
             val obligations =
                 Cbor.decode(l2Payload).to[Queue[GenesisObligation]].value.toList
-            val genesisId =
-                L2Genesis.mkGenesisId(pd.depositRefundTxSeq.depositTx.depositProduced.utxoId)
+            val genesisId = L2Genesis.mkGenesisId(pd.depositProduced)
             val genesis = L2Genesis(Queue.from(obligations), genesisId)
             utxos ++ genesis.asUtxos.map((i, o) => i -> o.value)
         }
@@ -199,7 +200,8 @@ object Model {
             val pending = PendingDeposit(
               requestId = cmd.request.requestId,
               expectedAbsorptionTime = cmd.expectedAbsorptionTime,
-              depositRefundTxSeq = cmd.depositRefundTxSeq,
+              l2Payload = cmd.l2Payload,
+              depositProduced = cmd.depositProduced
             )
 
             val spentL1Inputs = cmd.depositTxBytesSigned.body.value.inputs.toSet

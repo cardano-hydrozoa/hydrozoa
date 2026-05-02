@@ -2,6 +2,7 @@ package hydrozoa.config.head.multisig.timing
 
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, quantize, given}
+import hydrozoa.lib.logging.Logging
 import io.circe.syntax.*
 import io.circe.{Codec, Decoder, Encoder, HCursor, Json}
 import scala.annotation.targetName
@@ -53,7 +54,10 @@ final case class TxTiming(
     override val depositMaturityDuration: DepositMaturityDuration,
     override val depositAbsorptionDuration: DepositAbsorptionDuration,
 ) extends TxTiming.Section {
+    // TODO: do we need it?
     override transparent inline def txTiming: TxTiming = this
+
+    private val logger = Logging.logger("TxTiming")
 
     val absorptionStartOffsetDuration: AbsorptionStartOffsetDuration =
         AbsorptionStartOffsetDuration(
@@ -101,7 +105,11 @@ final case class TxTiming(
         blockCreationEndTime: BlockCreationEndTime,
         competingFallbackStartTime: FallbackTxStartTime
     ): Boolean = {
-        forcedMajorBlockTime(competingFallbackStartTime).convert > blockCreationEndTime.convert
+        val fmbt = forcedMajorBlockTime(competingFallbackStartTime).convert
+        logger.trace(
+          s"blockCanStayMinor: competingFallbackStartTime: ${competingFallbackStartTime}, forcedMajorBlockTime: ${fmbt}, blockCreationEndTime: ${blockCreationEndTime}"
+        )
+        return fmbt > blockCreationEndTime.convert
     }
 
     def depositSubmissionDeadline(
@@ -222,7 +230,9 @@ object TxTiming {
     ): Boolean =
         depositAbsorptionEndTime.convert < settlementTxEndTime.convert
 
-    /** At this time, if the block weaver is in the LeaderAwaiting state and has not received any
+    /** TODO: update the comment!
+      *
+      * At this time, if the block weaver is in the LeaderAwaiting state and has not received any
       * new requests, it must wake up and create the next block, which must be major.
       *
       * The major block is being created because either the earliest still-pending deposit has
@@ -232,6 +242,8 @@ object TxTiming {
         forcedMajorTime: ForcedMajorBlockTime,
         mAbsorptionStartTime: Option[DepositAbsorptionStartTime]
     ): MajorBlockWakeupTime = {
+        // TODO
+        // logger.trace(s"forcedMajorTime=$forcedMajorTime, mAbsorptionStartTime=$mAbsorptionStartTime")
         MajorBlockWakeupTime(
           mAbsorptionStartTime.fold(forcedMajorTime.convert)(absorptionStartTime =>
               if forcedMajorTime.convert < absorptionStartTime.convert
@@ -246,6 +258,8 @@ object TxTiming {
         previousMajorBlockWakeupTime: MajorBlockWakeupTime,
         mAbsorptionStartTime: Option[DepositAbsorptionStartTime]
     ): MajorBlockWakeupTime = {
+        // TODO
+        // logger.trace(s"previousMajorBlockWakeupTime=$previousMajorBlockWakeupTime, mAbsorptionStartTime=$mAbsorptionStartTime")
         mAbsorptionStartTime.fold(previousMajorBlockWakeupTime)(absorptionStartTime =>
             MajorBlockWakeupTime(
               if previousMajorBlockWakeupTime.convert < absorptionStartTime.convert
