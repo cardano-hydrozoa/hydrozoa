@@ -17,7 +17,7 @@ object AckId {
     def unapply(self: AckId): (HeadPeerNumber, AckNumber) =
         (HeadPeerNumber(self._1), AckNumber(self._2))
 
-    given Conversion[AckId, (Int, Int)] = identity
+    given Conversion[AckId, (Int, Int)] = id => id._1.convert -> id._2.convert
 
     given Ordering[AckId] with {
         override def compare(x: AckId, y: AckId): Int =

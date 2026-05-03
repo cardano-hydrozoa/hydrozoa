@@ -165,7 +165,6 @@ object Main extends IOApp {
     val cardanoNetwork: StandardCardanoNetwork = CardanoNetwork.Preview
 
     override def run(args: List[String]): IO[ExitCode] =
-
         val setupIO = for {
             _ <- logger.info("Starting Hydrozoa node...")
             env <- loadEnv
@@ -181,7 +180,9 @@ object Main extends IOApp {
             )
             _ <- logger.info(s"headAddress: ${nodeConfig.headMultisigAddress.toBech32.get}")
             _ <- logger.info(s"initTx hash: ${nodeConfig.initializationTx.tx.id}")
-            _ <- logger.info(s"initTx: ${encodeHexString(nodeConfig.initializationTx.tx.toCbor)}")
+            _ <- logger.info(
+              s"initTx: ${encodeHexString(nodeConfig.initializationTx.tx.toCbor)}"
+            )
         } yield (env, backend, nodeConfig)
 
         val resource = for {

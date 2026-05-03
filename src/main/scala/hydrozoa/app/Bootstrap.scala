@@ -270,8 +270,9 @@ object Bootstrap:
             )
 
         fallbackTxStartTime = initTxSeq.fallbackTx.fallbackTxStartTime
-        forcedMajorBlockTime = headParams.txTiming.forcedMajorBlockTime(fallbackTxStartTime)
-        majorBlockWakeupTime = TxTiming.majorBlockWakeupTime(forcedMajorBlockTime, None)
+        forcedMajorBlockWakeupTime = headParams.txTiming.forcedMajorBlockWakeupTime(
+          fallbackTxStartTime
+        )
 
         initialBlock = InitialBlock(
           Block.MultiSigned.Initial(
@@ -280,7 +281,8 @@ object Bootstrap:
                 startTime = blockCreationStartTime,
                 endTime = blockCreationEndTime,
                 fallbackTxStartTime = fallbackTxStartTime,
-                majorBlockWakeupTime = majorBlockWakeupTime,
+                forcedMajorBlockWakeupTime = forcedMajorBlockWakeupTime,
+                mDepositDecisionWakeupTime = None,
                 kzgCommitment = evacMap.kzgCommitment
               )
             ),

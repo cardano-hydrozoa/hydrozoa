@@ -61,7 +61,8 @@ object RequestId {
     def unapply(self: Id): (HeadPeerNumber, RequestNumber) =
         (HeadPeerNumber(self._1), RequestNumber(self._2))
 
-    given Conversion[Id, (Int, Long)] = identity
+    // See docs/style-guide.md — opaque tuple conversions must call .convert explicitly on each element.
+    given Conversion[Id, (Int, Long)] = id => id._1.convert -> id._2.convert
 
     given Ordering[Id] with {
         override def compare(x: Id, y: Id): Int =

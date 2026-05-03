@@ -8,6 +8,7 @@ import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.config.head.initialization.InitialBlock
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
+import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant}
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
@@ -53,7 +54,7 @@ object CardanoLiaison:
         IO(new CardanoLiaison(config, cardanoBackend, pendingConnections) {})
 
     type Config = CardanoNetwork.Section & InitialBlock.Section &
-        NodeOperationMultisigConfig.Section
+        NodeOperationMultisigConfig.Section & OwnHeadPeerPublic.Section
 
     final case class Connections(
         blockWeaver: BlockWeaver.Handle
@@ -222,8 +223,9 @@ trait CardanoLiaison(
 ) extends Actor[IO, CardanoLiaison.Request]:
     import CardanoLiaison.*
 
-    private val logger = Logging.logger("CardanoLiaison")
-    private val loggerIO = Logging.loggerIO("CardanoLiaison")
+    private val loggerName = s"CardanoLiaison.${config.ownHeadPeerNum}"
+    private val logger = Logging.logger(loggerName)
+    private val loggerIO = Logging.loggerIO(loggerName)
 
     private val connections = Ref.unsafe[IO, Option[CardanoLiaison.Connections]](None)
 

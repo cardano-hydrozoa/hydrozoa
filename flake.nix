@@ -58,6 +58,8 @@
             # Visualize programs running on the JVM. May need _JAVA_AWT_WM_NONREPARENTING=1 on wayland:
             #    https://github.com/oracle/visualvm/issues/403
             visualvm
+            nodejs_24 # this is needed by IDEA's MCP Server
+            mermaid-cli
           ];
           inherit (pre-commit-check) shellHook;
         };

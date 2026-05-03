@@ -2,9 +2,9 @@ package hydrozoa.config.head.multisig.timing
 
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, quantize, given}
+import hydrozoa.lib.logging.{Level, LogEvent, Traced}
 import io.circe.syntax.*
 import io.circe.{Codec, Decoder, Encoder, HCursor, Json}
-import scala.annotation.targetName
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scala.math.Ordered.orderingToOrdered
 import scala.util.Try
@@ -53,6 +53,7 @@ final case class TxTiming(
     override val depositMaturityDuration: DepositMaturityDuration,
     override val depositAbsorptionDuration: DepositAbsorptionDuration,
 ) extends TxTiming.Section {
+    // TODO: do we need it?
     override transparent inline def txTiming: TxTiming = this
 
     val absorptionStartOffsetDuration: AbsorptionStartOffsetDuration =
@@ -88,10 +89,12 @@ final case class TxTiming(
     /** At this time, the latest competing fallback tx needs to be replaced with a new fallback tx,
       * by creating a new major block.
       */
-    def forcedMajorBlockTime(
+    def forcedMajorBlockWakeupTime(
         competingFallbackStartTime: FallbackTxStartTime
-    ): ForcedMajorBlockTime =
-        ForcedMajorBlockTime(competingFallbackStartTime - minSettlementDuration - silenceDuration)
+    ): ForcedMajorBlockWakeupTime =
+        ForcedMajorBlockWakeupTime(
+          competingFallbackStartTime - minSettlementDuration - silenceDuration
+        )
 
     /** A block can stay minor if this predicate is true for its start time, relative to the
       * previous major block's fallback tx start time. Otherwise, it must be upgraded to a major
@@ -100,8 +103,19 @@ final case class TxTiming(
     def blockCanStayMinor(
         blockCreationEndTime: BlockCreationEndTime,
         competingFallbackStartTime: FallbackTxStartTime
-    ): Boolean = {
-        forcedMajorBlockTime(competingFallbackStartTime).convert > blockCreationEndTime.convert
+    ): Traced[Boolean] = {
+        val fmbt = forcedMajorBlockWakeupTime(competingFallbackStartTime).convert
+        val result = fmbt > blockCreationEndTime.convert
+        (
+          result,
+          List(
+            LogEvent(
+              Level.Trace,
+              s"blockCanStayMinor: competingFallbackStartTime: $competingFallbackStartTime, forcedMajorBlockWakeupTime: $fmbt, blockCreationEndTime: $blockCreationEndTime",
+              logger = "TxTiming"
+            )
+          )
+        )
     }
 
     def depositSubmissionDeadline(
@@ -221,40 +235,6 @@ object TxTiming {
         depositAbsorptionEndTime: DepositAbsorptionEndTime
     ): Boolean =
         depositAbsorptionEndTime.convert < settlementTxEndTime.convert
-
-    /** At this time, if the block weaver is in the LeaderAwaiting state and has not received any
-      * new requests, it must wake up and create the next block, which must be major.
-      *
-      * The major block is being created because either the earliest still-pending deposit has
-      * matured, or because the competing fallback tx needs to be replaced by a new fallback tx.
-      */
-    def majorBlockWakeupTime(
-        forcedMajorTime: ForcedMajorBlockTime,
-        mAbsorptionStartTime: Option[DepositAbsorptionStartTime]
-    ): MajorBlockWakeupTime = {
-        MajorBlockWakeupTime(
-          mAbsorptionStartTime.fold(forcedMajorTime.convert)(absorptionStartTime =>
-              if forcedMajorTime.convert < absorptionStartTime.convert
-              then forcedMajorTime
-              else absorptionStartTime
-          )
-        )
-    }
-
-    @targetName("majorBlockWakeupTime_update")
-    def majorBlockWakeupTime(
-        previousMajorBlockWakeupTime: MajorBlockWakeupTime,
-        mAbsorptionStartTime: Option[DepositAbsorptionStartTime]
-    ): MajorBlockWakeupTime = {
-        mAbsorptionStartTime.fold(previousMajorBlockWakeupTime)(absorptionStartTime =>
-            MajorBlockWakeupTime(
-              if previousMajorBlockWakeupTime.convert < absorptionStartTime.convert
-              then previousMajorBlockWakeupTime
-              else absorptionStartTime
-            )
-        )
-
-    }
 
     def default(slotConfig: SlotConfig): TxTiming = TxTiming(
       MinSettlementDuration(12.hours.quantize(slotConfig)),
@@ -377,15 +357,19 @@ object TxTiming {
 
         given (using CardanoNetwork.Section): Codec[FallbackTxStartTime] = quantizedInstantCodec
 
-        opaque type ForcedMajorBlockTime = QuantizedInstant
-        private[timing] def ForcedMajorBlockTime(x: QuantizedInstant): ForcedMajorBlockTime = x
-        given Conversion[ForcedMajorBlockTime, QuantizedInstant] = identity
+        opaque type ForcedMajorBlockWakeupTime = QuantizedInstant
+        private[timing] def ForcedMajorBlockWakeupTime(
+            x: QuantizedInstant
+        ): ForcedMajorBlockWakeupTime = x
+        given Conversion[ForcedMajorBlockWakeupTime, QuantizedInstant] = identity
+        given (using CardanoNetwork.Section): Codec[ForcedMajorBlockWakeupTime] =
+            quantizedInstantCodec
 
-        opaque type MajorBlockWakeupTime = QuantizedInstant
-        def MajorBlockWakeupTime(x: QuantizedInstant): MajorBlockWakeupTime = x
-        given Conversion[MajorBlockWakeupTime, QuantizedInstant] = identity
-        given (using CardanoNetwork.Section): Codec[MajorBlockWakeupTime] = quantizedInstantCodec
-
+        opaque type DepositDecisionWakeupTime = QuantizedInstant
+        def DepositDecisionWakeupTime(x: QuantizedInstant): DepositDecisionWakeupTime = x
+        given Conversion[DepositDecisionWakeupTime, QuantizedInstant] = identity
+        given (using CardanoNetwork.Section): Codec[DepositDecisionWakeupTime] =
+            quantizedInstantCodec
     }
 
     object RequestTimes {
