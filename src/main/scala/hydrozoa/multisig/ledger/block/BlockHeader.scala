@@ -2,7 +2,7 @@ package hydrozoa.multisig.ledger.block
 
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.given
-import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime, FallbackTxStartTime, MajorBlockWakeupTime}
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime, DepositDecisionWakeupTime, FallbackTxStartTime, ForcedMajorBlockWakeupTime}
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.DepositAbsorptionStartTime
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
@@ -31,7 +31,8 @@ object BlockHeader {
         // to create the head config and broadcast it to the peers.
         override val endTime: BlockCreationEndTime,
         override val fallbackTxStartTime: FallbackTxStartTime,
-        override val majorBlockWakeupTime: MajorBlockWakeupTime,
+        override val forcedMajorBlockWakeupTime: ForcedMajorBlockWakeupTime,
+        override val mDepositDecisionWakeupTime: Option[DepositDecisionWakeupTime],
         override val kzgCommitment: KzgCommitment
     ) extends BlockHeader,
           BlockType.Initial,
@@ -49,7 +50,8 @@ object BlockHeader {
         override val startTime: BlockCreationStartTime,
         override val endTime: BlockCreationEndTime,
         override val fallbackTxStartTime: FallbackTxStartTime,
-        override val majorBlockWakeupTime: MajorBlockWakeupTime,
+        override val forcedMajorBlockWakeupTime: ForcedMajorBlockWakeupTime,
+        override val mDepositDecisionWakeupTime: Option[DepositDecisionWakeupTime],
         override val kzgCommitment: KzgCommitment
     ) extends BlockHeader,
           BlockType.Minor,
@@ -69,7 +71,8 @@ object BlockHeader {
         override val startTime: BlockCreationStartTime,
         override val endTime: BlockCreationEndTime,
         override val fallbackTxStartTime: FallbackTxStartTime,
-        override val majorBlockWakeupTime: MajorBlockWakeupTime,
+        override val forcedMajorBlockWakeupTime: ForcedMajorBlockWakeupTime,
+        override val mDepositDecisionWakeupTime: Option[DepositDecisionWakeupTime],
         override val kzgCommitment: KzgCommitment
     ) extends BlockHeader,
           BlockType.Major,
@@ -117,7 +120,8 @@ object BlockHeader {
 
         trait NonFinal {
             def fallbackTxStartTime: FallbackTxStartTime
-            def majorBlockWakeupTime: MajorBlockWakeupTime
+            def forcedMajorBlockWakeupTime: ForcedMajorBlockWakeupTime
+            def mDepositDecisionWakeupTime: Option[DepositDecisionWakeupTime]
         }
     }
 
@@ -182,15 +186,16 @@ object BlockHeader {
                 mAbsorptionStartTime: Option[DepositAbsorptionStartTime],
                 newKzgCommitment: KzgCommitment
             ): Traced[BlockHeader.Minor] = {
-                val newMajorBlockWakeupTime =
-                    TxTiming.majorBlockWakeupTime(majorBlockWakeupTime, mAbsorptionStartTime)
+                val newDepositDecisionWakeupTime =
+                    mAbsorptionStartTime.map(t => DepositDecisionWakeupTime(t.convert))
                 val header = BlockHeader.Minor(
                   blockNum = blockNum.increment,
                   blockVersion = blockVersion.incrementMinor,
                   startTime = newStartTime,
                   endTime = newEndTime,
                   fallbackTxStartTime = fallbackTxStartTime,
-                  majorBlockWakeupTime = newMajorBlockWakeupTime,
+                  forcedMajorBlockWakeupTime = forcedMajorBlockWakeupTime,
+                  mDepositDecisionWakeupTime = newDepositDecisionWakeupTime,
                   kzgCommitment = newKzgCommitment
                 )
                 (
@@ -198,7 +203,7 @@ object BlockHeader {
                   List(
                     LogEvent(
                       Level.Trace,
-                      s"nextHeaderMinor: newMajorBlockWakeupTime=$newMajorBlockWakeupTime",
+                      s"nextHeaderMinor: forcedMajorBlockWakeupTime=$forcedMajorBlockWakeupTime, mDepositDecisionWakeupTime=$newDepositDecisionWakeupTime",
                       logger = "BlockHeader"
                     )
                   )
@@ -213,16 +218,18 @@ object BlockHeader {
                 newKzgCommitment: KzgCommitment
             ): Traced[BlockHeader.Major] = {
                 val newFallbackStartTime = txTiming.newFallbackStartTime(newEndTime)
-                val newForcedMajorBlockTime = txTiming.forcedMajorBlockTime(newFallbackStartTime)
-                val newMajorBlockWakeupTime =
-                    TxTiming.majorBlockWakeupTime(newForcedMajorBlockTime, mAbsorptionStartTime)
+                val newForcedMajorBlockWakeupTime =
+                    txTiming.forcedMajorBlockWakeupTime(newFallbackStartTime)
+                val newDepositDecisionWakeupTime =
+                    mAbsorptionStartTime.map(t => DepositDecisionWakeupTime(t.convert))
                 val header = BlockHeader.Major(
                   blockNum = blockNum.increment,
                   blockVersion = blockVersion.incrementMajor,
                   startTime = newStartTime,
                   endTime = newEndTime,
                   fallbackTxStartTime = newFallbackStartTime,
-                  majorBlockWakeupTime = newMajorBlockWakeupTime,
+                  forcedMajorBlockWakeupTime = newForcedMajorBlockWakeupTime,
+                  mDepositDecisionWakeupTime = newDepositDecisionWakeupTime,
                   kzgCommitment = newKzgCommitment
                 )
                 (
@@ -230,7 +237,7 @@ object BlockHeader {
                   List(
                     LogEvent(
                       Level.Trace,
-                      s"nextHeaderMajor: newMajorBlockWakeupTime=$newMajorBlockWakeupTime",
+                      s"nextHeaderMajor: forcedMajorBlockWakeupTime=$newForcedMajorBlockWakeupTime, mDepositDecisionWakeupTime=$newDepositDecisionWakeupTime",
                       logger = "BlockHeader"
                     )
                   )
@@ -256,7 +263,10 @@ object BlockHeader {
                   "startTime" -> helper(_.startTime),
                   "endTime" -> helper(_.endTime),
                   "fallbackTxStartTime" -> helper(_.fallbackTxStartTime),
-                  "majorBlockWakeupTime" -> helper(_.majorBlockWakeupTime),
+                  "forcedMajorBlockWakeupTime" -> helper(_.forcedMajorBlockWakeupTime),
+                  "depositDecisionWakeupTime" -> initBH.mDepositDecisionWakeupTime.fold(Json.Null)(
+                    t => t.convert.instant.toEpochMilli.asJson
+                  ),
                   "kzgCommitment" -> initBH.kzgCommitment.asJson
                 )
             }
@@ -283,13 +293,17 @@ object BlockHeader {
                     startTime <- helper("startTime")
                     endTime <- helper("endTime")
                     fbtx <- helper("fallbackTxStartTime")
-                    mbwt <- helper("majorBlockWakeupTime")
+                    fmbt <- c.downField("forcedMajorBlockWakeupTime").as[ForcedMajorBlockWakeupTime]
+                    mDdwt <- c
+                        .downField("depositDecisionWakeupTime")
+                        .as[Option[DepositDecisionWakeupTime]]
                     kzg <- c.downField("kzgCommitment").as[KzgCommitment]
                 } yield BlockHeader.Initial(
                   BlockCreationStartTime(startTime),
                   BlockCreationEndTime(endTime),
                   FallbackTxStartTime(fbtx),
-                  MajorBlockWakeupTime(mbwt),
+                  fmbt,
+                  mDdwt,
                   kzg
                 )
             }

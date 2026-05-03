@@ -2,7 +2,7 @@ package hydrozoa.integration.stage1
 
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
-import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime, FallbackTxStartTime, MajorBlockWakeupTime, SettlementTxEndTime}
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime, DepositDecisionWakeupTime, FallbackTxStartTime, ForcedMajorBlockWakeupTime, SettlementTxEndTime}
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.MultiNodeConfig
@@ -350,19 +350,6 @@ object Model:
                 )
             )
 
-        private def getMajorBlockWakeupTime(
-            fallbackTxStartTime: FallbackTxStartTime
-        ): cats.data.State[State, MajorBlockWakeupTime] =
-            for {
-                state <- cats.data.State.get[State]
-                newForcedMajorBlockTime =
-                    state.multiNodeConfig.txTiming.forcedMajorBlockTime(fallbackTxStartTime)
-                mAbsorptionStartTime: Option[DepositAbsorptionStartTime] =
-                    state.deposits.mAbsorptionStartTime(using state.multiNodeConfig)
-                wakeupTime =
-                    TxTiming.majorBlockWakeupTime(newForcedMajorBlockTime, mAbsorptionStartTime)
-
-            } yield wakeupTime
 
         /** Register or reject [[Enqueued]] deposits depending on their [[ValidityFlag]], as derived
           * from the [[BlockAccumulator]]
@@ -505,7 +492,11 @@ object Model:
                 blockStartTime <- getBlockCreationStartTime
 
                 newFallbackTxStartTime = txTiming.newFallbackStartTime(blockEndTime)
-                newMajorBlockWakeupTime <- getMajorBlockWakeupTime(newFallbackTxStartTime)
+                newForcedMajorBlockWakeupTime =
+                    txTiming.forcedMajorBlockWakeupTime(newFallbackTxStartTime)
+                mAbsorptionStartTime = state.deposits.mAbsorptionStartTime(using state.multiNodeConfig)
+                newDepositDecisionWakeupTime =
+                    mAbsorptionStartTime.map(t => DepositDecisionWakeupTime(t.convert))
 
                 majorBlock = Major(
                   header = BlockHeader.Major(
@@ -515,7 +506,8 @@ object Model:
                     endTime = blockEndTime,
                     kzgCommitment = newEvacuationMap.kzgCommitment,
                     fallbackTxStartTime = newFallbackTxStartTime,
-                    majorBlockWakeupTime = newMajorBlockWakeupTime
+                    forcedMajorBlockWakeupTime = newForcedMajorBlockWakeupTime,
+                    mDepositDecisionWakeupTime = newDepositDecisionWakeupTime
                   ),
                   body = BlockBody.Major(
                     events = events,
@@ -543,7 +535,13 @@ object Model:
         ): cats.data.State[State, BlockBrief.Minor] = for {
             state <- cats.data.State.get[State]
             blockStartTime = BlockCreationStartTime(state.currentTime.instant)
-            majorBlockWakeupTime <- getMajorBlockWakeupTime(state.competingFallbackStartTime)
+            forcedMajorBlockWakeupTime =
+                state.multiNodeConfig.txTiming.forcedMajorBlockWakeupTime(
+                  state.competingFallbackStartTime
+                )
+            mAbsorptionStartTime = state.deposits.mAbsorptionStartTime(using state.multiNodeConfig)
+            mDepositDecisionWakeupTime =
+                mAbsorptionStartTime.map(t => DepositDecisionWakeupTime(t.convert))
             minorBlock = Minor(
               header = BlockHeader.Minor(
                 blockNum = blockNumber,
@@ -551,8 +549,9 @@ object Model:
                 startTime = blockStartTime,
                 endTime = blockEndTime,
                 kzgCommitment = newEvacuationMap.kzgCommitment,
-                fallbackTxStartTime = state.competingFallbackStartTime, // doesn't change
-                majorBlockWakeupTime = majorBlockWakeupTime // doesn't change
+                fallbackTxStartTime = state.competingFallbackStartTime,
+                forcedMajorBlockWakeupTime = forcedMajorBlockWakeupTime,
+                mDepositDecisionWakeupTime = mDepositDecisionWakeupTime
               ),
               body = BlockBody.Minor(
                 events = events,

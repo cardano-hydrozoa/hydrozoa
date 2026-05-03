@@ -714,42 +714,12 @@ object BlockWeaver {
                                 if isBlockStarted == Started
                                 then completeNextBlock
                                 else
-                                    for {
-                                        _ <- logger.info(
-                                          s"Handling confirmation for previous block ${bc.blockNum}"
+                                    logger.info(
+                                      s"Handling confirmation for previous block ${bc.blockNum}"
+                                    ) >> scheduleWakeupFiber(config, bc) >>
+                                        pure(
+                                          Leader.AwaitingRequest(this, previousBlockConfirmed = bc)
                                         )
-                                        now <- realTimeQuantizedInstant(config.slotConfig)
-                                        sleepDuration = bc.headerNonFinal.majorBlockWakeupTime - now
-                                        ret <-
-                                            if sleepDuration.finiteDuration.toSeconds <= 0L
-                                            then
-                                                for
-                                                    _ <- logger.info(
-                                                      s"negative wakeup sleep duration, now=${now}, confirmed block wakeup time: ${bc.headerNonFinal.majorBlockWakeupTime}, sleepDuration=${sleepDuration}"
-                                                    )
-                                                    // _ <- sendStartBlock(config)(leadingBlockNumber)
-                                                    // ret <- completeNextBlock
-                                                    ret <- IO.raiseError(
-                                                      new RuntimeException(
-                                                        s"negative wakeup sleep duration, now=${now}, confirmed block wakeup time: ${bc.headerNonFinal.majorBlockWakeupTime}, sleepDuration=${sleepDuration}"
-                                                      )
-                                                    )
-                                                yield ret
-                                            else
-                                                for
-                                                    _ <- logger.info(
-                                                      s"Starting wakeup fiber, sleepDuration=${sleepDuration}"
-                                                    )
-                                                    _ <- sleepSendWakeup(sleepDuration).start
-                                                    ret <- pure(
-                                                      Leader.AwaitingRequest(
-                                                        this,
-                                                        previousBlockConfirmed = bc,
-                                                        // fiber
-                                                      )
-                                                    )
-                                                yield ret
-                                    } yield ret
                             else {
                                 // If it's not for the previous block, two cases are possible.
                                 // It might be a late confirmation for a previous block, consider this sequence:
@@ -794,6 +764,37 @@ object BlockWeaver {
                             panicUnexpectedRequest(this, unexpected)
                     }
                 }
+
+                private def scheduleWakeupFiber(
+                    config: Config,
+                    bc: Block.MultiSigned.NonFinal
+                ): IO[Unit] =
+                    for {
+                        now <- realTimeQuantizedInstant(config.slotConfig)
+                        fmbwtInstant = bc.headerNonFinal.forcedMajorBlockWakeupTime.convert
+                        wakeupInstant = bc.headerNonFinal.mDepositDecisionWakeupTime
+                            .fold(fmbwtInstant)(ddwt =>
+                                val ddwtInstant = ddwt.convert
+                                if ddwtInstant.instant.isBefore(fmbwtInstant.instant)
+                                then ddwtInstant
+                                else fmbwtInstant
+                            )
+                        sleepDuration = wakeupInstant - now
+                        _ <-
+                            if sleepDuration.finiteDuration.toSeconds <= 0L
+                            then
+                                logger.info(
+                                  s"negative wakeup sleep duration, now=${now}, wakeupInstant=${wakeupInstant}, sleepDuration=${sleepDuration}"
+                                ) >> IO.raiseError(
+                                  new RuntimeException(
+                                    s"negative wakeup sleep duration, now=${now}, wakeupInstant=${wakeupInstant}, sleepDuration=${sleepDuration}"
+                                  )
+                                )
+                            else
+                                logger.info(
+                                  s"Starting wakeup fiber, sleepDuration=${sleepDuration}"
+                                ) >> sleepSendWakeup(sleepDuration).start.void
+                    } yield ()
 
                 private def sleepSendWakeup(sleepDuration: QuantizedFiniteDuration): IO[Unit] =
                     for {

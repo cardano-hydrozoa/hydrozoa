@@ -108,8 +108,9 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
             val blockCreationStartTime = BlockCreationStartTime(now)
             val blockCreationEndTime = BlockCreationEndTime(now + 1.second)
             val fallbackTxStartTime = config.txTiming.newFallbackStartTime(blockCreationEndTime)
-            val forcedMajorBlockTime = config.txTiming.forcedMajorBlockTime(fallbackTxStartTime)
-            val majorBlockWakeupTime = TxTiming.majorBlockWakeupTime(forcedMajorBlockTime, None)
+            val forcedMajorBlockWakeupTime =
+                config.txTiming.forcedMajorBlockWakeupTime(fallbackTxStartTime)
+
             BlockBrief.Minor(
               BlockHeader.Minor(
                 blockNum = BlockNumber(1),
@@ -118,7 +119,8 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
                 endTime = blockCreationEndTime,
                 kzgCommitment = KzgCommitment.empty,
                 fallbackTxStartTime = fallbackTxStartTime,
-                majorBlockWakeupTime = majorBlockWakeupTime
+                forcedMajorBlockWakeupTime = forcedMajorBlockWakeupTime,
+                mDepositDecisionWakeupTime = None
               ),
               BlockBody.Minor(
                 events = List.empty,
