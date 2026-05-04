@@ -10,6 +10,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant}
 import hydrozoa.lib.logging.Logging
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.FallbackTxStartTime
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.pollresults.PollResults
@@ -19,6 +20,8 @@ import hydrozoa.multisig.ledger.l1.tx.*
 import scala.collection.immutable.{Seq, TreeMap}
 import scala.math.Ordered.orderingToOrdered
 import scalus.cardano.ledger.{Block as _, BlockHeader as _, Transaction, TransactionHash, TransactionInput}
+import scalus.utils.Pretty
+import scalus.cardano.ledger.Transaction.given
 
 /** Hydrozoa's liaison to Cardano L1 (actor):
   *   - Keeps track of the target L1 state the liaison tries to achieve by observing all L1 block
@@ -544,18 +547,28 @@ trait CardanoLiaison(
                         }
 
                     // 4. Submit flattened txs for actions it there are some
-                    _ <- IO.whenA(actionsToSubmit.nonEmpty)(
-                      loggerIO.info(
-                        "Liaison's actions:" + actionsToSubmit.map(a => s"\n\t- ${a.msg}").mkString
-                      )
-                    )
+                    _ <- IO.whenA(actionsToSubmit.nonEmpty) {
+                        val hasFallback =
+                            actionsToSubmit.exists(action =>
+                                action.isInstanceOf[Action.FallbackToRuleBased] ||
+                                    action.isInstanceOf[Action.SilencePeriodNoop]
+                            )
+                        val msg = "Liaison's actions:" + actionsToSubmit
+                            .map(a => s"\n\t- ${a.msg}")
+                            .mkString
+                        if hasFallback
+                        then loggerIO.warn(msg)
+                        else loggerIO.info(msg)
+                    }
 
                     submitRet <-
                         if actionsToSubmit.nonEmpty then
                             IO.traverse(actionsToSubmit.flatMap(actionTxs).toList)(tx =>
                                 for {
                                     _ <- loggerIO.trace(
-                                      s"Submitting tx hash: ${tx.id} cbor: ${HexUtil.encodeHexString(tx.toCbor)}"
+                                      s"Submitting tx hash: ${tx.id}\n\t" +
+                                          s"Pretty: ${summon[Pretty[Transaction]].pretty(tx)}" +
+                                          s"\n\tcbor: ${HexUtil.encodeHexString(tx.toCbor)}"
                                     )
                                     ret <- cardanoBackend.submitTx(tx)
                                 } yield tx -> ret
@@ -568,7 +581,9 @@ trait CardanoLiaison(
                       loggerIO.debug(
                         "Submission errors (generally ignored):" + submissionErrors
                             .map(a =>
-                                s"\n\t- ${a._2.left}, cbor=${HexUtil.encodeHexString(a._1.toCbor)}"
+                                s"\n\t- ${a._2.left},\n\t " +
+                                    s"Pretty: ${summon[Pretty[Transaction]].pretty(a._1)}\n\t " +
+                                    s"cbor=${HexUtil.encodeHexString(a._1.toCbor)}"
                             )
                             .mkString
                       )
@@ -601,7 +616,15 @@ trait CardanoLiaison(
           * period - a gap between two competing transactions when the settlement/finalization tx
           * already expired but the fallback is not valid yet.
           */
-        case object SilencePeriodNoop extends DirectAction
+        final case class SilencePeriodNoop (
+            currentTime: QuantizedInstant,
+            happyPathTxTtl : QuantizedInstant,
+            fallbackValidityStart: FallbackTxStartTime
+        ) extends DirectAction {
+
+        }
+
+
 
         /** Like [[PushForwardMultisig]] but starting from the initialization tx. */
         final case class InitializeHead(txs: Seq[Transaction]) extends Action
@@ -611,7 +634,7 @@ trait CardanoLiaison(
         case Action.FallbackToRuleBased(tx)  => Seq(tx)
         case Action.PushForwardMultisig(txs) => txs
         case Action.Rollout(txs)             => txs
-        case Action.SilencePeriodNoop        => Seq.empty
+        case Action.SilencePeriodNoop(_, _, _)        => Seq.empty
         case Action.InitializeHead(txs)      => txs
     }
 
@@ -623,7 +646,7 @@ trait CardanoLiaison(
                 case FallbackToRuleBased(tx)  => s"FallbackToRuleBased (${tx.id})"
                 case PushForwardMultisig(txs) => s"PushForwardMultisig (${txs.map(_.id)}"
                 case Rollout(txs)             => s"Rollout (${txs.map(_.id)}"
-                case SilencePeriodNoop        => "SilencePeriodNoop"
+                case sp@SilencePeriodNoop(_, _, _)   => s"$sp"
                 case InitializeHead(txs)      => s"InitializeHead (${txs.map(_.id)}"
             }
 
@@ -713,7 +736,7 @@ trait CardanoLiaison(
                                 // (2)
                                 case _
                                     if currentTime >= happyPathTxTtl && currentTime < fallbackValidityStart =>
-                                    Right(SilencePeriodNoop)
+                                    Right(SilencePeriodNoop(currentTime, happyPathTxTtl, fallbackValidityStart))
                                 // (3)
                                 case _ if currentTime >= fallbackValidityStart =>
                                     Right(

@@ -4,7 +4,8 @@ import hydrozoa.integration.stage1.model.Deposits.DepositStatus
 import cats.data.NonEmptyList
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.config.head.initialization.CappedValueGen.{ensureMinAdaLenient, generateCappedValue}
-import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
+import hydrozoa.config.head.multisig.timing.TxTiming
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime, FallbackTxStartTime}
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.integration.stage1.CommandGenerators.L2txGen
@@ -12,6 +13,7 @@ import hydrozoa.integration.stage1.CommandGenerators.TxMutator.Identity
 import hydrozoa.integration.stage1.CommandGenerators.TxStrategy.{Dust, RandomWithdrawals, Regular}
 import hydrozoa.integration.stage1.Commands.*
 import hydrozoa.integration.stage1.Model.BlockCycle.HeadFinalized
+import hydrozoa.integration.stage1.Model.CurrentTime.AfterCompetingFallbackStartTime
 import hydrozoa.integration.stage1.Model.given
 import hydrozoa.integration.stage1.SutCommands.given
 import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant.mkOrderingOps
@@ -131,21 +133,37 @@ object CommandGenerators:
     // Complete block
     // ===================================
 
-    def genBlockDuration(currentTime: QuantizedInstant): Gen[QuantizedFiniteDuration] =
+    // The pre-delay that the model will add prior to CompleteBlock* command
+    def genBlockDuration(
+        currentTime: QuantizedInstant,
+        competingFallbackStartTime: FallbackTxStartTime,
+        txTiming: TxTiming.Section,
+        padding : FiniteDuration
+    ): Gen[QuantizedFiniteDuration] = {
+        // The duration of the block must not put us in the silence period
+        val notionalSettlementEnd = txTiming.txTiming.newSettlementEndTime(competingFallbackStartTime)
+        val availableDuration = notionalSettlementEnd - currentTime
+        
+        require(availableDuration.finiteDuration > padding)
+
         Gen
-            .choose(10, 60_000) // 10ms - 1m, should be shorter than deposit's validity end
+            .choose(0L, availableDuration.finiteDuration.toMillis)
             .map(blockDurationMs =>
                 QuantizedFiniteDuration(
                   currentTime.slotConfig,
                   FiniteDuration(blockDurationMs, TimeUnit.MILLISECONDS)
                 )
             )
+    }
 
     def genCompleteBlockRegular(
         blockNumber: BlockNumber,
-        currentTime: QuantizedInstant
+        currentTime: QuantizedInstant,
+        competingFallbackStartTime: FallbackTxStartTime,
+        txTiming: TxTiming.Section,
+        padding : FiniteDuration
     ): Gen[CompleteBlockCommand] = for {
-        blockDuration <- genBlockDuration(currentTime)
+        blockDuration <- genBlockDuration(currentTime, competingFallbackStartTime, txTiming, padding)
     } yield CompleteBlockCommand(
       blockNumber,
       blockDuration,
@@ -155,9 +173,12 @@ object CommandGenerators:
 
     def genCompleteBlockFinal(
         blockNumber: BlockNumber,
-        currentTime: QuantizedInstant
+        currentTime: QuantizedInstant,
+        competingFallbackStartTime: FallbackTxStartTime,
+        txTiming: TxTiming.Section,
+        padding : FiniteDuration
     ): Gen[CompleteBlockCommand] = for {
-        blockDuration <- genBlockDuration(currentTime)
+        blockDuration <- genBlockDuration(currentTime, competingFallbackStartTime, txTiming, padding)
     } yield CompleteBlockCommand(
       blockNumber,
       blockDuration,
@@ -167,17 +188,38 @@ object CommandGenerators:
 
     def genCompleteBlock(
         blockNumber: BlockNumber,
-        currentTime: QuantizedInstant
+        currentTime: QuantizedInstant,
+        competingFallbackStartTime: FallbackTxStartTime,
+        txTiming: TxTiming.Section,
+        padding : FiniteDuration
     ): Gen[CompleteBlockCommand] =
 
         for {
             ret <-
                 if blockNumber.convert < 20
-                then genCompleteBlockRegular(blockNumber, currentTime)
+                then
+                    genCompleteBlockRegular(
+                      blockNumber,
+                      currentTime,
+                      competingFallbackStartTime,
+                      txTiming,
+                        padding
+                    )
                 else
                     Gen.frequency(
-                      1 -> genCompleteBlockFinal(blockNumber, currentTime),
-                      20 -> genCompleteBlockRegular(blockNumber, currentTime)
+                      1 -> genCompleteBlockFinal(
+                        blockNumber,
+                        currentTime,
+                        competingFallbackStartTime,
+                        txTiming, padding
+                      ),
+                      20 -> genCompleteBlockRegular(
+                        blockNumber,
+                        currentTime,
+                        competingFallbackStartTime,
+                        txTiming,
+                          padding
+                      )
                     )
         } yield ret
 
@@ -639,15 +681,24 @@ object ScenarioGenerators:
                         case InProgress(blockNumber, _, _, _) if blockNumber == BlockNumber.zero =>
                             CommandGenerators
                                 .genCompleteBlock(
-                                    blockNumber,
-                                    state.multiNodeConfig.initialBlock.endTime
+                                  blockNumber,
+                                  state.multiNodeConfig.initialBlock.endTime,
+                                  state.competingFallbackStartTime,
+                                  state.multiNodeConfig,
+                                    state.padding
                                 )
                                 .map(AnyCommand(_))
 
                         case InProgress(blockNumber, _, _, _) =>
                             Gen.frequency(
                               1 -> CommandGenerators
-                                  .genCompleteBlock(blockNumber, state.getCurrentTime.instant)
+                                  .genCompleteBlock(
+                                    blockNumber,
+                                    state.getCurrentTime.instant,
+                                    state.competingFallbackStartTime,
+                                    state.multiNodeConfig,
+                                      state.padding
+                                  )
                                   .map(AnyCommand.apply),
                               10 -> (if state.utxosL2Active.isEmpty
                                      then Gen.const(noOp)
@@ -692,8 +743,11 @@ object ScenarioGenerators:
                         case InProgress(blockNumber, _, _, _) if blockNumber == BlockNumber.zero =>
                             CommandGenerators
                                 .genCompleteBlock(
-                                    blockNumber,
-                                    state.multiNodeConfig.initialBlock.endTime
+                                  blockNumber,
+                                  state.multiNodeConfig.initialBlock.endTime,
+                                  state.competingFallbackStartTime,
+                                  state.multiNodeConfig,
+                                    state.padding
                                 )
                                 .map(AnyCommand(_))
                         case InProgress(blockNumber, _, _, _) =>
@@ -703,14 +757,20 @@ object ScenarioGenerators:
                                         CommandGenerators
                                             .genCompleteBlockFinal(
                                               blockNumber,
-                                              state.getCurrentTime.instant
+                                              state.getCurrentTime.instant,
+                                              state.competingFallbackStartTime,
+                                              state.multiNodeConfig,
+                                                state.padding
                                             )
                                             .map(AnyCommand.apply)
                                     else
                                         CommandGenerators
                                             .genCompleteBlockRegular(
                                               blockNumber,
-                                              state.getCurrentTime.instant
+                                              state.getCurrentTime.instant,
+                                              state.competingFallbackStartTime,
+                                              state.multiNodeConfig,
+                                                state.padding
                                             )
                                             .map(AnyCommand.apply)),
                               10 -> CommandGenerators
@@ -769,7 +829,11 @@ object ScenarioGenerators:
                             CommandGenerators
                                 .genCompleteBlock(
                                   blockNumber,
-                                  state.multiNodeConfig.initialBlock.endTime
+                                  state.multiNodeConfig.initialBlock.endTime,
+                                  state.competingFallbackStartTime,
+                                  state.multiNodeConfig,
+                                    state.padding
+                                    
                                 )
                                 .map(AnyCommand(_))
                         case InProgress(blockNumber, _, _, _) =>
@@ -787,7 +851,10 @@ object ScenarioGenerators:
                               1 -> CommandGenerators
                                   .genCompleteBlock(
                                     blockNumber,
-                                    state.getCurrentTime.instant
+                                    state.getCurrentTime.instant,
+                                    state.competingFallbackStartTime,
+                                    state.multiNodeConfig,
+                                      state.padding
                                   )
                                   .map(cmd => Some(AnyCommand.apply(cmd))),
                               3 -> (if state.utxosL2Active.nonEmpty

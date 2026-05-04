@@ -14,14 +14,15 @@ sealed trait BlockBrief extends BlockBrief.Section {
 }
 
 object BlockBrief {
+    // N.B.: technically we only need the cardano network for the decoder.
     given (using cardanoNetwork: CardanoNetwork.Section): Codec[BlockBrief] =
         deriveCodec[BlockBrief]
+    given (using cardanoNetwork: CardanoNetwork.Section): Codec[BlockBrief.Initial] =
+        deriveCodec[BlockBrief.Initial]
+    given bbMinorCodec(using CardanoNetwork.Section): Codec[BlockBrief.Minor] = deriveCodec[BlockBrief.Minor]
+    given bbMajorCodec(using CardanoNetwork.Section): Codec[BlockBrief.Major] = deriveCodec[BlockBrief.Major]
+    given (using CardanoNetwork.Section): Codec[BlockBrief.Final] = deriveCodec[BlockBrief.Final]
 
-    given blockBriefInitialEncoder: Encoder[BlockBrief.Initial] =
-        deriveEncoder[BlockBrief.Initial]
-
-    given blockBriefInitialDecoder(using CardanoNetwork.Section): Decoder[BlockBrief.Initial] =
-        deriveDecoder[BlockBrief.Initial]
 
     final case class Initial(
         override val header: BlockHeader.Initial
@@ -30,9 +31,8 @@ object BlockBrief {
         override transparent inline def blockBrief: BlockBrief.Initial = this
         override transparent inline def body: BlockBody.Initial.type = BlockBody.Initial
     }
-
-    given (using CardanoNetwork.Section): Codec[BlockBrief.Minor] = deriveCodec[BlockBrief.Minor]
-
+    
+        
     final case class Minor(
         override val header: BlockHeader.Minor,
         override val body: BlockBody.Minor

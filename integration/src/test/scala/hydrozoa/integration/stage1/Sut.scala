@@ -27,6 +27,7 @@ import org.scalacheck.commands.SutCommand
 import scala.concurrent.duration.DurationInt
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.Transaction
+import scalus.utils.Pretty
 
 // ===================================
 // Stage 1 SUT
@@ -176,35 +177,40 @@ object SutCommands:
         override def run(cmd: CompleteBlockCommand, sut: Stage1Sut): IO[BlockBrief] =
             given IOLocal[Tracer] = sut.tracerLocal
             for {
-            _ <- Tracer.debug(
-              s">> CompleteBlockCommand(blockNumber=${cmd.blockNumber}, " +
-                  s"blockDuration=${cmd.blockDuration}, " +
-                  s"blockCreationEndTime=${cmd.blockCreationEndTime}, " +
-                  s"isFinal=${cmd.isFinal})"
-            )
-            headUtxos <- sut.cardanoBackend
-                .utxosAt(sut.headAddress)
-                .map(_.fold(err => throw RuntimeException(err.toString), _.keySet))
-            block <- IO.pure(
-              if cmd.isFinal
-              then
-                  CompleteBlockFinal(
-                    referenceBlockBrief = None,
-                    blockCreationEndTime = cmd.blockCreationEndTime
-                  )
-              else
-                  CompleteBlockRegular(
-                    referenceBlockBrief = None,
-                    pollResults = PollResults(headUtxos),
-                    finalizationLocallyTriggered = LocalFinalizationTrigger.NotTriggered,
-                    blockCreationEndTime = cmd.blockCreationEndTime
-                  )
-            )
-            // All sync commands should be timed out since the system may terminate
-            d <- (sut.agent ?: AgentActor.CompleteBlock(block, cmd.blockNumber)).timeout(10.seconds)
-            // Save unsigned block effects
-            _ <- sut.effectsAcc.update(_ :+ d.effects.asInstanceOf[BlockEffects.Unsigned])
-        } yield d.blockBrief
+                _ <- Tracer.debug(
+                  s">> CompleteBlockCommand(blockNumber=${cmd.blockNumber}, " +
+                      s"blockDuration=${cmd.blockDuration}, " +
+                      s"blockCreationEndTime=${cmd.blockCreationEndTime}, " +
+                      s"isFinal=${cmd.isFinal})"
+                )
+                now <- IO.realTimeInstant
+                _ <- Tracer.trace(
+                  s"SUTCommand[CompleteBlockCommand, (...)]: current time: ${now.toEpochMilli}"
+                )
+                headUtxos <- sut.cardanoBackend
+                    .utxosAt(sut.headAddress)
+                    .map(_.fold(err => throw RuntimeException(err.toString), _.keySet))
+                block <- IO.pure(
+                  if cmd.isFinal
+                  then
+                      CompleteBlockFinal(
+                        referenceBlockBrief = None,
+                        blockCreationEndTime = cmd.blockCreationEndTime
+                      )
+                  else
+                      CompleteBlockRegular(
+                        referenceBlockBrief = None,
+                        pollResults = PollResults(headUtxos),
+                        finalizationLocallyTriggered = LocalFinalizationTrigger.NotTriggered,
+                        blockCreationEndTime = cmd.blockCreationEndTime
+                      )
+                )
+                // All sync commands should be timed out since the system may terminate
+                d <- (sut.agent ?: AgentActor.CompleteBlock(block, cmd.blockNumber))
+                    .timeout(10.seconds)
+                // Save unsigned block effects
+                _ <- sut.effectsAcc.update(_ :+ d.effects.asInstanceOf[BlockEffects.Unsigned])
+            } yield d.blockBrief
     }
 
     given SutCommand[RegisterDepositCommand, Unit, Stage1Sut] with {
@@ -220,23 +226,27 @@ object SutCommands:
         override def run(cmd: SubmitDepositsCommand, sut: Stage1Sut): IO[Unit] =
             given IOLocal[Tracer] = sut.tracerLocal
             for {
-            _ <- Tracer.debug(s">> SubmitDepositCommand (${cmd.depositsForSubmission.map(_._1)})")
-            ret <- IO.traverse(cmd.depositsForSubmission)(cmd => {
-                val id = cmd.request.requestId
-                val tx = cmd.depositTxBytesSigned
+                _ <- Tracer.debug(
+                  s">> SubmitDepositCommand (${cmd.depositsForSubmission.map(_._1)})"
+                )
+                ret <- IO.traverse(cmd.depositsForSubmission)(cmd => {
+                    val id = cmd.request.requestId
+                    val tx = cmd.depositTxBytesSigned
 
-                sut.cardanoBackend.submitTx(tx) >>= (ret => IO.pure((id, tx) -> ret))
-            })
+                    sut.cardanoBackend.submitTx(tx) >>= (ret => IO.pure((id, tx) -> ret))
+                })
 
-            submissionErrors = ret.filter(_._2.isLeft)
-            _ <- IO.whenA(submissionErrors.nonEmpty)(
-              Tracer.error(
-                "Submit deposit errors:" + submissionErrors
-                    .map(a =>
-                        s"\n\t- ${a._1._1}, error: ${a._2.left}, cbor: ${HexUtil.encodeHexString(a._1._2.toCbor)}"
-                    )
-                    .mkString
-              )
-            )
-        } yield ()
+                submissionErrors = ret.filter(_._2.isLeft)
+                _ <- IO.whenA(submissionErrors.nonEmpty)(
+                  Tracer.error(
+                    "Submit deposit errors:" + submissionErrors
+                        .map(a =>
+                            s"\n\t- ${a._1._1},\n\terror:\n\t${a._2.left}" +
+                                "\n\tPretty: ${summon[Pretty[Transaction]].pretty(a._1._2)}" +
+                                "\n\tcbor: ${HexUtil.encodeHexString(a._1._2.toCbor)}"
+                        )
+                        .mkString
+                  )
+                )
+            } yield ()
     }

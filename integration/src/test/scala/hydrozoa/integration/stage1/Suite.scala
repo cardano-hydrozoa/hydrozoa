@@ -372,6 +372,7 @@ case class Suite(
               preinitPeerUtxosL1 = peerL1GenesisUtxos,
               deposits = Deposits.empty,
               utxoLocked = Set.empty,
+                padding = 10.seconds
             )
             .applyContinuingL1Tx(config.headConfig.initializationTx.tx)
     }

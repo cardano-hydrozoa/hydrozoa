@@ -19,4 +19,5 @@
     <logger name="JointLedger" level="trace"/>
     <logger name="test.CardanoBackendMock" level="trace"/>
     <logger name="scalus" level="error"/>
+    <logger name="DepositsMap" level="trace"/>
 </configuration>
