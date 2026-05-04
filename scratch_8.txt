@@ -1,0 +1,2091 @@
+ ---------------------------------------------- Executing the next test case...
+INFO  org.scalacheck.commands.ModelBasedSuite 
+Sequential Commands:
+      4s    1. DelayCommand - EndsBeforeHappyPathExpires, 4000 milliseconds
+      4s    2. StartBlockCommand(block=1, time=1777917379000)
+      4s    3. RegisterDepositCommand(eventId=(0,0), ada=Coin(4809847265))
+      4s    4. L2TxCommand(eventId=(0,1), strategy=RandomWithdrawals, mutator=Identity)
+      4s    5. L2TxCommand(eventId=(0,2), strategy=RandomWithdrawals, mutator=Identity)
+   1m11s    6. CompleteBlockCommand(block=1, blockDuration=QuantizedFiniteDuration(67000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777917446000, isFinal=false)
+      Block 1 end time: 1m11 (1777917446000)
+   
+   
+   
+   1m14s    7. DelayCommand - EndsBeforeHappyPathExpires, 3000 milliseconds
+   
+   
+                                              
+   1m14s    8. StartBlockCommand(block=2, time=1777917449000)
+   1m14s    9. SubmitDepositsCommand(for submission=[RegisterDepositCommand(eventId=(0,0), ada=Coin(4809847265))], for rejection=[])
+   1m14s   10. RegisterDepositCommand(eventId=(0,3), ada=Coin(5875260450))
+   1m14s   11. RegisterDepositCommand(eventId=(0,4), ada=Coin(624094897))
+   
+     1777917477000
+
+   2m34s   12. CompleteBlockCommand(block=2, 
+   blockDuration=QuantizedFiniteDuration(80000 milliseconds,SlotConfig(1777917375000,0,1000)),
+    blockCreationEndTime=1777917529000, isFinal=false)
+                        
+   
+   
+   
+   
+   
+   
+   2m42s   13. DelayCommand - EndsBeforeHappyPathExpires, 8000 milliseconds
+   2m42s   14. StartBlockCommand(block=3, time=1777917537000)
+   2m42s   15. L2TxCommand(eventId=(0,5), strategy=RandomWithdrawals, mutator=Identity)
+   2m42s   16. L2TxCommand(eventId=(0,6), strategy=RandomWithdrawals, mutator=Identity)
+   2m42s   17. SubmitDepositsCommand(for submission=[RegisterDepositCommand(eventId=(0,3), ada=Coin(5875260450)), RegisterDepositCommand(eventId=(0,4), ada=Coin(624094897))], for rejection=[])
+   2m42s   18. RegisterDepositCommand(eventId=(0,7), ada=Coin(4166111127))
+   2m42s   19. RegisterDepositCommand(eventId=(0,8), ada=Coin(1255073823))
+   2m42s   20. L2TxCommand(eventId=(0,9), strategy=RandomWithdrawals, mutator=Identity)
+   2m42s   21. L2TxCommand(eventId=(0,10), strategy=RandomWithdrawals, mutator=Identity)
+   3m28s   22. CompleteBlockCommand(block=3, blockDuration=QuantizedFiniteDuration(46000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777917583000, isFinal=false)
+   3m35s   23. DelayCommand - EndsBeforeHappyPathExpires, 7000 milliseconds
+   3m35s   24. StartBlockCommand(block=4, time=1777917590000)
+   3m35s   25. L2TxCommand(eventId=(0,11), strategy=RandomWithdrawals, mutator=Identity)
+   3m35s   26. SubmitDepositsCommand(for submission=[RegisterDepositCommand(eventId=(0,7), ada=Coin(4166111127)), RegisterDepositCommand(eventId=(0,8), ada=Coin(1255073823))], for rejection=[])
+   3m35s   27. L2TxCommand(eventId=(0,12), strategy=RandomWithdrawals, mutator=Identity)
+   3m44s   28. CompleteBlockCommand(block=4, blockDuration=QuantizedFiniteDuration(9000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777917599000, isFinal=false)
+   3m50s   29. DelayCommand - EndsBeforeHappyPathExpires, 6000 milliseconds
+   3m50s   30. StartBlockCommand(block=5, time=1777917605000)
+   3m50s   31. L2TxCommand(eventId=(0,13), strategy=RandomWithdrawals, mutator=Identity)
+   3m50s   32. RegisterDepositCommand(eventId=(0,14), ada=Coin(2714776166))
+   3m50s   33. L2TxCommand(eventId=(0,15), strategy=RandomWithdrawals, mutator=Identity)
+   3m50s   34. L2TxCommand(eventId=(0,16), strategy=RandomWithdrawals, mutator=Identity)
+   3m50s   35. L2TxCommand(eventId=(0,17), strategy=RandomWithdrawals, mutator=Identity)
+   3m50s   36. L2TxCommand(eventId=(0,18), strategy=RandomWithdrawals, mutator=Identity)
+   3m50s   37. L2TxCommand(eventId=(0,19), strategy=RandomWithdrawals, mutator=Identity)
+   3m50s   38. L2TxCommand(eventId=(0,20), strategy=RandomWithdrawals, mutator=Identity)
+   3m50s   39. L2TxCommand(eventId=(0,21), strategy=RandomWithdrawals, mutator=Identity)
+   3m50s   40. L2TxCommand(eventId=(0,22), strategy=RandomWithdrawals, mutator=Identity)
+   3m50s   41. L2TxCommand(eventId=(0,23), strategy=RandomWithdrawals, mutator=Identity)
+   3m51s   42. CompleteBlockCommand(block=5, blockDuration=QuantizedFiniteDuration(1000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777917606000, isFinal=false)
+   3m52s   43. DelayCommand - EndsBeforeHappyPathExpires, 1000 milliseconds
+   3m52s   44. StartBlockCommand(block=6, time=1777917607000)
+   3m52s   45. SubmitDepositsCommand(for submission=[RegisterDepositCommand(eventId=(0,14), ada=Coin(2714776166))], for rejection=[])
+   3m52s   46. RegisterDepositCommand(eventId=(0,24), ada=Coin(145386327))
+   5m13s   47. CompleteBlockCommand(block=6, blockDuration=QuantizedFiniteDuration(81000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777917688000, isFinal=false)
+   5m17s   48. DelayCommand - EndsBeforeHappyPathExpires, 4000 milliseconds
+   5m17s   49. StartBlockCommand(block=7, time=1777917692000)
+   5m17s   50. SubmitDepositsCommand(for submission=[RegisterDepositCommand(eventId=(0,24), ada=Coin(145386327))], for rejection=[])
+   5m17s   51. L2TxCommand(eventId=(0,25), strategy=RandomWithdrawals, mutator=Identity)
+   5m17s   52. L2TxCommand(eventId=(0,26), strategy=RandomWithdrawals, mutator=Identity)
+   5m17s   53. L2TxCommand(eventId=(0,27), strategy=RandomWithdrawals, mutator=Identity)
+   5m17s   54. L2TxCommand(eventId=(0,28), strategy=RandomWithdrawals, mutator=Identity)
+   5m17s   55. RegisterDepositCommand(eventId=(0,29), ada=Coin(21342213))
+   5m17s   56. L2TxCommand(eventId=(0,30), strategy=RandomWithdrawals, mutator=Identity)
+   5m17s   57. L2TxCommand(eventId=(0,31), strategy=RandomWithdrawals, mutator=Identity)
+   5m17s   58. L2TxCommand(eventId=(0,32), strategy=RandomWithdrawals, mutator=Identity)
+   5m17s   59. L2TxCommand(eventId=(0,33), strategy=RandomWithdrawals, mutator=Identity)
+   5m17s   60. L2TxCommand(eventId=(0,34), strategy=RandomWithdrawals, mutator=Identity)
+   5m17s   61. L2TxCommand(eventId=(0,35), strategy=RandomWithdrawals, mutator=Identity)
+   5m17s   62. L2TxCommand(eventId=(0,36), strategy=RandomWithdrawals, mutator=Identity)
+   5m55s   63. CompleteBlockCommand(block=7, blockDuration=QuantizedFiniteDuration(38000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777917730000, isFinal=false)
+   5m57s   64. DelayCommand - EndsBeforeHappyPathExpires, 2000 milliseconds
+   5m57s   65. StartBlockCommand(block=8, time=1777917732000)
+   5m57s   66. SubmitDepositsCommand(for submission=[RegisterDepositCommand(eventId=(0,29), ada=Coin(21342213))], for rejection=[])
+   5m57s   67. RegisterDepositCommand(eventId=(0,37), ada=Coin(5389483))
+   5m57s   68. L2TxCommand(eventId=(0,38), strategy=RandomWithdrawals, mutator=Identity)
+   5m57s   69. L2TxCommand(eventId=(0,39), strategy=RandomWithdrawals, mutator=Identity)
+   5m57s   70. L2TxCommand(eventId=(0,40), strategy=RandomWithdrawals, mutator=Identity)
+   5m57s   71. L2TxCommand(eventId=(0,41), strategy=RandomWithdrawals, mutator=Identity)
+   5m57s   72. L2TxCommand(eventId=(0,42), strategy=RandomWithdrawals, mutator=Identity)
+   6m47s   73. CompleteBlockCommand(block=8, blockDuration=QuantizedFiniteDuration(50000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777917782000, isFinal=false)
+   6m53s   74. DelayCommand - EndsBeforeHappyPathExpires, 6000 milliseconds
+   6m53s   75. StartBlockCommand(block=9, time=1777917788000)
+   6m53s   76. L2TxCommand(eventId=(0,43), strategy=RandomWithdrawals, mutator=Identity)
+   6m53s   77. SubmitDepositsCommand(for submission=[RegisterDepositCommand(eventId=(0,37), ada=Coin(5389483))], for rejection=[])
+   6m53s   78. L2TxCommand(eventId=(0,44), strategy=RandomWithdrawals, mutator=Identity)
+   6m53s   79. L2TxCommand(eventId=(0,45), strategy=RandomWithdrawals, mutator=Identity)
+   6m53s   80. RegisterDepositCommand(eventId=(0,46), ada=Coin(8553344))
+   6m53s   81. L2TxCommand(eventId=(0,47), strategy=RandomWithdrawals, mutator=Identity)
+   7m55s   82. CompleteBlockCommand(block=9, blockDuration=QuantizedFiniteDuration(62000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777917850000, isFinal=false)
+   8m04s   83. DelayCommand - EndsBeforeHappyPathExpires, 9000 milliseconds
+   8m04s   84. StartBlockCommand(block=10, time=1777917859000)
+   8m04s   85. L2TxCommand(eventId=(0,48), strategy=RandomWithdrawals, mutator=Identity)
+   8m04s   86. SubmitDepositsCommand(for submission=[RegisterDepositCommand(eventId=(0,46), ada=Coin(8553344))], for rejection=[])
+   8m04s   87. RegisterDepositCommand(eventId=(0,49), ada=Coin(45836272))
+   8m04s   88. L2TxCommand(eventId=(0,50), strategy=RandomWithdrawals, mutator=Identity)
+   8m04s   89. L2TxCommand(eventId=(0,51), strategy=RandomWithdrawals, mutator=Identity)
+   8m04s   90. L2TxCommand(eventId=(0,52), strategy=RandomWithdrawals, mutator=Identity)
+   8m56s   91. CompleteBlockCommand(block=10, blockDuration=QuantizedFiniteDuration(52000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777917911000, isFinal=false)
+   8m58s   92. DelayCommand - EndsBeforeHappyPathExpires, 2000 milliseconds
+   8m58s   93. StartBlockCommand(block=11, time=1777917913000)
+   8m58s   94. L2TxCommand(eventId=(0,53), strategy=RandomWithdrawals, mutator=Identity)
+   8m58s   95. SubmitDepositsCommand(for submission=[RegisterDepositCommand(eventId=(0,49), ada=Coin(45836272))], for rejection=[])
+   8m58s   96. L2TxCommand(eventId=(0,54), strategy=RandomWithdrawals, mutator=Identity)
+   9m32s   97. CompleteBlockCommand(block=11, blockDuration=QuantizedFiniteDuration(34000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777917947000, isFinal=false)
+   9m42s   98. DelayCommand - EndsBeforeHappyPathExpires, 10000 milliseconds
+   9m42s   99. StartBlockCommand(block=12, time=1777917957000)
+  10m40s  100. CompleteBlockCommand(block=12, blockDuration=QuantizedFiniteDuration(58000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918015000, isFinal=false)
+  10m47s  101. DelayCommand - EndsBeforeHappyPathExpires, 7000 milliseconds
+  10m47s  102. StartBlockCommand(block=13, time=1777918022000)
+  10m47s  103. L2TxCommand(eventId=(0,55), strategy=RandomWithdrawals, mutator=Identity)
+  10m47s  104. L2TxCommand(eventId=(0,56), strategy=RandomWithdrawals, mutator=Identity)
+  11m19s  105. CompleteBlockCommand(block=13, blockDuration=QuantizedFiniteDuration(32000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918054000, isFinal=false)
+  11m24s  106. DelayCommand - EndsBeforeHappyPathExpires, 5000 milliseconds
+  11m24s  107. StartBlockCommand(block=14, time=1777918059000)
+  11m24s  108. RegisterDepositCommand(eventId=(0,57), ada=Coin(2757213))
+  12m44s  109. CompleteBlockCommand(block=14, blockDuration=QuantizedFiniteDuration(80000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918139000, isFinal=false)
+  12m50s  110. DelayCommand - EndsBeforeHappyPathExpires, 6000 milliseconds
+  12m50s  111. StartBlockCommand(block=15, time=1777918145000)
+  12m50s  112. SubmitDepositsCommand(for submission=[RegisterDepositCommand(eventId=(0,57), ada=Coin(2757213))], for rejection=[])
+  12m54s  113. CompleteBlockCommand(block=15, blockDuration=QuantizedFiniteDuration(4000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918149000, isFinal=false)
+  12m57s  114. DelayCommand - EndsBeforeHappyPathExpires, 3000 milliseconds
+  12m57s  115. StartBlockCommand(block=16, time=1777918152000)
+  14m10s  116. CompleteBlockCommand(block=16, blockDuration=QuantizedFiniteDuration(73000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918225000, isFinal=false)
+  14m15s  117. DelayCommand - EndsBeforeHappyPathExpires, 5000 milliseconds
+  14m15s  118. StartBlockCommand(block=17, time=1777918230000)
+  14m15s  119. L2TxCommand(eventId=(0,58), strategy=RandomWithdrawals, mutator=Identity)
+  14m15s  120. L2TxCommand(eventId=(0,59), strategy=RandomWithdrawals, mutator=Identity)
+  14m47s  121. CompleteBlockCommand(block=17, blockDuration=QuantizedFiniteDuration(32000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918262000, isFinal=false)
+  14m49s  122. DelayCommand - EndsBeforeHappyPathExpires, 2000 milliseconds
+  14m49s  123. StartBlockCommand(block=18, time=1777918264000)
+  15m15s  124. CompleteBlockCommand(block=18, blockDuration=QuantizedFiniteDuration(26000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918290000, isFinal=false)
+  15m24s  125. DelayCommand - EndsBeforeHappyPathExpires, 9000 milliseconds
+  15m24s  126. StartBlockCommand(block=19, time=1777918299000)
+  16m07s  127. CompleteBlockCommand(block=19, blockDuration=QuantizedFiniteDuration(43000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918342000, isFinal=false)
+  16m15s  128. DelayCommand - EndsBeforeHappyPathExpires, 8000 milliseconds
+  16m15s  129. StartBlockCommand(block=20, time=1777918350000)
+  16m55s  130. CompleteBlockCommand(block=20, blockDuration=QuantizedFiniteDuration(40000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918390000, isFinal=false)
+  17m01s  131. DelayCommand - EndsBeforeHappyPathExpires, 6000 milliseconds
+  17m01s  132. StartBlockCommand(block=21, time=1777918396000)
+  17m04s  133. CompleteBlockCommand(block=21, blockDuration=QuantizedFiniteDuration(3000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918399000, isFinal=false)
+  17m04s  134. DelayCommand - EndsBeforeHappyPathExpires, 0 milliseconds
+  17m04s  135. StartBlockCommand(block=22, time=1777918399000)
+  17m11s  136. CompleteBlockCommand(block=22, blockDuration=QuantizedFiniteDuration(7000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918406000, isFinal=false)
+  17m12s  137. DelayCommand - EndsBeforeHappyPathExpires, 1000 milliseconds
+  17m12s  138. StartBlockCommand(block=23, time=1777918407000)
+  18m19s  139. CompleteBlockCommand(block=23, blockDuration=QuantizedFiniteDuration(67000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918474000, isFinal=false)
+  18m27s  140. DelayCommand - EndsBeforeHappyPathExpires, 8000 milliseconds
+  18m27s  141. StartBlockCommand(block=24, time=1777918482000)
+  19m03s  142. CompleteBlockCommand(block=24, blockDuration=QuantizedFiniteDuration(36000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918518000, isFinal=false)
+  19m09s  143. DelayCommand - EndsBeforeHappyPathExpires, 6000 milliseconds
+  19m09s  144. StartBlockCommand(block=25, time=1777918524000)
+  19m10s  145. CompleteBlockCommand(block=25, blockDuration=QuantizedFiniteDuration(1000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918525000, isFinal=false)
+  19m11s  146. DelayCommand - EndsBeforeHappyPathExpires, 1000 milliseconds
+  19m11s  147. StartBlockCommand(block=26, time=1777918526000)
+  19m17s  148. CompleteBlockCommand(block=26, blockDuration=QuantizedFiniteDuration(6000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918532000, isFinal=false)
+  19m19s  149. DelayCommand - EndsBeforeHappyPathExpires, 2000 milliseconds
+  19m19s  150. StartBlockCommand(block=27, time=1777918534000)
+  19m21s  151. CompleteBlockCommand(block=27, blockDuration=QuantizedFiniteDuration(2000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918536000, isFinal=false)
+  19m29s  152. DelayCommand - EndsBeforeHappyPathExpires, 8000 milliseconds
+  19m29s  153. StartBlockCommand(block=28, time=1777918544000)
+  19m56s  154. CompleteBlockCommand(block=28, blockDuration=QuantizedFiniteDuration(27000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918571000, isFinal=false)
+  20m02s  155. DelayCommand - EndsBeforeHappyPathExpires, 6000 milliseconds
+  20m02s  156. StartBlockCommand(block=29, time=1777918577000)
+  20m44s  157. CompleteBlockCommand(block=29, blockDuration=QuantizedFiniteDuration(42000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918619000, isFinal=false)
+  20m44s  158. DelayCommand - EndsBeforeHappyPathExpires, 0 milliseconds
+  20m44s  159. StartBlockCommand(block=30, time=1777918619000)
+  21m28s  160. CompleteBlockCommand(block=30, blockDuration=QuantizedFiniteDuration(44000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918663000, isFinal=false)
+  21m34s  161. DelayCommand - EndsBeforeHappyPathExpires, 6000 milliseconds
+  21m34s  162. StartBlockCommand(block=31, time=1777918669000)
+  21m53s  163. CompleteBlockCommand(block=31, blockDuration=QuantizedFiniteDuration(19000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918688000, isFinal=false)
+  21m57s  164. DelayCommand - EndsBeforeHappyPathExpires, 4000 milliseconds
+  21m57s  165. StartBlockCommand(block=32, time=1777918692000)
+  22m32s  166. CompleteBlockCommand(block=32, blockDuration=QuantizedFiniteDuration(35000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918727000, isFinal=false)
+  22m36s  167. DelayCommand - EndsBeforeHappyPathExpires, 4000 milliseconds
+  22m36s  168. StartBlockCommand(block=33, time=1777918731000)
+  22m44s  169. CompleteBlockCommand(block=33, blockDuration=QuantizedFiniteDuration(8000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918739000, isFinal=false)
+  22m48s  170. DelayCommand - EndsBeforeHappyPathExpires, 4000 milliseconds
+  22m48s  171. StartBlockCommand(block=34, time=1777918743000)
+  22m49s  172. CompleteBlockCommand(block=34, blockDuration=QuantizedFiniteDuration(1000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918744000, isFinal=false)
+  22m50s  173. DelayCommand - EndsBeforeHappyPathExpires, 1000 milliseconds
+  22m50s  174. StartBlockCommand(block=35, time=1777918745000)
+  22m55s  175. CompleteBlockCommand(block=35, blockDuration=QuantizedFiniteDuration(5000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918750000, isFinal=false)
+  23m01s  176. DelayCommand - EndsBeforeHappyPathExpires, 6000 milliseconds
+  23m01s  177. StartBlockCommand(block=36, time=1777918756000)
+  24m20s  178. CompleteBlockCommand(block=36, blockDuration=QuantizedFiniteDuration(79000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918835000, isFinal=false)
+  24m20s  179. DelayCommand - EndsBeforeHappyPathExpires, 0 milliseconds
+  24m20s  180. StartBlockCommand(block=37, time=1777918835000)
+  24m50s  181. CompleteBlockCommand(block=37, blockDuration=QuantizedFiniteDuration(30000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918865000, isFinal=true)
+  24m50s  182. NoOp
+  24m50s  183. NoOp
+  24m50s  184. NoOp
+  24m50s  185. NoOp
+  24m50s  186. NoOp
+  24m50s  187. NoOp
+  24m50s  188. NoOp
+  24m50s  189. NoOp
+  24m50s  190. NoOp
+  24m50s  191. NoOp
+  24m50s  192. NoOp
+  24m50s  193. NoOp
+  24m50s  194. NoOp
+  24m50s  195. NoOp
+  24m50s  196. NoOp
+  24m50s  197. NoOp
+  24m50s  198. NoOp
+  24m50s  199. NoOp
+  24m50s  200. NoOp
+
+DEBUG org.scalacheck.commands.ModelBasedSuite 
+Using plain IO to run the test case...
+INFO  Stage1.Suite.1094bde3 
+Creating new SUT [deposits-yaci/1094bde3]
+DEBUG Stage1.Suite.1094bde3 
+peerKeys: NonEmptyList("6ea31d27d585439ea8fd9cd8e6664ed83e605c06aec24d32dfaba488e49287d9")
+INFO  Stage1.Suite 
+Wait a bit for backend being ready...
+INFO  Stage1.Suite 
+Creating Cardano backend and fetching the last epoch parameters to check they match ones in the head config...
+INFO  CardanoLiaison 
+Timeout received, run effects...
+TRACE CardanoLiaison 
+entering `runEffects`
+TRACE CardanoLiaison 
+current time is 1777917393000
+TRACE CardanoLiaison 
+utxoIds are Set()
+TRACE CardanoLiaison 
+state is State(
+  targetState: Active(treasuryUtxoId=TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0))
+  effectInputs (0 entries):
+
+  happyPathEffects (1 entries):
+  (0,0) -> txHash="7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49"
+  fallbackEffects (1 entries):
+  0 -> txHash="daaf9806a9ec48abf62aeb74608f705c18a36385039f0c41045d2a3fdf98231b"
+)
+TRACE CardanoLiaison 
+due actions is empty
+TRACE CardanoLiaison 
+no target TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0) found, submitting initAction: Some(List("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49"))
+INFO  CardanoLiaison 
+Liaison's actions:
+	- InitializeHead (List("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49")
+TRACE CardanoLiaison 
+Submitting tx hash: "7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49"
+	Pretty: Doc(...)
+	cbor: 84a600d9010281825820caff95f6d11cb2037182fd3549209376dd365e5d9d17d7799a2775cbb4389950150183a300581d7089234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d23501821a12416231a1581c89234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d235a15820013499008c834723b9c9b0033b006d450c606468c154cc365a800f16c3cc21e001028201d8185837d8799f5830ae950030040a67ba784b8a75ffbf05102da4c83c962abf5b084f2a2498bd645088a124cca270052227ff3b5bf84c5c9900ffa300581d7089234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d23501821a00d70539a1581c89234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d235a1582001247af08c834723b9c9b0033b006d450c606468c154cc365a800f16c3cc21e00103d818582582008201818200581cc8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee882581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee81a042fcb27021a0002ed4503185a07582002c00b4178287216ad34df984674b238fe3685e39d5b0ae5deaed293583555b109a1581c89234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d235a2582001247af08c834723b9c9b0033b006d450c606468c154cc365a800f16c3cc21e0015820013499008c834723b9c9b0033b006d450c606468c154cc365a800f16c3cc21e001a200d90102818258206ea31d27d585439ea8fd9cd8e6664ed83e605c06aec24d32dfaba488e49287d9584094e266de41c5de18dbe496e68bd7b3d3641f52b4afd73379d763a141a80b9def890e81747d738854fba278584c70eecf63158efd24bf7e7ec1c759810741640001d90102818201818200581cc8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8f5a1191349a16e496e697469616c697a6174696f6ea1784030313334393930303863383334373233623963396230303333623030366434353063363036343638633135346363333635613830306631366333636332316530a3726d756c74697369675472656173757279497800706d756c7469736967526567696d654978016673656564497800
+DEBUG Stage1.Suite.1094bde3 
+>> DelayCommand(delay=EndsBeforeHappyPathExpires(QuantizedFiniteDuration(4000 milliseconds,SlotConfig(1777917375000,0,1000))))
+DEBUG Stage1.Suite.1094bde3 
+	Current time: 1777917397599
+INFO  CardanoLiaison 
+Timeout received, run effects...
+TRACE CardanoLiaison 
+entering `runEffects`
+⚠️  All loggers are suspended while predicate evaluation and state advancement...
+DEBUG Stage1.Suite.1094bde3 
+>> StartBlockCommand(blockNumber=1)
+⚠️  All loggers are suspended while predicate evaluation and state advancement...
+DEBUG Stage1.Suite.1094bde3 
+>> RegisterDepositCommand
+⚠️  All loggers are suspended while predicate evaluation and state advancement...
+DEBUG Stage1.Suite.1094bde3 
+>> LedgerEventCommand
+⚠️  All loggers are suspended while predicate evaluation and state advancement...
+DEBUG Stage1.Suite.1094bde3 
+>> LedgerEventCommand
+⚠️  All loggers are suspended while predicate evaluation and state advancement...
+DEBUG JointLedger 
+Request processed ((0,0))
+INFO  JointLedger 
+applying transaction, request id: (0,1))
+INFO  JointLedger 
+applying transaction, request id: (0,2))
+TRACE CardanoLiaison 
+current time is 1777917397000
+TRACE CardanoLiaison 
+utxoIds are Set(TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0), TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",1))
+TRACE CardanoLiaison 
+state is State(
+  targetState: Active(treasuryUtxoId=TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0))
+  effectInputs (0 entries):
+
+  happyPathEffects (1 entries):
+  (0,0) -> txHash="7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49"
+  fallbackEffects (1 entries):
+  0 -> txHash="daaf9806a9ec48abf62aeb74608f705c18a36385039f0c41045d2a3fdf98231b"
+)
+TRACE CardanoLiaison 
+due actions is empty
+TRACE CardanoLiaison 
+target TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0) found, do nothing
+INFO  CardanoLiaison 
+Timeout received, run effects...
+TRACE CardanoLiaison 
+entering `runEffects`
+TRACE CardanoLiaison 
+current time is 1777917407000
+TRACE CardanoLiaison 
+utxoIds are Set(TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0), TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",1))
+TRACE CardanoLiaison 
+state is State(
+  targetState: Active(treasuryUtxoId=TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0))
+  effectInputs (0 entries):
+
+  happyPathEffects (1 entries):
+  (0,0) -> txHash="7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49"
+  fallbackEffects (1 entries):
+  0 -> txHash="daaf9806a9ec48abf62aeb74608f705c18a36385039f0c41045d2a3fdf98231b"
+)
+TRACE CardanoLiaison 
+due actions is empty
+TRACE CardanoLiaison 
+target TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0) found, do nothing
+INFO  CardanoLiaison 
+Timeout received, run effects...
+TRACE CardanoLiaison 
+entering `runEffects`
+TRACE CardanoLiaison 
+current time is 1777917416000
+TRACE CardanoLiaison 
+utxoIds are Set(TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0), TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",1))
+TRACE CardanoLiaison 
+state is State(
+  targetState: Active(treasuryUtxoId=TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0))
+  effectInputs (0 entries):
+
+  happyPathEffects (1 entries):
+  (0,0) -> txHash="7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49"
+  fallbackEffects (1 entries):
+  0 -> txHash="daaf9806a9ec48abf62aeb74608f705c18a36385039f0c41045d2a3fdf98231b"
+)
+TRACE CardanoLiaison 
+due actions is empty
+TRACE CardanoLiaison 
+target TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0) found, do nothing
+INFO  CardanoLiaison 
+Timeout received, run effects...
+TRACE CardanoLiaison 
+entering `runEffects`
+TRACE CardanoLiaison 
+current time is 1777917425000
+TRACE CardanoLiaison 
+utxoIds are Set(TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0), TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",1))
+TRACE CardanoLiaison 
+state is State(
+  targetState: Active(treasuryUtxoId=TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0))
+  effectInputs (0 entries):
+
+  happyPathEffects (1 entries):
+  (0,0) -> txHash="7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49"
+  fallbackEffects (1 entries):
+  0 -> txHash="daaf9806a9ec48abf62aeb74608f705c18a36385039f0c41045d2a3fdf98231b"
+)
+TRACE CardanoLiaison 
+due actions is empty
+TRACE CardanoLiaison 
+target TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0) found, do nothing
+INFO  CardanoLiaison 
+Timeout received, run effects...
+TRACE CardanoLiaison 
+entering `runEffects`
+TRACE CardanoLiaison 
+current time is 1777917434000
+TRACE CardanoLiaison 
+utxoIds are Set(TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0), TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",1))
+TRACE CardanoLiaison 
+state is State(
+  targetState: Active(treasuryUtxoId=TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0))
+  effectInputs (0 entries):
+
+  happyPathEffects (1 entries):
+  (0,0) -> txHash="7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49"
+  fallbackEffects (1 entries):
+  0 -> txHash="daaf9806a9ec48abf62aeb74608f705c18a36385039f0c41045d2a3fdf98231b"
+)
+TRACE CardanoLiaison 
+due actions is empty
+TRACE CardanoLiaison 
+target TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0) found, do nothing
+INFO  CardanoLiaison 
+Timeout received, run effects...
+TRACE CardanoLiaison 
+entering `runEffects`
+TRACE CardanoLiaison 
+current time is 1777917443000
+TRACE CardanoLiaison 
+utxoIds are Set(TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0), TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",1))
+TRACE CardanoLiaison 
+state is State(
+  targetState: Active(treasuryUtxoId=TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0))
+  effectInputs (0 entries):
+
+  happyPathEffects (1 entries):
+  (0,0) -> txHash="7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49"
+  fallbackEffects (1 entries):
+  0 -> txHash="daaf9806a9ec48abf62aeb74608f705c18a36385039f0c41045d2a3fdf98231b"
+)
+TRACE CardanoLiaison 
+due actions is empty
+TRACE CardanoLiaison 
+target TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0) found, do nothing
+INFO  CardanoLiaison 
+Timeout received, run effects...
+TRACE CardanoLiaison 
+entering `runEffects`
+TRACE CardanoLiaison 
+current time is 1777917452000
+TRACE CardanoLiaison 
+utxoIds are Set(TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0), TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",1))
+TRACE CardanoLiaison 
+state is State(
+  targetState: Active(treasuryUtxoId=TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0))
+  effectInputs (0 entries):
+
+  happyPathEffects (1 entries):
+  (0,0) -> txHash="7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49"
+  fallbackEffects (1 entries):
+  0 -> txHash="daaf9806a9ec48abf62aeb74608f705c18a36385039f0c41045d2a3fdf98231b"
+)
+TRACE CardanoLiaison 
+due actions is empty
+TRACE CardanoLiaison 
+target TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0) found, do nothing
+INFO  CardanoLiaison 
+Timeout received, run effects...
+TRACE CardanoLiaison 
+entering `runEffects`
+TRACE CardanoLiaison 
+current time is 1777917461000
+TRACE CardanoLiaison 
+utxoIds are Set(TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0), TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",1))
+TRACE CardanoLiaison 
+state is State(
+  targetState: Active(treasuryUtxoId=TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0))
+  effectInputs (0 entries):
+
+  happyPathEffects (1 entries):
+  (0,0) -> txHash="7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49"
+  fallbackEffects (1 entries):
+  0 -> txHash="daaf9806a9ec48abf62aeb74608f705c18a36385039f0c41045d2a3fdf98231b"
+)
+TRACE CardanoLiaison 
+due actions is empty
+TRACE CardanoLiaison 
+target TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0) found, do nothing
+DEBUG Stage1.Suite.1094bde3 
+>> CompleteBlockCommand(blockNumber=1, blockDuration=QuantizedFiniteDuration(67000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777917446000, isFinal=false)
+TRACE Stage1.Suite.1094bde3 
+SUTCommand[CompleteBlockCommand, (...)]: current time: 1777917464610
+INFO  JointLedger 
+completing block 1
+DEBUG DepositsMap 
+[partition]
+	 blockCreationEndTime: 1777917446000
+	 settlementTxEndTime: 1777917465000
+	 pollResults: [
+  "7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49#0",
+  "7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49#1"
+]
+DEBUG DepositsMap 
+Entry((0,0),DepositUtxo(TransactionInput("6a1af786b5adfec447ed5500469e1f9267d071a3d955127acd4fc2cf437f7959",0),ShelleyAddress(Testnet,Script("89234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d235"),Null),Datum(Onchain(Address(PubKeyCredential(pkh#c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8),None),None,1777917681000)),Value(4809.847265 ADA),"9fa200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a6e384d7da200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a8ded2b49a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a002e8792a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a17501619a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a0317bb98a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a0010f384a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a0712ecdda200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a008fac04a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a00306716a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a0010ac5dff",Coin(0),1777917499000,1777917501000,1777917621000)) is immature.
+TRACE JointLedger 
+Deposits partitioned and split:
+|- Expired: List()
+|- NotInPollResults: List()
+|- Eligible: List()
+|--- Absorbed: List()
+|--- Unabsorbed: List()
+|- Surviving: List(0)
+|--- Unabsorbed: List()
+|--- Immature: List(0)
+TRACE JointLedger 
+mkBlockBrief: previousHeader=Initial(1777917365000,1777917375000,1777917525000,1777917435000,"ae950030040a67ba784b8a75ffbf05102da4c83c962abf5b084f2a2498bd645088a124cca270052227ff3b5bf84c5c99")
+mkBlockBrief: blockWithdrawnUtxos=[
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a002d2b12",
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a000ecc16",
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a000ecc16",
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a001b3f39",
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a00a59240"
+]
+mkBlockBrief: blockStartTime=1777917379000
+mkBlockBrief: competingFallbackValidityStart=1777917525000
+mkBlockBrief: events=List(((0,0),Valid), ((0,1),Valid), ((0,2),Valid))
+mkBlockBrief: decisions.absorbed=List()
+mkBlockBrief: decisions.refunded=List()
+TRACE JointLedger 
+New evacuation map: {
+  
+}
+TRACE JointLedger 
+mkBlockBriefIntermediate result:
+  Block type: Major
+  Block number: 1
+  Block brief: Major(Major(1,(1,0),1777917379000,1777917446000,1777917596000,1777917501000,"97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb"),Major(List(((0,0),Valid), ((0,1),Valid), ((0,2),Valid)),List(),List()))
+TRACE JointLedger 
+mkBlockEffectsIntermediate:
+  Block type: Major
+  Block number: 1
+  Absorbed deposits: List()
+  Post-dated refund txs: 1
+  L2 payouts: 5
+TRACE JointLedger 
+Building effects for major block 1 with version (1,0).
+Previous block (0) had version (0,0).
+TRACE JointLedger 
+Remitting payouts: Vector((ShelleyAddress(Testnet,Key("c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8"),Null),Value(2.960146 ADA)), (ShelleyAddress(Testnet,Key("c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8"),Null),Value(0.969750 ADA)), (ShelleyAddress(Testnet,Key("c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8"),Null),Value(0.969750 ADA)), (ShelleyAddress(Testnet,Key("c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8"),Null),Value(1.785657 ADA)), (ShelleyAddress(Testnet,Key("c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8"),Null),Value(10.850880 ADA)))
+TRACE JointLedger 
+mkBlockEffectsIntermediate: Major block effects created
+TRACE JointLedger 
+Settlement tx ("21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245"): 84a600d90102818258207e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49000186a300581d7089234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d23501821a1132f6bca1581c89234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d235a15820013499008c834723b9c9b0033b006d450c606468c154cc365a800f16c3cc21e001028201d8185837d8799f583097f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb01ffa200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a00a59240a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a001b3f39a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a000ecc16a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a000ecc16a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a002d2b12021a0002d6be03185a075820f2e527ae8b0803eedf0e5b9b7f6cabc6d49fe28f49da9cb63169d1986ef6ead412d90102818258207e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e4901a0f5a1191349a16a536574746c656d656e74a1784030313334393930303863383334373233623963396230303333623030366434353063363036343638633135346363333635613830306631366333636332316530a0
+TRACE JointLedger 
+Fallback tx ("13a2466ba0b36c6ea32da7bdf86d0d5d67747c0c7693cea1f12c33a154c6a337"): 84a600d901028282582021a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245008258207e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49010184a300581d702f76eb137e1b2b0028bbac67de79c3e6f4063ab97ac65e691432843301821a0019a604a1581c89234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d235a15820013499008c834723b9c9b0033b006d450c606468c154cc365a800f16c3cc21e001028201d8185874d8799f581c89234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d2355820021eb2408c834723b9c9b0033b006d450c606468c154cc365a800f16c3cc21e09f58206ea31d27d585439ea8fd9cd8e6664ed83e605c06aec24d32dfaba488e49287d9ff011b0000019e0abd84c80180ffa200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a1194c05fa300581d7083588fce421d486e62f9f7ef409ff83035d913e618ffd2326eec16ac01821a00427e12a1581c89234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d235a15820021eb2408c834723b9c9b0033b006d450c606468c154cc365a800f16c3cc21e001028201d8185828d8799f0001d8799f581cc8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8ffffa300581d7083588fce421d486e62f9f7ef409ff83035d913e618ffd2326eec16ac01821a0016080aa1581c89234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d235a15820021eb2408c834723b9c9b0033b006d450c606468c154cc365a800f16c3cc21e001028201d818583dd8799f0001d87a9f583097f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb00ffff021a00030f76075820536cb21f493023b1559a078c4c1a7288151360c67de3fbc0804ba802f463e8d00818dd09a1581c89234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d235a2582001247af08c834723b9c9b0033b006d450c606468c154cc365a800f16c3cc21e0205820021eb2408c834723b9c9b0033b006d450c606468c154cc365a800f16c3cc21e002a0f5a1191349a16846616c6c6261636ba1784030313334393930303863383334373233623963396230303333623030366434353063363036343638633135346363333635613830306631366333636332316530a0
+TRACE JointLedger 
+Post-dated refund tx ("619703602dcc4a9a86868c45ac5cb9682810444432d28f6173d57dc0bc67b6fe"): 84a500d90102818258206a1af786b5adfec447ed5500469e1f9267d071a3d955127acd4fc2cf437f7959000181a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011b000000011eadd50c021a00029cd5075820489cbf73db1d5dcd76db44e4b4e43a764be9dd34cc45f5c4084950be3808661608190132a101d90102818201818200581cc8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8f5a1191349a166526566756e64a1784030313334393930303863383334373233623963396230303333623030366434353063363036343638633135346363333635613830306631366333636332316530a0
+⚠️  All loggers are suspended while predicate evaluation and state advancement...
+INFO  CardanoLiaison 
+handleMajorBlockL1Effects for block (1,0)
+TRACE CardanoLiaison 
+settlementTx hash: "21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245"
+TRACE CardanoLiaison 
+settlementTx treasuryProduced: TransactionInput("21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245",0)
+TRACE CardanoLiaison 
+settlementTx majorVersionProduced: 1
+TRACE CardanoLiaison 
+fallback tx validity start: 1777917596000
+TRACE CardanoLiaison 
+state before update: State(
+  targetState: Active(treasuryUtxoId=TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0))
+  effectInputs (0 entries):
+
+  happyPathEffects (1 entries):
+  (0,0) -> txHash="7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49"
+  fallbackEffects (1 entries):
+  0 -> txHash="daaf9806a9ec48abf62aeb74608f705c18a36385039f0c41045d2a3fdf98231b"
+)
+TRACE CardanoLiaison 
+  blockEffectInputs: TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0) -> (1,0)
+TRACE CardanoLiaison 
+  blockEffects: (1,0) -> "21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245"
+TRACE CardanoLiaison 
+state after update: State(
+  targetState: Active(treasuryUtxoId=TransactionInput("21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245",0))
+  effectInputs (1 entries):
+  TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0) -> (1,0)
+  happyPathEffects (2 entries):
+  (0,0) -> txHash="7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49"
+  (1,0) -> txHash="21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245"
+  fallbackEffects (2 entries):
+  0 -> txHash="daaf9806a9ec48abf62aeb74608f705c18a36385039f0c41045d2a3fdf98231b"
+  1 -> txHash="13a2466ba0b36c6ea32da7bdf86d0d5d67747c0c7693cea1f12c33a154c6a337"
+)
+TRACE CardanoLiaison 
+entering `runEffects`
+TRACE CardanoLiaison 
+current time is 1777917464000
+TRACE CardanoLiaison 
+utxoIds are Set(TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0), TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",1))
+TRACE CardanoLiaison 
+state is State(
+  targetState: Active(treasuryUtxoId=TransactionInput("21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245",0))
+  effectInputs (1 entries):
+  TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0) -> (1,0)
+  happyPathEffects (2 entries):
+  (0,0) -> txHash="7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49"
+  (1,0) -> txHash="21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245"
+  fallbackEffects (2 entries):
+  0 -> txHash="daaf9806a9ec48abf62aeb74608f705c18a36385039f0c41045d2a3fdf98231b"
+  1 -> txHash="13a2466ba0b36c6ea32da7bdf86d0d5d67747c0c7693cea1f12c33a154c6a337"
+)
+INFO  CardanoLiaison 
+Liaison's actions:
+	- PushForwardMultisig (List("21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245")
+TRACE CardanoLiaison 
+Submitting tx hash: "21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245"
+	Pretty: Doc(...)
+	cbor: 84a600d90102818258207e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49000186a300581d7089234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d23501821a1132f6bca1581c89234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d235a15820013499008c834723b9c9b0033b006d450c606468c154cc365a800f16c3cc21e001028201d8185837d8799f583097f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb01ffa200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a00a59240a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a001b3f39a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a000ecc16a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a000ecc16a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a002d2b12021a0002d6be03185a075820f2e527ae8b0803eedf0e5b9b7f6cabc6d49fe28f49da9cb63169d1986ef6ead412d90102818258207e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e4901a100d90102818258206ea31d27d585439ea8fd9cd8e6664ed83e605c06aec24d32dfaba488e49287d95840cef2d3e873783c47fc5601e501cd5a7f1d9406fa74af31a71856de93ae7c177193690dfe58afb7bb4cd0c03c670055654cfa8cbe7b09f965794cd61986a52707f5a1191349a16a536574746c656d656e74a1784030313334393930303863383334373233623963396230303333623030366434353063363036343638633135346363333635613830306631366333636332316530a0
+DEBUG CardanoLiaison 
+Submission errors (generally ignored):
+	- LeftProjection(Left({"status_code":400,"error":"400 BAD_REQUEST","message":"{\"contents\":{\"contents\":{\"contents\":{\"era\":\"ShelleyBasedEraConway\",\"error\":[\"ConwayUtxowFailure (UtxoFailure (OutsideValidityIntervalUTxO (ValidityInterval {invalidBefore = SNothing, invalidHereafter = SJust (SlotNo 90)}) (SlotNo 90)))\"],\"kind\":\"ShelleyTxValidationError\"},\"tag\":\"TxValidationErrorInCardanoMode\"},\"tag\":\"TxCmdTxSubmitValidationError\"},\"tag\":\"TxSubmitFail\"}"})),
+	 Pretty: Doc(...)
+	 cbor=84a600d90102818258207e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49000186a300581d7089234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d23501821a1132f6bca1581c89234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d235a15820013499008c834723b9c9b0033b006d450c606468c154cc365a800f16c3cc21e001028201d8185837d8799f583097f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb01ffa200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a00a59240a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a001b3f39a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a000ecc16a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a000ecc16a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a002d2b12021a0002d6be03185a075820f2e527ae8b0803eedf0e5b9b7f6cabc6d49fe28f49da9cb63169d1986ef6ead412d90102818258207e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e4901a100d90102818258206ea31d27d585439ea8fd9cd8e6664ed83e605c06aec24d32dfaba488e49287d95840cef2d3e873783c47fc5601e501cd5a7f1d9406fa74af31a71856de93ae7c177193690dfe58afb7bb4cd0c03c670055654cfa8cbe7b09f965794cd61986a52707f5a1191349a16a536574746c656d656e74a1784030313334393930303863383334373233623963396230303333623030366434353063363036343638633135346363333635613830306631366333636332316530a0
+DEBUG Stage1.Suite.1094bde3 
+>> DelayCommand(delay=EndsBeforeHappyPathExpires(QuantizedFiniteDuration(3000 milliseconds,SlotConfig(1777917375000,0,1000))))
+DEBUG Stage1.Suite.1094bde3 
+	Current time: 1777917467676
+⚠️  All loggers are suspended while predicate evaluation and state advancement...
+
+
+
+
+
+
+DEBUG Stage1.Suite.1094bde3 
+>> StartBlockCommand(blockNumber=2)
+⚠️  All loggers are suspended while predicate evaluation and state advancement...
+INFO  JointLedger 
+start block: 2...
+DEBUG Stage1.Suite.1094bde3 
+>> SubmitDepositCommand (Queue(RegisterDepositCommand(eventId=(0,0), ada=Coin(4809847265))))
+⚠️  All loggers are suspended while predicate evaluation and state advancement...
+DEBUG Stage1.Suite.1094bde3 
+>> RegisterDepositCommand
+⚠️  All loggers are suspended while predicate evaluation and state advancement...
+DEBUG Stage1.Suite.1094bde3 
+>> RegisterDepositCommand
+⚠️  All loggers are suspended while predicate evaluation and state advancement...
+INFO  CardanoLiaison 
+Timeout received, run effects...
+TRACE CardanoLiaison 
+entering `runEffects`
+TRACE CardanoLiaison 
+current time is 1777917477000
+TRACE CardanoLiaison 
+utxoIds are Set(TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0), TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",1), TransactionInput("6a1af786b5adfec447ed5500469e1f9267d071a3d955127acd4fc2cf437f7959",0))
+TRACE CardanoLiaison 
+state is State(
+  targetState: Active(treasuryUtxoId=TransactionInput("21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245",0))
+  effectInputs (1 entries):
+  TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0) -> (1,0)
+  happyPathEffects (2 entries):
+  (0,0) -> txHash="7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49"
+  (1,0) -> txHash="21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245"
+  fallbackEffects (2 entries):
+  0 -> txHash="daaf9806a9ec48abf62aeb74608f705c18a36385039f0c41045d2a3fdf98231b"
+  1 -> txHash="13a2466ba0b36c6ea32da7bdf86d0d5d67747c0c7693cea1f12c33a154c6a337"
+)
+WARN  CardanoLiaison 
+Liaison's actions:
+	- SilencePeriodNoop
+INFO  CardanoLiaison 
+Timeout received, run effects...
+TRACE CardanoLiaison 
+entering `runEffects`
+TRACE CardanoLiaison 
+current time is 1777917486000
+TRACE CardanoLiaison 
+utxoIds are Set(TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0), TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",1), TransactionInput("6a1af786b5adfec447ed5500469e1f9267d071a3d955127acd4fc2cf437f7959",0))
+TRACE CardanoLiaison 
+state is State(
+  targetState: Active(treasuryUtxoId=TransactionInput("21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245",0))
+  effectInputs (1 entries):
+  TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0) -> (1,0)
+  happyPathEffects (2 entries):
+  (0,0) -> txHash="7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49"
+  (1,0) -> txHash="21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245"
+  fallbackEffects (2 entries):
+  0 -> txHash="daaf9806a9ec48abf62aeb74608f705c18a36385039f0c41045d2a3fdf98231b"
+  1 -> txHash="13a2466ba0b36c6ea32da7bdf86d0d5d67747c0c7693cea1f12c33a154c6a337"
+)
+WARN  CardanoLiaison 
+Liaison's actions:
+	- SilencePeriodNoop
+INFO  CardanoLiaison 
+Timeout received, run effects...
+TRACE CardanoLiaison 
+entering `runEffects`
+TRACE CardanoLiaison 
+current time is 1777917495000
+TRACE CardanoLiaison 
+utxoIds are Set(TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0), TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",1), TransactionInput("6a1af786b5adfec447ed5500469e1f9267d071a3d955127acd4fc2cf437f7959",0))
+TRACE CardanoLiaison 
+state is State(
+  targetState: Active(treasuryUtxoId=TransactionInput("21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245",0))
+  effectInputs (1 entries):
+  TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0) -> (1,0)
+  happyPathEffects (2 entries):
+  (0,0) -> txHash="7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49"
+  (1,0) -> txHash="21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245"
+  fallbackEffects (2 entries):
+  0 -> txHash="daaf9806a9ec48abf62aeb74608f705c18a36385039f0c41045d2a3fdf98231b"
+  1 -> txHash="13a2466ba0b36c6ea32da7bdf86d0d5d67747c0c7693cea1f12c33a154c6a337"
+)
+WARN  CardanoLiaison 
+Liaison's actions:
+	- SilencePeriodNoop
+INFO  CardanoLiaison 
+Timeout received, run effects...
+TRACE CardanoLiaison 
+entering `runEffects`
+TRACE CardanoLiaison 
+current time is 1777917504000
+TRACE CardanoLiaison 
+utxoIds are Set(TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0), TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",1), TransactionInput("6a1af786b5adfec447ed5500469e1f9267d071a3d955127acd4fc2cf437f7959",0))
+TRACE CardanoLiaison 
+state is State(
+  targetState: Active(treasuryUtxoId=TransactionInput("21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245",0))
+  effectInputs (1 entries):
+  TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0) -> (1,0)
+  happyPathEffects (2 entries):
+  (0,0) -> txHash="7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49"
+  (1,0) -> txHash="21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245"
+  fallbackEffects (2 entries):
+  0 -> txHash="daaf9806a9ec48abf62aeb74608f705c18a36385039f0c41045d2a3fdf98231b"
+  1 -> txHash="13a2466ba0b36c6ea32da7bdf86d0d5d67747c0c7693cea1f12c33a154c6a337"
+)
+WARN  CardanoLiaison 
+Liaison's actions:
+	- SilencePeriodNoop
+INFO  CardanoLiaison 
+Timeout received, run effects...
+TRACE CardanoLiaison 
+entering `runEffects`
+TRACE CardanoLiaison 
+current time is 1777917513000
+TRACE CardanoLiaison 
+utxoIds are Set(TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0), TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",1), TransactionInput("6a1af786b5adfec447ed5500469e1f9267d071a3d955127acd4fc2cf437f7959",0))
+TRACE CardanoLiaison 
+state is State(
+  targetState: Active(treasuryUtxoId=TransactionInput("21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245",0))
+  effectInputs (1 entries):
+  TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0) -> (1,0)
+  happyPathEffects (2 entries):
+  (0,0) -> txHash="7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49"
+  (1,0) -> txHash="21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245"
+  fallbackEffects (2 entries):
+  0 -> txHash="daaf9806a9ec48abf62aeb74608f705c18a36385039f0c41045d2a3fdf98231b"
+  1 -> txHash="13a2466ba0b36c6ea32da7bdf86d0d5d67747c0c7693cea1f12c33a154c6a337"
+)
+WARN  CardanoLiaison 
+Liaison's actions:
+	- SilencePeriodNoop
+INFO  CardanoLiaison 
+Timeout received, run effects...
+TRACE CardanoLiaison 
+entering `runEffects`
+TRACE CardanoLiaison 
+current time is 1777917522000
+TRACE CardanoLiaison 
+utxoIds are Set(TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0), TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",1), TransactionInput("6a1af786b5adfec447ed5500469e1f9267d071a3d955127acd4fc2cf437f7959",0))
+TRACE CardanoLiaison 
+state is State(
+  targetState: Active(treasuryUtxoId=TransactionInput("21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245",0))
+  effectInputs (1 entries):
+  TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0) -> (1,0)
+  happyPathEffects (2 entries):
+  (0,0) -> txHash="7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49"
+  (1,0) -> txHash="21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245"
+  fallbackEffects (2 entries):
+  0 -> txHash="daaf9806a9ec48abf62aeb74608f705c18a36385039f0c41045d2a3fdf98231b"
+  1 -> txHash="13a2466ba0b36c6ea32da7bdf86d0d5d67747c0c7693cea1f12c33a154c6a337"
+)
+WARN  CardanoLiaison 
+Liaison's actions:
+	- SilencePeriodNoop
+INFO  CardanoLiaison 
+Timeout received, run effects...
+TRACE CardanoLiaison 
+entering `runEffects`
+TRACE CardanoLiaison 
+current time is 1777917531000
+TRACE CardanoLiaison 
+utxoIds are Set(TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0), TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",1), TransactionInput("6a1af786b5adfec447ed5500469e1f9267d071a3d955127acd4fc2cf437f7959",0))
+TRACE CardanoLiaison 
+state is State(
+  targetState: Active(treasuryUtxoId=TransactionInput("21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245",0))
+  effectInputs (1 entries):
+  TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0) -> (1,0)
+  happyPathEffects (2 entries):
+  (0,0) -> txHash="7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49"
+  (1,0) -> txHash="21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245"
+  fallbackEffects (2 entries):
+  0 -> txHash="daaf9806a9ec48abf62aeb74608f705c18a36385039f0c41045d2a3fdf98231b"
+  1 -> txHash="13a2466ba0b36c6ea32da7bdf86d0d5d67747c0c7693cea1f12c33a154c6a337"
+)
+WARN  CardanoLiaison 
+Liaison's actions:
+	- FallbackToRuleBased ("daaf9806a9ec48abf62aeb74608f705c18a36385039f0c41045d2a3fdf98231b")
+TRACE CardanoLiaison 
+Submitting tx hash: "daaf9806a9ec48abf62aeb74608f705c18a36385039f0c41045d2a3fdf98231b"
+	Pretty: Doc(...)
+	cbor: 84a600d90102828258207e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49008258207e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49010184a300581d702f76eb137e1b2b0028bbac67de79c3e6f4063ab97ac65e691432843301821a010b94b7a1581c89234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d235a15820013499008c834723b9c9b0033b006d450c606468c154cc365a800f16c3cc21e001028201d8185874d8799f581c89234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d2355820021eb2408c834723b9c9b0033b006d450c606468c154cc365a800f16c3cc21e09f58206ea31d27d585439ea8fd9cd8e6664ed83e605c06aec24d32dfaba488e49287d9ff011b0000019e0abc6f700080ffa200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a11b13d21a300581d7083588fce421d486e62f9f7ef409ff83035d913e618ffd2326eec16ac01821a00427e12a1581c89234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d235a15820021eb2408c834723b9c9b0033b006d450c606468c154cc365a800f16c3cc21e001028201d8185828d8799f0001d8799f581cc8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8ffffa300581d7083588fce421d486e62f9f7ef409ff83035d913e618ffd2326eec16ac01821a0016080aa1581c89234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d235a15820021eb2408c834723b9c9b0033b006d450c606468c154cc365a800f16c3cc21e001028201d818583dd8799f0001d87a9f5830ae950030040a67ba784b8a75ffbf05102da4c83c962abf5b084f2a2498bd645088a124cca270052227ff3b5bf84c5c9900ffff021a00030f76075820536cb21f493023b1559a078c4c1a7288151360c67de3fbc0804ba802f463e8d008189609a1581c89234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d235a2582001247af08c834723b9c9b0033b006d450c606468c154cc365a800f16c3cc21e0205820021eb2408c834723b9c9b0033b006d450c606468c154cc365a800f16c3cc21e002a100d90102818258206ea31d27d585439ea8fd9cd8e6664ed83e605c06aec24d32dfaba488e49287d95840493603ee78aa15b98c6fdcdefa6bf5a9a496b9bfdecd401a9f11f46c0788685ef4ba1d9c2401a16e02efa50540102db2ac1b78d7ac4f380e8886d01422301a01f5a1191349a16846616c6c6261636ba1784030313334393930303863383334373233623963396230303333623030366434353063363036343638633135346363333635613830306631366333636332316530a0
+INFO  CardanoLiaison 
+Timeout received, run effects...
+TRACE CardanoLiaison 
+entering `runEffects`
+TRACE CardanoLiaison 
+current time is 1777917540000
+TRACE CardanoLiaison 
+utxoIds are Set(TransactionInput("6a1af786b5adfec447ed5500469e1f9267d071a3d955127acd4fc2cf437f7959",0))
+TRACE CardanoLiaison 
+state is State(
+  targetState: Active(treasuryUtxoId=TransactionInput("21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245",0))
+  effectInputs (1 entries):
+  TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0) -> (1,0)
+  happyPathEffects (2 entries):
+  (0,0) -> txHash="7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49"
+  (1,0) -> txHash="21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245"
+  fallbackEffects (2 entries):
+  0 -> txHash="daaf9806a9ec48abf62aeb74608f705c18a36385039f0c41045d2a3fdf98231b"
+  1 -> txHash="13a2466ba0b36c6ea32da7bdf86d0d5d67747c0c7693cea1f12c33a154c6a337"
+)
+TRACE CardanoLiaison 
+due actions is empty
+TRACE CardanoLiaison 
+no target TransactionInput("21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245",0) found, submitting initAction: None
+DEBUG Stage1.Suite.1094bde3 
+>> CompleteBlockCommand(blockNumber=2, blockDuration=QuantizedFiniteDuration(80000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777917529000, isFinal=false)
+TRACE Stage1.Suite.1094bde3 
+SUTCommand[CompleteBlockCommand, (...)]: current time: 1777917547688
+INFO  JointLedger 
+completing block 2
+DEBUG DepositsMap 
+[partition]
+	 blockCreationEndTime: 1777917529000
+	 settlementTxEndTime: 1777917536000
+	 pollResults: [
+  "6a1af786b5adfec447ed5500469e1f9267d071a3d955127acd4fc2cf437f7959#0"
+]
+DEBUG DepositsMap 
+Entry((0,0),DepositUtxo(TransactionInput("6a1af786b5adfec447ed5500469e1f9267d071a3d955127acd4fc2cf437f7959",0),ShelleyAddress(Testnet,Script("89234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d235"),Null),Datum(Onchain(Address(PubKeyCredential(pkh#c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8),None),None,1777917681000)),Value(4809.847265 ADA),"9fa200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a6e384d7da200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a8ded2b49a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a002e8792a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a17501619a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a0317bb98a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a0010f384a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a0712ecdda200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a008fac04a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a00306716a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a0010ac5dff",Coin(0),1777917499000,1777917501000,1777917621000)) is eligible
+DEBUG DepositsMap 
+Entry((0,3),DepositUtxo(TransactionInput("492b171b70aac2c8426eba67845b3424d7b59ff584d54211528734a49fcb5445",0),ShelleyAddress(Testnet,Script("89234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d235"),Null),Datum(Onchain(Address(PubKeyCredential(pkh#c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8),None),None,1777917751000)),Value(5875.260450 ADA),"9fa200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011b0000000131e4e6a5a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a2b67f946a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a00e47c37ff",Coin(0),1777917569000,1777917571000,1777917691000)) is immature.
+DEBUG DepositsMap 
+Entry((0,4),DepositUtxo(TransactionInput("6fea8ff79210245c0620c7c5bc61e4e5e0a5acd0738c7e9a1bee6da2eb8280e9",0),ShelleyAddress(Testnet,Script("89234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d235"),Null),Datum(Onchain(Address(PubKeyCredential(pkh#c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8),None),None,1777917751000)),Value(624.094897 ADA),"9fa200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a252414bfa200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a000ed9f2ff",Coin(0),1777917569000,1777917571000,1777917691000)) is immature.
+TRACE JointLedger 
+Deposits partitioned and split:
+|- Expired: List()
+|- NotInPollResults: List()
+|- Eligible: List(0)
+|--- Absorbed: List(0)
+|--- Unabsorbed: List()
+|- Surviving: List(3, 4)
+|--- Unabsorbed: List()
+|--- Immature: List(3, 4)
+TRACE JointLedger 
+mkBlockBrief: previousHeader=Major(1,(1,0),1777917379000,1777917446000,1777917596000,1777917501000,"97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb")
+mkBlockBrief: blockWithdrawnUtxos=[
+]
+mkBlockBrief: blockStartTime=1777917449000
+mkBlockBrief: competingFallbackValidityStart=1777917596000
+mkBlockBrief: events=List(((0,3),Valid), ((0,4),Valid))
+mkBlockBrief: decisions.absorbed=List((0,0))
+mkBlockBrief: decisions.refunded=List()
+TRACE JointLedger 
+New evacuation map: {
+  "82582023e4961f099f0eeefb4d79800623c1493d7aed33775b381fe9c6204bdfb94b2600" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a6e384d7d",
+  "82582023e4961f099f0eeefb4d79800623c1493d7aed33775b381fe9c6204bdfb94b2601" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a8ded2b49",
+  "82582023e4961f099f0eeefb4d79800623c1493d7aed33775b381fe9c6204bdfb94b2602" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a002e8792",
+  "82582023e4961f099f0eeefb4d79800623c1493d7aed33775b381fe9c6204bdfb94b2603" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a17501619",
+  "82582023e4961f099f0eeefb4d79800623c1493d7aed33775b381fe9c6204bdfb94b2604" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a0317bb98",
+  "82582023e4961f099f0eeefb4d79800623c1493d7aed33775b381fe9c6204bdfb94b2605" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a0010f384",
+  "82582023e4961f099f0eeefb4d79800623c1493d7aed33775b381fe9c6204bdfb94b2606" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a0712ecdd",
+  "82582023e4961f099f0eeefb4d79800623c1493d7aed33775b381fe9c6204bdfb94b2607" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a008fac04",
+  "82582023e4961f099f0eeefb4d79800623c1493d7aed33775b381fe9c6204bdfb94b2608" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a00306716",
+  "82582023e4961f099f0eeefb4d79800623c1493d7aed33775b381fe9c6204bdfb94b2609" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a0010ac5d"
+}
+TRACE JointLedger 
+mkBlockBriefIntermediate result:
+  Block type: Major
+  Block number: 2
+  Block brief: Major(Major(2,(2,0),1777917449000,1777917529000,1777917679000,1777917571000,"964cf49d33bef72f113f8c7589cafaf91a19151790d2aecc08adf26e6ba87e43e6ce553a7aea40436e97976400c0c7f4"),Major(List(((0,3),Valid), ((0,4),Valid)),List((0,0)),List()))
+TRACE JointLedger 
+mkBlockEffectsIntermediate:
+  Block type: Major
+  Block number: 2
+  Absorbed deposits: List((0,0))
+  Post-dated refund txs: 2
+  L2 payouts: 0
+TRACE JointLedger 
+Building effects for major block 2 with version (2,0).
+Previous block (1) had version (1,0).
+TRACE JointLedger 
+Remitting payouts: Vector()
+TRACE JointLedger 
+mkBlockEffectsIntermediate: Major block effects created
+TRACE JointLedger 
+Settlement tx ("c6b4b726837e26c6fbf7893b64bd14fc734ab292ed00dacc52b47bd4aefb7c93"): 84a600d901028282582021a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245008258206a1af786b5adfec447ed5500469e1f9267d071a3d955127acd4fc2cf437f7959000181a300581d7089234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d23501821b000000012fe0ac83a1581c89234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d235a15820013499008c834723b9c9b0033b006d450c606468c154cc365a800f16c3cc21e001028201d8185837d8799f5830964cf49d33bef72f113f8c7589cafaf91a19151790d2aecc08adf26e6ba87e43e6ce553a7aea40436e97976400c0c7f402ff021a0002bc1a0318a1075820f2e527ae8b0803eedf0e5b9b7f6cabc6d49fe28f49da9cb63169d1986ef6ead412d90102818258207e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e4901a0f5a1191349a16a536574746c656d656e74a1784030313334393930303863383334373233623963396230303333623030366434353063363036343638633135346363333635613830306631366333636332316530a0
+TRACE JointLedger 
+Fallback tx ("9fbfd4fb734e7835ffab5f7c5eafb3869fd9cba139a6d012425e7e419e59f69d"): 84a600d90102828258207e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e4901825820c6b4b726837e26c6fbf7893b64bd14fc734ab292ed00dacc52b47bd4aefb7c93000184a300581d702f76eb137e1b2b0028bbac67de79c3e6f4063ab97ac65e691432843301821b000000011eb071e1a1581c89234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d235a15820013499008c834723b9c9b0033b006d450c606468c154cc365a800f16c3cc21e001028201d8185874d8799f581c89234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d2355820021eb2408c834723b9c9b0033b006d450c606468c154cc365a800f16c3cc21e09f58206ea31d27d585439ea8fd9cd8e6664ed83e605c06aec24d32dfaba488e49287d9ff011b0000019e0abec9000280ffa200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a11aba96da300581d7083588fce421d486e62f9f7ef409ff83035d913e618ffd2326eec16ac01821a00427e12a1581c89234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d235a15820021eb2408c834723b9c9b0033b006d450c606468c154cc365a800f16c3cc21e001028201d8185828d8799f0001d8799f581cc8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8ffffa300581d7083588fce421d486e62f9f7ef409ff83035d913e618ffd2326eec16ac01821a0016080aa1581c89234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d235a15820021eb2408c834723b9c9b0033b006d450c606468c154cc365a800f16c3cc21e001028201d818583dd8799f0001d87a9f5830964cf49d33bef72f113f8c7589cafaf91a19151790d2aecc08adf26e6ba87e43e6ce553a7aea40436e97976400c0c7f400ffff021a00031052075820536cb21f493023b1559a078c4c1a7288151360c67de3fbc0804ba802f463e8d00819013009a1581c89234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d235a2582001247af08c834723b9c9b0033b006d450c606468c154cc365a800f16c3cc21e0205820021eb2408c834723b9c9b0033b006d450c606468c154cc365a800f16c3cc21e002a0f5a1191349a16846616c6c6261636ba1784030313334393930303863383334373233623963396230303333623030366434353063363036343638633135346363333635613830306631366333636332316530a0
+TRACE JointLedger 
+Post-dated refund tx ("44f80f11426e771448405431f8256b57102fd461a67d82545e40ce2c47f3af82"): 84a500d9010281825820492b171b70aac2c8426eba67845b3424d7b59ff584d54211528734a49fcb5445000181a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011b000000015e2ebf4d021a00029cd5075820489cbf73db1d5dcd76db44e4b4e43a764be9dd34cc45f5c4084950be3808661608190178a101d90102818201818200581cc8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8f5a1191349a166526566756e64a1784030313334393930303863383334373233623963396230303333623030366434353063363036343638633135346363333635613830306631366333636332316530a0
+TRACE JointLedger 
+Post-dated refund tx ("03725d432f47358319ae68fd01f99bd241ca9812b4848fc39147e36c1e0e88cf"): 84a500d90102818258206fea8ff79210245c0620c7c5bc61e4e5e0a5acd0738c7e9a1bee6da2eb8280e9000181a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a2530528c021a00029c25075820489cbf73db1d5dcd76db44e4b4e43a764be9dd34cc45f5c4084950be3808661608190178a101d90102818201818200581cc8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8f5a1191349a166526566756e64a1784030313334393930303863383334373233623963396230303333623030366434353063363036343638633135346363333635613830306631366333636332316530a0
+⚠️  All loggers are suspended while predicate evaluation and state advancement...
+TRACE CardanoLiaison 
+current time is 1777917547000
+TRACE CardanoLiaison 
+utxoIds are Set(TransactionInput("6a1af786b5adfec447ed5500469e1f9267d071a3d955127acd4fc2cf437f7959",0))
+TRACE CardanoLiaison 
+state is State(
+  targetState: Active(treasuryUtxoId=TransactionInput("c6b4b726837e26c6fbf7893b64bd14fc734ab292ed00dacc52b47bd4aefb7c93",0))
+  effectInputs (2 entries):
+  TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0) -> (1,0)
+  TransactionInput("21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245",0) -> (2,0)
+  happyPathEffects (3 entries):
+  (0,0) -> txHash="7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49"
+  (1,0) -> txHash="21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245"
+  (2,0) -> txHash="c6b4b726837e26c6fbf7893b64bd14fc734ab292ed00dacc52b47bd4aefb7c93"
+  fallbackEffects (3 entries):
+  0 -> txHash="daaf9806a9ec48abf62aeb74608f705c18a36385039f0c41045d2a3fdf98231b"
+  1 -> txHash="13a2466ba0b36c6ea32da7bdf86d0d5d67747c0c7693cea1f12c33a154c6a337"
+  2 -> txHash="9fbfd4fb734e7835ffab5f7c5eafb3869fd9cba139a6d012425e7e419e59f69d"
+)
+TRACE CardanoLiaison 
+due actions is empty
+TRACE CardanoLiaison 
+no target TransactionInput("c6b4b726837e26c6fbf7893b64bd14fc734ab292ed00dacc52b47bd4aefb7c93",0) found, submitting initAction: None
+DEBUG Stage1.Suite.1094bde3 
+>> DelayCommand(delay=EndsBeforeHappyPathExpires(QuantizedFiniteDuration(8000 milliseconds,SlotConfig(1777917375000,0,1000))))
+DEBUG Stage1.Suite.1094bde3 
+	Current time: 1777917555743
+⚠️  All loggers are suspended while predicate evaluation and state advancement...
+DEBUG Stage1.Suite.1094bde3 
+>> StartBlockCommand(blockNumber=3)
+INFO  CardanoLiaison 
+Timeout received, run effects...
+TRACE CardanoLiaison 
+entering `runEffects`
+⚠️  All loggers are suspended while predicate evaluation and state advancement...
+DEBUG Stage1.Suite.1094bde3 
+>> LedgerEventCommand
+INFO  JointLedger 
+start block: 3...
+INFO  JointLedger 
+applying transaction, request id: (0,5))
+⚠️  All loggers are suspended while predicate evaluation and state advancement...
+DEBUG Stage1.Suite.1094bde3 
+>> LedgerEventCommand
+⚠️  All loggers are suspended while predicate evaluation and state advancement...
+DEBUG Stage1.Suite.1094bde3 
+>> SubmitDepositCommand (Queue(RegisterDepositCommand(eventId=(0,3), ada=Coin(5875260450)), RegisterDepositCommand(eventId=(0,4), ada=Coin(624094897))))
+TRACE CardanoLiaison 
+current time is 1777917555000
+TRACE CardanoLiaison 
+utxoIds are Set(TransactionInput("6a1af786b5adfec447ed5500469e1f9267d071a3d955127acd4fc2cf437f7959",0))
+TRACE CardanoLiaison 
+state is State(
+  targetState: Active(treasuryUtxoId=TransactionInput("c6b4b726837e26c6fbf7893b64bd14fc734ab292ed00dacc52b47bd4aefb7c93",0))
+  effectInputs (2 entries):
+  TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0) -> (1,0)
+  TransactionInput("21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245",0) -> (2,0)
+  happyPathEffects (3 entries):
+  (0,0) -> txHash="7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49"
+  (1,0) -> txHash="21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245"
+  (2,0) -> txHash="c6b4b726837e26c6fbf7893b64bd14fc734ab292ed00dacc52b47bd4aefb7c93"
+  fallbackEffects (3 entries):
+  0 -> txHash="daaf9806a9ec48abf62aeb74608f705c18a36385039f0c41045d2a3fdf98231b"
+  1 -> txHash="13a2466ba0b36c6ea32da7bdf86d0d5d67747c0c7693cea1f12c33a154c6a337"
+  2 -> txHash="9fbfd4fb734e7835ffab5f7c5eafb3869fd9cba139a6d012425e7e419e59f69d"
+)
+TRACE CardanoLiaison 
+due actions is empty
+TRACE CardanoLiaison 
+no target TransactionInput("c6b4b726837e26c6fbf7893b64bd14fc734ab292ed00dacc52b47bd4aefb7c93",0) found, submitting initAction: None
+ERROR Stage1.Suite.1094bde3 
+Submit deposit errors:
+	- (0,3),
+	error:
+	LeftProjection(Left({"status_code":400,"error":"400 BAD_REQUEST","message":"{\"contents\":{\"contents\":{\"contents\":{\"era\":\"ShelleyBasedEraConway\",\"error\":[\"ConwayUtxowFailure (UtxoFailure (BadInputsUTxO (fromList [TxIn (TxId {unTxId = SafeHash \\\"7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49\\\"}) (TxIx {unTxIx = 1})])))\"],\"kind\":\"ShelleyTxValidationError\"},\"tag\":\"TxValidationErrorInCardanoMode\"},\"tag\":\"TxCmdTxSubmitValidationError\"},\"tag\":\"TxSubmitFail\"}"}))
+	Pretty: ${summon[Pretty[Transaction]].pretty(a._1._2)}
+	cbor: ${HexUtil.encodeHexString(a._1._2.toCbor)}
+	- (0,4),
+	error:
+	LeftProjection(Left({"status_code":400,"error":"400 BAD_REQUEST","message":"{\"contents\":{\"contents\":{\"contents\":{\"era\":\"ShelleyBasedEraConway\",\"error\":[\"ConwayUtxowFailure (UtxoFailure (BadInputsUTxO (fromList [TxIn (TxId {unTxId = SafeHash \\\"7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49\\\"}) (TxIx {unTxIx = 1})])))\"],\"kind\":\"ShelleyTxValidationError\"},\"tag\":\"TxValidationErrorInCardanoMode\"},\"tag\":\"TxCmdTxSubmitValidationError\"},\"tag\":\"TxSubmitFail\"}"}))
+	Pretty: ${summon[Pretty[Transaction]].pretty(a._1._2)}
+	cbor: ${HexUtil.encodeHexString(a._1._2.toCbor)}
+⚠️  All loggers are suspended while predicate evaluation and state advancement...
+DEBUG Stage1.Suite.1094bde3 
+>> RegisterDepositCommand
+⚠️  All loggers are suspended while predicate evaluation and state advancement...
+DEBUG Stage1.Suite.1094bde3 
+>> RegisterDepositCommand
+⚠️  All loggers are suspended while predicate evaluation and state advancement...
+DEBUG Stage1.Suite.1094bde3 
+>> LedgerEventCommand
+INFO  JointLedger 
+applying transaction, request id: (0,9))
+⚠️  All loggers are suspended while predicate evaluation and state advancement...
+DEBUG Stage1.Suite.1094bde3 
+>> LedgerEventCommand
+⚠️  All loggers are suspended while predicate evaluation and state advancement...
+INFO  CardanoLiaison 
+Timeout received, run effects...
+TRACE CardanoLiaison 
+entering `runEffects`
+TRACE CardanoLiaison 
+current time is 1777917565000
+TRACE CardanoLiaison 
+utxoIds are Set(TransactionInput("6a1af786b5adfec447ed5500469e1f9267d071a3d955127acd4fc2cf437f7959",0))
+TRACE CardanoLiaison 
+state is State(
+  targetState: Active(treasuryUtxoId=TransactionInput("c6b4b726837e26c6fbf7893b64bd14fc734ab292ed00dacc52b47bd4aefb7c93",0))
+  effectInputs (2 entries):
+  TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0) -> (1,0)
+  TransactionInput("21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245",0) -> (2,0)
+  happyPathEffects (3 entries):
+  (0,0) -> txHash="7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49"
+  (1,0) -> txHash="21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245"
+  (2,0) -> txHash="c6b4b726837e26c6fbf7893b64bd14fc734ab292ed00dacc52b47bd4aefb7c93"
+  fallbackEffects (3 entries):
+  0 -> txHash="daaf9806a9ec48abf62aeb74608f705c18a36385039f0c41045d2a3fdf98231b"
+  1 -> txHash="13a2466ba0b36c6ea32da7bdf86d0d5d67747c0c7693cea1f12c33a154c6a337"
+  2 -> txHash="9fbfd4fb734e7835ffab5f7c5eafb3869fd9cba139a6d012425e7e419e59f69d"
+)
+TRACE CardanoLiaison 
+due actions is empty
+TRACE CardanoLiaison 
+no target TransactionInput("c6b4b726837e26c6fbf7893b64bd14fc734ab292ed00dacc52b47bd4aefb7c93",0) found, submitting initAction: None
+INFO  CardanoLiaison 
+Timeout received, run effects...
+TRACE CardanoLiaison 
+entering `runEffects`
+TRACE CardanoLiaison 
+current time is 1777917574000
+TRACE CardanoLiaison 
+utxoIds are Set(TransactionInput("6a1af786b5adfec447ed5500469e1f9267d071a3d955127acd4fc2cf437f7959",0))
+TRACE CardanoLiaison 
+state is State(
+  targetState: Active(treasuryUtxoId=TransactionInput("c6b4b726837e26c6fbf7893b64bd14fc734ab292ed00dacc52b47bd4aefb7c93",0))
+  effectInputs (2 entries):
+  TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0) -> (1,0)
+  TransactionInput("21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245",0) -> (2,0)
+  happyPathEffects (3 entries):
+  (0,0) -> txHash="7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49"
+  (1,0) -> txHash="21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245"
+  (2,0) -> txHash="c6b4b726837e26c6fbf7893b64bd14fc734ab292ed00dacc52b47bd4aefb7c93"
+  fallbackEffects (3 entries):
+  0 -> txHash="daaf9806a9ec48abf62aeb74608f705c18a36385039f0c41045d2a3fdf98231b"
+  1 -> txHash="13a2466ba0b36c6ea32da7bdf86d0d5d67747c0c7693cea1f12c33a154c6a337"
+  2 -> txHash="9fbfd4fb734e7835ffab5f7c5eafb3869fd9cba139a6d012425e7e419e59f69d"
+)
+TRACE CardanoLiaison 
+due actions is empty
+TRACE CardanoLiaison 
+no target TransactionInput("c6b4b726837e26c6fbf7893b64bd14fc734ab292ed00dacc52b47bd4aefb7c93",0) found, submitting initAction: None
+INFO  CardanoLiaison 
+Timeout received, run effects...
+TRACE CardanoLiaison 
+entering `runEffects`
+TRACE CardanoLiaison 
+current time is 1777917583000
+TRACE CardanoLiaison 
+utxoIds are Set(TransactionInput("6a1af786b5adfec447ed5500469e1f9267d071a3d955127acd4fc2cf437f7959",0))
+TRACE CardanoLiaison 
+state is State(
+  targetState: Active(treasuryUtxoId=TransactionInput("c6b4b726837e26c6fbf7893b64bd14fc734ab292ed00dacc52b47bd4aefb7c93",0))
+  effectInputs (2 entries):
+  TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0) -> (1,0)
+  TransactionInput("21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245",0) -> (2,0)
+  happyPathEffects (3 entries):
+  (0,0) -> txHash="7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49"
+  (1,0) -> txHash="21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245"
+  (2,0) -> txHash="c6b4b726837e26c6fbf7893b64bd14fc734ab292ed00dacc52b47bd4aefb7c93"
+  fallbackEffects (3 entries):
+  0 -> txHash="daaf9806a9ec48abf62aeb74608f705c18a36385039f0c41045d2a3fdf98231b"
+  1 -> txHash="13a2466ba0b36c6ea32da7bdf86d0d5d67747c0c7693cea1f12c33a154c6a337"
+  2 -> txHash="9fbfd4fb734e7835ffab5f7c5eafb3869fd9cba139a6d012425e7e419e59f69d"
+)
+TRACE CardanoLiaison 
+due actions is empty
+TRACE CardanoLiaison 
+no target TransactionInput("c6b4b726837e26c6fbf7893b64bd14fc734ab292ed00dacc52b47bd4aefb7c93",0) found, submitting initAction: None
+INFO  CardanoLiaison 
+Timeout received, run effects...
+TRACE CardanoLiaison 
+entering `runEffects`
+TRACE CardanoLiaison 
+current time is 1777917592000
+TRACE CardanoLiaison 
+utxoIds are Set(TransactionInput("6a1af786b5adfec447ed5500469e1f9267d071a3d955127acd4fc2cf437f7959",0))
+TRACE CardanoLiaison 
+state is State(
+  targetState: Active(treasuryUtxoId=TransactionInput("c6b4b726837e26c6fbf7893b64bd14fc734ab292ed00dacc52b47bd4aefb7c93",0))
+  effectInputs (2 entries):
+  TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0) -> (1,0)
+  TransactionInput("21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245",0) -> (2,0)
+  happyPathEffects (3 entries):
+  (0,0) -> txHash="7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49"
+  (1,0) -> txHash="21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245"
+  (2,0) -> txHash="c6b4b726837e26c6fbf7893b64bd14fc734ab292ed00dacc52b47bd4aefb7c93"
+  fallbackEffects (3 entries):
+  0 -> txHash="daaf9806a9ec48abf62aeb74608f705c18a36385039f0c41045d2a3fdf98231b"
+  1 -> txHash="13a2466ba0b36c6ea32da7bdf86d0d5d67747c0c7693cea1f12c33a154c6a337"
+  2 -> txHash="9fbfd4fb734e7835ffab5f7c5eafb3869fd9cba139a6d012425e7e419e59f69d"
+)
+TRACE CardanoLiaison 
+due actions is empty
+TRACE CardanoLiaison 
+no target TransactionInput("c6b4b726837e26c6fbf7893b64bd14fc734ab292ed00dacc52b47bd4aefb7c93",0) found, submitting initAction: None
+INFO  CardanoLiaison 
+Timeout received, run effects...
+TRACE CardanoLiaison 
+entering `runEffects`
+TRACE CardanoLiaison 
+current time is 1777917601000
+TRACE CardanoLiaison 
+utxoIds are Set(TransactionInput("6a1af786b5adfec447ed5500469e1f9267d071a3d955127acd4fc2cf437f7959",0))
+TRACE CardanoLiaison 
+state is State(
+  targetState: Active(treasuryUtxoId=TransactionInput("c6b4b726837e26c6fbf7893b64bd14fc734ab292ed00dacc52b47bd4aefb7c93",0))
+  effectInputs (2 entries):
+  TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0) -> (1,0)
+  TransactionInput("21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245",0) -> (2,0)
+  happyPathEffects (3 entries):
+  (0,0) -> txHash="7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49"
+  (1,0) -> txHash="21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245"
+  (2,0) -> txHash="c6b4b726837e26c6fbf7893b64bd14fc734ab292ed00dacc52b47bd4aefb7c93"
+  fallbackEffects (3 entries):
+  0 -> txHash="daaf9806a9ec48abf62aeb74608f705c18a36385039f0c41045d2a3fdf98231b"
+  1 -> txHash="13a2466ba0b36c6ea32da7bdf86d0d5d67747c0c7693cea1f12c33a154c6a337"
+  2 -> txHash="9fbfd4fb734e7835ffab5f7c5eafb3869fd9cba139a6d012425e7e419e59f69d"
+)
+TRACE CardanoLiaison 
+due actions is empty
+TRACE CardanoLiaison 
+no target TransactionInput("c6b4b726837e26c6fbf7893b64bd14fc734ab292ed00dacc52b47bd4aefb7c93",0) found, submitting initAction: None
+DEBUG Stage1.Suite.1094bde3 
+>> CompleteBlockCommand(blockNumber=3, blockDuration=QuantizedFiniteDuration(46000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777917583000, isFinal=false)
+TRACE Stage1.Suite.1094bde3 
+SUTCommand[CompleteBlockCommand, (...)]: current time: 1777917601813
+INFO  JointLedger 
+completing block 3
+DEBUG DepositsMap 
+[partition]
+	 blockCreationEndTime: 1777917583000
+	 settlementTxEndTime: 1777917619000
+	 pollResults: [
+  "6a1af786b5adfec447ed5500469e1f9267d071a3d955127acd4fc2cf437f7959#0"
+]
+DEBUG DepositsMap 
+Entry((0,3),DepositUtxo(TransactionInput("492b171b70aac2c8426eba67845b3424d7b59ff584d54211528734a49fcb5445",0),ShelleyAddress(Testnet,Script("89234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d235"),Null),Datum(Onchain(Address(PubKeyCredential(pkh#c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8),None),None,1777917751000)),Value(5875.260450 ADA),"9fa200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011b0000000131e4e6a5a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a2b67f946a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a00e47c37ff",Coin(0),1777917569000,1777917571000,1777917691000)) is mature, but not in the poll results.
+DEBUG DepositsMap 
+Entry((0,4),DepositUtxo(TransactionInput("6fea8ff79210245c0620c7c5bc61e4e5e0a5acd0738c7e9a1bee6da2eb8280e9",0),ShelleyAddress(Testnet,Script("89234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d235"),Null),Datum(Onchain(Address(PubKeyCredential(pkh#c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8),None),None,1777917751000)),Value(624.094897 ADA),"9fa200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a252414bfa200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a000ed9f2ff",Coin(0),1777917569000,1777917571000,1777917691000)) is mature, but not in the poll results.
+DEBUG DepositsMap 
+Entry((0,7),DepositUtxo(TransactionInput("160afb949035dc6bc2cc2ffff895e8b76bfad2e8e3af3fa7631c87ba7c290889",0),ShelleyAddress(Testnet,Script("89234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d235"),Null),Datum(Onchain(Address(PubKeyCredential(pkh#c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8),None),None,1777917839000)),Value(4166.111127 ADA),"9fa200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a31ff9b5aa200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a1023d6bfa200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a5cc0dcd3a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a056e32a2a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a1e296441a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a01cb9d4fa200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a169f7090a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a0ad38294a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a002c72d4a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a0c402e36a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a0564636fa200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a006a58a6a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a00248591a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a000ecc16a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a0028aa8fff",Coin(0),1777917657000,1777917659000,1777917779000)) is immature.
+DEBUG DepositsMap 
+Entry((0,8),DepositUtxo(TransactionInput("fa3208b7baaf01b1b7361fa0d1f5d27717637e9eb541acaaa1d323d9eb5c5c68",0),ShelleyAddress(Testnet,Script("89234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d235"),Null),Datum(Onchain(Address(PubKeyCredential(pkh#c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8),None),None,1777917839000)),Value(1255.073823 ADA),"9fa200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a3c359bbfa200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a051d5f40a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a05e33436a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a00139d36a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a032dd612a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a00264b97a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a0030fa0bff",Coin(0),1777917657000,1777917659000,1777917779000)) is immature.
+TRACE JointLedger 
+Deposits partitioned and split:
+|- Expired: List()
+|- NotInPollResults: List(3, 4)
+|- Eligible: List()
+|--- Absorbed: List()
+|--- Unabsorbed: List()
+|- Surviving: List(7, 8)
+|--- Unabsorbed: List()
+|--- Immature: List(7, 8)
+TRACE JointLedger 
+mkBlockBrief: previousHeader=Major(2,(2,0),1777917449000,1777917529000,1777917679000,1777917571000,"964cf49d33bef72f113f8c7589cafaf91a19151790d2aecc08adf26e6ba87e43e6ce553a7aea40436e97976400c0c7f4")
+mkBlockBrief: blockWithdrawnUtxos=[
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a000ecc16",
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a00244258",
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011ab10f19bb",
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a1643f02f",
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a0869d019",
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a00ca0189",
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a00f5b42d",
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a00ac7424",
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a005b6006",
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a000ecc16",
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a001b2029",
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a013f183f",
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a007d2d34",
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a000ecc16"
+]
+mkBlockBrief: blockStartTime=1777917537000
+mkBlockBrief: competingFallbackValidityStart=1777917679000
+mkBlockBrief: events=List(((0,5),Valid), ((0,6),Valid), ((0,7),Valid), ((0,8),Valid), ((0,9),Valid), ((0,10),Valid))
+mkBlockBrief: decisions.absorbed=List()
+mkBlockBrief: decisions.refunded=List((0,3), (0,4))
+TRACE JointLedger 
+New evacuation map: {
+  "82582050c3532d940d503323779c40147b470a794a21dbe21b8dbebc4ab2ecaad410f900" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a49f4bd81",
+  "825820f53e45749133e8505fc8e708677ad8cd00c0abecbbf07d9b1819a744faedebd101" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a000f4447"
+}
+TRACE JointLedger 
+mkBlockBriefIntermediate result:
+  Block type: Major
+  Block number: 3
+  Block brief: Major(Major(3,(3,0),1777917537000,1777917583000,1777917733000,1777917643000,"89efd1f147ed3901eb3c653b74c58d238fc67dd48a797821b5bc6c789c8f65bce4b882908149f8431897ef6a316c1d62"),Major(List(((0,5),Valid), ((0,6),Valid), ((0,7),Valid), ((0,8),Valid), ((0,9),Valid), ((0,10),Valid)),List(),List((0,3), (0,4))))
+TRACE JointLedger 
+mkBlockEffectsIntermediate:
+  Block type: Major
+  Block number: 3
+  Absorbed deposits: List()
+  Post-dated refund txs: 2
+  L2 payouts: 14
+TRACE JointLedger 
+Building effects for major block 3 with version (3,0).
+Previous block (2) had version (2,0).
+TRACE JointLedger 
+Remitting payouts: Vector((ShelleyAddress(Testnet,Key("c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8"),Null),Value(0.969750 ADA)), (ShelleyAddress(Testnet,Key("c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8"),Null),Value(2.376280 ADA)), (ShelleyAddress(Testnet,Key("c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8"),Null),Value(2970.556859 ADA)), (ShelleyAddress(Testnet,Key("c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8"),Null),Value(373.551151 ADA)), (ShelleyAddress(Testnet,Key("c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8"),Null),Value(141.152281 ADA)), (ShelleyAddress(Testnet,Key("c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8"),Null),Value(13.238665 ADA)), (ShelleyAddress(Testnet,Key("c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8"),Null),Value(16.102445 ADA)), (ShelleyAddress(Testnet,Key("c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8"),Null),Value(11.301924 ADA)), (ShelleyAddress(Testnet,Key("c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8"),Null),Value(5.988358 ADA)), (ShelleyAddress(Testnet,Key("c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8"),Null),Value(0.969750 ADA)), (ShelleyAddress(Testnet,Key("c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8"),Null),Value(1.777705 ADA)), (ShelleyAddress(Testnet,Key("c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8"),Null),Value(20.912191 ADA)), (ShelleyAddress(Testnet,Key("c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8"),Null),Value(8.203572 ADA)), (ShelleyAddress(Testnet,Key("c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8"),Null),Value(0.969750 ADA)))
+TRACE JointLedger 
+mkBlockEffectsIntermediate: Major block effects created
+TRACE JointLedger 
+Settlement tx ("7fb1589a80dc7b52ae30fc72506e3dd7448195a7937057e577ddf978219e6308"): 84a600d9010281825820c6b4b726837e26c6fbf7893b64bd14fc734ab292ed00dacc52b47bd4aefb7c9300018fa300581d7089234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d23501821a5b312958a1581c89234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d235a15820013499008c834723b9c9b0033b006d450c606468c154cc365a800f16c3cc21e001028201d8185837d8799f583089efd1f147ed3901eb3c653b74c58d238fc67dd48a797821b5bc6c789c8f65bce4b882908149f8431897ef6a316c1d6203ffa200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a000ecc16a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a007d2d34a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a013f183fa200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a001b2029a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a000ecc16a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a005b6006a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a00ac7424a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a00f5b42da200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a00ca0189a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a0869d019a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a1643f02fa200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011ab10f19bba200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a00244258a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a000ecc16021a000313120318f4075820f2e527ae8b0803eedf0e5b9b7f6cabc6d49fe28f49da9cb63169d1986ef6ead412d90102818258207e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e4901a0f5a1191349a16a536574746c656d656e74a1784030313334393930303863383334373233623963396230303333623030366434353063363036343638633135346363333635613830306631366333636332316530a0
+TRACE JointLedger 
+Fallback tx ("0937c98858ca536e0873346f6c64e1c8b5c4a12c8801a20c1ce9070bfd50e003"): 84a600d90102828258207e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49018258207fb1589a80dc7b52ae30fc72506e3dd7448195a7937057e577ddf978219e6308000184a300581d702f76eb137e1b2b0028bbac67de79c3e6f4063ab97ac65e691432843301821a4a0401c8a1581c89234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d235a15820013499008c834723b9c9b0033b006d450c606468c154cc365a800f16c3cc21e001028201d8185874d8799f581c89234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d2355820021eb2408c834723b9c9b0033b006d450c606468c154cc365a800f16c3cc21e09f58206ea31d27d585439ea8fd9cd8e6664ed83e605c06aec24d32dfaba488e49287d9ff011b0000019e0abf9bf00380ffa200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a11a8970ba300581d7083588fce421d486e62f9f7ef409ff83035d913e618ffd2326eec16ac01821a00427e12a1581c89234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d235a15820021eb2408c834723b9c9b0033b006d450c606468c154cc365a800f16c3cc21e001028201d8185828d8799f0001d8799f581cc8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8ffffa300581d7083588fce421d486e62f9f7ef409ff83035d913e618ffd2326eec16ac01821a0016080aa1581c89234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d235a15820021eb2408c834723b9c9b0033b006d450c606468c154cc365a800f16c3cc21e001028201d818583dd8799f0001d87a9f583089efd1f147ed3901eb3c653b74c58d238fc67dd48a797821b5bc6c789c8f65bce4b882908149f8431897ef6a316c1d6200ffff021a00030fa2075820536cb21f493023b1559a078c4c1a7288151360c67de3fbc0804ba802f463e8d00819016609a1581c89234e0f20373cde0c7b0644edeb3cfc1dbca4005fd98b731518d235a2582001247af08c834723b9c9b0033b006d450c606468c154cc365a800f16c3cc21e0205820021eb2408c834723b9c9b0033b006d450c606468c154cc365a800f16c3cc21e002a0f5a1191349a16846616c6c6261636ba1784030313334393930303863383334373233623963396230303333623030366434353063363036343638633135346363333635613830306631366333636332316530a0
+TRACE JointLedger 
+Post-dated refund tx ("6bceaa4f8d4bd1056b30a4181bb3d59dbe097a42cc59e80fc639af68049ede66"): 84a500d9010281825820160afb949035dc6bc2cc2ffff895e8b76bfad2e8e3af3fa7631c87ba7c290889000181a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011af84f3372021a00029c25075820489cbf73db1d5dcd76db44e4b4e43a764be9dd34cc45f5c4084950be38086616081901d0a101d90102818201818200581cc8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8f5a1191349a166526566756e64a1784030313334393930303863383334373233623963396230303333623030366434353063363036343638633135346363333635613830306631366333636332316530a0
+TRACE JointLedger 
+Post-dated refund tx ("a310b3b2484e7535ab1642f1ea90e2db120f7a150c15ecfe72777008699fdf02"): 84a500d9010281825820fa3208b7baaf01b1b7361fa0d1f5d27717637e9eb541acaaa1d323d9eb5c5c68000181a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a4acc4bfa021a00029c25075820489cbf73db1d5dcd76db44e4b4e43a764be9dd34cc45f5c4084950be38086616081901d0a101d90102818201818200581cc8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8f5a1191349a166526566756e64a1784030313334393930303863383334373233623963396230303333623030366434353063363036343638633135346363333635613830306631366333636332316530a0
+⚠️  All loggers are suspended while predicate evaluation and state advancement...
+INFO  CardanoLiaison 
+handleMajorBlockL1Effects for block (3,0)
+INFO  Stage1.Suite 
+shutdownSut
+INFO  Stage1.Suite 
+Protocol trace: 30 events → /home/pdragos/Code/cardano-hydrozoa/hydrozoa/target/traces/stage1-deposits-yaci-1094bde3.jsonl
+TRACE CardanoLiaison 
+current time is 1777917601000
+TRACE CardanoLiaison 
+utxoIds are Set(TransactionInput("6a1af786b5adfec447ed5500469e1f9267d071a3d955127acd4fc2cf437f7959",0))
+TRACE CardanoLiaison 
+state is State(
+  targetState: Active(treasuryUtxoId=TransactionInput("7fb1589a80dc7b52ae30fc72506e3dd7448195a7937057e577ddf978219e6308",0))
+  effectInputs (3 entries):
+  TransactionInput("7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49",0) -> (1,0)
+  TransactionInput("21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245",0) -> (2,0)
+  TransactionInput("c6b4b726837e26c6fbf7893b64bd14fc734ab292ed00dacc52b47bd4aefb7c93",0) -> (3,0)
+  happyPathEffects (4 entries):
+  (0,0) -> txHash="7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49"
+  (1,0) -> txHash="21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245"
+  (2,0) -> txHash="c6b4b726837e26c6fbf7893b64bd14fc734ab292ed00dacc52b47bd4aefb7c93"
+  (3,0) -> txHash="7fb1589a80dc7b52ae30fc72506e3dd7448195a7937057e577ddf978219e6308"
+  fallbackEffects (4 entries):
+  0 -> txHash="daaf9806a9ec48abf62aeb74608f705c18a36385039f0c41045d2a3fdf98231b"
+  1 -> txHash="13a2466ba0b36c6ea32da7bdf86d0d5d67747c0c7693cea1f12c33a154c6a337"
+  2 -> txHash="9fbfd4fb734e7835ffab5f7c5eafb3869fd9cba139a6d012425e7e419e59f69d"
+  3 -> txHash="0937c98858ca536e0873346f6c64e1c8b5c4a12c8801a20c1ce9070bfd50e003"
+)
+TRACE CardanoLiaison 
+due actions is empty
+TRACE CardanoLiaison 
+no target TransactionInput("7fb1589a80dc7b52ae30fc72506e3dd7448195a7937057e577ddf978219e6308",0) found, submitting initAction: None
+TRACE Stage1.Model 
+Model current time: BeforeHappyPathExpiration(1777917583000)
+INFO  Stage1.Suite 
+Utxo set size: 7
+INFO  Stage1.Suite 
+Expected effects:
+	- Init: "7e921cde2bbead1c2daa5fe6de432344f56995ed11350fea2db4ee750eab7e49"
+	- Settlement(5 payouts): "21a008e5f4cfe9139eb51d8e205b6f74de188cdc5726d914a85d1022ad764245"
+	- Settlement: "c6b4b726837e26c6fbf7893b64bd14fc734ab292ed00dacc52b47bd4aefb7c93"
+	- Settlement(14 payouts): "7fb1589a80dc7b52ae30fc72506e3dd7448195a7937057e577ddf978219e6308"
+INFO  org.scalacheck.commands.ModelBasedSuite 
+Test case property is evaluated.
+DEBUG Stage1.Model 
+MODEL>> DelayCommand: EndsBeforeHappyPathExpires(QuantizedFiniteDuration(4000 milliseconds,SlotConfig(1777917375000,0,1000)))
+TRACE Stage1.Model 
+Transitioning Done -> Ready for block 0
+TRACE Stage1.Model 
+Model current time: BeforeHappyPathExpiration(1777917375000)
+TRACE Stage1.Model 
+Model current time advancing to BeforeHappyPathExpiration(1777917379000) from BeforeHappyPathExpiration(1777917375000)
+DEBUG Stage1.Model 
+MODEL>> StartBlockCommand for block number: 1
+TRACE Stage1.Model 
+Model current time: BeforeHappyPathExpiration(1777917379000)
+TRACE Stage1.Model 
+Model current time: BeforeHappyPathExpiration(1777917379000)
+DEBUG Stage1.Model 
+MODEL>> RegisterDepositCommand for event ID: (0,0)
+TRACE Stage1.Model 
+INPUT state.blockCycle event IDs: List()
+TRACE Stage1.Model 
+deposit txHash="6a1af786b5adfec447ed5500469e1f9267d071a3d955127acd4fc2cf437f7959"
+TRACE Stage1.Model 
+OUTPUT newState.blockCycle event IDs: List((0,0))
+TRACE Stage1.Model 
+OUTPUT newState.depositEnqueued IDs and submission deadlines: Queue(((0,0),1777917500000))
+DEBUG Stage1.Model 
+MODEL>> L2TxCommand for event ID: (0,1)
+TRACE Stage1.Model 
+INPUT state.blockCycle event IDs: List((0,0))
+TRACE Stage1.Model 
+Model current time: BeforeHappyPathExpiration(1777917379000)
+TRACE Stage1.Model 
+OUTPUT finalState.blockCycle event IDs: List((0,0), (0,1))
+TRACE Stage1.Model 
+[L2TxCommand] payout obligations for "e696b1c4cc4fff3c544c865ce92555a77c08f6f567a13538beca5e3468f8792d": Right([
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a002d2b12",
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a000ecc16"
+])
+TRACE Stage1.Model 
+[L2TxCommand] L2 Utxos for "e696b1c4cc4fff3c544c865ce92555a77c08f6f567a13538beca5e3468f8792d": {
+  "e696b1c4cc4fff3c544c865ce92555a77c08f6f567a13538beca5e3468f8792d#1" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a00a2577b",
+  "e696b1c4cc4fff3c544c865ce92555a77c08f6f567a13538beca5e3468f8792d#3" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a002d4614"
+}
+DEBUG Stage1.Model 
+MODEL>> L2TxCommand for event ID: (0,2)
+TRACE Stage1.Model 
+INPUT state.blockCycle event IDs: List((0,0), (0,1))
+TRACE Stage1.Model 
+Model current time: BeforeHappyPathExpiration(1777917379000)
+TRACE Stage1.Model 
+OUTPUT finalState.blockCycle event IDs: List((0,0), (0,1), (0,2))
+TRACE Stage1.Model 
+[L2TxCommand] payout obligations for "acc95749c5cb14ef6d872a60af3f1b286a2b16099d6995901a34c941ed58924f": Right([
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a000ecc16",
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a001b3f39",
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a00a59240"
+])
+TRACE Stage1.Model 
+[L2TxCommand] L2 Utxos for "acc95749c5cb14ef6d872a60af3f1b286a2b16099d6995901a34c941ed58924f": {
+  
+}
+DEBUG Stage1.Model 
+MODEL>> CompleteBlockCommand for block number: 1
+TRACE Stage1.Model 
+Completing block 1, accumulator has 3 elements: with reqeust IDs: List((0,0), (0,1), (0,2)).
+TRACE Stage1.Model 
+[getNewSettlementValidityEnd]: 1777917465000
+TRACE Stage1.Model 
+depositsToAbsorb: Queue()
+TRACE Stage1.Model 
+[getNewSettlementValidityEnd]: 1777917465000
+TRACE Stage1.Model 
+MODEL deposit refund check: (0,0),
+depositAbsorptionEnd=1777917621000, settlementValidityEnd=1777917465000
+TRACE Stage1.Model 
+depositToRefund: Queue()
+TRACE Stage1.Model 
+newEvacuationMap: {
+  
+}
+TRACE Stage1.Model 
+Model current time: BeforeHappyPathExpiration(1777917379000)
+TRACE Stage1.Model 
+[CompleteBlockCommand.majorBlock]: {
+  "header" : {
+    "blockNum" : 1,
+    "blockVersion" : [
+      1,
+      0
+    ],
+    "startTime" : 1777917379000,
+    "endTime" : 1777917446000,
+    "fallbackTxStartTime" : 1777917596000,
+    "majorBlockWakeupTime" : 1777917501000,
+    "kzgCommitment" : "97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb"
+  },
+  "body" : {
+    "events" : [
+      [
+        {
+          "headPeerNumber" : 0,
+          "requestNumber" : 0
+        },
+        "Valid"
+      ],
+      [
+        {
+          "headPeerNumber" : 0,
+          "requestNumber" : 1
+        },
+        "Valid"
+      ],
+      [
+        {
+          "headPeerNumber" : 0,
+          "requestNumber" : 2
+        },
+        "Valid"
+      ]
+    ],
+    "depositsAbsorbed" : [
+    ],
+    "depositsRefunded" : [
+    ]
+  }
+}
+TRACE Stage1.Model 
+block brief: Major(Major(1,(1,0),1777917379000,1777917446000,1777917596000,1777917501000,"97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb"),Major(List(((0,0),Valid), ((0,1),Valid), ((0,2),Valid)),List(),List()))
+TRACE Stage1.Model 
+Model current time advancing to BeforeHappyPathExpiration(1777917446000) from BeforeHappyPathExpiration(1777917379000)
+DEBUG Stage1.Model 
+MODEL>> DelayCommand: EndsBeforeHappyPathExpires(QuantizedFiniteDuration(3000 milliseconds,SlotConfig(1777917375000,0,1000)))
+TRACE Stage1.Model 
+Transitioning Done -> Ready for block 1
+TRACE Stage1.Model 
+Model current time: BeforeHappyPathExpiration(1777917446000)
+TRACE Stage1.Model 
+Model current time advancing to BeforeHappyPathExpiration(1777917449000) from BeforeHappyPathExpiration(1777917446000)
+DEBUG Stage1.Model 
+MODEL>> StartBlockCommand for block number: 2
+TRACE Stage1.Model 
+Model current time: BeforeHappyPathExpiration(1777917449000)
+TRACE Stage1.Model 
+Model current time: BeforeHappyPathExpiration(1777917449000)
+DEBUG Stage1.Model 
+MODEL>> SubmitDepositCommand, for submission: 1, for rejection: 0
+DEBUG Stage1.Model 
+MODEL>> RegisterDepositCommand for event ID: (0,3)
+TRACE Stage1.Model 
+INPUT state.blockCycle event IDs: List()
+TRACE Stage1.Model 
+deposit txHash="492b171b70aac2c8426eba67845b3424d7b59ff584d54211528734a49fcb5445"
+TRACE Stage1.Model 
+OUTPUT newState.blockCycle event IDs: List((0,3))
+TRACE Stage1.Model 
+OUTPUT newState.depositEnqueued IDs and submission deadlines: Queue(((0,3),1777917570000))
+DEBUG Stage1.Model 
+MODEL>> RegisterDepositCommand for event ID: (0,4)
+TRACE Stage1.Model 
+INPUT state.blockCycle event IDs: List((0,3))
+TRACE Stage1.Model 
+deposit txHash="6fea8ff79210245c0620c7c5bc61e4e5e0a5acd0738c7e9a1bee6da2eb8280e9"
+TRACE Stage1.Model 
+OUTPUT newState.blockCycle event IDs: List((0,3), (0,4))
+TRACE Stage1.Model 
+OUTPUT newState.depositEnqueued IDs and submission deadlines: Queue(((0,3),1777917570000), ((0,4),1777917570000))
+DEBUG Stage1.Model 
+MODEL>> CompleteBlockCommand for block number: 2
+TRACE Stage1.Model 
+Completing block 2, accumulator has 2 elements: with reqeust IDs: List((0,3), (0,4)).
+TRACE Stage1.Model 
+[getNewSettlementValidityEnd]: 1777917536000
+TRACE Stage1.Model 
+MODEL deposit absorption check: (0,0),
+depositAbsorptionStart=1777917501000, depositAbsorptionEnd=1777917621000
+TRACE Stage1.Model 
+depositsToAbsorb: Queue(Submitted(RegisterDepositCommand(eventId=(0,0), ada=Coin(4809847265))))
+TRACE Stage1.Model 
+[getNewSettlementValidityEnd]: 1777917536000
+TRACE Stage1.Model 
+MODEL deposit refund check: (0,3),
+depositAbsorptionEnd=1777917691000, settlementValidityEnd=1777917536000
+TRACE Stage1.Model 
+MODEL deposit refund check: (0,4),
+depositAbsorptionEnd=1777917691000, settlementValidityEnd=1777917536000
+TRACE Stage1.Model 
+depositToRefund: Queue()
+TRACE Stage1.Model 
+newEvacuationMap: {
+  "82582023e4961f099f0eeefb4d79800623c1493d7aed33775b381fe9c6204bdfb94b2600" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a6e384d7d",
+  "82582023e4961f099f0eeefb4d79800623c1493d7aed33775b381fe9c6204bdfb94b2601" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a8ded2b49",
+  "82582023e4961f099f0eeefb4d79800623c1493d7aed33775b381fe9c6204bdfb94b2602" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a002e8792",
+  "82582023e4961f099f0eeefb4d79800623c1493d7aed33775b381fe9c6204bdfb94b2603" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a17501619",
+  "82582023e4961f099f0eeefb4d79800623c1493d7aed33775b381fe9c6204bdfb94b2604" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a0317bb98",
+  "82582023e4961f099f0eeefb4d79800623c1493d7aed33775b381fe9c6204bdfb94b2605" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a0010f384",
+  "82582023e4961f099f0eeefb4d79800623c1493d7aed33775b381fe9c6204bdfb94b2606" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a0712ecdd",
+  "82582023e4961f099f0eeefb4d79800623c1493d7aed33775b381fe9c6204bdfb94b2607" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a008fac04",
+  "82582023e4961f099f0eeefb4d79800623c1493d7aed33775b381fe9c6204bdfb94b2608" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a00306716",
+  "82582023e4961f099f0eeefb4d79800623c1493d7aed33775b381fe9c6204bdfb94b2609" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a0010ac5d"
+}
+TRACE Stage1.Model 
+Model current time: BeforeHappyPathExpiration(1777917449000)
+TRACE Stage1.Model 
+[CompleteBlockCommand.majorBlock]: {
+  "header" : {
+    "blockNum" : 2,
+    "blockVersion" : [
+      2,
+      0
+    ],
+    "startTime" : 1777917449000,
+    "endTime" : 1777917529000,
+    "fallbackTxStartTime" : 1777917679000,
+    "majorBlockWakeupTime" : 1777917571000,
+    "kzgCommitment" : "964cf49d33bef72f113f8c7589cafaf91a19151790d2aecc08adf26e6ba87e43e6ce553a7aea40436e97976400c0c7f4"
+  },
+  "body" : {
+    "events" : [
+      [
+        {
+          "headPeerNumber" : 0,
+          "requestNumber" : 3
+        },
+        "Valid"
+      ],
+      [
+        {
+          "headPeerNumber" : 0,
+          "requestNumber" : 4
+        },
+        "Valid"
+      ]
+    ],
+    "depositsAbsorbed" : [
+      {
+        "headPeerNumber" : 0,
+        "requestNumber" : 0
+      }
+    ],
+    "depositsRefunded" : [
+    ]
+  }
+}
+TRACE Stage1.Model 
+block brief: Major(Major(2,(2,0),1777917449000,1777917529000,1777917679000,1777917571000,"964cf49d33bef72f113f8c7589cafaf91a19151790d2aecc08adf26e6ba87e43e6ce553a7aea40436e97976400c0c7f4"),Major(List(((0,3),Valid), ((0,4),Valid)),List((0,0)),List()))
+TRACE Stage1.Model 
+Model current time advancing to BeforeHappyPathExpiration(1777917529000) from BeforeHappyPathExpiration(1777917449000)
+DEBUG Stage1.Model 
+MODEL>> DelayCommand: EndsBeforeHappyPathExpires(QuantizedFiniteDuration(8000 milliseconds,SlotConfig(1777917375000,0,1000)))
+TRACE Stage1.Model 
+Transitioning Done -> Ready for block 2
+TRACE Stage1.Model 
+Model current time: BeforeHappyPathExpiration(1777917529000)
+TRACE Stage1.Model 
+Model current time advancing to BeforeHappyPathExpiration(1777917537000) from BeforeHappyPathExpiration(1777917529000)
+DEBUG Stage1.Model 
+MODEL>> StartBlockCommand for block number: 3
+TRACE Stage1.Model 
+Model current time: BeforeHappyPathExpiration(1777917537000)
+TRACE Stage1.Model 
+Model current time: BeforeHappyPathExpiration(1777917537000)
+DEBUG Stage1.Model 
+MODEL>> L2TxCommand for event ID: (0,5)
+TRACE Stage1.Model 
+INPUT state.blockCycle event IDs: List()
+TRACE Stage1.Model 
+Model current time: BeforeHappyPathExpiration(1777917537000)
+TRACE Stage1.Model 
+OUTPUT finalState.blockCycle event IDs: List((0,5))
+TRACE Stage1.Model 
+[L2TxCommand] payout obligations for "132155f5487e54fb76e1c58d1fb45e2329b7b0836dd9c27bdc57d33bdf02fd5c": Right([
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a000ecc16",
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a00244258"
+])
+TRACE Stage1.Model 
+[L2TxCommand] L2 Utxos for "132155f5487e54fb76e1c58d1fb45e2329b7b0836dd9c27bdc57d33bdf02fd5c": {
+  "132155f5487e54fb76e1c58d1fb45e2329b7b0836dd9c27bdc57d33bdf02fd5c#1" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a001d1905"
+}
+DEBUG Stage1.Model 
+MODEL>> L2TxCommand for event ID: (0,6)
+TRACE Stage1.Model 
+INPUT state.blockCycle event IDs: List((0,5))
+TRACE Stage1.Model 
+Model current time: BeforeHappyPathExpiration(1777917537000)
+TRACE Stage1.Model 
+OUTPUT finalState.blockCycle event IDs: List((0,5), (0,6))
+TRACE Stage1.Model 
+[L2TxCommand] payout obligations for "4a76deb052ea7048266fce1cd7b467920bede97adbccaf13143eca77363aebc0": Right([
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011ab10f19bb",
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a1643f02f",
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a0869d019",
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a00ca0189",
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a00f5b42d",
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a00ac7424",
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a005b6006",
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a000ecc16",
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a001b2029"
+])
+TRACE Stage1.Model 
+[L2TxCommand] L2 Utxos for "4a76deb052ea7048266fce1cd7b467920bede97adbccaf13143eca77363aebc0": {
+  "4a76deb052ea7048266fce1cd7b467920bede97adbccaf13143eca77363aebc0#9" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a001e105d",
+  "4a76deb052ea7048266fce1cd7b467920bede97adbccaf13143eca77363aebc0#11" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a0039ab1f",
+  "4a76deb052ea7048266fce1cd7b467920bede97adbccaf13143eca77363aebc0#3" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a0abfa629",
+  "4a76deb052ea7048266fce1cd7b467920bede97adbccaf13143eca77363aebc0#1" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a31dd325d",
+  "4a76deb052ea7048266fce1cd7b467920bede97adbccaf13143eca77363aebc0#4" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a0492bdd5"
+}
+DEBUG Stage1.Model 
+MODEL>> SubmitDepositCommand, for submission: 2, for rejection: 0
+DEBUG Stage1.Model 
+MODEL>> RegisterDepositCommand for event ID: (0,7)
+TRACE Stage1.Model 
+INPUT state.blockCycle event IDs: List((0,5), (0,6))
+TRACE Stage1.Model 
+deposit txHash="160afb949035dc6bc2cc2ffff895e8b76bfad2e8e3af3fa7631c87ba7c290889"
+TRACE Stage1.Model 
+OUTPUT newState.blockCycle event IDs: List((0,5), (0,6), (0,7))
+TRACE Stage1.Model 
+OUTPUT newState.depositEnqueued IDs and submission deadlines: Queue(((0,7),1777917658000))
+DEBUG Stage1.Model 
+MODEL>> RegisterDepositCommand for event ID: (0,8)
+TRACE Stage1.Model 
+INPUT state.blockCycle event IDs: List((0,5), (0,6), (0,7))
+TRACE Stage1.Model 
+deposit txHash="fa3208b7baaf01b1b7361fa0d1f5d27717637e9eb541acaaa1d323d9eb5c5c68"
+TRACE Stage1.Model 
+OUTPUT newState.blockCycle event IDs: List((0,5), (0,6), (0,7), (0,8))
+TRACE Stage1.Model 
+OUTPUT newState.depositEnqueued IDs and submission deadlines: Queue(((0,7),1777917658000), ((0,8),1777917658000))
+DEBUG Stage1.Model 
+MODEL>> L2TxCommand for event ID: (0,9)
+TRACE Stage1.Model 
+INPUT state.blockCycle event IDs: List((0,5), (0,6), (0,7), (0,8))
+TRACE Stage1.Model 
+Model current time: BeforeHappyPathExpiration(1777917537000)
+TRACE Stage1.Model 
+OUTPUT finalState.blockCycle event IDs: List((0,5), (0,6), (0,7), (0,8), (0,9))
+TRACE Stage1.Model 
+[L2TxCommand] payout obligations for "50c3532d940d503323779c40147b470a794a21dbe21b8dbebc4ab2ecaad410f9": Right([
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a013f183f",
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a007d2d34"
+])
+TRACE Stage1.Model 
+[L2TxCommand] L2 Utxos for "50c3532d940d503323779c40147b470a794a21dbe21b8dbebc4ab2ecaad410f9": {
+  "50c3532d940d503323779c40147b470a794a21dbe21b8dbebc4ab2ecaad410f9#0" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a49f4bd81"
+}
+DEBUG Stage1.Model 
+MODEL>> L2TxCommand for event ID: (0,10)
+TRACE Stage1.Model 
+INPUT state.blockCycle event IDs: List((0,5), (0,6), (0,7), (0,8), (0,9))
+TRACE Stage1.Model 
+Model current time: BeforeHappyPathExpiration(1777917537000)
+TRACE Stage1.Model 
+OUTPUT finalState.blockCycle event IDs: List((0,5), (0,6), (0,7), (0,8), (0,9), (0,10))
+TRACE Stage1.Model 
+[L2TxCommand] payout obligations for "f53e45749133e8505fc8e708677ad8cd00c0abecbbf07d9b1819a744faedebd1": Right([
+  "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a000ecc16"
+])
+TRACE Stage1.Model 
+[L2TxCommand] L2 Utxos for "f53e45749133e8505fc8e708677ad8cd00c0abecbbf07d9b1819a744faedebd1": {
+  "f53e45749133e8505fc8e708677ad8cd00c0abecbbf07d9b1819a744faedebd1#1" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a000f4447"
+}
+DEBUG Stage1.Model 
+MODEL>> CompleteBlockCommand for block number: 3
+TRACE Stage1.Model 
+Completing block 3, accumulator has 6 elements: with reqeust IDs: List((0,5), (0,6), (0,7), (0,8), (0,9), (0,10)).
+TRACE Stage1.Model 
+[getNewSettlementValidityEnd]: 1777917619000
+TRACE Stage1.Model 
+MODEL deposit absorption check: (0,3),
+depositAbsorptionStart=1777917571000, depositAbsorptionEnd=1777917691000
+TRACE Stage1.Model 
+MODEL deposit absorption check: (0,4),
+depositAbsorptionStart=1777917571000, depositAbsorptionEnd=1777917691000
+TRACE Stage1.Model 
+depositsToAbsorb: Queue(Submitted(RegisterDepositCommand(eventId=(0,3), ada=Coin(5875260450))), Submitted(RegisterDepositCommand(eventId=(0,4), ada=Coin(624094897))))
+TRACE Stage1.Model 
+[getNewSettlementValidityEnd]: 1777917619000
+TRACE Stage1.Model 
+MODEL deposit refund check: (0,7),
+depositAbsorptionEnd=1777917779000, settlementValidityEnd=1777917619000
+TRACE Stage1.Model 
+MODEL deposit refund check: (0,8),
+depositAbsorptionEnd=1777917779000, settlementValidityEnd=1777917619000
+TRACE Stage1.Model 
+depositToRefund: Queue()
+TRACE Stage1.Model 
+newEvacuationMap: {
+  "8258201b34afe98e3f7b86b083a2bbd04f179f88d0e75b1a2a914f12a62f62852a943100" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011b0000000131e4e6a5",
+  "8258201b34afe98e3f7b86b083a2bbd04f179f88d0e75b1a2a914f12a62f62852a943101" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a2b67f946",
+  "8258201b34afe98e3f7b86b083a2bbd04f179f88d0e75b1a2a914f12a62f62852a943102" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a00e47c37",
+  "82582021cc145ecef54ba1a503fa19aa49fbbfb323af4c87eb0254951d6daaade84a3e00" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a252414bf",
+  "82582021cc145ecef54ba1a503fa19aa49fbbfb323af4c87eb0254951d6daaade84a3e01" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a000ed9f2",
+  "82582050c3532d940d503323779c40147b470a794a21dbe21b8dbebc4ab2ecaad410f900" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a49f4bd81",
+  "825820f53e45749133e8505fc8e708677ad8cd00c0abecbbf07d9b1819a744faedebd101" : "a200581d60c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8011a000f4447"
+}
+TRACE Stage1.Model 
+Model current time: BeforeHappyPathExpiration(1777917537000)
+TRACE Stage1.Model 
+[CompleteBlockCommand.majorBlock]: {
+  "header" : {
+    "blockNum" : 3,
+    "blockVersion" : [
+      3,
+      0
+    ],
+    "startTime" : 1777917537000,
+    "endTime" : 1777917583000,
+    "fallbackTxStartTime" : 1777917733000,
+    "majorBlockWakeupTime" : 1777917643000,
+    "kzgCommitment" : "80dfc3596bb534a6a5ed53aab4360b5200245cd96ae0c7e269c69f35f4f71ff7ff24075c292834a9b1d1c66c2bcf3e78"
+  },
+  "body" : {
+    "events" : [
+      [
+        {
+          "headPeerNumber" : 0,
+          "requestNumber" : 5
+        },
+        "Valid"
+      ],
+      [
+        {
+          "headPeerNumber" : 0,
+          "requestNumber" : 6
+        },
+        "Valid"
+      ],
+      [
+        {
+          "headPeerNumber" : 0,
+          "requestNumber" : 7
+        },
+        "Valid"
+      ],
+      [
+        {
+          "headPeerNumber" : 0,
+          "requestNumber" : 8
+        },
+        "Valid"
+      ],
+      [
+        {
+          "headPeerNumber" : 0,
+          "requestNumber" : 9
+        },
+        "Valid"
+      ],
+      [
+        {
+          "headPeerNumber" : 0,
+          "requestNumber" : 10
+        },
+        "Valid"
+      ]
+    ],
+    "depositsAbsorbed" : [
+      {
+        "headPeerNumber" : 0,
+        "requestNumber" : 3
+      },
+      {
+        "headPeerNumber" : 0,
+        "requestNumber" : 4
+      }
+    ],
+    "depositsRefunded" : [
+    ]
+  }
+}
+TRACE Stage1.Model 
+block brief: Major(Major(3,(3,0),1777917537000,1777917583000,1777917733000,1777917643000,"80dfc3596bb534a6a5ed53aab4360b5200245cd96ae0c7e269c69f35f4f71ff7ff24075c292834a9b1d1c66c2bcf3e78"),Major(List(((0,5),Valid), ((0,6),Valid), ((0,7),Valid), ((0,8),Valid), ((0,9),Valid), ((0,10),Valid)),List((0,3), (0,4)),List()))
+TRACE Stage1.Model 
+Model current time advancing to BeforeHappyPathExpiration(1777917583000) from BeforeHappyPathExpiration(1777917537000)
+WARN  org.scalacheck.commands.ModelBasedSuite 
+Property is falsified (see the labels down below). Additional information: 
+Initial state:
+  <model state (hidden)>
+Last state:
+  <model state (hidden)>
+Sequential Commands:
+      4s   1. DelayCommand - EndsBeforeHappyPathExpires, 4000 milliseconds
+      4s   2. StartBlockCommand(block=1, time=1777917379000)
+      4s   3. RegisterDepositCommand(eventId=(0,0), ada=Coin(4809847265))
+      4s   4. L2TxCommand(eventId=(0,1), strategy=RandomWithdrawals, mutator=Identity)
+      4s   5. L2TxCommand(eventId=(0,2), strategy=RandomWithdrawals, mutator=Identity)
+   1m11s   6. CompleteBlockCommand(block=1, blockDuration=QuantizedFiniteDuration(67000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777917446000, isFinal=false)
+   1m14s   7. DelayCommand - EndsBeforeHappyPathExpires, 3000 milliseconds
+   1m14s   8. StartBlockCommand(block=2, time=1777917449000)
+   1m14s   9. SubmitDepositsCommand(for submission=[RegisterDepositCommand(eventId=(0,0), ada=Coin(4809847265))], for rejection=[])
+   1m14s  10. RegisterDepositCommand(eventId=(0,3), ada=Coin(5875260450))
+   1m14s  11. RegisterDepositCommand(eventId=(0,4), ada=Coin(624094897))
+   2m34s  12. CompleteBlockCommand(block=2, blockDuration=QuantizedFiniteDuration(80000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777917529000, isFinal=false)
+   2m42s  13. DelayCommand - EndsBeforeHappyPathExpires, 8000 milliseconds
+   2m42s  14. StartBlockCommand(block=3, time=1777917537000)
+   2m42s  15. L2TxCommand(eventId=(0,5), strategy=RandomWithdrawals, mutator=Identity)
+   2m42s  16. L2TxCommand(eventId=(0,6), strategy=RandomWithdrawals, mutator=Identity)
+   2m42s  17. SubmitDepositsCommand(for submission=[RegisterDepositCommand(eventId=(0,3), ada=Coin(5875260450)), RegisterDepositCommand(eventId=(0,4), ada=Coin(624094897))], for rejection=[])
+   2m42s  18. RegisterDepositCommand(eventId=(0,7), ada=Coin(4166111127))
+   2m42s  19. RegisterDepositCommand(eventId=(0,8), ada=Coin(1255073823))
+   2m42s  20. L2TxCommand(eventId=(0,9), strategy=RandomWithdrawals, mutator=Identity)
+   2m42s  21. L2TxCommand(eventId=(0,10), strategy=RandomWithdrawals, mutator=Identity)
+   3m28s  22. CompleteBlockCommand(block=3, blockDuration=QuantizedFiniteDuration(46000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777917583000, isFinal=false)
+   3m35s  23. DelayCommand - EndsBeforeHappyPathExpires, 7000 milliseconds
+   3m35s  24. StartBlockCommand(block=4, time=1777917590000)
+   3m35s  25. L2TxCommand(eventId=(0,11), strategy=RandomWithdrawals, mutator=Identity)
+   3m35s  26. SubmitDepositsCommand(for submission=[RegisterDepositCommand(eventId=(0,7), ada=Coin(4166111127)), RegisterDepositCommand(eventId=(0,8), ada=Coin(1255073823))], for rejection=[])
+   3m35s  27. L2TxCommand(eventId=(0,12), strategy=RandomWithdrawals, mutator=Identity)
+   3m44s  28. CompleteBlockCommand(block=4, blockDuration=QuantizedFiniteDuration(9000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777917599000, isFinal=false)
+   3m50s  29. DelayCommand - EndsBeforeHappyPathExpires, 6000 milliseconds
+   3m50s  30. StartBlockCommand(block=5, time=1777917605000)
+   3m50s  31. L2TxCommand(eventId=(0,13), strategy=RandomWithdrawals, mutator=Identity)
+   3m50s  32. RegisterDepositCommand(eventId=(0,14), ada=Coin(2714776166))
+   3m50s  33. L2TxCommand(eventId=(0,15), strategy=RandomWithdrawals, mutator=Identity)
+   3m50s  34. L2TxCommand(eventId=(0,16), strategy=RandomWithdrawals, mutator=Identity)
+   3m50s  35. L2TxCommand(eventId=(0,17), strategy=RandomWithdrawals, mutator=Identity)
+   3m50s  36. L2TxCommand(eventId=(0,18), strategy=RandomWithdrawals, mutator=Identity)
+   3m50s  37. L2TxCommand(eventId=(0,19), strategy=RandomWithdrawals, mutator=Identity)
+   3m50s  38. L2TxCommand(eventId=(0,20), strategy=RandomWithdrawals, mutator=Identity)
+   3m50s  39. L2TxCommand(eventId=(0,21), strategy=RandomWithdrawals, mutator=Identity)
+   3m50s  40. L2TxCommand(eventId=(0,22), strategy=RandomWithdrawals, mutator=Identity)
+   3m50s  41. L2TxCommand(eventId=(0,23), strategy=RandomWithdrawals, mutator=Identity)
+   3m51s  42. CompleteBlockCommand(block=5, blockDuration=QuantizedFiniteDuration(1000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777917606000, isFinal=false)
+   3m52s  43. DelayCommand - EndsBeforeHappyPathExpires, 1000 milliseconds
+   3m52s  44. StartBlockCommand(block=6, time=1777917607000)
+   3m52s  45. SubmitDepositsCommand(for submission=[RegisterDepositCommand(eventId=(0,14), ada=Coin(2714776166))], for rejection=[])
+   3m52s  46. RegisterDepositCommand(eventId=(0,24), ada=Coin(145386327))
+   5m13s  47. CompleteBlockCommand(block=6, blockDuration=QuantizedFiniteDuration(81000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777917688000, isFinal=false)
+   5m17s  48. DelayCommand - EndsBeforeHappyPathExpires, 4000 milliseconds
+   5m17s  49. StartBlockCommand(block=7, time=1777917692000)
+   5m17s  50. SubmitDepositsCommand(for submission=[RegisterDepositCommand(eventId=(0,24), ada=Coin(145386327))], for rejection=[])
+   5m17s  51. L2TxCommand(eventId=(0,25), strategy=RandomWithdrawals, mutator=Identity)
+   5m17s  52. L2TxCommand(eventId=(0,26), strategy=RandomWithdrawals, mutator=Identity)
+   5m17s  53. L2TxCommand(eventId=(0,27), strategy=RandomWithdrawals, mutator=Identity)
+   5m17s  54. L2TxCommand(eventId=(0,28), strategy=RandomWithdrawals, mutator=Identity)
+   5m17s  55. RegisterDepositCommand(eventId=(0,29), ada=Coin(21342213))
+   5m17s  56. L2TxCommand(eventId=(0,30), strategy=RandomWithdrawals, mutator=Identity)
+   5m17s  57. L2TxCommand(eventId=(0,31), strategy=RandomWithdrawals, mutator=Identity)
+   5m17s  58. L2TxCommand(eventId=(0,32), strategy=RandomWithdrawals, mutator=Identity)
+   5m17s  59. L2TxCommand(eventId=(0,33), strategy=RandomWithdrawals, mutator=Identity)
+   5m17s  60. L2TxCommand(eventId=(0,34), strategy=RandomWithdrawals, mutator=Identity)
+   5m17s  61. L2TxCommand(eventId=(0,35), strategy=RandomWithdrawals, mutator=Identity)
+   5m17s  62. L2TxCommand(eventId=(0,36), strategy=RandomWithdrawals, mutator=Identity)
+   5m55s  63. CompleteBlockCommand(block=7, blockDuration=QuantizedFiniteDuration(38000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777917730000, isFinal=false)
+   5m57s  64. DelayCommand - EndsBeforeHappyPathExpires, 2000 milliseconds
+   5m57s  65. StartBlockCommand(block=8, time=1777917732000)
+   5m57s  66. SubmitDepositsCommand(for submission=[RegisterDepositCommand(eventId=(0,29), ada=Coin(21342213))], for rejection=[])
+   5m57s  67. RegisterDepositCommand(eventId=(0,37), ada=Coin(5389483))
+   5m57s  68. L2TxCommand(eventId=(0,38), strategy=RandomWithdrawals, mutator=Identity)
+   5m57s  69. L2TxCommand(eventId=(0,39), strategy=RandomWithdrawals, mutator=Identity)
+   5m57s  70. L2TxCommand(eventId=(0,40), strategy=RandomWithdrawals, mutator=Identity)
+   5m57s  71. L2TxCommand(eventId=(0,41), strategy=RandomWithdrawals, mutator=Identity)
+   5m57s  72. L2TxCommand(eventId=(0,42), strategy=RandomWithdrawals, mutator=Identity)
+   6m47s  73. CompleteBlockCommand(block=8, blockDuration=QuantizedFiniteDuration(50000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777917782000, isFinal=false)
+   6m53s  74. DelayCommand - EndsBeforeHappyPathExpires, 6000 milliseconds
+   6m53s  75. StartBlockCommand(block=9, time=1777917788000)
+   6m53s  76. L2TxCommand(eventId=(0,43), strategy=RandomWithdrawals, mutator=Identity)
+   6m53s  77. SubmitDepositsCommand(for submission=[RegisterDepositCommand(eventId=(0,37), ada=Coin(5389483))], for rejection=[])
+   6m53s  78. L2TxCommand(eventId=(0,44), strategy=RandomWithdrawals, mutator=Identity)
+   6m53s  79. L2TxCommand(eventId=(0,45), strategy=RandomWithdrawals, mutator=Identity)
+   6m53s  80. RegisterDepositCommand(eventId=(0,46), ada=Coin(8553344))
+   6m53s  81. L2TxCommand(eventId=(0,47), strategy=RandomWithdrawals, mutator=Identity)
+   7m55s  82. CompleteBlockCommand(block=9, blockDuration=QuantizedFiniteDuration(62000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777917850000, isFinal=false)
+   8m04s  83. DelayCommand - EndsBeforeHappyPathExpires, 9000 milliseconds
+   8m04s  84. StartBlockCommand(block=10, time=1777917859000)
+   8m04s  85. L2TxCommand(eventId=(0,48), strategy=RandomWithdrawals, mutator=Identity)
+   8m04s  86. SubmitDepositsCommand(for submission=[RegisterDepositCommand(eventId=(0,46), ada=Coin(8553344))], for rejection=[])
+   8m04s  87. RegisterDepositCommand(eventId=(0,49), ada=Coin(45836272))
+   8m04s  88. L2TxCommand(eventId=(0,50), strategy=RandomWithdrawals, mutator=Identity)
+   8m04s  89. L2TxCommand(eventId=(0,51), strategy=RandomWithdrawals, mutator=Identity)
+   8m04s  90. L2TxCommand(eventId=(0,52), strategy=RandomWithdrawals, mutator=Identity)
+   8m56s  91. CompleteBlockCommand(block=10, blockDuration=QuantizedFiniteDuration(52000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777917911000, isFinal=false)
+   8m58s  92. DelayCommand - EndsBeforeHappyPathExpires, 2000 milliseconds
+   8m58s  93. StartBlockCommand(block=11, time=1777917913000)
+   8m58s  94. L2TxCommand(eventId=(0,53), strategy=RandomWithdrawals, mutator=Identity)
+   8m58s  95. SubmitDepositsCommand(for submission=[RegisterDepositCommand(eventId=(0,49), ada=Coin(45836272))], for rejection=[])
+   8m58s  96. L2TxCommand(eventId=(0,54), strategy=RandomWithdrawals, mutator=Identity)
+   9m32s  97. CompleteBlockCommand(block=11, blockDuration=QuantizedFiniteDuration(34000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777917947000, isFinal=false)
+   9m42s  98. DelayCommand - EndsBeforeHappyPathExpires, 10000 milliseconds
+   9m42s  99. StartBlockCommand(block=12, time=1777917957000)
+  10m40s  100. CompleteBlockCommand(block=12, blockDuration=QuantizedFiniteDuration(58000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918015000, isFinal=false)
+  10m47s  101. DelayCommand - EndsBeforeHappyPathExpires, 7000 milliseconds
+  10m47s  102. StartBlockCommand(block=13, time=1777918022000)
+  10m47s  103. L2TxCommand(eventId=(0,55), strategy=RandomWithdrawals, mutator=Identity)
+  10m47s  104. L2TxCommand(eventId=(0,56), strategy=RandomWithdrawals, mutator=Identity)
+  11m19s  105. CompleteBlockCommand(block=13, blockDuration=QuantizedFiniteDuration(32000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918054000, isFinal=false)
+  11m24s  106. DelayCommand - EndsBeforeHappyPathExpires, 5000 milliseconds
+  11m24s  107. StartBlockCommand(block=14, time=1777918059000)
+  11m24s  108. RegisterDepositCommand(eventId=(0,57), ada=Coin(2757213))
+  12m44s  109. CompleteBlockCommand(block=14, blockDuration=QuantizedFiniteDuration(80000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918139000, isFinal=false)
+  12m50s  110. DelayCommand - EndsBeforeHappyPathExpires, 6000 milliseconds
+  12m50s  111. StartBlockCommand(block=15, time=1777918145000)
+  12m50s  112. SubmitDepositsCommand(for submission=[RegisterDepositCommand(eventId=(0,57), ada=Coin(2757213))], for rejection=[])
+  12m54s  113. CompleteBlockCommand(block=15, blockDuration=QuantizedFiniteDuration(4000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918149000, isFinal=false)
+  12m57s  114. DelayCommand - EndsBeforeHappyPathExpires, 3000 milliseconds
+  12m57s  115. StartBlockCommand(block=16, time=1777918152000)
+  14m10s  116. CompleteBlockCommand(block=16, blockDuration=QuantizedFiniteDuration(73000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918225000, isFinal=false)
+  14m15s  117. DelayCommand - EndsBeforeHappyPathExpires, 5000 milliseconds
+  14m15s  118. StartBlockCommand(block=17, time=1777918230000)
+  14m15s  119. L2TxCommand(eventId=(0,58), strategy=RandomWithdrawals, mutator=Identity)
+  14m15s  120. L2TxCommand(eventId=(0,59), strategy=RandomWithdrawals, mutator=Identity)
+  14m47s  121. CompleteBlockCommand(block=17, blockDuration=QuantizedFiniteDuration(32000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918262000, isFinal=false)
+  14m49s  122. DelayCommand - EndsBeforeHappyPathExpires, 2000 milliseconds
+  14m49s  123. StartBlockCommand(block=18, time=1777918264000)
+  15m15s  124. CompleteBlockCommand(block=18, blockDuration=QuantizedFiniteDuration(26000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918290000, isFinal=false)
+  15m24s  125. DelayCommand - EndsBeforeHappyPathExpires, 9000 milliseconds
+  15m24s  126. StartBlockCommand(block=19, time=1777918299000)
+  16m07s  127. CompleteBlockCommand(block=19, blockDuration=QuantizedFiniteDuration(43000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918342000, isFinal=false)
+  16m15s  128. DelayCommand - EndsBeforeHappyPathExpires, 8000 milliseconds
+  16m15s  129. StartBlockCommand(block=20, time=1777918350000)
+  16m55s  130. CompleteBlockCommand(block=20, blockDuration=QuantizedFiniteDuration(40000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918390000, isFinal=false)
+  17m01s  131. DelayCommand - EndsBeforeHappyPathExpires, 6000 milliseconds
+  17m01s  132. StartBlockCommand(block=21, time=1777918396000)
+  17m04s  133. CompleteBlockCommand(block=21, blockDuration=QuantizedFiniteDuration(3000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918399000, isFinal=false)
+  17m04s  134. DelayCommand - EndsBeforeHappyPathExpires, 0 milliseconds
+  17m04s  135. StartBlockCommand(block=22, time=1777918399000)
+  17m11s  136. CompleteBlockCommand(block=22, blockDuration=QuantizedFiniteDuration(7000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918406000, isFinal=false)
+  17m12s  137. DelayCommand - EndsBeforeHappyPathExpires, 1000 milliseconds
+  17m12s  138. StartBlockCommand(block=23, time=1777918407000)
+  18m19s  139. CompleteBlockCommand(block=23, blockDuration=QuantizedFiniteDuration(67000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918474000, isFinal=false)
+  18m27s  140. DelayCommand - EndsBeforeHappyPathExpires, 8000 milliseconds
+  18m27s  141. StartBlockCommand(block=24, time=1777918482000)
+  19m03s  142. CompleteBlockCommand(block=24, blockDuration=QuantizedFiniteDuration(36000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918518000, isFinal=false)
+  19m09s  143. DelayCommand - EndsBeforeHappyPathExpires, 6000 milliseconds
+  19m09s  144. StartBlockCommand(block=25, time=1777918524000)
+  19m10s  145. CompleteBlockCommand(block=25, blockDuration=QuantizedFiniteDuration(1000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918525000, isFinal=false)
+  19m11s  146. DelayCommand - EndsBeforeHappyPathExpires, 1000 milliseconds
+  19m11s  147. StartBlockCommand(block=26, time=1777918526000)
+  19m17s  148. CompleteBlockCommand(block=26, blockDuration=QuantizedFiniteDuration(6000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918532000, isFinal=false)
+  19m19s  149. DelayCommand - EndsBeforeHappyPathExpires, 2000 milliseconds
+  19m19s  150. StartBlockCommand(block=27, time=1777918534000)
+  19m21s  151. CompleteBlockCommand(block=27, blockDuration=QuantizedFiniteDuration(2000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918536000, isFinal=false)
+  19m29s  152. DelayCommand - EndsBeforeHappyPathExpires, 8000 milliseconds
+  19m29s  153. StartBlockCommand(block=28, time=1777918544000)
+  19m56s  154. CompleteBlockCommand(block=28, blockDuration=QuantizedFiniteDuration(27000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918571000, isFinal=false)
+  20m02s  155. DelayCommand - EndsBeforeHappyPathExpires, 6000 milliseconds
+  20m02s  156. StartBlockCommand(block=29, time=1777918577000)
+  20m44s  157. CompleteBlockCommand(block=29, blockDuration=QuantizedFiniteDuration(42000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918619000, isFinal=false)
+  20m44s  158. DelayCommand - EndsBeforeHappyPathExpires, 0 milliseconds
+  20m44s  159. StartBlockCommand(block=30, time=1777918619000)
+  21m28s  160. CompleteBlockCommand(block=30, blockDuration=QuantizedFiniteDuration(44000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918663000, isFinal=false)
+  21m34s  161. DelayCommand - EndsBeforeHappyPathExpires, 6000 milliseconds
+  21m34s  162. StartBlockCommand(block=31, time=1777918669000)
+  21m53s  163. CompleteBlockCommand(block=31, blockDuration=QuantizedFiniteDuration(19000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918688000, isFinal=false)
+  21m57s  164. DelayCommand - EndsBeforeHappyPathExpires, 4000 milliseconds
+  21m57s  165. StartBlockCommand(block=32, time=1777918692000)
+  22m32s  166. CompleteBlockCommand(block=32, blockDuration=QuantizedFiniteDuration(35000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918727000, isFinal=false)
+  22m36s  167. DelayCommand - EndsBeforeHappyPathExpires, 4000 milliseconds
+  22m36s  168. StartBlockCommand(block=33, time=1777918731000)
+  22m44s  169. CompleteBlockCommand(block=33, blockDuration=QuantizedFiniteDuration(8000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918739000, isFinal=false)
+  22m48s  170. DelayCommand - EndsBeforeHappyPathExpires, 4000 milliseconds
+  22m48s  171. StartBlockCommand(block=34, time=1777918743000)
+  22m49s  172. CompleteBlockCommand(block=34, blockDuration=QuantizedFiniteDuration(1000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918744000, isFinal=false)
+  22m50s  173. DelayCommand - EndsBeforeHappyPathExpires, 1000 milliseconds
+  22m50s  174. StartBlockCommand(block=35, time=1777918745000)
+  22m55s  175. CompleteBlockCommand(block=35, blockDuration=QuantizedFiniteDuration(5000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918750000, isFinal=false)
+  23m01s  176. DelayCommand - EndsBeforeHappyPathExpires, 6000 milliseconds
+  23m01s  177. StartBlockCommand(block=36, time=1777918756000)
+  24m20s  178. CompleteBlockCommand(block=36, blockDuration=QuantizedFiniteDuration(79000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918835000, isFinal=false)
+  24m20s  179. DelayCommand - EndsBeforeHappyPathExpires, 0 milliseconds
+  24m20s  180. StartBlockCommand(block=37, time=1777918835000)
+  24m50s  181. CompleteBlockCommand(block=37, blockDuration=QuantizedFiniteDuration(30000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918865000, isFinal=true)
+  24m50s  182. NoOp
+  24m50s  183. NoOp
+  24m50s  184. NoOp
+  24m50s  185. NoOp
+  24m50s  186. NoOp
+  24m50s  187. NoOp
+  24m50s  188. NoOp
+  24m50s  189. NoOp
+  24m50s  190. NoOp
+  24m50s  191. NoOp
+  24m50s  192. NoOp
+  24m50s  193. NoOp
+  24m50s  194. NoOp
+  24m50s  195. NoOp
+  24m50s  196. NoOp
+  24m50s  197. NoOp
+  24m50s  198. NoOp
+  24m50s  199. NoOp
+  24m50s  200. NoOp
+Last executed command: 22
+failing seed for Integration Stage 1 with Yaci.Deposits on Yaci is eh7AFO3tQCAeLnJG7Zu5bAR-gQMa7PkaxOlEMISZzxA=
+! Integration Stage 1 with Yaci.Deposits on Yaci: Falsified after 0 passed tests.
+> Labels of failing property: 
+block briefs should be identical: 
+	expected: {
+  "Major" : {
+    "header" : {
+      "blockNum" : 3,
+      "blockVersion" : [
+        3,
+        0
+      ],
+      "startTime" : 1777917537000,
+      "endTime" : 1777917583000,
+      "fallbackTxStartTime" : 1777917733000,
+      "majorBlockWakeupTime" : 1777917643000,
+      "kzgCommitment" : "80dfc3596bb534a6a5ed53aab4360b5200245cd96ae0c7e269c69f35f4f71ff7ff24075c292834a9b1d1c66c2bcf3e78"
+    },
+    "body" : {
+      "events" : [
+        [
+          {
+            "headPeerNumber" : 0,
+            "requestNumber" : 5
+          },
+          "Valid"
+        ],
+        [
+          {
+            "headPeerNumber" : 0,
+            "requestNumber" : 6
+          },
+          "Valid"
+        ],
+        [
+          {
+            "headPeerNumber" : 0,
+            "requestNumber" : 7
+          },
+          "Valid"
+        ],
+        [
+          {
+            "headPeerNumber" : 0,
+            "requestNumber" : 8
+          },
+          "Valid"
+        ],
+        [
+          {
+            "headPeerNumber" : 0,
+            "requestNumber" : 9
+          },
+          "Valid"
+        ],
+        [
+          {
+            "headPeerNumber" : 0,
+            "requestNumber" : 10
+          },
+          "Valid"
+        ]
+      ],
+      "depositsAbsorbed" : [
+        {
+          "headPeerNumber" : 0,
+          "requestNumber" : 3
+        },
+        {
+          "headPeerNumber" : 0,
+          "requestNumber" : 4
+        }
+      ],
+      "depositsRefunded" : [
+      ]
+    }
+  }
+}
+	got: {
+  "Major" : {
+    "header" : {
+      "blockNum" : 3,
+      "blockVersion" : [
+        3,
+        0
+      ],
+      "startTime" : 1777917537000,
+      "endTime" : 1777917583000,
+      "fallbackTxStartTime" : 1777917733000,
+      "majorBlockWakeupTime" : 1777917643000,
+      "kzgCommitment" : "89efd1f147ed3901eb3c653b74c58d238fc67dd48a797821b5bc6c789c8f65bce4b882908149f8431897ef6a316c1d62"
+    },
+    "body" : {
+      "events" : [
+        [
+          {
+            "headPeerNumber" : 0,
+            "requestNumber" : 5
+          },
+          "Valid"
+        ],
+        [
+          {
+            "headPeerNumber" : 0,
+            "requestNumber" : 6
+          },
+          "Valid"
+        ],
+        [
+          {
+            "headPeerNumber" : 0,
+            "requestNumber" : 7
+          },
+          "Valid"
+        ],
+        [
+          {
+            "headPeerNumber" : 0,
+            "requestNumber" : 8
+          },
+          "Valid"
+        ],
+        [
+          {
+            "headPeerNumber" : 0,
+            "requestNumber" : 9
+          },
+          "Valid"
+        ],
+        [
+          {
+            "headPeerNumber" : 0,
+            "requestNumber" : 10
+          },
+          "Valid"
+        ]
+      ],
+      "depositsAbsorbed" : [
+      ],
+      "depositsRefunded" : [
+        {
+          "headPeerNumber" : 0,
+          "requestNumber" : 3
+        },
+        {
+          "headPeerNumber" : 0,
+          "requestNumber" : 4
+        }
+      ]
+    }
+  }
+}
+Property failed, see the log above for details
+> ARG_0: TestCase(<model state (hidden)>,List(DelayCommand - EndsBeforeHappyPathExpires, 4000 milliseconds, StartBlockCommand(block=1, time=1777917379000), RegisterDepositCommand(eventId=(0,0), ada=Coin(4809847265)), L2TxCommand(eventId=(0,1), strategy=RandomWithdrawals, mutator=Identity), L2TxCommand(eventId=(0,2), strategy=RandomWithdrawals, mutator=Identity), CompleteBlockCommand(block=1, blockDuration=QuantizedFiniteDuration(67000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777917446000, isFinal=false), DelayCommand - EndsBeforeHappyPathExpires, 3000 milliseconds, StartBlockCommand(block=2, time=1777917449000), SubmitDepositsCommand(for submission=[RegisterDepositCommand(eventId=(0,0), ada=Coin(4809847265))], for rejection=[]), RegisterDepositCommand(eventId=(0,3), ada=Coin(5875260450)), RegisterDepositCommand(eventId=(0,4), ada=Coin(624094897)), CompleteBlockCommand(block=2, blockDuration=QuantizedFiniteDuration(80000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777917529000, isFinal=false), DelayCommand - EndsBeforeHappyPathExpires, 8000 milliseconds, StartBlockCommand(block=3, time=1777917537000), L2TxCommand(eventId=(0,5), strategy=RandomWithdrawals, mutator=Identity), L2TxCommand(eventId=(0,6), strategy=RandomWithdrawals, mutator=Identity), SubmitDepositsCommand(for submission=[RegisterDepositCommand(eventId=(0,3), ada=Coin(5875260450)), RegisterDepositCommand(eventId=(0,4), ada=Coin(624094897))], for rejection=[]), RegisterDepositCommand(eventId=(0,7), ada=Coin(4166111127)), RegisterDepositCommand(eventId=(0,8), ada=Coin(1255073823)), L2TxCommand(eventId=(0,9), strategy=RandomWithdrawals, mutator=Identity), L2TxCommand(eventId=(0,10), strategy=RandomWithdrawals, mutator=Identity), CompleteBlockCommand(block=3, blockDuration=QuantizedFiniteDuration(46000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777917583000, isFinal=false), DelayCommand - EndsBeforeHappyPathExpires, 7000 milliseconds, StartBlockCommand(block=4, time=1777917590000), L2TxCommand(eventId=(0,11), strategy=RandomWithdrawals, mutator=Identity), SubmitDepositsCommand(for submission=[RegisterDepositCommand(eventId=(0,7), ada=Coin(4166111127)), RegisterDepositCommand(eventId=(0,8), ada=Coin(1255073823))], for rejection=[]), L2TxCommand(eventId=(0,12), strategy=RandomWithdrawals, mutator=Identity), CompleteBlockCommand(block=4, blockDuration=QuantizedFiniteDuration(9000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777917599000, isFinal=false), DelayCommand - EndsBeforeHappyPathExpires, 6000 milliseconds, StartBlockCommand(block=5, time=1777917605000), L2TxCommand(eventId=(0,13), strategy=RandomWithdrawals, mutator=Identity), RegisterDepositCommand(eventId=(0,14), ada=Coin(2714776166)), L2TxCommand(eventId=(0,15), strategy=RandomWithdrawals, mutator=Identity), L2TxCommand(eventId=(0,16), strategy=RandomWithdrawals, mutator=Identity), L2TxCommand(eventId=(0,17), strategy=RandomWithdrawals, mutator=Identity), L2TxCommand(eventId=(0,18), strategy=RandomWithdrawals, mutator=Identity), L2TxCommand(eventId=(0,19), strategy=RandomWithdrawals, mutator=Identity), L2TxCommand(eventId=(0,20), strategy=RandomWithdrawals, mutator=Identity), L2TxCommand(eventId=(0,21), strategy=RandomWithdrawals, mutator=Identity), L2TxCommand(eventId=(0,22), strategy=RandomWithdrawals, mutator=Identity), L2TxCommand(eventId=(0,23), strategy=RandomWithdrawals, mutator=Identity), CompleteBlockCommand(block=5, blockDuration=QuantizedFiniteDuration(1000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777917606000, isFinal=false), DelayCommand - EndsBeforeHappyPathExpires, 1000 milliseconds, StartBlockCommand(block=6, time=1777917607000), SubmitDepositsCommand(for submission=[RegisterDepositCommand(eventId=(0,14), ada=Coin(2714776166))], for rejection=[]), RegisterDepositCommand(eventId=(0,24), ada=Coin(145386327)), CompleteBlockCommand(block=6, blockDuration=QuantizedFiniteDuration(81000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777917688000, isFinal=false), DelayCommand - EndsBeforeHappyPathExpires, 4000 milliseconds, StartBlockCommand(block=7, time=1777917692000), SubmitDepositsCommand(for submission=[RegisterDepositCommand(eventId=(0,24), ada=Coin(145386327))], for rejection=[]), L2TxCommand(eventId=(0,25), strategy=RandomWithdrawals, mutator=Identity), L2TxCommand(eventId=(0,26), strategy=RandomWithdrawals, mutator=Identity), L2TxCommand(eventId=(0,27), strategy=RandomWithdrawals, mutator=Identity), L2TxCommand(eventId=(0,28), strategy=RandomWithdrawals, mutator=Identity), RegisterDepositCommand(eventId=(0,29), ada=Coin(21342213)), L2TxCommand(eventId=(0,30), strategy=RandomWithdrawals, mutator=Identity), L2TxCommand(eventId=(0,31), strategy=RandomWithdrawals, mutator=Identity), L2TxCommand(eventId=(0,32), strategy=RandomWithdrawals, mutator=Identity), L2TxCommand(eventId=(0,33), strategy=RandomWithdrawals, mutator=Identity), L2TxCommand(eventId=(0,34), strategy=RandomWithdrawals, mutator=Identity), L2TxCommand(eventId=(0,35), strategy=RandomWithdrawals, mutator=Identity), L2TxCommand(eventId=(0,36), strategy=RandomWithdrawals, mutator=Identity), CompleteBlockCommand(block=7, blockDuration=QuantizedFiniteDuration(38000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777917730000, isFinal=false), DelayCommand - EndsBeforeHappyPathExpires, 2000 milliseconds, StartBlockCommand(block=8, time=1777917732000), SubmitDepositsCommand(for submission=[RegisterDepositCommand(eventId=(0,29), ada=Coin(21342213))], for rejection=[]), RegisterDepositCommand(eventId=(0,37), ada=Coin(5389483)), L2TxCommand(eventId=(0,38), strategy=RandomWithdrawals, mutator=Identity), L2TxCommand(eventId=(0,39), strategy=RandomWithdrawals, mutator=Identity), L2TxCommand(eventId=(0,40), strategy=RandomWithdrawals, mutator=Identity), L2TxCommand(eventId=(0,41), strategy=RandomWithdrawals, mutator=Identity), L2TxCommand(eventId=(0,42), strategy=RandomWithdrawals, mutator=Identity), CompleteBlockCommand(block=8, blockDuration=QuantizedFiniteDuration(50000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777917782000, isFinal=false), DelayCommand - EndsBeforeHappyPathExpires, 6000 milliseconds, StartBlockCommand(block=9, time=1777917788000), L2TxCommand(eventId=(0,43), strategy=RandomWithdrawals, mutator=Identity), SubmitDepositsCommand(for submission=[RegisterDepositCommand(eventId=(0,37), ada=Coin(5389483))], for rejection=[]), L2TxCommand(eventId=(0,44), strategy=RandomWithdrawals, mutator=Identity), L2TxCommand(eventId=(0,45), strategy=RandomWithdrawals, mutator=Identity), RegisterDepositCommand(eventId=(0,46), ada=Coin(8553344)), L2TxCommand(eventId=(0,47), strategy=RandomWithdrawals, mutator=Identity), CompleteBlockCommand(block=9, blockDuration=QuantizedFiniteDuration(62000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777917850000, isFinal=false), DelayCommand - EndsBeforeHappyPathExpires, 9000 milliseconds, StartBlockCommand(block=10, time=1777917859000), L2TxCommand(eventId=(0,48), strategy=RandomWithdrawals, mutator=Identity), SubmitDepositsCommand(for submission=[RegisterDepositCommand(eventId=(0,46), ada=Coin(8553344))], for rejection=[]), RegisterDepositCommand(eventId=(0,49), ada=Coin(45836272)), L2TxCommand(eventId=(0,50), strategy=RandomWithdrawals, mutator=Identity), L2TxCommand(eventId=(0,51), strategy=RandomWithdrawals, mutator=Identity), L2TxCommand(eventId=(0,52), strategy=RandomWithdrawals, mutator=Identity), CompleteBlockCommand(block=10, blockDuration=QuantizedFiniteDuration(52000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777917911000, isFinal=false), DelayCommand - EndsBeforeHappyPathExpires, 2000 milliseconds, StartBlockCommand(block=11, time=1777917913000), L2TxCommand(eventId=(0,53), strategy=RandomWithdrawals, mutator=Identity), SubmitDepositsCommand(for submission=[RegisterDepositCommand(eventId=(0,49), ada=Coin(45836272))], for rejection=[]), L2TxCommand(eventId=(0,54), strategy=RandomWithdrawals, mutator=Identity), CompleteBlockCommand(block=11, blockDuration=QuantizedFiniteDuration(34000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777917947000, isFinal=false), DelayCommand - EndsBeforeHappyPathExpires, 10000 milliseconds, StartBlockCommand(block=12, time=1777917957000), CompleteBlockCommand(block=12, blockDuration=QuantizedFiniteDuration(58000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918015000, isFinal=false), DelayCommand - EndsBeforeHappyPathExpires, 7000 milliseconds, StartBlockCommand(block=13, time=1777918022000), L2TxCommand(eventId=(0,55), strategy=RandomWithdrawals, mutator=Identity), L2TxCommand(eventId=(0,56), strategy=RandomWithdrawals, mutator=Identity), CompleteBlockCommand(block=13, blockDuration=QuantizedFiniteDuration(32000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918054000, isFinal=false), DelayCommand - EndsBeforeHappyPathExpires, 5000 milliseconds, StartBlockCommand(block=14, time=1777918059000), RegisterDepositCommand(eventId=(0,57), ada=Coin(2757213)), CompleteBlockCommand(block=14, blockDuration=QuantizedFiniteDuration(80000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918139000, isFinal=false), DelayCommand - EndsBeforeHappyPathExpires, 6000 milliseconds, StartBlockCommand(block=15, time=1777918145000), SubmitDepositsCommand(for submission=[RegisterDepositCommand(eventId=(0,57), ada=Coin(2757213))], for rejection=[]), CompleteBlockCommand(block=15, blockDuration=QuantizedFiniteDuration(4000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918149000, isFinal=false), DelayCommand - EndsBeforeHappyPathExpires, 3000 milliseconds, StartBlockCommand(block=16, time=1777918152000), CompleteBlockCommand(block=16, blockDuration=QuantizedFiniteDuration(73000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918225000, isFinal=false), DelayCommand - EndsBeforeHappyPathExpires, 5000 milliseconds, StartBlockCommand(block=17, time=1777918230000), L2TxCommand(eventId=(0,58), strategy=RandomWithdrawals, mutator=Identity), L2TxCommand(eventId=(0,59), strategy=RandomWithdrawals, mutator=Identity), CompleteBlockCommand(block=17, blockDuration=QuantizedFiniteDuration(32000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918262000, isFinal=false), DelayCommand - EndsBeforeHappyPathExpires, 2000 milliseconds, StartBlockCommand(block=18, time=1777918264000), CompleteBlockCommand(block=18, blockDuration=QuantizedFiniteDuration(26000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918290000, isFinal=false), DelayCommand - EndsBeforeHappyPathExpires, 9000 milliseconds, StartBlockCommand(block=19, time=1777918299000), CompleteBlockCommand(block=19, blockDuration=QuantizedFiniteDuration(43000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918342000, isFinal=false), DelayCommand - EndsBeforeHappyPathExpires, 8000 milliseconds, StartBlockCommand(block=20, time=1777918350000), CompleteBlockCommand(block=20, blockDuration=QuantizedFiniteDuration(40000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918390000, isFinal=false), DelayCommand - EndsBeforeHappyPathExpires, 6000 milliseconds, StartBlockCommand(block=21, time=1777918396000), CompleteBlockCommand(block=21, blockDuration=QuantizedFiniteDuration(3000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918399000, isFinal=false), DelayCommand - EndsBeforeHappyPathExpires, 0 milliseconds, StartBlockCommand(block=22, time=1777918399000), CompleteBlockCommand(block=22, blockDuration=QuantizedFiniteDuration(7000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918406000, isFinal=false), DelayCommand - EndsBeforeHappyPathExpires, 1000 milliseconds, StartBlockCommand(block=23, time=1777918407000), CompleteBlockCommand(block=23, blockDuration=QuantizedFiniteDuration(67000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918474000, isFinal=false), DelayCommand - EndsBeforeHappyPathExpires, 8000 milliseconds, StartBlockCommand(block=24, time=1777918482000), CompleteBlockCommand(block=24, blockDuration=QuantizedFiniteDuration(36000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918518000, isFinal=false), DelayCommand - EndsBeforeHappyPathExpires, 6000 milliseconds, StartBlockCommand(block=25, time=1777918524000), CompleteBlockCommand(block=25, blockDuration=QuantizedFiniteDuration(1000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918525000, isFinal=false), DelayCommand - EndsBeforeHappyPathExpires, 1000 milliseconds, StartBlockCommand(block=26, time=1777918526000), CompleteBlockCommand(block=26, blockDuration=QuantizedFiniteDuration(6000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918532000, isFinal=false), DelayCommand - EndsBeforeHappyPathExpires, 2000 milliseconds, StartBlockCommand(block=27, time=1777918534000), CompleteBlockCommand(block=27, blockDuration=QuantizedFiniteDuration(2000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918536000, isFinal=false), DelayCommand - EndsBeforeHappyPathExpires, 8000 milliseconds, StartBlockCommand(block=28, time=1777918544000), CompleteBlockCommand(block=28, blockDuration=QuantizedFiniteDuration(27000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918571000, isFinal=false), DelayCommand - EndsBeforeHappyPathExpires, 6000 milliseconds, StartBlockCommand(block=29, time=1777918577000), CompleteBlockCommand(block=29, blockDuration=QuantizedFiniteDuration(42000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918619000, isFinal=false), DelayCommand - EndsBeforeHappyPathExpires, 0 milliseconds, StartBlockCommand(block=30, time=1777918619000), CompleteBlockCommand(block=30, blockDuration=QuantizedFiniteDuration(44000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918663000, isFinal=false), DelayCommand - EndsBeforeHappyPathExpires, 6000 milliseconds, StartBlockCommand(block=31, time=1777918669000), CompleteBlockCommand(block=31, blockDuration=QuantizedFiniteDuration(19000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918688000, isFinal=false), DelayCommand - EndsBeforeHappyPathExpires, 4000 milliseconds, StartBlockCommand(block=32, time=1777918692000), CompleteBlockCommand(block=32, blockDuration=QuantizedFiniteDuration(35000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918727000, isFinal=false), DelayCommand - EndsBeforeHappyPathExpires, 4000 milliseconds, StartBlockCommand(block=33, time=1777918731000), CompleteBlockCommand(block=33, blockDuration=QuantizedFiniteDuration(8000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918739000, isFinal=false), DelayCommand - EndsBeforeHappyPathExpires, 4000 milliseconds, StartBlockCommand(block=34, time=1777918743000), CompleteBlockCommand(block=34, blockDuration=QuantizedFiniteDuration(1000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918744000, isFinal=false), DelayCommand - EndsBeforeHappyPathExpires, 1000 milliseconds, StartBlockCommand(block=35, time=1777918745000), CompleteBlockCommand(block=35, blockDuration=QuantizedFiniteDuration(5000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918750000, isFinal=false), DelayCommand - EndsBeforeHappyPathExpires, 6000 milliseconds, StartBlockCommand(block=36, time=1777918756000), CompleteBlockCommand(block=36, blockDuration=QuantizedFiniteDuration(79000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918835000, isFinal=false), DelayCommand - EndsBeforeHappyPathExpires, 0 milliseconds, StartBlockCommand(block=37, time=1777918835000), CompleteBlockCommand(block=37, blockDuration=QuantizedFiniteDuration(30000 milliseconds,SlotConfig(1777917375000,0,1000)), blockCreationEndTime=1777918865000, isFinal=true), NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp))
+Found 1 failing properties.
+
+Process finished with exit code 1

@@ -8,8 +8,9 @@ import hydrozoa.multisig.ledger.joint.EvacuationKey.given
 import hydrozoa.multisig.ledger.joint.EvacuationMap.mkScalar
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.remote.RemoteL2LedgerCodecs
+import hydrozoa.multisig.ledger.remote.RemoteL2LedgerCodecs.{payoutObligationDecoder, payoutObligationEncoder}
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.given
-import io.circe.{Decoder, Encoder, *}
+import io.circe.*
 import scala.collection.immutable.{SortedMap, TreeMap}
 import scala.util.Try
 import scalus.cardano.ledger.*
@@ -116,22 +117,20 @@ final case class EvacuationMap(
 
 object EvacuationMap:
 
-    given evacuationMapEncoder(using config: CardanoNetwork.Section): Encoder[EvacuationMap] = {
-        val codecs = RemoteL2LedgerCodecs(config)
+    given evacuationMapEncoder: Encoder[EvacuationMap] = {
         Encoder
             .encodeMap[EvacuationKey, Payout.Obligation](using
               evacuationKeyKeyEncoder,
-              codecs.payoutObligationEncoder
+              payoutObligationEncoder
             )
             .contramap(emap => emap.evacuationMap)
     }
 
     given evacuationMapDecoder(using config: CardanoNetwork.Section): Decoder[EvacuationMap] = {
-        val codecs = RemoteL2LedgerCodecs(config)
         Decoder
             .decodeMap[EvacuationKey, Payout.Obligation](using
               evacuationKeyKeyDecoder,
-              codecs.payoutObligationDecoder
+              payoutObligationDecoder
             )
             .map(m => EvacuationMap.from(m))
     }

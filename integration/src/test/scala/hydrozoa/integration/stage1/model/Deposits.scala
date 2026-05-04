@@ -10,9 +10,12 @@ import scala.collection.immutable.Queue
 import monocle.*
 import monocle.syntax.all.*
 import scalus.|>
-import cats.data.State
+import cats.data.{Kleisli, RWS, State}
+import cats.*
+import cats.syntax.all.*
 import Deposits.DepositStatus
 import Deposits.DepositStatus.*
+import scalus.cardano.ledger.{Transaction, TransactionInput}
 
 /** A state machine for Deposits. Each deposit can only be in one state at a time. Possible transitions are:
   *
@@ -42,10 +45,10 @@ import Deposits.DepositStatus.*
   */
 
 object Deposits {
-    enum DepositStatus(cmd: RegisterDepositCommand) {
+    enum DepositStatus private (cmd: RegisterDepositCommand) {
         // The queue of all generated deposits that Alice wants to register.
         // At all times, all deposits in the list are disjoint in terms of their funding utxo, see [[utxosLocked]].
-        case Enqueued(cmd: RegisterDepositCommand) extends DepositStatus(cmd)
+        case Enqueued private (cmd: RegisterDepositCommand) extends DepositStatus(cmd)
         // A deposits registered by Hydrozoa, i.e. included in a block brief with positive validity flag.
         case Registered private (cmd: RegisterDepositCommand) extends DepositStatus(cmd)
         // After a deposit was registered, we may submit it or cancel it depending on
@@ -82,39 +85,158 @@ object Deposits {
             config.txTiming.depositAbsorptionEndTime(requestValidityEnd)
 
         def cmd: RegisterDepositCommand = hydrozoaRegistered match {
-            case x : Registered => x.cmd
-            case y : Declined => y.cmd
-            case z : Submitted => z.cmd
+            case x: Registered => x.cmd
+            case y: Declined   => y.cmd
+            case z: Submitted  => z.cmd
         }
 
     }
 
+    /** Implementation note: the companion object for DepositStatus is implemented such that there
+      * is no public way to construct something like `DepositStatus.Registered` directly; you _must_
+      * pass it through Registered.register and update the Model.State accordingly
+      */
     object DepositStatus {
         type Refundable = Registered | Submitted | Declined
+        object Enqueued {
+
+            /** Enqueue incoming commands.
+              *
+              * @return
+              */
+            def enqueue(cmds: Queue[RegisterDepositCommand]): (Model.State => Model.State) =
+                deposits =>
+                    val enqueued: Queue[Enqueued] = cmds.map(Enqueued(_))
+                    deposits
+                        .focus(_.deposits.fullQueue)
+                        .modify(_ ++ enqueued)
+                        .focus(_.deposits.depositsEnqueued)
+                        .modify(_ ++ enqueued)
+        }
 
         object Registered {
-            def apply(enqueued: Enqueued) = new Registered(enqueued.cmd)
+            def register: AppendDepositM[DepositStatus.Enqueued, DepositStatus.Registered] =
+                transformationHelper(
+                  enqueued => new Registered(enqueued.cmd),
+                  depositsEnqueuedL,
+                  depositsRegisteredL
+                )
         }
 
         object Submitted {
-            def apply(registered: Registered) = new Submitted(registered.cmd)
+            def submit: AppendDepositM[DepositStatus.Registered, DepositStatus.Submitted] =
+                toSubmit =>
+                    for {
+                        submitted <- transformationHelper(
+                          (registered: Registered) => new Submitted(registered.cmd),
+                          depositsRegisteredL,
+                          depositsSubmittedL
+                        )(toSubmit)
+
+                        _ <- submitted.traverse(submitted =>
+                            State[Model.State, Unit](oldState =>
+                                (
+                                  oldState.applyContinuingL1Tx(submitted.cmd.depositTxBytesSigned),
+                                  ()
+                                )
+                            )
+                        )
+                    } yield submitted
         }
 
         object Declined {
-            def apply(registered: Registered) = new Declined(registered.cmd)
+            def decline: AppendDepositM[DepositStatus.Registered, DepositStatus.Declined] =
+                toDecline => {
+                    for {
+                        declined <- transformationHelper(
+                          (registered: Registered) => new Declined(registered.cmd),
+                          depositsRegisteredL,
+                          depositsDeclinedL
+                        )(toDecline)
+
+                        inputsToUnlock = declined
+                            .map(_.cmd.depositTxBytesSigned.body.value.inputs.toSet)
+                            .foldLeft(Set.empty[TransactionInput])(_ ++ _)
+
+                        _ <- State[Model.State, Unit](original =>
+                            (original.focus(_.utxoLocked).modify(_ -- inputsToUnlock), ())
+                        )
+                    } yield declined
+                }
         }
 
         object Absorbed {
-            def apply(submitted: Submitted) = new Absorbed(submitted.cmd)
+            def absorb: AppendDepositM[DepositStatus.Submitted, DepositStatus.Absorbed] =
+                transformationHelper(
+                  submitted => Absorbed(submitted.cmd),
+                  depositsSubmittedL,
+                  depositsAbsorbedL
+                )
         }
 
         object Rejected {
-            def apply(enqueued: Enqueued) = new DepositStatus.Rejected(enqueued.cmd)
+
+            def reject: AppendDepositM[DepositStatus.Enqueued, DepositStatus.Rejected] =
+                transformationHelper(
+                  enqueued => new Rejected(enqueued.cmd),
+                  depositsEnqueuedL,
+                  depositsRejectedL
+                )
         }
 
         object Refunded {
-            def apply(refundable: Registered | Submitted | Declined): Refunded =
-                new DepositStatus.Refunded(refundable.cmd)
+            // This is a little bit ugly...
+            def refund: AppendDepositM[Refundable, Refunded] = toAppend => {
+                // helper alias to run the transformationHelper and accumulate the refunded deposits at each step
+                type HelperM = RWS[Unit, Queue[DepositStatus.Refunded], Model.State, Unit]
+
+                // lift the result of transformationHelper into the RWS
+                def liftState(stateM: State[Model.State, Queue[Refunded]]): HelperM =
+                    RWS((_, oldState) =>
+                        val (newState, newlyRefunded) = stateM.run(oldState).value
+                        (newlyRefunded, newState, ())
+                    )
+
+                // Build up a sequence of computations that:
+                // - Modify the Model.State
+                // - Indicate which deposits were refunded
+                val helperComputation: Queue[HelperM] =
+                    toAppend.map {
+                        case registered: Registered =>
+                            transformationHelper[Registered, Refunded](
+                              refundable => new Refunded(refundable.cmd),
+                              depositsRegisteredL,
+                              depositsRefundedL
+                            )(
+                              Queue(registered)
+                            ) |> liftState
+                        case declined: Declined =>
+                            transformationHelper[Declined, Refunded](
+                              refundable => new Refunded(refundable.cmd),
+                              depositsDeclinedL,
+                              depositsRefundedL
+                            )(
+                              Queue(declined)
+                            ) |> liftState
+                        case submitted: Submitted =>
+                            transformationHelper[Submitted, Refunded](
+                              refundable => new Refunded(refundable.cmd),
+                              depositsSubmittedL,
+                              depositsRefundedL
+                            )(
+                              Queue(submitted)
+                            ) |> liftState
+
+                    }
+
+                // Sequence the computations, run the RWS, and lower it into `State`
+                cats.data.State(oldState =>
+                    helperComputation.sequence_
+                        .run((), oldState)
+                        .map((refunded, state, _) => (state, refunded))
+                        .value
+                )
+            }
         }
 
     }
@@ -142,7 +264,8 @@ object Deposits {
     private def depositsRefundedL: Lens[Model.State, Queue[Refunded]] =
         Focus[Model.State](_.deposits.depositsRefunded)
 
-    private type AppendEndo[A <: DepositStatus] = Queue[A] => (Model.State => Model.State)
+    private type AppendDepositM[From <: DepositStatus, To <: DepositStatus] =
+        Queue[From] => cats.data.State[Model.State, Queue[To]]
 
     import DepositStatus.*
 
@@ -152,7 +275,6 @@ object Deposits {
       * @param f
       *   a function to transform the deposit status. It should be one of the "apply" methods of the
       *   DepositStatus enum
-      *
       * @param fromQueue
       *   the (mutable) LinkedHashSet to remove elements from
       * @param toQueue
@@ -168,7 +290,7 @@ object Deposits {
         f: From => To,
         fromQueueLens: Lens[Model.State, Queue[From]],
         toQueueLens: Lens[Model.State, Queue[To]]
-    ): AppendEndo[From] = toAppend => {
+    ): AppendDepositM[From, To] = toAppend => {
 
         // Updates the full Queue with new deposit states
         val transformFullQueue: (Model.State => Model.State) = original =>
@@ -193,80 +315,11 @@ object Deposits {
         val addToQueue: (Model.State => Model.State) = original =>
             original |> toQueueLens.modify(_.appendedAll(toAppend.map(f)))
 
-        state => state |> transformFullQueue |> removeFromQueue |> addToQueue
+        cats.data.State(state =>
+            (state |> transformFullQueue |> removeFromQueue |> addToQueue, toAppend.map(f))
+        )
     }
 
-    // TODO: Add logging
-    /** Enqueue incoming commands.
-      *
-      * @return
-      */
-    def enqueue(cmds: Queue[RegisterDepositCommand]): (Model.State => Model.State) = deposits =>
-        val enqueued: Queue[Enqueued] = cmds.map(Enqueued(_))
-        deposits
-            .focus(_.deposits.fullQueue)
-            .modify(_ ++ enqueued)
-            .focus(_.deposits.depositsEnqueued)
-            .modify(_ ++ enqueued)
-
-    def register: AppendEndo[DepositStatus.Enqueued] =
-        transformationHelper(
-          Registered(_),
-          depositsEnqueuedL,
-          depositsRegisteredL
-        )
-
-    def submit: AppendEndo[DepositStatus.Registered] =
-        transformationHelper(
-          Submitted(_),
-          depositsRegisteredL,
-          depositsSubmittedL
-        )
-
-    def decline: AppendEndo[DepositStatus.Registered] =
-        transformationHelper(
-          Declined(_),
-          depositsRegisteredL,
-          depositsDeclinedL
-        )
-
-    def absorb: AppendEndo[DepositStatus.Submitted] =
-        transformationHelper(
-          Absorbed(_),
-          depositsSubmittedL,
-          depositsAbsorbedL
-        )
-
-    def reject: AppendEndo[DepositStatus.Enqueued] =
-        transformationHelper(
-          Rejected(_),
-          depositsEnqueuedL,
-          depositsRejectedL
-        )
-
-    // This is a little bit ugly...
-    def refund: AppendEndo[Refundable] = toAppend =>
-        state =>
-            toAppend.foldLeft(state) {
-                case (oldState, registered: Registered) =>
-                    (transformationHelper[Registered, Refunded](Refunded(_), depositsRegisteredL, depositsRefundedL)(
-                      Queue(registered)
-                    )(oldState)) : Model.State
-                case (oldState, declined: Declined) =>
-                    (transformationHelper[Declined, Refunded](Refunded(_), depositsDeclinedL, depositsRefundedL)(
-                      Queue(declined)
-                    )(oldState)) : Model.State
-                case (oldState, submitted: Submitted) =>
-                    transformationHelper[Submitted, Refunded](Refunded(_), depositsSubmittedL, depositsRefundedL)(
-                      Queue(submitted)
-                    )(oldState)
-
-            }
-
-//        (transformationHelper(Refunded(_), depositsSubmittedL, depositsRefundedL)(submitted)
-    //          |> transformationHelper(Refunded(_), depositsDeclinedL, depositsRefundedL)(declined)
-    //          |> transformationHelper(Refunded(_), depositsRegisteredL, depositsRefundedL)(registered))
-    //    }
 }
 
 // Implementation notes:
@@ -283,21 +336,14 @@ case class Deposits private (
     depositsRefunded: Queue[Refunded] = Queue.empty
 ) {
 
-    /** All the registered deposits that hydrozoa "knows" about at rest
+    /** All the registered deposits that hydrozoa "knows" about at rest, sorted according to
+      * absorption start time. See also: [[DepositsMap]] for a similar structure used in the
+      * JointLedger
       */
     def hydrozoaKnownRegisteredDeposits: Queue[Registered | Declined | Submitted] =
-        (depositsRegistered ++ depositsSubmitted ++ depositsDeclined).map(
-          _.asInstanceOf[Registered | Declined | Submitted]
-        )
-
-    def mAbsorptionStartTime(using config: TxTiming.Section): Option[DepositAbsorptionStartTime] = {
-
-        val absorptionStartTimes: Queue[DepositAbsorptionStartTime] =
-            hydrozoaKnownRegisteredDeposits.map(cmd =>
-                config.txTiming.depositAbsorptionStartTime(cmd.request.request.header.validityEnd)
+        (depositsRegistered ++ depositsSubmitted ++ depositsDeclined)
+            .sortBy(_.depositRefundTxSeq.depositTx.depositProduced.absorptionStartTime)
+            .map(
+              _.asInstanceOf[Registered | Declined | Submitted]
             )
-
-        absorptionStartTimes.minOption
-    }
-
 }

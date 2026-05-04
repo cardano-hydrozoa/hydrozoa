@@ -3,11 +3,14 @@ package hydrozoa.multisig.ledger.l1.deposits.map
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, SettlementTxEndTime}
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.DepositAbsorptionStartTime
 import hydrozoa.config.head.multisig.timing.{TxTiming, given_Ordering_DepositAbsorptionStartTime}
+import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.given
+import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap.Entry
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap.Partition.Compartment
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
+import io.circe.syntax.*
 import scala.collection.immutable.{Queue, TreeMap}
 
 /** deposits in a TreeMap according to their absorption start time. The Tree map ensures that the
@@ -18,6 +21,8 @@ import scala.collection.immutable.{Queue, TreeMap}
 final case class DepositsMap private[map] (
     treeMap: TreeMap[DepositAbsorptionStartTime, Queue[Entry]]
 ) {
+
+    private val logger = Logging.logger("DepositsMap")
 
     /** Append a request to the end of the queue of requests with the same start time.
       */
@@ -68,13 +73,20 @@ final case class DepositsMap private[map] (
       *   Queue order:
       *   - eligible for absorption
       *   - ineligible for absorption - (immature + mature but non-existent)
-      *   - rejected
+      *   - NotInPollResults -- mature, but not eligible for absorption because the deposit is not on chain
+      *   - - expire -- deposits absorption window is expire before this settlement tx's TTL is reached
       */
     def partition(
         blockCreationEndTime: BlockCreationEndTime,
         settlementTxEndTime: SettlementTxEndTime,
         pollResults: PollResults
-    ): DepositsMap.Partition =
+    ): DepositsMap.Partition = {
+        logger.debug(
+          "[partition]" +
+              s"\n\t blockCreationEndTime: $blockCreationEndTime" +
+              s"\n\t settlementTxEndTime: $settlementTxEndTime" +
+              s"\n\t pollResults: ${pollResults.utxos.asJson}"
+        )
         treeMap.foldLeft(DepositsMap.Partition.empty) {
             case (outerAcc, (_absorptionStartTime, depositQueue)) =>
                 depositQueue.foldLeft(outerAcc) { case (innerAcc, entry) =>
@@ -94,15 +106,25 @@ final case class DepositsMap private[map] (
                     val isExistent = pollResults.utxos.contains(depositUtxo.toUtxo.input)
 
                     val compartment =
-                        if isImmature then Immature
-                        else if isExpired then Rejected
-                        else if isExistent then Eligible
-                        else Rejected
+                        if isImmature then {
+                            logger.debug(s"$entry is immature.")
+                            Immature
+                        } else if isExpired then {
+                            logger.debug(s"$entry is expired (rejected).")
+                            Expired
+                        } else if isExistent then {
+                            logger.debug(s"$entry is eligible")
+                            Eligible
+                        } else {
+                            logger.debug(s"$entry is mature, but not in the poll results.")
+                            NotInPollResults
+                        }
 
                     innerAcc.append(compartment, entry)
 
                 }
         }
+    }
 }
 
 object DepositsMap {
@@ -116,13 +138,16 @@ object DepositsMap {
     )
 
     final case class Partition private[map] (
-        rejected: DepositsMap,
+        expired: DepositsMap,
         eligible: DepositsMap,
         immature: DepositsMap,
+        notInPollResults: DepositsMap
     ) {
         def append(compartment: Compartment, x: Entry): Partition =
             compartment match {
-                case Compartment.Rejected => copy(rejected = rejected.append(x))
+                case Compartment.Expired => copy(expired = expired.append(x))
+                case Compartment.NotInPollResults =>
+                    copy(notInPollResults = notInPollResults.append(x))
                 case Compartment.Eligible => copy(eligible = eligible.append(x))
                 case Compartment.Immature => copy(immature = immature.append(x))
             }
@@ -133,7 +158,8 @@ object DepositsMap {
             val unabsorbed = DepositsMap(tmUnabsorbed)
             Split(
               absorbed = absorbed,
-              rejected = rejected,
+              expired = expired,
+              notInPollResults = notInPollResults,
               unabsorbed = unabsorbed,
               immature = immature
             )
@@ -141,35 +167,39 @@ object DepositsMap {
 
         override def toString: String =
             "Deposits partitioned:" + "\n\t" +
-                s"|- Rejected: ${rejected.requestIdsLong}" + "\n\t" +
+                s"|- Expired: ${expired.requestIdsLong}" + "\n\t" +
                 s"|- Eligible: ${eligible.requestIdsLong}" + "\n\t" +
-                s"|- Immature: ${immature.requestIdsLong}"
+                s"|- Immature: ${immature.requestIdsLong}" + "\n\t" +
+                s"|- NotInPollResults: ${notInPollResults.requestIdsLong}"
     }
 
     object Partition {
         enum Compartment:
-            case Immature, Eligible, Rejected
+            case Immature, Eligible, Expired, NotInPollResults
 
-        val empty = Partition(DepositsMap.empty, DepositsMap.empty, DepositsMap.empty)
+        val empty =
+            Partition(DepositsMap.empty, DepositsMap.empty, DepositsMap.empty, DepositsMap.empty)
     }
 
     final case class Split private[map] (
         absorbed: DepositsMap,
-        rejected: DepositsMap,
+        expired: DepositsMap,
+        notInPollResults: DepositsMap,
         unabsorbed: DepositsMap,
         immature: DepositsMap,
     ) {
-        lazy val eligible = absorbed.concat(unabsorbed)
-        val surviving = unabsorbed.concat(immature)
+        lazy val eligible: DepositsMap = absorbed.concat(unabsorbed)
+        val surviving: DepositsMap = unabsorbed.concat(immature)
         val decisions = Decisions(
           absorbed = absorbed.unzip,
-          rejected = rejected.unzip,
+          refunded = DepositsMap(notInPollResults.treeMap ++ expired.treeMap).unzip,
           mNextAbsorptionStartTime = surviving.treeMap.keys.minOption
         )
 
         override def toString: String =
             "Deposits partitioned and split:" + "\n" +
-                "|- " + s"Rejected: ${rejected.requestIdsLong}" + "\n" +
+                "|- " + s"Expired: ${expired.requestIdsLong}" + "\n" +
+                "|- " + s"NotInPollResults: ${notInPollResults.requestIdsLong}" + "\n" +
                 "|- " + s"Eligible: ${eligible.requestIdsLong}" + "\n" +
                 "|--- " + s"Absorbed: ${absorbed.requestIdsLong}" + "\n" +
                 "|--- " + s"Unabsorbed: ${unabsorbed.requestIdsLong}" + "\n" +
@@ -180,7 +210,7 @@ object DepositsMap {
 
     final case class Decisions private[map] (
         absorbed: Unzip,
-        rejected: Unzip,
+        refunded: Unzip,
         mNextAbsorptionStartTime: Option[DepositAbsorptionStartTime]
     )
 

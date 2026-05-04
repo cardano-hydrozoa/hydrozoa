@@ -13,7 +13,7 @@ abstract class YetAnotherProperties(override val name: String) extends Propertie
     override def main(args: Array[String]): Unit =
         CmdLineParser.parseParams(args) match {
             case (applyCmdParams, Nil) =>
-                val params = applyCmdParams(overrideParameters(Test.Parameters.default))
+                val params = overrideParameters(applyCmdParams(Test.Parameters.default))
                 val res = Test.checkProperties(params, this)
                 val numFailed = res.count(!_._2.passed)
                 if numFailed > 0 then {

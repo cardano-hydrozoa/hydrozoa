@@ -8,6 +8,7 @@ import com.suprnation.typelevel.actors.syntax.BroadcastOps
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime, FallbackTxStartTime}
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.actor.*
 import hydrozoa.lib.logging.Logging
@@ -21,6 +22,7 @@ import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag.{Invalid, Valid}
 import hydrozoa.multisig.ledger.joint.EvacuationMap.applyDiffs
+import hydrozoa.multisig.ledger.joint.EvacuationMap.given
 import hydrozoa.multisig.ledger.joint.JointLedger.*
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.*
 import hydrozoa.multisig.ledger.l1.L1LedgerM
@@ -30,6 +32,8 @@ import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import hydrozoa.multisig.ledger.l1.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerCommand, L2LedgerError, L2LedgerState}
+import hydrozoa.multisig.ledger.remote.RemoteL2LedgerCodecs.given
+import io.circe.syntax.*
 import monocle.Focus.focus
 import scalus.uplc.builtin.ByteString
 
@@ -251,7 +255,7 @@ final case class JointLedger(
             _ <- logger.info(s"register new deposit, request id: $requestId)")
 
             p <- unsafeGetProducing
-            blockStartTime = p.BlockCreationStartTime
+            blockStartTime = p.blockCreationStartTime
             currentBlockNum = p.nextBlockNumber
 
             _ <-
@@ -269,7 +273,7 @@ final case class JointLedger(
                               requestId = requestId,
                               userVKey = req.request.userVk,
                               blockNumber = currentBlockNum,
-                              blockCreationStartTime = p.BlockCreationStartTime.toPosixTime,
+                              blockCreationStartTime = p.blockCreationStartTime.toPosixTime,
                               depositId = depositProduced.utxoId,
                               depositFee = depositProduced.depositFee,
                               depositL2Value = depositProduced.l2Value,
@@ -321,7 +325,7 @@ final case class JointLedger(
             _ <- logger.info(s"applying transaction, request id: $requestId)")
 
             p <- unsafeGetProducing
-            blockStartTime = p.BlockCreationStartTime
+            blockStartTime = p.blockCreationStartTime
             currentBlockNum = p.nextBlockNumber
 
             _ <-
@@ -336,7 +340,7 @@ final case class JointLedger(
                           requestId = req.requestId,
                           userVKey = req.request.userVk,
                           blockNumber = p.nextBlockNumber,
-                          blockCreationStartTime = p.BlockCreationStartTime.toPosixTime,
+                          blockCreationStartTime = p.blockCreationStartTime.toPosixTime,
                           l2Payload = l2Payload
                         )
 
@@ -442,21 +446,22 @@ final case class JointLedger(
     def mkBlockBriefIntermediate(
         p: JointLedger.Producing,
         blockCreationEndTime: BlockCreationEndTime,
-        decisions: DepositsMap.Decisions
+        decisions: DepositsMap.Decisions,
     ): IO[(JointLedger.Producing, BlockBrief.Intermediate)] = {
-        val blockCreationStartTime = p.BlockCreationStartTime
+        given CardanoNetwork.Section = config.cardanoNetwork
+        val blockCreationStartTime = p.blockCreationStartTime
         val previousHeader = p.previousBlockHeader
         val blockWithdrawnUtxos = p.l2LedgerState.payouts
         val events = p.userRequestState.requests
         for {
             _ <- logger.trace(
               s"mkBlockBrief: previousHeader=$previousHeader\n" +
-                  s"mkBlockBrief: blockWithdrawnUtxos=$blockWithdrawnUtxos\n" +
+                  s"mkBlockBrief: blockWithdrawnUtxos=${blockWithdrawnUtxos.asJson}\n" +
                   s"mkBlockBrief: blockStartTime=$blockCreationStartTime\n" +
                   s"mkBlockBrief: competingFallbackValidityStart=${p.competingFallbackTxTime}\n" +
                   s"mkBlockBrief: events=$events\n" +
                   s"mkBlockBrief: decisions.absorbed=${decisions.absorbed.requestIds}\n" +
-                  s"mkBlockBrief: decisions.rejected=${decisions.rejected.requestIds}"
+                  s"mkBlockBrief: decisions.refunded=${decisions.refunded.requestIds}"
             )
 
             depositEventDecisions: L2LedgerCommand.ApplyDepositDecisions =
@@ -464,7 +469,7 @@ final case class JointLedger(
                   blockNumber = p.nextBlockNumber,
                   blockCreationEndTime = blockCreationEndTime.toPosixTime,
                   absorbedDeposits = decisions.absorbed.requestIds,
-                  rejectedDeposits = decisions.rejected.requestIds
+                  refundedDeposits = decisions.refunded.requestIds
                 )
 
             // Block header
@@ -474,9 +479,9 @@ final case class JointLedger(
                     val newEvacuationMap = applyDiffs(p.evacuationMap, p.l2LedgerState.diffs)
                     for {
                         newL2State <-
-                            if decisions.rejected.isEmpty then IO.pure(p.l2LedgerState)
+                            if decisions.refunded.isEmpty then IO.pure(p.l2LedgerState)
                             else executeL2Command(p, depositEventDecisions)
-                        _ <- logger.trace(s"New evacuation map: ${newEvacuationMap.evacuationMap}")
+                        _ <- logger.trace(s"New evacuation map: ${newEvacuationMap.asJson}")
 
                         // Update the state with the new evacuation map
                         newJLState = p
@@ -500,7 +505,7 @@ final case class JointLedger(
                     for {
                         newL2State <- executeL2Command(p, depositEventDecisions)
                         newEvacuationMap = applyDiffs(p.evacuationMap, newL2State.diffs)
-                        _ <- logger.trace(s"New evacuation map: ${newEvacuationMap.evacuationMap}")
+                        _ <- logger.trace(s"New evacuation map: ${newEvacuationMap.asJson}")
                         newJLState = p
                             .setL2LedgerState(newL2State)
                             .focus(_.evacuationMap)
@@ -522,25 +527,28 @@ final case class JointLedger(
             // Block brief
             blockBrief: BlockBrief.Intermediate = headerIntermediate match {
                 case header: BlockHeader.Minor =>
-                    val blockBody = BlockBody.Minor(events, decisions.rejected.requestIds)
+                    val blockBody = BlockBody.Minor(events, decisions.refunded.requestIds)
                     BlockBrief.Minor(header, blockBody)
                 case header: BlockHeader.Major =>
                     val blockBody = BlockBody.Major(
                       events,
                       decisions.absorbed.requestIds,
-                      decisions.rejected.requestIds
+                      decisions.refunded.requestIds
                     )
                     BlockBrief.Major(header, blockBody)
             }
 
-            _ <- logger.trace(
-              "mkBlockBriefIntermediate result:\n" +
-                  s"  Block type: ${blockBrief match {
-                          case _: BlockBrief.Minor => "Minor"; case _: BlockBrief.Major => "Major"
-                      }}\n" +
-                  s"  Block number: ${headerIntermediate.blockNum}\n" +
-                  s"  Block brief: $blockBrief"
-            )
+            _ <- logger.trace {
+                given CardanoNetwork.Section = config
+
+                "mkBlockBriefIntermediate result:\n" +
+                    s"  Block type: ${blockBrief match {
+                            case _: BlockBrief.Minor => "Minor";
+                            case _: BlockBrief.Major => "Major"
+                        }}\n" +
+                    s"  Block number: ${headerIntermediate.blockNum}\n" +
+                    s"  Block brief: ${blockBrief}"
+            }
         } yield (newJlState, blockBrief)
     }
 
@@ -662,7 +670,7 @@ final case class JointLedger(
                 val blockHeader =
                     newJlState.previousBlockHeader
                         .nextHeaderFinal(
-                          newJlState.BlockCreationStartTime,
+                          newJlState.blockCreationStartTime,
                           args.blockCreationEndTime
                         )
 
@@ -882,7 +890,7 @@ object JointLedger {
         override val l1LedgerState: L1LedgerM.State,
         override val evacuationMap: EvacuationMap,
         l2LedgerState: L2LedgerState,
-        BlockCreationStartTime: BlockCreationStartTime,
+        blockCreationStartTime: BlockCreationStartTime,
         userRequestState: UserRequestState
     ) extends State {
         val nextBlockNumber: BlockNumber.BlockNumber = previousBlockHeader.blockNum.increment

@@ -86,6 +86,7 @@ class CardanoBackendMock private (
     ): MockStateF[Either[CardanoBackend.Error, Boolean]] = for {
         state: MockState <- get
         isKnown = state.knownTxs.contains(txHash)
+        _ = logger.trace(s"isTxKnown: looking for tx ${txHash} in state.knownTxs ${state.knownTxs}")
     } yield Right(isKnown)
 
     override def lastContinuingTxs(

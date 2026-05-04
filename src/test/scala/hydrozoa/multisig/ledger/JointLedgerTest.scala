@@ -125,9 +125,12 @@ object JointLedgerTestHelpers {
     val defaultInitializer: PropertyM[IO, TestR] = {
         for {
             multiNodeConfig <- PropertyM.pick[IO, MultiNodeConfig](
-              MultiNodeConfig.generate(
-                TestPeersSpec.default.withPeersNumberSpec(PeersNumberSpec.Exact(1))
-              )()
+              for {
+                  testPeersSpec <- TestPeersSpec.generate()
+                  mnc <- MultiNodeConfig.generate(
+                    testPeersSpec.withPeersNumberSpec(PeersNumberSpec.Exact(1))
+                  )()
+              } yield mnc
             )
 
             // testPeers <- PropertyM.pick[IO, TestHeadPeers](generateTestPeers())

@@ -97,6 +97,8 @@ private object DepositTxOps {
                     .build(
                       config.network,
                       spendUtxosFunding ++ List(
+                        // The deposit must reference the multisig regime utxo. This ensures that the deposit
+                        // will roll back if the initialization tx rolls back.
                         config.multisigRegimeUtxo.referenceOutput,
                         addRefundMetadata,
                         sendDeposit,

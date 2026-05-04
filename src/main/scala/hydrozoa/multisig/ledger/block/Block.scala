@@ -1,5 +1,6 @@
 package hydrozoa.multisig.ledger.block
 
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.ledger.block.BlockHeader.Minor.HeaderSignature
 import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, FinalizationTx, InitializationTx, RefundTx, RolloutTx, SettlementTx}
 import io.circe.*
@@ -108,7 +109,7 @@ object Block {
             override transparent inline def finalizationRequested: Boolean = false
         }
 
-        given blockMultisignedInitialEncoder: Encoder[Block.MultiSigned.Initial] =
+        given  blockMultisignedInitialEncoder(using CardanoNetwork.Section): Encoder[Block.MultiSigned.Initial] =
             deriveEncoder[Block.MultiSigned.Initial]
 
         final case class Minor(

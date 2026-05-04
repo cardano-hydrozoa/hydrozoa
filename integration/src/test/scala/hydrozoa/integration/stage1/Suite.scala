@@ -19,9 +19,9 @@ import hydrozoa.integration.stage1.Model.{BlockCycle, CurrentTime}
 import hydrozoa.integration.stage1.SuiteCardano.*
 import hydrozoa.integration.stage1.model.Deposits
 import hydrozoa.integration.yaci.DevKit
-import hydrozoa.integration.yaci.DevKit.DevnetInfo
+import hydrozoa.integration.yaci.DevKit.{DevnetInfo, devnetInfo}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.{Logging, Tracer}
 import hydrozoa.lib.tracing.ProtocolTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost.URL
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendMock, MockState, yaciTestSauceGenesis}
@@ -116,13 +116,15 @@ case class Suite(
     }
 
     override def commandGenTweaker: [A] => (g: Gen[A]) => Gen[A] =
-        [A] => (g: Gen[A]) => suiteCardano match {
-            // When using L1 mock we do want to start with short sequences to find a failure ASAP
-            case _: SuiteCardano.Mock => g
-            // When using Yaci and devnet we don't want to generate short sequences - only long ones
-            case _: SuiteCardano.Yaci   => Gen.resize(200, g)
-            case _: SuiteCardano.Public => Gen.resize(200, g)
-        }
+        [A] =>
+            (g: Gen[A]) =>
+                suiteCardano match {
+                    // When using L1 mock we do want to start with short sequences to find a failure ASAP
+                    case _: SuiteCardano.Mock => g
+                    // When using Yaci and devnet we don't want to generate short sequences - only long ones
+                    case _: SuiteCardano.Yaci   => Gen.resize(200, g)
+                    case _: SuiteCardano.Public => Gen.resize(200, g)
+            }
 
     override def initEnv: Env = suiteCardano match {
 
@@ -134,7 +136,7 @@ case class Suite(
             )
 
             Stage1Env(
-              startTime = java.time.Instant.now(),
+              startTime = java.time.Instant.ofEpochSecond(2000000000),
               cardanoNetwork = cardanoNetwork,
               genesisUtxo = yaciTestSauceGenesis(cardanoNetwork.network),
               testPeers = testPeers
@@ -161,7 +163,8 @@ case class Suite(
               )
             )
 
-            val cardanoNetwork: CardanoNetwork.Custom = CardanoNetwork.Custom(cardanoInfo)
+            val cardanoNetwork: CardanoNetwork.Custom =
+                CardanoNetwork.Custom(cardanoInfo, DevKit.devnetInfo().protocolMagic)
 
             val testPeers = TestPeers.apply(
               SeedPhrase.Yaci,
@@ -194,7 +197,8 @@ case class Suite(
             Stage1Env(
               startTime = startTime,
               cardanoNetwork = CardanoNetwork.Custom(
-                cardanoInfo
+                cardanoInfo,
+                DevKit.devnetInfo().protocolMagic
               ),
               genesisUtxo = _ => Map(Alice -> splitUpUtxos),
               testPeers = testPeers
@@ -311,7 +315,8 @@ case class Suite(
               generateTxTiming = txTimingGen
             )
 
-        val generateHeadConfigBootstrap: GenWithTestPeers[hydrozoa.config.head.HeadConfig.Bootstrap] =
+        val generateHeadConfigBootstrap
+            : GenWithTestPeers[hydrozoa.config.head.HeadConfig.Bootstrap] =
             hydrozoa.config.head.generateHeadConfigBootstrap(
               generateHeadParams = generateHeadParams,
               generateInitializationParameters = InitParamsType.TopDown(
@@ -328,7 +333,8 @@ case class Suite(
               genHeadConfigBootstrap = generateHeadConfigBootstrap,
               generateInitialBlock = bootstrap =>
                   hydrozoa.config.head.initialization.generateInitialBlock(
-                    genHeadConfigBootstrap = ReaderT.pure[Gen, TestPeers, hydrozoa.config.head.HeadConfig.Bootstrap](bootstrap),
+                    genHeadConfigBootstrap = ReaderT
+                        .pure[Gen, TestPeers, hydrozoa.config.head.HeadConfig.Bootstrap](bootstrap),
                     generateBlockCreationEndTime = generateHeadStartTime
                   )
             )
@@ -347,21 +353,26 @@ case class Suite(
             _ = logger.debug(s"peerL1GenesisUtxos: ${peerL1GenesisUtxos}")
 
             operationalMultisigConfig <- generateNodeOperationMultisigConfig
-            operationalLiquidationConfig <- generateNodeOperationEvacuationConfig(testPeers.walletFor(Alice))
+            operationalLiquidationConfig <- generateNodeOperationEvacuationConfig(
+              testPeers.walletFor(Alice)
+            )
         } yield Model
             .State(
               multiNodeConfig = config,
               nextRequestNumber = RequestNumber(0),
-              currentTime = BeforeHappyPathExpiration(config.headConfig.initialBlock.endTime.convert),
+              currentTime =
+                  BeforeHappyPathExpiration(config.headConfig.initialBlock.endTime.convert),
               blockCycle = BlockCycle.Done(BlockNumber.zero, BlockVersion.Full.zero),
-              competingFallbackStartTime =
-                  config.headConfig.txTiming.newFallbackStartTime(config.headConfig.initialBlock.endTime),
+              competingFallbackStartTime = config.headConfig.txTiming
+                  .newFallbackStartTime(config.headConfig.initialBlock.endTime),
               // TODO: see https://linear.app/gummiworm-labs/issue/GUM-104/specify-how-ledger-configuration-is-handled
-              utxosL2Active = config.headConfig.initializationParameters.initialEvacuationMap.toUtxos,
+              utxosL2Active =
+                  config.headConfig.initializationParameters.initialEvacuationMap.toUtxos,
               peerUtxosL1 = peerL1GenesisUtxos,
               preinitPeerUtxosL1 = peerL1GenesisUtxos,
               deposits = Deposits.empty,
               utxoLocked = Set.empty,
+                padding = 10.seconds
             )
             .applyContinuingL1Tx(config.headConfig.initializationTx.tx)
     }
@@ -380,26 +391,28 @@ case class Suite(
         val runId = java.util.UUID.randomUUID().toString.take(8)
 
         for {
-            _ <- loggerIO.info(s"Creating new SUT [${label}/${runId}]")
+            tracerLocal <- Tracer.makeLocal(s"Stage1.Suite.$runId")
+            given cats.effect.IOLocal[Tracer] = tracerLocal
+            _ <- Tracer.info(s"Creating new SUT [${label}/${runId}]")
 
             // Fast-forward to the current time if TestControl is used
             _ <- IO.whenA(useTestControl)(for {
-                _ <- loggerIO.debug("Fast-forward to the current time...")
+                _ <- Tracer.debug("Fast-forward to the current time...")
 
                 // Before creating the actor system, if we are in the TestControl we need
                 // to fast-forward to the zero block creation time.
                 // Will take almost forever if is run after the actor system is spun up
                 _ <- IO.sleep(
                   FiniteDuration(
-                    state.currentTime.instant.instant.toEpochMilli,
+                    state.getCurrentTime.instant.instant.toEpochMilli,
                     TimeUnit.MILLISECONDS
                   )
                 )
                 now <- IO.realTimeInstant
-                _ <- loggerIO.info(s"Current time: $now")
+                _ <- Tracer.info(s"[startupSut] Current time: ${now.toEpochMilli}")
             } yield ())
 
-            _ <- loggerIO.debug(s"peerKeys: ${multiNodeConfig.headConfig.headPeers.headPeerVKeys}")
+            _ <- Tracer.debug(s"peerKeys: ${multiNodeConfig.headConfig.headPeers.headPeerVKeys}")
 
             nodeConfig = multiNodeConfig.nodeConfigs(HeadPeerNumber.zero)
 
@@ -422,7 +435,13 @@ case class Suite(
                 case Yaci(url, _) =>
                     CardanoBackendConfig.Blockfrost(
                       network = Right(
-                        (CardanoNetwork.Custom(multiNodeConfig.headConfig.cardanoInfo), url)
+                        (
+                          CardanoNetwork.Custom(
+                            multiNodeConfig.headConfig.cardanoInfo,
+                            devnetInfo().protocolMagic
+                          ),
+                          url
+                        )
                       )
                     )
                 case Public(_, cardanoNetwork, blockfrostKey) =>
@@ -484,12 +503,12 @@ case class Suite(
 
             // Consensus actor
             consensusConnections = ConsensusActor.Connections(
-                blockWeaver = blockWeaver,
-                cardanoLiaison = cardanoLiaison,
-                eventSequencer = eventSequencerStub,
-                peerLiaisons = List.empty,
-                jointLedger = jointLedger,
-                tracer = tracer
+              blockWeaver = blockWeaver,
+              cardanoLiaison = cardanoLiaison,
+              eventSequencer = eventSequencerStub,
+              peerLiaisons = List.empty,
+              jointLedger = jointLedger,
+              tracer = tracer
             )
 
             consensusActor <- system.actorOf(ConsensusActor(nodeConfig, consensusConnections))
@@ -501,6 +520,7 @@ case class Suite(
           system = system,
           cardanoBackend = cardanoBackend,
           agent = agent,
+          tracerLocal = tracerLocal,
           runId = runId,
           traceRef = traceRef
         )
@@ -598,7 +618,7 @@ case class Suite(
         /** Important: this action should ensure that the actor system was not terminated.
           *
           * Even more important: before terminating, make sure [[waitForIdle]] is called - otherwise
-          * you just immediately shutdown the system and will get a false-positive test.
+          * you just immediately shutdown the system and will get a false-positive or false-negative test.
           *
           * Luckily enough, [[waitForIdle]] does exactly what we need in addition to checking the
           * mailboxes it also verifies that the system was not terminated.
@@ -612,7 +632,7 @@ case class Suite(
           lastState.multiNodeConfig.headConfig.initialBlock.initializationTx.tx.id,
           lastState.multiNodeConfig.headConfig.initialBlock.fallbackTx.tx.id,
           effects,
-          lastState.currentTime
+          lastState.getCurrentTime
         )
 
         _ <- IO.whenA(expectedEffects.nonEmpty)(
@@ -635,7 +655,7 @@ case class Suite(
             poll(0)
         }
 
-        // Finally we have to terminate the actor system, otherwise in TestControlownTestPeer
+        // Finally we have to terminate the actor system, otherwise in TestControl.ownTestPeer
         // this will loop indefinitely.
         _ <- sut.system.terminate()
     } yield {
