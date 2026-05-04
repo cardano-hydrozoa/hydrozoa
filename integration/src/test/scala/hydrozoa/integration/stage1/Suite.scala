@@ -21,7 +21,7 @@ import hydrozoa.integration.stage1.model.Deposits
 import hydrozoa.integration.yaci.DevKit
 import hydrozoa.integration.yaci.DevKit.{DevnetInfo, devnetInfo}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.{Logging, Tracer}
 import hydrozoa.lib.tracing.ProtocolTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost.URL
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendMock, MockState, yaciTestSauceGenesis}
@@ -390,11 +390,13 @@ case class Suite(
         val runId = java.util.UUID.randomUUID().toString.take(8)
 
         for {
-            _ <- loggerIO.info(s"Creating new SUT [${label}/${runId}]")
+            tracerLocal <- Tracer.makeLocal(s"Stage1.Suite.$runId")
+            given cats.effect.IOLocal[Tracer] = tracerLocal
+            _ <- Tracer.info(s"Creating new SUT [${label}/${runId}]")
 
             // Fast-forward to the current time if TestControl is used
             _ <- IO.whenA(useTestControl)(for {
-                _ <- loggerIO.debug("Fast-forward to the current time...")
+                _ <- Tracer.debug("Fast-forward to the current time...")
 
                 // Before creating the actor system, if we are in the TestControl we need
                 // to fast-forward to the zero block creation time.
@@ -406,10 +408,10 @@ case class Suite(
                   )
                 )
                 now <- IO.realTimeInstant
-                _ <- loggerIO.info(s"[startupSut] Current time: ${now.toEpochMilli}")
+                _ <- Tracer.info(s"[startupSut] Current time: ${now.toEpochMilli}")
             } yield ())
 
-            _ <- loggerIO.debug(s"peerKeys: ${multiNodeConfig.headConfig.headPeers.headPeerVKeys}")
+            _ <- Tracer.debug(s"peerKeys: ${multiNodeConfig.headConfig.headPeers.headPeerVKeys}")
 
             nodeConfig = multiNodeConfig.nodeConfigs(HeadPeerNumber.zero)
 
@@ -512,17 +514,15 @@ case class Suite(
 
             _ <- consensusActorD.complete(consensusActor)
 
-            sut = Stage1Sut(
-                headAddress = multiNodeConfig.headConfig.headMultisigAddress,
-                system = system,
-                cardanoBackend = cardanoBackend,
-                agent = agent,
-                runId = runId,
-                traceRef = traceRef
-            )
-
-            _ <- loggerIO.trace(s"finished SUT startup: $sut")
-        } yield sut
+        } yield Stage1Sut(
+          headAddress = multiNodeConfig.headConfig.headMultisigAddress,
+          system = system,
+          cardanoBackend = cardanoBackend,
+          agent = agent,
+          tracerLocal = tracerLocal,
+          runId = runId,
+          traceRef = traceRef
+        )
     }
 
     enum CardanoBackendConfig:
