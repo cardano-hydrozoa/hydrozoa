@@ -19,7 +19,7 @@ import scalus.uplc.builtin.ByteString
 import scalus.uplc.builtin.ByteString.hex
 import registry.scalacheck.*
 
-private lazy val gens =
+private lazy val deinitGens =
     gen[DeinitTx.Build] +:
         // override the Unresolved RuleBasedTreasuryUtxo
         gen(genEmptyResolvedTreasuryUtxo) +:
@@ -75,8 +75,8 @@ object DeinitTxTest extends Properties("Deinit Tx Test") {
 
     val _ = property("Deinit Simple Happy Path") = runDefault(
       for {
-          nc <- forAll[NodeConfig](gens)
-          builder <- forAll[DeinitTx.Build](gens)
+          nc <- forAll[NodeConfig](deinitGens)
+          builder <- forAll[DeinitTx.Build](deinitGens)
           deinitTx <- failLeft(builder.result(using nc))
           _ <- assertWith(deinitTx.tx != null, "Transaction should not be null")
           _ <- assertWith(

@@ -24,7 +24,7 @@ import scalus.uplc.builtin.Builtins.blake2b_224
 import scalus.uplc.builtin.ByteString
 import registry.scalacheck.*
 
-private lazy val gens =
+private lazy val voteGens =
     // same OnChain needed in headersList and OnChain block header
     const[Onchain] +:
         // same tx hash in genRuleBasedTreasuryUtxo and genTransactionInput (used by voteUtxo)
@@ -93,8 +93,8 @@ object VoteTxTest extends Properties("Vote Tx Test") {
 
     val _ = property("Vote Tx") = runDefault(
       for {
-          nc <- forAll[NodeConfig](gens)
-          builder <- forAll[VoteTx.Build](gens)
+          nc <- forAll[NodeConfig](voteGens)
+          builder <- forAll[VoteTx.Build](voteGens)
           tx <- failLeft(builder.result(using nc))
           _ <- assertWith(
             tx.voteUtxoSpent == builder.uncastVoteUtxo,

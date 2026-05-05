@@ -31,7 +31,7 @@ import test.Generators.Hydrozoa.genPubKeyUtxo
 import CommonGeneratorsTypes.*
 import registry.scalacheck.*
 
-private lazy val gens =
+private lazy val evacuationGens =
     gen(genEvacuationTxBuild) +:
         gen(genL2TransactionOutput) +:
         CommonGenerators.gens
@@ -83,7 +83,7 @@ def genTreasuryResolvedDatum(
     setupSize: Int
 ): Gen[Resolved] =
     for {
-        version <- gens.make[Gen[Version]]
+        version <- evacuationGens.make[Gen[Version]]
         params <- genByteStringOfN(32)
         setup = TrustedSetup
             .takeSrsG2(setupSize)
@@ -99,7 +99,7 @@ def genTreasuryResolvedDatum(
 def genEvacuationTxBuild(config: MultiNodeConfig): Gen[EvacuationTx.Build] =
     given MultiNodeConfig = config
     for {
-        Right(evacMap) <- gens
+        Right(evacMap) <- evacuationGens
             .make[Gen[Utxos]]
             .map(_.toEvacuationMap(config.headConfig))
         _ = println(s"evac map: ${evacMap.size}")
@@ -208,8 +208,8 @@ object EvacuationTxTest extends Properties("EvacuationTx Test") {
       "EvacuationTx builds successfully with valid recipe"
     ) = runDefault(
       for {
-          nc <- forAll[NodeConfig](gens)
-          builder <- forAll[EvacuationTx.Build](gens)
+          nc <- forAll[NodeConfig](evacuationGens)
+          builder <- forAll[EvacuationTx.Build](evacuationGens)
           evacuationTx <- failLeft(builder.result(using nc))
           _ <- assertWith(
             evacuationTx.treasuryUtxoSpent == builder.treasuryUtxo,
@@ -239,7 +239,7 @@ object EvacuationTxTest extends Properties("EvacuationTx Test") {
     )
 
     val _ = property("Partial membership proofs check") =
-        val r = gen(genMembershipCheck) +: gens
+        val r = gen(genMembershipCheck) +: evacuationGens
         val tupleGen = r.makeGen[(prelude.List[ScalusScalar], BLS12_381_G1_Element, BLS12_381_G1_Element)]
         Prop.forAll(tupleGen)((subset, commitmentG1, proof) =>
             // Pre-calculated powers of tau
