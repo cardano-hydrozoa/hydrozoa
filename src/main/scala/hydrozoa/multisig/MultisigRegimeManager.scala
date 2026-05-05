@@ -8,7 +8,7 @@ import com.suprnation.actor.ActorRef.NoSendActorRef
 import com.suprnation.actor.SupervisorStrategy.Escalate
 import com.suprnation.actor.{OneForOneStrategy, SupervisionStrategy}
 import hydrozoa.config.node.NodeConfig
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.{Logging, Tracer}
 import hydrozoa.lib.tracing.ProtocolTracer
 import hydrozoa.multisig.MultisigRegimeManager.*
 import hydrozoa.multisig.backend.cardano.CardanoBackend
@@ -84,15 +84,19 @@ trait MultisigRegimeManager(
 
             blockWeaver <- context.actorOf(BlockWeaver(config, pendingConnections))
 
+            cardanoLiaisonTracer <- Tracer.makeLocal("CardanoLiaison")
             cardanoLiaison <-
-                context.actorOf(CardanoLiaison(config, cardanoBackend, pendingConnections))
+                context.actorOf(
+                  CardanoLiaison(config, cardanoBackend, pendingConnections, cardanoLiaisonTracer)
+                )
 
             consensusActor <- context.actorOf(ConsensusActor(config, pendingConnections))
 
             eventSequencer <- context.actorOf(EventSequencer(config, pendingConnections))
 
+            jointLedgerTracerLocal <- Tracer.makeLocal("JointLedger")
             jointLedger <- context.actorOf(
-              JointLedger(config, pendingConnections, l2Ledger, tracer)
+              JointLedger(config, pendingConnections, l2Ledger, tracer, jointLedgerTracerLocal)
             )
 
             localPeerLiaisons <-

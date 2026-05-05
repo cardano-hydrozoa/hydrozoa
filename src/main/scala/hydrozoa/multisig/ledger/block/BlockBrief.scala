@@ -19,10 +19,11 @@ object BlockBrief {
         deriveCodec[BlockBrief]
     given (using cardanoNetwork: CardanoNetwork.Section): Codec[BlockBrief.Initial] =
         deriveCodec[BlockBrief.Initial]
-    given bbMinorCodec(using CardanoNetwork.Section): Codec[BlockBrief.Minor] = deriveCodec[BlockBrief.Minor]
-    given bbMajorCodec(using CardanoNetwork.Section): Codec[BlockBrief.Major] = deriveCodec[BlockBrief.Major]
+    given bbMinorCodec(using CardanoNetwork.Section): Codec[BlockBrief.Minor] =
+        deriveCodec[BlockBrief.Minor]
+    given bbMajorCodec(using CardanoNetwork.Section): Codec[BlockBrief.Major] =
+        deriveCodec[BlockBrief.Major]
     given (using CardanoNetwork.Section): Codec[BlockBrief.Final] = deriveCodec[BlockBrief.Final]
-
 
     final case class Initial(
         override val header: BlockHeader.Initial
@@ -31,8 +32,7 @@ object BlockBrief {
         override transparent inline def blockBrief: BlockBrief.Initial = this
         override transparent inline def body: BlockBody.Initial.type = BlockBody.Initial
     }
-    
-        
+
     final case class Minor(
         override val header: BlockHeader.Minor,
         override val body: BlockBody.Minor

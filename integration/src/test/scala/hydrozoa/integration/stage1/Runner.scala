@@ -19,6 +19,7 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
         p: org.scalacheck.Test.Parameters
     ): org.scalacheck.Test.Parameters = {
         p.withWorkers(1)
+            //.withPropFilter(Some("Block promotion with real L2 txs"))
             .withPropFilter(Some("Deposits"))
             .withInitialSeed(Some(Seed.fromBase64("lr7yvfMC6Qxtovs5UjWZSfTcqzr7pHrzQ4_mcWApnUP=").get))
         // NB: careful, this will override -s from the command line

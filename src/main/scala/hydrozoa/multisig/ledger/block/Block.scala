@@ -109,7 +109,9 @@ object Block {
             override transparent inline def finalizationRequested: Boolean = false
         }
 
-        given  blockMultisignedInitialEncoder(using CardanoNetwork.Section): Encoder[Block.MultiSigned.Initial] =
+        given blockMultisignedInitialEncoder(using
+            CardanoNetwork.Section
+        ): Encoder[Block.MultiSigned.Initial] =
             deriveEncoder[Block.MultiSigned.Initial]
 
         final case class Minor(
