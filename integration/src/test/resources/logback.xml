@@ -5,8 +5,17 @@
             </pattern>
         </encoder>
     </appender>
+    <appender name="FILE" class="ch.qos.logback.core.FileAppender">
+        <file>integration-tests.log</file>
+        <append>false</append>
+        <encoder>
+            <pattern> %-5level %logger{64} %n%msg%n
+            </pattern>
+        </encoder>
+    </appender>
     <root level="error">
         <appender-ref ref="STDOUT"/>
+        <appender-ref ref="FILE"/>
     </root>
     <logger name="org.scalacheck.commands.ModelBasedSuite" level="trace"/>
     <logger name="Stage1.Commands" level="warn"/>
