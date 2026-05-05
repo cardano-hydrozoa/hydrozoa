@@ -159,27 +159,23 @@ final case class JointLedger(
     } yield p
 
     override def preStart: IO[Unit] =
-        Tracer.updateLocal(_.copy(logger = s"JointLedger.${config.ownHeadPeerNum}")) >>
-            (context.self ! Requests.PreStart)
+        context.self ! Requests.PreStart
 
     override def receive: Receive[IO, Requests.Request] = PartialFunction.fromFunction(receiveTotal)
 
-    private def receiveTotal(req: Requests.Request): IO[Unit] = {
-        Tracer.scoped(_.copy(logger = "JointLedger")) {
-            req match {
-                case Requests.PreStart       => preStartLocal
-                case e: UserRequestWithId    => applyUserRequestWithId(e)
-                case s: StartBlock           => startBlock(s)
-                case c: CompleteBlockRegular => completeBlockRegular(c)
-                case f: CompleteBlockFinal   => completeBlockFinal(f)
-                case req: SyncRequest.Any =>
-                    req.request match {
-                        case r: GetState.type => r.handleSync(req, _ => state.get)
-                    }
-                case p: Block.MultiSigned.Next => proxyConfirmation(p)
-            }
+    private def receiveTotal(req: Requests.Request): IO[Unit] =
+        req match {
+            case Requests.PreStart       => preStartLocal
+            case e: UserRequestWithId    => applyUserRequestWithId(e)
+            case s: StartBlock           => startBlock(s)
+            case c: CompleteBlockRegular => completeBlockRegular(c)
+            case f: CompleteBlockFinal   => completeBlockFinal(f)
+            case req: SyncRequest.Any =>
+                req.request match {
+                    case r: GetState.type => r.handleSync(req, _ => state.get)
+                }
+            case p: Block.MultiSigned.Next => proxyConfirmation(p)
         }
-    }
 
     // QUESTION: This gets sent from the consensus actor, but the consensus actor has the full ability to send it
     // itself. Should we move this into the consensus actor?
@@ -197,6 +193,7 @@ final case class JointLedger(
 
     private def preStartLocal: IO[Unit] =
         for {
+            _ <- Tracer.routeLocal(s"JointLedger.${config.ownHeadPeerNum}")
             _ <- initializeConnections
         } yield ()
 

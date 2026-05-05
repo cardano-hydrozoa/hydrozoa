@@ -146,7 +146,7 @@ object JointLedgerTestHelpers {
             consensusAgent <- PropertyM.run(system.actorOf(ConsensusAgent()))
 
             eutxoLedger <- PropertyM.run(EutxoL2Ledger(config))
-            tracerLocal <- PropertyM.run(Tracer.makeLocal("JointLedgerTest"))
+            tracerLocal <- PropertyM.run(Tracer.makeLocal)
             jointLedger <- PropertyM.run(
               system.actorOf(
                 JointLedger(

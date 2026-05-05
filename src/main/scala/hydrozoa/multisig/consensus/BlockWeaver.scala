@@ -29,6 +29,7 @@ final case class BlockWeaver(
     import BlockWeaver.*
 
     private val logger = Logging.loggerIO(s"BlockWeaver.${config.ownHeadPeerNum}")
+    given IOLocal[Tracer] = tracerLocal
 
     override def preStart: IO[Unit] = for {
         _ <- context.self ! BlockWeaver.PreStart
@@ -51,6 +52,7 @@ final case class BlockWeaver(
     override def receive: Receive[IO, BlockWeaver.Request] = PartialFunction.fromFunction {
         case PreStart =>
             for {
+                _ <- Tracer.routeLocal(s"BlockWeaver.${config.ownHeadPeerNum}")
                 connections <- initializeConnections
                 startingState <- State.start(config, connections, logger)
                 _ <- become(startingState)

@@ -77,7 +77,8 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
 
         for
             _ <- IO.sleep(FiniteDuration(startEpochMs, TimeUnit.MILLISECONDS))
-            tracerLocal <- Tracer.makeLocal(label)
+            tracerLocal <- Tracer.makeLocal
+            given cats.effect.IOLocal[Tracer] = tracerLocal
 
             system <- ActorSystem[IO](label).allocated.map(_._1)
 
@@ -111,24 +112,26 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
                 .traverse { peerNum =>
                     val nodeConfig = multiNodeConfig.nodeConfigs(peerNum)
                     val pending = pendingConnsMap(peerNum)
-                    for
-                        blockWeaver <- system.actorOf(BlockWeaver(nodeConfig, pending, tracerLocal))
-                        cardanoLiaison <- system.actorOf(
-                          CardanoLiaison(nodeConfig, cardanoBackend, pending, tracerLocal)
+                    Tracer.scopedCtx("peer" -> s"${peerNum: Int}") {
+                        for
+                            blockWeaver <- system.actorOf(BlockWeaver(nodeConfig, pending, tracerLocal))
+                            cardanoLiaison <- system.actorOf(
+                              CardanoLiaison(nodeConfig, cardanoBackend, pending, tracerLocal)
+                            )
+                            eventSequencer <- system.actorOf(EventSequencer(nodeConfig, pending))
+                            l2Ledger <- EutxoL2Ledger(nodeConfig)
+                            jointLedger <- system.actorOf(
+                              JointLedger(nodeConfig, pending, l2Ledger, ProtocolTracer.noop, tracerLocal)
+                            )
+                            consensusActor <- system.actorOf(ConsensusActor(nodeConfig, pending))
+                        yield peerNum -> PeerStack(
+                          blockWeaver,
+                          cardanoLiaison,
+                          eventSequencer,
+                          jointLedger,
+                          consensusActor
                         )
-                        eventSequencer <- system.actorOf(EventSequencer(nodeConfig, pending))
-                        l2Ledger <- EutxoL2Ledger(nodeConfig)
-                        jointLedger <- system.actorOf(
-                          JointLedger(nodeConfig, pending, l2Ledger, ProtocolTracer.noop, tracerLocal)
-                        )
-                        consensusActor <- system.actorOf(ConsensusActor(nodeConfig, pending))
-                    yield peerNum -> PeerStack(
-                      blockWeaver,
-                      cardanoLiaison,
-                      eventSequencer,
-                      jointLedger,
-                      consensusActor
-                    )
+                    }
                 }
                 .map(_.toMap)
 
