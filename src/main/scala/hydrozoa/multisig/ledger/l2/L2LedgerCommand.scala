@@ -50,7 +50,7 @@ object L2LedgerCommand {
         blockNumber: BlockNumber,
         blockCreationEndTime: PosixTime,
         absorbedDeposits: List[RequestId],
-        rejectedDeposits: List[RequestId]
+        refundedDeposits: List[RequestId]
     ) extends L2LedgerCommand.Real
 
     /** An L2Event, as forwarded to black-box L2 ledger. It can only be constructed with respect to

@@ -11,6 +11,7 @@ import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerCommand, L2LedgerError}
 import hydrozoa.multisig.ledger.remote
 import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.{Request, Response}
+import hydrozoa.multisig.ledger.remote.RemoteL2LedgerCodecs.{*, given}
 import io.circe.parser.*
 import io.circe.syntax.*
 import org.http4s.Uri
@@ -47,8 +48,7 @@ class RemoteL2Ledger private (
 
     override implicit def monadF: Monad[IO] = Async[IO]
 
-    private val codecs = RemoteL2LedgerCodecs(config)
-    import codecs.*
+    given CardanoNetwork.Section = config.cardanoNetwork
 
     /** Send a request to the remote ledger and wait for the synchronous response */
     /** Establish a new WebSocket connection

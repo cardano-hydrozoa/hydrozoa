@@ -17,7 +17,9 @@ import org.scalacheck.commands.{CommandLabel, CommandProp}
 import scalus.cardano.ledger.Transaction
 import hydrozoa.multisig.ledger.block.BlockBrief.given
 import io.circe.syntax.*
+
 import scala.collection.immutable.Queue
+import scala.concurrent.duration.FiniteDuration
 
 object Commands:
 
@@ -70,7 +72,7 @@ object Commands:
         creationTime: BlockCreationStartTime
     ) {
         override def toString: String =
-            s"StartBlockCommand(block=$blockNumber, time=${creationTime.instant})"
+            s"StartBlockCommand(block=$blockNumber, time=${creationTime.instant.toEpochMilli})"
     }
 
     implicit given CommandProp[StartBlockCommand, Unit, Model.State] with {}
@@ -126,11 +128,14 @@ object Commands:
     /** Complete the current block (regular or final).  Result is the [[BlockBrief]] produced. */
     final case class CompleteBlockCommand(
         blockNumber: BlockNumber,
+        // TODO: should we de-quantize this?
+        blockDuration : QuantizedFiniteDuration,
+        // TODO: This and blockDuration must be consistent, we're just using both for ease of troubleshooting right now
         blockCreationEndTime: BlockCreationEndTime,
         isFinal: Boolean,
     ) {
         override def toString: String =
-            s"CompleteBlockCommand(block=$blockNumber, blockCreationEndTime=$blockCreationEndTime, isFinal=$isFinal)"
+            s"CompleteBlockCommand(block=$blockNumber, blockDuration=$blockDuration, blockCreationEndTime=$blockCreationEndTime, isFinal=$isFinal)"
     }
 
     /** Postcondition for [[CompleteBlockCommand]]: verifies model and SUT agree on the block brief.

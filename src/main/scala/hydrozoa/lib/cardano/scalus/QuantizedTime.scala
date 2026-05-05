@@ -88,6 +88,8 @@ object QuantizedTime {
 
     case class QuantizedInstant private (instant: java.time.Instant, slotConfig: SlotConfig) {
 
+        override def toString: String = this.asJson.toString
+
         def toPosixTime: PosixTime =
             BigInt(instant.toEpochMilli)
 
