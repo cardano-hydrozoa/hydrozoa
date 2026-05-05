@@ -24,26 +24,20 @@ import scalus.uplc.builtin.Builtins.blake2b_224
 import scalus.uplc.builtin.ByteString
 import registry.scalacheck.*
 
-lazy val gens =
+private lazy val gens =
     // same OnChain needed in headersList and OnChain block header
     const[Onchain] +:
-    // same tx hash in genRuleBasedTreasuryUtxo and genTransactionInput (used by voteUtxo)
-    const[TransactionHash] +:
-    const[VersionMajor] +:
-    // use the same multi-node config for the whole test
-    const[MultiNodeConfig] +:
-    gen[VoteTx.Build] +:
-    gen(headersList) +:
-    gen(voteUtxo) +:
-    gen(genTransactionInput) +:
-    gen(genRuleBasedTreasuryUtxo) +:
-    gen(genCollateralUtxo) +:
-    gen(addressKeyHash) +:
-    gen(genPeerVoteDatumAwaitingVote) +:
-    gen((_: NodeConfig).headConfig.headPeers) +:
-    gen((_: MultiNodeConfig).nodeConfigs.head._2) +:
-    gen(MultiNodeConfig.generateDefault) +:
-    CommonGenerators.gens
+        // same tx hash in genRuleBasedTreasuryUtxo and genTransactionInput (used by voteUtxo)
+        const[TransactionHash] +:
+        const[VersionMajor] +:
+        gen[VoteTx.Build] +:
+        gen(headersList) +:
+        gen(voteUtxo) +:
+        gen(genTransactionInput) +:
+        gen(genRuleBasedTreasuryUtxo) +:
+        gen(addressKeyHash) +:
+        gen(genPeerVoteDatumAwaitingVote) +:
+        CommonGenerators.gens
 
 def addressKeyHash(voteDatum: VoteDatum, voteTxConfig: VoteTx.Config) =
     val peerAddresses =
@@ -71,23 +65,27 @@ def genPeerVoteDatumAwaitingVote(config: HeadPeers.Section): Gen[VoteDatum] = {
     )
 }
 
-def genTransactionInput(fallbackTxId: TransactionHash, config: VoteTx.Config):Gen[TransactionInput] =
+def genTransactionInput(
+    fallbackTxId: TransactionHash,
+    config: VoteTx.Config
+): Gen[TransactionInput] =
     Gen.choose(1, config.nHeadPeers.toInt).map(outputIx => TransactionInput(fallbackTxId, outputIx))
 
 // TODO: Determine what *Config.Section this should take
 def voteUtxo(
     transactionInput: TransactionInput,
     voteDatum: VoteDatum,
-    config: VoteTx.Config): VoteUtxo[VoteStatus.AwaitingVote] =
+    config: VoteTx.Config
+): VoteUtxo[VoteStatus.AwaitingVote] =
     VoteUtxo(
-        input = transactionInput,
-        voteOutput = VoteOutput(
-            key = voteDatum.key,
-            link = voteDatum.link,
-            coin = Coin.ada(10),
-            voteTokens = PositiveInt.unsafeApply(1),
-            status = voteDatum.voteStatus.asInstanceOf[VoteStatus.AwaitingVote]
-        )
+      input = transactionInput,
+      voteOutput = VoteOutput(
+        key = voteDatum.key,
+        link = voteDatum.link,
+        coin = Coin.ada(10),
+        voteTokens = PositiveInt.unsafeApply(1),
+        status = voteDatum.voteStatus.asInstanceOf[VoteStatus.AwaitingVote]
+      )
     )
 
 object VoteTxTest extends Properties("Vote Tx Test") {

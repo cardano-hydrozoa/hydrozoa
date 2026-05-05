@@ -5,7 +5,7 @@ import hydrozoa.*
 import hydrozoa.config.HydrozoaBlueprint
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
-import hydrozoa.config.node.MultiNodeConfig
+import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.cardano.scalus.ledger.{CollateralOutput, CollateralUtxo}
 import hydrozoa.lib.cardano.scalus.gens.Base
 import hydrozoa.lib.number.PositiveInt
@@ -19,7 +19,7 @@ import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTrea
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
 import monocle.{Focus, Lens}
-import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
+import scalus.cardano.address.{Network, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.TransactionOutput.Babbage
@@ -40,9 +40,14 @@ import CommonGeneratorsTypes.*
 object CommonGenerators {
 
     lazy val gens =
+        gen((_: NodeConfig).headConfig.headPeers) +:
+            gen((_: MultiNodeConfig).nodeConfigs.head._2) +:
+            // Always use the same multi-node config across make invocations
+            const[MultiNodeConfig] +:
+            gen(MultiNodeConfig.generateDefault) +:
             gen[EvacuationTx] +:
-            gen[CollateralUtxo] +:
             gen(genOnchainBlockHeader) +:
+            gen(genCollateralUtxo) +:
             gen(genTreasuryUnresolvedDatum) +:
             gen[RuleBasedTreasuryUtxo] +:
             gen[RuleBasedTreasuryOutput] +:
@@ -139,7 +144,6 @@ object CommonGenerators {
           commitment = commitment
         )
 
-
     def genPositiveInt(genInt: Gen[Int]): Gen[PositiveInt] =
         genInt.flatMap(i => PositiveInt.apply(i).map(Gen.const).getOrElse(genPositiveInt(genInt)))
 }
@@ -160,7 +164,6 @@ object CommonGeneratorsTypes:
     def genVersionMinor: Gen[VersionMinor] =
         Gen.choose(1L, 99L).map(BigInt(_))
 
-
     def unresolvedSetup: UnresolvedSetup = {
         TrustedSetup
             .takeSrsG2(10)
@@ -173,9 +176,13 @@ object CommonGeneratorsTypes:
             .map(BigInt(_))
             .map(System.currentTimeMillis() + _.abs)
 
-    def genTreasuryUnresolvedDatum(versionMajor: VersionMajor, deadlineVoting: DeadlineVoting, setup: UnresolvedSetup): Gen[Unresolved] =
+    def genTreasuryUnresolvedDatum(
+        versionMajor: VersionMajor,
+        deadlineVoting: DeadlineVoting,
+        setup: UnresolvedSetup
+    ): Gen[Unresolved] =
         Unresolved(
-            deadlineVoting,
-            versionMajor,
-            setup
+          deadlineVoting,
+          versionMajor,
+          setup
         )

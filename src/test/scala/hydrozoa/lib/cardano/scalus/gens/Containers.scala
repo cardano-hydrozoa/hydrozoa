@@ -1,14 +1,6 @@
 package hydrozoa.lib.cardano.scalus.gens
 
-import _root_.scalus.cardano.ledger.{
-    KeepRaw,
-    Sized,
-    TaggedOrderedSet,
-    TaggedOrderedStrictSet,
-    TaggedSortedMap,
-    TaggedSortedSet,
-    TaggedSortedStrictMap
-}
+import _root_.scalus.cardano.ledger.{KeepRaw, Sized, TaggedOrderedSet, TaggedOrderedStrictSet, TaggedSortedMap, TaggedSortedSet, TaggedSortedStrictMap}
 import _root_.scalus.cardano.onchain.plutus.prelude.List as PreludeList
 import io.bullet.borer.Encoder
 import izumi.reflect.Tag
@@ -17,11 +9,11 @@ import registry.{Entry, TypedEntry}
 
 import scala.collection.immutable.SortedMap
 
-/** Container combinators that complement `registry.scalacheck.Containers` with shapes specific
-  * to scalus's data model — `SortedMap[K, V]` and the three `Tagged*Set[A]` opaque types.
+/** Container combinators that complement `registry.scalacheck.Containers` with shapes specific to
+  * scalus's data model — `SortedMap[K, V]` and the three `Tagged*Set[A]` opaque types.
   *
-  * All four follow the `mapOf[K, V]` / `setOf[T]` pattern: a `TypedEntry` whose inputs are
-  * the per-element generators and whose closure threads them through the appropriate
+  * All four follow the `mapOf[K, V]` / `setOf[T]` pattern: a `TypedEntry` whose inputs are the
+  * per-element generators and whose closure threads them through the appropriate
   * `Container.from(...)` constructor.
   */
 object Containers:
@@ -82,8 +74,8 @@ object Containers:
         )
 
     /** Register `Gen[A] => Gen[TaggedOrderedStrictSet[A]]`. The `from` constructor takes an
-      * implicit `ProtocolVersion` parameter with a default value (Conway PV) — we let that
-      * default kick in.
+      * implicit `ProtocolVersion` parameter with a default value (Conway PV) — we let that default
+      * kick in.
       */
     def taggedOrderedStrictSetOf[A](using
         inTag: Tag[Gen[A]],
@@ -115,15 +107,18 @@ object Containers:
             output = outTag.tag,
             invoke = args =>
                 val gA = args(0).asInstanceOf[Gen[A]]
-                Gen.listOf(gA).map(xs =>
-                    xs.foldRight(PreludeList.Nil: PreludeList[A])((h, t) => PreludeList.Cons(h, t))
-                )
+                Gen.listOf(gA)
+                    .map(xs =>
+                        xs.foldRight(PreludeList.Nil: PreludeList[A])((h, t) =>
+                            PreludeList.Cons(h, t)
+                        )
+                    )
           )
         )
 
-    /** Register `Gen[A] => Gen[Sized[A]]`. Captures the implicit borer `Encoder[A]` once when
-      * the entry is built — `Sized.apply[A: Encoder](value: A)` re-encodes the value to compute
-      * its CBOR-byte length and stores it alongside the value.
+    /** Register `Gen[A] => Gen[Sized[A]]`. Captures the implicit borer `Encoder[A]` once when the
+      * entry is built — `Sized.apply[A: Encoder](value: A)` re-encodes the value to compute its
+      * CBOR-byte length and stores it alongside the value.
       */
     def sized[A](using
         enc: Encoder[A],
@@ -141,8 +136,8 @@ object Containers:
         )
 
     /** Register `Gen[A] => Gen[KeepRaw[A]]`. Captures the implicit borer `Encoder[A]` once at
-      * entry-construction time — `KeepRaw.apply[A: Encoder](value: A)` runs the encoder lazily
-      * (the raw bytes are computed on first access) but the encoder itself must be in scope.
+      * entry-construction time — `KeepRaw.apply[A: Encoder](value: A)` runs the encoder lazily (the
+      * raw bytes are computed on first access) but the encoder itself must be in scope.
       */
     def keepRaw[A](using
         enc: Encoder[A],

@@ -38,9 +38,7 @@ import scalus.uplc.builtin.{ByteString, Data}
 import scalus.|>
 import spire.math.{Rational, SafeLong}
 import test.Generators.Hydrozoa.{genPositiveValue, genPubKeyUtxo}
-import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.{gens}
-
-import registry.{Registry}
+import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.gens
 
 // Annoyingly, `Gen` doesn't have `Monad[Gen]` already. But I want to use `traverse`, so I'm vendoring it here
 given genMonad: Monad[Gen] = new Monad[Gen] {

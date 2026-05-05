@@ -9,12 +9,11 @@ import _root_.scalus.uplc.builtin.{ByteString, Data}
 import _root_.scalus.cardano.onchain.plutus.v1.PubKeyHash
 import org.scalacheck.Gen
 import org.scalacheck.Arbitrary.arbitrary
-import registry.value
-import registry.scalacheck.{Sized => _, *}
+import registry.scalacheck.{Sized as _, *}
 
 import scala.collection.immutable.SortedMap
-
 import hydrozoa.lib.cardano.scalus.gens.Containers.*
+import spire.math.Rational
 
 /** Base generators.
   */
@@ -167,6 +166,7 @@ object Base:
             gen(genSlot) *:
             gen(genProtocolVersion) *:
             gen(genNetwork) *:
+            gen(genRational) *:
             arb[String] *:
             arb[Metadatum] *:
             arb[Boolean] *:
@@ -192,8 +192,8 @@ object Base:
 
     // Make sure that the transaction input index is positive
     def genTransactionInput(transactionId: TransactionHash) =
-        Gen.frequency(5 -> Gen.choose(0, 10), 1 -> Gen.choose(11, 65535)).map(index =>
-            TransactionInput(transactionId, index))
+        Gen.frequency(5 -> Gen.choose(0, 10), 1 -> Gen.choose(11, 65535))
+            .map(index => TransactionInput(transactionId, index))
 
     private def genHash[HF: HashSize, Purpose]: Gen[Hash[HF, Purpose]] =
         genByteStringOfN(summon[HashSize[HF]].size).map(Hash.apply[HF, Purpose])
@@ -338,3 +338,8 @@ object Base:
           Timelock.TimeStart(slot.slot),
           Timelock.TimeExpire(slot.slot)
         )
+
+    def genRational: Gen[Rational] =
+        for {
+            den <- Gen.choose(1, 20)
+        } yield Rational(1, den)
