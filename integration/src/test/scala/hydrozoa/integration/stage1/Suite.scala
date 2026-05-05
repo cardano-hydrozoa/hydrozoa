@@ -305,9 +305,20 @@ case class Suite(
         import env.testPeers
         val testPeerToUtxos = env.genesisUtxo(testPeers)
 
-        // Build custom HeadConfig generator with the environment's start time
+        // For real-blockchain modes: anchor all block times 1 minute in the future so the SUT
+        // can sleep until that moment and be perfectly synchronized with the model clock.
+        val takeoffTime: Option[java.time.Instant] = suiteCardano match {
+            case _: SuiteCardano.Mock => None
+            case _                    => Some(java.time.Instant.now().plusSeconds(60))
+        }
+        logger.trace(s"takeoff time: $takeoffTime")
+
+        // Build custom HeadConfig generator anchored at the takeoff time (or env start for mock)
         val generateHeadStartTime: GenWithTestPeers[BlockCreationEndTime] =
-            ReaderT(tp => Gen.const(BlockCreationEndTime(env.startTime.quantize(tp.slotConfig))))
+            takeoffTime match {
+                case None    => ReaderT(tp => Gen.const(BlockCreationEndTime(env.startTime.quantize(tp.slotConfig))))
+                case Some(t) => ReaderT(tp => Gen.const(BlockCreationEndTime(t.quantize(tp.slotConfig))))
+            }
 
         // Use the custom txTimingGen provided to Suite
         val generateHeadParams: GenWithTestPeers[hydrozoa.config.head.parameters.HeadParameters] =
@@ -359,6 +370,7 @@ case class Suite(
         } yield Model
             .State(
               multiNodeConfig = config,
+              takeoffTime = takeoffTime,
               nextRequestNumber = RequestNumber(0),
               currentTime =
                   BeforeHappyPathExpiration(config.headConfig.initialBlock.endTime.convert),
@@ -411,6 +423,26 @@ case class Suite(
                 now <- IO.realTimeInstant
                 _ <- Tracer.info(s"[startupSut] Current time: ${now.toEpochMilli}")
             } yield ())
+
+            // For real-blockchain modes: sleep until takeoff time so the model clock and the
+            // Yaci clock are synchronized at command execution start. Abort if we are already late.
+            _ <- state.takeoffTime match {
+                case None => IO.unit
+                case Some(t) =>
+                    IO.realTimeInstant.flatMap { now =>
+                        if now.isAfter(t) then
+                            IO.raiseError(
+                              RuntimeException(
+                                s"Suite aborted: initialization took too long " +
+                                    s"(takeoff: $t, now: $now)"
+                              )
+                            )
+                        else
+                            val sleepMs = t.toEpochMilli - now.toEpochMilli
+                            Tracer.info(s"Sleeping ${sleepMs}ms until takeoff at $t") >>
+                                IO.sleep(FiniteDuration(sleepMs, TimeUnit.MILLISECONDS))
+                    }
+            }
 
             _ <- Tracer.debug(s"peerKeys: ${multiNodeConfig.headConfig.headPeers.headPeerVKeys}")
 

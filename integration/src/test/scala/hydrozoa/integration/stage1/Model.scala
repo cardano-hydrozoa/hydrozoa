@@ -71,6 +71,11 @@ object Model:
 
         padding : FiniteDuration,
 
+        // The real-world instant at which the SUT should start processing commands.
+        // None for mock mode (time is controlled via TestControl).
+        // Some(t) for Yaci/public: startupSut sleeps until t, or aborts if t is already past.
+        takeoffTime: Option[java.time.Instant],
+
         // Pre-initial state of the peer's L1 utxos.
         // It's needed since [[peerUtxosL1]] reflects the state after applying the initialization tx.
         // This is done upon initial state generation, but maybe there is a better time to run the init tx.
