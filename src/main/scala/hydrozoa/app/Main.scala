@@ -7,7 +7,7 @@ import com.comcast.ip4s.{host, port}
 import com.suprnation.actor.ActorSystem
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.{Logging, Tracer}
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost
 import hydrozoa.multisig.ledger.remote.RemoteL2Ledger
@@ -165,81 +165,86 @@ object Main extends IOApp {
     val cardanoNetwork: StandardCardanoNetwork = CardanoNetwork.Preview
 
     override def run(args: List[String]): IO[ExitCode] =
+        Tracer.makeLocal("gummiworm.node").flatMap { tracerLocal =>
+            given cats.effect.IOLocal[Tracer] = tracerLocal
 
-        val setupIO = for {
-            _ <- logger.info("Starting Hydrozoa node...")
-            env <- loadEnv
-            _ <- logger.info("Starting Cardano Blockfrost Backend...")
-            backend <- CardanoBackendBlockfrost(
-              network = Left(cardanoNetwork),
-              apiKey = env.blockfrostApiKey
-            )
-            nodeConfig <- Bootstrap.mkNodeConfig(cardanoNetwork, backend)(
-              vKey = env.verificationKey,
-              sKey = env.signingKey,
-              minEquity = env.minEquity
-            )
-            _ <- logger.info(s"headAddress: ${nodeConfig.headMultisigAddress.toBech32.get}")
-            _ <- logger.info(s"initTx hash: ${nodeConfig.initializationTx.tx.id}")
-            _ <- logger.info(s"initTx: ${encodeHexString(nodeConfig.initializationTx.tx.toCbor)}")
-        } yield (env, backend, nodeConfig)
+            val setupIO = for {
+                _ <- logger.info("Starting Hydrozoa node...")
+                env <- loadEnv
+                _ <- logger.info("Starting Cardano Blockfrost Backend...")
+                backend <- CardanoBackendBlockfrost(
+                  network = Left(cardanoNetwork),
+                  apiKey = env.blockfrostApiKey
+                )
+                nodeConfig <- Bootstrap.mkNodeConfig(cardanoNetwork, backend)(
+                  vKey = env.verificationKey,
+                  sKey = env.signingKey,
+                  minEquity = env.minEquity
+                )
+                _ <- logger.info(s"headAddress: ${nodeConfig.headMultisigAddress.toBech32.get}")
+                _ <- logger.info(s"initTx hash: ${nodeConfig.initializationTx.tx.id}")
+                _ <- logger.info(
+                  s"initTx: ${encodeHexString(nodeConfig.initializationTx.tx.toCbor)}"
+                )
+            } yield (env, backend, nodeConfig)
 
-        val resource = for {
-            result <- Resource.eval(setupIO)
-            (env, backend, nodeConfig) = result
+            val resource = for {
+                result <- Resource.eval(setupIO)
+                (env, backend, nodeConfig) = result
 
-            _ <- Resource.eval(
-              logger.info(s"Connecting to L2 ledger at ${env.sugarRushUri}")
-            )
-            remoteL2Ledger <- Resource.eval(
-              RemoteL2Ledger.create(
-                wsUri = env.sugarRushUri,
-                config = cardanoNetwork
-              )
-            )
-
-            // Attach cleanup to ActorSystem resource - env, backend, nodeConfig are in scope here
-            system <- ActorSystem[IO]("Hydrozoa Demo").onFinalize(
-              logger.info("Hydrozoa node shut down, running janitor...") *>
-                  Janitor.cleanUp(
-                    backend = backend,
-                    headPeerWallet = nodeConfig.ownHeadWallet,
-                    config = nodeConfig.headConfig,
-                    faucetAddress = env.verificationKey.shelleyAddress()(using cardanoNetwork),
-                    tokenRecoveryAddress = env.tokenRecoveryAddress
+                _ <- Resource.eval(
+                  logger.info(s"Connecting to L2 ledger at ${env.sugarRushUri}")
+                )
+                remoteL2Ledger <- Resource.eval(
+                  RemoteL2Ledger.create(
+                    wsUri = env.sugarRushUri,
+                    config = cardanoNetwork
                   )
-            )
-        } yield (env, backend, nodeConfig, remoteL2Ledger, system)
+                )
 
-        resource.use { case (env, backend, nodeConfig, remoteL2Ledger, system) =>
-            for {
-                mrm <- MultisigRegimeManager.apply(nodeConfig, backend, remoteL2Ledger)
-                _ <- system.actorOf(mrm, "MultisigRegimeManager")
-                _ <- logger.info("Hydrozoa node started successfully")
+                // Attach cleanup to ActorSystem resource - env, backend, nodeConfig are in scope here
+                system <- ActorSystem[IO]("Hydrozoa Demo").onFinalize(
+                  logger.info("Hydrozoa node shut down, running janitor...") *>
+                      Janitor.cleanUp(
+                        backend = backend,
+                        headPeerWallet = nodeConfig.ownHeadWallet,
+                        config = nodeConfig.headConfig,
+                        faucetAddress = env.verificationKey.shelleyAddress()(using cardanoNetwork),
+                        tokenRecoveryAddress = env.tokenRecoveryAddress
+                      )
+                )
+            } yield (env, backend, nodeConfig, remoteL2Ledger, system)
 
-                // Start HTTP server once EventSequencer is available
-                _ <- mrm.connectionsDeferred.get.flatMap { connections =>
-                    val serverConfig = HydrozoaServer.Config(
-                      host = host"0.0.0.0",
-                      port = port"8080",
-                      adminUsername = env.adminUsername,
-                      adminPassword = env.adminPassword
-                    )
-                    logger.info("Starting HTTP server...") *>
-                        HydrozoaServer
-                            .create(
-                              connections.eventSequencer,
-                              connections.blockWeaver,
-                              nodeConfig.headConfig,
-                              serverConfig
-                            )
-                            .use(_ => IO.never)
-                            .start // Run in background
-                            .void
-                }
+            resource.use { case (env, backend, nodeConfig, remoteL2Ledger, system) =>
+                for {
+                    mrm <- MultisigRegimeManager.apply(nodeConfig, backend, remoteL2Ledger)
+                    _ <- system.actorOf(mrm, "MultisigRegimeManager")
+                    _ <- logger.info("Hydrozoa node started successfully")
 
-                _ <- system.waitForTermination
-            } yield ExitCode.Success
+                    // Start HTTP server once EventSequencer is available
+                    _ <- mrm.connectionsDeferred.get.flatMap { connections =>
+                        val serverConfig = HydrozoaServer.Config(
+                          host = host"0.0.0.0",
+                          port = port"8080",
+                          adminUsername = env.adminUsername,
+                          adminPassword = env.adminPassword
+                        )
+                        logger.info("Starting HTTP server...") *>
+                            HydrozoaServer
+                                .create(
+                                  connections.eventSequencer,
+                                  connections.blockWeaver,
+                                  nodeConfig.headConfig,
+                                  serverConfig
+                                )
+                                .use(_ => IO.never)
+                                .start // Run in background
+                                .void
+                    }
+
+                    _ <- system.waitForTermination
+                } yield ExitCode.Success
+            }
         }
 
 }
