@@ -158,7 +158,9 @@ final case class JointLedger(
         }
     } yield p
 
-    override def preStart: IO[Unit] = context.self ! Requests.PreStart
+    override def preStart: IO[Unit] =
+        Tracer.updateLocal(_.copy(logger = s"JointLedger.${config.ownHeadPeerNum}")) >>
+            (context.self ! Requests.PreStart)
 
     override def receive: Receive[IO, Requests.Request] = PartialFunction.fromFunction(receiveTotal)
 

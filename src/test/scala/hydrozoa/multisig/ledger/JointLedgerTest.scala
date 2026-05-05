@@ -146,7 +146,7 @@ object JointLedgerTestHelpers {
             consensusAgent <- PropertyM.run(system.actorOf(ConsensusAgent()))
 
             eutxoLedger <- PropertyM.run(EutxoL2Ledger(config))
-            jlTracerLocal <- PropertyM.run(Tracer.makeLocal("JointLedger"))
+            tracerLocal <- PropertyM.run(Tracer.makeLocal("JointLedgerTest"))
             jointLedger <- PropertyM.run(
               system.actorOf(
                 JointLedger(
@@ -157,7 +157,7 @@ object JointLedgerTestHelpers {
                   ),
                   eutxoLedger,
                   hydrozoa.lib.tracing.ProtocolTracer.noop,
-                  jlTracerLocal
+                  tracerLocal
                 )
               )
             )

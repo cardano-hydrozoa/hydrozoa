@@ -528,7 +528,6 @@ case class Suite(
                 jointLedgerConnections,
                 l2Ledger,
                 tracer,
-
                 tracerLocal
               )
             )

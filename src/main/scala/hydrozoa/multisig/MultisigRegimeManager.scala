@@ -79,11 +79,13 @@ trait MultisigRegimeManager(
             nodeId = s"head:${config.ownHeadPeerNum: Int}"
             tracer <- ProtocolTracer.jsonLines(nodeId)
             _ <- tracer.traceError(0, "foo", "bar")
+            tracerLocal <- Tracer.makeLocal(nodeId)
 
             _ <- logger.info("Starting multisig actors...")
 
-            blockWeaver <- context.actorOf(BlockWeaver(config, pendingConnections))
+            blockWeaver <- context.actorOf(BlockWeaver(config, pendingConnections, tracerLocal))
 
+            // TODO: I am not sure this is the proper way...
             cardanoLiaisonTracer <- Tracer.makeLocal("CardanoLiaison")
             cardanoLiaison <-
                 context.actorOf(
@@ -94,6 +96,7 @@ trait MultisigRegimeManager(
 
             eventSequencer <- context.actorOf(EventSequencer(config, pendingConnections))
 
+            // TODO: I am not sure this is the proper way...
             jointLedgerTracerLocal <- Tracer.makeLocal("JointLedger")
             jointLedger <- context.actorOf(
               JointLedger(config, pendingConnections, l2Ledger, tracer, jointLedgerTracerLocal)

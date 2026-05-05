@@ -13,5 +13,5 @@ lazy val generateNodeOperationMultisigConfig: Gen[NodeOperationMultisigConfig] =
         seconds <- Gen.choose(1, 1 * 60)
     } yield NodeOperationMultisigConfig(
       cardanoLiaisonPollingPeriod = seconds.seconds,
-      peerLiaisonMaxEventsPerBatch = PositiveInt(posNum).get
+      peerLiaisonMaxRequestsPerBatch = PositiveInt(posNum).get
     )
