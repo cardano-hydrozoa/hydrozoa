@@ -8,6 +8,7 @@ import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.cardano.scalus.ledger.{CollateralOutput, CollateralUtxo}
 import hydrozoa.lib.cardano.scalus.gens.Base
+import hydrozoa.lib.cardano.scalus.{Scalar => ScalusScalar}
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.commitment.TrustedSetup
@@ -56,6 +57,8 @@ object CommonGenerators {
             gen[CollateralOutput] +:
             gen(Focus[EvacuationTx](_.tx)) +:
             gen(ResolvedUtxos.empty) +:
+            listOfMinMax[ScalusScalar](64, 1024) +:
+            gen(genScalusScalar) +:
             gen(genDeadlineVoting) +:
             gen(unresolvedSetup) +:
             gen(genVersion) +:
@@ -146,6 +149,23 @@ object CommonGenerators {
 
     def genPositiveInt(genInt: Gen[Int]): Gen[PositiveInt] =
         genInt.flatMap(i => PositiveInt.apply(i).map(Gen.const).getOrElse(genPositiveInt(genInt)))
+    
+    def genScalarList: Gen[prelude.List[ScalusScalar]] =
+        for {
+            length <- Gen.choose(64, 1024)
+            list <- Gen.listOfN(length, genScalusScalar)
+        } yield prelude.List.from(list)
+
+    /** Generate a big enough (> 2^230) scalus.Scalar
+    */
+    def genScalusScalar: Gen[ScalusScalar] =
+        for {
+            bigInt <- Gen.choose(
+                BigInt("1000000000000000000000000000000000000000000000000000000000000000000000"),
+                ScalusScalar.fieldPrime - 1
+            )
+        } yield ScalusScalar.applyUnsafe(bigInt)
+
 }
 
 object CommonGeneratorsTypes:

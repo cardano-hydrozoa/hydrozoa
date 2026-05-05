@@ -3,7 +3,8 @@ package hydrozoa.rulebased.ledger.l1.tx
 import cats.effect.unsafe.implicits.global
 import hydrozoa.*
 import hydrozoa.config.HydrozoaBlueprint
-import hydrozoa.config.node.MultiNodeConfig
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.asG1Element
@@ -11,16 +12,13 @@ import hydrozoa.multisig.ledger.commitment.{KzgCommitment, Membership, TrustedSe
 import hydrozoa.multisig.ledger.eutxol2.toEvacuationMap
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Resolved
-import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.*
+import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.{gens as _, *}
 import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
-import monocle.*
 import monocle.syntax.all.*
-import org.scalacheck.Prop.propBoolean
 import org.scalacheck.{Arbitrary, Gen, Prop, Properties}
 import scalus.cardano.address.ShelleyPaymentPart.Key
-import scalus.cardano.address.{Network, ShelleyPaymentPart}
+import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.onchain.plutus.prelude
@@ -31,6 +29,27 @@ import supranational.blst.Scalar
 import test.*
 import test.Generators.Hydrozoa.genPubKeyUtxo
 import CommonGeneratorsTypes.*
+import registry.scalacheck.*
+
+private lazy val gens =
+    gen(genEvacuationTxBuild) +:
+        gen(genL2TransactionOutput) +:
+        CommonGenerators.gens
+
+def genL2TransactionOutput(config: CardanoNetwork.Section): Gen[TransactionOutput] =
+    for {
+        keyHash <- Arbitrary.arbitrary[AddrKeyHash]
+        coin <- Gen.choose(1_000_000L, 10_000_000L)
+    } yield TransactionOutput.Babbage(
+      address = ShelleyAddress(
+        network = config.network,
+        payment = Key(keyHash),
+        delegation = ShelleyDelegationPart.Null
+      ),
+      value = Value(Coin(coin)),
+      datumOption = None,
+      scriptRef = None
+    )
 
 /** Generator for resolved treasury UTXO with resolved datum */
 def genResolvedTreasuryUtxo(
@@ -77,11 +96,9 @@ def genTreasuryResolvedDatum(
 
 /** Generator for EvacuationTx transaction recipe */
 // Feel free to trim down the config argument
-def genEvacuationTxBuild(using config: MultiNodeConfig): Gen[EvacuationTx.Build] =
+def genEvacuationTxBuild(config: MultiNodeConfig): Gen[EvacuationTx.Build] =
+    given MultiNodeConfig = config
     for {
-        // Generate a set of L2 utxos via the registry. Network is pinned to the test config's
-        // network through `tweak[Network]`; the L2-shape `Gen[TransactionOutput]` registered
-        // in `CommonGenerators.gens` shadows Base's generic one (LIFO resolution).
         Right(evacMap) <- gens
             .make[Gen[Utxos]]
             .map(_.toEvacuationMap(config.headConfig))
@@ -161,25 +178,20 @@ def genEvacuationTxBuild(using config: MultiNodeConfig): Gen[EvacuationTx.Build]
       collateralUtxo = collateralUtxo
     )
 
-def genMembershipCheck
+def genMembershipCheck(scalars: List[ScalusScalar])
     : Gen[(prelude.List[ScalusScalar], BLS12_381_G1_Element, BLS12_381_G1_Element)] =
+    val identityBlst = prelude.List.from(
+        scalars.map(ss => Scalar().from_bendian(ss._1.toByteArray))
+    )
+    val commitmentPoint = KzgCommitment.calculateKzgCommitment(identityBlst)
+    val commitmentG1 = commitmentPoint.asG1Element
+
     for {
-        // Acc elements
-        length <- Gen.choose(64, 1024)
-        identity <- Gen.listOfN(length, Arbitrary.arbitrary[ScalusScalar])
-        identityBlst = prelude.List.from(
-          identity.map(ss => Scalar().from_bendian(ss._1.toByteArray))
-        )
-
-        // Accumulator
-        commitmentPoint = KzgCommitment.calculateKzgCommitment(identityBlst)
-        commitmentG1 = commitmentPoint.asG1Element
-
         // Subset
-        subset <- Gen.pick(Integer.min(1, 64), identity)
+        subset <- Gen.pick(Integer.min(1, 64), scalars)
 
         // Proof
-        theRest = identity.diff(subset) // I don't like the name, but diff is disjoint
+        theRest = scalars.diff(subset) // I don't like the name, but diff is disjoint
         theRestBlst = prelude.List.from(
           theRest.map(ss => Scalar().from_bendian(ss._1.toByteArray))
         )
@@ -189,17 +201,6 @@ def genMembershipCheck
 
     } yield (prelude.List.from(subset), commitmentG1, proofG1)
 
-// TODO: upstream
-// Arbitrary instance for ScalusScalar that generates big enough (> 2^230) values
-given Arbitrary[ScalusScalar] = Arbitrary {
-    for {
-        bigInt <- Gen.choose(
-          BigInt("1000000000000000000000000000000000000000000000000000000000000000000000"),
-          ScalusScalar.fieldPrime - 1
-        )
-    } yield ScalusScalar.applyUnsafe(bigInt)
-}
-
 object EvacuationTxTest extends Properties("EvacuationTx Test") {
     import MultiNodeConfig.*
 
@@ -207,9 +208,9 @@ object EvacuationTxTest extends Properties("EvacuationTx Test") {
       "EvacuationTx builds successfully with valid recipe"
     ) = runDefault(
       for {
-          env <- ask
-          builder <- pick(genEvacuationTxBuild(using env))
-          evacuationTx <- failLeft(builder.result(using env.nodeConfigs.head._2))
+          nc <- forAll[NodeConfig](gens)
+          builder <- forAll[EvacuationTx.Build](gens)
+          evacuationTx <- failLeft(builder.result(using nc))
           _ <- assertWith(
             evacuationTx.treasuryUtxoSpent == builder.treasuryUtxo,
             "Spent treasury UTXO should match recipe input"
@@ -238,8 +239,9 @@ object EvacuationTxTest extends Properties("EvacuationTx Test") {
     )
 
     val _ = property("Partial membership proofs check") =
-        Prop.forAll(genMembershipCheck)((subset, commitmentG1, proof) =>
-
+        val r = gen(genMembershipCheck) +: gens
+        val tupleGen = r.makeGen[(prelude.List[ScalusScalar], BLS12_381_G1_Element, BLS12_381_G1_Element)]
+        Prop.forAll(tupleGen)((subset, commitmentG1, proof) =>
             // Pre-calculated powers of tau
             val crsG2 =
                 TrustedSetup.takeSrsG2(subset.length.toInt + 1).map(BLS12_381_G2_Element.apply)
