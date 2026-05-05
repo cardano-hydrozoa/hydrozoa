@@ -118,7 +118,7 @@ enum UserRequestBody {
             case UserRequestBody.TransactionRequestBody(l2Payload) => l2Payload
         }
 
-        println(s"preimage: $preimage")
+        // println(s"preimage: $preimage")
 
         preimage |> blake2b_256 |> Hash.apply
     }

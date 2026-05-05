@@ -470,7 +470,7 @@ case class Suite(
 
             // Cardano liaison
             cardanoLiaison <- system.actorOf(
-              CardanoLiaison(nodeConfig, cardanoBackend, CardanoLiaison.Connections(blockWeaver))
+              CardanoLiaison(nodeConfig, cardanoBackend, CardanoLiaison.Connections(blockWeaver), tracerLocal)
             )
 
             // Event sequencer stub
@@ -495,7 +495,9 @@ case class Suite(
                 nodeConfig,
                 jointLedgerConnections,
                 l2Ledger,
-                tracer
+                tracer,
+
+                tracerLocal
               )
             )
 

@@ -7,6 +7,7 @@ import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.DepositAbsorpt
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.lib.logging.{Level, LogEvent, Traced}
 import hydrozoa.multisig.ledger.commitment.KzgCommitment
 import io.circe.*
 import io.circe.generic.semiauto.*
@@ -149,33 +150,40 @@ object BlockHeader {
                 newEndTime: BlockCreationEndTime,
                 mAbsorptionStartTime: Option[DepositAbsorptionStartTime],
                 newKzgCommitment: KzgCommitment
-            ): BlockHeader.Intermediate =
-                if txTiming.blockCanStayMinor(newEndTime, fallbackTxStartTime)
-                then
-                    nextHeaderMinor(
-                      newStartTime,
-                      newEndTime,
-                      mAbsorptionStartTime,
-                      newKzgCommitment
-                    )
-                else
-                    nextHeaderMajor(
-                      txTiming,
-                      newStartTime,
-                      newEndTime,
-                      mAbsorptionStartTime,
-                      newKzgCommitment
-                    )
+            ): Traced[BlockHeader.Intermediate] = {
+                val (canStayMinor, timingEvents) =
+                    txTiming.blockCanStayMinor(newEndTime, fallbackTxStartTime)
+                if canStayMinor then {
+                    val (header, headerEvents) =
+                        nextHeaderMinor(
+                          newStartTime,
+                          newEndTime,
+                          mAbsorptionStartTime,
+                          newKzgCommitment
+                        )
+                    (header, timingEvents ++ headerEvents)
+                } else {
+                    val (header, headerEvents) =
+                        nextHeaderMajor(
+                          txTiming,
+                          newStartTime,
+                          newEndTime,
+                          mAbsorptionStartTime,
+                          newKzgCommitment
+                        )
+                    (header, timingEvents ++ headerEvents)
+                }
+            }
 
             final def nextHeaderMinor(
                 newStartTime: BlockCreationStartTime,
                 newEndTime: BlockCreationEndTime,
                 mAbsorptionStartTime: Option[DepositAbsorptionStartTime],
                 newKzgCommitment: KzgCommitment
-            ): BlockHeader.Minor = {
+            ): Traced[BlockHeader.Minor] = {
                 val newMajorBlockWakeupTime =
                     TxTiming.majorBlockWakeupTime(majorBlockWakeupTime, mAbsorptionStartTime)
-                BlockHeader.Minor(
+                val header = BlockHeader.Minor(
                   blockNum = blockNum.increment,
                   blockVersion = blockVersion.incrementMinor,
                   startTime = newStartTime,
@@ -183,6 +191,16 @@ object BlockHeader {
                   fallbackTxStartTime = fallbackTxStartTime,
                   majorBlockWakeupTime = newMajorBlockWakeupTime,
                   kzgCommitment = newKzgCommitment
+                )
+                (
+                  header,
+                  List(
+                    LogEvent(
+                      Level.Trace,
+                      s"nextHeaderMinor: majorBlockWakeupTime=$newMajorBlockWakeupTime",
+                      logger = "BlockHeader"
+                    )
+                  )
                 )
             }
 
@@ -192,12 +210,12 @@ object BlockHeader {
                 newEndTime: BlockCreationEndTime,
                 mAbsorptionStartTime: Option[DepositAbsorptionStartTime],
                 newKzgCommitment: KzgCommitment
-            ): BlockHeader.Major = {
+            ): Traced[BlockHeader.Major] = {
                 val newFallbackStartTime = txTiming.newFallbackStartTime(newEndTime)
                 val newForcedMajorBlockTime = txTiming.forcedMajorBlockTime(newFallbackStartTime)
                 val newMajorBlockWakeupTime =
                     TxTiming.majorBlockWakeupTime(newForcedMajorBlockTime, mAbsorptionStartTime)
-                BlockHeader.Major(
+                val header = BlockHeader.Major(
                   blockNum = blockNum.increment,
                   blockVersion = blockVersion.incrementMajor,
                   startTime = newStartTime,
@@ -205,6 +223,16 @@ object BlockHeader {
                   fallbackTxStartTime = newFallbackStartTime,
                   majorBlockWakeupTime = newMajorBlockWakeupTime,
                   kzgCommitment = newKzgCommitment
+                )
+                (
+                  header,
+                  List(
+                    LogEvent(
+                      Level.Trace,
+                      s"nextHeaderMajor: newEndTime=$newEndTime, newFallbackStartTime=$newFallbackStartTime, newForcedMajorBlockTime=$newForcedMajorBlockTime, majorBlockWakeupTime=$newMajorBlockWakeupTime",
+                      logger = "BlockHeader"
+                    )
+                  )
                 )
             }
         }

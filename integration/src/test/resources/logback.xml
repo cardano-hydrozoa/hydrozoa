@@ -1,7 +1,7 @@
 <configuration>
     <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
-            <pattern> %highlight(%-5level) %cyan(%logger{64}) %n%msg%n
+            <pattern>%d{HH:mm:ss.SSS} %highlight(%-5level) %cyan(%logger{64}) %n%msg%n
             </pattern>
         </encoder>
     </appender>
@@ -9,7 +9,7 @@
         <file>integration-tests.log</file>
         <append>false</append>
         <encoder>
-            <pattern> %-5level %logger{64} %n%msg%n
+            <pattern>%d{HH:mm:ss.SSS} %-5level %logger{64} %n%msg%n
             </pattern>
         </encoder>
     </appender>
@@ -17,13 +17,13 @@
         <appender-ref ref="STDOUT"/>
         <appender-ref ref="FILE"/>
     </root>
-    <logger name="org.scalacheck.commands.ModelBasedSuite" level="trace"/>
-    <logger name="Stage1.Commands" level="warn"/>
-    <logger name="Stage1.CommandGenerators" level="trace"/>
+    <logger name="org.scalacheck.commands.ModelBasedSuite" level="info"/>
+    <logger name="Stage1.Commands" level="info"/>
+    <logger name="Stage1.CommandGenerators" level="warn"/>
     <logger name="Stage1.ScenarioGenerators" level="warn"/>
-    <logger name="Stage1.Model" level="trace"/>
-    <logger name="Stage1.Sut" level="trace"/>
-    <logger name="Stage1.Suite" level="trace"/>
+    <logger name="Stage1.Model" level="warn"/>
+    <logger name="Stage1.Sut" level="debug"/>
+    <logger name="Stage1.Suite" level="warn"/>
     <logger name="CardanoLiaison" level="trace"/>
     <logger name="JointLedger" level="trace"/>
     <logger name="test.CardanoBackendMock" level="trace"/>

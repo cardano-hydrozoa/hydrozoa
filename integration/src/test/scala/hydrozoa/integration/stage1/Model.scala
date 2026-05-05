@@ -45,6 +45,7 @@ import hydrozoa.multisig.ledger.remote.RemoteL2LedgerCodecs.given
 import monocle.syntax.all.focus
 import org.scalacheck.commands.ModelCommand
 import scalus.cardano.ledger.{AssetName, KeepRaw, SlotConfig, Transaction, TransactionHash, TransactionInput, TransactionOutput, Utxos}
+import hydrozoa.lib.logging.value
 
 import scala.collection.immutable.{Queue, TreeMap}
 import scala.concurrent.duration.FiniteDuration
@@ -722,7 +723,7 @@ object Model:
                 blockCanStayMinor = state.multiNodeConfig.txTiming.blockCanStayMinor(
                   blockEndTime,
                   state.competingFallbackStartTime
-                )
+                ).value
 
                 hasWithdrawals = accumulator.exists(_._2 match {
                     case e: L2Tx => e.l1utxos.nonEmpty
