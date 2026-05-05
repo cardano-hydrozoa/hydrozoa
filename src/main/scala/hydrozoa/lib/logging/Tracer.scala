@@ -11,7 +11,7 @@ case class LogEvent(
     msg: String,
     ctx: Map[String, String] = Map.empty,
     cause: Option[Throwable] = None,
-    logger: String = "gummiworm"
+    logger: String = "hydrozoa"
 )
 
 /** Contravariant logger: a function that emits a [[LogEvent]] into IO.
@@ -56,7 +56,7 @@ object Tracer:
 
     /** Seeds the local with [[base]] pre-configured to route to [[name]] unless overridden. */
     def makeLocal(name: String): IO[IOLocal[Tracer]] =
-        IOLocal(ev => base(ev.copy(logger = if ev.logger == "gummiworm" then name else ev.logger)))
+        IOLocal(ev => base(ev.copy(logger = if ev.logger == "hydrozoa" then name else ev.logger)))
 
     /** Permanently contramaps the ambient tracer — no scope, no restore.
       *

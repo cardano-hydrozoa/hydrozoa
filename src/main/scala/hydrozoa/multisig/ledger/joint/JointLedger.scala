@@ -164,17 +164,21 @@ final case class JointLedger(
 
     override def receive: Receive[IO, Requests.Request] = PartialFunction.fromFunction(receiveTotal)
 
-    private def receiveTotal(req: Requests.Request): IO[Unit] = req match {
-        case Requests.PreStart       => preStartLocal
-        case e: UserRequestWithId    => applyUserRequestWithId(e)
-        case s: StartBlock           => startBlock(s)
-        case c: CompleteBlockRegular => completeBlockRegular(c)
-        case f: CompleteBlockFinal   => completeBlockFinal(f)
-        case req: SyncRequest.Any =>
-            req.request match {
-                case r: GetState.type => r.handleSync(req, _ => state.get)
+    private def receiveTotal(req: Requests.Request): IO[Unit] = {
+        Tracer.scoped(_.copy(logger = "JointLedger")) {
+            req match {
+                case Requests.PreStart       => preStartLocal
+                case e: UserRequestWithId    => applyUserRequestWithId(e)
+                case s: StartBlock           => startBlock(s)
+                case c: CompleteBlockRegular => completeBlockRegular(c)
+                case f: CompleteBlockFinal   => completeBlockFinal(f)
+                case req: SyncRequest.Any =>
+                    req.request match {
+                        case r: GetState.type => r.handleSync(req, _ => state.get)
+                    }
+                case p: Block.MultiSigned.Next => proxyConfirmation(p)
             }
-        case p: Block.MultiSigned.Next => proxyConfirmation(p)
+        }
     }
 
     // QUESTION: This gets sent from the consensus actor, but the consensus actor has the full ability to send it
@@ -375,6 +379,7 @@ final case class JointLedger(
         Tracer.scopedCtx("blockNum" -> s"${args.blockNum: Int}") {
             for {
                 _ <- Tracer.info(s"start block: ${args.blockNum}...")
+                _ <- Tracer.trace(s"blockCreationStartTime=$blockCreationStartTime")
                 d <- unsafeGetDone
                 newState = d.producing(
                   l2LedgerState = L2LedgerState.empty,
@@ -400,6 +405,11 @@ final case class JointLedger(
             Tracer.scopedCtx("blockNum" -> s"${p.nextBlockNumber: Int}") {
                 for {
                     _ <- Tracer.info(s"completing block ${p.nextBlockNumber}")
+                    _ <- Tracer.trace(s"blockCreationEndTime=$blockCreationEndTime")
+                    _ <- Tracer.trace(s"competingFallbackTxTime=${p.competingFallbackTxTime}")
+                    _ <- Tracer.trace(
+                      s"settlementTxEndTime=${config.txTiming.newSettlementEndTime(p.competingFallbackTxTime)}"
+                    )
 
                     partition = p.l1LedgerState.deposits.partition(
                       blockCreationEndTime = blockCreationEndTime,
@@ -468,7 +478,7 @@ final case class JointLedger(
                   s"mkBlockBrief: competingFallbackValidityStart=${p.competingFallbackTxTime}\n" +
                   s"mkBlockBrief: events=$events\n" +
                   s"mkBlockBrief: decisions.absorbed=${decisions.absorbed.requestIds}\n" +
-                  s"mkBlockBrief: decisions.rejected=${decisions.rejected.requestIds}"
+                  s"mkBlockBrief: decisions.refunded=${decisions.refunded.requestIds}"
             )
 
             depositEventDecisions: L2LedgerCommand.ApplyDepositDecisions =
@@ -476,7 +486,7 @@ final case class JointLedger(
                   blockNumber = p.nextBlockNumber,
                   blockCreationEndTime = blockCreationEndTime.toPosixTime,
                   absorbedDeposits = decisions.absorbed.requestIds,
-                  rejectedDeposits = decisions.rejected.requestIds
+                  refundedDeposits = decisions.refunded.requestIds
                 )
 
             // Block header
@@ -486,7 +496,7 @@ final case class JointLedger(
                     val newEvacuationMap = applyDiffs(p.evacuationMap, p.l2LedgerState.diffs)
                     for {
                         newL2State <-
-                            if decisions.rejected.isEmpty then IO.pure(p.l2LedgerState)
+                            if decisions.refunded.isEmpty then IO.pure(p.l2LedgerState)
                             else executeL2Command(p, depositEventDecisions)
                         _ <- Tracer.trace(s"New evacuation map: ${newEvacuationMap.evacuationMap}")
 
@@ -536,13 +546,13 @@ final case class JointLedger(
             // Block brief
             blockBrief: BlockBrief.Intermediate = headerIntermediate match {
                 case header: BlockHeader.Minor =>
-                    val blockBody = BlockBody.Minor(events, decisions.rejected.requestIds)
+                    val blockBody = BlockBody.Minor(events, decisions.refunded.requestIds)
                     BlockBrief.Minor(header, blockBody)
                 case header: BlockHeader.Major =>
                     val blockBody = BlockBody.Major(
                       events,
                       decisions.absorbed.requestIds,
-                      decisions.rejected.requestIds
+                      decisions.refunded.requestIds
                     )
                     BlockBrief.Major(header, blockBody)
             }

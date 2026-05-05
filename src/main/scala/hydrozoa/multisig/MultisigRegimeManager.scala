@@ -85,15 +85,21 @@ trait MultisigRegimeManager(
 
             blockWeaver <- context.actorOf(BlockWeaver(config, pendingConnections, tracerLocal))
 
+            // TODO: I am not sure this is the proper way...
+            cardanoLiaisonTracer <- Tracer.makeLocal("CardanoLiaison")
             cardanoLiaison <-
-                context.actorOf(CardanoLiaison(config, cardanoBackend, pendingConnections))
+                context.actorOf(
+                  CardanoLiaison(config, cardanoBackend, pendingConnections, cardanoLiaisonTracer)
+                )
 
             consensusActor <- context.actorOf(ConsensusActor(config, pendingConnections))
 
             eventSequencer <- context.actorOf(EventSequencer(config, pendingConnections))
 
+            // TODO: I am not sure this is the proper way...
+            jointLedgerTracerLocal <- Tracer.makeLocal("JointLedger")
             jointLedger <- context.actorOf(
-              JointLedger(config, pendingConnections, l2Ledger, tracer, tracerLocal)
+              JointLedger(config, pendingConnections, l2Ledger, tracer, jointLedgerTracerLocal)
             )
 
             localPeerLiaisons <-

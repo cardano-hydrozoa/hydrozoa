@@ -159,7 +159,13 @@ class CardanoBackendBlockfrostTest extends AnyFunSuite {
         val ret = runWithKey(key =>
             for {
                 backend <- CardanoBackendBlockfrost(
-                  Right((CardanoNetwork.Custom(CardanoInfo.mainnet), "https://not-blockforst.net")),
+                  Right(
+                    (
+                      CardanoNetwork
+                          .Custom(CardanoInfo.mainnet, CardanoNetwork.Mainnet.protocolMagic),
+                      "https://not-blockforst.net"
+                    )
+                  ),
                   key
                 )
                 txInfo <- backend.isTxKnown(

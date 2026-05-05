@@ -114,7 +114,7 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
                     for
                         blockWeaver <- system.actorOf(BlockWeaver(nodeConfig, pending, tracerLocal))
                         cardanoLiaison <- system.actorOf(
-                          CardanoLiaison(nodeConfig, cardanoBackend, pending)
+                          CardanoLiaison(nodeConfig, cardanoBackend, pending, tracerLocal)
                         )
                         eventSequencer <- system.actorOf(EventSequencer(nodeConfig, pending))
                         l2Ledger <- EutxoL2Ledger(nodeConfig)
