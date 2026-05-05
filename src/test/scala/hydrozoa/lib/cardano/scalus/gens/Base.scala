@@ -10,7 +10,7 @@ import _root_.scalus.cardano.onchain.plutus.v1.PubKeyHash
 import org.scalacheck.Gen
 import org.scalacheck.Arbitrary.arbitrary
 import registry.value
-import registry.scalacheck.*
+import registry.scalacheck.{Sized => _, *}
 
 import scala.collection.immutable.SortedMap
 
@@ -317,7 +317,7 @@ object Base:
     // Recursive Gen[Timelock]: the `grow` function picks among the recursive variants
     // (AllOf / AnyOf / MOf), each of which embeds an `IndexedSeq[Timelock]` resolved
     // through `self`.
-    val genTimelock = genRecursive[Timelock] { self =>
+    val genTimelock = genRec[Timelock] { self =>
         Gen.oneOf(
           Gen.listOf(self).map(xs => Timelock.AllOf(xs.toIndexedSeq)),
           Gen.listOf(self).map(xs => Timelock.AnyOf(xs.toIndexedSeq)),
@@ -329,8 +329,8 @@ object Base:
     } *: gen(genTimelockLeaf)
 
     /** Leaf-only `Timelock` generator — the three non-recursive variants. Used as the base case by
-      * the `genRecursive[Timelock]` entry above; the recursive variants (AllOf / AnyOf / MOf) are
-      * produced by `genRecursive`'s `grow` function, which threads `self` through.
+      * the `genRec[Timelock]` entry above; the recursive variants (AllOf / AnyOf / MOf) are
+      * produced by `genRec`'s `grow` function, which threads `self` through.
       */
     def genTimelockLeaf(addrKeyHash: AddrKeyHash, slot: Slot): Gen[Timelock] =
         Gen.oneOf[Timelock](

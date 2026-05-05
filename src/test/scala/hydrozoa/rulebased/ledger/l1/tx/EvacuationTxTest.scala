@@ -83,7 +83,6 @@ def genEvacuationTxBuild(using config: MultiNodeConfig): Gen[EvacuationTx.Build]
         // network through `tweak[Network]`; the L2-shape `Gen[TransactionOutput]` registered
         // in `CommonGenerators.gens` shadows Base's generic one (LIFO resolution).
         Right(evacMap) <- gens
-            .tweak[Network](_ => config.headConfig.network)
             .make[Gen[Utxos]]
             .map(_.toEvacuationMap(config.headConfig))
         _ = println(s"evac map: ${evacMap.size}")
