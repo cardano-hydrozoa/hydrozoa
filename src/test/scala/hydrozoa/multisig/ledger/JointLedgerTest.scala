@@ -17,6 +17,7 @@ import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.lib.cardano.scalus.QuantizedTime.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.ledger.stripVKeyWitnesses
+import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.pollresults.PollResults
@@ -145,6 +146,7 @@ object JointLedgerTestHelpers {
             consensusAgent <- PropertyM.run(system.actorOf(ConsensusAgent()))
 
             eutxoLedger <- PropertyM.run(EutxoL2Ledger(config))
+            jlTracerLocal <- PropertyM.run(Tracer.makeLocal("JointLedger"))
             jointLedger <- PropertyM.run(
               system.actorOf(
                 JointLedger(
@@ -154,7 +156,8 @@ object JointLedgerTestHelpers {
                     peerLiaisons = List()
                   ),
                   eutxoLedger,
-                  hydrozoa.lib.tracing.ProtocolTracer.noop
+                  hydrozoa.lib.tracing.ProtocolTracer.noop,
+                  jlTracerLocal
                 )
               )
             )

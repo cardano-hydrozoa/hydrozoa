@@ -45,6 +45,7 @@ import hydrozoa.multisig.ledger.remote.RemoteL2LedgerCodecs.given
 import monocle.syntax.all.focus
 import org.scalacheck.commands.ModelCommand
 import scalus.cardano.ledger.{AssetName, KeepRaw, SlotConfig, Transaction, TransactionHash, TransactionInput, TransactionOutput, Utxos}
+import hydrozoa.lib.logging.value
 
 import scala.collection.immutable.{Queue, TreeMap}
 import scala.concurrent.duration.FiniteDuration
@@ -69,6 +70,11 @@ object Model:
         multiNodeConfig: MultiNodeConfig,
 
         padding : FiniteDuration,
+
+        // The real-world instant at which the SUT should start processing commands.
+        // None for mock mode (time is controlled via TestControl).
+        // Some(t) for Yaci/public: startupSut sleeps until t, or aborts if t is already past.
+        takeoffTime: Option[java.time.Instant],
 
         // Pre-initial state of the peer's L1 utxos.
         // It's needed since [[peerUtxosL1]] reflects the state after applying the initialization tx.
@@ -722,7 +728,7 @@ object Model:
                 blockCanStayMinor = state.multiNodeConfig.txTiming.blockCanStayMinor(
                   blockEndTime,
                   state.competingFallbackStartTime
-                )
+                ).value
 
                 hasWithdrawals = accumulator.exists(_._2 match {
                     case e: L2Tx => e.l1utxos.nonEmpty
