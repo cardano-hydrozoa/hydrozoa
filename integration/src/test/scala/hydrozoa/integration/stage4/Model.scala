@@ -65,6 +65,10 @@ object Model {
 
         // Per-peer deposits registered but not yet absorbed
         pendingDeposits: Map[HeadPeerNumber, List[PendingDeposit]],
+
+        // Validity flag the model assigned to each user request, in submission order. Used at
+        // shutdown to compare model's submission-order verdict against SUT's block-order verdict.
+        modelFlags: Map[RequestId, ValidityFlag],
     ) {
         override def toString: String = "<stage4 model state (hidden)>"
 
@@ -176,6 +180,7 @@ object Model {
               utxosL2Active = newL2Utxos,
               nextRequestNumbers = stateAfterTime.nextRequestNumbers +
                   (peerNum -> stateAfterTime.nextRequestNumbers(peerNum).increment),
+              modelFlags = stateAfterTime.modelFlags + (cmd.request.requestId -> flag),
             )
     }
 
@@ -213,6 +218,8 @@ object Model {
               nextRequestNumbers = stateAfterTime.nextRequestNumbers +
                   (peerNum -> stateAfterTime.nextRequestNumbers(peerNum).increment),
               peerUtxosL1 = stateAfterTime.peerUtxosL1 + (peerNum -> updatedPeerL1),
+              modelFlags =
+                  stateAfterTime.modelFlags + (cmd.request.requestId -> ValidityFlag.Valid),
             )
     }
 

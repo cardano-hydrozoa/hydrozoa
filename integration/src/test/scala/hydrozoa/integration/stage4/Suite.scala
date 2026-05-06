@@ -253,13 +253,13 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
             _ <- IO.sleep(100.millis) // settle: let the drainer consume any last-cycle errors
             _ <- sut.errorDrainer.cancel
             errors <- sut.sutErrors.get
-            oracleProp <- analyzeBlockBriefs(sut)
+            analysisProp <- analyzeBlockBriefs(lastState, sut)
         yield
             if errors.nonEmpty then
                 Prop.exception(RuntimeException(s"SUT actor errors:\n${errors.mkString("\n")}"))
-            else oracleProp
+            else analysisProp
 
-    private def analyzeBlockBriefs(sut: Stage4Sut): IO[Prop] = for
+    private def analyzeBlockBriefs(lastState: ModelState, sut: Stage4Sut): IO[Prop] = for
         briefsByPeer <- sut.blockBriefs.toList
             .traverse { case (p, ref) => ref.get.map(p -> _) }
             .map(_.toMap)
@@ -303,24 +303,36 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
 
             println(divider)
 
-            val totalEvents = canonicalBriefs.map(_.events.length).sum
-            val totalValid = canonicalBriefs.flatMap(_.events).count(_._2 == ValidityFlag.Valid)
-            val totalInvalid = totalEvents - totalValid
-            val validPct = if totalEvents == 0 then 0.0 else totalValid.toDouble / totalEvents * 100
+            // SUT processing order — each block contributes its absorbed deposits, then its events.
+            val sutOrder: Vector[RequestId] =
+                canonicalBriefs.flatMap(b => b.depositsAbsorbed ++ b.events.map(_._1)).toVector
 
-            val processedIds =
-                canonicalBriefs.flatMap(b => b.events.map(_._1) ++ b.depositsAbsorbed).toSet
-            val commonPrefixLen = submittedIds.takeWhile(processedIds.contains).length
+            // Common-prefix length: position-by-position match between submission order and SUT
+            // processing order. If all submitted ids land in the same positions in the SUT order
+            // (commonPrefixLen == submittedIds.size), the SUT preserved order and replay against
+            // block-order isn't needed.
+            val commonPrefixLen =
+                submittedIds.zip(sutOrder).takeWhile { case (a, b) => a == b }.length
 
-            println(
-              f"Total: $totalEvents events in ${canonicalBriefs.length} blocks — valid=$totalValid ($validPct%.1f%%)  invalid=$totalInvalid"
-            )
+            // Model verdicts (submission order) vs SUT verdicts (block order).
+            val modelValid = lastState.modelFlags.values.count(_ == ValidityFlag.Valid)
+            val modelTotal = lastState.modelFlags.size
+            val sutEvents = canonicalBriefs.flatMap(_.events)
+            val sutValid = sutEvents.count(_._2 == ValidityFlag.Valid)
+            val sutTotal = sutEvents.size
+
             println(
               s"Peers: ${sortedPeers.map(p => s"p${p: Int}=${briefsByPeer(p).length}blks").mkString("  ")}"
             )
             println(
-              s"Common prefix: $commonPrefixLen / ${submittedIds.length} submitted IDs in block order"
+              s"Common prefix: $commonPrefixLen / ${submittedIds.length} (submission order vs SUT block order)"
             )
+            println(
+              s"Valid/total — model: $modelValid/$modelTotal  SUT: $sutValid/$sutTotal"
+            )
+            if commonPrefixLen == submittedIds.length then
+                println("SUT preserved submission order — replay not needed.")
+            else println("SUT diverged from submission order — replay required to verify.")
             println(
               "Legend: Min=Minor Maj=Major v=version lead=leader p=peer r=requestNum V=valid I=invalid abs=deposit-absorbed ref=refunded"
             )
@@ -411,4 +423,5 @@ object Stage4Suite:
           peerUtxosL1 = peerUtxosL1,
           nextRequestNumbers = peers.map(_ -> RequestNumber(0)).toMap,
           pendingDeposits = peers.map(_ -> Nil).toMap,
+          modelFlags = Map.empty,
         )
