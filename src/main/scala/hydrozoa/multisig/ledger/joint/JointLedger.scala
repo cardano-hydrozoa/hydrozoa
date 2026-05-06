@@ -778,6 +778,13 @@ final case class JointLedger(
             _ <- IO.traverse_(acks)(ack => conn.consensusActor ! ack)
         } yield ()
 
+    // TODO: classify the mismatch instead of emitting a generic "consensus is broken" panic.
+    //   One specific subcase worth singling out is "a deposit absorbed by the leader was not
+    //   found onchain by this peer": the leader's brief lists `depositsAbsorbed` containing a
+    //   request whose deposit utxo is missing from this peer's pollResults — i.e. the peer
+    //   would have classified that deposit as `NotInPollResults` (refunded) and produced a
+    //   different block. This typically reflects a polling cadence violating the
+    //   `cardanoLiaisonPollingPeriodSafetyFactor` invariant on `TxTiming`.
     private def panicOnMismatchWithExpectedBlock(
         expectedBlockBrief: Option[BlockBrief],
         actualBlock: Block

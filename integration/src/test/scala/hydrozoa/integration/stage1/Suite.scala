@@ -363,7 +363,9 @@ case class Suite(
 
             _ = logger.debug(s"peerL1GenesisUtxos: ${peerL1GenesisUtxos}")
 
-            operationalMultisigConfig <- generateNodeOperationMultisigConfig
+            operationalMultisigConfig <- generateNodeOperationMultisigConfig(
+              config.headConfig.maxCardanoLiaisonPollingPeriod
+            )
             operationalLiquidationConfig <- generateNodeOperationEvacuationConfig(
               testPeers.walletFor(Alice)
             )
