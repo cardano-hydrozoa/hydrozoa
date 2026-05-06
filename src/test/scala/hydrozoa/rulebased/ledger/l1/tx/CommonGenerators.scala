@@ -8,14 +8,14 @@ import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.cardano.scalus.ledger.{CollateralOutput, CollateralUtxo}
 import hydrozoa.lib.cardano.scalus.gens.Base
-import hydrozoa.lib.cardano.scalus.{Scalar => ScalusScalar}
+import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.commitment.TrustedSetup
 import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.{Resolved, Unresolved}
 import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
@@ -35,6 +35,7 @@ import test.*
 import registry.*
 import registry.scalacheck.*
 import CommonGeneratorsTypes.*
+import scalus.uplc.builtin.ByteString.hex
 
 /** Common test generators for rule-based transaction tests.
   */
@@ -149,7 +150,7 @@ object CommonGenerators {
 
     def genPositiveInt(genInt: Gen[Int]): Gen[PositiveInt] =
         genInt.flatMap(i => PositiveInt.apply(i).map(Gen.const).getOrElse(genPositiveInt(genInt)))
-    
+
     def genScalarList: Gen[prelude.List[ScalusScalar]] =
         for {
             length <- Gen.choose(64, 1024)
@@ -205,4 +206,11 @@ object CommonGeneratorsTypes:
           deadlineVoting,
           versionMajor,
           setup
+        )
+
+    def genTreasuryResolvedDatum(version: Version): Gen[Resolved] =
+        Resolved (
+            evacuationActive = hex"97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb",
+            version,
+            setup = prelude.List.empty
         )

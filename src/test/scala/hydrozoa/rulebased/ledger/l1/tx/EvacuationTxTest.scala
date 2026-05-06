@@ -13,7 +13,7 @@ import hydrozoa.multisig.ledger.eutxol2.toEvacuationMap
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Resolved
-import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.{gens as _, *}
+import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.{gens as _, genCollateralUtxo}
 import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import monocle.syntax.all.*
 import org.scalacheck.{Arbitrary, Gen, Prop, Properties}
@@ -29,6 +29,7 @@ import supranational.blst.Scalar
 import test.*
 import test.Generators.Hydrozoa.genPubKeyUtxo
 import CommonGeneratorsTypes.*
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import registry.scalacheck.*
 
 private lazy val evacuationGens =
@@ -53,6 +54,7 @@ def genL2TransactionOutput(config: CardanoNetwork.Section): Gen[TransactionOutpu
 
 /** Generator for resolved treasury UTXO with resolved datum */
 def genResolvedTreasuryUtxo(
+    version: Version,
     fallbackTxId: TransactionHash,
     headMp: PolicyId,
     beaconTokenName: TokenName,
@@ -61,7 +63,7 @@ def genResolvedTreasuryUtxo(
     network: Network
 ): Gen[RuleBasedTreasuryUtxo] =
     for {
-        treasuryDatum <- genTreasuryResolvedDatum(headMp, utxosCommitment, setupSize)
+        treasuryDatum <- genTreasuryResolvedDatum(version, headMp, utxosCommitment, setupSize)
         // Min ada for the beacon token and the datum
         coin <- Gen.const(5_000_000L)
         value = Value(Coin(coin)) + Value.asset(headMp, AssetName(beaconTokenName), 1)
@@ -78,12 +80,12 @@ def genResolvedTreasuryUtxo(
 
 /** Generator for resolved treasury datum */
 def genTreasuryResolvedDatum(
+    version: Version,
     headMp: PolicyId,
     utxosCommitment: KzgCommitment.KzgCommitment,
     setupSize: Int
-): Gen[Resolved] =
+): Gen[RuleBasedTreasuryDatum.Resolved] =
     for {
-        version <- evacuationGens.make[Gen[Version]]
         params <- genByteStringOfN(32)
         setup = TrustedSetup
             .takeSrsG2(setupSize)
@@ -96,7 +98,7 @@ def genTreasuryResolvedDatum(
 
 /** Generator for EvacuationTx transaction recipe */
 // Feel free to trim down the config argument
-def genEvacuationTxBuild(config: MultiNodeConfig): Gen[EvacuationTx.Build] =
+def genEvacuationTxBuild(version: Version, config: MultiNodeConfig): Gen[EvacuationTx.Build] =
     given MultiNodeConfig = config
     for {
         Right(evacMap) <- evacuationGens
@@ -140,6 +142,7 @@ def genEvacuationTxBuild(config: MultiNodeConfig): Gen[EvacuationTx.Build] =
         // Generate treasury UTXO with _some_ funds
         beaconTokenName = config.headConfig.headTokenNames.treasuryTokenName
         treasuryUtxo <- genResolvedTreasuryUtxo(
+          version,
           fallbackTxId,
           config.headConfig.headMultisigScript.policyId,
           beaconTokenName.bytes,

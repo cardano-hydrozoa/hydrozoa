@@ -8,6 +8,7 @@ import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Resolved
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.{gens as _, *}
 import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
@@ -21,27 +22,17 @@ import registry.scalacheck.*
 
 private lazy val deinitGens =
     gen[DeinitTx.Build] +:
-        // override the Unresolved RuleBasedTreasuryUtxo
         gen(genEmptyResolvedTreasuryUtxo) +:
         // pin a single fallbackTxId so the treasury UTxO and other tx-input-derived values agree
         const[TransactionHash] +:
+        gen(genTreasuryResolvedDatum) +:
         CommonGenerators.gens
 
 def genEmptyResolvedTreasuryUtxo(
+    resolvedDatum: RuleBasedTreasuryDatum,
     config: CardanoNetwork.Section & HasTokenNames & HeadPeers.Section,
     fallbackTxId: TransactionHash
 ): Gen[RuleBasedTreasuryUtxo] = {
-    given (CardanoNetwork.Section & HasTokenNames & HeadPeers.Section) = config
-    val g1Generator =
-        hex"97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb"
-    val dummySetup = prelude.List.empty
-
-    val emptyResolvedDatum = Resolved(
-      evacuationActive = g1Generator,
-      version = (BigInt(1), BigInt(0)),
-      setup = dummySetup
-    )
-
     val voteTokensAmount = config.nHeadPeers.toInt + 1
     val headMp = config.headMultisigScript.policyId
     val beaconTokenName = config.headTokenNames.treasuryTokenName
@@ -56,7 +47,7 @@ def genEmptyResolvedTreasuryUtxo(
             + Value.asset(headMp, voteTokenName, voteTokensAmount)
 
         val output = RuleBasedTreasuryOutput(
-          emptyResolvedDatum,
+            resolvedDatum,
           value
         )
         val treasuryUtxo = RuleBasedTreasuryUtxo(
@@ -65,7 +56,7 @@ def genEmptyResolvedTreasuryUtxo(
         )
 
         // Respect minAda
-        val outputMinAda = treasuryUtxo.toUtxo.toTuple._2.ensureMinAda(config)
+        val outputMinAda = treasuryUtxo.toUtxo(using config).toTuple._2.ensureMinAda(config)
         treasuryUtxo.focus(_.treasuryOutput.value).replace(outputMinAda.value)
     }
 }
