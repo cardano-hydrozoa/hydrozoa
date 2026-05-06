@@ -59,8 +59,9 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
     override def onTestCaseGenerated(
         initialState: ModelState,
         commands: List[AnyCommand[ModelState, Stage4Sut]]
-    ): Unit =
-        println(Stage4Runner.renderTable(initialState, commands))
+    ): IO[Unit] =
+        super.onTestCaseGenerated(initialState, commands) >>
+            logger.info(Stage4Runner.renderTable(initialState, commands))
 
     override def initEnv: Unit = ()
 

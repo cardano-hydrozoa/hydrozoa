@@ -291,10 +291,12 @@ trait ModelBasedSuite {
     def commandGenTweaker: [A] => Gen[A] => Gen[A] = [A] => (g: Gen[A]) => g
 
     /** Hook fired once per test case after the command sequence has been generated and before SUT
-      * startup. Default is a no-op; suites can override to print diagnostics (e.g. a per-peer
-      * command table) tailored to their state shape.
+      * startup. The default implementation logs the flat command sequence with cumulative time;
+      * suites can override to print extra diagnostics (e.g. a per-peer command table) and may
+      * call `super.onTestCaseGenerated(...)` to keep the default log alongside their own.
       */
-    def onTestCaseGenerated(initialState: State, commands: List[AnyCommand[State, Sut]]): Unit = ()
+    def onTestCaseGenerated(initialState: State, commands: List[AnyCommand[State, Sut]]): IO[Unit] =
+        loggerIO.info(s"Sequential Commands:\n${prettyCmdsRes(commands, commands.size)}\n")
 
     // ===================================
     // SUT
@@ -479,9 +481,7 @@ trait ModelBasedSuite {
         testCase: TestCase,
         startupSut: State => IO[Sut]
     ): Prop = {
-        val size = testCase.commands.size
-        logger.info(s"Sequential Commands:\n${prettyCmdsRes(testCase.commands, size)}\n")
-        onTestCaseGenerated(testCase.initialState, testCase.commands)
+        onTestCaseGenerated(testCase.initialState, testCase.commands).unsafeRunSync()
 
         val (_sut, p, s, lastCmd, _) =
             if useTestControl

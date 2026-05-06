@@ -46,7 +46,7 @@
     <logger name="Stage4.ScenarioGenerators" level="trace"/>
     <logger name="Stage4.Model" level="trace"/>
     <logger name="Stage4.Sut" level="trace"/>
-    <logger name="Stage4.Suite" level="trace"/>
+    <logger name="Stage4.Suite" level="info"/>
 
     <logger name="BlockWeaver" level="trace"/>
     <logger name="ConsensusActor" level="debug"/>
