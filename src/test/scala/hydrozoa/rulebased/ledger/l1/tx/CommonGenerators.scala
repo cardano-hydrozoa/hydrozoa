@@ -158,14 +158,26 @@ object CommonGenerators {
         } yield prelude.List.from(list)
 
     /** Generate a big enough (> 2^230) scalus.Scalar
-    */
+      */
     def genScalusScalar: Gen[ScalusScalar] =
         for {
             bigInt <- Gen.choose(
-                BigInt("1000000000000000000000000000000000000000000000000000000000000000000000"),
-                ScalusScalar.fieldPrime - 1
+              BigInt("1000000000000000000000000000000000000000000000000000000000000000000000"),
+              ScalusScalar.fieldPrime - 1
             )
         } yield ScalusScalar.applyUnsafe(bigInt)
+
+    def genTreasuryValue(
+        config: HeadPeers.Section & HasTokenNames,
+        coin: Coin,
+    ): Gen[Value] =
+        val headMp = config.headMultisigScript.policyId
+        val voteTokensAmount = config.nHeadPeers.toInt + 1
+        Gen.const(
+          Value(coin)
+              + Value.asset(headMp, config.headTokenNames.treasuryTokenName, 1)
+              + Value.asset(headMp, config.headTokenNames.voteTokenName, voteTokensAmount)
+        )
 
 }
 
@@ -208,9 +220,10 @@ object CommonGeneratorsTypes:
           setup
         )
 
-    def genTreasuryResolvedDatum(version: Version): Gen[Resolved] =
-        Resolved (
-            evacuationActive = hex"97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb",
-            version,
-            setup = prelude.List.empty
+    def genEmptyTreasuryResolvedDatum(version: Version): Gen[Resolved] =
+        Resolved(
+          evacuationActive =
+              hex"97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb",
+          version,
+          setup = prelude.List.empty
         )
