@@ -5,6 +5,16 @@
         <appender-ref ref="FILE"/>
     </root>
 
+    <!-- IMPORTANT
+
+         Timestamps added by the logging framework
+         by `%d{HH:mm:ss.SSS}` in <pattern>
+         when using mock/test control are useless!
+
+         They are here since when testing against
+         Yaci/public testnets they are needed.
+
+    -->
     <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
             <pattern>%d{HH:mm:ss.SSS} %highlight(%-5level) %cyan(%logger{64}) %n%msg%n
@@ -31,16 +41,19 @@
         <appender-ref ref="MERMAID"/>
     </logger>
 
+    <!-- common test loggers -->
     <logger name="org.scalacheck.commands.ModelBasedSuite" level="info"/>
     <logger name="test.CardanoBackendMock" level="warn"/>
 
+    <!-- stage1 loggers -->
     <logger name="Stage1.Commands" level="warn"/>
-    <logger name="Stage1.CommandGenerators" level="trace"/>
+    <logger name="Stage1.CommandGenerators" level="warn"/>
     <logger name="Stage1.ScenarioGenerators" level="warn"/>
-    <logger name="Stage1.Model" level="trace"/>
-    <logger name="Stage1.Sut" level="trace"/>
-    <logger name="Stage1.Suite" level="trace"/>
+    <logger name="Stage1.Model" level="warn"/>
+    <logger name="Stage1.Sut" level="warn"/>
+    <logger name="Stage1.Suite" level="warn"/>
 
+    <!-- stage4 loggers -->
     <logger name="Stage4.Commands" level="trace"/>
     <logger name="Stage4.CommandGenerators" level="trace"/>
     <logger name="Stage4.ScenarioGenerators" level="trace"/>
@@ -48,15 +61,17 @@
     <logger name="Stage4.Sut" level="trace"/>
     <logger name="Stage4.Suite" level="trace"/>
 
-    <logger name="BlockWeaver" level="trace"/>
-    <logger name="ConsensusActor" level="debug"/>
-    <logger name="EventSequencer" level="trace"/>
+    <!-- hydrozoa -->
+    <logger name="BlockWeaver" level="warn"/>
+    <logger name="ConsensusActor" level="warn"/>
+    <logger name="EventSequencer" level="warn"/>
     <logger name="CardanoLiaison" level="warn"/>
-    <logger name="JointLedger" level="trace"/>
-    <logger name="PeerLiaison" level="trace"/>
-    <logger name="PeerLiaisonMermaid" level="info"/>
-    <logger name="TxTiming" level="trace"/>
+    <logger name="JointLedger" level="warn"/>
+    <logger name="PeerLiaison" level="warn"/>
+    <logger name="PeerLiaisonMermaid" level="warn"/>
+    <logger name="TxTiming" level="warn"/>
+    <logger name="DepositsMap" level="warn"/>
 
+    <!-- libs -->
     <logger name="scalus" level="error"/>
-    <logger name="DepositsMap" level="trace"/>
 </configuration>

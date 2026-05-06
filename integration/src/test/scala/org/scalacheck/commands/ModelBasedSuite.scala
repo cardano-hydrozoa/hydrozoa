@@ -6,7 +6,7 @@ import cats.effect.{Deferred, IO}
 import ch.qos.logback.classic.Level
 import hydrozoa.lib.logging.Logging
 import org.scalacheck.{Gen, Prop, Shrink}
-import org.slf4j.{Logger, LoggerFactory}
+import org.slf4j.LoggerFactory
 
 import scala.annotation.tailrec
 import scala.concurrent.duration.{Duration, DurationInt, FiniteDuration}
@@ -241,7 +241,8 @@ trait ScenarioGen[State, Sut]:
   */
 trait ModelBasedSuite {
 
-    private val logger = org.slf4j.LoggerFactory.getLogger("org.scalacheck.commands.ModelBasedSuite")
+    private val logger =
+        org.slf4j.LoggerFactory.getLogger("org.scalacheck.commands.ModelBasedSuite")
     private val loggerIO = Logging.loggerIO("org.scalacheck.commands.ModelBasedSuite")
 
     /** Represent [some parts of] the environment on which a test case is run.
@@ -690,7 +691,6 @@ trait ModelBasedSuite {
                                     _ <- loggerIO.info("Opening the gate")
                                     _ <- gate.complete(())
 
-
                                     // 8. Tick until all fibers exhaust, then check next signal.
                                     _ <- tickUntil(
                                       tc,
@@ -736,15 +736,15 @@ trait ModelBasedSuite {
 
     /** Strict variant: ticks until `tickOne` returns `false` (all eligible fibers exhausted), then
       * checks `done`. If `done` is false at that point, raises an error — between commands the SUT
-      * must always reach the next signal without needing a clock advance.
-      * Never calls [[tickUntilAdvancing]].
+      * must always reach the next signal without needing a clock advance. Never calls
+      * [[tickUntilAdvancing]].
       */
     private def tickUntil[A](tc: TestControl[A], done: IO[Boolean]): IO[Unit] =
         tc.tickOne.flatMap {
-            case true  => tickUntil(tc, done)
+            case true => tickUntil(tc, done)
             case false =>
                 done.flatMap {
-                    case true  => loggerIO.info("tickUntil is done")
+                    case true => loggerIO.info("tickUntil is done")
                     case false =>
                         val msg =
                             "tickUntil: fibers exhausted but signal not received — SUT deadlock or unexpected IO.sleep"
@@ -767,10 +767,11 @@ trait ModelBasedSuite {
                         tc.nextInterval.flatMap { next =>
                             if next > Duration.Zero then
                                 loggerIO.warn(
-                                    s"tickUntilAdvancing: no eligible fibers — advancing $next to next timer"
+                                  s"tickUntilAdvancing: no eligible fibers — advancing $next to next timer"
                                 ) >> tc.advance(next) >> tickUntilAdvancing(tc, done)
                             else {
-                                val msg = "TestControl deadlock: no eligible fibers and predicate not satisfied"
+                                val msg =
+                                    "TestControl deadlock: no eligible fibers and predicate not satisfied"
                                 loggerIO.error(msg) >> IO.raiseError(new RuntimeException(msg))
                             }
                         }
