@@ -403,7 +403,7 @@ case class Suite(
         val runId = java.util.UUID.randomUUID().toString.take(8)
 
         for {
-            tracerLocal <- Tracer.makeLocal(s"Stage1.Suite.$runId")
+            tracerLocal <- Tracer.makeLocal
             given cats.effect.IOLocal[Tracer] = tracerLocal
             _ <- Tracer.info(s"Creating new SUT [${label}/${runId}]")
 

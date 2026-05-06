@@ -204,7 +204,7 @@ object BlockHeader {
                     LogEvent(
                       Level.Trace,
                       s"nextHeaderMinor: forcedMajorBlockWakeupTime=$forcedMajorBlockWakeupTime, mDepositDecisionWakeupTime=$newDepositDecisionWakeupTime",
-                      logger = "BlockHeader"
+                      routingKey = Some("BlockHeader")
                     )
                   )
                 )
@@ -238,7 +238,7 @@ object BlockHeader {
                     LogEvent(
                       Level.Trace,
                       s"nextHeaderMajor: forcedMajorBlockWakeupTime=$newForcedMajorBlockWakeupTime, mDepositDecisionWakeupTime=$newDepositDecisionWakeupTime",
-                      logger = "BlockHeader"
+                      routingKey = Some("BlockHeader")
                     )
                   )
                 )

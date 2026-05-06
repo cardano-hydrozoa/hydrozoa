@@ -261,41 +261,39 @@ trait CardanoLiaison(
     override def receive: Receive[IO, Request] = PartialFunction.fromFunction(receiveTotal)
 
     private def receiveTotal(req: Request): IO[Unit] =
-        Tracer.scoped(_.copy(logger = "CardanoLiaison")) {
-            req match {
-                case CardanoLiaison.PreStart =>
-                    preStartLocal
-                case block: BlockConfirmed.Major =>
-                    Tracer.scopedCtx(
-                      "cardanoLiaisonMode" -> "BlockConfirmed.Major",
-                      "blockNum" -> s"${block.blockNum: Int}"
-                    ) {
-                        Tracer.info(
-                          s"received BlockConfirmed.Major for block ${block.blockVersion}"
-                        ) >>
-                            handleMajorBlockL1Effects(block) >> runEffects
-                    }
-                case block: BlockConfirmed.Final =>
-                    Tracer.scopedCtx(
-                      "cardanoLiaisonMode" -> "BlockConfirmed.Final",
-                      "blockNum" -> s"${block.blockNum: Int}"
-                    ) {
-                        Tracer.info(
-                          s"received BlockConfirmed.Final for block ${block.blockVersion}"
-                        ) >>
-                            handleFinalBlockL1Effects(block) >> runEffects
-                    }
-                case CardanoLiaison.Timeout =>
-                    Tracer.scopedCtx("cardanoLiaisonMode" -> "Timeout") {
-                        Tracer.info("received Timeout, run effects...") >>
-                            runEffects
-                    }
-            }
+        req match {
+            case CardanoLiaison.PreStart =>
+                preStartLocal
+            case block: BlockConfirmed.Major =>
+                Tracer.scopedCtx(
+                  "cardanoLiaisonMode" -> "BlockConfirmed.Major",
+                  "blockNum" -> s"${block.blockNum: Int}"
+                ) {
+                    Tracer.info(
+                      s"received BlockConfirmed.Major for block ${block.blockVersion}"
+                    ) >>
+                        handleMajorBlockL1Effects(block) >> runEffects
+                }
+            case block: BlockConfirmed.Final =>
+                Tracer.scopedCtx(
+                  "cardanoLiaisonMode" -> "BlockConfirmed.Final",
+                  "blockNum" -> s"${block.blockNum: Int}"
+                ) {
+                    Tracer.info(
+                      s"received BlockConfirmed.Final for block ${block.blockVersion}"
+                    ) >>
+                        handleFinalBlockL1Effects(block) >> runEffects
+                }
+            case CardanoLiaison.Timeout =>
+                Tracer.scopedCtx("cardanoLiaisonMode" -> "Timeout") {
+                    Tracer.info("received Timeout, run effects...") >>
+                        runEffects
+                }
         }
 
     private def preStartLocal: IO[Unit] =
         for {
-            _ <- Tracer.updateLocal(_.copy(logger = "CardanoLiaison"))
+            _ <- Tracer.routeLocal(s"CardanoLiaison.${config.ownHeadPeerNum}")
             _ <- initializeConnections
             // Immediate + periodic Timeout
             _ <- context.self ! CardanoLiaison.Timeout

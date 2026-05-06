@@ -7,7 +7,7 @@ import com.comcast.ip4s.{host, port}
 import com.suprnation.actor.ActorSystem
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.{Logging, Tracer}
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost
 import hydrozoa.multisig.ledger.remote.RemoteL2Ledger
@@ -214,7 +214,8 @@ object Main extends IOApp {
 
         resource.use { case (env, backend, nodeConfig, remoteL2Ledger, system) =>
             for {
-                mrm <- MultisigRegimeManager.apply(nodeConfig, backend, remoteL2Ledger)
+                tracerLocal <- Tracer.makeLocal
+                mrm <- MultisigRegimeManager.apply(nodeConfig, backend, remoteL2Ledger, tracerLocal)
                 _ <- system.actorOf(mrm, "MultisigRegimeManager")
                 _ <- logger.info("Hydrozoa node started successfully")
 

@@ -112,7 +112,7 @@ final case class TxTiming(
             LogEvent(
               Level.Trace,
               s"blockCanStayMinor: competingFallbackStartTime: $competingFallbackStartTime, forcedMajorBlockWakeupTime: $fmbt, blockCreationEndTime: $blockCreationEndTime",
-              logger = "TxTiming"
+              routingKey = Some("TxTiming")
             )
           )
         )

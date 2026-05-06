@@ -1,14 +1,14 @@
 package hydrozoa.multisig
 
 import cats.*
-import cats.effect.{Deferred, IO}
+import cats.effect.{Deferred, IO, IOLocal}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.NoSendActorRef
 import com.suprnation.actor.SupervisorStrategy.Escalate
 import com.suprnation.actor.{OneForOneStrategy, SupervisionStrategy}
 import hydrozoa.config.node.NodeConfig
-import hydrozoa.lib.logging.{Logging, Tracer}
+import hydrozoa.lib.logging.Tracer
 import hydrozoa.lib.tracing.ProtocolTracer
 import hydrozoa.multisig.MultisigRegimeManager.*
 import hydrozoa.multisig.backend.cardano.CardanoBackend
@@ -22,10 +22,11 @@ import scala.concurrent.duration.DurationInt
 trait MultisigRegimeManager(
     config: NodeConfig,
     cardanoBackend: CardanoBackend[IO],
-    l2Ledger: L2Ledger[IO]
+    l2Ledger: L2Ledger[IO],
+    tracerLocal: IOLocal[Tracer]
 ) extends Actor[IO, Request] {
 
-    private val logger = Logging.loggerIO("hydrozoa.multisig.MultisigRegimeManager")
+    given IOLocal[Tracer] = tracerLocal
 
     /** Deferred that will be completed with connections once actors are started */
     val connectionsDeferred: Deferred[IO, Connections] = Deferred.unsafe[IO, Connections]
@@ -50,56 +51,53 @@ trait MultisigRegimeManager(
         case TerminatedChild(childType, _) =>
             childType match {
                 case Actors.BlockWeaver =>
-                    logger.warn("Terminated block weaver actor")
+                    Tracer.warn("Terminated block weaver actor")
                 case Actors.CardanoLiaison =>
-                    logger.warn("Terminated Cardano liaison actor")
+                    Tracer.warn("Terminated Cardano liaison actor")
                 case Actors.Consensus =>
-                    logger.warn("Terminated consensus actor")
+                    Tracer.warn("Terminated consensus actor")
                 case Actors.JointLedger =>
-                    logger.warn("Terminated joint ledger actor")
+                    Tracer.warn("Terminated joint ledger actor")
                 case Actors.PeerLiaison =>
-                    logger.warn("Terminated peer liaison actor")
+                    Tracer.warn("Terminated peer liaison actor")
                 case Actors.EventSequencer =>
-                    logger.warn("Terminated event sequencer actor")
+                    Tracer.warn("Terminated event sequencer actor")
             }
         case TerminatedDependency(dependencyType, _) =>
             dependencyType match {
                 case Dependencies.CardanoBackend =>
-                    logger.warn("Terminated cardano backend")
+                    Tracer.warn("Terminated cardano backend")
                 case Dependencies.Persistence =>
-                    logger.warn("Terminated persistence")
+                    Tracer.warn("Terminated persistence")
             }
         // TODO: Implement a way to receive a remote comm actor and connect it to its corresponding local comm actor
     }
 
     def preStartLocal: IO[Unit] =
         for {
-            pendingConnections <- Deferred[IO, MultisigRegimeManager.Connections]
+            _ <- Tracer.routeLocal("MultisigRegimeManager")
+            _ <- Tracer.updateLocalCtx("peer" -> s"${config.ownHeadPeerNum: Int}")
+            _ <- Tracer.info("Starting multisig actors...")
 
+            // TODO: should be _peer/peerId_
             nodeId = s"head:${config.ownHeadPeerNum: Int}"
             tracer <- ProtocolTracer.jsonLines(nodeId)
-            _ <- tracer.traceError(0, "foo", "bar")
-            tracerLocal <- Tracer.makeLocal(nodeId)
 
-            _ <- logger.info("Starting multisig actors...")
+            pendingConnections <- Deferred[IO, MultisigRegimeManager.Connections]
 
             blockWeaver <- context.actorOf(BlockWeaver(config, pendingConnections, tracerLocal))
 
-            // TODO: I am not sure this is the proper way...
-            cardanoLiaisonTracer <- Tracer.makeLocal("CardanoLiaison")
             cardanoLiaison <-
                 context.actorOf(
-                  CardanoLiaison(config, cardanoBackend, pendingConnections, cardanoLiaisonTracer)
+                  CardanoLiaison(config, cardanoBackend, pendingConnections, tracerLocal)
                 )
 
             consensusActor <- context.actorOf(ConsensusActor(config, pendingConnections))
 
             eventSequencer <- context.actorOf(EventSequencer(config, pendingConnections))
 
-            // TODO: I am not sure this is the proper way...
-            jointLedgerTracerLocal <- Tracer.makeLocal("JointLedger")
             jointLedger <- context.actorOf(
-              JointLedger(config, pendingConnections, l2Ledger, tracer, jointLedgerTracerLocal)
+              JointLedger(config, pendingConnections, l2Ledger, tracer, tracerLocal)
             )
 
             localPeerLiaisons <-
@@ -126,7 +124,7 @@ trait MultisigRegimeManager(
             _ <- pendingConnections.complete(connections)
             _ <- connectionsDeferred.complete(connections)
 
-            _ <- logger.info("Watching multisig actors...")
+            _ <- Tracer.info("Watching multisig actors...")
 
             _ <- context.watch(blockWeaver, TerminatedChild(Actors.BlockWeaver, blockWeaver))
             _ <- localPeerLiaisons.traverse(r =>
@@ -162,9 +160,10 @@ object MultisigRegimeManager {
     def apply(
         config: NodeConfig,
         cardanoBackend: CardanoBackend[IO],
-        virtualLedger: L2Ledger[IO]
+        virtualLedger: L2Ledger[IO],
+        tracerLocal: IOLocal[Tracer]
     ): IO[MultisigRegimeManager] =
-        IO(new MultisigRegimeManager(config, cardanoBackend, virtualLedger) {})
+        IO(new MultisigRegimeManager(config, cardanoBackend, virtualLedger, tracerLocal) {})
 
     /** Multisig regime's protocol for actor requests and responses. See diagram:
       * [[https://app.excalidraw.com/s/9N3iw9j24UW/9eRJ7Dwu42X]]
