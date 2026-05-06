@@ -35,6 +35,7 @@ private lazy val voteGens =
         gen(voteUtxo) +:
         gen(genTransactionInput) +:
         gen(genRuleBasedTreasuryUtxo) +:
+        gen(genTreasuryUnresolvedDatum) +:
         gen(addressKeyHash) +:
         gen(genPeerVoteDatumAwaitingVote) +:
         CommonGenerators.gens

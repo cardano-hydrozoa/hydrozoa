@@ -3,22 +3,24 @@ package hydrozoa.rulebased.ledger.l1.tx
 import cats.effect.unsafe.implicits.global
 import hydrozoa.*
 import hydrozoa.config.HydrozoaBlueprint
+import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
-import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.asG1Element
 import hydrozoa.multisig.ledger.commitment.{KzgCommitment, Membership, TrustedSetup}
 import hydrozoa.multisig.ledger.eutxol2.toEvacuationMap
 import hydrozoa.multisig.ledger.joint.EvacuationMap
+import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
+import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Resolved
-import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.{gens as _, genCollateralUtxo}
+import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.{genCollateralUtxo, someShelleyAddress, gens as _}
 import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import monocle.syntax.all.*
 import org.scalacheck.{Arbitrary, Gen, Prop, Properties}
 import scalus.cardano.address.ShelleyPaymentPart.Key
-import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart}
+import scalus.cardano.address.{Address, Network, ShelleyAddress, ShelleyDelegationPart}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.onchain.plutus.prelude
@@ -34,151 +36,71 @@ import registry.scalacheck.*
 
 private lazy val evacuationGens =
     gen(genEvacuationTxBuild) +:
-        gen(genL2TransactionOutput) +:
+        // Bump the sampled treasury value to cover Σ evacuation outputs + a 20-ADA buffer, so the
+        // on-chain `treasuryInput = treasuryOutput + Σ evacuated` invariant can hold.
+        refineGen[EvacuationTx.Build](adjustTreasuryUtxo) +:
+        // L1 fee utxo: a single 100-ADA pub-key utxo at the payment address.
+        gen(genFeeUtxos) +:
+        // Splits the sampled L2 EvacuationMap into notEvacuatedYet and evacuatees.
+        gen(evacuate) +:
+        // Set the per-utxo Coin to 1–10 ADA.
+        refineGen[(TransactionOutput, Coin)](Gen.choose(1_000_000L, 10_000_000L)) +:
+        // Set every L2 utxo's address to a ShelleyAddress
+        refineGen[TransactionOutput](someShelleyAddress) +:
+        // Single ShelleyAddress for transaction outputs
+        gen(someShelleyAddress) +:
+        // Create Babbage transaction outputs with a single coin value.
+        gen(genTransactionOutput) +:
+        // Treasury output value: 5-ADA + 1 beacon token. The beacon token is required for the
+        // on-chain treasury invariant.
+        refineGen[RuleBasedTreasuryOutput](beaconValue) +:
+        // Set the treasury datum to `Resolved`
+        refineGen[RuleBasedTreasuryOutput](genTreasuryResolvedDatum) +:
+        // KZG commitment computed from the actual sampled L2 set
+        gen(genCommitment) +:
+        // Share the same generated `Utxos` between `genCommitment` and `genEvacuationMap`
+        // so that the on-chain KZG check (commitment vs. evacuation map) succeeds.
+        share[Utxos] +:
         CommonGenerators.gens
 
-def genL2TransactionOutput(config: CardanoNetwork.Section): Gen[TransactionOutput] =
-    for {
-        keyHash <- Arbitrary.arbitrary[AddrKeyHash]
-        coin <- Gen.choose(1_000_000L, 10_000_000L)
-    } yield TransactionOutput.Babbage(
-      address = ShelleyAddress(
-        network = config.network,
-        payment = Key(keyHash),
-        delegation = ShelleyDelegationPart.Null
-      ),
-      value = Value(Coin(coin)),
-      datumOption = None,
-      scriptRef = None
-    )
+def paymentAddress(config: NodeConfig): ShelleyAddress =
+    config.ownHeadWallet.exportVerificationKey.shelleyAddress()(using config.headConfig)
 
-/** Generator for resolved treasury UTXO with resolved datum */
-def genResolvedTreasuryUtxo(
-    version: Version,
-    fallbackTxId: TransactionHash,
-    headMp: PolicyId,
-    beaconTokenName: TokenName,
-    utxosCommitment: KzgCommitment.KzgCommitment,
-    setupSize: Int,
-    network: Network
-): Gen[RuleBasedTreasuryUtxo] =
-    for {
-        treasuryDatum <- genTreasuryResolvedDatum(version, headMp, utxosCommitment, setupSize)
-        // Min ada for the beacon token and the datum
-        coin <- Gen.const(5_000_000L)
-        value = Value(Coin(coin)) + Value.asset(headMp, AssetName(beaconTokenName), 1)
-        outputIx <- Gen.choose(0, 5)
-        txId = TransactionInput(fallbackTxId, outputIx)
-        scriptAddr = HydrozoaBlueprint.mkTreasuryAddress(network)
-    } yield RuleBasedTreasuryUtxo(
-      utxoId = txId,
-      treasuryOutput = RuleBasedTreasuryOutput(
-        treasuryDatum,
-        value
-      )
-    )
+def genTransactionOutput(address: Address, coin: Coin): Gen[TransactionOutput] =
+    TransactionOutput.Babbage(address, Value(coin))
 
-/** Generator for resolved treasury datum */
-def genTreasuryResolvedDatum(
-    version: Version,
-    headMp: PolicyId,
-    utxosCommitment: KzgCommitment.KzgCommitment,
-    setupSize: Int
-): Gen[RuleBasedTreasuryDatum.Resolved] =
+def beaconValue(headConfig: HeadConfig): Value =
+    val beaconTokenName = headConfig.headTokenNames.treasuryTokenName.bytes
+    val headMp = headConfig.headMultisigScript.policyId
+    // Treasury coin — fixed at 5M, the min-ada needed for beacon + datum.
+    Value(Coin(5_000_000L)) + Value.asset(headMp, AssetName(beaconTokenName), 1)
+
+def genCommitment(utxos: Utxos, config: MultiNodeConfig): KzgCommitment =
+    val Right(evacMap) = utxos.toEvacuationMap(config.headConfig)
+    // Calculate the whole L2 utxo set commitment, wrapped in the registry-side opaque alias.
+    kzgCommitment(evacMap.kzgCommitment)
+
+def adjustTreasuryUtxo(headConfig: HeadConfig, utxos: Utxos, treasuryUtxo: RuleBasedTreasuryUtxo): RuleBasedTreasuryUtxo =
+    val Right(evacMap) = utxos.toEvacuationMap(headConfig)
+    val totalL2Value = evacMap.totalValue
+    val sufficientTreasuryValue = treasuryUtxo.treasuryOutput.value + totalL2Value + Value(Coin(20_000_000L))
+    treasuryUtxo.focus(_.treasuryOutput.value).set(sufficientTreasuryValue)
+
+/** Split the evacuation map to create the evacuatees */
+def evacuate(evacMap: EvacuationMap): Gen[(EvacuationMap, EvacuationMap)] =
     for {
-        params <- genByteStringOfN(32)
-        setup = TrustedSetup
-            .takeSrsG2(setupSize)
-            .map(p2 => BLS12_381_G2_Element(p2).toCompressedByteString)
-    } yield Resolved(
-      evacuationActive = utxosCommitment,
-      version = version,
-      setup = setup
-    )
+        wn <- Gen.choose(1, Integer.min(5, evacMap.size))
+        evacuatees <- Gen.pick(wn, evacMap)
+    } yield (evacMap, EvacuationMap.from(evacuatees))
 
 /** Generator for EvacuationTx transaction recipe */
-// Feel free to trim down the config argument
-def genEvacuationTxBuild(version: Version, config: MultiNodeConfig): Gen[EvacuationTx.Build] =
-    given MultiNodeConfig = config
-    for {
-        Right(evacMap) <- evacuationGens
-            .make[Gen[Utxos]]
-            .map(_.toEvacuationMap(config.headConfig))
-        _ = println(s"evac map: ${evacMap.size}")
-
-        // Calculate the whole L2 utxo set commitment
-        utxoCommitment = evacMap.kzgCommitment
-
-        // Select some random number of withdrawals
-        // TODO: find the limit with refscripts
-        wn <- Gen.choose(1, Integer.min(5, evacMap.size))
-        evacuatees0 <- Gen.pick(wn, evacMap)
-        _ = println(s"evacuatees length: ${evacuatees0.length}")
-        evacuatees = EvacuationMap.from(evacuatees0)
-
-        // Check
-        // _ = println(s"withdrawals: {$withdrawals0}")
-        // _ = println(
-        //  s"withdrawal hashes: ${withdrawalScalars.map(e => BigInt.apply(e.to_bendian()))}"
-        // )
-
-        // Calculate and validate the membership proof
-        theRest = evacMap.removedAll(Set.from(evacuatees.keys))
-        _ = println(s"theRest: ${theRest.size}")
-
-        membershipProof = Membership
-            .mkMembershipProofValidated(
-              set = evacMap,
-              subset = evacuatees
-            )
-            .fold(err => throw RuntimeException(err.explain), x => x)
-
-        _ = println(
-          s"validated membership proof: ${membershipProof.asG1Element.toCompressedByteString.toHex}"
-        )
-
-        fallbackTxId <- Arbitrary.arbitrary[TransactionHash]
-
-        // Generate treasury UTXO with _some_ funds
-        beaconTokenName = config.headConfig.headTokenNames.treasuryTokenName
-        treasuryUtxo <- genResolvedTreasuryUtxo(
-          version,
-          fallbackTxId,
-          config.headConfig.headMultisigScript.policyId,
-          beaconTokenName.bytes,
-          utxoCommitment,
-          wn + 1,
-          config.headConfig.network
-        )
-
-        // Ensure treasury has sufficient funds
-        totalL2Value = evacMap.totalValue
-        sufficientTreasuryValue = treasuryUtxo.treasuryOutput.value + totalL2Value +
-            Value(Coin(20_000_000L))
-        adjustedTreasuryUtxo = treasuryUtxo
-            .focus(_.treasuryOutput.value)
-            .set(sufficientTreasuryValue)
-
-        // Generate validity slot
-        validityEndSlot <- Gen.choose(100L, 1000L)
-
-        addr = config.nodeConfigs.head._2.ownHeadWallet.exportVerificationKey
-            .shelleyAddress()(using config.headConfig)
-
-        feeUtxo <-
-            genPubKeyUtxo(
-              address = addr,
-              genValue = Gen.const(Value.ada(100))
-            )
-
-        collateralUtxo <- genCollateralUtxo(addr.payment.asInstanceOf[Key].hash)
-
-    } yield EvacuationTx.Build(
-      treasuryUtxo = adjustedTreasuryUtxo,
-      evacuatees = evacuatees,
-      notEvacuatedYet = evacMap,
-      feeUtxos = Map(feeUtxo.toTuple),
-      collateralUtxo = collateralUtxo
+def genEvacuationTxBuild(treasuryUtxo: RuleBasedTreasuryUtxo, feeUtxos: FeeUtxos, evacMaps: (EvacuationMap, EvacuationMap), collateralUtxo: CollateralUtxo): EvacuationTx.Build =
+    EvacuationTx.Build(
+      treasuryUtxo,
+      evacuatees = evacMaps._1,
+      notEvacuatedYet = evacMaps._2,
+      collateralUtxo,
+      feeUtxos.toUtxos,
     )
 
 def genMembershipCheck(scalars: List[ScalusScalar])
@@ -241,14 +163,21 @@ object EvacuationTxTest extends Properties("EvacuationTx Test") {
       } yield true
     )
 
+    private lazy val membershipRegistry =
+        // 64..256 is plenty to exercise the validator while cutting BLS work by ~3x compared to the default generator
+        listOfMinMax[ScalusScalar](64, 256) +:
+            gen(genMembershipCheck) +:
+            evacuationGens
+
+    private lazy val membershipGen =
+        membershipRegistry
+            .makeGen[(prelude.List[ScalusScalar], BLS12_381_G1_Element, BLS12_381_G1_Element)]
+
     val _ = property("Partial membership proofs check") =
-        val r = gen(genMembershipCheck) +: evacuationGens
-        val tupleGen = r.makeGen[(prelude.List[ScalusScalar], BLS12_381_G1_Element, BLS12_381_G1_Element)]
-        Prop.forAll(tupleGen)((subset, commitmentG1, proof) =>
+        Prop.forAll(membershipGen)((subset, commitmentG1, proof) =>
             // Pre-calculated powers of tau
             val crsG2 =
                 TrustedSetup.takeSrsG2(subset.length.toInt + 1).map(BLS12_381_G2_Element.apply)
-
             RuleBasedTreasuryValidator.checkMembership(crsG2, commitmentG1, subset, proof) == true
         )
 }

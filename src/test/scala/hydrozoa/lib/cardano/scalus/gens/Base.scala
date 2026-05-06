@@ -33,6 +33,7 @@ object Base:
             keepRaw[TransactionBody] *:
             keepRaw[TransactionWitnessSet] *:
             keepRaw[AuxiliaryData] *:
+            gen[Utxo] *:
             gen[TransactionBody] *:
             gen[TransactionWitnessSet] *:
             taggedSortedSetOf[VKeyWitness] *:
@@ -317,14 +318,21 @@ object Base:
     // Recursive Gen[Timelock]: the `grow` function picks among the recursive variants
     // (AllOf / AnyOf / MOf), each of which embeds an `IndexedSeq[Timelock]` resolved
     // through `self`.
+    //
+    // IMPORTANT: cap the per-level fan-out at a small constant. `Gen.listOf(self)` would scale
+    // with the ambient ScalaCheck size (~100 by default), and `Sized.default`'s `size - 1`
+    // depth shrink doesn't compensate — total nodes grow factorially and OOM the heap.
+    private val timelockMaxBranching = 4
     val genTimelock = genRec[Timelock] { self =>
+        def fewKids: Gen[IndexedSeq[Timelock]] =
+            Gen.choose(0, timelockMaxBranching).flatMap(Gen.listOfN(_, self).map(_.toIndexedSeq))
         Gen.oneOf(
-          Gen.listOf(self).map(xs => Timelock.AllOf(xs.toIndexedSeq)),
-          Gen.listOf(self).map(xs => Timelock.AnyOf(xs.toIndexedSeq)),
+          fewKids.map(Timelock.AllOf(_)),
+          fewKids.map(Timelock.AnyOf(_)),
           for
-              m <- Gen.choose(0, 5)
-              xs <- Gen.listOf(self)
-          yield Timelock.MOf(m, xs.toIndexedSeq): Timelock
+              xs <- fewKids
+              m <- Gen.choose(0, xs.size)
+          yield Timelock.MOf(m, xs): Timelock
         )
     } *: gen(genTimelockLeaf)
 

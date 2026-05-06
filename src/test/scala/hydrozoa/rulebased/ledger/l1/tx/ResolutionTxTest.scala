@@ -12,6 +12,7 @@ import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.U
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.Voted
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.{gens as _, *}
+import hydrozoa.rulebased.ledger.l1.tx.CommonGeneratorsTypes.genTreasuryUnresolvedDatum
 import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryUtxo, VoteOutput, VoteUtxo}
 import org.scalacheck.{Arbitrary, Gen, Properties}
 import scalus.cardano.ledger.*
@@ -25,6 +26,7 @@ private lazy val resolutionGens =
         // override the structural Gen[RuleBasedTreasuryUtxo] with the bounded version that
         // attaches the head beacon token (without it the Plutus validator rejects the tx)
         gen(genRuleBasedTreasuryUtxo) +:
+        gen(genTreasuryUnresolvedDatum) +:
         gen(resolutionTallyVoteUtxo) +:
         gen(genTalliedVoteDatum) +:
         gen(addrKeyHash) +:

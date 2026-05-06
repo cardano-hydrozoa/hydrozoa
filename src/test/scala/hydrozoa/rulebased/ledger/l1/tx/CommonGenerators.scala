@@ -3,6 +3,8 @@ package hydrozoa.rulebased.ledger.l1.tx
 import cats.data.NonEmptyList
 import hydrozoa.*
 import hydrozoa.config.HydrozoaBlueprint
+import hydrozoa.config.head.HeadConfig
+import hydrozoa.multisig.ledger.eutxol2.toEvacuationMap
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
@@ -20,7 +22,8 @@ import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTrea
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
 import monocle.{Focus, Lens}
-import scalus.cardano.address.{Network, ShelleyDelegationPart, ShelleyPaymentPart}
+import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
+import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.TransactionOutput.Babbage
@@ -42,19 +45,24 @@ import scalus.uplc.builtin.ByteString.hex
 object CommonGenerators {
 
     lazy val gens =
-        gen((_: NodeConfig).headConfig.headPeers) +:
-            gen((_: MultiNodeConfig).nodeConfigs.head._2) +:
+        gen(genEvacuationMap) +:
+            gen((_: HeadConfig).headPeers) +:
+            gen((_: NodeConfig).headConfig) +:
+            gen((_: MultiNodeConfig).nodeConfigs.values.head) +:
             // Always use the same multi-node config across make invocations
             const[MultiNodeConfig] +:
             gen(MultiNodeConfig.generateDefault) +:
             gen[EvacuationTx] +:
             gen(genOnchainBlockHeader) +:
             gen(genCollateralUtxo) +:
-            gen(genTreasuryUnresolvedDatum) +:
+            gen(membershipProofFromKzg) +:
+            gen(resolvedSetup) +:
+            gen(genKzgCommitment) +:
+            gen(genSetupSize) +:
             gen[RuleBasedTreasuryUtxo] +:
             gen[RuleBasedTreasuryOutput] +:
             gen[RuleBasedTreasuryDatum] +:
-            mapOfN[TransactionInput, TransactionOutput](2) +:
+            gen((utxo: Utxo) => Map(utxo.toTuple)) +:
             gen[CollateralOutput] +:
             gen(Focus[EvacuationTx](_.tx)) +:
             gen(ResolvedUtxos.empty) +:
@@ -134,6 +142,10 @@ object CommonGenerators {
           CollateralOutput(addrKeyHash, ShelleyDelegationPart.Null, coin, None, None)
         )
 
+    def genEvacuationMap(utxos: Utxos, headConfig: HeadConfig) =
+        val Right(evacMap) = utxos.toEvacuationMap(headConfig)
+        evacMap
+
     def genOnchainBlockHeader(versionMajor: VersionMajor): Gen[BlockHeader.Minor.Onchain] =
         for {
             blockNum <- Gen.choose(10L, 20L).map(BigInt(_))
@@ -179,6 +191,13 @@ object CommonGenerators {
               + Value.asset(headMp, config.headTokenNames.voteTokenName, voteTokensAmount)
         )
 
+    def someShelleyAddress(config: CardanoNetwork.Section, keyHash: AddrKeyHash): ShelleyAddress =
+        ShelleyAddress(
+            network = config.network,
+            payment = Key(keyHash),
+            delegation = ShelleyDelegationPart.Null
+        )
+
 }
 
 object CommonGeneratorsTypes:
@@ -187,6 +206,36 @@ object CommonGeneratorsTypes:
     opaque type VersionMinor <: BigInt = BigInt
     opaque type DeadlineVoting = BigInt
     opaque type UnresolvedSetup = prelude.List[ByteString]
+    // Registry-side opaque aliases — give the registry distinct type tags for these values so
+    // generators can be wired up without colliding with the ambient Gen[ByteString] / Gen[Int] /
+    // Gen[List[ByteString]] channels. Note: no `<: ByteString` (etc.) bound — that bound makes
+    // Gen[KzgCommitment] <:< Gen[ByteString], so any entry producing Gen[KzgCommitment] would
+    // also satisfy Gen[ByteString] requests anywhere in the registry, accidentally overriding
+    // arb[ByteString] and pulling Gen[Utxos] into ScriptRef-style paths (cycle).
+    opaque type KzgCommitment = ByteString
+    opaque type MembershipProof = ByteString
+    opaque type SetupSize = Int
+    opaque type ResolvedSetup = prelude.List[ByteString]
+    // L1 fee utxos paying the transaction fee — distinct from the L2 `Utxos` set being evacuated,
+    // so the registry can resolve `feeUtxos: FeeUtxos` and `utxos: Utxos` to different generators
+    // even though both are structurally `Map[TransactionInput, TransactionOutput]`.
+    opaque type FeeUtxos = Utxos
+
+    // Coercions from raw underlying types — only available outside the object via these helpers,
+    // matching the `genVersion(major, minor)` pattern.
+    def kzgCommitment(b: ByteString): KzgCommitment = b
+    def membershipProof(b: ByteString): MembershipProof = b
+    def setupSize(n: Int): SetupSize = n
+    def feeUtxos(u: Utxos): FeeUtxos = u
+
+    extension (fu: FeeUtxos) def toUtxos: Utxos = fu
+
+    /** L1 fee utxo set: a single 100-ADA pub-key utxo at the payment address. Generous enough to
+      * cover any plausible transaction fee in these tests; consumers should refine this if a tighter
+      * value is needed.
+      */
+    def genFeeUtxos(txInput: TransactionInput, paymentAddr: ShelleyAddress): FeeUtxos =
+        feeUtxos(Map(txInput -> Babbage(paymentAddr, Value.ada(100))))
 
     def genVersion(major: VersionMajor, minor: VersionMinor): Version =
         (major, minor)
@@ -203,6 +252,30 @@ object CommonGeneratorsTypes:
             .map(p2 => G2Element(p2).toCompressedByteString)
     }
 
+    /** Default placeholder commitment — a known-valid 48-byte compressed G1 point. Tests that
+      * actually drive the on-chain validator should override `Gen[KzgCommitment]` with one
+      * derived from the real evacuation map.
+      */
+    def genKzgCommitment: Gen[KzgCommitment] =
+        Gen.const(
+          hex"97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb"
+        )
+
+    /** A `KzgCommitment` is structurally also the membership-proof byte string used in
+      * `Resolved.evacuationActive`. This wires `Gen[KzgCommitment] -> Gen[MembershipProof]`.
+      */
+    def membershipProofFromKzg(commitment: KzgCommitment): MembershipProof = commitment
+
+    /** Default trusted-setup size. Tests with larger evacuation sets should refine this for the
+      * `Resolved` path: `refineGen[RuleBasedTreasuryDatum.Resolved](setupSize(N))`.
+      */
+    def genSetupSize: Gen[SetupSize] = Gen.const(10)
+
+    def resolvedSetup(size: SetupSize): ResolvedSetup =
+        TrustedSetup
+            .takeSrsG2(size)
+            .map(p2 => G2Element(p2).toCompressedByteString)
+
     def genDeadlineVoting: Gen[DeadlineVoting] =
         Gen
             .choose(600_000, 1800_000)
@@ -218,6 +291,17 @@ object CommonGeneratorsTypes:
           deadlineVoting,
           versionMajor,
           setup
+        )
+
+    def genTreasuryResolvedDatum(
+        version: Version,
+        evacuationActive: MembershipProof,
+        setup: ResolvedSetup
+    ): Resolved =
+        Resolved(
+          evacuationActive = evacuationActive,
+          version = version,
+          setup = setup
         )
 
     def genEmptyTreasuryResolvedDatum(version: Version): Gen[Resolved] =
