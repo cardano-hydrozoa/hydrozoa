@@ -241,7 +241,8 @@ trait ScenarioGen[State, Sut]:
   */
 trait ModelBasedSuite {
 
-    private val logger = org.slf4j.LoggerFactory.getLogger("org.scalacheck.commands.ModelBasedSuite")
+    private val logger =
+        org.slf4j.LoggerFactory.getLogger("org.scalacheck.commands.ModelBasedSuite")
     private val loggerIO = Logging.loggerIO("org.scalacheck.commands.ModelBasedSuite")
 
     /** Represent [some parts of] the environment on which a test case is run.
@@ -288,6 +289,12 @@ trait ModelBasedSuite {
     /** A custom command generator modificator like resize or something like that (noop by default).
       */
     def commandGenTweaker: [A] => Gen[A] => Gen[A] = [A] => (g: Gen[A]) => g
+
+    /** Hook fired once per test case after the command sequence has been generated and before SUT
+      * startup. Default is a no-op; suites can override to print diagnostics (e.g. a per-peer
+      * command table) tailored to their state shape.
+      */
+    def onTestCaseGenerated(initialState: State, commands: List[AnyCommand[State, Sut]]): Unit = ()
 
     // ===================================
     // SUT
@@ -474,6 +481,7 @@ trait ModelBasedSuite {
     ): Prop = {
         val size = testCase.commands.size
         logger.info(s"Sequential Commands:\n${prettyCmdsRes(testCase.commands, size)}\n")
+        onTestCaseGenerated(testCase.initialState, testCase.commands)
 
         val (_sut, p, s, lastCmd, _) =
             if useTestControl
@@ -690,7 +698,6 @@ trait ModelBasedSuite {
                                     _ <- loggerIO.info("Opening the gate")
                                     _ <- gate.complete(())
 
-
                                     // 8. Tick until all fibers exhaust, then check next signal.
                                     _ <- tickUntil(
                                       tc,
@@ -736,15 +743,15 @@ trait ModelBasedSuite {
 
     /** Strict variant: ticks until `tickOne` returns `false` (all eligible fibers exhausted), then
       * checks `done`. If `done` is false at that point, raises an error — between commands the SUT
-      * must always reach the next signal without needing a clock advance.
-      * Never calls [[tickUntilAdvancing]].
+      * must always reach the next signal without needing a clock advance. Never calls
+      * [[tickUntilAdvancing]].
       */
     private def tickUntil[A](tc: TestControl[A], done: IO[Boolean]): IO[Unit] =
         tc.tickOne.flatMap {
-            case true  => tickUntil(tc, done)
+            case true => tickUntil(tc, done)
             case false =>
                 done.flatMap {
-                    case true  => loggerIO.info("tickUntil is done")
+                    case true => loggerIO.info("tickUntil is done")
                     case false =>
                         val msg =
                             "tickUntil: fibers exhausted but signal not received — SUT deadlock or unexpected IO.sleep"
@@ -767,10 +774,11 @@ trait ModelBasedSuite {
                         tc.nextInterval.flatMap { next =>
                             if next > Duration.Zero then
                                 loggerIO.warn(
-                                    s"tickUntilAdvancing: no eligible fibers — advancing $next to next timer"
+                                  s"tickUntilAdvancing: no eligible fibers — advancing $next to next timer"
                                 ) >> tc.advance(next) >> tickUntilAdvancing(tc, done)
                             else {
-                                val msg = "TestControl deadlock: no eligible fibers and predicate not satisfied"
+                                val msg =
+                                    "TestControl deadlock: no eligible fibers and predicate not satisfied"
                                 loggerIO.error(msg) >> IO.raiseError(new RuntimeException(msg))
                             }
                         }

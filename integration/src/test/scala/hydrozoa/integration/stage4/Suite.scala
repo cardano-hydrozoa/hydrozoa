@@ -27,9 +27,8 @@ import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toUtxos}
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.joint.JointLedger
-import org.scalacheck.commands.{ModelBasedSuite, ScenarioGen}
-import org.scalacheck.rng.Seed
-import org.scalacheck.{Gen, Prop, Test, YetAnotherProperties}
+import org.scalacheck.commands.{AnyCommand, ModelBasedSuite, ScenarioGen}
+import org.scalacheck.{Gen, Prop}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.rules.{Context, UtxoEnv}
 import scalus.cardano.ledger.{CertState, TransactionInput, Utxos}
@@ -56,6 +55,12 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
 
     override def commandGenTweaker: [A] => Gen[A] => Gen[A] = [A] =>
         (g: Gen[A]) => Gen.resize(50, g)
+
+    override def onTestCaseGenerated(
+        initialState: ModelState,
+        commands: List[AnyCommand[ModelState, Stage4Sut]]
+    ): Unit =
+        println(Stage4Runner.renderTable(initialState, commands))
 
     override def initEnv: Unit = ()
 
@@ -114,14 +119,22 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
                     val pending = pendingConnsMap(peerNum)
                     Tracer.scopedCtx("peer" -> s"${peerNum: Int}") {
                         for
-                            blockWeaver <- system.actorOf(BlockWeaver(nodeConfig, pending, tracerLocal))
+                            blockWeaver <- system.actorOf(
+                              BlockWeaver(nodeConfig, pending, tracerLocal)
+                            )
                             cardanoLiaison <- system.actorOf(
                               CardanoLiaison(nodeConfig, cardanoBackend, pending, tracerLocal)
                             )
                             eventSequencer <- system.actorOf(EventSequencer(nodeConfig, pending))
                             l2Ledger <- EutxoL2Ledger(nodeConfig)
                             jointLedger <- system.actorOf(
-                              JointLedger(nodeConfig, pending, l2Ledger, ProtocolTracer.noop, tracerLocal)
+                              JointLedger(
+                                nodeConfig,
+                                pending,
+                                l2Ledger,
+                                ProtocolTracer.noop,
+                                tracerLocal
+                              )
                             )
                             consensusActor <- system.actorOf(ConsensusActor(nodeConfig, pending))
                         yield peerNum -> PeerStack(
@@ -334,9 +347,10 @@ object Stage4Suite:
             val anchorTime = 1767225600L
             // 100 day range, seconds
             val range = 86_400 * 100L
-            for
-                offset <- Gen.choose(0L, range)
-            yield BlockCreationEndTime(java.time.Instant.ofEpochSecond(anchorTime + offset).quantize(tp.slotConfig))
+            for offset <- Gen.choose(0L, range)
+            yield BlockCreationEndTime(
+              java.time.Instant.ofEpochSecond(anchorTime + offset).quantize(tp.slotConfig)
+            )
         )
 
         val generateHeadConfigBootstrap_ = generateHeadConfigBootstrap(
@@ -397,25 +411,3 @@ object Stage4Suite:
           nextRequestNumbers = peers.map(_ -> RequestNumber(0)).toMap,
           pendingDeposits = peers.map(_ -> Nil).toMap,
         )
-
-// ===================================
-// Test entry points
-// ===================================
-
-object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
-
-    override def overrideParameters(p: Test.Parameters): Test.Parameters =
-        p
-            //.withInitialSeed(Seed.fromBase64("7wf2XaHHBHdGl4XOoIpW8PvN2t8XFcR0fFE0RBX6pWG=").get)
-            .withInitialSeed(Seed.fromBase64("Irdkn14LUINcIDjKQOxKuN-GF2399UOCwL-C11NVESJ=").get)
-            .withWorkers(1)
-            .withMinSuccessfulTests(1)
-
-    lazy val _ = property("two peers head") =
-        Stage4Suite(label = "stage4-two-peers", nPeers = 2).property()
-
-    val _ = property("three peers head") =
-        Stage4Suite(label = "stage4-three-peers", nPeers = 3).property()
-
-    lazy val _ = property("twenty peers head") =
-        Stage4Suite(label = "stage4-twenty-peers", nPeers = 20).property()
