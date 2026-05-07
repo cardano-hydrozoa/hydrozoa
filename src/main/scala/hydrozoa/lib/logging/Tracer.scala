@@ -1,7 +1,11 @@
 package hydrozoa.lib.logging
 
-import cats.effect.{IO, IOLocal}
-import cats.syntax.all.*
+import cats.effect.{ExitCode, IO, IOApp, IOLocal}
+import cats.implicits.*
+import cats.{effect, *}
+import hydrozoa.lib.logging.Level.{Debug, Info, Warn}
+
+import ContraTracerSyntax.*
 
 enum Level:
     case Trace, Debug, Info, Warn, Error
@@ -29,15 +33,17 @@ case class LogEvent(
   *
   * Note: [[hydrozoa.lib.tracing.ProtocolTracer]] is a future merge candidate.
   */
-type Tracer = LogEvent => IO[Unit]
+type Tracer = ContraTracer[IO, LogEvent]
 
 extension (t: Tracer)
-    def withCtx(f: Map[String, String] => Map[String, String]): Tracer =
-        ev => t(ev.copy(ctx = f(ev.ctx)))
+    // TODO: perhaps this should just be done with contramap?
+    def withCtx(f: Map[String, String] => Map[String, String]): Tracer = {
+        t.contramap(ev => ev.copy(ctx = f(ev.ctx)))
+    }
 
 object Tracer:
 
-    private val base: Tracer = ev =>
+    private val base: ContraTracer[IO, LogEvent] = ContraTracer.emit((ev: LogEvent) =>
         val lg = Logging.loggerIO(ev.routingKey.getOrElse("hydrozoa"))
         val prefix =
             if ev.ctx.isEmpty then ""
@@ -49,6 +55,7 @@ object Tracer:
             case Level.Info  => lg.info(msg)
             case Level.Warn  => lg.warn(msg)
             case Level.Error => ev.cause.fold(lg.error(msg))(lg.error(_)(msg))
+    )
 
     /** Creates a fresh [[IOLocal]] seeded with the base tracer. All routing is then set per-fiber
       * via [[routeLocal]] in each actor's preStartLocal.
@@ -62,12 +69,7 @@ object Tracer:
       * would corrupt the parent's routing).
       */
     def routeLocal(name: String)(using local: IOLocal[Tracer]): IO[Unit] =
-        local.update(tracer =>
-            ev =>
-                tracer(
-                  if ev.routingKey.isEmpty then ev.copy(routingKey = Some(name)) else ev
-                )
-        )
+        updateLocal(ev => if ev.routingKey.isEmpty then ev.copy(routingKey = Some(name)) else ev)
 
     /** Permanently contramaps the ambient tracer — no scope, no restore.
       *
@@ -75,7 +77,7 @@ object Tracer:
       * for other permanent per-fiber enrichment.
       */
     def updateLocal(f: LogEvent => LogEvent)(using local: IOLocal[Tracer]): IO[Unit] =
-        local.update(tracer => ev => tracer(f(ev)))
+        local.update(tracer => tracer.contramap(f))
 
     /** Convenience: permanently add key-value pairs to [[LogEvent.ctx]] only. */
     def updateLocalCtx(kvs: (String, String)*)(using local: IOLocal[Tracer]): IO[Unit] =
@@ -84,31 +86,45 @@ object Tracer:
     /** Enriches the ambient tracer for the duration of [[fa]], then restores. Use to set
       * [[LogEvent.ctx]] (ambient context).
       */
-    def scoped[A](f: LogEvent => LogEvent)(fa: IO[A])(using local: IOLocal[Tracer]): IO[A] =
-        local.get.flatMap(t =>
-            local.getAndSet(ev => t(f(ev))).flatMap(old => fa.guarantee(local.set(old)))
-        )
+    def scoped[A](f: LogEvent => LogEvent)(fa: IO[A])(using local: IOLocal[Tracer]): IO[A] = for {
+        tracer <- local.get
+        old <- local.getAndSet(tracer.contramap(f))
+        res <- fa.guarantee(local.set(old))
+    } yield res
+
+    def contramapScoped[A, B](
+        f: B => LogEvent
+    )(fa: ContraTracer[IO, B] ?=> IO[A])(using local: IOLocal[Tracer]): IO[A] =
+        for {
+            tracer <- local.get
+            res <- {
+                given ContraTracer[IO, B] = tracer.contramap(f)
+                fa.guarantee(local.set(tracer))
+            }
+        } yield res
 
     /** Convenience: add key-value pairs to [[LogEvent.ctx]] only. */
     def scopedCtx[A](kvs: (String, String)*)(fa: IO[A])(using IOLocal[Tracer]): IO[A] =
         scoped(ev => ev.copy(ctx = ev.ctx ++ kvs))(fa)
 
+    private def levelMap(level: Level)(using local: IOLocal[Tracer]): String => IO[Unit] =
+        msg => local.get.flatMap(_.traceWith(LogEvent(level, msg)))
+
     def trace(msg: String)(using local: IOLocal[Tracer]): IO[Unit] =
-        local.get.flatMap(_(LogEvent(Level.Trace, msg)))
+        levelMap(Level.Trace)(msg)
 
     def debug(msg: String)(using local: IOLocal[Tracer]): IO[Unit] =
-        local.get.flatMap(_(LogEvent(Level.Debug, msg)))
+        levelMap(Debug)(msg)
 
     def info(msg: String)(using local: IOLocal[Tracer]): IO[Unit] =
-        local.get.flatMap(_(LogEvent(Level.Info, msg)))
+        levelMap(Level.Info)(msg)
 
     def warn(msg: String)(using local: IOLocal[Tracer]): IO[Unit] =
-        local.get.flatMap(_(LogEvent(Level.Warn, msg)))
+        levelMap(Warn)(msg)
 
     def error(msg: String, cause: Option[Throwable] = None)(using
         local: IOLocal[Tracer]
-    ): IO[Unit] =
-        local.get.flatMap(_(LogEvent(Level.Error, msg, cause = cause)))
+    ): IO[Unit] = levelMap(Level.Error)(msg)
 
 // Lightweight Writer monad for logging in pure code.
 // Pure functions return Traced[A] instead of A; IO callers emit events via logWith;
@@ -118,4 +134,79 @@ type Traced[+A] = (A, List[LogEvent])
 extension [A](traced: Traced[A])
     def value: A = traced._1
     def logWith(using local: IOLocal[Tracer]): IO[A] =
-        traced._2.traverse_(e => local.get.flatMap(_(e))).as(traced._1)
+        traced._2.traverse_(e => local.get.flatMap(_.traceWith(e))).as(traced._1)
+
+object TracerDemo extends IOApp {
+
+    enum CtxKeys:
+        case K1
+        case K2
+        case K3
+
+    case class MockBlock(blockNumber: Int, kzg: String)
+
+    case class BlockProductionCtx(ctx: Map[CtxKeys, String])
+
+    def blockProductionContramap(
+        blockProductionCtx: BlockProductionCtx
+    )(mockBlock: MockBlock): LogEvent =
+        LogEvent(
+          level = Info,
+          msg = "block produced",
+          ctx = blockProductionCtx.ctx.map((k, v) => (k.toString, v)),
+          cause = None,
+          routingKey = None
+        )
+
+    override def run(args: List[String]): IO[ExitCode] =
+        for {
+            tracerLocal <- Tracer.makeLocal
+            _ <- {
+                given IOLocal[Tracer] = tracerLocal
+
+                for {
+                    // String tracing
+                    _ <- for {
+                        _ <- Tracer.trace("trace level")
+                        _ <- Tracer.info("info level")
+                        _ <- Tracer.error("error level")
+                    } yield ()
+
+                    // LogEvent Tracing
+                    _ <- for {
+                        tracer <- tracerLocal.get
+                        _ <- tracer.traceWith(
+                          LogEvent(
+                            Level.Error,
+                            "direct log event logging with context",
+                            Map("foo" -> "bar")
+                          )
+                        )
+                    } yield ()
+
+                    mockBlock = MockBlock(100, "abcd")
+                    mockContext = BlockProductionCtx(
+                      Map(
+                        CtxKeys.K1 -> "set by the calling function and passed to the called function"
+                      )
+                    )
+
+                    // Logging a typed event with a typed context
+                    _ <- for {
+                        tracer <- tracerLocal.get
+                        _ <- tracer
+                            .contramap(blockProductionContramap(mockContext))
+                            .traceWith(mockBlock)
+                    } yield ()
+
+                    // contramap scoping
+                    _ <- Tracer.contramapScoped(blockProductionContramap(mockContext))(
+                      traceWith(mockBlock)
+                    )
+
+                } yield ()
+
+            }
+
+        } yield ExitCode.Success
+}
