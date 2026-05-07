@@ -162,3 +162,45 @@ Used in the startup pump (Phase 1) and the shutdown drain (Phase 3). In these ph
 ## totalAdvanced: Exact Virtual Time Tracking
 
 `totalAdvanced` accumulates only the explicit command delays. `nextInterval` advances during startup and shutdown are excluded — they represent test infrastructure overhead (fast-forward to present, `waitForIdle` polling), not protocol simulated time. The result is printed at the end:
+
+## Expected Log Output
+
+NB: This is correcr for stage1, I didn't proofread it for stage4 so far.
+
+A healthy run produces exactly **two `tickUntilAdvancing` WARN lines per test case**, with no other WARN output during the command loop:
+
+```
+08:53:35.817 WARN  org.scalacheck.commands.ModelBasedSuite
+tickUntilAdvancing: no eligible fibers — advancing 2000000000000000000 nanoseconds to next timer
+08:53:36.990 WARN  org.scalacheck.commands.ModelBasedSuite
+tickUntilAdvancing: no eligible fibers — advancing 100000000 nanoseconds to next timer
+08:53:37.735 WARN  org.scalacheck.commands.ModelBasedSuite
+tickUntilAdvancing: no eligible fibers — advancing 2000000000000000000 nanoseconds to next timer
+...
+```
+
+### Entry 1 — startup fast-forward (`2000000000000000000` ns ≈ 63 years)
+
+Produced during **Phase 1 (Startup Pump)**. `startupSut` calls:
+
+```scala
+IO.sleep(FiniteDuration(state.getCurrentTime.instant.toEpochMilli, MILLISECONDS))
+```
+
+The model's initial time is anchored to a point far in the future relative to the `TestControl` epoch (time 0), so the sleep duration is enormous. `tickUntilAdvancing` finds no eligible fibers at epoch, calls `tc.nextInterval` which returns this huge duration, and advances to it. After this advance the startup IO resumes, actors are created, and the first command's gate is posted — so `tickUntilAdvancing` exits without a second `nextInterval` call.
+
+### Entry 2 — shutdown `waitForIdle` stabilization (`100000000` ns = 100 ms)
+
+Produced during **Phase 3 (Sentinel and Shutdown)**. `shutdownSut` calls `sut.system.waitForIdle(maxTimeout = 1.second)`. Even when all actor mailboxes are already empty, `ActorSystemDebugSyntax.waitForIdle` (cats-actors 2.0.1) always executes a hardcoded stabilization sleep after confirming children are idle:
+
+```scala
+_ <- children.waitForIdle(checkSchedulerIdle)
+_ <- Temporal[F].sleep(100 milliseconds)   // always fires, even when already idle
+```
+
+The inner's fiber suspends on this sleep. `tickOne → false`. `tc.results` is not yet defined. `tickUntilAdvancing` calls `tc.nextInterval` → 100 ms → advances → the sleep fires → `waitForIdle` completes → `shutdownSut` finishes → `tc.results` becomes defined → `tickUntilAdvancing` exits.
+
+### What a broken run looks like
+
+- **Extra `tickUntilAdvancing` advances during the command loop** indicate an unexpected `IO.sleep` in a SUT command path. The strict `tickUntil` should have caught this with an error — if it didn't, check whether the sleep is reachable only from a background fiber (actor ping loop firing, etc.).
+- **`tickUntil: fibers exhausted but signal not received` error** means the SUT deadlocked or the inner posted no gate before running out of eligible work. Common causes: actor timeout not fired (clock not advanced far enough), or a `Deferred.get` that is never completed.
