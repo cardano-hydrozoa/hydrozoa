@@ -8,6 +8,7 @@ import com.suprnation.typelevel.actors.syntax.BroadcastOps
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime, FallbackTxStartTime}
+import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.actor.*
 import hydrozoa.lib.logging.{Tracer, logWith}
@@ -262,7 +263,11 @@ final case class JointLedger(
                 if !checkRequestValidityInterval(req, blockStartTime) then
                     rejectEvent(
                       requestId,
-                      JointLedger.UserRequestError.BlockOutOfRequestValidityInterval(blockStartTime)
+                      JointLedger.UserRequestError.BlockOutOfRequestValidityInterval(
+                        blockStartTime,
+                        req.request.header.validityStart,
+                        req.request.header.validityEnd
+                      )
                     )
                 else {
                     val l1Res = L1LedgerM.registerDeposit(req).run(config, p.l1LedgerState)
@@ -332,7 +337,11 @@ final case class JointLedger(
                 if !checkRequestValidityInterval(req, blockStartTime) then
                     rejectEvent(
                       requestId,
-                      JointLedger.UserRequestError.BlockOutOfRequestValidityInterval(blockStartTime)
+                      JointLedger.UserRequestError.BlockOutOfRequestValidityInterval(
+                        blockStartTime,
+                        req.request.header.validityStart,
+                        req.request.header.validityEnd
+                      )
                     )
                 else {
                     val l2Command: L2LedgerCommand.ApplyTransaction = L2LedgerCommand
@@ -820,8 +829,19 @@ object JointLedger {
     )
 
     enum UserRequestError extends Throwable:
-        case BlockOutOfRequestValidityInterval(blockCreationStartTime: BlockCreationStartTime)
-            extends UserRequestError
+        // Inherits Throwable.toString = "<className>: <getMessage>"; we override getMessage so
+        // the rejection log shows all three timestamps and can be diagnosed at a glance.
+        override def getMessage: String = this match
+            case e: BlockOutOfRequestValidityInterval =>
+                s"blockCreationStartTime=${e.blockCreationStartTime.convert}, " +
+                    s"requestValidityStart=${e.requestValidityStart.convert}, " +
+                    s"requestValidityEnd=${e.requestValidityEnd.convert}"
+
+        case BlockOutOfRequestValidityInterval(
+            blockCreationStartTime: BlockCreationStartTime,
+            requestValidityStart: RequestValidityStartTime,
+            requestValidityEnd: RequestValidityEndTime
+        ) extends UserRequestError
 
     object Requests {
         type Request =
