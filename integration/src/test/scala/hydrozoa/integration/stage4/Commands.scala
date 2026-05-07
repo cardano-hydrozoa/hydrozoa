@@ -91,9 +91,12 @@ object Commands:
         depositProduced: TransactionInput,
         depositTxBytesSigned: Transaction,
         interArrivalDelay: FiniteDuration,
-        // Pre-computed at generation time as depositAbsorptionStartTime(validityEnd) + absorptionSlack.
-        // Stored here so runState doesn't need to re-derive it from txTiming, and so the table
-        // can display the expected absorption time alongside the deposit command.
+        // Protocol-level deposit maturity time (= depositAbsorptionStartTime(validityEnd)).
+        // SUT may absorb at any block whose endTime >= this value.
+        absorptionStartTime: QuantizedInstant,
+        // Pre-computed at generation time as absorptionStartTime + absorptionSlack.
+        // Used by the model to decide when to promote the deposit's L2 UTxOs into utxosL2Active
+        // (a model-side conservatism over the protocol maturity time).
         expectedAbsorptionTime: QuantizedInstant,
     ) {
         override def toString: String =

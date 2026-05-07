@@ -338,13 +338,13 @@ object CommandGenerators:
                                             .ownHeadWallet
                                             .exportVerificationKey
 
-                                        absorptionStart =
+                                        absorptionStartTime =
                                             config.headConfig.txTiming
                                                 .depositAbsorptionStartTime(requestValidityEndTime)
                                                 .convert
 
                                         expectedAbsorptionTime =
-                                            absorptionStart + state.params.absorptionSlack
+                                            absorptionStartTime + state.params.absorptionSlack
 
                                         interArrivalDelay <- genInterArrivalDelay(
                                           state.params.meanInterArrivalTimes(peerNum)
@@ -367,6 +367,7 @@ object CommandGenerators:
                                             depositRefundSeq.depositTx.depositProduced.utxoId,
                                         depositTxBytesSigned = depositTxSigned,
                                         interArrivalDelay = interArrivalDelay,
+                                        absorptionStartTime = absorptionStartTime,
                                         expectedAbsorptionTime = expectedAbsorptionTime,
                                       )
                                     )

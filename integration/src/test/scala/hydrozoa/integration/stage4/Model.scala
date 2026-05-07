@@ -39,6 +39,10 @@ object Model {
       */
     case class PendingDeposit(
         requestId: RequestId,
+        // Protocol-level deposit maturity time (= depositAbsorptionStartTime).
+        absorptionStartTime: QuantizedInstant,
+        // absorptionStartTime + Params.absorptionSlack — model's view of when the deposit's L2
+        // UTxOs become available in `utxosL2Active`.
         expectedAbsorptionTime: QuantizedInstant,
         l2Payload: ByteString,
         depositProduced: TransactionInput
@@ -69,6 +73,10 @@ object Model {
         // Validity flag the model assigned to each user request, in submission order. Used at
         // shutdown to compare model's submission-order verdict against SUT's block-order verdict.
         modelFlags: Map[RequestId, ValidityFlag],
+
+        // Every deposit ever registered, by RequestId. Retained even after absorption so that
+        // shutdownSut analysis has access to timing metadata (expectedAbsorptionTime, etc.).
+        registeredDeposits: Map[RequestId, PendingDeposit],
     ) {
         override def toString: String = "<stage4 model state (hidden)>"
 
@@ -204,6 +212,7 @@ object Model {
 
             val pending = PendingDeposit(
               requestId = cmd.request.requestId,
+              absorptionStartTime = cmd.absorptionStartTime,
               expectedAbsorptionTime = cmd.expectedAbsorptionTime,
               l2Payload = cmd.l2Payload,
               depositProduced = cmd.depositProduced
@@ -220,6 +229,8 @@ object Model {
               peerUtxosL1 = stateAfterTime.peerUtxosL1 + (peerNum -> updatedPeerL1),
               modelFlags =
                   stateAfterTime.modelFlags + (cmd.request.requestId -> ValidityFlag.Valid),
+              registeredDeposits =
+                  stateAfterTime.registeredDeposits + (cmd.request.requestId -> pending),
             )
     }
 

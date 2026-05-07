@@ -13,6 +13,7 @@ import hydrozoa.config.head.parameters.generateHeadParameters
 import hydrozoa.config.head.{InitParamsType, generateHeadConfig, generateHeadConfigBootstrap}
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.integration.stage4.Model.*
+import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant.mkOrderingOps
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import cats.effect.IOLocal
 import hydrozoa.lib.logging.{Logging, Tracer}
@@ -54,7 +55,7 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
     override def scenarioGen: ScenarioGen[ModelState, Stage4Sut] = Stage4ScenarioGen
 
     override def commandGenTweaker: [A] => Gen[A] => Gen[A] = [A] =>
-        (g: Gen[A]) => Gen.resize(50, g)
+        (g: Gen[A]) => Gen.resize(500, g)
 
     override def onTestCaseGenerated(
         initialState: ModelState,
@@ -269,75 +270,144 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
         canonicalBriefs = briefsByPeer(sortedPeers.head)
         submittedIds <- sut.submittedRequestIds.get
 
-        _ <- IO {
-            val colWidth = 72
-            val divider = s"+${"-" * (colWidth + 2)}+"
-            val header = s"| ${"Block".padTo(colWidth, ' ')} |"
+        _ <- IO(printBlockTable(canonicalBriefs, sortedPeers, briefsByPeer, nPeers, submittedIds, lastState))
+    yield
+        propLiveness(submittedIds, canonicalBriefs) &&
+            propDepositTiming(lastState.registeredDeposits, canonicalBriefs) &&
+            propValidRatio(lastState, canonicalBriefs)
 
-            println(divider)
-            println(header)
-            println(divider)
+    /** Property: every submitted request id eventually appears in some block — either as an event
+      * (Valid or Invalid) or as a deposit (absorbed or refunded). Catches silent message loss
+      * (e.g. the historical `Mempool.extractRequestsWhile` bug).
+      */
+    private def propLiveness(
+        submittedIds: Vector[RequestId],
+        canonicalBriefs: Vector[BlockBrief.Intermediate]
+    ): Prop = {
+        val processedIds: Set[RequestId] =
+            canonicalBriefs.flatMap(b =>
+                b.events.map(_._1) ++ b.depositsAbsorbed ++ b.depositsRefunded
+            ).toSet
+        val missing = submittedIds.toSet -- processedIds
+        Prop(missing.isEmpty) :|
+            s"liveness: ${missing.size} submitted reqId(s) never appeared in any block: " +
+            s"${missing.toSeq.sortBy(r => (r.peerNum.convert, r.requestNum.convert)).mkString(", ")}"
+    }
 
-            canonicalBriefs.foreach { brief =>
-                val blockType = brief match {
-                    case _: BlockBrief.Minor => "Min"; case _: BlockBrief.Major => "Maj"
-                }
-                val vMaj = brief.blockVersion.major.convert
-                val vMin = brief.blockVersion.minor.convert
-                val leader = (brief.blockNum: Int) % nPeers
-                val evs = brief.events.map { case (reqId, flag) =>
-                    val f = if flag == ValidityFlag.Valid then "V" else "I"
-                    s"p${reqId.peerNum.convert}:r${reqId.requestNum.convert}=$f"
-                }
-                val abs = brief.depositsAbsorbed.map(r =>
-                    s"abs:p${r.peerNum.convert}:r${r.requestNum.convert}"
-                )
-                val ref = brief.depositsRefunded.map(r =>
-                    s"ref:p${r.peerNum.convert}:r${r.requestNum.convert}"
-                )
-                val events = (evs ++ abs ++ ref).mkString(" ")
-                val label =
-                    s"#${brief.blockNum: Int} $blockType v$vMaj.$vMin lead=p$leader | $events"
-                println(s"| ${label.take(colWidth).padTo(colWidth, ' ')} |")
+    /** Property: every absorbed deposit was mature by the time the absorbing block ended,
+      * i.e. `brief.endTime >= deposit.absorptionStartTime`. Refund-window check is a TODO — needs
+      * `depositAbsorptionEndTime` and the `notInPollResults` legitimate case which we don't track.
+      */
+    private def propDepositTiming(
+        registeredDeposits: Map[RequestId, PendingDeposit],
+        canonicalBriefs: Vector[BlockBrief.Intermediate]
+    ): Prop = {
+        val violations: Vector[String] =
+            for
+                brief <- canonicalBriefs
+                reqId <- brief.depositsAbsorbed.toVector
+                deposit <- registeredDeposits.get(reqId).toVector
+                if brief.endTime.convert < deposit.absorptionStartTime
+            yield s"reqId=$reqId absorbed at brief.endTime=${brief.endTime.convert} but " +
+                s"absorptionStartTime=${deposit.absorptionStartTime}"
+        Prop(violations.isEmpty) :|
+            s"deposit timing: ${violations.size} absorbed-too-early violation(s):\n" +
+            violations.mkString("\n")
+    }
+
+    /** Property: SUT's valid/total ratio is no greater than the model's, i.e. the SUT is not
+      * more permissive than the model. Compared as exact rationals via cross-multiplication.
+      */
+    private def propValidRatio(
+        lastState: ModelState,
+        canonicalBriefs: Vector[BlockBrief.Intermediate]
+    ): Prop = {
+        // Restrict model to L2-tx requests so denominators are comparable to SUT's brief.events
+        // (deposits are always Valid in the model and don't appear in events).
+        val l2TxReqIds = lastState.modelFlags.keySet -- lastState.registeredDeposits.keySet
+        val modelValid = l2TxReqIds.count(lastState.modelFlags(_) == ValidityFlag.Valid).toLong
+        val modelTotal = l2TxReqIds.size.toLong
+        val sutEvents = canonicalBriefs.flatMap(_.events)
+        val sutValid = sutEvents.count(_._2 == ValidityFlag.Valid).toLong
+        val sutTotal = sutEvents.size.toLong
+
+        // sutValid/sutTotal <= modelValid/modelTotal  iff  sutValid*modelTotal <= modelValid*sutTotal
+        // Trivially holds when either total is 0 (vacuous).
+        val holds =
+            modelTotal == 0L || sutTotal == 0L ||
+                sutValid * modelTotal <= modelValid * sutTotal
+        Prop(holds) :|
+            s"valid ratio: SUT $sutValid/$sutTotal exceeds model $modelValid/$modelTotal " +
+            s"(SUT is more permissive than the model)"
+    }
+
+    private def printBlockTable(
+        canonicalBriefs: Vector[BlockBrief.Intermediate],
+        sortedPeers: Seq[HeadPeerNumber],
+        briefsByPeer: Map[HeadPeerNumber, Vector[BlockBrief.Intermediate]],
+        nPeers: Int,
+        submittedIds: Vector[RequestId],
+        lastState: ModelState
+    ): Unit = {
+        val colWidth = 72
+        val divider = s"+${"-" * (colWidth + 2)}+"
+        val header = s"| ${"Block".padTo(colWidth, ' ')} |"
+
+        println(divider)
+        println(header)
+        println(divider)
+
+        canonicalBriefs.foreach { brief =>
+            val blockType = brief match {
+                case _: BlockBrief.Minor => "Min"; case _: BlockBrief.Major => "Maj"
             }
-
-            println(divider)
-
-            // SUT processing order — each block contributes its absorbed deposits, then its events.
-            val sutOrder: Vector[RequestId] =
-                canonicalBriefs.flatMap(b => b.depositsAbsorbed ++ b.events.map(_._1)).toVector
-
-            // Common-prefix length: position-by-position match between submission order and SUT
-            // processing order. If all submitted ids land in the same positions in the SUT order
-            // (commonPrefixLen == submittedIds.size), the SUT preserved order and replay against
-            // block-order isn't needed.
-            val commonPrefixLen =
-                submittedIds.zip(sutOrder).takeWhile { case (a, b) => a == b }.length
-
-            // Model verdicts (submission order) vs SUT verdicts (block order).
-            val modelValid = lastState.modelFlags.values.count(_ == ValidityFlag.Valid)
-            val modelTotal = lastState.modelFlags.size
-            val sutEvents = canonicalBriefs.flatMap(_.events)
-            val sutValid = sutEvents.count(_._2 == ValidityFlag.Valid)
-            val sutTotal = sutEvents.size
-
-            println(
-              s"Peers: ${sortedPeers.map(p => s"p${p: Int}=${briefsByPeer(p).length}blks").mkString("  ")}"
+            val vMaj = brief.blockVersion.major.convert
+            val vMin = brief.blockVersion.minor.convert
+            val leader = (brief.blockNum: Int) % nPeers
+            val evs = brief.events.map { case (reqId, flag) =>
+                val f = if flag == ValidityFlag.Valid then "V" else "I"
+                s"p${reqId.peerNum.convert}:r${reqId.requestNum.convert}=$f"
+            }
+            val abs = brief.depositsAbsorbed.map(r =>
+                s"abs:p${r.peerNum.convert}:r${r.requestNum.convert}"
             )
-            println(
-              s"Common prefix: $commonPrefixLen / ${submittedIds.length} (submission order vs SUT block order)"
+            val ref = brief.depositsRefunded.map(r =>
+                s"ref:p${r.peerNum.convert}:r${r.requestNum.convert}"
             )
-            println(
-              s"Valid/total — model: $modelValid/$modelTotal  SUT: $sutValid/$sutTotal"
-            )
-            if commonPrefixLen == submittedIds.length then
-                println("SUT preserved submission order — replay not needed.")
-            else println("SUT diverged from submission order — replay required to verify.")
-            println(
-              "Legend: Min=Minor Maj=Major v=version lead=leader p=peer r=requestNum V=valid I=invalid abs=deposit-absorbed ref=refunded"
-            )
+            val events = (evs ++ abs ++ ref).mkString(" ")
+            val label =
+                s"#${brief.blockNum: Int} $blockType v$vMaj.$vMin lead=p$leader | $events"
+            println(s"| ${label.take(colWidth).padTo(colWidth, ' ')} |")
         }
-    yield Prop.passed
+
+        println(divider)
+
+        // SUT processing order — each block contributes its absorbed deposits, then its events.
+        val sutOrder: Vector[RequestId] =
+            canonicalBriefs.flatMap(b => b.depositsAbsorbed ++ b.events.map(_._1)).toVector
+        val commonPrefixLen =
+            submittedIds.zip(sutOrder).takeWhile { case (a, b) => a == b }.length
+
+        val l2TxReqIds = lastState.modelFlags.keySet -- lastState.registeredDeposits.keySet
+        val modelValid = l2TxReqIds.count(lastState.modelFlags(_) == ValidityFlag.Valid)
+        val modelTotal = l2TxReqIds.size
+        val sutEvents = canonicalBriefs.flatMap(_.events)
+        val sutValid = sutEvents.count(_._2 == ValidityFlag.Valid)
+        val sutTotal = sutEvents.size
+
+        println(
+          s"Peers: ${sortedPeers.map(p => s"p${p: Int}=${briefsByPeer(p).length}blks").mkString("  ")}"
+        )
+        println(
+          s"Common prefix: $commonPrefixLen / ${submittedIds.length} (submission order vs SUT block order)"
+        )
+        println(
+          s"Valid/total (L2 txs) — model: $modelValid/$modelTotal  SUT: $sutValid/$sutTotal"
+        )
+        println(
+          "Legend: Min=Minor Maj=Major v=version lead=leader p=peer r=requestNum V=valid I=invalid abs=deposit-absorbed ref=refunded"
+        )
+    }
 
 // ===================================
 // Initial state generator (canonical location; Runner delegates here for @main)
@@ -424,4 +494,5 @@ object Stage4Suite:
           nextRequestNumbers = peers.map(_ -> RequestNumber(0)).toMap,
           pendingDeposits = peers.map(_ -> Nil).toMap,
           modelFlags = Map.empty,
+          registeredDeposits = Map.empty,
         )

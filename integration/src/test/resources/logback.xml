@@ -31,32 +31,38 @@
         <appender-ref ref="MERMAID"/>
     </logger>
 
-    <logger name="org.scalacheck.commands.ModelBasedSuite" level="info"/>
+
+    <!-- default: warn -->
+    <logger name="org.scalacheck.commands.ModelBasedSuite" level="warn"/>
     <logger name="test.CardanoBackendMock" level="warn"/>
 
-    <logger name="Stage1.Commands" level="warn"/>
-    <logger name="Stage1.CommandGenerators" level="trace"/>
-    <logger name="Stage1.ScenarioGenerators" level="warn"/>
-    <logger name="Stage1.Model" level="trace"/>
-    <logger name="Stage1.Sut" level="trace"/>
-    <logger name="Stage1.Suite" level="trace"/>
+    <!-- default: info -->
+    <logger name="Stage1.Commands" level="info"/>
+    <logger name="Stage1.CommandGenerators" level="info"/>
+    <logger name="Stage1.ScenarioGenerators" level="info"/>
+    <logger name="Stage1.Model" level="info"/>
+    <logger name="Stage1.Sut" level="info"/>
+    <logger name="Stage1.Suite" level="info"/>
 
-    <logger name="Stage4.Commands" level="trace"/>
-    <logger name="Stage4.CommandGenerators" level="trace"/>
-    <logger name="Stage4.ScenarioGenerators" level="trace"/>
-    <logger name="Stage4.Model" level="trace"/>
-    <logger name="Stage4.Sut" level="trace"/>
+    <!-- default: info -->
+    <logger name="Stage4.Commands" level="info"/>
+    <logger name="Stage4.CommandGenerators" level="info"/>
+    <logger name="Stage4.ScenarioGenerators" level="info"/>
+    <logger name="Stage4.Model" level="info"/>
+    <logger name="Stage4.Sut" level="info"/>
     <logger name="Stage4.Suite" level="info"/>
 
-    <logger name="BlockWeaver" level="trace"/>
-    <logger name="ConsensusActor" level="debug"/>
-    <logger name="EventSequencer" level="trace"/>
+    <!-- default: warn -->
+    <logger name="BlockWeaver" level="warn"/>
+    <logger name="ConsensusActor" level="warn"/>
+    <logger name="EventSequencer" level="warn"/>
     <logger name="CardanoLiaison" level="warn"/>
-    <logger name="JointLedger" level="trace"/>
-    <logger name="PeerLiaison" level="trace"/>
-    <logger name="PeerLiaisonMermaid" level="info"/>
-    <logger name="TxTiming" level="trace"/>
+    <logger name="JointLedger" level="warn"/>
+    <logger name="PeerLiaison" level="warn"/>
+    <logger name="PeerLiaisonMermaid" level="warn"/>
+    <logger name="TxTiming" level="warn"/>
+    <logger name="DepositsMap" level="warn"/>
 
-    <logger name="scalus" level="error"/>
-    <logger name="DepositsMap" level="trace"/>
+    <!-- default: warn -->
+    <logger name="scalus" level="warn"/>
 </configuration>
