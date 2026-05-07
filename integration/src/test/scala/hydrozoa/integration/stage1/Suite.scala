@@ -652,13 +652,24 @@ case class Suite(
 
         /** Important: this action should ensure that the actor system was not terminated.
           *
-          * Even more important: before terminating, make sure [[waitForIdle]] is called - otherwise
-          * you just immediately shutdown the system and will get a false-positive or false-negative test.
+          * Even more important: before terminating, make sure [[waitForIdle]] is called -
+          * otherwise we'd shut down the system while messages are still in flight and the test
+          * would observe an inconsistent partial state, causing false-positive or
+          * false-negative results. Stage1 uses [[BlockWeaverMock]], so there are no wakeup
+          * timers to drain — only the mailbox queues from the last submitted command.
           *
-          * Luckily enough, [[waitForIdle]] does exactly what we need in addition to checking the
-          * mailboxes it also verifies that the system was not terminated.
+          * Luckily enough, [[waitForIdle]] does exactly what we need: in addition to checking
+          * the mailboxes it also verifies that the system was not terminated.
+          *
+          * `maxTimeout` is `Temporal[F].sleep`-based and races the drain loop:
+          *   - Under [[TestControl]] (mock backend), it is virtual time and elapses fast in
+          *     real time; the value caps how much virtual clock advancement we tolerate.
+          *   - Under real-clock backends (Yaci / testnet), it is wall-clock time and bounds
+          *     how long this drain may stall the test before giving up.
+          *
+          * The same call serves both modes; the only thing the test author tunes is `maxTimeout`.
           */
-        _ <- sut.system.waitForIdle(maxTimeout = 1.second)
+        _ <- sut.system.waitForIdle(maxTimeout = 5.minutes)
 
         // Next part of the property is to check that expected effects were submitted and are known to the Cardano backend.
         effects <- sut.effectsAcc.get

@@ -5,6 +5,7 @@ import cats.effect.{Deferred, IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.ActorSystem
 import com.suprnation.actor.event.Error as ActorError
+import com.suprnation.typelevel.actors.syntax.*
 import hydrozoa.config.head.initialization.{InitializationParametersGenTopDown, generateInitialBlock}
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.config.head.multisig.timing.generateYaciTxTiming
@@ -244,11 +245,26 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
         )
 
     override def shutdownSut(lastState: ModelState, sut: Stage4Sut): IO[Prop] =
-        // BlockWeaver's IO.sleep inside sleepSendWakeup keeps _isIdle=false for the full sleep
-        // duration, so waitForIdle would always time out. Terminate directly after a brief settle
-        // window that lets any in-flight fault-handling chains flush to eventStream.
         for
             _ <- logger.warn("shutdownSut")
+            // Drain before terminating: the leader's JointLedger is in `Producing` when the
+            // last command arrives, and its `userRequestState.requests` only become a
+            // `BlockBrief` when the block is sealed. Sealing happens when `BlockWeaver` decides
+            // it's time — driven by either the dead-man fallback push-out timer or a deposit
+            // decision wakeup, whichever fires first. Without `waitForIdle` we'd terminate
+            // before any of that completes and miss the in-progress block's events in the
+            // analysis, causing spurious liveness failures.
+            //
+            // `waitForIdle` returns when all mailboxes are empty, the child set is stable, and
+            // deadLetters are drained — it does NOT require "no scheduled future sleeps".
+            // BlockWeaver's `sleepSendWakeup` runs in a separate fiber, so between wakeups the
+            // actor's mailbox is empty and `isIdle` is true.
+            //
+            // `maxTimeout` is virtual under TestControl and elapses fast in real time; the
+            // default (30s virtual) is enough to drive a pending fallback or deposit-decision
+            // wakeup that seals the in-progress block. Under real-clock backends it would be
+            // wall-clock; stage4 currently uses only the mock backend so we keep the default.
+            _ <- sut.system.waitForIdle()
             _ <- sut.system.terminate()
             _ <- logger.warn("shutdownSut: system was terminated")
             _ <- IO.sleep(100.millis) // settle: let the drainer consume any last-cycle errors
@@ -275,6 +291,30 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
         propLiveness(submittedIds, canonicalBriefs) &&
             propDepositTiming(lastState.registeredDeposits, canonicalBriefs) &&
             propValidRatio(lastState, canonicalBriefs)
+
+    // TODO: side-channel validity-error tracking + propNoStaleRejections
+    //
+    // `JointLedger.rejectEvent` records every rejection as `(reqId, ValidityFlag.Invalid)` in
+    // the in-progress block, so propLiveness sees the request landed in a brief — it cannot
+    // distinguish:
+    //   1. Reordering-induced ledger errors (e.g. `BadAllInputsUTxOException`) — legitimate
+    //      effect of stage4's leader scheduling, expected at stress.
+    //   2. Validity-window expirations (`UserRequestError.BlockOutOfRequestValidityInterval`)
+    //      — symptom of the request reaching the leader after `requestValidityEnd`, currently
+    //      caused by the per-peer model clock vs SUT virtual clock skew (see comment near
+    //      `Generator` validity computation).
+    //   3. SUT bugs producing wrong Invalid verdicts — what we actually want to catch.
+    //
+    // Plan:
+    //   - Add `Stage4Sut.rejections: Ref[IO, Vector[(RequestId, UserRequestError | L1/L2 err)]]`
+    //     populated from a tracer hook in `JointLedger.rejectEvent` (one entry per rejection,
+    //     across all peers).
+    //   - Add `propNoStaleRejections`: assert no `BlockOutOfRequestValidityInterval` rejections
+    //     occurred. Other rejection types are informational only (printed in the analysis
+    //     table) — they are the legitimate reordering signal stage4 wants to exercise.
+    //   - When `propNoStaleRejections` fails, the message must include the rejection's
+    //     timestamps (`blockCreationStartTime`, `requestValidityStart`, `requestValidityEnd`)
+    //     and the reqId, so the diagnostic is self-contained without grepping the log.
 
     /** Property: every submitted request id eventually appears in some block — either as an event
       * (Valid or Invalid) or as a deposit (absorbed or refunded). Catches silent message loss
