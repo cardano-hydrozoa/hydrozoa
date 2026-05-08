@@ -316,8 +316,12 @@ case class Suite(
         // Build custom HeadConfig generator anchored at the takeoff time (or env start for mock)
         val generateHeadStartTime: GenWithTestPeers[BlockCreationEndTime] =
             takeoffTime match {
-                case None    => ReaderT(tp => Gen.const(BlockCreationEndTime(env.startTime.quantize(tp.slotConfig))))
-                case Some(t) => ReaderT(tp => Gen.const(BlockCreationEndTime(t.quantize(tp.slotConfig))))
+                case None =>
+                    ReaderT(tp =>
+                        Gen.const(BlockCreationEndTime(env.startTime.quantize(tp.slotConfig)))
+                    )
+                case Some(t) =>
+                    ReaderT(tp => Gen.const(BlockCreationEndTime(t.quantize(tp.slotConfig))))
             }
 
         // Use the custom txTimingGen provided to Suite
@@ -386,7 +390,7 @@ case class Suite(
               preinitPeerUtxosL1 = peerL1GenesisUtxos,
               deposits = Deposits.empty,
               utxoLocked = Set.empty,
-                padding = 10.seconds
+              padding = 10.seconds
             )
             .applyContinuingL1Tx(config.headConfig.initializationTx.tx)
     }
@@ -504,7 +508,12 @@ case class Suite(
 
             // Cardano liaison
             cardanoLiaison <- system.actorOf(
-              CardanoLiaison(nodeConfig, cardanoBackend, CardanoLiaison.Connections(blockWeaver), tracerLocal)
+              CardanoLiaison(
+                nodeConfig,
+                cardanoBackend,
+                CardanoLiaison.Connections(blockWeaver),
+                tracerLocal
+              )
             )
 
             // Event sequencer stub
@@ -652,20 +661,20 @@ case class Suite(
 
         /** Important: this action should ensure that the actor system was not terminated.
           *
-          * Even more important: before terminating, make sure [[waitForIdle]] is called -
-          * otherwise we'd shut down the system while messages are still in flight and the test
-          * would observe an inconsistent partial state, causing false-positive or
-          * false-negative results. Stage1 uses [[BlockWeaverMock]], so there are no wakeup
-          * timers to drain — only the mailbox queues from the last submitted command.
+          * Even more important: before terminating, make sure [[waitForIdle]] is called - otherwise
+          * we'd shut down the system while messages are still in flight and the test would observe
+          * an inconsistent partial state, causing false-positive or false-negative results. Stage1
+          * uses [[BlockWeaverMock]], so there are no wakeup timers to drain — only the mailbox
+          * queues from the last submitted command.
           *
-          * Luckily enough, [[waitForIdle]] does exactly what we need: in addition to checking
-          * the mailboxes it also verifies that the system was not terminated.
+          * Luckily enough, [[waitForIdle]] does exactly what we need: in addition to checking the
+          * mailboxes it also verifies that the system was not terminated.
           *
           * `maxTimeout` is `Temporal[F].sleep`-based and races the drain loop:
-          *   - Under [[TestControl]] (mock backend), it is virtual time and elapses fast in
-          *     real time; the value caps how much virtual clock advancement we tolerate.
-          *   - Under real-clock backends (Yaci / testnet), it is wall-clock time and bounds
-          *     how long this drain may stall the test before giving up.
+          *   - Under [[TestControl]] (mock backend), it is virtual time and elapses fast in real
+          *     time; the value caps how much virtual clock advancement we tolerate.
+          *   - Under real-clock backends (Yaci / testnet), it is wall-clock time and bounds how
+          *     long this drain may stall the test before giving up.
           *
           * The same call serves both modes; the only thing the test author tunes is `maxTimeout`.
           */

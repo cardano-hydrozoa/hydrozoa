@@ -129,7 +129,7 @@ object Commands:
     final case class CompleteBlockCommand(
         blockNumber: BlockNumber,
         // TODO: should we de-quantize this?
-        blockDuration : QuantizedFiniteDuration,
+        blockDuration: QuantizedFiniteDuration,
         // TODO: This and blockDuration must be consistent, we're just using both for ease of troubleshooting right now
         blockCreationEndTime: BlockCreationEndTime,
         isFinal: Boolean,

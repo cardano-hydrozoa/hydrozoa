@@ -11,17 +11,17 @@ import org.scalacheck.rng.Seed
 import org.scalacheck.util.Pretty
 import test.SeedPhrase
 
-
-
 object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 on L1 mock"):
 
     override def overrideParameters(
         p: org.scalacheck.Test.Parameters
     ): org.scalacheck.Test.Parameters = {
         p.withWorkers(1)
-            //.withPropFilter(Some("Block promotion with real L2 txs"))
+            // .withPropFilter(Some("Block promotion with real L2 txs"))
             .withPropFilter(Some("Deposits"))
-            .withInitialSeed(Some(Seed.fromBase64("lr7yvfMC6Qxtovs5UjWZSfTcqzr7pHrzQ4_mcWApnUP=").get))
+            .withInitialSeed(
+              Some(Seed.fromBase64("lr7yvfMC6Qxtovs5UjWZSfTcqzr7pHrzQ4_mcWApnUP=").get)
+            )
         // NB: careful, this will override -s from the command line
         // .withMinSuccessfulTests(100) // 10000
         // .withMaxSize(100) // 500

@@ -138,12 +138,13 @@ object CommandGenerators:
         currentTime: QuantizedInstant,
         competingFallbackStartTime: FallbackTxStartTime,
         txTiming: TxTiming.Section,
-        padding : FiniteDuration
+        padding: FiniteDuration
     ): Gen[QuantizedFiniteDuration] = {
         // The duration of the block must not put us in the silence period
-        val notionalSettlementEnd = txTiming.txTiming.newSettlementEndTime(competingFallbackStartTime)
+        val notionalSettlementEnd =
+            txTiming.txTiming.newSettlementEndTime(competingFallbackStartTime)
         val availableDuration = notionalSettlementEnd - currentTime
-        
+
         require(availableDuration.finiteDuration > padding)
 
         Gen
@@ -161,9 +162,14 @@ object CommandGenerators:
         currentTime: QuantizedInstant,
         competingFallbackStartTime: FallbackTxStartTime,
         txTiming: TxTiming.Section,
-        padding : FiniteDuration
+        padding: FiniteDuration
     ): Gen[CompleteBlockCommand] = for {
-        blockDuration <- genBlockDuration(currentTime, competingFallbackStartTime, txTiming, padding)
+        blockDuration <- genBlockDuration(
+          currentTime,
+          competingFallbackStartTime,
+          txTiming,
+          padding
+        )
     } yield CompleteBlockCommand(
       blockNumber,
       blockDuration,
@@ -176,9 +182,14 @@ object CommandGenerators:
         currentTime: QuantizedInstant,
         competingFallbackStartTime: FallbackTxStartTime,
         txTiming: TxTiming.Section,
-        padding : FiniteDuration
+        padding: FiniteDuration
     ): Gen[CompleteBlockCommand] = for {
-        blockDuration <- genBlockDuration(currentTime, competingFallbackStartTime, txTiming, padding)
+        blockDuration <- genBlockDuration(
+          currentTime,
+          competingFallbackStartTime,
+          txTiming,
+          padding
+        )
     } yield CompleteBlockCommand(
       blockNumber,
       blockDuration,
@@ -191,7 +202,7 @@ object CommandGenerators:
         currentTime: QuantizedInstant,
         competingFallbackStartTime: FallbackTxStartTime,
         txTiming: TxTiming.Section,
-        padding : FiniteDuration
+        padding: FiniteDuration
     ): Gen[CompleteBlockCommand] =
 
         for {
@@ -203,7 +214,7 @@ object CommandGenerators:
                       currentTime,
                       competingFallbackStartTime,
                       txTiming,
-                        padding
+                      padding
                     )
                 else
                     Gen.frequency(
@@ -211,14 +222,15 @@ object CommandGenerators:
                         blockNumber,
                         currentTime,
                         competingFallbackStartTime,
-                        txTiming, padding
+                        txTiming,
+                        padding
                       ),
                       20 -> genCompleteBlockRegular(
                         blockNumber,
                         currentTime,
                         competingFallbackStartTime,
                         txTiming,
-                          padding
+                        padding
                       )
                     )
         } yield ret
@@ -685,7 +697,7 @@ object ScenarioGenerators:
                                   state.multiNodeConfig.initialBlock.endTime,
                                   state.competingFallbackStartTime,
                                   state.multiNodeConfig,
-                                    state.padding
+                                  state.padding
                                 )
                                 .map(AnyCommand(_))
 
@@ -697,7 +709,7 @@ object ScenarioGenerators:
                                     state.getCurrentTime.instant,
                                     state.competingFallbackStartTime,
                                     state.multiNodeConfig,
-                                      state.padding
+                                    state.padding
                                   )
                                   .map(AnyCommand.apply),
                               10 -> (if state.utxosL2Active.isEmpty
@@ -747,7 +759,7 @@ object ScenarioGenerators:
                                   state.multiNodeConfig.initialBlock.endTime,
                                   state.competingFallbackStartTime,
                                   state.multiNodeConfig,
-                                    state.padding
+                                  state.padding
                                 )
                                 .map(AnyCommand(_))
                         case InProgress(blockNumber, _, _, _) =>
@@ -760,7 +772,7 @@ object ScenarioGenerators:
                                               state.getCurrentTime.instant,
                                               state.competingFallbackStartTime,
                                               state.multiNodeConfig,
-                                                state.padding
+                                              state.padding
                                             )
                                             .map(AnyCommand.apply)
                                     else
@@ -770,7 +782,7 @@ object ScenarioGenerators:
                                               state.getCurrentTime.instant,
                                               state.competingFallbackStartTime,
                                               state.multiNodeConfig,
-                                                state.padding
+                                              state.padding
                                             )
                                             .map(AnyCommand.apply)),
                               10 -> CommandGenerators
@@ -832,8 +844,7 @@ object ScenarioGenerators:
                                   state.multiNodeConfig.initialBlock.endTime,
                                   state.competingFallbackStartTime,
                                   state.multiNodeConfig,
-                                    state.padding
-                                    
+                                  state.padding
                                 )
                                 .map(AnyCommand(_))
                         case InProgress(blockNumber, _, _, _) =>
@@ -854,7 +865,7 @@ object ScenarioGenerators:
                                     state.getCurrentTime.instant,
                                     state.competingFallbackStartTime,
                                     state.multiNodeConfig,
-                                      state.padding
+                                    state.padding
                                   )
                                   .map(cmd => Some(AnyCommand.apply(cmd))),
                               3 -> (if state.utxosL2Active.nonEmpty
