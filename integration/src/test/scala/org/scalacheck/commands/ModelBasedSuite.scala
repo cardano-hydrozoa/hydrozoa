@@ -154,6 +154,7 @@ final class AnyCommand[State, Sut](
     /** Advances the model state (the Result half of runState is erased). */
     val advanceState: State => State,
     /** Time delay to advance before running. */
+    // TODO: this is used in SUT but comes from CommandModel instance which is misleading
     val delay: FiniteDuration,
     /** Runs the command and returns a postcondition predicate over the state *before* the command
       * ran.

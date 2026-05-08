@@ -81,7 +81,7 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
         // With TestControl, IO.sleep advances the virtual clock only while no actor fibers
         // exist; once actors are started their ping loops compete with tickOne, so the sleep
         // must come first (same pattern as stage1 Suite).
-        val startEpochMs = state.currentModelTimes.values.head.getEpochSecond * 1000L
+        val startEpochMs = state.currentModelTime.getEpochSecond * 1000L
 
         for
             _ <- IO.sleep(FiniteDuration(startEpochMs, TimeUnit.MILLISECONDS))
@@ -165,6 +165,7 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
                     system
                         .actorOf(
                           BlockBriefObserver(
+                            peerNum,
                             peerStackMap(peerNum).consensusActor,
                             blockBriefsMap(peerNum)
                           )
@@ -173,7 +174,7 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
                 }
                 .map(_.toMap)
 
-            // Create one PeerLiaison per (local, remote) pair.
+            // Create one local PeerLiaison per (local, remote) pair.
             // peerLiaisonMap(A)(B.id) = the liaison at A directed to B.
             peerLiaisonMap <- peers
                 .traverse { peerNum =>
@@ -230,6 +231,21 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
                 .foreverM
                 .start
 
+            // Side-fiber per peer that periodically pokes its CardanoLiaison with
+            // `Timeout`. cats-actors' `setReceiveTimeout` is unusable under TestControl
+            // (1s-virtual-ping + wall-clock check), so we drive polling externally to
+            // honor `cardanoLiaisonPollingPeriod` in virtual time. `Temporal.sleep` is
+            // virtual-clock-aware, so each tick fires after `period` of virtual time and
+            // every peer's CardanoLiaison.runEffects runs at the configured cadence.
+            liaisonTickFibers <- peers.traverse { peerNum =>
+                val pollingPeriod = multiNodeConfig
+                    .nodeConfigs(peerNum)
+                    .nodeOperationMultisigConfig
+                    .cardanoLiaisonPollingPeriod
+                val liaison = peerStackMap(peerNum).cardanoLiaison
+                (IO.sleep(pollingPeriod) >> (liaison ! CardanoLiaison.Timeout)).foreverM.start
+            }
+
             submittedRequestIds <- Ref[IO].of(Vector.empty[RequestId])
         yield Stage4Sut(
           system = system,
@@ -239,6 +255,7 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
           },
           sutErrors = sutErrors,
           errorDrainer = errorDrainer,
+          liaisonTickFibers = liaisonTickFibers.toList,
           blockBriefs = blockBriefsMap,
           submittedRequestIds = submittedRequestIds,
           tracerLocal = tracerLocal,
@@ -264,6 +281,10 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
             // default (30s virtual) is enough to drive a pending fallback or deposit-decision
             // wakeup that seals the in-progress block. Under real-clock backends it would be
             // wall-clock; stage4 currently uses only the mock backend so we keep the default.
+            // Cancel liaison tick fibers BEFORE waitForIdle/terminate so they stop pushing
+            // Timeout messages while the system is winding down (otherwise the system stays
+            // non-idle).
+            _ <- sut.liaisonTickFibers.traverse_(_.cancel)
             _ <- sut.system.waitForIdle()
             _ <- sut.system.terminate()
             _ <- logger.warn("shutdownSut: system was terminated")
@@ -357,19 +378,24 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
 
     /** Property: SUT's valid/total ratio is no greater than the model's, i.e. the SUT is not
       * more permissive than the model. Compared as exact rationals via cross-multiplication.
+      *
+      * Both sides are restricted to L2-tx reqIds (excluding any deposit reqId — deposits go
+      * into `depositsAbsorbed` / `depositsRefunded` on the SUT side, but a rejected deposit
+      * registration ends up in `events` via `JointLedger.rejectEvent` and would otherwise
+      * inflate the SUT total relative to the model.
       */
     private def propValidRatio(
         lastState: ModelState,
         canonicalBriefs: Vector[BlockBrief.Intermediate]
     ): Prop = {
-        // Restrict model to L2-tx requests so denominators are comparable to SUT's brief.events
-        // (deposits are always Valid in the model and don't appear in events).
-        val l2TxReqIds = lastState.modelFlags.keySet -- lastState.registeredDeposits.keySet
+        val depositIds = lastState.registeredDeposits.keySet
+        val l2TxReqIds = lastState.modelFlags.keySet -- depositIds
         val modelValid = l2TxReqIds.count(lastState.modelFlags(_) == ValidityFlag.Valid).toLong
         val modelTotal = l2TxReqIds.size.toLong
-        val sutEvents = canonicalBriefs.flatMap(_.events)
-        val sutValid = sutEvents.count(_._2 == ValidityFlag.Valid).toLong
-        val sutTotal = sutEvents.size.toLong
+        val sutL2Events =
+            canonicalBriefs.flatMap(_.events).filterNot { case (r, _) => depositIds.contains(r) }
+        val sutValid = sutL2Events.count(_._2 == ValidityFlag.Valid).toLong
+        val sutTotal = sutL2Events.size.toLong
 
         // sutValid/sutTotal <= modelValid/modelTotal  iff  sutValid*modelTotal <= modelValid*sutTotal
         // Trivially holds when either total is 0 (vacuous).
@@ -428,12 +454,14 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
         val commonPrefixLen =
             submittedIds.zip(sutOrder).takeWhile { case (a, b) => a == b }.length
 
-        val l2TxReqIds = lastState.modelFlags.keySet -- lastState.registeredDeposits.keySet
+        val depositIds = lastState.registeredDeposits.keySet
+        val l2TxReqIds = lastState.modelFlags.keySet -- depositIds
         val modelValid = l2TxReqIds.count(lastState.modelFlags(_) == ValidityFlag.Valid)
         val modelTotal = l2TxReqIds.size
-        val sutEvents = canonicalBriefs.flatMap(_.events)
-        val sutValid = sutEvents.count(_._2 == ValidityFlag.Valid)
-        val sutTotal = sutEvents.size
+        val sutL2Events =
+            canonicalBriefs.flatMap(_.events).filterNot { case (r, _) => depositIds.contains(r) }
+        val sutValid = sutL2Events.count(_._2 == ValidityFlag.Valid)
+        val sutTotal = sutL2Events.size
 
         println(
           s"Peers: ${sortedPeers.map(p => s"p${p: Int}=${briefsByPeer(p).length}blks").mkString("  ")}"
@@ -528,7 +556,7 @@ object Stage4Suite:
             peers.map(pn => pn -> meanInterArrivalTime(pn)).toMap
           ),
           preinitPeerUtxosL1 = preinitPeerUtxosL1,
-          currentModelTimes = peers.map(_ -> startTime).toMap,
+          currentModelTime = startTime,
           utxosL2Active = config.headConfig.initializationParameters.initialEvacuationMap.toUtxos,
           peerUtxosL1 = peerUtxosL1,
           nextRequestNumbers = peers.map(_ -> RequestNumber(0)).toMap,

@@ -25,7 +25,7 @@ object Stage4Runner:
         commands: List[AnyCommand[ModelState, Stage4Sut]]
     ): String =
         val peers = initialState.params.multiNodeConfig.nodeConfigs.keys.toSeq.sortBy(p => p: Int)
-        val startEpoch = initialState.modelTimeFor(peers.head).getEpochSecond
+        val startEpoch = initialState.currentModelTime.getEpochSecond
 
         val colWidth = 36
         val stepWidth = 4
@@ -65,13 +65,11 @@ object Stage4Runner:
             }
             ._2
 
-        // Sort by acting peer's simulated clock, ties broken by generation order
-        val sorted = rows.sortBy { (genSeq, cmd, nextState) =>
-            val t = peerRegex
-                .findFirstMatchIn(cmd.label)
-                .map(m => nextState.modelTimeFor(HeadPeerNumber(m.group(1).toInt)).getEpochSecond)
-                .getOrElse(0L)
-            (t, genSeq)
+        // Sort by global clock, ties broken by generation order. With the single global clock
+        // the model time after each command is shared across peers, so this sort matches the
+        // SUT virtual timeline.
+        val sorted = rows.sortBy { (genSeq, _, nextState) =>
+            (nextState.currentModelTime.getEpochSecond, genSeq)
         }
 
         val rowLines = sorted.zipWithIndex.map { case ((genSeq, cmd, nextState), displayIdx) =>
@@ -80,7 +78,7 @@ object Stage4Runner:
             s"| ${(displayIdx + 1).toString.padTo(stepWidth, ' ')} |" + peers.map { p =>
                 val cell =
                     if actingPeer.contains(p) then
-                        val t = nextState.modelTimeFor(p).getEpochSecond - startEpoch
+                        val t = nextState.currentModelTime.getEpochSecond - startEpoch
                         val d = cmd.delay.toSeconds
                         s"#$genSeq ${compactLabel(cmd.label)} +${t}s Δ${d}s"
                             .take(colWidth)
@@ -124,9 +122,9 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
 
     override def overrideParameters(p: Test.Parameters): Test.Parameters =
         p
-            .withPropFilter(Some("Two-peers head works"))
+            //.withPropFilter(Some("Two-peers head works"))
             //.withPropFilter(Some("Three-peers head works"))
-            //.withPropFilter(Some("Twenty-peers head works"))
+            .withPropFilter(Some("Twenty-peers head works"))
              .withInitialSeed(Seed.fromBase64("wZ2FQc_Iv2duN06RHMXFg7014XeEirS_K2-wY0RN38O=").get)
             // .withInitialSeed(Seed.fromBase64("7wf2XaHHBHdGl4XOoIpW8PvN2t8XFcR0fFE0RBX6pWG=").get)
             //.withInitialSeed(Seed.fromBase64("Irdkn14LUINcIDjKQOxKuN-GF2399UOCwL-C11NVESJ=").get)
