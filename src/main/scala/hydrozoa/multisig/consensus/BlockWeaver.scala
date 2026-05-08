@@ -783,16 +783,33 @@ object BlockWeaver {
                             )
                         sleepDuration = wakeupInstant - now
                         _ <-
-                            if sleepDuration.finiteDuration.toSeconds <= 0L
-                            then
+                            if sleepDuration.finiteDuration.toMillis <= 0L
+                            then {
+                                // Non-positive sleep duration: the chosen wakeup target is already
+                                // at or before `now`, which is legitimate. The dominant case is a
+                                // deposit-driven wakeup: `mDepositDecisionWakeupTime` is set from
+                                // a pending deposit's `absorptionStartTime` (a fixed wall-time
+                                // anchor from when the deposit was registered) and is selected
+                                // here when it precedes `forcedMajorBlockWakeupTime`. Between the
+                                // moment the previous block's header was sealed (carrying that
+                                // ddwt) and the moment confirmation for that block reaches us
+                                // here, virtual time can advance past the ddwt. Observed in the
+                                // stage4 20-peer head: a major-block transition (block 45 in
+                                // run logged 2026-02-11) advanced virtual time ~43s during
+                                // cross-peer ack collection, leaving sleepDuration = -43s.
+                                //
+                                // The right action is "fire the wakeup immediately" — the same
+                                // Wakeup message `sleepSendWakeup` would send after sleeping.
+                                // The `Ignoring wakeup for preceding block N` guard handles any
+                                // race between this dispatch and a subsequent state change.
+                                //
+                                // See:
+                                //   https://linear.app/gummiworm-labs/issue/GUM-111/should-negative-weavers-wakeups-be-permitted
                                 logger.info(
-                                  s"negative wakeup sleep duration, now=${now}, wakeupInstant=${wakeupInstant}, sleepDuration=${sleepDuration}"
-                                ) >> IO.raiseError(
-                                  new RuntimeException(
-                                    s"negative wakeup sleep duration, now=${now}, wakeupInstant=${wakeupInstant}, sleepDuration=${sleepDuration}"
-                                  )
-                                )
-                            else
+                                  "non-positive wakeup sleep duration, firing immediately: " +
+                                      s"now=$now, wakeupInstant=$wakeupInstant, sleepDuration=$sleepDuration"
+                                ) >> (connections.blockWeaver ! Wakeup(this.leadingBlockNumber))
+                            } else
                                 logger.info(
                                   s"Starting wakeup fiber, sleepDuration=${sleepDuration}"
                                 ) >> sleepSendWakeup(sleepDuration).start.void
