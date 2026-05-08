@@ -131,37 +131,38 @@ object EvacuationTxTest extends Properties("EvacuationTx Test") {
 
     val _ = property(
       "EvacuationTx builds successfully with valid recipe"
-    ) = runDefault(
-      for {
-          nc <- forAll[NodeConfig](evacuationGens)
-          builder <- forAll[EvacuationTx.Build](evacuationGens)
-          evacuationTx <- failLeft(builder.result(using nc))
-          _ <- assertWith(
-            evacuationTx.treasuryUtxoSpent == builder.treasuryUtxo,
-            "Spent treasury UTXO should match recipe input"
-          )
-          _ <- assertWith(
-            evacuationTx.treasuryUtxoProduced != null,
-            "Treasury UTXO produced should not be null"
-          )
-          _ <- assertWith(
-            evacuationTx.evacuatedOutputs.length == builder.evacuatees.size,
-            "Evacuated outputs should match builder's evacuatees"
-            // Note this holds because we're not
-            // testing large numbers of evacuations
-          )
-          _ <- assertWith(evacuationTx.tx != null, "Transaction should not be null")
+    ) = runDefault {
+        // Pin one MultiNodeConfig across both `forAll` samples.
+        val gens = evacuationGens.const[MultiNodeConfig]
+        for {
+            nc <- forAll[NodeConfig](gens)
+            builder <- forAll[EvacuationTx.Build](gens)
+            evacuationTx <- failLeft(builder.result(using nc))
+            _ <- assertWith(
+              evacuationTx.treasuryUtxoSpent == builder.treasuryUtxo,
+              "Spent treasury UTXO should match recipe input"
+            )
+            _ <- assertWith(
+              evacuationTx.treasuryUtxoProduced != null,
+              "Treasury UTXO produced should not be null"
+            )
+            _ <- assertWith(
+              evacuationTx.evacuatedOutputs.length == builder.evacuatees.size,
+              "Evacuated outputs should match builder's evacuatees"
+              // Note this holds because we're not
+              // testing large numbers of evacuations
+            )
+            _ <- assertWith(evacuationTx.tx != null, "Transaction should not be null")
 
-          // Verify residual treasury value is correct
-          totalEvacuations =
-              builder.evacuatees.totalValue
-          expectedResidual = builder.treasuryUtxo.treasuryOutput.value - totalEvacuations
-          _ <- assertWith(
-            evacuationTx.treasuryUtxoProduced.treasuryOutput.value == expectedResidual,
-            "Residual treasury value should be correct"
-          )
-      } yield true
-    )
+            // Verify residual treasury value is correct
+            totalEvacuations = builder.evacuatees.totalValue
+            expectedResidual = builder.treasuryUtxo.treasuryOutput.value - totalEvacuations
+            _ <- assertWith(
+              evacuationTx.treasuryUtxoProduced.treasuryOutput.value == expectedResidual,
+              "Residual treasury value should be correct"
+            )
+        } yield true
+    }
 
     private lazy val membershipRegistry =
         // 64..256 is plenty to exercise the validator while cutting BLS work by ~3x compared to the default generator

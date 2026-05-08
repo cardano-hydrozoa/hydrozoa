@@ -15,9 +15,34 @@ import scala.collection.immutable.SortedMap
 import hydrozoa.lib.cardano.scalus.gens.Containers.*
 import spire.math.Rational
 
+/** Distinct registry tag for the `index` field of a [[TransactionInput]]. Lives in a sibling
+  * object so the opaque alias is genuinely opaque from `Base`'s `gen(...)` call sites — within the
+  * defining scope an opaque type is transparent and would tag-collide with `arb[Int]`. No `<: Int`
+  * bound, same reasoning as `KzgCommitment` / `MembershipProof` in `CommonGeneratorsTypes`.
+  */
+object BaseTypes:
+    opaque type TransactionInputIndex = Int
+
+    /** Coerce a raw `Int` into a [[TransactionInputIndex]] — used by tests to refine the index, e.g.
+      * `refineGen[TransactionInput](transactionInputIndex(1))`.
+      */
+    def transactionInputIndex(i: Int): TransactionInputIndex = i
+
+    /** Index biased towards small values (0..10 with 5/6 weight) — typical txs only have a handful
+      * of outputs, but we still occasionally explore up to 65535. Sourced from the registry so
+      * tests can override via `refineGen[TransactionInput](transactionInputIndex(N))`.
+      */
+    def genTransactionInputIndex: Gen[TransactionInputIndex] =
+        Gen.frequency(5 -> Gen.choose(0, 10), 1 -> Gen.choose(11, 65535))
+
+    def genTransactionInput(transactionId: TransactionHash, index: TransactionInputIndex)
+        : TransactionInput =
+        TransactionInput(transactionId, index)
+
 /** Base generators.
   */
 object Base:
+    import BaseTypes.*
 
     lazy val gens =
         gen[BlockFile] *:
@@ -58,6 +83,7 @@ object Base:
             preludeListOf[ByteString] *:
             taggedSortedSetOf[TransactionInput] *:
             gen(genTransactionInput) *:
+            gen(genTransactionInputIndex) *:
             indexedSeqOf[Sized[TransactionOutput]] *:
             optionOf[Sized[TransactionOutput]] *:
             listOf[TransactionOutput] *:
@@ -190,11 +216,6 @@ object Base:
     val genMetadataHash: Gen[MetadataHash] = genHash[Blake2b_256, HashPurpose.MetadataHash]
     val genVrfKeyHash: Gen[VrfKeyHash] = genHash[Blake2b_256, HashPurpose.VrfKeyHash]
     val genBlockHash: Gen[BlockHash] = genHash[Blake2b_256, HashPurpose.BlockHash]
-
-    // Make sure that the transaction input index is positive
-    def genTransactionInput(transactionId: TransactionHash) =
-        Gen.frequency(5 -> Gen.choose(0, 10), 1 -> Gen.choose(11, 65535))
-            .map(index => TransactionInput(transactionId, index))
 
     private def genHash[HF: HashSize, Purpose]: Gen[Hash[HF, Purpose]] =
         genByteStringOfN(summon[HashSize[HF]].size).map(Hash.apply[HF, Purpose])

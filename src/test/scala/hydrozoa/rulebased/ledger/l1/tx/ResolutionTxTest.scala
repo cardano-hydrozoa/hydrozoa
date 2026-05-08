@@ -6,13 +6,13 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.number.PositiveInt
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
+import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.Voted
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.{gens as _, *}
-import hydrozoa.rulebased.ledger.l1.tx.CommonGeneratorsTypes.genTreasuryUnresolvedDatum
+import hydrozoa.rulebased.ledger.l1.tx.CommonGeneratorsTypes.{KzgCommitment, VersionMinor}
 import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryUtxo, VoteOutput, VoteUtxo}
 import org.scalacheck.{Arbitrary, Gen, Properties}
 import scalus.cardano.ledger.*
@@ -22,63 +22,42 @@ import scalus.uplc.builtin.Builtins.blake2b_224
 import registry.scalacheck.*
 
 private lazy val resolutionGens =
+    // entry point: forAll[ResolutionTx.Build] looks up Gen[ResolutionTx.Build] in the registry
     gen[ResolutionTx.Build] +:
         // override the structural Gen[RuleBasedTreasuryUtxo] with the bounded version that
         // attaches the head beacon token (without it the Plutus validator rejects the tx)
         gen(genRuleBasedTreasuryUtxo) +:
-        gen(genTreasuryUnresolvedDatum) +:
-        gen(resolutionTallyVoteUtxo) +:
+        // wire VoteOutput[Voted] + TransactionInput into VoteUtxo[Voted]; needed because the
+        // phantom type tag isn't picked up by the registry's default structural derivation
+        gen[VoteUtxo[Voted]] +:
+        // build VoteOutput[Voted] from the VoteDatum so output.key/link match datum.key/link
+        // (the validator rejects mismatched values)
+        gen(voteOutput) +:
+        // produce VoteDatum with the Voted status — the registry can't pick a VoteStatus variant
+        // structurally, and the resolution tx needs a tallied (Voted) vote
         gen(genTalliedVoteDatum) +:
-        gen(addrKeyHash) +:
-        const[TransactionHash] +:
+        gen[VoteStatus.Voted] +:
         CommonGenerators.gens
 
-/** Generate a tallied vote datum with Vote status for resolution testing
-  */
-def genTalliedVoteDatum: Gen[VoteDatum] =
-    // First peer voted
-    val key = 1
-    // Links to next peer
-    val link = 2
-    for {
-        versionMinor <- Gen.choose(0L, 100L).map(BigInt(_))
-        commitment <- genByteStringOfN(48) // KZG commitment
-    } yield VoteDatum(
-      key = key,
-      link = link,
-      voteStatus = VoteStatus.Voted(commitment, versionMinor)
+def genTalliedVoteDatum(voteStatus: VoteStatus.Voted): VoteDatum =
+    VoteDatum(
+      key = 1, // First peer voted
+      link = 2, // Links to next peer
+      voteStatus
     )
 
-def resolutionTallyVoteUtxo(
+def voteOutput(
     config: HeadPeers.Section & HasTokenNames & CardanoNetwork.Section,
-    fallbackTxId: TransactionHash,
     voteDatum: VoteDatum,
-): VoteUtxo[Voted] = {
-    // Index 1 — index 0 is the treasury (see genRuleBasedTreasuryUtxo). Sharing the same
-    // TransactionHash via const[TransactionHash] requires the indices to differ.
-    val txId = TransactionInput(fallbackTxId, 1)
-    val scriptAddr = HydrozoaBlueprint.mkDisputeAddress(config.network)
-
-    val voteTokenAssetName = config.headTokenNames.voteTokenName
-    val voteToken = Value.asset(
-      policyId = config.headMultisigScript.policyId,
-      assetName = voteTokenAssetName,
-      amount = config.nHeadPeers.convert + 1
-    )
-
-    val voteOutput: VoteOutput[Voted] = VoteOutput(
+    voteStatus: VoteStatus.Voted,
+): VoteOutput[Voted] =
+    VoteOutput(
       key = voteDatum.key,
       link = voteDatum.link,
       coin = Coin(10_000_000),
       voteTokens = PositiveInt.unsafeApply(config.nHeadPeers + 1),
-      status = voteDatum.voteStatus.asInstanceOf[Voted]
+      status = voteStatus
     )
-
-    VoteUtxo(input = txId, voteOutput)
-}
-
-def addrKeyHash(multiNodeConfig: MultiNodeConfig): AddrKeyHash =
-    multiNodeConfig.addrKeyHashOf(HeadPeerNumber.zero)
 
 object ResolutionTxTest extends Properties("Resolution Tx Test") {
     import MultiNodeConfig.*

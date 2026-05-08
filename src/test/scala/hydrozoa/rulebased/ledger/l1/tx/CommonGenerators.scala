@@ -38,6 +38,7 @@ import test.*
 import registry.*
 import registry.scalacheck.*
 import CommonGeneratorsTypes.*
+import hydrozoa.rulebased.ledger.l1.state.VoteState
 import scalus.uplc.builtin.ByteString.hex
 
 /** Common test generators for rule-based transaction tests.
@@ -49,8 +50,7 @@ object CommonGenerators {
             gen((_: HeadConfig).headPeers) +:
             gen((_: NodeConfig).headConfig) +:
             gen((_: MultiNodeConfig).nodeConfigs.values.head) +:
-            // Always use the same multi-node config across make invocations
-            const[MultiNodeConfig] +:
+            share[MultiNodeConfig] +:
             gen(MultiNodeConfig.generateDefault) +:
             gen[EvacuationTx] +:
             gen(genOnchainBlockHeader) +:
@@ -136,7 +136,8 @@ object CommonGenerators {
     def genCollateralUtxo(addrKeyHash: AddrKeyHash): Gen[CollateralUtxo] =
         for {
             input <- arbitrary[TransactionInput]
-            coin <- arbitrary[Coin].map(_ + Coin.ada(100))
+            // Bounded to avoid Long-overflow when summed with other Coin values downstream.
+            coin <- Gen.choose(0L, 100_000_000L).map(c => Coin(c) + Coin.ada(100))
         } yield CollateralUtxo(
           input,
           CollateralOutput(addrKeyHash, ShelleyDelegationPart.Null, coin, None, None)
@@ -146,18 +147,16 @@ object CommonGenerators {
         val Right(evacMap) = utxos.toEvacuationMap(headConfig)
         evacMap
 
-    def genOnchainBlockHeader(versionMajor: VersionMajor): Gen[BlockHeader.Minor.Onchain] =
+    def genOnchainBlockHeader(versionMajor: VersionMajor, versionMinor: VersionMinor, commitment: VoteState.KzgCommitment): Gen[BlockHeader.Minor.Onchain] =
         for {
             blockNum <- Gen.choose(10L, 20L).map(BigInt(_))
             timeCreation <- Gen.choose(1591566491L, 1760000000L).map(BigInt(_))
-            versionMinor <- Gen.choose(0L, 100L).map(BigInt(_))
-            commitment <- genByteStringOfN(48) // KZG commitment (G1 compressed point)
         } yield BlockHeader.Minor.Onchain(
           blockNum = blockNum,
           startTime = timeCreation,
-          versionMajor = versionMajor,
-          versionMinor = versionMinor,
-          commitment = commitment
+          versionMajor,
+          versionMinor,
+          commitment,
         )
 
     def genPositiveInt(genInt: Gen[Int]): Gen[PositiveInt] =
@@ -179,23 +178,11 @@ object CommonGenerators {
             )
         } yield ScalusScalar.applyUnsafe(bigInt)
 
-    def genTreasuryValue(
-        config: HeadPeers.Section & HasTokenNames,
-        coin: Coin,
-    ): Gen[Value] =
-        val headMp = config.headMultisigScript.policyId
-        val voteTokensAmount = config.nHeadPeers.toInt + 1
-        Gen.const(
-          Value(coin)
-              + Value.asset(headMp, config.headTokenNames.treasuryTokenName, 1)
-              + Value.asset(headMp, config.headTokenNames.voteTokenName, voteTokensAmount)
-        )
-
     def someShelleyAddress(config: CardanoNetwork.Section, keyHash: AddrKeyHash): ShelleyAddress =
         ShelleyAddress(
-            network = config.network,
-            payment = Key(keyHash),
-            delegation = ShelleyDelegationPart.Null
+          network = config.network,
+          payment = Key(keyHash),
+          delegation = ShelleyDelegationPart.Null
         )
 
 }
@@ -231,8 +218,8 @@ object CommonGeneratorsTypes:
     extension (fu: FeeUtxos) def toUtxos: Utxos = fu
 
     /** L1 fee utxo set: a single 100-ADA pub-key utxo at the payment address. Generous enough to
-      * cover any plausible transaction fee in these tests; consumers should refine this if a tighter
-      * value is needed.
+      * cover any plausible transaction fee in these tests; consumers should refine this if a
+      * tighter value is needed.
       */
     def genFeeUtxos(txInput: TransactionInput, paymentAddr: ShelleyAddress): FeeUtxos =
         feeUtxos(Map(txInput -> Babbage(paymentAddr, Value.ada(100))))
@@ -253,8 +240,8 @@ object CommonGeneratorsTypes:
     }
 
     /** Default placeholder commitment — a known-valid 48-byte compressed G1 point. Tests that
-      * actually drive the on-chain validator should override `Gen[KzgCommitment]` with one
-      * derived from the real evacuation map.
+      * actually drive the on-chain validator should override `Gen[KzgCommitment]` with one derived
+      * from the real evacuation map.
       */
     def genKzgCommitment: Gen[KzgCommitment] =
         Gen.const(
