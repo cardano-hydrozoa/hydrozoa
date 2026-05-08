@@ -11,7 +11,7 @@ import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerCommand, L2LedgerError}
 import hydrozoa.multisig.ledger.remote
 import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.{Request, Response}
-import hydrozoa.multisig.ledger.remote.RemoteL2LedgerCodecs.{*, given}
+import io.circe.Codec
 import io.circe.parser.*
 import io.circe.syntax.*
 import org.http4s.Uri
@@ -43,6 +43,7 @@ class RemoteL2Ledger private (
     maxBackoff: FiniteDuration,
     config: RemoteL2Ledger.Config
 ) extends L2Ledger[IO] {
+    import RemoteL2LedgerCodecs.given
 
     private given logger: Logger[IO] = Logging.loggerIO("RemoteL2Ledger")
 
@@ -209,6 +210,59 @@ object RemoteL2Ledger {
             extends Request
         final case class ProxyRequestError(command: L2LedgerCommand.ProxyRequestError)
             extends Request
+
+        // Request codecs
+        given requestCodec: Codec[Request] = {
+            import L2LedgerCommand.given
+
+            Codec.from(
+              encodeA = {
+                  case Request.RegisterDeposit(event) =>
+                      io.circe.Json.obj("RegisterDeposit" -> event.asJson)
+                  case Request.ApplyDepositDecisions(event) =>
+                      io.circe.Json.obj("ApplyDepositDecisions" -> event.asJson)
+                  case Request.ApplyTransaction(event) =>
+                      io.circe.Json.obj("ApplyTransaction" -> event.asJson)
+                  case Request.ProxyBlockConfirmation(event) =>
+                      io.circe.Json.obj("ProxyBlockConfirmation" -> event.asJson)
+                  case Request.ProxyRequestError(event) =>
+                      io.circe.Json.obj("ProxyRequestError" -> event.asJson)
+              },
+              decodeA = c =>
+                  c.keys
+                      .flatMap(_.headOption)
+                      .toRight(
+                        io.circe.DecodingFailure("Request must have exactly one field", c.history)
+                      )
+                      .flatMap {
+                          case "RegisterDepositRequest" =>
+                              c.downField("RegisterDepositRequest")
+                                  .as[L2LedgerCommand.RegisterDeposit]
+                                  .map(Request.RegisterDeposit.apply)
+                          case "ApplyDepositDecisions" =>
+                              c.downField("ApplyDepositDecisions")
+                                  .as[L2LedgerCommand.ApplyDepositDecisions]
+                                  .map(Request.ApplyDepositDecisions.apply)
+                          case "ApplyTransaction" =>
+                              c.downField("ApplyTransaction")
+                                  .as[L2LedgerCommand.ApplyTransaction]
+                                  .map(Request.ApplyTransaction.apply)
+                          case "ProxyBlockConfirmation" =>
+                              c.downField("ProxyBlockConfirmation")
+                                  .as[L2LedgerCommand.ProxyBlockConfirmation]
+                                  .map(Request.ProxyBlockConfirmation.apply)
+                          case "ProxyRequestError" =>
+                              c.downField("ProxyRequestError")
+                                  .as[L2LedgerCommand.ProxyRequestError]
+                                  .map(Request.ProxyRequestError.apply)
+                          case other =>
+                              Left(
+                                io.circe.DecodingFailure(s"Unknown request type: $other", c.history)
+                              )
+                      }
+            )
+        }
+
     }
 
     /** Response types received from the remote L2 ledger */

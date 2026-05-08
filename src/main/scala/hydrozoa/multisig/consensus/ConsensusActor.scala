@@ -1,14 +1,14 @@
 package hydrozoa.multisig.consensus
 
 import cats.data.Validated.{Invalid, Valid}
-import cats.effect.{IO, Ref}
+import cats.effect.{IO, IOLocal, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.*
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{AckBlock, AckId}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
@@ -29,8 +29,8 @@ import scalus.uplc.builtin.{ByteString, platform}
 type RoundOneOwnAck = AckBlock.Minor | AckBlock.Major1 | AckBlock.Final1
 
 /** Round two acks, which should be scheduled for announcing when the cell switches to round two.
-  * There is no way to separate own acks from others' acks at the type level, but those alias is
-  * used only for own acks that come from the joint ledger.
+  * There is no way to separate own acks from others' acks at the type level, but this alias is used
+  * only for own acks that come from the joint ledger.
   */
 type RoundTwoOwnAck = AckBlock.Major2 | AckBlock.Final2
 
@@ -247,7 +247,6 @@ sealed trait FinalConsensusCell[T] extends ConsensusCell[T]
   *   [[PostponedAckSupport]] for postponed ack handling
   */
 object ConsensusActor:
-
     type Config = OwnHeadPeerPublic.Section & HeadPeers.Section
 
     final case class Connections(
@@ -287,14 +286,16 @@ object ConsensusActor:
 
     def apply(
         config: Config,
-        pendingConnections: MultisigRegimeManager.PendingConnections | ConsensusActor.Connections
+        pendingConnections: MultisigRegimeManager.PendingConnections | ConsensusActor.Connections,
+        tracerLocal: IOLocal[Tracer]
     ): IO[ConsensusActor] =
         for {
             stateRef <- Ref[IO].of(State.mkInitialState)
         } yield new ConsensusActor(
           config = config,
           pendingConnections = pendingConnections,
-          stateRef = stateRef
+          stateRef = stateRef,
+          tracerLocal = tracerLocal
         )
 
 end ConsensusActor
@@ -302,12 +303,13 @@ end ConsensusActor
 class ConsensusActor(
     config: ConsensusActor.Config,
     pendingConnections: MultisigRegimeManager.PendingConnections | ConsensusActor.Connections,
-    stateRef: Ref[IO, ConsensusActor.State]
+    stateRef: Ref[IO, ConsensusActor.State],
+    tracerLocal: IOLocal[Tracer]
 ) extends Actor[IO, ConsensusActor.Request]:
     import ConsensusActor.*
     import ConsensusCell.*
 
-    private val logger = Logging.loggerIO(s"ConsensusActor.${config.ownHeadPeerNum}")
+    given IOLocal[Tracer] = tracerLocal
 
     private val connections = Ref.unsafe[IO, Option[ConsensusActor.Connections]](None)
 
@@ -352,27 +354,35 @@ class ConsensusActor(
         case ack: AckBlock              => handleAck(ack)
     }
 
-    private def preStartLocal: IO[Unit] = initializeConnections
+    private def preStartLocal: IO[Unit] = for {
+        _ <- Tracer.routeLocal(s"ConsensusActor.${config.ownHeadPeerNum}")
+        _ <- initializeConnections
+    } yield ()
 
     /** Since the ReqBlock messages are sent by the joint ledger actor directly, all we need to do
       * when receiving a new block is to store it in the proper cell. The consensus actor is
       * responsible for sending acks only.
       */
-    def handleBlock(block: Block.Unsigned.Next): IO[Unit] = for {
-        _ <- logger.debug(
-          s"handleBlock: block=${block.blockNum} type=${block.getClass.getSimpleName}"
+    def handleBlock(block: Block.Unsigned.Next): IO[Unit] =
+        Tracer.scopedCtx(
+          "blockNumber" -> block.blockNum.toString,
+          "blockType" -> block.getClass.getSimpleName
+        )(
+          for {
+              // TODO: Pretty print this instead
+              _ <- Tracer.trace("handleBlock")
+              state <- stateRef.get
+              // This is a bit annoying but Scala cannot infer types unless we PM explicitly
+              _ <- block match {
+                  case minor: Block.Unsigned.Minor =>
+                      state.withCellFor(minor)(_.applyBlock(minor))
+                  case major: Block.Unsigned.Major =>
+                      state.withCellFor(major)(_.applyBlock(major))
+                  case final_ : Block.Unsigned.Final =>
+                      state.withCellFor(final_)(_.applyBlock(final_))
+              }
+          } yield ()
         )
-        state <- stateRef.get
-        // This is a bit annoying but Scala cannot infer types unless we PM explicitly
-        _ <- block match {
-            case minor: Block.Unsigned.Minor =>
-                state.withCellFor(minor)(_.applyBlock(minor))
-            case major: Block.Unsigned.Major =>
-                state.withCellFor(major)(_.applyBlock(major))
-            case final_ : Block.Unsigned.Final =>
-                state.withCellFor(final_)(_.applyBlock(final_))
-        }
-    } yield ()
 
     /** Handling acks, on the other hand, in addition to storing the ack in a cell, requires
       * checking whether it's an own acknowledgement and if so scheduling its announcement. This is
@@ -383,48 +393,42 @@ class ConsensusActor(
       * @param ack
       *   an arbitrary ack, whether own one or someone else's one
       */
-    def handleAck(ack: AckBlock): IO[Unit] = for {
-        conn <- getConnections
-        ackTypeName = ack match {
-            case _: AckBlock.Minor  => "minor"
-            case _: AckBlock.Major1 => "major1"
-            case _: AckBlock.Major2 => "major2"
-            case _: AckBlock.Final1 => "final1"
-            case _: AckBlock.Final2 => "final2"
-        }
-        _ <- logger.debug(s"handleAck: block=${ack.blockNum} type=$ackTypeName peer=${ack.peerNum}")
-        _ <- conn.tracer.ack(ack.blockNum: Int, ack.peerNum: Int, ackTypeName)
-        state <- stateRef.get
-        // This is a bit annoying but Scala cannot infer types unless we PM explicitly
-        _ <- ack match {
-            case minor: AckBlock.Minor =>
-                state.withCellFor(minor)(_.applyAck(minor)) >>
-                    IO.whenA(ack.peerNum == config.ownHeadPeerNum)(
-                      state.scheduleOwnImmediateAck(minor)
-                    )
-            case major1: AckBlock.Major1 =>
-                state.withCellFor(major1)(_.applyAck(major1)) >>
-                    IO.whenA(ack.peerNum == config.ownHeadPeerNum)(
-                      state.scheduleOwnImmediateAck(major1)
-                    )
-            case major2: AckBlock.Major2 =>
-                state.withCellFor(major2) {
-                    case round1: MajorRoundOneCell => round1.applyAck(major2)
-                    case round2: MajorRoundTwoCell => round2.applyAck(major2)
-                }
-            case final1: AckBlock.Final1 =>
-                state.withCellFor(final1)(_.applyAck(final1)) >>
-                    IO.whenA(ack.peerNum == config.ownHeadPeerNum)(
-                      state.scheduleOwnImmediateAck(final1)
-                    )
-            case final2: AckBlock.Final2 =>
-                state.withCellFor(final2) {
-                    case round1: FinalRoundOneCell => round1.applyAck(final2)
-                    case round2: FinalRoundTwoCell => round2.applyAck(final2)
-                }
-        }
-    } yield ()
+    def handleAck(ack: AckBlock): IO[Unit] = {
+        Tracer.scopedCtx(ack.toContext*)(for {
+            conn <- getConnections
 
+            _ <- conn.tracer.ack(ack.blockNum: Int, ack.peerNum: Int, ack.ackTypeName)
+            state <- stateRef.get
+            // This is a bit annoying but Scala cannot infer types unless we PM explicitly
+            _ <- ack match {
+                case minor: AckBlock.Minor =>
+                    state.withCellFor(minor)(_.applyAck(minor)) >>
+                        IO.whenA(ack.peerNum == config.ownHeadPeerNum)(
+                          state.scheduleOwnImmediateAck(minor)
+                        )
+                case major1: AckBlock.Major1 =>
+                    state.withCellFor(major1)(_.applyAck(major1)) >>
+                        IO.whenA(ack.peerNum == config.ownHeadPeerNum)(
+                          state.scheduleOwnImmediateAck(major1)
+                        )
+                case major2: AckBlock.Major2 =>
+                    state.withCellFor(major2) {
+                        case round1: MajorRoundOneCell => round1.applyAck(major2)
+                        case round2: MajorRoundTwoCell => round2.applyAck(major2)
+                    }
+                case final1: AckBlock.Final1 =>
+                    state.withCellFor(final1)(_.applyAck(final1)) >>
+                        IO.whenA(ack.peerNum == config.ownHeadPeerNum)(
+                          state.scheduleOwnImmediateAck(final1)
+                        )
+                case final2: AckBlock.Final2 =>
+                    state.withCellFor(final2) {
+                        case round1: FinalRoundOneCell => round1.applyAck(final2)
+                        case round2: FinalRoundTwoCell => round2.applyAck(final2)
+                    }
+            }
+        } yield ())
+    }
     // ===================================
     // State extension methods
     // ===================================
@@ -434,97 +438,114 @@ class ConsensusActor(
 
         /**   - Gives access to a typed consensus cell or raise an error if it can't be done
           *   - Afterwards checks whether the cell is saturated and tries to complete it which leads
-          *     the either a new round in the same cell or to the close of cell and the final
-          *     result, so we can eliminate the cell.
+          *     either a new round in the same cell or to the close of cell and the final result, so
+          *     we can eliminate the cell.
           */
         def withCellFor(msg: Block.Unsigned.Next | AckBlock)(
             f: ConsensusFor[msg.type] => IO[ConsensusFor[msg.type]]
         ): IO[Unit] = {
-            for {
-                conn <- getConnections
-                blockNum <- IO.pure(msgBlockNum(msg))
-                cell <-
-                    state.cells.get(blockNum) match {
-                        case Some(cell) => tryCastCell(msg)(cell)
-                        case None       => spawnCell(msg)
-                    }
-                // Run asked actions
-                cellUpdated <- f(cell)
-                _ <-
-                    if cellUpdated.isSaturated
-                    then {
-                        // Complete the round/cell
-                        for {
-                            // _ <- IO.println("---- CA ----: complete updated cell")
-                            ret <- cellUpdated.complete
-                            _ <- ret match {
-                                // Switch the cell to the next round
-                                case Left(nextRoundCell, ownAck) =>
-                                    val roundBlockType = ownAck match {
-                                        case _: AckBlock.Major2 => "major"
-                                        case _: AckBlock.Final2 => "final"
-                                        case _                  => "unknown"
-                                    }
-                                    for {
-                                        _ <- logger.debug(
-                                          s"round 1 complete: block=$blockNum type=$roundBlockType"
-                                        )
-                                        _ <- conn.tracer.roundComplete(
-                                          blockNum: Int,
-                                          roundBlockType,
-                                          1
-                                        )
+            val context: Seq[(String, String)] = msg match {
+                case b: Block.Unsigned.Next =>
+                    Seq(
+                      "argumentType" -> "Block.Unsigned.Next",
+                      "blockType" -> b.blockTypeString,
+                      "blockNumber" -> b.blockBriefNext.header.blockNum.toString,
+                      "blockVersion" -> b.blockBriefNext.blockVersion.toString
+                    )
+                case a: AckBlock =>
+                    ("argumentType" -> "AckBlock") +: a.toContext
 
-                                        // These casts are sound since the only alternative is Void
-                                        // Ack2 can be safely sent when round 1 is finished (i.e. all first-round acks of
-                                        // block N are received) because the peer liaisons guarantee that all acks of
-                                        // block (N-1) are received (i.e. block N-1 is confirmed)
-                                        // before the first-round acks of block N are received.
-                                        // Sanity check: the consensus cell for block N-1 cannot exist now when cell N switches to round two.
-                                        _ <- announceAck(ownAck.asInstanceOf[AckBlock])
-                                        nextCell = nextRoundCell.asInstanceOf[ConsensusCell[?]]
+            }
 
-                                        // Here is a little caveat:
-                                        //  - we require own Ack2 to complete round one (since we have to announce it when
-                                        //    switching to round two)
-                                        //  - in the degenerate case of a head with just one node, it breaks:
-                                        //     - First we receive own Ack1, and don't switch (we need own Ack2)
-                                        //     - Second we receive own Ack2, and do switch to round two
-                                        //     - nothing will happen, since only Ack2 is already here
-                                        // So we have to try to go further immediately to cover that case.
-                                        // TODO: originally the code (partially) assumed we may more than two rounds.
-                                        //   But in practice whe have only two, so I am not going to do any
-                                        //   recursive things there.
-                                        _ <-
-                                            if nextCell.isSaturated
-                                            then
-                                                for {
-                                                    ret <- nextCell.complete
-                                                    // This is safe as long as we have only two rounds (which unlikely will change)
-                                                    Right(result, mbAck) = ret: @unchecked
-                                                    // _ <- IO.println("---- CA ----: complete updated cell: Left-Right")
-                                                    _ <- completeCell(
-                                                      result.asInstanceOf[Block.MultiSigned.Next],
-                                                      mbAck
-                                                    )
-                                                } yield ()
-                                            else updateCell(nextCell)
-                                    } yield ()
-                                // Complete the consensus in the cell
-                                case Right(result, mbAck) =>
-                                    // IO.println("---- CA ----: complete updated cell: Right") >>
-                                    // This cast is sound since the only alternative is Void
-                                    completeCell(
-                                      result.asInstanceOf[Block.MultiSigned.Next],
-                                      mbAck
-                                    )
-                            }
-                        } yield ()
-                    } else {
-                        // Just update the state with the new consensus state
-                        updateCell(cellUpdated)
-                    }
-            } yield ()
+            Tracer.scopedCtx(context*) {
+                for {
+                    conn <- getConnections
+                    blockNum <- IO.pure(msgBlockNum(msg))
+                    cell <-
+                        state.cells.get(blockNum) match {
+                            case Some(cell) => tryCastCell(msg)(cell)
+                            case None       => spawnCell(msg)
+                        }
+                    // Run asked actions
+                    cellUpdated <- f(cell)
+                    _ <-
+                        if cellUpdated.isSaturated
+                        then {
+                            // Complete the round/cell
+                            for {
+                                _ <- Tracer.trace("complete updated cell")
+                                ret <- cellUpdated.complete
+                                _ <- ret match {
+                                    // Switch the cell to the next round
+                                    case Left(nextRoundCell, ownAck) =>
+                                        // FIXME: This feels redundant
+                                        val roundBlockType = ownAck match {
+                                            case _: AckBlock.Major2 => "major"
+                                            case _: AckBlock.Final2 => "final"
+                                            case _                  => "unknown"
+                                        }
+                                        for {
+                                            _ <- Tracer.debug("round 1 complete")
+                                            _ <- conn.tracer.roundComplete(
+                                              blockNum: Int,
+                                              roundBlockType,
+                                              1
+                                            )
+
+                                            // These casts are sound since the only alternative is Void
+                                            // Ack2 can be safely sent when round 1 is finished (i.e. all first-round acks of
+                                            // block N are received) because the peer liaisons guarantee that all acks of
+                                            // block (N-1) are received (i.e. block N-1 is confirmed)
+                                            // before the first-round acks of block N are received.
+                                            // Sanity check: the consensus cell for block N-1 cannot exist now when cell N switches to round two.
+                                            _ <- announceAck(ownAck.asInstanceOf[AckBlock])
+                                            nextCell = nextRoundCell.asInstanceOf[ConsensusCell[?]]
+
+                                            // Here is a little caveat:
+                                            //  - we require own Ack2 to complete round one (since we have to announce it when
+                                            //    switching to round two)
+                                            //  - in the degenerate case of a head with just one node, it breaks:
+                                            //     - First we receive own Ack1, and don't switch (we need own Ack2)
+                                            //     - Second we receive own Ack2, and do switch to round two
+                                            //     - nothing will happen, since only Ack2 is already here
+                                            // So we have to try to go further immediately to cover that case.
+                                            // TODO: originally the code (partially) assumed we may more than two rounds.
+                                            //   But in practice whe have only two, so I am not going to do any
+                                            //   recursive things there.
+                                            _ <-
+                                                if nextCell.isSaturated
+                                                then
+                                                    for {
+                                                        ret <- nextCell.complete
+                                                        // This is safe as long as we have only two rounds (which unlikely will change)
+                                                        Right(result, mbAck) = ret: @unchecked
+                                                        _ <- Tracer.trace(
+                                                          "complete updated cell: Left-Right"
+                                                        )
+                                                        _ <- completeCell(
+                                                          result
+                                                              .asInstanceOf[Block.MultiSigned.Next],
+                                                          mbAck
+                                                        )
+                                                    } yield ()
+                                                else updateCell(nextCell)
+                                        } yield ()
+                                    // Complete the consensus in the cell
+                                    case Right(result, mbAck) =>
+                                        Tracer.trace("complete updated cell: Right") >>
+                                            // This cast is sound since the only alternative is Void
+                                            completeCell(
+                                              result.asInstanceOf[Block.MultiSigned.Next],
+                                              mbAck
+                                            )
+                                }
+                            } yield ()
+                        } else {
+                            // Just update the state with the new consensus state
+                            updateCell(cellUpdated)
+                        }
+                } yield ()
+            }
         }
 
         // ===================================
@@ -557,7 +578,7 @@ class ConsensusActor(
           *       the only way that cell N-1 can be absent is if block N-1 is confirmed.
           */
         def scheduleOwnImmediateAck(ack: RoundOneOwnAck): IO[Unit] = for {
-            _ <- logger.debug(s"scheduleOwnImmediateAck: block=${ack.blockNum}")
+            _ <- Tracer.debug(s"scheduleOwnImmediateAck: block=${ack.blockNum}")
             // Check again it's our own ack
             _ <- IO.raiseWhen(ack.peerNum != config.ownHeadPeerNum)(Error.AlienAckAnnouncement)
             // The number of the block an ack may depend - the previous block
@@ -591,7 +612,7 @@ class ConsensusActor(
         private def spawnCell(msg: Block.Unsigned.Next | AckBlock): IO[ConsensusFor[msg.type]] = {
             for {
                 blockNum <- IO.pure(msgBlockNum(msg))
-                _ <- logger.debug(s"spawnCell: block=$blockNum")
+                _ <- Tracer.debug("spawnCell")
                 result <- msg match {
                     case _: (Block.Unsigned.Minor | AckBlock.Minor) =>
                         MinorConsensusCell.apply(blockNum)
@@ -682,7 +703,7 @@ class ConsensusActor(
                           b.header.blockVersion.minor: Int
                         )
                 }
-                _ <- logger.info(
+                _ <- Tracer.info(
                   s"block confirmed: block=${blockConfirmed.blockNum} type=$confirmedBlockType v$vMajor.$vMinor"
                 )
                 _ <- conn.tracer.blockConfirmed(
@@ -714,7 +735,11 @@ class ConsensusActor(
           * Note: The actual broadcast mechanism depends on the peer liaison implementation.
           */
         private def announceAck(ack: AckBlock): IO[Unit] =
-            getConnections.flatMap(conn => (conn.peerLiaisons ! ack).parallel)
+            for {
+                _ <- Tracer.info("announcing ack")
+                conns <- getConnections
+                _ <- (conns.peerLiaisons ! ack).parallel
+            } yield ()
     }
 
     enum Error extends Throwable:
@@ -755,9 +780,12 @@ class ConsensusActor(
                 case Valid(x) => IO.pure(x)
                 // TODO: Report all signature errors
                 case Invalid(e) =>
-                    IO.raiseError(
-                      CompletionError.WrongTxSignature(someTx.tx.id, e.head.witness.vkey)
-                    )
+                    val error = CompletionError.WrongTxSignature(someTx.tx.id, e.head.witness.vkey)
+
+                    Tracer.error(error.getMessage) >>
+                        IO.raiseError(
+                          error
+                        )
             }
         }
 

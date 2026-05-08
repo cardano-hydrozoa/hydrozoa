@@ -7,6 +7,50 @@ import hydrozoa.lib.logging.ContraTracer.nullTracer
 import hydrozoa.lib.logging.TracerA.Squelching
 
 /** Ported from https://github.com/avieth/contra-tracer/blob/master/src/Control/Tracer.hs
+  *
+  * Why I ported (this will eventually go into a PR comment, just jotting down here for now): The
+  * regular [[Tracer]] is a fine format for logging out to log4cats -- does accomplish the
+  * _contextual_ logging goals. But it's too closely bound to the message format, particularly with
+  * respect with the `ctx : Map[String,String]` parameter.
+  *
+  * The primary issue I was running into when trying to integrate the original `Tracer` is getting
+  * messages like:
+  *
+  * 09:24:00.520 INFO ConsensusActor.1 [ackId=(0,56) argumentType=AckBlock peer=1 ackType=minor
+  * ack={"minor":{"ackId":[0,56]},"blockNum":47} blockNumber=47] block confirmed: block=47
+  * type=minor v9.1
+  *
+  * Where things have just been lumped into the context using different keys (block, blockNum,
+  * ack.blockNum) and then put into the log message as well.
+  *
+  * The most obvious solution is to go from a stringly-typed context to a more strongly typed
+  * context, where we're not adding random strings into the context, but we're adding actual types
+  * like `Block`. Then `Block` can have a `BlockContext` trait that can map down onto to the `(String, String)` format,
+  *  and something like `AckBlock` can extend the `BlockContext` trait -- this give us something like
+  *
+  *    block.toContext.toString
+  *      ==
+  *    ("blockNumber" -> block.blockNumber.toString, "kzgCommitment" -> block.kzgCommitment.toString)
+  *
+  *   And if we use these traits diligently, then we don't risk logging the block number 3 different times by adding
+  *   it to the context under different keys.
+  *
+  *   Basically, within a given actor, I believe:
+  *   - Events should be enumerated and typed
+  *   - Things that _may_ be in the context should be enumerated and typed to avoid duplicated context keys. This
+  *     is especially useful for functions that might get fed a particular context key from a calling function that they
+  *     also should add if its not already there.
+  *   - We should use ContraTracer to contramap these onto the more general LogEvent type.
+  *
+  *   We don't care much about these other parts yet, but:
+  *   - This also gives us more flexibility to log in different ways -- to files, to a remote log capture system, to
+  *     journald
+  *   - This sets us up for metrics/telemetry by changing the `emit` effect, and allows to combine these with loggers
+  *     via the semi-group instance
+  *   - Sets us up to fix the bug where `Tracer`, as written, evaluates the argument regardless of trace level
+  *   - Sets us up for an asynchronous `asyncJsonToDiskTracer[A : Codec[A]] : ContraTracer[IO, A]` that spawns a fiber to
+  *     do expensive serialization and IO (writting to disk, etc.)
+  *
   * @param runTracer
   * @tparam M
   * @tparam A

@@ -3,17 +3,20 @@ package hydrozoa.lib.logging
 import cats.effect.{ExitCode, IO, IOApp, IOLocal}
 import cats.implicits.*
 import cats.{effect, *}
-import hydrozoa.lib.logging.Level.{Debug, Info, Warn}
+import hydrozoa.lib.logging.Level.Info
 
 import ContraTracerSyntax.*
 
 enum Level:
     case Trace, Debug, Info, Warn, Error
 
-case class LogEvent(
+// This is a log event at least has a typed context. Should we also have typed messages, or swap the (msg:String) for a
+// polymorphic typed payload?
+// TODO: Make this a trait or an abstact case class with an abstract `def toLogEvent` method
+case class LogEventTyped[A](
     level: Level,
     msg: String,
-    ctx: Map[String, String] = Map.empty,
+    ctx: A,
     cause: Option[Throwable] = None,
     /** SLF4J logger name used for routing to the correct Logback appender/level config. [[None]]
       * means "use whatever routing the ambient [[IOLocal]][[[Tracer]]] has set" — the tracer
@@ -23,6 +26,18 @@ case class LogEvent(
       */
     routingKey: Option[String] = None
 )
+
+type LogEvent = LogEventTyped[Map[String, String]]
+
+object LogEvent {
+    def apply(
+        level: Level,
+        msg: String,
+        ctx: Map[String, String] = Map.empty,
+        cause: Option[Throwable] = None,
+        routingKey: Option[String] = None
+    ): LogEventTyped[Map[String, String]] = LogEventTyped(level, msg, ctx, cause, routingKey)
+}
 
 /** Contravariant logger: a function that emits a [[LogEvent]] into IO.
   *
@@ -36,7 +51,6 @@ case class LogEvent(
 type Tracer = ContraTracer[IO, LogEvent]
 
 extension (t: Tracer)
-    // TODO: perhaps this should just be done with contramap?
     def withCtx(f: Map[String, String] => Map[String, String]): Tracer = {
         t.contramap(ev => ev.copy(ctx = f(ev.ctx)))
     }
@@ -107,22 +121,22 @@ object Tracer:
     def scopedCtx[A](kvs: (String, String)*)(fa: IO[A])(using IOLocal[Tracer]): IO[A] =
         scoped(ev => ev.copy(ctx = ev.ctx ++ kvs))(fa)
 
-    private def levelMap(level: Level)(using local: IOLocal[Tracer]): String => IO[Unit] =
-        msg => local.get.flatMap(_.traceWith(LogEvent(level, msg)))
+    private def levelMap(level: Level)(msg: => String)(using local: IOLocal[Tracer]): IO[Unit] =
+        local.get.flatMap(_.traceWith(LogEvent(level, msg)))
 
-    def trace(msg: String)(using local: IOLocal[Tracer]): IO[Unit] =
+    def trace(msg: => String)(using local: IOLocal[Tracer]): IO[Unit] =
         levelMap(Level.Trace)(msg)
 
-    def debug(msg: String)(using local: IOLocal[Tracer]): IO[Unit] =
-        levelMap(Debug)(msg)
+    def debug(msg: => String)(using local: IOLocal[Tracer]): IO[Unit] =
+        levelMap(Level.Debug)(msg)
 
-    def info(msg: String)(using local: IOLocal[Tracer]): IO[Unit] =
+    def info(msg: => String)(using local: IOLocal[Tracer]): IO[Unit] =
         levelMap(Level.Info)(msg)
 
-    def warn(msg: String)(using local: IOLocal[Tracer]): IO[Unit] =
-        levelMap(Warn)(msg)
+    def warn(msg: => String)(using local: IOLocal[Tracer]): IO[Unit] =
+        levelMap(Level.Warn)(msg)
 
-    def error(msg: String, cause: Option[Throwable] = None)(using
+    def error(msg: => String, cause: Option[Throwable] = None)(using
         local: IOLocal[Tracer]
     ): IO[Unit] = levelMap(Level.Error)(msg)
 
@@ -165,6 +179,15 @@ object TracerDemo extends IOApp {
                 given IOLocal[Tracer] = tracerLocal
 
                 for {
+
+                    _ <- Tracer.routeLocal("TracerDemo")
+
+                    // This is wrong -- it shouldn't print, but it does. LoggerDemo doesn't have the same issue
+                    _ <- Tracer.trace {
+                        println("should not print when level is set to info")
+                        "should not print when level is set to Info"
+                    }
+
                     // String tracing
                     _ <- for {
                         _ <- Tracer.trace("trace level")
@@ -199,7 +222,8 @@ object TracerDemo extends IOApp {
                             .traceWith(mockBlock)
                     } yield ()
 
-                    // contramap scoping
+                    // contramap scoping -- bringing in a new Contratracer as a given instance into scope.
+                    // This allows using [[ContraTracerSyntax]]
                     _ <- Tracer.contramapScoped(blockProductionContramap(mockContext))(
                       traceWith(mockBlock)
                     )
@@ -209,4 +233,20 @@ object TracerDemo extends IOApp {
             }
 
         } yield ExitCode.Success
+}
+
+/** Demo: `Logger` does not evaluate the argument regardless of log level. If you do a
+  * `logger.trace` and set the log level to `info`, it will not print "non-cats side effect"
+  */
+object LoggerDemo extends IOApp {
+    private val logger = Logging.loggerIO("LoggerDemo")
+
+    override def run(args: List[String]): IO[ExitCode] =
+        for {
+            _ <- logger.trace {
+                println("non-cats side effect")
+                "logger.trace"
+            }
+        } yield ExitCode.Success
+
 }

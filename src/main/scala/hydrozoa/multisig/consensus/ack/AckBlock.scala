@@ -3,6 +3,8 @@ package hydrozoa.multisig.consensus.ack
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber, BlockType}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
+import io.circe.*
+import io.circe.syntax.*
 
 sealed trait AckBlock {
     def ackId: AckId
@@ -10,9 +12,36 @@ sealed trait AckBlock {
 
     final transparent inline def ackNum: AckNumber = ackId.ackNum
     final transparent inline def peerNum: HeadPeerNumber = ackId.peerNum
+
+    val ackTypeName: String = this match {
+        case _: AckBlock.Minor  => "minor"
+        case _: AckBlock.Major1 => "major1"
+        case _: AckBlock.Major2 => "major2"
+        case _: AckBlock.Final1 => "final1"
+        case _: AckBlock.Final2 => "final2"
+    }
+
+    val toContext: Seq[(String, String)] =
+        Seq(
+          "ackType" -> ackTypeName,
+          "peer" -> peerNum.toString,
+          "ackId" -> ackId.toString,
+          "blockNum" -> blockNum.toString
+        )
 }
 
 object AckBlock {
+
+    /** An encoder for logging purposes. It does not round-trip; it only prints the ackTypeName, the
+      * ackId, and the blockNum
+      */
+    val loggingEncoder: Encoder[AckBlock] = Encoder.instance(ack =>
+        Json.obj(
+          ack.ackTypeName -> Json.obj("ackId" -> ack.ackId.asJson),
+          "blockNum" -> ack.blockNum.asJson
+        )
+    )
+
     final case class Minor(
         override val ackId: AckId,
         override val blockNum: BlockNumber,

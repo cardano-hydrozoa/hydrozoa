@@ -2,6 +2,7 @@ package hydrozoa.multisig.ledger.joint
 
 import cats.implicits.*
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{byteStringDecoder, byteStringEncoder}
 import hydrozoa.multisig.ledger.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.joint.EvacuationKey.given
@@ -11,6 +12,7 @@ import hydrozoa.multisig.ledger.remote.RemoteL2LedgerCodecs
 import hydrozoa.multisig.ledger.remote.RemoteL2LedgerCodecs.{payoutObligationDecoder, payoutObligationEncoder}
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.given
 import io.circe.*
+import io.circe.syntax.*
 import scala.collection.immutable.{SortedMap, TreeMap}
 import scala.util.Try
 import scalus.cardano.ledger.*
@@ -37,6 +39,19 @@ final case class EvacuationKey private (byteString: ByteString)
 object EvacuationKey:
     def apply(bytes: ByteString): Option[EvacuationKey] = Some(new EvacuationKey(bytes))
     // if bytes.length == 32 then Some(new EvacuationKey(bytes)) else None
+
+    given Encoder[EvacuationKey] = Encoder.instance { ek =>
+        byteStringEncoder(ek.byteString)
+    }
+
+    given Decoder[EvacuationKey] = Decoder.instance { c =>
+        byteStringDecoder(c).flatMap { bytes =>
+            EvacuationKey(bytes) match {
+                case Some(key) => Right(key)
+                case None      => Left(io.circe.DecodingFailure("Invalid EvacuationKey", c.history))
+            }
+        }
+    }
 
     given evacuationKeyKeyEncoder: KeyEncoder[EvacuationKey] = {
         KeyEncoder.encodeKeyString.contramap(_.byteString.toHex)
@@ -166,3 +181,38 @@ object EvacuationMap:
 enum EvacuationDiff:
     case Update(key: EvacuationKey, value: Payout.Obligation)
     case Delete(key: EvacuationKey)
+
+object EvacuationDiff {
+
+    given Encoder[EvacuationDiff] = Encoder.instance {
+        case EvacuationDiff.Update(key, value) =>
+            io.circe.Json.obj(
+              "tag" -> io.circe.Json.fromString("Update"),
+              "key" -> key.asJson,
+              "value" -> value.asJson
+            )
+        case EvacuationDiff.Delete(key) =>
+            io.circe.Json.obj(
+              "tag" -> io.circe.Json.fromString("Delete"),
+              "key" -> key.asJson
+            )
+    }
+
+    given evacuationDiffDecoder(using config: CardanoNetwork.Section): Decoder[EvacuationDiff] = {
+        import EvacuationKey.given
+
+        Decoder.instance { c =>
+            c.downField("tag").as[String].flatMap {
+                case "Update" =>
+                    for {
+                        key <- c.downField("key").as[EvacuationKey]
+                        value <- c.downField("value").as[Payout.Obligation]
+                    } yield EvacuationDiff.Update(key, value)
+                case "Delete" =>
+                    c.downField("key").as[EvacuationKey].map(EvacuationDiff.Delete.apply)
+                case other =>
+                    Left(io.circe.DecodingFailure(s"Unknown EvacuationDiff tag: $other", c.history))
+            }
+        }
+    }
+}

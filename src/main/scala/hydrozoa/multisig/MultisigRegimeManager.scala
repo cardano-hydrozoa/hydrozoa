@@ -92,7 +92,9 @@ trait MultisigRegimeManager(
                   CardanoLiaison(config, cardanoBackend, pendingConnections, tracerLocal)
                 )
 
-            consensusActor <- context.actorOf(ConsensusActor(config, pendingConnections))
+            consensusActor <- context.actorOf(
+              ConsensusActor(config, pendingConnections, tracerLocal)
+            )
 
             eventSequencer <- context.actorOf(EventSequencer(config, pendingConnections))
 

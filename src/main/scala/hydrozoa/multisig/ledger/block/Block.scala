@@ -9,7 +9,15 @@ import io.circe.generic.semiauto.*
 sealed trait Block extends Block.Section
 
 object Block {
-    sealed trait Unsigned extends Block, BlockStatus.Unsigned
+
+    sealed trait Unsigned extends Block, BlockStatus.Unsigned {
+        def toContext: Seq[(String, String)] =
+            Seq(
+              "blockType" -> this.blockTypeString,
+              "blockVersion" -> this.blockVersion.toString,
+              "blockNumber" -> this.blockNum.toString
+            )
+    }
 
     object Unsigned {
         final case class Initial(

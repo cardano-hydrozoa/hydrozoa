@@ -123,7 +123,7 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
                             jointLedger <- system.actorOf(
                               JointLedger(nodeConfig, pending, l2Ledger, ProtocolTracer.noop, tracerLocal)
                             )
-                            consensusActor <- system.actorOf(ConsensusActor(nodeConfig, pending))
+                            consensusActor <- system.actorOf(ConsensusActor(nodeConfig, pending, tracerLocal))
                         yield peerNum -> PeerStack(
                           blockWeaver,
                           cardanoLiaison,
