@@ -68,7 +68,7 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
     override def initEnv: Unit = ()
 
     override def genInitialState(env: Unit): Gen[ModelState] =
-        Stage4Suite.genInitialState(nPeers = nPeers)
+        Stage4Suite.genInitialState(nPeers = nPeers, useTestControl = useTestControl)
 
     override def canStartupNewSut(): Boolean = true
 
@@ -84,7 +84,37 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
         val startEpochMs = state.currentModelTime.getEpochSecond * 1000L
 
         for
-            _ <- IO.sleep(FiniteDuration(startEpochMs, TimeUnit.MILLISECONDS))
+            // TestControl branch: jump the virtual clock from 0 to the head's start epoch.
+            // Without TestControl this would be a literal multi-decade real sleep, so it must
+            // be gated on `useTestControl`. The non-TestControl analogue is the
+            // `state.takeoffTime` wait below — `genInitialState` anchors `currentModelTime`
+            // at `now + 60s` for that mode, so wall-clock sleeping until the anchor is the
+            // right move.
+            _ <- IO.whenA(useTestControl)(
+              IO.sleep(FiniteDuration(startEpochMs, TimeUnit.MILLISECONDS))
+            )
+
+            // Non-TestControl branch: wait until the wall clock reaches `takeoffTime` so the
+            // model clock and the SUT wall clock coincide at command 1. Abort if setup
+            // overran the budget — better a loud failure than a test that starts with
+            // already-violated timing. Same shape as stage 1.
+            _ <- state.takeoffTime match {
+                case None => IO.unit
+                case Some(t) =>
+                    IO.realTimeInstant.flatMap { now =>
+                        if now.isAfter(t) then
+                            IO.raiseError(
+                              RuntimeException(
+                                s"Stage4 startupSut: initialization took too long " +
+                                    s"(takeoff: $t, now: $now)"
+                              )
+                            )
+                        else
+                            val sleepMs = t.toEpochMilli - now.toEpochMilli
+                            IO.sleep(FiniteDuration(sleepMs, TimeUnit.MILLISECONDS))
+                    }
+            }
+
             tracerLocal <- Tracer.makeLocal
             given cats.effect.IOLocal[Tracer] = tracerLocal
 
@@ -307,11 +337,19 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
         canonicalBriefs = briefsByPeer(sortedPeers.head)
         submittedIds <- sut.submittedRequestIds.get
 
-        _ <- IO(printBlockTable(canonicalBriefs, sortedPeers, briefsByPeer, nPeers, submittedIds, lastState))
-    yield
-        propLiveness(submittedIds, canonicalBriefs) &&
-            propDepositTiming(lastState.registeredDeposits, canonicalBriefs) &&
-            propValidRatio(lastState, canonicalBriefs)
+        _ <- IO(
+          printBlockTable(
+            canonicalBriefs,
+            sortedPeers,
+            briefsByPeer,
+            nPeers,
+            submittedIds,
+            lastState
+          )
+        )
+    yield propLiveness(submittedIds, canonicalBriefs) &&
+        propDepositTiming(lastState.registeredDeposits, canonicalBriefs) &&
+        propValidRatio(lastState, canonicalBriefs)
 
     // TODO: side-channel validity-error tracking + propNoStaleRejections
     //
@@ -338,25 +376,25 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
     //     and the reqId, so the diagnostic is self-contained without grepping the log.
 
     /** Property: every submitted request id eventually appears in some block — either as an event
-      * (Valid or Invalid) or as a deposit (absorbed or refunded). Catches silent message loss
-      * (e.g. the historical `Mempool.extractRequestsWhile` bug).
+      * (Valid or Invalid) or as a deposit (absorbed or refunded). Catches silent message loss (e.g.
+      * the historical `Mempool.extractRequestsWhile` bug).
       */
     private def propLiveness(
         submittedIds: Vector[RequestId],
         canonicalBriefs: Vector[BlockBrief.Intermediate]
     ): Prop = {
         val processedIds: Set[RequestId] =
-            canonicalBriefs.flatMap(b =>
-                b.events.map(_._1) ++ b.depositsAbsorbed ++ b.depositsRefunded
-            ).toSet
+            canonicalBriefs
+                .flatMap(b => b.events.map(_._1) ++ b.depositsAbsorbed ++ b.depositsRefunded)
+                .toSet
         val missing = submittedIds.toSet -- processedIds
         Prop(missing.isEmpty) :|
             s"liveness: ${missing.size} submitted reqId(s) never appeared in any block: " +
             s"${missing.toSeq.sortBy(r => (r.peerNum.convert, r.requestNum.convert)).mkString(", ")}"
     }
 
-    /** Property: every absorbed deposit was mature by the time the absorbing block ended,
-      * i.e. `brief.endTime >= deposit.absorptionStartTime`. Refund-window check is a TODO — needs
+    /** Property: every absorbed deposit was mature by the time the absorbing block ended, i.e.
+      * `brief.endTime >= deposit.absorptionStartTime`. Refund-window check is a TODO — needs
       * `depositAbsorptionEndTime` and the `notInPollResults` legitimate case which we don't track.
       */
     private def propDepositTiming(
@@ -376,13 +414,13 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
             violations.mkString("\n")
     }
 
-    /** Property: SUT's valid/total ratio is no greater than the model's, i.e. the SUT is not
-      * more permissive than the model. Compared as exact rationals via cross-multiplication.
+    /** Property: SUT's valid/total ratio is no greater than the model's, i.e. the SUT is not more
+      * permissive than the model. Compared as exact rationals via cross-multiplication.
       *
-      * Both sides are restricted to L2-tx reqIds (excluding any deposit reqId — deposits go
-      * into `depositsAbsorbed` / `depositsRefunded` on the SUT side, but a rejected deposit
-      * registration ends up in `events` via `JointLedger.rejectEvent` and would otherwise
-      * inflate the SUT total relative to the model.
+      * Both sides are restricted to L2-tx reqIds (excluding any deposit reqId — deposits go into
+      * `depositsAbsorbed` / `depositsRefunded` on the SUT side, but a rejected deposit registration
+      * ends up in `events` via `JointLedger.rejectEvent` and would otherwise inflate the SUT total
+      * relative to the model.
       */
     private def propValidRatio(
         lastState: ModelState,
@@ -487,21 +525,36 @@ object Stage4Suite:
         nPeers: Int = 2,
         absorptionSlack: FiniteDuration = 60.seconds,
         meanInterArrivalTime: HeadPeerNumber => FiniteDuration = _ => 12.seconds,
+        useTestControl: Boolean = true,
     ): Gen[ModelState] =
         val cardanoNetwork = CardanoNetwork.Preprod
         val testPeers = TestPeers.apply(SeedPhrase.Yaci, cardanoNetwork, nPeers)
         val testPeerToUtxos = yaciTestSauceGenesis(cardanoNetwork.network)(testPeers)
 
-        // This should be deterministic
+        // For non-TestControl runs we need the head's initial block end-time anchored at a
+        // small wall-clock offset in the future, so `startupSut` can sleep until that anchor
+        // and have the model clock and the wall clock coincide at command 1. 60s matches
+        // stage 1's budget; if 20-peer setup overruns it the test aborts (see startupSut).
+        // Under TestControl the virtual clock jumps instantly so any anchor works — we keep
+        // the deterministic 100-day random distribution to exercise different start epochs.
+        val takeoffTime: Option[java.time.Instant] =
+            if useTestControl then None
+            else Some(java.time.Instant.now().plusSeconds(60))
+
         val generateHeadStartTime = ReaderT((tp: TestPeers) =>
-            // Date and time (GMT): Thursday, January 1, 2026 at 12:00:00 AM, POSIX seconds
-            val anchorTime = 1767225600L
-            // 100 day range, seconds
-            val range = 86_400 * 100L
-            for offset <- Gen.choose(0L, range)
-            yield BlockCreationEndTime(
-              java.time.Instant.ofEpochSecond(anchorTime + offset).quantize(tp.slotConfig)
-            )
+            takeoffTime match {
+                case Some(t) =>
+                    Gen.const(BlockCreationEndTime(t.quantize(tp.slotConfig)))
+                case None =>
+                    // Date and time (GMT): Thursday, January 1, 2026 at 12:00:00 AM, POSIX seconds
+                    val anchorTime = 1767225600L
+                    // 100 day range, seconds
+                    val range = 86_400 * 100L
+                    for offset <- Gen.choose(0L, range)
+                    yield BlockCreationEndTime(
+                      java.time.Instant.ofEpochSecond(anchorTime + offset).quantize(tp.slotConfig)
+                    )
+            }
         )
 
         val generateHeadConfigBootstrap_ = generateHeadConfigBootstrap(
@@ -527,7 +580,16 @@ object Stage4Suite:
 
         for
             config <- MultiNodeConfig.generateWith(testPeers)(
-              generateHeadConfig = generateHeadConfig_
+              generateHeadConfig = generateHeadConfig_,
+              // Halve the maximum allowed polling period (the default is
+              // `headConfig.maxCardanoLiaisonPollingPeriod`). With a lower upper bound,
+              // every peer's CardanoLiaison polls L1 more frequently — peers see new
+              // deposits closer in time, which should reduce inter-peer skew that may
+              // currently produce mismatched block briefs at major-block consensus.
+              generateNodeOperationMultisigConfig = hc =>
+                  hydrozoa.config.node.operation.multisig.generateNodeOperationMultisigConfig(
+                    hc.maxCardanoLiaisonPollingPeriod / 2
+                  )
             )
 
             preinitPeerUtxosL1 = testPeerToUtxos.map((k, v) => k.headPeerNumber -> v)
@@ -557,6 +619,7 @@ object Stage4Suite:
           ),
           preinitPeerUtxosL1 = preinitPeerUtxosL1,
           currentModelTime = startTime,
+          takeoffTime = takeoffTime,
           utxosL2Active = config.headConfig.initializationParameters.initialEvacuationMap.toUtxos,
           peerUtxosL1 = peerUtxosL1,
           nextRequestNumbers = peers.map(_ -> RequestNumber(0)).toMap,

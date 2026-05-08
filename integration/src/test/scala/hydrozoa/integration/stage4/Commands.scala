@@ -71,18 +71,18 @@ object Commands:
                 case TxMutator.Identity      => "identity"
                 case TxMutator.DropWitnesses => "drop-witnesses"
             val stratStr = cmd.txStrategy match
-                case TxStrategy.Regular          => "regular"
-                case TxStrategy.Arbitrary        => "arbitrary"
+                case TxStrategy.Regular           => "regular"
+                case TxStrategy.Arbitrary         => "arbitrary"
                 case TxStrategy.RandomWithdrawals => "withdrawals"
-                case TxStrategy.Dust(n)          => s"dust=$n"
+                case TxStrategy.Dust(n)           => s"dust=$n"
             s"L2Tx(peer=${cmd.peerNum: Int}, $stratStr, $mutStr)"
 
     // ===================================
     // Register Deposit
     // ===================================
 
-    /** Register a deposit with the given peer and immediately submit the deposit tx to L1.
-      *  Result is the model's validity prediction (always Valid — invalid deposits are tested in stage1).
+    /** Register a deposit with the given peer and immediately submit the deposit tx to L1. Result
+      * is the model's validity prediction (always Valid — invalid deposits are tested in stage1).
       */
     final case class RegisterAndSubmitDepositCommand(
         peerNum: HeadPeerNumber,

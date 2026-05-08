@@ -32,34 +32,44 @@ private[stage4] case class PeerStack(
 // Block brief observer
 // ===================================
 
-/** Proxy actor wrapping ConsensusActor. Intercepts Block.Unsigned.{Minor,Major} to record
-  * block briefs; forwards everything else unchanged. Both leader-produced and
-  * follower-reproduced blocks flow through JointLedger.handleBlock → ConsensusActor, so
-  * this captures the complete ordered sequence seen by the peer.
+/** Proxy actor wrapping ConsensusActor. Intercepts Block.Unsigned.{Minor,Major} to record block
+  * briefs; forwards everything else unchanged. Both leader-produced and follower-reproduced blocks
+  * flow through JointLedger.handleBlock → ConsensusActor, so this captures the complete ordered
+  * sequence seen by the peer.
   */
 private[stage4] class BlockBriefObserver(
     peerNum: HeadPeerNumber,
     real: ConsensusActor.Handle,
     briefs: Ref[IO, Vector[BlockBrief.Intermediate]],
 ) extends Actor[IO, ConsensusActor.Request]:
-    private val logger = Logging.loggerIO(s"BlockBriefObserver.${peerNum: Int}")
+    private val logger = Logging.loggerIO(s"Stage4.BlockBriefObserver.${peerNum: Int}")
     override def receive: Receive[IO, ConsensusActor.Request] = {
         case block: UMinor =>
-            logger.debug(s"received UMinor block=${block.blockNum}, capturing brief and forwarding") >>
+            logger.debug(
+              s"received UMinor block=${block.blockNum}, capturing brief and forwarding"
+            ) >>
                 briefs.update(_ :+ block.blockBrief) >>
-                logger.debug(s"brief captured for block=${block.blockNum}, forwarding to real ConsensusActor") >>
+                logger.debug(
+                  s"brief captured for block=${block.blockNum}, forwarding to real ConsensusActor"
+                ) >>
                 (real ! block) >>
                 logger.debug(s"forwarded UMinor block=${block.blockNum} to real ConsensusActor")
         case block: UMajor =>
-            logger.debug(s"received UMajor block=${block.blockNum}, capturing brief and forwarding") >>
+            logger.debug(
+              s"received UMajor block=${block.blockNum}, capturing brief and forwarding"
+            ) >>
                 briefs.update(_ :+ block.blockBrief) >>
-                logger.debug(s"brief captured for block=${block.blockNum}, forwarding to real ConsensusActor") >>
+                logger.debug(
+                  s"brief captured for block=${block.blockNum}, forwarding to real ConsensusActor"
+                ) >>
                 (real ! block) >>
                 logger.debug(s"forwarded UMajor block=${block.blockNum} to real ConsensusActor")
         case msg =>
             logger.debug(s"received non-block msg=${msg.getClass.getSimpleName}, forwarding") >>
                 (real ! msg) >>
-                logger.debug(s"forwarded non-block msg=${msg.getClass.getSimpleName} to real ConsensusActor")
+                logger.debug(
+                  s"forwarded non-block msg=${msg.getClass.getSimpleName} to real ConsensusActor"
+                )
     }
 
 // ===================================

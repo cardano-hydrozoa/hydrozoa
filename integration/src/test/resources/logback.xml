@@ -51,17 +51,20 @@
     <logger name="Stage4.Model" level="info"/>
     <logger name="Stage4.Sut" level="info"/>
     <logger name="Stage4.Suite" level="info"/>
+    <logger name="Stage4.BlockBriefObserver" level="info"/>
+
+
 
     <!-- default: warn -->
-    <logger name="BlockWeaver" level="warn"/>
-    <logger name="ConsensusActor" level="warn"/>
-    <logger name="EventSequencer" level="warn"/>
-    <logger name="CardanoLiaison" level="warn"/>
-    <logger name="JointLedger" level="warn"/>
-    <logger name="PeerLiaison" level="warn"/>
-    <logger name="PeerLiaisonMermaid" level="warn"/>
-    <logger name="TxTiming" level="warn"/>
-    <logger name="DepositsMap" level="warn"/>
+    <logger name="BlockWeaver" level="info"/>
+    <logger name="ConsensusActor" level="info"/>
+    <logger name="EventSequencer" level="info"/>
+    <logger name="CardanoLiaison" level="info"/>
+    <logger name="JointLedger" level="info"/>
+    <logger name="PeerLiaison" level="info"/>
+    <logger name="PeerLiaisonMermaid" level="info"/>
+    <logger name="TxTiming" level="info"/>
+    <logger name="DepositsMap" level="info"/>
 
     <!-- default: warn -->
     <logger name="scalus" level="warn"/>

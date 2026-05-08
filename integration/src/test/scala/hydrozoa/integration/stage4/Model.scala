@@ -25,11 +25,10 @@ object Model {
 
     private val logger = Logging.logger("Stage4.Model")
 
-
     case class Params(
         multiNodeConfig: MultiNodeConfig,
         /** How long after depositAbsorptionStart we assume the deposit is available in L2.
-         */
+          */
         absorptionSlack: FiniteDuration,
         meanInterArrivalTimes: Map[HeadPeerNumber, FiniteDuration],
     )
@@ -59,6 +58,13 @@ object Model {
         // for DelayCommand) on every command's runState. Stays in lockstep with the SUT virtual
         // clock since the framework also calls IO.sleep with the same value before submission.
         currentModelTime: QuantizedInstant,
+
+        // Real-clock anchor for non-TestControl runs. `Some(t)` means `genInitialState`
+        // computed `t = Instant.now() + 60s` and pinned the head's initial block end-time to
+        // it; `startupSut` will sleep until the wall clock reaches `t` (or abort if late).
+        // `None` for TestControl runs — virtual clock jumps instantly. See
+        // package.scala "Why TestControl is mandatory" for the full rationale.
+        takeoffTime: Option[java.time.Instant],
 
         // Shared (among peers) L2 active UTxO set
         utxosL2Active: Utxos,
@@ -93,11 +99,10 @@ object Model {
     // Helpers
     // ===================================
 
-    /** Promote pending deposits whose expectedAbsorptionTime has been reached. Called as the
-      * first step of every runState so the active UTxO set is always up-to-date before the
-      * command is evaluated. With a single global clock, absorption is checked across all peers'
-      * pending deposits — once the clock crosses a deposit's expectedAbsorptionTime, every peer
-      * sees it.
+    /** Promote pending deposits whose expectedAbsorptionTime has been reached. Called as the first
+      * step of every runState so the active UTxO set is always up-to-date before the command is
+      * evaluated. With a single global clock, absorption is checked across all peers' pending
+      * deposits — once the clock crosses a deposit's expectedAbsorptionTime, every peer sees it.
       */
     private def absorbDeposits(
         newTime: QuantizedInstant,

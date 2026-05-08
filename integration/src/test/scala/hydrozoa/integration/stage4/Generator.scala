@@ -41,9 +41,9 @@ object CommandGenerators:
       *     merged stream
       *   - `peer` is sampled with probability proportional to `lambda_p`
       *
-      * The marginal stream of any peer p (project the merged stream onto peer-p events) is
-      * exactly `Poisson(lambda_p)` — so configuring peer-specific rates produces the intended
-      * less-active vs more-active behavior.
+      * The marginal stream of any peer p (project the merged stream onto peer-p events) is exactly
+      * `Poisson(lambda_p)` — so configuring peer-specific rates produces the intended less-active
+      * vs more-active behavior.
       */
     def genSuperposedNextEvent(
         meanInterArrivalTimes: Map[HeadPeerNumber, FiniteDuration]
@@ -388,10 +388,11 @@ object CommandGenerators:
             } yield ret
     }
 
-    /** Force-advance the global clock until all pending deposits for this peer are absorbed.
-      * Jumps to max(expectedAbsorptionTime) + [0, 30s] jitter. Used when the peer has no L2
-      * UTxOs and must wait for absorption.
-     * TODO: within the new appoach that uses cumulative time this looks odd, shall we remove it?
+    /** Force-advance the global clock until all pending deposits for this peer are absorbed. Jumps
+      * to max(expectedAbsorptionTime) + [0, 30s] jitter. Used when the peer has no L2 UTxOs and
+      * must wait for absorption.
+      *
+      * TODO: within the new approach that uses cumulative time this looks odd, shall we remove it?
       */
     def genDelayForAbsorption(
         peerNum: HeadPeerNumber,
@@ -471,11 +472,16 @@ object Stage4ScenarioGen extends ScenarioGen[ModelState, Stage4Sut]:
                       5 -> Gen.const(TxStrategy.Regular),
                       2 -> Gen.const(TxStrategy.RandomWithdrawals),
                       // TODO: Too slow on my machine dure to KZG-commitments
-                      //2 -> Gen.const(TxStrategy.Dust(50)),
+                      // 2 -> Gen.const(TxStrategy.Dust(50)),
                       1 -> Gen.const(TxStrategy.Arbitrary)
                     ).flatMap(strategy =>
                         CommandGenerators
-                            .genL2TxCommand(peerNum, interArrivalDelay, strategy, TxMutator.Identity)(state)
+                            .genL2TxCommand(
+                              peerNum,
+                              interArrivalDelay,
+                              strategy,
+                              TxMutator.Identity
+                            )(state)
                             .map(_.map(AnyCommand.apply(_)))
                     )
 
