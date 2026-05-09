@@ -68,7 +68,8 @@ object Model:
         // Non-mutable part, always copy as it is, no changes please.
         //
         multiNodeConfig: MultiNodeConfig,
-        padding: FiniteDuration,
+        //
+        reservedSubmissionDuration: FiniteDuration,
 
         // The real-world instant at which the SUT should start processing commands.
         // None for mock mode (time is controlled via TestControl).

@@ -6,7 +6,7 @@ import cats.effect.{Deferred, IO}
 import ch.qos.logback.classic.Level
 import hydrozoa.lib.logging.Logging
 import org.scalacheck.{Gen, Prop, Shrink}
-import org.slf4j.{Logger, LoggerFactory}
+import org.slf4j.LoggerFactory
 
 import scala.annotation.tailrec
 import scala.concurrent.duration.{Duration, DurationInt, FiniteDuration}

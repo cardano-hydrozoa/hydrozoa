@@ -1,6 +1,5 @@
 package hydrozoa.integration.stage1
 
-import hydrozoa.integration.stage1.model.Deposits.DepositStatus
 import cats.data.NonEmptyList
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.config.head.initialization.CappedValueGen.{ensureMinAdaLenient, generateCappedValue}
@@ -13,7 +12,6 @@ import hydrozoa.integration.stage1.CommandGenerators.TxMutator.Identity
 import hydrozoa.integration.stage1.CommandGenerators.TxStrategy.{Dust, RandomWithdrawals, Regular}
 import hydrozoa.integration.stage1.Commands.*
 import hydrozoa.integration.stage1.Model.BlockCycle.HeadFinalized
-import hydrozoa.integration.stage1.Model.CurrentTime.AfterCompetingFallbackStartTime
 import hydrozoa.integration.stage1.Model.given
 import hydrozoa.integration.stage1.SutCommands.given
 import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant.mkOrderingOps
@@ -30,7 +28,6 @@ import hydrozoa.multisig.ledger.eutxol2.tx.GenesisObligation
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
-import io.bullet.borer.Cbor
 import org.scalacheck.Gen
 import org.scalacheck.commands.{AnyCommand, ScenarioGen, noOp}
 import scalus.cardano.address.ShelleyAddress
@@ -138,17 +135,23 @@ object CommandGenerators:
         currentTime: QuantizedInstant,
         competingFallbackStartTime: FallbackTxStartTime,
         txTiming: TxTiming.Section,
-        padding: FiniteDuration
+        reservedSubmissionDuration: FiniteDuration
     ): Gen[QuantizedFiniteDuration] = {
         // The duration of the block must not put us in the silence period
-        val notionalSettlementEnd =
+        val silencePeriodStart =
             txTiming.txTiming.newSettlementEndTime(competingFallbackStartTime)
-        val availableDuration = notionalSettlementEnd - currentTime
+        val availableDuration = silencePeriodStart - currentTime
 
-        require(availableDuration.finiteDuration > padding)
+        require(
+          availableDuration.finiteDuration > reservedSubmissionDuration,
+          "too late to complete the block"
+        )
 
         Gen
-            .choose(0L, availableDuration.finiteDuration.toMillis)
+            .frequency(
+               5 -> Gen.const(1_000L),
+               5 -> Gen.choose(0L, (availableDuration.finiteDuration - reservedSubmissionDuration).toMillis)
+            )
             .map(blockDurationMs =>
                 QuantizedFiniteDuration(
                   currentTime.slotConfig,
@@ -162,13 +165,13 @@ object CommandGenerators:
         currentTime: QuantizedInstant,
         competingFallbackStartTime: FallbackTxStartTime,
         txTiming: TxTiming.Section,
-        padding: FiniteDuration
+        reservedSubmissionDuration: FiniteDuration
     ): Gen[CompleteBlockCommand] = for {
         blockDuration <- genBlockDuration(
           currentTime,
           competingFallbackStartTime,
           txTiming,
-          padding
+          reservedSubmissionDuration
         )
     } yield CompleteBlockCommand(
       blockNumber,
@@ -182,13 +185,13 @@ object CommandGenerators:
         currentTime: QuantizedInstant,
         competingFallbackStartTime: FallbackTxStartTime,
         txTiming: TxTiming.Section,
-        padding: FiniteDuration
+        reservedSubmissionDuration: FiniteDuration
     ): Gen[CompleteBlockCommand] = for {
         blockDuration <- genBlockDuration(
           currentTime,
           competingFallbackStartTime,
           txTiming,
-          padding
+          reservedSubmissionDuration
         )
     } yield CompleteBlockCommand(
       blockNumber,
@@ -202,7 +205,7 @@ object CommandGenerators:
         currentTime: QuantizedInstant,
         competingFallbackStartTime: FallbackTxStartTime,
         txTiming: TxTiming.Section,
-        padding: FiniteDuration
+        reservedSubmissionDuration: FiniteDuration
     ): Gen[CompleteBlockCommand] =
 
         for {
@@ -214,7 +217,7 @@ object CommandGenerators:
                       currentTime,
                       competingFallbackStartTime,
                       txTiming,
-                      padding
+                      reservedSubmissionDuration
                     )
                 else
                     Gen.frequency(
@@ -223,14 +226,14 @@ object CommandGenerators:
                         currentTime,
                         competingFallbackStartTime,
                         txTiming,
-                        padding
+                        reservedSubmissionDuration
                       ),
                       20 -> genCompleteBlockRegular(
                         blockNumber,
                         currentTime,
                         competingFallbackStartTime,
                         txTiming,
-                        padding
+                        reservedSubmissionDuration
                       )
                     )
         } yield ret
@@ -665,7 +668,7 @@ object ScenarioGenerators:
             state: Model.State
         ): Gen[AnyCommand[Model.State, Stage1Sut]] = {
             import hydrozoa.integration.stage1.Model.BlockCycle.*
-            import hydrozoa.integration.stage1.Model.CurrentTime.BeforeHappyPathExpiration
+    import hydrozoa.integration.stage1.Model.CurrentTime.BeforeHappyPathExpiration
 
             state.getCurrentTime match {
                 case BeforeHappyPathExpiration(_) =>
@@ -697,7 +700,7 @@ object ScenarioGenerators:
                                   state.multiNodeConfig.initialBlock.endTime,
                                   state.competingFallbackStartTime,
                                   state.multiNodeConfig,
-                                  state.padding
+                                  state.reservedSubmissionDuration
                                 )
                                 .map(AnyCommand(_))
 
@@ -709,7 +712,7 @@ object ScenarioGenerators:
                                     state.getCurrentTime.instant,
                                     state.competingFallbackStartTime,
                                     state.multiNodeConfig,
-                                    state.padding
+                                    state.reservedSubmissionDuration
                                   )
                                   .map(AnyCommand.apply),
                               10 -> (if state.utxosL2Active.isEmpty
@@ -729,7 +732,7 @@ object ScenarioGenerators:
             state: Model.State
         ): Gen[AnyCommand[Model.State, Stage1Sut]] = {
             import hydrozoa.integration.stage1.Model.BlockCycle.*
-            import hydrozoa.integration.stage1.Model.CurrentTime.BeforeHappyPathExpiration
+    import hydrozoa.integration.stage1.Model.CurrentTime.BeforeHappyPathExpiration
 
             state.getCurrentTime match {
                 case BeforeHappyPathExpiration(_) =>
@@ -759,7 +762,7 @@ object ScenarioGenerators:
                                   state.multiNodeConfig.initialBlock.endTime,
                                   state.competingFallbackStartTime,
                                   state.multiNodeConfig,
-                                  state.padding
+                                  state.reservedSubmissionDuration
                                 )
                                 .map(AnyCommand(_))
                         case InProgress(blockNumber, _, _, _) =>
@@ -772,7 +775,7 @@ object ScenarioGenerators:
                                               state.getCurrentTime.instant,
                                               state.competingFallbackStartTime,
                                               state.multiNodeConfig,
-                                              state.padding
+                                              state.reservedSubmissionDuration
                                             )
                                             .map(AnyCommand.apply)
                                     else
@@ -782,7 +785,7 @@ object ScenarioGenerators:
                                               state.getCurrentTime.instant,
                                               state.competingFallbackStartTime,
                                               state.multiNodeConfig,
-                                              state.padding
+                                              state.reservedSubmissionDuration
                                             )
                                             .map(AnyCommand.apply)),
                               10 -> CommandGenerators
@@ -812,7 +815,7 @@ object ScenarioGenerators:
             state: Model.State
         ): Gen[AnyCommand[Model.State, Stage1Sut]] = {
             import hydrozoa.integration.stage1.Model.BlockCycle.*
-            import hydrozoa.integration.stage1.Model.CurrentTime.BeforeHappyPathExpiration
+    import hydrozoa.integration.stage1.Model.CurrentTime.BeforeHappyPathExpiration
 
             state.getCurrentTime match {
                 case BeforeHappyPathExpiration(_) =>
@@ -844,7 +847,7 @@ object ScenarioGenerators:
                                   state.multiNodeConfig.initialBlock.endTime,
                                   state.competingFallbackStartTime,
                                   state.multiNodeConfig,
-                                  state.padding
+                                  state.reservedSubmissionDuration
                                 )
                                 .map(AnyCommand(_))
                         case InProgress(blockNumber, _, _, _) =>
@@ -865,7 +868,7 @@ object ScenarioGenerators:
                                     state.getCurrentTime.instant,
                                     state.competingFallbackStartTime,
                                     state.multiNodeConfig,
-                                    state.padding
+                                    state.reservedSubmissionDuration
                                   )
                                   .map(cmd => Some(AnyCommand.apply(cmd))),
                               3 -> (if state.utxosL2Active.nonEmpty

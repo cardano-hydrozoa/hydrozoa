@@ -5,6 +5,16 @@
         <appender-ref ref="FILE"/>
     </root>
 
+    <!-- IMPORTANT
+
+         Timestamps added by the logging framework
+         by `%d{HH:mm:ss.SSS}` in <pattern>
+         when using mock/test control are useless!
+
+         They are here since when testing against
+         Yaci/public testnets they are needed.
+
+    -->
     <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
             <pattern>%d{HH:mm:ss.SSS} %highlight(%-5level) %cyan(%logger{64}) %n%msg%n
@@ -31,11 +41,12 @@
         <appender-ref ref="MERMAID"/>
     </logger>
 
-
+    <!-- common test loggers -->
     <!-- default: warn -->
     <logger name="org.scalacheck.commands.ModelBasedSuite" level="warn"/>
     <logger name="test.CardanoBackendMock" level="warn"/>
 
+    <!-- stage1 loggers -->
     <!-- default: info -->
     <logger name="Stage1.Commands" level="info"/>
     <logger name="Stage1.CommandGenerators" level="info"/>
@@ -44,6 +55,7 @@
     <logger name="Stage1.Sut" level="info"/>
     <logger name="Stage1.Suite" level="info"/>
 
+    <!-- stage4 loggers -->
     <!-- default: info -->
     <logger name="Stage4.Commands" level="info"/>
     <logger name="Stage4.CommandGenerators" level="info"/>
@@ -54,7 +66,7 @@
     <logger name="Stage4.BlockBriefObserver" level="info"/>
 
 
-
+    <!-- hydrozoa -->
     <!-- default: warn -->
     <logger name="BlockWeaver" level="info"/>
     <logger name="ConsensusActor" level="info"/>
@@ -66,6 +78,7 @@
     <logger name="TxTiming" level="info"/>
     <logger name="DepositsMap" level="info"/>
 
+    <!-- libs -->
     <!-- default: warn -->
     <logger name="scalus" level="warn"/>
 </configuration>
