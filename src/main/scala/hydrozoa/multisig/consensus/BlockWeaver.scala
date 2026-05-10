@@ -123,6 +123,17 @@ object BlockWeaver {
         final def logStateTransition: IO[Unit] =
             logger.info(s"Becoming $stateName.")
 
+        /** Wrap a reactive state in `Some` and emit the "Becoming X" log only if the receiver (the
+          * previous state) has a different [[stateName]]. Same-name self-loops (e.g. `pure(this)`
+          * or `pure(copy(...))`) suppress the log so it doesn't drown the rest of the trace.
+          */
+        final def pure[S <: State.Reactive](newState: S): IO[Some[S]] = {
+            val log =
+                if newState.stateName == this.stateName then IO.unit
+                else newState.logStateTransition
+            log >> IO.pure(Some(newState))
+        }
+
         final def sendStartBlock(config: Config)(blockNumber: BlockNumber): IO[Unit] = for {
             now <- realTimeQuantizedInstant(config.slotConfig)
             blockCreationStartTime = BlockCreationStartTime(now)
@@ -188,12 +199,6 @@ object BlockWeaver {
                       nextBlockNumber = BlockNumber.zero.increment
                     ).act(config)
             } yield state.get
-
-        /** If the next state is reactive, then the transition into it is pure because no immediate
-          * actions need to be taken.
-          */
-        private def pure[S <: State.Reactive](state: S): IO[Some[S]] =
-            state.logStateTransition >> IO.pure(Some(state))
 
         /** A state with a mempool can store requests in its mempool. */
         sealed trait WithMempool extends State {
