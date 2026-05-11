@@ -1,13 +1,20 @@
 package hydrozoa.multisig.consensus.ack
 
 import cats.implicits.catsSyntaxOrder
+import hydrozoa.multisig.consensus.ack.AckNumber.given
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import io.circe.*
 import scala.annotation.targetName
 
 type AckId = AckId.AckId
 
 object AckId {
     opaque type AckId = (HeadPeerNumber, AckNumber)
+
+    given Codec[AckId] = Codec.from(
+      encodeA = Encoder.encodeTuple2,
+      decodeA = Decoder.decodeTuple2
+    )
 
     def apply(peerNum: HeadPeerNumber, ackNum: AckNumber): AckId = (peerNum, ackNum)
 

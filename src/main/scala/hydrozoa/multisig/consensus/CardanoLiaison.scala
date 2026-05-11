@@ -559,7 +559,7 @@ trait CardanoLiaison(
                                 for {
                                     _ <- Tracer.trace(
                                       s"Submitting tx hash: ${tx.id}\n\t" +
-                                          s"Pretty: ${summon[Pretty[Transaction]].pretty(tx)}" +
+                                          s"Pretty: ${summon[Pretty[Transaction]].pretty(tx).render(100)}" +
                                           s"\n\tcbor: ${HexUtil.encodeHexString(tx.toCbor)}"
                                     )
                                     ret <- cardanoBackend.submitTx(tx)
@@ -574,7 +574,7 @@ trait CardanoLiaison(
                         "Submission errors (generally ignored):" + submissionErrors
                             .map(a =>
                                 s"\n\t- ${a._2.left},\n\t " +
-                                    s"Pretty: ${summon[Pretty[Transaction]].pretty(a._1)}\n\t " +
+                                    s"Pretty: ${summon[Pretty[Transaction]].pretty(a._1).render(100)}\n\t " +
                                     s"cbor=${HexUtil.encodeHexString(a._1.toCbor)}"
                             )
                             .mkString

@@ -1,11 +1,17 @@
 package hydrozoa.multisig.consensus.ack
 
 import hydrozoa.multisig.ledger.block.BlockHeader
+import io.circe.*
 
 type AckNumber = AckNumber.AckNumber
 
 object AckNumber {
     opaque type AckNumber = Int
+
+    given Codec[AckNumber] = Codec.from(
+      encodeA = Encoder.encodeInt,
+      decodeA = Decoder.decodeInt
+    )
 
     def apply(i: Int): AckNumber = {
         require(i >= 0)
