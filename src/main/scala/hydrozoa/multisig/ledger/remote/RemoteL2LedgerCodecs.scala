@@ -2,7 +2,6 @@ package hydrozoa.multisig.ledger.remote
 
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.ledger.block.BlockNumber
-import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.l2.{Destination, L2LedgerCommand}
