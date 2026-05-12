@@ -19,5 +19,6 @@ def generateNodeOperationMultisigConfig(
         millis <- Gen.choose(1L, maxPollingPeriod.toMillis)
     } yield NodeOperationMultisigConfig(
       cardanoLiaisonPollingPeriod = millis.millis,
-      peerLiaisonMaxRequestsPerBatch = PositiveInt(maxRequestsPerBatch).get
+      peerLiaisonMaxRequestsPerBatch = PositiveInt(maxRequestsPerBatch).get,
+      peerLiaisonResendInterval = 5.seconds
     )

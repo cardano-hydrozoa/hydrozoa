@@ -233,6 +233,14 @@ object PeerWsTransport {
                 .default[IO]
                 .withHost(bindHost)
                 .withPort(bindPort)
+                // Ember closes idle WS sockets after 60s by default. We want the PeerLiaison
+                // protocol's own retransmit timer to be the only thing that brings a stalled
+                // link back to life, so in production we'd set this to `Duration.Inf`. We
+                // intentionally leave the default in place during tests so reconnect handling
+                // gets exercised.
+                // TODO: surface this as a config parameter on the transport (default `Inf` for
+                //   production; short value in tests that want to exercise the reconnect path).
+                // .withIdleTimeout(Duration.Inf)
                 .withHttpWebSocketApp(wsb => transport.routes(wsb).orNotFound)
                 .build
                 .evalTap(_ => logger.info(s"WS server bound at ws://$bindHost:$bindPort/peer"))

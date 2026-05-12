@@ -65,9 +65,20 @@ trait PeerLiaison(
 
     override def receive: Receive[IO, Request] =
         PartialFunction.fromFunction {
-            case PeerLiaison.PreStart => preStartLocal
-            case req                  => getConnections.flatMap(receiveTotal(req, _))
+            case PeerLiaison.PreStart      => preStartLocal
+            case PeerLiaison.ResendCurrent => getConnections.flatMap(resendCurrentTo)
+            case req                       => getConnections.flatMap(receiveTotal(req, _))
         }
+
+    private def resendCurrentTo(conn: Connections): IO[Unit] =
+        for {
+            current <- state.getCurrentlyRequesting
+            _ <- logger.debug(
+              s"resend tick: GetMsgBatch batch=${current.batchNum}, ack=${current.ackNum}, " +
+                  s"block=${current.blockNum}, req=${current.requestNum}"
+            )
+            _ <- conn.remotePeerLiaison ! current
+        } yield ()
 
     private def receiveTotal(req: Request, conn: Connections): IO[Unit] =
         req match {
@@ -75,6 +86,10 @@ trait PeerLiaison(
             case PeerLiaison.PreStart =>
                 // Should never reach here since PreStart is handled in receive
                 IO.raiseError(new IllegalStateException("PreStart handled in receive"))
+
+            case PeerLiaison.ResendCurrent =>
+                // Should never reach here since ResendCurrent is handled in receive
+                IO.raiseError(new IllegalStateException("ResendCurrent handled in receive"))
 
             case x: RemoteBroadcast =>
                 for {
@@ -127,15 +142,32 @@ trait PeerLiaison(
                     _ <- logger.debug(
                       s"got NewMsgBatch: batch=${x.batchNum}, ack=${x.ack.map(_.ackNum)}, block=${x.blockBrief.map(_.blockNum)}, reqs=${x.requests.size}"
                     )
+                    prev <- state.getCurrentlyRequesting
                     next: GetMsgBatch <- state.verifyBatchAndGetNext(x)
-                    msg <- IO.pure(
-                      s"GetMsgBatch: batch=${next.batchNum}, ack=${next.ackNum}, block=${next.blockNum}, req=${next.requestNum}"
-                    )
-                    // _ <- mermaid(msg)
-                    _ <- conn.remotePeerLiaison ! next
-                    _ <- x.ack.traverse_(conn.consensusActor ! _)
-                    _ <- x.blockBrief.traverse_(conn.blockWeaver ! _)
-                    _ <- x.requests.traverse_(conn.blockWeaver ! _)
+                    advanced = next.batchNum != prev.batchNum
+                    _ <-
+                        if advanced then
+                            for {
+                                msg <- IO.pure(
+                                  s"GetMsgBatch: batch=${next.batchNum}, ack=${next.ackNum}, " +
+                                      s"block=${next.blockNum}, req=${next.requestNum}"
+                                )
+                                // _ <- mermaid(msg)
+                                _ <- conn.remotePeerLiaison ! next
+                                _ <- x.ack.traverse_(conn.consensusActor ! _)
+                                _ <- x.blockBrief.traverse_(conn.blockWeaver ! _)
+                                _ <- x.requests.traverse_(conn.blockWeaver ! _)
+                            } yield ()
+                        else
+                            // Stale/duplicate reply: either a verification mismatch or a
+                            // late reply for an already-advanced batch (the retransmit timer
+                            // can cause this). Don't bounce a GetMsgBatch back — the timer
+                            // will keep the chain alive — and don't re-dispatch payloads
+                            // (we've already seen them).
+                            logger.debug(
+                              s"dropping stale NewMsgBatch batch=${x.batchNum} " +
+                                  s"(current=${prev.batchNum})"
+                            )
                 } yield ()
 
             case x: (BlockConfirmed & BlockType.NonFinal) =>
@@ -158,11 +190,31 @@ trait PeerLiaison(
             conn <- getConnections
             _ <- mermaid("GetMsgBatch.initial")
             _ <- conn.remotePeerLiaison ! GetMsgBatch.initial
+            _ <- startResendTimer
         yield ()
+
+    /** Fire a periodic [[ResendCurrent]] self-message so the request-response chain self-heals
+      * after wire-level losses. See the design note on [[PeerLiaison]] for the rationale.
+      *
+      * The tick is fire-and-forget: it lives as long as the actor system. We don't try to cancel it
+      * on actor shutdown because the actor terminates with the system in our deployment, and an
+      * orphaned `IO.sleep` is cheap.
+      */
+    private def startResendTimer: IO[Unit] = {
+        val interval = config.peerLiaisonResendInterval
+        val tick: IO[Unit] =
+            IO.sleep(interval) >> (context.self ! PeerLiaison.ResendCurrent)
+        tick.foreverM.start.void
+    }
 
     private final class State {
         private val currentlyRequesting: Ref[IO, GetMsgBatch] =
             Ref.unsafe[IO, GetMsgBatch](GetMsgBatch.initial)
+
+        /** Read-only access to the outstanding [[GetMsgBatch]]. Used by the retransmit timer (see
+          * [[startResendTimer]]) and by the [[NewMsgBatch]] handler to detect duplicates.
+          */
+        def getCurrentlyRequesting: IO[GetMsgBatch] = this.currentlyRequesting.get
         private val nAck = Ref.unsafe[IO, AckNumber](AckNumber(0))
         private val nBlock = Ref.unsafe[IO, BlockNumber](BlockNumber(0))
         private val nEvent = Ref.unsafe[IO, RequestNumber](RequestNumber(0))
@@ -382,9 +434,44 @@ object PeerLiaison {
         }
     }
 
-    type Request = PreStart.type | RemoteBroadcast | GetMsgBatch | NewMsgBatch | BlockConfirmed
+    type Request =
+        PreStart.type | ResendCurrent.type | RemoteBroadcast | GetMsgBatch | NewMsgBatch |
+            BlockConfirmed
 
     case object PreStart
+
+    /** Local-only self-tick that asks the liaison to re-send its currently outstanding
+      * [[GetMsgBatch]] to the remote peer. Never put on the wire — filtered out by
+      * [[hydrozoa.multisig.consensus.transport.Frame.fromWire]].
+      *
+      * ## Design note: keeping the chain alive at the protocol layer
+      *
+      * The `GetMsgBatch` / `NewMsgBatch` exchange is a single-outstanding-request chain: each side
+      * only sends the next `GetMsgBatch` after processing the previous `NewMsgBatch` reply. Message
+      * content itself is idempotent — sender queues are only drained on `BlockConfirmed`, and
+      * `buildNewMsgBatch` reads via `dropWhile` rather than dequeueing — so no data is lost when a
+      * frame goes missing. What is at risk is the chain's "next pull": if a `GetMsgBatch` or its
+      * reply does not land, neither side fires again on its own.
+      *
+      * Two places this responsibility could live:
+      *
+      *   - '''(A) The transport.''' A "link came back up" callback would let `PeerLiaison` re-emit
+      *     `currentlyRequesting` at the moment a reconnect completes. Couples the liaison to a
+      *     specific transport's notion of "connection event" and covers only the failures that
+      *     transport can observe.
+      *   - '''(B) The protocol itself.''' `PeerLiaison` owns a slow periodic resend of its
+      *     outstanding `GetMsgBatch`. Transport-agnostic. Equally applicable to clean reconnects,
+      *     half-open TCP, paused GC on the peer, frame-corrupting NAT timeouts, or any other path
+      *     that leaves the chain stalled without a visible "reconnect" signal.
+      *
+      * We chose '''(B)'''. The protocol's liveness is a protocol-level concern, not the
+      * transport's. It is also cheap to keep healthy: when the chain is already moving, a resend
+      * either harmlessly overwrites the remote's stashed `sendBatchImmediately` value, or it
+      * triggers a duplicate `NewMsgBatch` that the `advanced` check in the `NewMsgBatch` handler
+      * discards without bouncing a `GetMsgBatch` back. Worst-case steady-state cost is one extra
+      * round-trip per peer per `peerLiaisonResendInterval`.
+      */
+    case object ResendCurrent
 
     object Request {
         type RemoteBroadcast = AckBlock | BlockBrief.Next | UserRequestWithId
