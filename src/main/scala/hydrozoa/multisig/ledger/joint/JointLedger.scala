@@ -175,9 +175,9 @@ final case class JointLedger(
             case p: Block.SoftConfirmed.Next => proxyConfirmation(p)
         }
 
-    /** Notify the L2 ledger that the brief was soft-confirmed. Refund-tx CBORs (slow-side
-      * artifact) are not available on the fast-only path; pass an empty list. The slow consensus
-      * actor will be responsible for surfacing refund tx bytes once wired up.
+    /** Notify the L2 ledger that the brief was soft-confirmed. Refund-tx CBORs (slow-side artifact)
+      * are not available on the fast-only path; pass an empty list. The slow consensus actor will
+      * be responsible for surfacing refund tx bytes once wired up.
       */
     private def proxyConfirmation(next: Block.SoftConfirmed.Next): IO[Unit] = {
         val l2Command = L2LedgerCommand.ProxyBlockConfirmation(
@@ -563,7 +563,6 @@ final case class JointLedger(
     // [[hydrozoa.multisig.consensus.StackActor]]. The fast cycle only handles briefs + header
     // signatures.
 
-
     // Block completion Signal is provided to the joint ledger when the block weaver says it's time.
     // If it's a final block, we don't pass poll results from the cardano liaison. Otherwise, we do.
     // We need to:
@@ -612,14 +611,26 @@ final case class JointLedger(
         brief: BlockBrief.Next
     ): (String, Int, Int, Int) = brief match {
         case b: BlockBrief.Minor =>
-            ("minor", b.header.blockVersion.major: Int, b.header.blockVersion.minor: Int,
-              b.body.events.size)
+            (
+              "minor",
+              b.header.blockVersion.major: Int,
+              b.header.blockVersion.minor: Int,
+              b.body.events.size
+            )
         case b: BlockBrief.Major =>
-            ("major", b.header.blockVersion.major: Int, b.header.blockVersion.minor: Int,
-              b.body.events.size)
+            (
+              "major",
+              b.header.blockVersion.major: Int,
+              b.header.blockVersion.minor: Int,
+              b.body.events.size
+            )
         case b: BlockBrief.Final =>
-            ("final", b.header.blockVersion.major: Int, b.header.blockVersion.minor: Int,
-              b.body.events.size)
+            (
+              "final",
+              b.header.blockVersion.major: Int,
+              b.header.blockVersion.minor: Int,
+              b.body.events.size
+            )
     }
 
     /** When the joint ledger finishes producing (or reproducing) a brief:

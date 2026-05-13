@@ -21,9 +21,9 @@ import scalus.uplc.builtin.{ByteString, platform}
   *
   * ==Overview==
   *
-  * Coordinates the soft-confirmation of block briefs among head peers via a single round of
-  * Ed25519 signatures over the brief's [[BlockHeader.Section.signingBytes]] (see
-  * `consensus/fast-consensus` in the whitepaper).
+  * Coordinates the soft-confirmation of block briefs among head peers via a single round of Ed25519
+  * signatures over the brief's [[BlockHeader.Section.signingBytes]] (see `consensus/fast-consensus`
+  * in the whitepaper).
   *
   * Per the fast/slow split, this actor produces soft-confirmations only. L1 effect signatures
   * (settlement, fallback, rollouts, refunds, finalization) belong to the slow cycle and live in
@@ -31,20 +31,20 @@ import scalus.uplc.builtin.{ByteString, platform}
   *
   * ==State==
   *
-  * The actor maintains a [[ConsensusCell]] per in-flight block number. Each cell tracks the
-  * block's brief (received from the local joint ledger once produced or reproduced) and the soft
-  * acks from each head peer (received from peer liaisons; the local peer's own ack is also fed in
-  * by the joint ledger). When a cell becomes saturated (brief present, every peer's ack
-  * collected), it produces a [[Block.SoftConfirmed.Next]] and broadcasts it.
+  * The actor maintains a [[ConsensusCell]] per in-flight block number. Each cell tracks the block's
+  * brief (received from the local joint ledger once produced or reproduced) and the soft acks from
+  * each head peer (received from peer liaisons; the local peer's own ack is also fed in by the
+  * joint ledger). When a cell becomes saturated (brief present, every peer's ack collected), it
+  * produces a [[Block.SoftConfirmed.Next]] and broadcasts it.
   *
   * ==Postponed acks==
   *
-  * A peer's own soft-ack for block N+1 can arrive before block N is soft-confirmed: the local
-  * joint ledger may complete block N+1 (as a follower replicating the next leader's brief)
-  * before the consensus cell for block N has saturated. The N+1 own ack is then stashed on the
-  * cell for block N and announced as soon as cell N completes. This preserves the cross-peer
-  * invariant that a peer's own block-N+1 ack is broadcast strictly after the same peer has seen
-  * block N soft-confirmed.
+  * A peer's own soft-ack for block N+1 can arrive before block N is soft-confirmed: the local joint
+  * ledger may complete block N+1 (as a follower replicating the next leader's brief) before the
+  * consensus cell for block N has saturated. The N+1 own ack is then stashed on the cell for block
+  * N and announced as soon as cell N completes. This preserves the cross-peer invariant that a
+  * peer's own block-N+1 ack is broadcast strictly after the same peer has seen block N
+  * soft-confirmed.
   */
 object ConsensusActor:
 
@@ -59,8 +59,8 @@ object ConsensusActor:
         tracer: hydrozoa.lib.tracing.ProtocolTracer = hydrozoa.lib.tracing.ProtocolTracer.noop,
     )
 
-    /** One cell per in-flight block number. A cell knows the block number it is collecting for,
-      * may have a brief, accumulates acks from each peer (indexed by verification key), and can
+    /** One cell per in-flight block number. A cell knows the block number it is collecting for, may
+      * have a brief, accumulates acks from each peer (indexed by verification key), and can
       * postpone the local peer's own ack for the next block if it arrives early.
       */
     final case class ConsensusCell(
@@ -138,11 +138,11 @@ object ConsensusActor:
         override def getMessage: String = this match
             case UnexpectedBlockNumber(c, m) =>
                 s"Block-number mismatch: cell=$c, message=$m"
-            case UnexpectedAck(b, p)         => s"Duplicate ack for block $b from peer $p"
-            case UnexpectedBlock(b)          => s"Duplicate brief for block $b"
-            case UnexpectedPeer(p)           => s"Unknown peer number: $p"
-            case PostponedAckAlreadySet      => "Postponed ack already set"
-            case UnexpectedPostponedAck      => "Unexpected postponed ack"
+            case UnexpectedAck(b, p)    => s"Duplicate ack for block $b from peer $p"
+            case UnexpectedBlock(b)     => s"Duplicate brief for block $b"
+            case UnexpectedPeer(p)      => s"Unknown peer number: $p"
+            case PostponedAckAlreadySet => "Postponed ack already set"
+            case UnexpectedPostponedAck => "Unexpected postponed ack"
 
     enum CompletionError extends Throwable:
         case WrongHeaderSignature(vkey: ByteString)
@@ -329,8 +329,7 @@ class ConsensusActor(
     ): Block.SoftConfirmed.Next = {
         // Build the ordered list of header signatures keyed by peer-number order so each peer
         // arrives at the same canonical sequence.
-        val sigsByPeer: List[BlockHeader.HeaderSignature] = acks
-            .toList
+        val sigsByPeer: List[BlockHeader.HeaderSignature] = acks.toList
             .sortBy((_, ack) => ack.peerNum: Int)
             .map((_, ack) => ack.header)
 

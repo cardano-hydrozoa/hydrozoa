@@ -6,14 +6,14 @@ import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber}
 /** A head peer's soft acknowledgment of a block brief: the head peer's Ed25519 signature over the
   * brief's [[BlockHeader.Section.signingBytes]]. See `consensus/fast-consensus` in the spec.
   *
-  * One soft-ack per peer per block, regardless of block type (Minor / Major / Final). The
-  * `ackNum` is the block number — there is exactly one soft-ack per block, so the two coincide
-  * and using `blockNum` keeps the per-peer ack sequence gap-free for [[hydrozoa.multisig.consensus.PeerLiaison]]'s
-  * batch protocol.
+  * One soft-ack per peer per block, regardless of block type (Minor / Major / Final). The `ackNum`
+  * is the block number — there is exactly one soft-ack per block, so the two coincide and using
+  * `blockNum` keeps the per-peer ack sequence gap-free for
+  * [[hydrozoa.multisig.consensus.PeerLiaison]]'s batch protocol.
   *
-  * The `finalizationRequested` flag lets any peer signal that the next block should be a
-  * `Final` block; the leader for block N+1 reads the union of these flags across the
-  * soft-confirmed block-N acks to decide the next block's type.
+  * The `finalizationRequested` flag lets any peer signal that the next block should be a `Final`
+  * block; the leader for block N+1 reads the union of these flags across the soft-confirmed block-N
+  * acks to decide the next block's type.
   */
 final case class SoftAck(
     ackId: AckId,

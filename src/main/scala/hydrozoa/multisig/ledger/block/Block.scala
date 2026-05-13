@@ -181,8 +181,9 @@ object Block {
     }
 
     /** Result of fast consensus: block brief plus every head peer's soft-ack signature over the
-      * brief's [[BlockHeader.Section.signingBytes]]. Carries no L1 effect signatures — those
-      * belong to the slow consensus cycle (parked, see [[hydrozoa.multisig.consensus.SlowConsensusActor]]).
+      * brief's [[BlockHeader.Section.signingBytes]]. Carries no L1 effect signatures — those belong
+      * to the slow consensus cycle (parked, see
+      * [[hydrozoa.multisig.consensus.SlowConsensusActor]]).
       *
       * Not a `Block` (intentionally) because a `Block` is defined as a brief plus its effects, and
       * SoftConfirmed has only the brief.

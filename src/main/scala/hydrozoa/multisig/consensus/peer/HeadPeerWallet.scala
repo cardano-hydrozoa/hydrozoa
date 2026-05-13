@@ -66,8 +66,8 @@ final class HeadPeerWallet(
     ): BlockHeader.HeaderSignature =
         BlockHeader.Minor.HeaderSignature(walletModule.signMsg(headerSerialized, signingKey))
 
-    /** Sign the block brief's canonical signing bytes to produce this peer's soft ack. One ack
-      * per peer per block, regardless of block type. See `consensus/fast-consensus` in the spec.
+    /** Sign the block brief's canonical signing bytes to produce this peer's soft ack. One ack per
+      * peer per block, regardless of block type. See `consensus/fast-consensus` in the spec.
       */
     def mkSoftAck(
         brief: BlockBrief.Next,
