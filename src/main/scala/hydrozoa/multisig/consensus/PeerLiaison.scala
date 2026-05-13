@@ -142,9 +142,13 @@ trait PeerLiaison(
                     _ <- logger.debug(
                       s"got NewMsgBatch: batch=${x.batchNum}, ack=${x.ack.map(_.ackNum)}, block=${x.blockBrief.map(_.blockNum)}, reqs=${x.requests.size}"
                     )
-                    prev <- state.getCurrentlyRequesting
+                    current <- state.getCurrentlyRequesting
                     next: GetMsgBatch <- state.verifyBatchAndGetNext(x)
-                    advanced = next.batchNum != prev.batchNum
+                    // verifyBatchAndGetNext returns either `current` (mismatch) or a
+                    // GetMsgBatch whose batchNum is `current.batchNum.increment` — so the
+                    // post-condition is `next.batchNum >= current.batchNum`. Strict `>` is
+                    // the actual advance signal.
+                    advanced = Ordering[Batch.Number].gt(next.batchNum, current.batchNum)
                     _ <-
                         if advanced then
                             for {
@@ -152,7 +156,7 @@ trait PeerLiaison(
                                   s"GetMsgBatch: batch=${next.batchNum}, ack=${next.ackNum}, " +
                                       s"block=${next.blockNum}, req=${next.requestNum}"
                                 )
-                                // _ <- mermaid(msg)
+                                 _ <- mermaid(msg)
                                 _ <- conn.remotePeerLiaison ! next
                                 _ <- x.ack.traverse_(conn.consensusActor ! _)
                                 _ <- x.blockBrief.traverse_(conn.blockWeaver ! _)
@@ -166,7 +170,7 @@ trait PeerLiaison(
                             // (we've already seen them).
                             logger.debug(
                               s"dropping stale NewMsgBatch batch=${x.batchNum} " +
-                                  s"(current=${prev.batchNum})"
+                                  s"(current=${current.batchNum})"
                             )
                 } yield ()
 
@@ -193,8 +197,8 @@ trait PeerLiaison(
             _ <- startResendTimer
         yield ()
 
-    /** Fire a periodic [[ResendCurrent]] self-message so the request-response chain self-heals
-      * after wire-level losses. See the design note on [[PeerLiaison]] for the rationale.
+    /** Fire a periodic self-message so the request-response chain self-heals after wire-level
+      * losses, see the design note on [[ResendCurrent]] for the rationale.
       *
       * The tick is fire-and-forget: it lives as long as the actor system. We don't try to cancel it
       * on actor shutdown because the actor terminates with the system in our deployment, and an
