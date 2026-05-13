@@ -6,6 +6,7 @@ import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.Tre
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatumOnchain
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteDatum
 import java.io.File
+import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import scalus.cardano.address.Network
 import scalus.cardano.blueprint.Blueprint
@@ -85,35 +86,35 @@ object Export {
         println(s"- Rule-Based Treasury Script Hash: ${treasuryScriptHash.toHex}")
     }
 
-    /** Path to the flat-encoded Dispute Resolution script in the source tree. */
+    /** Path to the Dispute Resolution script `.flat` file (ASCII hex of the CBOR envelope). */
     val disputeResolutionFlatFilePath: String =
         "src/main/resources/dispute_resolution.flat"
 
-    /** Path to the flat-encoded Rule-Based Treasury script in the source tree. */
+    /** Path to the Rule-Based Treasury script `.flat` file (ASCII hex of the CBOR envelope). */
     val ruleBasedTreasuryFlatFilePath: String =
         "src/main/resources/rule_based_treasury.flat"
 
-    /** Writes a single flat-encoded UPLC program to the given path. */
-    private def writeFlatScript(flatBytes: Array[Byte], outputPath: String): Unit = {
+    /** Writes the script to a `.flat` file as ASCII hex of the CBOR envelope.
+      *
+      * Format (PlutusCoreBlaster `single_cbor_hex` mode): UTF-8 / ASCII text, contiguous lowercase
+      * hex, no whitespace, no newlines, no `0x` prefix — the same string that appears as
+      * `validators[].compiledCode` in the CIP-57 blueprint.
+      */
+    private def writeFlatScript(cborHex: String, outputPath: String): Unit = {
         val outputFile = new File(outputPath)
         outputFile.getParentFile.mkdirs()
-        Files.write(outputFile.toPath, flatBytes)
-        println(s"Flat-encoded script exported to: $outputPath (${flatBytes.length} bytes)")
+        Files.write(outputFile.toPath, cborHex.getBytes(StandardCharsets.US_ASCII))
+        println(s"Flat (CBOR-hex) script exported to: $outputPath (${cborHex.length} chars)")
     }
 
-    /** Writes the flat-encoded UPLC programs for both validators to the resources directory.
-      *
-      * The flat format is the raw UPLC binary encoding consumed by formal-verification tooling
-      * (e.g. plutus-core / aiken-style toolchains). It is NOT the CBOR-wrapped script bytes that
-      * appear in the CIP-57 blueprint.
-      */
+    /** Writes the `.flat` files (ASCII hex of CBOR envelope) for both validators. */
     def exportFlatScripts(): Unit = {
         writeFlatScript(
-          DisputeResolutionScript.compiledPlutusV3Program.program.flatEncoded,
+          DisputeResolutionScript.compiledPlutusV3Program.program.cborByteString.toHex,
           disputeResolutionFlatFilePath
         )
         writeFlatScript(
-          RuleBasedTreasuryScript.compiledPlutusV3Program.program.flatEncoded,
+          RuleBasedTreasuryScript.compiledPlutusV3Program.program.cborByteString.toHex,
           ruleBasedTreasuryFlatFilePath
         )
     }
