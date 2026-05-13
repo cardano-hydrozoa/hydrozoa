@@ -1,4 +1,11 @@
-package hydrozoa.lib.petri
+package hydrozoa.lib.petri.net.components
+
+// TODO: YAPNE models "data petri nets" or "DPN". It allows simple typed variables (integer, doubles, and booleans)
+// to be checked in transition pre-conditions ("guards") and updated as post-conditions.
+// These are restricted to simple expressions, with beta support for arbitrary python.
+// One reason I suspect that the language may be so restricted is to make SMT solving easier, but I don't know
+// for certain.
+type Expression = Unit
 
 enum DataVariable[Id](val id: Id):
     case Int(int: scala.Int, override val id: Id) extends DataVariable(id)
