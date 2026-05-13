@@ -6,6 +6,7 @@ import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.Tre
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatumOnchain
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteDatum
 import java.io.File
+import java.nio.file.Files
 import scalus.cardano.address.Network
 import scalus.cardano.blueprint.Blueprint
 
@@ -84,6 +85,39 @@ object Export {
         println(s"- Rule-Based Treasury Script Hash: ${treasuryScriptHash.toHex}")
     }
 
+    /** Path to the flat-encoded Dispute Resolution script in the source tree. */
+    val disputeResolutionFlatFilePath: String =
+        "src/main/resources/dispute_resolution.flat"
+
+    /** Path to the flat-encoded Rule-Based Treasury script in the source tree. */
+    val ruleBasedTreasuryFlatFilePath: String =
+        "src/main/resources/rule_based_treasury.flat"
+
+    /** Writes a single flat-encoded UPLC program to the given path. */
+    private def writeFlatScript(flatBytes: Array[Byte], outputPath: String): Unit = {
+        val outputFile = new File(outputPath)
+        outputFile.getParentFile.mkdirs()
+        Files.write(outputFile.toPath, flatBytes)
+        println(s"Flat-encoded script exported to: $outputPath (${flatBytes.length} bytes)")
+    }
+
+    /** Writes the flat-encoded UPLC programs for both validators to the resources directory.
+      *
+      * The flat format is the raw UPLC binary encoding consumed by formal-verification tooling
+      * (e.g. plutus-core / aiken-style toolchains). It is NOT the CBOR-wrapped script bytes that
+      * appear in the CIP-57 blueprint.
+      */
+    def exportFlatScripts(): Unit = {
+        writeFlatScript(
+          DisputeResolutionScript.compiledPlutusV3Program.program.flatEncoded,
+          disputeResolutionFlatFilePath
+        )
+        writeFlatScript(
+          RuleBasedTreasuryScript.compiledPlutusV3Program.program.flatEncoded,
+          ruleBasedTreasuryFlatFilePath
+        )
+    }
+
     /** Main method for standalone execution.
       *
       * Run with: nix develop --command sbtn "runMain
@@ -91,5 +125,6 @@ object Export {
       */
     def main(args: Array[String]): Unit = {
         exportBlueprint()
+        exportFlatScripts()
     }
 }
