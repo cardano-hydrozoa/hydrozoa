@@ -57,7 +57,7 @@ case class MultiNodeConfig private (
     ): NonEmptyList[BlockHeader.Minor.HeaderSignature] =
         val serialized = BlockHeader.Minor.Onchain.Serialized(blockHeader)
         NonEmptyList.fromListUnsafe(
-          nodePrivateConfigs.map(_._2.ownHeadWallet.mkMinorHeaderSignature(serialized)).toList
+          nodePrivateConfigs.map(_._2.ownHeadWallet.mkHeaderSignature(serialized)).toList
         )
 
     def addressOf(peerNumber: HeadPeerNumber): ShelleyAddress = nodeConfigs(

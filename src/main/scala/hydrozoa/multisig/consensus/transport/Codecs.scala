@@ -4,12 +4,11 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.multisig.consensus.PeerLiaison.Request.{GetMsgBatch, NewMsgBatch}
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
-import hydrozoa.multisig.consensus.ack.{AckBlock, AckId, AckNumber}
+import hydrozoa.multisig.consensus.ack.{AckId, AckNumber, SoftAck}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{PeerLiaison, UserRequest, UserRequestBody, UserRequestHeader, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeader, BlockNumber}
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
-import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import io.circe.*
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
@@ -76,20 +75,7 @@ object Codecs {
           )
         )
 
-    private given Codec[TxSignature] =
-        io.circe.Codec.from(
-          Decoder.decodeString.emap(s =>
-              ByteVector
-                  .fromHex(s)
-                  .toRight(s"Invalid hex for TxSignature: $s")
-                  .map(bv => TxSignature(IArray.from(bv.toArray)))
-          ),
-          Encoder.encodeString.contramap((sig: TxSignature) =>
-              ByteVector(IArray.genericWrapArray(sig).toArray).toHex
-          )
-        )
-
-    private given Codec[BlockHeader.Minor.HeaderSignature] =
+    private given Codec[BlockHeader.HeaderSignature] =
         io.circe.Codec.from(
           Decoder.decodeString.emap(s =>
               ByteVector
@@ -97,39 +83,14 @@ object Codecs {
                   .toRight(s"Invalid hex for HeaderSignature: $s")
                   .map(bv => BlockHeader.Minor.HeaderSignature(IArray.from(bv.toArray)))
           ),
-          Encoder.encodeString.contramap((sig: BlockHeader.Minor.HeaderSignature) =>
+          Encoder.encodeString.contramap((sig: BlockHeader.HeaderSignature) =>
               ByteVector(IArray.genericWrapArray(sig).toArray).toHex
           )
         )
 
-    // ---- AckBlock ADT ----
+    // ---- SoftAck ----
 
-    private given Codec[AckBlock.Minor] = deriveCodec[AckBlock.Minor]
-    private given Codec[AckBlock.Major1] = deriveCodec[AckBlock.Major1]
-    private given Codec[AckBlock.Major2] = deriveCodec[AckBlock.Major2]
-    private given Codec[AckBlock.Final1] = deriveCodec[AckBlock.Final1]
-    private given Codec[AckBlock.Final2] = deriveCodec[AckBlock.Final2]
-
-    given Codec[AckBlock] = {
-        val enc: Encoder[AckBlock] = Encoder.instance {
-            case x: AckBlock.Minor  => Json.obj("kind" -> "Minor".asJson, "v" -> x.asJson)
-            case x: AckBlock.Major1 => Json.obj("kind" -> "Major1".asJson, "v" -> x.asJson)
-            case x: AckBlock.Major2 => Json.obj("kind" -> "Major2".asJson, "v" -> x.asJson)
-            case x: AckBlock.Final1 => Json.obj("kind" -> "Final1".asJson, "v" -> x.asJson)
-            case x: AckBlock.Final2 => Json.obj("kind" -> "Final2".asJson, "v" -> x.asJson)
-        }
-        val dec: Decoder[AckBlock] = Decoder.instance(c =>
-            c.downField("kind").as[String].flatMap {
-                case "Minor"  => c.downField("v").as[AckBlock.Minor]
-                case "Major1" => c.downField("v").as[AckBlock.Major1]
-                case "Major2" => c.downField("v").as[AckBlock.Major2]
-                case "Final1" => c.downField("v").as[AckBlock.Final1]
-                case "Final2" => c.downField("v").as[AckBlock.Final2]
-                case other    => Left(DecodingFailure(s"Unknown AckBlock kind: $other", c.history))
-            }
-        )
-        io.circe.Codec.from(dec, enc)
-    }
+    given Codec[SoftAck] = deriveCodec[SoftAck]
 
     // ---- UserRequestWithId ----
     //

@@ -9,8 +9,8 @@ import hydrozoa.lib.logging.{Logging, Tracer}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, ConsensusActor, EventSequencer, PeerLiaison, UserRequest, UserRequestWithId}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.block.{Block, BlockBrief}
-import Block.Unsigned.{Minor as UMinor, Major as UMajor}
+import hydrozoa.multisig.ledger.block.BlockBrief
+import BlockBrief.{Minor as BMinor, Major as BMajor}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.joint.JointLedger
@@ -32,10 +32,10 @@ private[stage4] case class PeerStack(
 // Block brief observer
 // ===================================
 
-/** Proxy actor wrapping ConsensusActor. Intercepts Block.Unsigned.{Minor,Major} to record block
-  * briefs; forwards everything else unchanged. Both leader-produced and follower-reproduced blocks
-  * flow through JointLedger.handleBlock → ConsensusActor, so this captures the complete ordered
-  * sequence seen by the peer.
+/** Proxy actor wrapping ConsensusActor. Intercepts intermediate `BlockBrief`s (Minor / Major) to
+  * record the per-peer brief sequence; forwards everything else unchanged. Both leader-produced
+  * and follower-reproduced briefs flow through JointLedger.handleBlock → ConsensusActor, so this
+  * captures the complete ordered sequence seen by the peer.
   */
 private[stage4] class BlockBriefObserver(
     peerNum: HeadPeerNumber,
@@ -44,31 +44,29 @@ private[stage4] class BlockBriefObserver(
 ) extends Actor[IO, ConsensusActor.Request]:
     private val logger = Logging.loggerIO(s"Stage4.BlockBriefObserver.${peerNum: Int}")
     override def receive: Receive[IO, ConsensusActor.Request] = {
-        case block: UMinor =>
+        case brief: BMinor =>
             logger.debug(
-              s"received UMinor block=${block.blockNum}, capturing brief and forwarding"
+              s"received BlockBrief.Minor block=${brief.blockNum}, capturing and forwarding"
             ) >>
-                briefs.update(_ :+ block.blockBrief) >>
+                briefs.update(_ :+ brief) >>
+                (real ! brief) >>
                 logger.debug(
-                  s"brief captured for block=${block.blockNum}, forwarding to real ConsensusActor"
-                ) >>
-                (real ! block) >>
-                logger.debug(s"forwarded UMinor block=${block.blockNum} to real ConsensusActor")
-        case block: UMajor =>
+                  s"forwarded BlockBrief.Minor block=${brief.blockNum} to real ConsensusActor"
+                )
+        case brief: BMajor =>
             logger.debug(
-              s"received UMajor block=${block.blockNum}, capturing brief and forwarding"
+              s"received BlockBrief.Major block=${brief.blockNum}, capturing and forwarding"
             ) >>
-                briefs.update(_ :+ block.blockBrief) >>
+                briefs.update(_ :+ brief) >>
+                (real ! brief) >>
                 logger.debug(
-                  s"brief captured for block=${block.blockNum}, forwarding to real ConsensusActor"
-                ) >>
-                (real ! block) >>
-                logger.debug(s"forwarded UMajor block=${block.blockNum} to real ConsensusActor")
+                  s"forwarded BlockBrief.Major block=${brief.blockNum} to real ConsensusActor"
+                )
         case msg =>
-            logger.debug(s"received non-block msg=${msg.getClass.getSimpleName}, forwarding") >>
+            logger.debug(s"received non-brief msg=${msg.getClass.getSimpleName}, forwarding") >>
                 (real ! msg) >>
                 logger.debug(
-                  s"forwarded non-block msg=${msg.getClass.getSimpleName} to real ConsensusActor"
+                  s"forwarded non-brief msg=${msg.getClass.getSimpleName} to real ConsensusActor"
                 )
     }
 

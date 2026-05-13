@@ -13,7 +13,6 @@ import hydrozoa.lib.tracing.ProtocolTracer
 import hydrozoa.multisig.MultisigRegimeManager.*
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
-import hydrozoa.multisig.consensus.ack.AckBlock
 import hydrozoa.multisig.consensus.peer.HeadPeerId
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l2.L2Ledger

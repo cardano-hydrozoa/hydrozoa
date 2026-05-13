@@ -10,7 +10,7 @@ import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.PeerLiaison.*
 import hydrozoa.multisig.consensus.PeerLiaison.Request.*
-import hydrozoa.multisig.consensus.ack.{AckBlock, AckId, AckNumber}
+import hydrozoa.multisig.consensus.ack.{AckId, AckNumber, SoftAck}
 import hydrozoa.multisig.consensus.peer.HeadPeerId
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber, BlockStatus, BlockType}
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
@@ -98,7 +98,7 @@ trait PeerLiaison(
                             logger.debug(
                               s"outbox: request (${y.requestId.peerNum}:${y.requestId.requestNum})"
                             )
-                        case y: AckBlock =>
+                        case y: SoftAck =>
                             logger.debug(s"outbox: ack block=${y.blockNum} peer=${y.peerNum}")
                         case y: BlockBrief.Next =>
                             logger.debug(s"outbox: block block=${y.blockNum}")
@@ -218,7 +218,7 @@ trait PeerLiaison(
         private val nAck = Ref.unsafe[IO, AckNumber](AckNumber(0))
         private val nBlock = Ref.unsafe[IO, BlockNumber](BlockNumber(0))
         private val nEvent = Ref.unsafe[IO, RequestNumber](RequestNumber(0))
-        private val qAck = Ref.unsafe[IO, Queue[AckBlock]](Queue())
+        private val qAck = Ref.unsafe[IO, Queue[SoftAck]](Queue())
         private val qBlock = Ref.unsafe[IO, Queue[BlockBrief.Next]](Queue())
         private val qEvent = Ref.unsafe[IO, Queue[UserRequestWithId]](Queue())
         private val sendBatchImmediately = Ref.unsafe[IO, Option[GetMsgBatch]](None)
@@ -243,12 +243,12 @@ trait PeerLiaison(
                         _ <- this.nEvent.set(nY)
                         _ <- this.qEvent.update(_ :+ y)
                     } yield ()
-                case y: AckBlock =>
+                case y: SoftAck =>
                     for {
                         nAck <- this.nAck.get
                         nY = y.ackNum
                         _ <- IO.raiseWhen(nY.convert != 0L && nAck.increment != nY)(
-                          Error("Bad AckBlock increment: last-seen: $nEvent, attempted: $nY")
+                          Error("Bad SoftAck increment: last-seen: $nEvent, attempted: $nY")
                         )
                         _ <- this.nAck.set(nY)
                         _ <- this.qAck.update(_ :+ y)
@@ -424,13 +424,13 @@ object PeerLiaison {
 
     type Handle = ActorRef[IO, Request]
 
-    type BlockConfirmed = BlockBrief.Section & BlockType.Next & BlockStatus.MultiSigned
+    type BlockConfirmed = BlockBrief.Section & BlockType.Next & BlockStatus.SoftConfirmed
 
     object BlockConfirmed {
 
         /** For testing purposes */
         object Minimal {
-            def apply(x: BlockBrief.Next): BlockConfirmed = x.asMultiSigned
+            def apply(x: BlockBrief.Next): BlockConfirmed = x.asSoftConfirmed
         }
     }
 
@@ -474,7 +474,7 @@ object PeerLiaison {
     case object ResendCurrent
 
     object Request {
-        type RemoteBroadcast = AckBlock | BlockBrief.Next | UserRequestWithId
+        type RemoteBroadcast = SoftAck | BlockBrief.Next | UserRequestWithId
 
         /** Request by a comm actor to its remote comm-actor counterpart for a batch of events,
           * blocks, or block acknowledgements originating from the remote peer.
@@ -526,7 +526,7 @@ object PeerLiaison {
           */
         final case class NewMsgBatch(
             batchNum: Batch.Number,
-            ack: Option[AckBlock],
+            ack: Option[SoftAck],
             blockBrief: Option[BlockBrief.Next],
             requests: List[UserRequestWithId]
         )

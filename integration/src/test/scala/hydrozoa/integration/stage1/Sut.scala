@@ -15,10 +15,10 @@ import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger
 import hydrozoa.multisig.consensus.CardanoLiaison.Timeout
-import hydrozoa.multisig.consensus.ack.AckBlock
+import hydrozoa.multisig.consensus.ack.SoftAck
 import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.consensus.{CardanoLiaison, ConsensusActor, UserRequestWithId}
-import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockNumber}
+import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.joint
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
@@ -39,7 +39,9 @@ case class Stage1Sut(
     cardanoBackend: CardanoBackend[IO],
     agent: AgentActor.Handle,
     tracerLocal: IOLocal[Tracer],
-    effectsAcc: Ref[IO, List[BlockEffects.Unsigned]] = Ref.unsafe(List.empty),
+    // Effect accumulator dropped with the fast/slow consensus split: the fast cycle no longer
+    // builds settlement / fallback / rollout / refund / finalization txs. The slow cycle (see
+    // `hydrozoa.multisig.consensus.StackActor`) will own them once it's wired up.
     runId: String = "",
     traceRef: Ref[IO, List[String]] = Ref.unsafe(List.empty)
 )
@@ -61,13 +63,13 @@ object AgentActor:
     case class CompleteBlock(
         block: CompleteBlockRegular | CompleteBlockFinal,
         blockNumber: BlockNumber
-    ) extends SyncRequest[IO, CompleteBlock, Block.Unsigned.Next] {
+    ) extends SyncRequest[IO, CompleteBlock, BlockBrief.Next] {
         export CompleteBlock.Sync
         def ?: : this.Send = SyncRequest.send(_, this)
     }
 
     object CompleteBlock:
-        type Sync = SyncRequest.Envelope[IO, CompleteBlock, Block.Unsigned.Next]
+        type Sync = SyncRequest.Envelope[IO, CompleteBlock, BlockBrief.Next]
 
     type Request =
         UserRequestWithId | StartBlock | CompleteBlock.Sync | ConsensusActor.Request |
@@ -117,24 +119,24 @@ case class AgentActor(
         case x: StartBlock        => jointLedger >>= (_ ! x)
 
         // Consensus actor
-        // Intercepting unsigned blocks
-        case x: Block.Unsigned.Next => proxyBlockUnsigned(x)
+        // Intercepting briefs (used to be `Block.Unsigned.Next` before the fast/slow split)
+        case x: BlockBrief.Next => proxyBlockBrief(x)
         // Direct proxying
-        case x: AckBlock => consensusActor >>= (_ ! x)
+        case x: SoftAck => consensusActor >>= (_ ! x)
 
     }
 
     private val ref = Ref.unsafe[IO, Map[BlockNumber, CompleteBlock.Sync]](Map.empty)
 
-    def proxyBlockUnsigned(block: Block.Unsigned.Next): IO[Unit] = for {
-        _ <- consensusActor >>= (_ ! block)
+    def proxyBlockBrief(brief: BlockBrief.Next): IO[Unit] = for {
+        _ <- consensusActor >>= (_ ! brief)
         envelope <- ref.modify { map =>
-            val blockNum = block.blockNum
+            val blockNum = brief.blockNum
             val v = map(blockNum)
             val newMap = map - blockNum
             (newMap, v)
         }
-        _ <- envelope.dResponse.complete(block)
+        _ <- envelope.dResponse.complete(brief)
     } yield ()
 
 end AgentActor
@@ -208,8 +210,6 @@ object SutCommands:
                 // All sync commands should be timed out since the system may terminate
                 d <- (sut.agent ?: AgentActor.CompleteBlock(block, cmd.blockNumber))
                     .timeout(10.seconds)
-                // Save unsigned block effects
-                _ <- sut.effectsAcc.update(_ :+ d.effects.asInstanceOf[BlockEffects.Unsigned])
             } yield d.blockBrief
     }
 
