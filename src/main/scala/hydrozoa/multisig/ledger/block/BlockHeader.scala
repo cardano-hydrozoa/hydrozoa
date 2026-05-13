@@ -97,6 +97,13 @@ object BlockHeader {
     type Intermediate = BlockHeader & BlockType.Intermediate
     type NonFinal = BlockHeader & BlockType.NonFinal & NonFinal.Section
 
+    /** Block-type-agnostic header signature. Currently an alias of the original Minor-scoped
+      * opaque so existing rule-based code (which speaks `BlockHeader.Minor.HeaderSignature` for
+      * dispute-resolution voting) keeps working unchanged. Fast-consensus soft-acks for Minor,
+      * Major, and Final blocks all share this type.
+      */
+    type HeaderSignature = Minor.HeaderSignature
+
     object Fields {
         trait HasBlockNum {
             def blockNum: BlockNumber
@@ -145,6 +152,23 @@ object BlockHeader {
           startTime = newStartTime,
           endTime = newEndTime
         )
+
+        /** Canonical byte representation used as the input for a head peer's soft acknowledgment
+          * (Ed25519 signature). Shared shape across Minor, Major, and Final block types — the same
+          * `Minor.Onchain` PlutusData layout the L1 dispute mechanism already accepts for Minor
+          * blocks. Final blocks pass `KzgCommitment.empty`; their kzg field is always empty.
+          */
+        final def signingBytes: BlockHeader.Minor.Onchain.Serialized = {
+            import scalus.cardano.onchain.plutus.v3.PosixTime
+            val onchain = Minor.Onchain(
+              blockNum = BigInt(blockNum.convert),
+              startTime = startTime.instant.toEpochMilli: PosixTime,
+              versionMajor = BigInt(blockVersion.major.convert),
+              versionMinor = BigInt(blockVersion.minor.convert),
+              commitment = kzgCommitment
+            )
+            Minor.Onchain.Serialized(onchain)
+        }
     }
 
     object NonFinal {
