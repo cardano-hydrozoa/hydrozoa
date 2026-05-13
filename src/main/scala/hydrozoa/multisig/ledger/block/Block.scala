@@ -180,6 +180,60 @@ object Block {
 
     }
 
+    /** Result of fast consensus: block brief plus every head peer's soft-ack signature over the
+      * brief's [[BlockHeader.Section.signingBytes]]. Carries no L1 effect signatures — those
+      * belong to the slow consensus cycle (parked, see [[hydrozoa.multisig.consensus.SlowConsensusActor]]).
+      *
+      * Not a `Block` (intentionally) because a `Block` is defined as a brief plus its effects, and
+      * SoftConfirmed has only the brief.
+      */
+    sealed trait SoftConfirmed
+        extends BlockBrief.Section,
+          BlockStatus.SoftConfirmed,
+          Fields.HasFinalizationRequested {
+        def headerMultiSigned: List[BlockHeader.HeaderSignature]
+    }
+
+    object SoftConfirmed {
+        final case class Minor(
+            override val blockBrief: BlockBrief.Minor,
+            override val headerMultiSigned: List[BlockHeader.HeaderSignature],
+            override val finalizationRequested: Boolean
+        ) extends Block.SoftConfirmed,
+              BlockType.Minor {
+            override transparent inline def header: BlockHeader.Minor = blockBrief.header
+            override transparent inline def body: BlockBody.Minor = blockBrief.body
+        }
+
+        final case class Major(
+            override val blockBrief: BlockBrief.Major,
+            override val headerMultiSigned: List[BlockHeader.HeaderSignature],
+            override val finalizationRequested: Boolean
+        ) extends Block.SoftConfirmed,
+              BlockType.Major {
+            override transparent inline def header: BlockHeader.Major = blockBrief.header
+            override transparent inline def body: BlockBody.Major = blockBrief.body
+        }
+
+        final case class Final(
+            override val blockBrief: BlockBrief.Final,
+            override val headerMultiSigned: List[BlockHeader.HeaderSignature]
+        ) extends Block.SoftConfirmed,
+              BlockType.Final {
+            override transparent inline def header: BlockHeader.Final = blockBrief.header
+            override transparent inline def body: BlockBody.Final = blockBrief.body
+            override transparent inline def finalizationRequested: Boolean = false
+        }
+
+        type Next = Block.SoftConfirmed & BlockType.Next
+        type Intermediate = Block.SoftConfirmed & BlockType.Intermediate
+        type NonFinal = Block.SoftConfirmed & BlockType.NonFinal
+
+        extension (nonFinal: Block.SoftConfirmed.NonFinal)
+            def headerNonFinal: BlockHeader.NonFinal =
+                nonFinal.header.asInstanceOf[BlockHeader.NonFinal]
+    }
+
     object Fields {
         trait HasFinalizationRequested {
             def finalizationRequested: Boolean
