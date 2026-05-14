@@ -18,8 +18,8 @@ import KzgCommitment.KzgCommitment
 sealed trait BlockHeader extends BlockHeader.Section {
     def asUnsigned: this.type & BlockStatus.Unsigned =
         this.asInstanceOf[this.type & BlockStatus.Unsigned]
-    def asMultiSigned: this.type & BlockStatus.MultiSigned =
-        this.asInstanceOf[this.type & BlockStatus.MultiSigned]
+    def asMultiSigned: this.type & BlockStatus.HardConfirmed =
+        this.asInstanceOf[this.type & BlockStatus.HardConfirmed]
 }
 
 object BlockHeader {
@@ -100,7 +100,7 @@ object BlockHeader {
     /** Block-type-agnostic header signature. Currently an alias of the original Minor-scoped opaque
       * so existing rule-based code (which speaks `BlockHeader.Minor.HeaderSignature` for
       * dispute-resolution voting) keeps working unchanged. Fast-consensus soft-acks for Minor,
-      * Major, and Final blocks all share this type.
+      * Major, and Final blocks all share this type. TODO: untie from minor blocks
       */
     type HeaderSignature = Minor.HeaderSignature
 
@@ -121,6 +121,18 @@ object BlockHeader {
             def endTime: BlockCreationEndTime
         }
 
+        // TRANSITIONAL — fast/slow consensus split. KZG commitments are conceptually
+        // slow-side effect data: the settlement tx that pins L2 state to L1 is a
+        // slow-cycle effect, not a fast-cycle brief artifact. Long-term intent is to
+        // move `kzgCommitment` out of `BlockHeader` entirely and derive it slow-side
+        // alongside the other L1 effects, so the brief stays a pure L2-state
+        // description with no L1-effect material.
+        //
+        // Cannot remove yet: `BlockHeader.Section.signingBytes` feeds
+        // `Minor.Onchain` PlutusData, and the rule-based dispute mechanism's on-chain
+        // code currently expects `commitment` to be present in the signed bytes.
+        // Removal requires a coordinated change to the rule-based on-chain script
+        // and the dispute protocol.
         trait HasKzgCommitment {
             def kzgCommitment: KzgCommitment
         }

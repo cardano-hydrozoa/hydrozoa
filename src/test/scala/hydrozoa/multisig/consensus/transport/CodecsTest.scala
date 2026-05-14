@@ -77,7 +77,7 @@ class CodecsTest extends AnyFunSuite {
         val ack = SoftAck(
           ackId = AckId(HeadPeerNumber(2), hydrozoa.multisig.consensus.ack.AckNumber(5)),
           blockNum = BlockNumber(11),
-          header = BlockHeader.Minor.HeaderSignature(
+          headerSignature = BlockHeader.Minor.HeaderSignature(
             IArray[Byte](1.toByte, 2.toByte, 3.toByte, 4.toByte, 5.toByte)
           ),
           finalizationRequested = true,
@@ -97,8 +97,8 @@ class CodecsTest extends AnyFunSuite {
                         assert(decodedAck.ackId == ack.ackId)
                         assert(decodedAck.blockNum == ack.blockNum)
                         assert(
-                          (decodedAck.header: IArray[Byte]).toList ==
-                              (ack.header: IArray[Byte]).toList
+                          (decodedAck.headerSignature: IArray[Byte]).toList ==
+                              (ack.headerSignature: IArray[Byte]).toList
                         )
                         assert(decodedAck.finalizationRequested == ack.finalizationRequested)
                     case other => fail(s"Expected Some(SoftAck), got: $other")

@@ -196,7 +196,7 @@ class ConsensusActor(
     override def receive: Receive[IO, Request] = PartialFunction.fromFunction(receiveTotal)
 
     private def receiveTotal(req: Request): IO[Unit] = req match {
-        case ConsensusActor.PreStart => initializeConnections
+        case ConsensusActor.PreStart => preStartLocal
         case brief: BlockBrief.Next  => handleBrief(brief)
         case ack: SoftAck            => handleAck(ack)
     }
@@ -280,7 +280,7 @@ class ConsensusActor(
         )
         // Verify every ack's signature against the brief's signingBytes.
         msg = brief.header.signingBytes
-        _ <- cell.acks.toList.traverse_((vk, ack) => verifyHeaderSig(vk, ack.header, msg))
+        _ <- cell.acks.toList.traverse_((vk, ack) => verifyHeaderSig(vk, ack.headerSignature, msg))
 
         finalizationRequested = cell.acks.values.exists(_.finalizationRequested)
         confirmed = mkSoftConfirmed(brief, cell.acks, finalizationRequested)
@@ -338,7 +338,7 @@ class ConsensusActor(
         // arrives at the same canonical sequence.
         val sigsByPeer: List[BlockHeader.HeaderSignature] = acks.toList
             .sortBy((_, ack) => ack.peerNum: Int)
-            .map((_, ack) => ack.header)
+            .map((_, ack) => ack.headerSignature)
 
         brief match {
             case b: BlockBrief.Minor =>

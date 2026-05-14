@@ -37,7 +37,7 @@ def generateInitialBlock(
         )
 
     } yield InitialBlock(
-      Block.MultiSigned.Initial(
+      Block.HardConfirmed.Initial(
         blockBrief = BlockBrief.Initial(
           BlockHeader.Initial(
             startTime = BlockCreationStartTime(blockCreationEndTime - 10.seconds),
@@ -48,7 +48,7 @@ def generateInitialBlock(
             kzgCommitment = config.initializationParameters.initialEvacuationMap.kzgCommitment
           )
         ),
-        effects = BlockEffects.MultiSigned.Initial(
+        effects = BlockEffects.HardConfirmed.Initial(
           initializationTx = testPeers.multisignTx(initTxSeq.initializationTx),
           fallbackTx = testPeers.multisignTx(initTxSeq.fallbackTx)
         )

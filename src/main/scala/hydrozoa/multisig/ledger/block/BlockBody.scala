@@ -9,8 +9,8 @@ import RequestId.ValidityFlag
 trait BlockBody extends BlockBody.Section {
     def asUnsigned: this.type & BlockStatus.Unsigned =
         this.asInstanceOf[this.type & BlockStatus.Unsigned]
-    def asMultiSigned: this.type & BlockStatus.MultiSigned =
-        this.asInstanceOf[this.type & BlockStatus.MultiSigned]
+    def asMultiSigned: this.type & BlockStatus.HardConfirmed =
+        this.asInstanceOf[this.type & BlockStatus.HardConfirmed]
 }
 
 object BlockBody {

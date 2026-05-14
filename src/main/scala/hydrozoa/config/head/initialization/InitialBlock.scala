@@ -7,7 +7,7 @@ import hydrozoa.multisig.ledger.l1.utxo.MultisigRegimeUtxo
 
 // Why do we need this wrapper? Is there is no semantic boundary here.
 final case class InitialBlock(
-    override val initialBlock: Block.MultiSigned.Initial
+    override val initialBlock: Block.HardConfirmed.Initial
 ) extends InitialBlock.Section {
     override transparent inline def initialBlockSection: InitialBlock = this
 }
@@ -15,7 +15,7 @@ final case class InitialBlock(
 object InitialBlock {
     trait Section {
         def initialBlockSection: InitialBlock
-        def initialBlock: Block.MultiSigned.Initial = initialBlockSection.initialBlock
+        def initialBlock: Block.HardConfirmed.Initial = initialBlockSection.initialBlock
 
         def initialKzgCommitment: KzgCommitment = initialBlock.kzgCommitment
 

@@ -99,7 +99,7 @@ trait PeerLiaison(
                               s"outbox: request (${y.requestId.peerNum}:${y.requestId.requestNum})"
                             )
                         case y: SoftAck =>
-                            logger.debug(s"outbox: ack block=${y.blockNum} peer=${y.peerNum}")
+                            logger.debug(s"outbox: soft ack block=${y.blockNum} peer=${y.peerNum}")
                         case y: BlockBrief.Next =>
                             logger.debug(s"outbox: block block=${y.blockNum}")
                     }

@@ -517,7 +517,7 @@ final case class JointLedger(
                             .focus(_.evacuationMap)
                             .replace(newEvacuationMap)
 
-                        // TODO: We want this to be done in a separate actor in the future
+                        // TODO: We want this to be done in a separate actor in the future - keeping there for now not to ruin RBR
                         kzgCommitment = newEvacuationMap.kzgCommitment
                         headerIntermediate <- previousHeader
                             .nextHeaderMajor(

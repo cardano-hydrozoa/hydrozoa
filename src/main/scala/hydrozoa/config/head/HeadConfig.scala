@@ -208,11 +208,11 @@ object HeadConfig {
                       _initialEquityContributions = headConfigBootstrap.initialEquityContributions,
                       scriptReferenceUtxos = headConfigBootstrap.scriptReferenceUtxos,
                       InitialBlock(
-                        Block.MultiSigned.Initial(
+                        Block.HardConfirmed.Initial(
                           blockBrief,
                           // The "expectedTxSeq" contains the "enriched" tx types, but they are not signed,
                           // so we steal the tx signatures here.
-                          BlockEffects.MultiSigned.Initial(iTx, fTx)
+                          BlockEffects.HardConfirmed.Initial(iTx, fTx)
                         )
                       )
                     )
@@ -223,7 +223,7 @@ object HeadConfig {
 
     def apply(
         headConfigBootstrap: HeadConfig.Bootstrap,
-        initialBlock: Block.MultiSigned.Initial
+        initialBlock: Block.HardConfirmed.Initial
     ): ValidatedNel[HeadConfigError, HeadConfig] = HeadConfig(
       headConfigBootstrap,
       initialBlock.blockBrief,
@@ -236,7 +236,7 @@ object HeadConfig {
         headParams: HeadParameters,
         headPeers: HeadPeers,
         coilPeers: List[CoilPeer],
-        initialBlock: Block.MultiSigned.Initial,
+        initialBlock: Block.HardConfirmed.Initial,
         initializationParams: InitializationParameters,
         scriptReferenceUtxos: ScriptReferenceUtxos
     ): ValidatedNel[HeadConfigError, HeadConfig] = {

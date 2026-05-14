@@ -18,7 +18,7 @@ import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber}
 final case class SoftAck(
     ackId: AckId,
     blockNum: BlockNumber,
-    header: BlockHeader.HeaderSignature,
+    headerSignature: BlockHeader.HeaderSignature,
     finalizationRequested: Boolean
 ) {
     final transparent inline def ackNum: AckNumber = ackId.ackNum
@@ -41,7 +41,7 @@ object SoftAck {
     ): SoftAck = SoftAck(
       ackId = AckId(peerNum, AckNumber(blockNum: Int)),
       blockNum = blockNum,
-      header = header,
+      headerSignature = header,
       finalizationRequested = finalizationRequested
     )
 }

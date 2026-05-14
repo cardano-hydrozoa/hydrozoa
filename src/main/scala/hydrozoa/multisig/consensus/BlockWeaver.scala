@@ -345,7 +345,7 @@ object BlockWeaver {
 
                         case bc: Block.SoftConfirmed =>
                             logger.trace(
-                              s"Ignoring confirmed block ${bc.blockNum}."
+                              s"Ignoring soft block confirmation ${bc.blockNum}"
                             ) >> pure(this)
 
                         case unexpected: Unexpected =>
@@ -531,7 +531,7 @@ object BlockWeaver {
 
                         case bc: Block.SoftConfirmed =>
                             logger.trace(
-                              s"Ignoring confirmed block ${bc.blockNum}."
+                              s"Ignoring soft block confirmation ${bc.blockNum}"
                             ) >> pure(this)
 
                         case unexpected: Unexpected =>

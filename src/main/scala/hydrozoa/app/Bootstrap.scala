@@ -275,7 +275,7 @@ object Bootstrap:
         )
 
         initialBlock = InitialBlock(
-          Block.MultiSigned.Initial(
+          Block.HardConfirmed.Initial(
             blockBrief = BlockBrief.Initial(
               BlockHeader.Initial(
                 startTime = blockCreationStartTime,
@@ -286,7 +286,7 @@ object Bootstrap:
                 kzgCommitment = evacMap.kzgCommitment
               )
             ),
-            effects = BlockEffects.MultiSigned.Initial(
+            effects = BlockEffects.HardConfirmed.Initial(
               initializationTx = ownHeadWallet.signTx(initTxSeq.initializationTx),
               fallbackTx = ownHeadWallet.signTx(initTxSeq.fallbackTx)
             )

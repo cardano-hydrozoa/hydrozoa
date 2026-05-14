@@ -89,23 +89,26 @@ object Block {
 
         type Next = Block.Unsigned & BlockType.Next
         type Intermediate = Block.Unsigned & BlockType.Intermediate
-        type NonFinal = Block.MultiSigned & BlockType.NonFinal
+        type NonFinal = Block.HardConfirmed & BlockType.NonFinal
 
         extension (self: Next)
             transparent inline def blockBriefNext: BlockBrief.Next =
                 self.blockBrief.asInstanceOf[BlockBrief.Next]
     }
 
-    sealed trait MultiSigned extends Block, BlockStatus.MultiSigned, Fields.HasFinalizationRequested
+    sealed trait HardConfirmed
+        extends Block,
+          BlockStatus.HardConfirmed,
+          Fields.HasFinalizationRequested
 
-    object MultiSigned {
+    object HardConfirmed {
         final case class Initial(
             override val blockBrief: BlockBrief.Initial,
-            override val effects: BlockEffects.MultiSigned.Initial,
-        ) extends Block.MultiSigned,
+            override val effects: BlockEffects.HardConfirmed.Initial,
+        ) extends Block.HardConfirmed,
               BlockType.Initial,
-              BlockEffects.MultiSigned.Initial.Section {
-            override transparent inline def block: Block.MultiSigned.Initial = this
+              BlockEffects.HardConfirmed.Initial.Section {
+            override transparent inline def block: Block.HardConfirmed.Initial = this
 
             override transparent inline def header: BlockHeader.Initial = blockBrief.header
             override transparent inline def body: BlockBody.Initial.type = blockBrief.body
@@ -119,17 +122,17 @@ object Block {
 
         given blockMultisignedInitialEncoder(using
             CardanoNetwork.Section
-        ): Encoder[Block.MultiSigned.Initial] =
-            deriveEncoder[Block.MultiSigned.Initial]
+        ): Encoder[Block.HardConfirmed.Initial] =
+            deriveEncoder[Block.HardConfirmed.Initial]
 
         final case class Minor(
             override val blockBrief: BlockBrief.Minor,
-            override val effects: BlockEffects.MultiSigned.Minor,
+            override val effects: BlockEffects.HardConfirmed.Minor,
             override val finalizationRequested: Boolean,
-        ) extends Block.MultiSigned,
+        ) extends Block.HardConfirmed,
               BlockType.Minor,
-              BlockEffects.MultiSigned.Minor.Section {
-            override transparent inline def block: Block.MultiSigned.Minor = this
+              BlockEffects.HardConfirmed.Minor.Section {
+            override transparent inline def block: Block.HardConfirmed.Minor = this
 
             override transparent inline def header: BlockHeader.Minor = blockBrief.header
             override transparent inline def body: BlockBody.Minor = blockBrief.body
@@ -144,12 +147,12 @@ object Block {
 
         final case class Major(
             override val blockBrief: BlockBrief.Major,
-            override val effects: BlockEffects.MultiSigned.Major,
+            override val effects: BlockEffects.HardConfirmed.Major,
             override val finalizationRequested: Boolean,
-        ) extends Block.MultiSigned,
+        ) extends Block.HardConfirmed,
               BlockType.Major,
-              BlockEffects.MultiSigned.Major.Section {
-            override transparent inline def block: Block.MultiSigned.Major = this
+              BlockEffects.HardConfirmed.Major.Section {
+            override transparent inline def block: Block.HardConfirmed.Major = this
 
             override transparent inline def header: BlockHeader.Major = blockBrief.header
             override transparent inline def body: BlockBody.Major = blockBrief.body
@@ -163,11 +166,11 @@ object Block {
 
         final case class Final(
             override val blockBrief: BlockBrief.Final,
-            override val effects: BlockEffects.MultiSigned.Final,
-        ) extends Block.MultiSigned,
+            override val effects: BlockEffects.HardConfirmed.Final,
+        ) extends Block.HardConfirmed,
               BlockType.Final,
-              BlockEffects.MultiSigned.Final.Section {
-            override transparent inline def block: Block.MultiSigned.Final = this
+              BlockEffects.HardConfirmed.Final.Section {
+            override transparent inline def block: Block.HardConfirmed.Final = this
 
             override transparent inline def header: BlockHeader.Final = blockBrief.header
             override transparent inline def body: BlockBody.Final = blockBrief.body
@@ -178,11 +181,11 @@ object Block {
             override transparent inline def finalizationRequested: Boolean = false
         }
 
-        type Next = Block.MultiSigned & BlockType.Next
-        type Intermediate = Block.MultiSigned & BlockType.Intermediate
-        type NonFinal = Block.MultiSigned & BlockType.NonFinal
+        type Next = Block.HardConfirmed & BlockType.Next
+        type Intermediate = Block.HardConfirmed & BlockType.Intermediate
+        type NonFinal = Block.HardConfirmed & BlockType.NonFinal
 
-        extension (nonFinal: Block.MultiSigned.NonFinal)
+        extension (nonFinal: Block.HardConfirmed.NonFinal)
             def headerNonFinal: BlockHeader.NonFinal =
                 nonFinal.header.asInstanceOf[BlockHeader.NonFinal]
 

@@ -177,9 +177,9 @@ object CardanoLiaison:
 
     object BlockConfirmed {
         type Major = BlockHeader.Fields.HasBlockNum & BlockHeader.Fields.HasBlockVersion &
-            BlockEffects.MultiSigned.Major.Section
+            BlockEffects.HardConfirmed.Major.Section
         type Final = BlockHeader.Fields.HasBlockNum & BlockHeader.Fields.HasBlockVersion &
-            BlockEffects.MultiSigned.Final.Section
+            BlockEffects.HardConfirmed.Final.Section
 
         /** For testing purposes, where we may not want to construct a whole Block.MultiSigned. */
         sealed trait Minimal extends BlockHeader.Fields.HasBlockVersion
@@ -195,8 +195,8 @@ object CardanoLiaison:
                 override val rolloutTxs: List[RolloutTx],
                 override val postDatedRefundTxs: List[RefundTx.PostDated],
             ) extends Minimal,
-                  BlockEffects.MultiSigned.Major.Section {
-                override def effects: BlockEffects.MultiSigned.Major = BlockEffects.MultiSigned
+                  BlockEffects.HardConfirmed.Major.Section {
+                override def effects: BlockEffects.HardConfirmed.Major = BlockEffects.HardConfirmed
                     .Major(settlementTx, rolloutTxs, fallbackTx, postDatedRefundTxs)
             }
 
@@ -207,9 +207,9 @@ object CardanoLiaison:
                 override val finalizationTx: FinalizationTx,
                 override val rolloutTxs: List[RolloutTx],
             ) extends Minimal,
-                  BlockEffects.MultiSigned.Final.Section {
-                override def effects: BlockEffects.MultiSigned.Final =
-                    BlockEffects.MultiSigned.Final(finalizationTx, rolloutTxs)
+                  BlockEffects.HardConfirmed.Final.Section {
+                override def effects: BlockEffects.HardConfirmed.Final =
+                    BlockEffects.HardConfirmed.Final(finalizationTx, rolloutTxs)
             }
         }
 
@@ -456,87 +456,88 @@ trait CardanoLiaison(
                     actionsToSubmit <-
                         if dueActions.nonEmpty
                         then IO.pure(dueActions)
-                        else {
+                        else
+                            for {
 
-                            Tracer.trace("due actions is empty")
+                                _ <- Tracer.trace("due actions is empty")
 
-                            // Empty direct actions indicate another actions should be considered:
-                            //  - the last fallback tx might have become valid
-                            //  - the init (whole happy path) tx submission might be needed
+                                // Empty direct actions indicate another actions should be considered:
+                                //  - the last fallback tx might have become valid
+                                //  - the init (whole happy path) tx submission might be needed
 
-                            // TODO: this is done in a bit a makeshift manner to fix the test, likely we want to do it
-                            //   more systematically
-                            val lastFallback: Option[Transaction] = for {
-                                maxKey <- state.fallbackEffects.keySet.maxOption
-                                fallbackTx = state.fallbackEffects(maxKey)
-                                if utxoIds.contains(
-                                  fallbackTx.treasurySpent.utxoId
-                                ) && fallbackTx.fallbackTxStartTime.convert <= currentTime
-                            } yield fallbackTx.tx
+                                // TODO: this is done in a bit a makeshift manner to fix the test, likely we want to do it
+                                //   more systematically
+                                lastFallback: Option[Transaction] = for {
+                                    maxKey <- state.fallbackEffects.keySet.maxOption
+                                    fallbackTx = state.fallbackEffects(maxKey)
+                                    if utxoIds.contains(
+                                      fallbackTx.treasurySpent.utxoId
+                                    ) && fallbackTx.fallbackTxStartTime.convert <= currentTime
+                                } yield fallbackTx.tx
 
-                            lastFallback match {
-                                case Some(fallback) =>
-                                    IO.pure(Seq(Action.FallbackToRuleBased(fallback)))
-                                case None => {
-                                    lazy val initAction = {
-                                        if currentTime < config.initializationTx.initializationTxEndTime.convert
-                                        then
-                                            Seq(
-                                              Action.InitializeHead(
-                                                state.happyPathEffects.values.map(_.tx).toSeq
-                                              )
-                                            )
-                                        else {
-                                            Seq.empty
+                                ret <- lastFallback match {
+                                    case Some(fallback) =>
+                                        IO.pure(Seq(Action.FallbackToRuleBased(fallback)))
+                                    case None => {
+                                        lazy val initAction = {
+                                            if currentTime < config.initializationTx.initializationTxEndTime.convert
+                                            then
+                                                Seq(
+                                                  Action.InitializeHead(
+                                                    state.happyPathEffects.values.map(_.tx).toSeq
+                                                  )
+                                                )
+                                            else {
+                                                Seq.empty
+                                            }
+                                        }
+                                        // TODO: check the rule-based treasury, and if it exists, don't try to initialize the head.
+                                        state.targetState match {
+                                            case TargetState.Active(targetTreasuryUtxoId) =>
+                                                if utxoIds.contains(targetTreasuryUtxoId)
+                                                then {
+                                                    // everything is up-to-date on L1
+                                                    Tracer.trace(
+                                                      s"target ${targetTreasuryUtxoId} found, do nothing"
+                                                    ) >>
+                                                        IO.pure(List.empty)
+                                                } else
+                                                    Tracer.trace(
+                                                      s"no target ${targetTreasuryUtxoId} found, submitting initAction: ${initAction.headOption.map(_.txs.map(_.id))}"
+                                                    ) >>
+                                                        IO.pure(initAction)
+
+                                            case TargetState.Finalized(finalizationTxHash) =>
+                                                for {
+                                                    txResp <- cardanoBackend.isTxKnown(
+                                                      finalizationTxHash
+                                                    )
+                                                    _ <- Tracer.debug(
+                                                      s"finalizationTx: hash: $finalizationTxHash txResp: $txResp"
+                                                    )
+                                                    mbInitAction <- txResp match {
+                                                        case Left(err) =>
+                                                            for {
+                                                                _ <- Tracer.error(
+                                                                  s"error when getting finalization tx info: ${err}"
+                                                                )
+                                                            } yield Seq.empty
+                                                        case Right(isKnown) =>
+                                                            if isKnown
+                                                            then
+                                                                Tracer.trace(
+                                                                  "finalization tx is known, do nothing"
+                                                                ) >> IO.pure(Seq.empty)
+                                                            else
+                                                                Tracer.trace(
+                                                                  s"finalization tx is NOT known, submitting initAction: ${initAction.headOption.map(_.txs.map(_.id))}"
+                                                                ) >> IO.pure(initAction)
+                                                    }
+                                                } yield mbInitAction
                                         }
                                     }
-                                    // TODO: check the rule-based treasury, and if it exists, don't try to initialize the head.
-                                    state.targetState match {
-                                        case TargetState.Active(targetTreasuryUtxoId) =>
-                                            if utxoIds.contains(targetTreasuryUtxoId)
-                                            then {
-                                                // everything is up-to-date on L1
-                                                Tracer.trace(
-                                                  s"target ${targetTreasuryUtxoId} found, do nothing"
-                                                ) >>
-                                                    IO.pure(List.empty)
-                                            } else
-                                                Tracer.trace(
-                                                  s"no target ${targetTreasuryUtxoId} found, submitting initAction: ${initAction.headOption.map(_.txs.map(_.id))}"
-                                                ) >>
-                                                    IO.pure(initAction)
-
-                                        case TargetState.Finalized(finalizationTxHash) =>
-                                            for {
-                                                txResp <- cardanoBackend.isTxKnown(
-                                                  finalizationTxHash
-                                                )
-                                                _ <- Tracer.debug(
-                                                  s"finalizationTx: hash: $finalizationTxHash txResp: $txResp"
-                                                )
-                                                mbInitAction <- txResp match {
-                                                    case Left(err) =>
-                                                        for {
-                                                            _ <- Tracer.error(
-                                                              s"error when getting finalization tx info: ${err}"
-                                                            )
-                                                        } yield Seq.empty
-                                                    case Right(isKnown) =>
-                                                        if isKnown
-                                                        then
-                                                            Tracer.trace(
-                                                              "finalization tx is known, do nothing"
-                                                            ) >> IO.pure(Seq.empty)
-                                                        else
-                                                            Tracer.trace(
-                                                              s"finalization tx is NOT known, submitting initAction: ${initAction.headOption.map(_.txs.map(_.id))}"
-                                                            ) >> IO.pure(initAction)
-                                                }
-                                            } yield mbInitAction
-                                    }
                                 }
-                            }
-                        }
+                            } yield ret
 
                     // 4. Submit flattened txs for actions it there are some
                     _ <- IO.whenA(actionsToSubmit.nonEmpty) {

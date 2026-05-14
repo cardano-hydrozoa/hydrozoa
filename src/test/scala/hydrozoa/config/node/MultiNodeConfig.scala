@@ -10,7 +10,7 @@ import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.block.Block.MultiSigned
+import hydrozoa.multisig.ledger.block.Block.HardConfirmed
 import hydrozoa.multisig.ledger.block.BlockHeader
 import org.scalacheck.util.Pretty
 import org.scalacheck.{Gen, Prop, Properties, PropertyM}
@@ -42,7 +42,7 @@ case class MultiNodeConfig private (
         )
 
     override def headConfigBootstrap: HeadConfig.Bootstrap = headConfig.headConfigBootstrap
-    override def initialBlock: MultiSigned.Initial = headConfig.initialBlock
+    override def initialBlock: HardConfirmed.Initial = headConfig.initialBlock
 
     def multisignTx(tx: Transaction): Transaction =
         tx.attachVKeyWitnesses(mkVKeyWitnesses(tx).toList)

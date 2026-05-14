@@ -52,29 +52,29 @@ object BlockEffects {
         type Intermediate = BlockEffects.Unsigned & BlockType.Intermediate
     }
 
-    sealed trait MultiSigned extends BlockEffects, BlockStatus.MultiSigned
+    sealed trait HardConfirmed extends BlockEffects, BlockStatus.HardConfirmed
 
-    object MultiSigned {
+    object HardConfirmed {
         final case class Initial(
             override val initializationTx: InitializationTx,
             override val fallbackTx: FallbackTx,
-        ) extends BlockEffects.MultiSigned,
+        ) extends BlockEffects.HardConfirmed,
               BlockType.Initial,
-              BlockEffects.MultiSigned.Initial.Section {
-            override transparent inline def effects: BlockEffects.MultiSigned.Initial = this
+              BlockEffects.HardConfirmed.Initial.Section {
+            override transparent inline def effects: BlockEffects.HardConfirmed.Initial = this
         }
 
-        given blockEffectsMultiSignedInitialEncoder: Encoder[BlockEffects.MultiSigned.Initial] =
-            deriveEncoder[BlockEffects.MultiSigned.Initial]
+        given blockEffectsMultiSignedInitialEncoder: Encoder[BlockEffects.HardConfirmed.Initial] =
+            deriveEncoder[BlockEffects.HardConfirmed.Initial]
 
         final case class Minor(
             override val headerSerialized: BlockHeader.Minor.Onchain.Serialized,
             override val headerMultiSigned: List[BlockHeader.Minor.HeaderSignature],
             override val postDatedRefundTxs: List[RefundTx.PostDated],
-        ) extends BlockEffects.MultiSigned,
+        ) extends BlockEffects.HardConfirmed,
               BlockType.Minor,
-              BlockEffects.MultiSigned.Minor.Section {
-            override transparent inline def effects: BlockEffects.MultiSigned.Minor = this
+              BlockEffects.HardConfirmed.Minor.Section {
+            override transparent inline def effects: BlockEffects.HardConfirmed.Minor = this
         }
 
         final case class Major(
@@ -82,23 +82,23 @@ object BlockEffects {
             override val rolloutTxs: List[RolloutTx],
             override val fallbackTx: FallbackTx,
             override val postDatedRefundTxs: List[RefundTx.PostDated],
-        ) extends BlockEffects.MultiSigned,
+        ) extends BlockEffects.HardConfirmed,
               BlockType.Major,
-              BlockEffects.MultiSigned.Major.Section {
-            override transparent inline def effects: BlockEffects.MultiSigned.Major = this
+              BlockEffects.HardConfirmed.Major.Section {
+            override transparent inline def effects: BlockEffects.HardConfirmed.Major = this
         }
 
         final case class Final(
             override val finalizationTx: FinalizationTx,
             override val rolloutTxs: List[RolloutTx]
-        ) extends BlockEffects.MultiSigned,
+        ) extends BlockEffects.HardConfirmed,
               BlockType.Final,
-              BlockEffects.MultiSigned.Final.Section {
-            override transparent inline def effects: BlockEffects.MultiSigned.Final = this
+              BlockEffects.HardConfirmed.Final.Section {
+            override transparent inline def effects: BlockEffects.HardConfirmed.Final = this
         }
 
-        type Next = BlockEffects.MultiSigned & BlockType.Next
-        type Intermediate = BlockEffects.MultiSigned & BlockType.Intermediate
+        type Next = BlockEffects.HardConfirmed & BlockType.Next
+        type Intermediate = BlockEffects.HardConfirmed & BlockType.Intermediate
 
         object Initial {
             type Section = BlockEffects.Initial.Section

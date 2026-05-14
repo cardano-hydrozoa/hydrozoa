@@ -68,7 +68,7 @@ class BlockWeaverMock(
         else IO.pure(())
 
     override def receive: Receive[IO, BlockWeaver.Request] = {
-        case b: Block.MultiSigned =>
+        case b: Block.HardConfirmed =>
             val nextBlockNum = (b.blockNum: Int) + 1
             if nextBlockNum % numPeers == ownPeerNum then
                 tracer.leaderStarted(nextBlockNum, ownPeerNum)
