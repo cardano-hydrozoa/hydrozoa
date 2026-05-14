@@ -46,7 +46,7 @@ object RequestId {
     given Decoder[Id] = Decoder.instance(c =>
         for {
             hpn <- c.downField("headPeerNumber").as[HeadPeerNumber]
-            rn <- c.downField("requstNumber").as[RequestNumber]
+            rn <- c.downField("requestNumber").as[RequestNumber]
         } yield (hpn, rn)
     )
 

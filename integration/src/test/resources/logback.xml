@@ -71,10 +71,11 @@
     <logger name="BlockWeaver" level="info"/>
     <logger name="ConsensusActor" level="info"/>
     <logger name="EventSequencer" level="info"/>
-    <logger name="CardanoLiaison" level="info"/>
+    <logger name="CardanoLiaison" level="warn"/>
     <logger name="JointLedger" level="info"/>
     <logger name="PeerLiaison" level="info"/>
     <logger name="PeerLiaisonMermaid" level="info"/>
+    <logger name="PeerWsTransport" level="info"/>
     <logger name="TxTiming" level="info"/>
     <logger name="DepositsMap" level="info"/>
 

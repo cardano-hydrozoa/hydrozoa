@@ -22,8 +22,11 @@ import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.lib.tracing.ProtocolTracer
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState, yaciTestSauceGenesis}
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
+import hydrozoa.multisig.consensus.transport.{PeerWsTransport, RemotePeerProxy}
 import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, ConsensusActor, EventSequencer, PeerLiaison}
+import org.http4s.Uri
+import com.comcast.ip4s.{Host, Port, host}
 import hydrozoa.multisig.ledger.block.BlockBrief
 import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toUtxos}
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
@@ -43,7 +46,11 @@ import scala.concurrent.duration.{DurationInt, FiniteDuration}
 // Stage 4 suite
 // ===================================
 
-case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelBasedSuite:
+case class Stage4Suite(
+    label: String = "stage4",
+    nPeers: Int = 2,
+    transportMode: TransportMode = TransportMode.Direct,
+) extends ModelBasedSuite:
 
     override type Env = Unit
     override type State = ModelState
@@ -51,7 +58,14 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
 
     private val logger = Logging.loggerIO("Stage4.Suite")
 
-    override def useTestControl: Boolean = true
+    /** TestControl is incompatible with real sockets — virtual time doesn't drive the OS
+      * scheduler that owns the WS connection. Direct mode keeps virtual time; WS mode runs on
+      * the real clock.
+      */
+    override def useTestControl: Boolean = transportMode match {
+        case TransportMode.Direct       => true
+        case _: TransportMode.WebSocket => false
+    }
 
     override def scenarioGen: ScenarioGen[ModelState, Stage4Sut] = Stage4ScenarioGen
 
@@ -72,7 +86,7 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
 
     override def canStartupNewSut(): Boolean = true
 
-    override def startupSut(state: ModelState): IO[Stage4Sut] =
+    override def startupSut(state: ModelState): IO[Stage4Sut] = {
         val multiNodeConfig = state.params.multiNodeConfig
         val cardanoInfo = multiNodeConfig.headConfig.cardanoInfo
         val peers = multiNodeConfig.nodeConfigs.keys.toSeq.sortBy(p => p: Int)
@@ -81,6 +95,12 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
         // With TestControl, IO.sleep advances the virtual clock only while no actor fibers
         // exist; once actors are started their ping loops compete with tickOne, so the sleep
         // must come first (same pattern as stage1 Suite).
+        //
+        // In WS mode (real clock) we skip this: the configured start epoch is potentially
+        // years in the future, sleeping would block the test. Block production almost
+        // certainly won't fire under WS+real-clock until the model anchors startTime to
+        // `Instant.now() + small`. v1 of WS mode validates the transport layer; full property
+        // validation under WS is a follow-up.
         val startEpochMs = state.currentModelTime.getEpochSecond * 1000L
 
         for
@@ -223,19 +243,43 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
                 }
                 .map(_.toMap)
 
+            // Build the per-peer remote-liaison map. In Direct mode, this is the actual
+            // PeerLiaison handle from the other peer's actor stack. In WebSocket mode, it's
+            // a RemotePeerProxy that forwards messages over the local PeerWsTransport.
+            //
+            // remoteLiaisonsByPeer(A)(B.id) = the handle that A's PeerLiaison(A->B) uses to
+            // reach B's PeerLiaison(B->A).
+            transportSetup <- transportMode match {
+                case TransportMode.Direct =>
+                    val remoteLiaisonsByPeer: Map[HeadPeerNumber, Map[HeadPeerId, PeerLiaison.Handle]] =
+                        peers.map { peerNum =>
+                            val ownPeerId = multiNodeConfig.nodeConfigs(peerNum).ownHeadPeerId
+                            peerNum -> peers
+                                .filterNot(_ == peerNum)
+                                .map { remotePeerNum =>
+                                    val remotePeerId =
+                                        multiNodeConfig.nodeConfigs(remotePeerNum).ownHeadPeerId
+                                    remotePeerId -> peerLiaisonMap(remotePeerNum)(ownPeerId)
+                                }
+                                .toMap
+                        }.toMap
+                    IO.pure((remoteLiaisonsByPeer, IO.unit))
+                case TransportMode.WebSocket(basePort) =>
+                    given CardanoNetwork.Section = multiNodeConfig.headConfig
+                    setupWebSocketTransports(
+                      multiNodeConfig,
+                      peers,
+                      basePort,
+                      system,
+                      peerLiaisonMap,
+                    )
+            }
+            (remoteLiaisonsByPeer, transportCleanup) = transportSetup
+
             // Complete each peer's deferred with its full wiring.
-            // remotePeerLiaisons(B.id) = the liaison at B directed back at A (for A's Connections).
             _ <- peers.traverse { peerNum =>
                 val stack = peerStackMap(peerNum)
-                val ownPeerId = multiNodeConfig.nodeConfigs(peerNum).ownHeadPeerId
                 val localLiaisons = peerLiaisonMap(peerNum).values.toList
-                val remoteLiaisons = peers
-                    .filterNot(_ == peerNum)
-                    .map { remotePeerNum =>
-                        val remotePeerId = multiNodeConfig.nodeConfigs(remotePeerNum).ownHeadPeerId
-                        remotePeerId -> peerLiaisonMap(remotePeerNum)(ownPeerId)
-                    }
-                    .toMap
                 pendingConnsMap(peerNum)
                     .complete(
                       MultisigRegimeManager.Connections(
@@ -245,7 +289,7 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
                         eventSequencer = stack.eventSequencer,
                         jointLedger = stack.jointLedger,
                         peerLiaisons = localLiaisons,
-                        remotePeerLiaisons = remoteLiaisons,
+                        remotePeerLiaisons = remoteLiaisonsByPeer(peerNum),
                       )
                     )
                     .void
@@ -289,7 +333,85 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
           blockBriefs = blockBriefsMap,
           submittedRequestIds = submittedRequestIds,
           tracerLocal = tracerLocal,
+          transportCleanup = transportCleanup,
         )
+    }
+
+    /** WS-mode helper: builds one [[PeerWsTransport]] per peer (each bound to a distinct
+      * localhost port), spawns one [[RemotePeerProxy]] per (local, remote) pair, registers each
+      * local [[PeerLiaison]] with its peer's transport, and returns:
+      *
+      *   - the remote-handle map (proxy actors keyed by remote peer id), per peer
+      *   - a cleanup IO that releases all transports on shutdown
+      */
+    private def setupWebSocketTransports(
+        multiNodeConfig: MultiNodeConfig,
+        peers: Seq[HeadPeerNumber],
+        basePort: Int,
+        system: ActorSystem[IO],
+        peerLiaisonMap: Map[HeadPeerNumber, Map[HeadPeerId, PeerLiaison.Handle]],
+    )(using CardanoNetwork.Section): IO[
+      (Map[HeadPeerNumber, Map[HeadPeerId, PeerLiaison.Handle]], IO[Unit])
+    ] = {
+        // Map each peer to a localhost address. Bind on 127.0.0.1 (avoids firewall prompts on
+        // dev machines); peers dial each other at the same address+port.
+        def addrFor(peerNum: HeadPeerNumber): (Host, Port) =
+            (host"127.0.0.1", Port.fromInt(basePort + (peerNum: Int)).get)
+
+        def uriFor(peerNum: HeadPeerNumber): Uri = {
+            val (h, p) = addrFor(peerNum)
+            Uri.unsafeFromString(s"ws://$h:$p/peer")
+        }
+
+        // Allocate transports per peer.
+        for {
+            transportsAndReleases <- peers.toList.traverse { ownPeerNum =>
+                val ownPeerId = multiNodeConfig.nodeConfigs(ownPeerNum).ownHeadPeerId
+                val (bindH, bindP) = addrFor(ownPeerNum)
+                val remotes: Map[HeadPeerId, Uri] = peers
+                    .filterNot(_ == ownPeerNum)
+                    .map { rpn =>
+                        multiNodeConfig.nodeConfigs(rpn).ownHeadPeerId -> uriFor(rpn)
+                    }
+                    .toMap
+                PeerWsTransport
+                    .resource(ownPeerId, bindH, bindP, remotes)
+                    .allocated
+                    .map(ownPeerNum -> _)
+            }
+            transports = transportsAndReleases.map { case (pn, (t, _)) => pn -> t }.toMap
+            cleanup = transportsAndReleases.map { case (_, (_, r)) => r }.sequence_
+
+            // Register each local liaison so inbound msgs from remote get dispatched correctly.
+            // peerLiaisonMap(A)(B.id) is A's local liaison for talking to B. When A's transport
+            // receives a msg from B, it dispatches to that liaison.
+            _ <- peers.toList.traverse_ { ownPeerNum =>
+                val transport = transports(ownPeerNum)
+                peerLiaisonMap(ownPeerNum).toList.traverse_ { case (remotePeerId, localLiaison) =>
+                    transport.register(remotePeerId, localLiaison)
+                }
+            }
+
+            // Build the proxy actors: one per (local peer, remote peer) pair.
+            remoteHandlesByPeer <- peers.toList
+                .traverse { ownPeerNum =>
+                    val transport = transports(ownPeerNum)
+                    peers
+                        .filterNot(_ == ownPeerNum)
+                        .toList
+                        .traverse { remotePeerNum =>
+                            val remotePeerId =
+                                multiNodeConfig.nodeConfigs(remotePeerNum).ownHeadPeerId
+                            for {
+                                proxy <- RemotePeerProxy(remotePeerId, transport)
+                                ref <- system.actorOf(proxy)
+                            } yield remotePeerId -> ref
+                        }
+                        .map(ownPeerNum -> _.toMap)
+                }
+                .map(_.toMap)
+        } yield (remoteHandlesByPeer, cleanup)
+    }
 
     override def shutdownSut(lastState: ModelState, sut: Stage4Sut): IO[Prop] =
         for
@@ -311,15 +433,25 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
             // default (30s virtual) is enough to drive a pending fallback or deposit-decision
             // wakeup that seals the in-progress block. Under real-clock backends it would be
             // wall-clock; stage4 currently uses only the mock backend so we keep the default.
-            // Cancel liaison tick fibers BEFORE waitForIdle/terminate so they stop pushing
-            // Timeout messages while the system is winding down (otherwise the system stays
-            // non-idle).
-            _ <- sut.liaisonTickFibers.traverse_(_.cancel)
+            //
+            // Order matters: `waitForIdle` BEFORE cancelling liaison tick fibers. Cancelling
+            // ticks first stops the leader's CardanoLiaison from observing L1 settlement,
+            // which kills the path that drives the in-progress block to confirmation — the
+            // leader keeps applying its mempool tail but never gets `BlockConfirmed` because
+            // followers (with ticks cancelled too) stop emitting acks. The result was visible
+            // in WS real-clock 10-peer runs: ~15% of submitted reqIds never reached any
+            // brief because the leader's WIP block at shutdown was discarded by terminate.
+            // Letting ticks run during `waitForIdle` keeps the L1-polling-driven seal path
+            // alive long enough for the tail to land in confirmed blocks. `waitForIdle` can
+            // still return because the periods between ticks are mailbox-empty.
             _ <- sut.system.waitForIdle()
+            _ <- sut.liaisonTickFibers.traverse_(_.cancel)
             _ <- sut.system.terminate()
             _ <- logger.warn("shutdownSut: system was terminated")
             _ <- IO.sleep(100.millis) // settle: let the drainer consume any last-cycle errors
             _ <- sut.errorDrainer.cancel
+            // Release any WS transport resources (no-op in Direct mode).
+            _ <- sut.transportCleanup
             errors <- sut.sutErrors.get
             analysisProp <- analyzeBlockBriefs(lastState, sut)
         yield
@@ -535,8 +667,8 @@ object Stage4Suite:
         // small wall-clock offset in the future, so `startupSut` can sleep until that anchor
         // and have the model clock and the wall clock coincide at command 1. 60s matches
         // stage 1's budget; if 20-peer setup overruns it the test aborts (see startupSut).
-        // Under TestControl the virtual clock jumps instantly so any anchor works — we keep
-        // the deterministic 100-day random distribution to exercise different start epochs.
+        // Under TestControl we keep the deterministic Jan-1-2026 + 100-day random distribution
+        // — `Instant.now()` would defeat seed-based reproducibility.
         val takeoffTime: Option[java.time.Instant] =
             if useTestControl then None
             else Some(java.time.Instant.now().plusSeconds(60))

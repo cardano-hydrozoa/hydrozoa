@@ -98,7 +98,25 @@ case class Stage4Sut(
     blockBriefs: Map[HeadPeerNumber, Ref[IO, Vector[BlockBrief.Intermediate]]],
     submittedRequestIds: Ref[IO, Vector[RequestId]],
     tracerLocal: IOLocal[Tracer],
+    // Cleanup hooks for resources allocated outside the actor system (currently the
+    // optional WebSocket transport when running with [[TransportMode.WebSocket]]).
+    // Empty in [[TransportMode.Direct]] mode. Run during [[shutdownSut]].
+    transportCleanup: IO[Unit] = IO.unit,
 )
+
+/** Selects how a [[Stage4Sut]] wires its peer liaisons to remote peers.
+  *
+  *   - [[Direct]] (default) — every peer's [[PeerLiaison]] gets the actual remote handle from
+  *     the corresponding peer's actor system. In-process, no network. Compatible with
+  *     [[ModelBasedSuite#useTestControl]] = `true`.
+  *   - [[WebSocket]] — every peer runs its own [[PeerWsTransport]] bound to localhost on a
+  *     distinct port. Cross-peer communication happens over real WebSocket connections. Forces
+  *     [[ModelBasedSuite#useTestControl]] = `false` since real sockets don't speak virtual time.
+  *     Ports start at [[basePort]] and increase by `peerNum`.
+  */
+enum TransportMode:
+    case Direct
+    case WebSocket(basePort: Int = 31000)
 
 // ===================================
 // SUT command instances (direct submission)
