@@ -2,17 +2,39 @@
 
 ## Goal
 
-Reintroduce the removed effect-production code as a proper slow cycle, aligned with the whitepaper's slow-consensus article. Head peers only in Phase A — no coil quorum yet, but the two-round hard-ack flow ("unlock" pattern) is built in from day one for stacks containing settlement or finalization, including the **initial stack** (a two-phase, one-block stack with the initialization tx as its unlock). Slow cycle mirrors the fast cycle's leader-broadcast / peers-confirm shape, with consumer-side gating on soft-confirmation.
+Reintroduce the removed effect-production code as a proper slow cycle, aligned with the whitepaper's slow-consensus article. Head peers only in Phase A — no coil quorum yet, but the two-round hard-ack flow ("unlock" pattern) is built in from day one for stacks containing settlement or finalization, including the **initial stack** (a two-phase, one-block stack with the initialization tx as its unlock). Slow cycle mirrors the fast cycle's leader-broadcast / peers-ack shape, with consumer-side gating on soft-confirmation.
+
+## Terminology
+
+To avoid confusion: **ack** vs **confirmation** are not synonymous.
+
+- **Ack** (soft / hard) = a single peer's signature. Per-peer event. Produced by signers, transported by PeerLiaisons, collected by ConsensusActor (fast) / SlowConsensusActor (slow).
+- **Confirmation** (soft / hard) = the aggregated, saturated event. Produced by ConsensusActor (soft) or SlowConsensusActor (hard) once all required acks are collected. Consumed by downstream actors (BlockWeaver, StackActor, CardanoLiaison, JointLedger.releaseRefunds, PeerLiaisons-for-outbox-prune).
+
+**Routing rule.** Briefs (BlockBrief, StackBrief) go from producer **directly to PeerLiaisons**; the consensus actor is not on the brief path. Acks go through the consensus actor (own acks routed through it for outbound scheduling; remote acks delivered through it for aggregation).
+
+Actor flow:
+- BlockWeaver ← soft **confirmations** ← ConsensusActor.
+- JointLedger → BlockBrief (if leader) → PeerLiaisons (direct broadcast); JointLedger → own soft **ack** → ConsensusActor.
+- ConsensusActor ← soft **acks** ← (JointLedger own + PeerLiaisons remote); ConsensusActor → own soft **ack** → PeerLiaisons (broadcast); ConsensusActor → soft **confirmations** → (BlockWeaver + StackActor).
+- StackActor ← soft **confirmations** ← ConsensusActor; StackActor ← incoming `StackBrief` ← PeerLiaisons (follower-side, direct); StackActor → `StackBrief` (if leader) → PeerLiaisons (direct broadcast); StackActor → own hard **acks** (all rounds) → SlowConsensusActor.
+- SlowConsensusActor ← hard **acks** ← (StackActor own + PeerLiaisons remote); SlowConsensusActor → own hard **acks** (round-1 / sole immediate, round-2 withheld until local round-1 confirmation) → PeerLiaisons; SlowConsensusActor → hard **confirmations** → (CardanoLiaison + JointLedger.releaseRefunds + PeerLiaisons + StackActor's `PreviousStackHardConfirmation`).
+
+**Implications:**
+- All hard-ack signing lives in StackActor (which holds the wallet for slow-side signing). Both round-1 and round-2 acks are signed upfront at stack close — round-2 signs over the unlock tx body, which is known at close time, so no dependence on round-1 confirmation for signing.
+- SlowConsensusActor is a pure ack aggregator + scheduled-broadcast controller + confirmation emitter — no wallet, no signing. Withholds own round-2 ack until local round-1 confirmation observed, then releases it to PeerLiaisons for broadcast. Mirrors the pre-split ConsensusActor's "scheduled own ack" pattern (formerly used for major-block round-2 acks).
+
+**Codebase naming.** Current codebase: `ConsensusActor` is the fast-side soft-ack collector; `SlowConsensusActor` is the slow-side stub that this work fills in. This document's `SlowConsensusActor` references already match the codebase class name. Whether to rename `ConsensusActor` → `FastConsensusActor` for symmetry is a separate decision, not blocking.
 
 ## Design principle: fast/slow isomorphism, gated by soft-confirmation
 
-- **Fast consensus** = soft-ack over `BlockHeader.signingBytes`. Fast leader picks the brief, **also signs her own soft-ack, broadcasts both brief and her own ack to peers via PeerLiaison, and feeds her own ack into her local ConsensusActor**. Other peers verify the brief and broadcast their own soft-acks. **Soft-confirmation requires soft-acks from ALL head peers (leader's own included) — not a quorum.** A single missing head-peer ack stalls the brief. Weaker guarantee than slow (no L1 commitment), but lower latency. Useful standalone for clients that don't need L1 commitment.
-- **Slow consensus** = hard-ack over per-effect signatures of a closed stack. Slow leader picks the stack composition (cuts), **also signs her own round-1 hard-ack, broadcasts the StackBrief + her own ack to peers via PeerLiaison, and feeds her own ack into her local SlowConsensusActor**. Other peers verify the brief, locally derive effects, broadcast their own hard-acks. **Hard-confirmation requires hard-acks from ALL head peers (leader's own included) in Phase A; when coil peers join in a later PR, it will additionally require a quorum of coil peers.** Stronger guarantee, higher latency, batched.
-- **Symmetry.** Both cycles follow the same pattern: leader fixes the order, peers confirm. Distributed-system safety needs the leader's broadcast to synchronize the closure decision — peers cannot be assumed to converge independently.
+- **Fast consensus** = soft-ack over `BlockHeader.signingBytes`. Fast leader picks the brief, **broadcasts the brief directly to PeerLiaisons, and signs + hands her own soft-ack to her local ConsensusActor (which broadcasts the ack to PeerLiaisons and aggregates remote acks).** Other peers receive the brief from PeerLiaisons, sign their own soft-ack, and route it through their local ConsensusActor. **Soft-confirmation requires soft-acks from ALL head peers (leader's own included) — not a quorum.** A single missing head-peer ack stalls the brief. Weaker guarantee than slow (no L1 commitment), but lower latency. Useful standalone for clients that don't need L1 commitment.
+- **Slow consensus** = hard-ack over per-effect signatures of a closed stack. Slow leader picks the stack composition (cuts), **broadcasts the `StackBrief` directly to PeerLiaisons, and signs + hands her own hard-acks (all rounds upfront) to her local SlowConsensusActor (which broadcasts round-1 / sole acks immediately, withholds round-2 until local round-1 confirmation, and aggregates remote acks).** Other peers receive the brief from PeerLiaisons, validate composition + re-derive effects locally, sign their own hard-acks, and route them through their local SlowConsensusActor. **Hard-confirmation requires hard-acks from ALL head peers (leader's own included) in Phase A; when coil peers join in a later PR, it will additionally require a quorum of coil peers.** Stronger guarantee, higher latency, batched.
+- **Symmetry.** Both cycles follow the same pattern: leader fixes the order, peers ack (and the consensus actor aggregates acks into a confirmation). Distributed-system safety needs the leader's broadcast to synchronize the closure decision — peers cannot be assumed to converge independently.
 - **Producer-side decoupling.** JointLedger emits `BlockResult` immediately on local block completion, independent of the soft-ack round. The fast cycle proceeds in parallel.
 - **Consumer-side gating.** StackActor pairs `BlockResult.N` (data, from JointLedger) with `Block.SoftConfirmed.N` (proof, from ConsensusActor) before treating a block as stackable. A stack cannot close until every constituent block is paired.
-- **Leader broadcast.** The slow leader, on receiving the previous-stack hard-confirmation signal (and having a soft-confirmed Major / Final block to close on), builds the stack locally, signs round-1 hard ack, broadcasts `StackBrief` (composition only, never effects). Followers re-derive effects locally and sign the same `StackBrief`.
-- **Leader's soft-ack gate.** The slow leader does not include a block in a stack until she has observed its `Block.SoftConfirmed` (full soft-ack collection by fast consensus). No soft-confirmation → no stack inclusion.
+- **Leader broadcast.** The slow leader, on receiving the previous-stack hard-confirmation signal (and having at least one new soft-confirmed block to include), builds the stack locally, signs her hard acks, **broadcasts `StackBrief` directly to PeerLiaisons** (composition only, never effects), and hands her hard acks to her local SlowConsensusActor. Followers receive the `StackBrief` from PeerLiaisons, re-derive effects locally, and sign the same `StackBrief`.
+- **Leader's soft-confirmation gate — longest contiguous prefix.** The slow leader cannot arbitrarily skip blocks. She picks the **longest contiguous prefix** of newly-soft-confirmed blocks starting at `lastClosedBlockNum + 1`. If blocks 5, 6, 8 are soft-confirmed but 7 is not yet, only [5, 6] is stackable — block 8 must wait until 7 is also soft-confirmed. Stack composition is therefore deterministic given the soft-confirmation prefix length at trigger time.
 - **Stack-closure trigger.** Wrap-up of stack N+1 is signaled by hard-confirmation of stack N — mirroring how BlockWeaver wraps block N+1 on the signal of multi-signed block N. Single-flight serialization: only one stack is in slow consensus at a time. The initial block stack (stack 0, containing just the initial block) bootstraps the trigger chain, same way BlockWeaver bootstraps from initial-block confirmation. Phase A also has the special case of "first stack can close after the very first non-initial block."
 - Slow side may lag arbitrarily behind fast side. That's the point — amortize L1 cost and (later) coil round-trip.
 
@@ -131,32 +153,31 @@ Processed during `PreStart` — the actor injects these into its `pending` / `re
 
 ## Hard-ack rounds (per spec)
 
-**Setup (not a round).** Slow leader announces `StackBrief` (just the composition cut: stackNum, firstBlockNum, lastBlockNum, optionally firstMajorBlockNum). Broadcast to all peers via PeerLiaison.
+**Setup (not a round).** Slow leader broadcasts `StackBrief` (the composition cut: stackNum, firstBlockNum, lastBlockNum, optionally firstMajorBlockNum) directly to PeerLiaisons. Followers receive it on their PeerLiaison and route it to their StackActor for validation.
 
 **Round 1 — first hard ack (all-but-unlock).**
-- Each peer, on observing the leader's `StackBrief` AND having all constituent blocks paired locally, signs every necessary effect EXCEPT the first settlement/finalization. Per-effect sigs.
+- Each peer signs every necessary effect EXCEPT the first settlement/finalization at stack close (StackActor produces all own acks upfront — see Terminology section). Per-effect sigs.
 - Content per partition:
   - Sig over the partition's last evac commit (if non-empty).
   - Sigs over each refund tx in the partition (including refunds from minor blocks).
-  - For partitions ending in a Major: sigs over fallback + each rollout + the Major's refunds + the Major's settlement (UNLESS it's the first settlement / finalization — that one's withheld).
+  - For partitions ending in a Major: sigs over fallback + each rollout + the Major's refunds + the Major's settlement (UNLESS it's the first settlement / finalization — that one's withheld for round 2).
   - For the partition ending in a Final: sigs over each rollout (and Final's refunds if any).
 - The first settlement OR finalization tx in the stack is the only one withheld for round 2. In a multi-major stack, second and subsequent settlements are signed in round 1.
-- Each peer broadcasts its round-1 hard ack to every other peer.
-- Round 1 saturates locally when all head peers' round-1 acks are received and every per-effect sig verifies against the locally-derived effect bodies.
+- Round-1 ack travels: StackActor → SlowConsensusActor → PeerLiaisons → remote peers' SlowConsensusActor.
+- Round-1 confirmation reached locally when all head peers' round-1 acks have been received and every per-effect sig verifies against the locally-derived effect bodies.
 
 **Round 2 — second hard ack (the unlock).**
-- Triggered the moment a peer locally observes round-1 saturation.
-- Each peer signs the first settlement (Major) or finalization (Final) of the stack.
-- Broadcast to every other peer.
-- Round 2 saturates when all head peers' round-2 acks are received.
+- Each peer signs the first settlement (Major) or finalization (Final) at stack close (upfront, alongside round-1 ack — round-2 sig domain is just the unlock tx body, fully known then).
+- The own round-2 ack is held by the local SlowConsensusActor until that actor observes round-1 confirmation locally; only then is the ack released to PeerLiaisons for broadcast. Mirrors the pre-split ConsensusActor's "scheduled own ack" pattern.
+- Round-2 confirmation reached when all head peers' round-2 acks have been received and verified.
 
-**L1 submission.** After round-2 saturation. The full effect-tx set is now multisigned and submittable on L1 in dependency order (settlement / finalization first, then dependent rollouts / fallback / refunds).
+**L1 submission.** After round-2 confirmation. The full effect-tx set is now multisigned and submittable on L1 in dependency order (settlement / finalization first, then dependent rollouts / fallback / refunds).
 
 **Why withhold settlement.** Settlement is the L1 entry point — all subsequent dependent txs spend its outputs. If a peer withholds round-2 sig, the other effects are signed but unactionable on L1 (no settlement to spend from). If round 1 stalls, no commitment was made at all. Atomicity preserved either way.
 
 **Minor-only-stack path:**
 - Sole ack: sig over last evac commitment from the stack's single partition + per-tx sigs over each minor block's refund txs.
-- One round; on saturation the stack is hard-confirmed. L1 submission of refund txs (the evac commitment itself is not a standalone L1 tx — it's a value carried into the next major's settlement / used in dispute resolution).
+- One round; on sole-round confirmation the stack is hard-confirmed. L1 submission of refund txs (the evac commitment itself is not a standalone L1 tx — it's a value carried into the next major's settlement / used in dispute resolution).
 
 ## Stack data types (sketch)
 
@@ -229,7 +250,7 @@ case class HardAck(
     ackId: AckId,
     stackNum: StackNumber,
     payload: HardAckRound1 | HardAckRound2,    // round discriminated by payload type
-    finalizationConfirmed: Bool,                // mirrors SoftAck pattern; may also be implicit in payload variant
+    finalizationRequested: Bool,                // mirrors SoftAck.finalizationRequested (per-peer flag, NOT a confirmation)
 )
 
 sealed trait Stack
@@ -246,7 +267,7 @@ object Stack:
     )
     case class HardConfirmed(
         round1: Round1Confirmed,
-        round2Acks: NonEmptyList[HardAckRound2],   // empty list if minor-only stack (no second round)
+        round2Acks: List[HardAckRound2],   // empty for minor-only stacks (no second round)
     )
 ```
 
@@ -256,42 +277,49 @@ object Stack:
 
 ```
 JointLedger.completeBlockRegular / completeBlockFinal
-  ├─ produce BlockBrief                              → ConsensusActor (fast: collect SoftAcks)
+  ├─ produce BlockBrief + own soft ack               → ConsensusActor (fast: aggregates soft acks)
   └─ emit BlockResult.N (NEW)                        → StackActor
 
 ConsensusActor (fast cycle)
-  └─ on SoftAck saturation: Block.SoftConfirmed.N    → JointLedger.proxyConfirmation (legacy, retired later)
+  └─ on soft-confirmation: Block.SoftConfirmed.N     → JointLedger.proxyConfirmation (legacy, retired later)
                                                       → StackActor (gate signal)
 
-StackActor (leader role — peer where isSlowLeader(closingBlockNum) holds)
+StackActor (leader role — peer where isSlowLeader(stackNum) holds)
   ├─ pair (BlockResult.N, Block.SoftConfirmed.N) by blockNum
-  └─ when both present AND brief is Major/Final AND previous stack hard-confirmed AND no gap below:
-       ├─ close stack: all paired blocks since last close, ending at this Major/Final
-       ├─ build StackBrief (stackNum, firstBlockNum, lastBlockNum, firstMajorBlockNum)
-       ├─ derive necessary effects (partition by major version; drop superseded evac commits)
-       ├─ build StackEffects (settlement / finalization withheld for round 2)
-       ├─ sign own HardAckRound1 (per-effect sigs, all-but-unlock)
-       ├─ broadcast StackBrief                       → PeerLiaisons (leader's closure decision)
-       └─ forward Stack.Unsigned + own round-1 ack   → SlowConsensusActor
+  └─ when previous-stack hard-confirmation received AND ready queue's longest contiguous prefix non-empty:
+       ├─ close stack: drain ready prefix (any combination of minors / majors / final)
+       ├─ build StackBrief
+       ├─ derive necessary effects (or use StackEffects.Initial for stack 0)
+       ├─ build Stack.Unsigned
+       ├─ sign own round-1 + round-2 hard acks upfront (or sole hard ack for minor-only)
+       └─ StackBrief + Stack.Unsigned + all own hard acks  → SlowConsensusActor
+                                                            (which broadcasts StackBrief, schedules ack broadcast)
 
 StackActor (follower role)
   ├─ pair streams
-  ├─ wait for leader's StackBrief
+  ├─ wait for SlowConsensusActor to forward leader's StackBrief
   └─ when leader's StackBrief arrives AND all constituent blockNums locally paired:
-       ├─ validate composition: blockNums in spec-required form; ending block is Major/Final
-       ├─ re-derive necessary effects locally
-       ├─ sign own HardAckRound1, hand off (Stack.Unsigned + ack) → SlowConsensusActor
+       ├─ validate composition; re-derive necessary effects locally
+       ├─ sign own round-1 + round-2 hard acks upfront (or sole)
+       └─ Stack.Unsigned + all own hard acks         → SlowConsensusActor
 
-SlowConsensusActor (per-stack cell, two phases, leader-driven)
-  ├─ Phase 1: collect round-1 HardAckRound1 from all head peers; verify per-effect sigs
-  ├─ on round-1 saturate:
-  │    ├─ sign own HardAckRound2 (sig over first settlement/finalization)
-  │    └─ broadcast own round-2 ack via PeerLiaisons
-  ├─ Phase 2: collect round-2 HardAckRound2 from all head peers; verify settlement/finalization sig
-  └─ on round-2 saturate:
+SlowConsensusActor (per-stack cell, pure ack aggregator + scheduled broadcaster; sole slow-side actor talking to PeerLiaisons)
+  ├─ on (StackBrief if leader, Stack.Unsigned, all own acks) from StackActor:
+  │    ├─ create cell
+  │    ├─ deposit own round-1 / sole ack into cell
+  │    ├─ if leader: broadcast StackBrief           → PeerLiaisons (immediately)
+  │    ├─ broadcast own round-1 / sole ack          → PeerLiaisons (immediately)
+  │    └─ stash own round-2 ack in cell (withheld until local round-1 confirmation)
+  ├─ on incoming StackBrief from PeerLiaison (follower-side): forward → StackActor (so follower can validate + sign)
+  ├─ Phase 1: collect round-1 hard acks from PeerLiaisons (other peers); verify per-effect sigs
+  ├─ on local round-1 confirmation:
+  │    └─ release stashed own round-2 ack            → PeerLiaisons (broadcast to other peers)
+  ├─ Phase 2: collect round-2 hard acks from PeerLiaisons; verify per-variant payload
+  └─ on local round-2 confirmation:
        ├─ Stack.HardConfirmed (with both ack sets)   → CardanoLiaison (L1 submit, dependency order)
        ├─                                            → JointLedger.releaseRefunds (L2 update; replaces proxyConfirmation)
-       └─                                            → PeerLiaisons (purge hard-ack outbox)
+       ├─                                            → PeerLiaisons (purge hard-ack outbox + stack-brief outbox)
+       └─                                            → StackActor (PreviousStackHardConfirmation signal)
 ```
 
 Note `Stack.Unsigned` lives only inside each peer's StackActor — it's not wire-broadcast. Only `StackBrief` + `HardAck`s travel.
@@ -370,11 +398,11 @@ case class HardAck(
     ackId: AckId,
     stackNum: StackNumber,
     payload: HardAckRound1Payload | HardAckRound2Payload | HardAckSolePayload,
-    finalizationConfirmed: Bool,
+    finalizationRequested: Bool,    // mirrors SoftAck.finalizationRequested — per-peer request flag, not a confirmation
 )
 ```
 
-Wallet API:
+Wallet API (called exclusively by StackActor — SlowConsensusActor is wallet-free):
 - `HeadPeerWallet.mkHardAckRound1Regular(stack: Stack.Unsigned): HardAck` — signs each non-unlock effect tx body individually.
 - `HeadPeerWallet.mkHardAckRound1Initial(fallbackTx): HardAck` — signs the fallback tx body for stack 0.
 - `HeadPeerWallet.mkHardAckRound2Regular(stack: Stack.Round1Confirmed): HardAck` — signs the first settlement / finalization tx body.
@@ -422,80 +450,94 @@ case class StackActorState(
 Pairing (both roles): on `BlockResult.N` or `Block.SoftConfirmed.N`, update `pending[N]`; if both halves present, move to `ready` queue.
 
 Leader path (only when `isSlowLeader(lastClosedStackNum + 1)` holds for this peer):
-1. After every pairing update OR `PreviousStackHardConfirmed`, check eligibility:
+1. After every pairing update OR `PreviousStackHardConfirmation`, check eligibility:
    - `previousStackHardConfirmed == true`
-   - `ready` queue is non-empty (at least one new soft-confirmed block since last close)
-2. If eligible: close a stack containing **all** of `ready` (drained — every soft-confirmed-and-paired block since the previous close, regardless of type).
+   - `ready` queue's longest contiguous-from-`lastClosedBlockNum + 1` prefix is non-empty (at least one new soft-confirmed block; gap-free per the soft-confirmation gate)
+2. If eligible: close a stack containing **all** of that contiguous prefix from `ready` (any combination of minors / majors / final).
 3. Close-stack:
-   - drain `ready` entirely
+   - drain the contiguous prefix from `ready`
    - build `StackBrief` from drained blocks
    - if `stackNum == 0` (boot): build `StackEffects.Initial(initTx, deriveFallbackTx(initTx, headParams))` from bootstrap data; skip the necessary-effects partition algorithm
    - else: run necessary-effects selection (M1) → `StackEffects.Regular(...)`
    - build `Stack.Unsigned`
    - cell-phase decision based on stack-effects variant:
-     - `StackEffects.Initial` → 2-phase (round 1 = fallback sig; round 2 = init tx sig + individual witnesses)
+     - `StackEffects.Initial` → 2-phase (round 1 = fallback ack; round 2 = init tx ack + individual witnesses)
      - `StackEffects.Regular` with settlement / finalization → 2-phase
      - `StackEffects.Regular` minor-only → 1-phase
-   - sign own round-1 hard ack (or sole hard ack for minor-only) via the appropriate wallet method
-   - broadcast `StackBrief` → PeerLiaisons
-   - hand off `(unsigned, own ack)` → SlowConsensusActor
-   - `previousStackHardConfirmed = false` until the next `PreviousStackHardConfirmed` event
+   - sign all own hard acks upfront via the appropriate wallet methods:
+     - 2-phase: own round-1 ack + own round-2 ack
+     - 1-phase: own sole ack
+   - send `StackBrief + Stack.Unsigned + own hard acks (all rounds)` → SlowConsensusActor (which broadcasts StackBrief + round-1/sole ack immediately, withholds round-2 until local round-1 confirmation)
+   - `previousStackHardConfirmed = false` until the next `PreviousStackHardConfirmation` event
+
+StackActor signs round-2 upfront because the round-2 sig domain is just the unlock tx body, which is fully known at stack close. No dependence on round-1 ack set.
 
 Follower path:
 1. On `IncomingStackBrief` from PeerLiaison: insert into `inboundLeaderBrief`, then try-process.
 2. On any state change: look for `inboundLeaderBrief[lastClosed+1]` with all constituent blocks paired.
-3. On match: validate composition, re-derive effects, check against leader's brief, sign own `HardAckRound1`, hand off to SlowConsensusActor.
+3. On match: validate composition, re-derive effects, check against leader's brief, sign all own hard acks upfront (round-1 + round-2 OR sole), send `Stack.Unsigned + all own hard acks` → SlowConsensusActor (which schedules outbound broadcast).
 4. On mismatch: log + stall (open question).
 
 **Files:** `StackActor.scala` (replace stub).
 
 ---
 
-### M6: `SlowConsensusActor` (replaces stub) — variable-phase per cell
+### M6: `SlowConsensusActor` (replaces stub) — pure ack aggregator + scheduled broadcaster
+
+> Codebase naming: keeps the existing `SlowConsensusActor` class name. Fast-side `ConsensusActor` may be renamed to `FastConsensusActor` for symmetry, but that's a separate decision.
+
+**No wallet, no signing.** All hard-ack signing lives in StackActor. SlowConsensusActor's responsibilities:
+1. Aggregate hard acks (from StackActor + PeerLiaisons), verify against locally-derived effect bodies.
+2. Schedule outbound broadcast of own acks: round-1 / sole released immediately on receipt from StackActor; round-2 withheld until local round-1 confirmation (mirrors pre-split ConsensusActor's "scheduled own ack" pattern for major rounds).
+3. Emit hard confirmations on saturation.
 
 ```scala
 sealed trait SlowConsensusCell
-// 2-phase path: stack contains settlement/finalization
+// 2-phase path: stack contains settlement/finalization OR initial stack
 case class WaitingForRound1(
     unsigned: Stack.Unsigned,
-    round1Acks: Map[HeadPeerId, HardAckRound1],
+    round1Acks: Map[HeadPeerId, HardAckRound1Payload],
+    ownRound2AckHeld: HardAckRound2Payload,   // held until local round-1 confirmation
 )
 case class WaitingForRound2(
     round1: Stack.Round1Confirmed,
-    round2Acks: Map[HeadPeerId, HardAckRound2],
+    round2Acks: Map[HeadPeerId, HardAckRound2Payload],
 )
 // 1-phase path: minor-only stack
-case class WaitingForSoleAck(
+case class WaitingForSole(
     unsigned: Stack.Unsigned,
-    soleAcks: Map[HeadPeerId, HardAckSole],
+    soleAcks: Map[HeadPeerId, HardAckSolePayload],
 )
 ```
 
 Transitions (2-phase path; works for both `StackEffects.Regular` w/ settlement/finalization and `StackEffects.Initial`):
-- On `Stack.Unsigned` + own round-1 ack from StackActor → `WaitingForRound1`.
-- On incoming round-1 `HardAck`: insert; verify per-effect sigs against locally-derived effect tx bodies. If complete:
-  - sign own round-2 ack via the appropriate wallet method:
-    - `StackEffects.Regular` → `mkHardAckRound2Regular` (sig over first settlement / finalization)
-    - `StackEffects.Initial` → `mkHardAckRound2Initial` (sig over init tx + individual witnesses)
-  - transition to `WaitingForRound2`
-  - broadcast own round-2 ack via PeerLiaisons
-- On incoming round-2 `HardAck`: insert; verify per-variant payload (settlement/finalization sig, or init tx sig + witnesses). If complete:
+- On `(StackBrief if leader, Stack.Unsigned, ownRound1, ownRound2)` from StackActor:
+  - create cell `WaitingForRound1(unsigned, {self → ownRound1}, ownRound2AckHeld = ownRound2)`
+  - if leader: broadcast `StackBrief` → PeerLiaisons (immediately)
+  - broadcast `ownRound1` → PeerLiaisons (immediately)
+- On incoming round-1 hard ack from PeerLiaison: insert; verify per-effect sigs. If round-1 confirmation reached:
+  - release `ownRound2AckHeld` → PeerLiaisons (broadcast)
+  - transition to `WaitingForRound2({self → ownRound2AckHeld})`
+- On incoming round-2 hard ack from PeerLiaison: insert; verify per-variant payload. If round-2 confirmation reached:
   - build `Stack.HardConfirmed`
-  - emit to CardanoLiaison (L1 submit), JointLedger.releaseRefunds, PeerLiaisons (purge outbox), StackActor (signal `PreviousStackHardConfirmed`)
+  - emit hard confirmation:
+    - `Stack.HardConfirmed` → CardanoLiaison (L1 submit, dependency order)
+    - `Stack.HardConfirmed` → JointLedger.releaseRefunds (L2 update)
+    - `Stack.HardConfirmed` → PeerLiaisons (purge hard-ack + stack-brief outbox)
+    - `PreviousStackHardConfirmation(stackNum)` → StackActor (unblocks next stack)
   - drop cell
 
 Transitions (1-phase path):
-- On `Stack.Unsigned` (minor-only) + own sole ack from StackActor → `WaitingForSoleAck`.
-- On incoming sole `HardAck`: insert; verify last-evac-commit sig + minor-refund sigs. If complete:
+- On `(Stack.Unsigned, ownSole)` from StackActor:
+  - create cell `WaitingForSole(unsigned, {self → ownSole})`
+  - broadcast `ownSole` → PeerLiaisons (immediately)
+- On incoming sole hard ack: insert; verify last-evac-commit sig + minor-refund sigs. If sole-round confirmation reached:
   - build `Stack.HardConfirmed` (no round-2 acks)
-  - emit to CardanoLiaison (L1 submit only if any refund txs), JointLedger.releaseRefunds, PeerLiaisons (purge outbox), StackActor (signal `PreviousStackHardConfirmed`)
-  - drop cell
+  - same emission set as 2-phase confirmation, except CardanoLiaison submission only if any refund txs
 
-Cell-phase choice is determined by `Stack.Unsigned`'s effects content at hand-off time from StackActor.
+Cell-phase choice is determined by `Stack.Unsigned`'s effects variant at hand-off time from StackActor.
 
-Postponed-ack semantics: stash early acks for stackNum N+1 on cell N if N not saturated yet (same as soft-side); applies to both rounds (or sole round).
-
-Wallet access: SlowConsensusActor receives `HeadPeerWallet` reference.
+Postponed-ack semantics: stash early acks for stackNum N+1 on cell N if cell N has not reached confirmation yet (same as fast-side). Applies to both rounds and to the held own round-2 ack — if a remote peer's round-2 ack arrives before local round-1 confirmation, stash it for transition into `WaitingForRound2`'s `round2Acks` map.
 
 **Files:** `SlowConsensusActor.scala` (replace stub).
 
@@ -555,7 +597,7 @@ Re-enable treasury utxo rotation on settlement (Major stacks). On Final stack ha
 ### M11: Test restoration
 
 - Stage1: effect-presence assertion restored — pulls effects from `Stack.HardConfirmed` events, not from the vacuous fast-side pass-through.
-- Stage4: add `StackObserver` parallel to `BlockBriefObserver`, watching `SlowConsensusActor`'s request channel. Verify: stack count, both 1-phase (minor-only) and 2-phase (settlement/finalization-containing) paths are exercised, round-2 always follows round-1 saturation in 2-phase cells, multi-partition necessary-effects selection produces correct sig sets.
+- Stage4: add `StackObserver` parallel to `BlockBriefObserver`, watching `SlowConsensusActor`'s request channel. Verify: stack count, both 1-phase (minor-only) and 2-phase (settlement/finalization-containing) paths are exercised, round-2 always follows round-1 confirmation in 2-phase cells, multi-partition necessary-effects selection produces correct sig sets.
 
 **Files:** `integration/.../stage1/Sut.scala`, `integration/.../stage4/Sut.scala`.
 
@@ -576,11 +618,11 @@ Re-enable treasury utxo rotation on settlement (Major stacks). On Final stack ha
 
 2. **Mempool eviction.** StackActor drops `pending` / `ready` entries once their stack is handed off to SlowConsensusActor. Simple, no back-edge needed.
 
-3. **Effect-derivation divergence between peers.** Per-effect sig mismatch → cell never saturates → slow side stalls (fast side keeps moving). Need observability: log mismatched sigs with peer ID + which tx body diverged. Add before this lands.
+3. **~~Effect-derivation divergence between peers~~** — not an open concern. Deterministic effect derivation is a core Hydrozoa property: given the same `BlockResult`s + `StackBrief`, every head peer must derive byte-identical effects. Divergence is a critical bug that breaks consensus by design — there's no "graceful" handling for head peers; slow consensus halts, fallback timer fires, and the system falls back into the rule-based regime (dispute-resolution / dead-man's switch). (Coil peers are a different story for a future PR.) Standard observability hygiene applies — log mismatched sig verifications with peer ID + tx body — but this is normal debugging infrastructure, not a special design concern.
 
 4. **`proxyConfirmation` retirement timeline.** Phase A adds `releaseRefunds`. ConsensusActor still calls `proxyConfirmation` with empty refund list. Cut after slow side live — follow-up cleanup, not blocking.
 
-5. **Where round-2 signing lives.** Plan: SlowConsensusActor (triggered on local round-1 saturation, needs wallet). Alternative: StackActor (already holds wallet). SlowConsensusActor wins because round 2 is consensus-state-driven, not stack-build-driven.
+5. **~~Where round-2 signing lives~~** — resolved: StackActor signs all hard acks (round-1 + round-2 OR sole) upfront at stack close, and hands them all to SlowConsensusActor. SlowConsensusActor is a pure ack aggregator with no wallet — it manages outbound broadcast scheduling: round-1 / sole released immediately to PeerLiaisons, round-2 withheld until local round-1 confirmation, then released. Mirrors the pre-split ConsensusActor's "scheduled own ack" pattern. Symmetric with fast consensus: JointLedger signs all soft acks; ConsensusActor handles aggregation and (now) outbound scheduling.
 
 6. **`firstSettlementOrFinalizationSig` field naming.** Multi-major stacks contain multiple settlements; per spec only the FIRST is withheld for round 2. Round-2 carries one sig. Rename to `firstUnlockSig` for clarity.
 
