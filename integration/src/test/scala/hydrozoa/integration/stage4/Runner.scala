@@ -126,6 +126,8 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
             // .withPropFilter(Some("Three-peers head works"))
             // .withPropFilter(Some("Twenty-peers head works"))
             // .withPropFilter(Some("Two-peers head works WS"))
+            .withPropFilter(Some("Ten-peers head works WS"))
+            // .withInitialSeed(Seed.fromBase64("uOllVn-lTcPloHDUuC3_x8oVjOgUbTR7vUoBi3T71gF=").get)
             // .withInitialSeed(Seed.fromBase64("wZ2FQc_Iv2duN06RHMXFg7014XeEirS_K2-wY0RN38O=").get)
             // .withInitialSeed(Seed.fromBase64("7wf2XaHHBHdGl4XOoIpW8PvN2t8XFcR0fFE0RBX6pWG=").get)
             // .withInitialSeed(Seed.fromBase64("Irdkn14LUINcIDjKQOxKuN-GF2399UOCwL-C11NVESJ=").get)
@@ -150,5 +152,12 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
         Stage4Suite(
           label = "stage4-ws-two-peers",
           nPeers = 2,
+          transportMode = TransportMode.WebSocket(),
+        ).property()
+
+    val _ = property("Ten-peers head works WS") =
+        Stage4Suite(
+          label = "stage4-ws-ten-peers",
+          nPeers = 10,
           transportMode = TransportMode.WebSocket(),
         ).property()

@@ -23,6 +23,13 @@ final case class SoftAck(
 ) {
     final transparent inline def ackNum: AckNumber = ackId.ackNum
     final transparent inline def peerNum: HeadPeerNumber = ackId.peerNum
+
+    val toContext: Seq[(String, String)] =
+        Seq(
+          "peer" -> peerNum.toString,
+          "ackId" -> ackId.toString,
+          "blockNum" -> blockNum.toString
+        )
 }
 
 object SoftAck {

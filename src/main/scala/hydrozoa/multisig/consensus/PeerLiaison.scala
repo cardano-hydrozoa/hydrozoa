@@ -11,7 +11,7 @@ import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.PeerLiaison.*
 import hydrozoa.multisig.consensus.PeerLiaison.Request.*
 import hydrozoa.multisig.consensus.ack.{AckId, AckNumber, SoftAck}
-import hydrozoa.multisig.consensus.peer.HeadPeerId
+import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber, BlockStatus, BlockType}
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import scala.collection.immutable.Queue
@@ -142,32 +142,31 @@ trait PeerLiaison(
                     _ <- logger.debug(
                       s"got NewMsgBatch: batch=${x.batchNum}, ack=${x.ack.map(_.ackNum)}, block=${x.blockBrief.map(_.blockNum)}, reqs=${x.requests.size}"
                     )
-                    prev <- state.getCurrentlyRequesting
-                    next: GetMsgBatch <- state.verifyBatchAndGetNext(x)
-                    advanced = next.batchNum != prev.batchNum
-                    _ <-
-                        if advanced then
+                    outcome <- state.verify(x)
+                    _ <- outcome match {
+                        case VerifyOutcome.Advance(next) =>
                             for {
+                                _ <- state.advanceTo(next)
                                 msg <- IO.pure(
                                   s"GetMsgBatch: batch=${next.batchNum}, ack=${next.ackNum}, " +
                                       s"block=${next.blockNum}, req=${next.requestNum}"
                                 )
-                                // _ <- mermaid(msg)
+                                _ <- mermaid(msg)
                                 _ <- conn.remotePeerLiaison ! next
                                 _ <- x.ack.traverse_(conn.consensusActor ! _)
                                 _ <- x.blockBrief.traverse_(conn.blockWeaver ! _)
                                 _ <- x.requests.traverse_(conn.blockWeaver ! _)
                             } yield ()
-                        else
-                            // Stale/duplicate reply: either a verification mismatch or a
-                            // late reply for an already-advanced batch (the retransmit timer
-                            // can cause this). Don't bounce a GetMsgBatch back — the timer
-                            // will keep the chain alive — and don't re-dispatch payloads
-                            // (we've already seen them).
-                            logger.debug(
-                              s"dropping stale NewMsgBatch batch=${x.batchNum} " +
-                                  s"(current=${prev.batchNum})"
+                        case VerifyOutcome.Reject(reason) =>
+                            // Rejected reply: either a stale duplicate caused by the
+                            // retransmit timer or a real verification mismatch. Either
+                            // way, don't bounce a GetMsgBatch back (the timer keeps the
+                            // chain alive) and don't re-dispatch payloads. WARN so the
+                            // specific failing predicate shows up in normal logs.
+                            logger.warn(
+                              s"dropping NewMsgBatch batch=${x.batchNum}: $reason"
                             )
+                    }
                 } yield ()
 
             case x: (BlockConfirmed & BlockType.NonFinal) =>
@@ -193,8 +192,8 @@ trait PeerLiaison(
             _ <- startResendTimer
         yield ()
 
-    /** Fire a periodic [[ResendCurrent]] self-message so the request-response chain self-heals
-      * after wire-level losses. See the design note on [[PeerLiaison]] for the rationale.
+    /** Fire a periodic self-message so the request-response chain self-heals after wire-level
+      * losses, see the design note on [[ResendCurrent]] for the rationale.
       *
       * The tick is fire-and-forget: it lives as long as the actor system. We don't try to cancel it
       * on actor shutdown because the actor terminates with the system in our deployment, and an
@@ -313,14 +312,35 @@ trait PeerLiaison(
 
                 _ <- this.queuesAreEmpty.ifM(IO.raiseError(EmptyNewMsgBatch), IO.unit)
 
+                // Prune queues in place (read-and-shrink in one `modify`) for every
+                // field based on what the remote has already received:
+                //   - `batchReq.ackNum`/`batchReq.blockNum`: "I have N, send me N+1"
+                //     ⇒ drop entries `<= N`.
+                //   - `batchReq.requestNum`: "send me requests with requestNum >= N"
+                //     ⇒ drop entries `< N`.
+                //
+                // Pruning per-remote on each incoming `GetMsgBatch` — NOT on local
+                // `BlockConfirmed` — is essential. Local consensus for block N
+                // confirms when WE receive enough acks for N from other peers; it
+                // does NOT imply every remote peer has polled OUR outgoing ack/
+                // brief/request for N. If we prune on local confirmation, a slow
+                // remote can miss content we own and the chain stalls (verification
+                // mismatch on next-expected positions). The remote's GetMsgBatch
+                // positions are the authoritative per-remote receipt signal.
+                //
                 // TODO: once ackNum/blockNum switch to next-expected semantics, change `<=` to `<`
-                mAck <- this.qAck.get.map(_.dropWhile(_.ackNum <= batchReq.ackNum).headOption)
-                mBlock <- this.qBlock.get.map(
-                  _.dropWhile(_.blockNum <= batchReq.blockNum).headOption
-                )
-                events <- this.qEvent.get.map(
-                  _.dropWhile(_.requestId._2 < batchReq.requestNum).take(maxRequests)
-                )
+                mAck <- this.qAck.modify { q =>
+                    val pruned = q.dropWhile(_.ackNum <= batchReq.ackNum)
+                    (pruned, pruned.headOption)
+                }
+                mBlock <- this.qBlock.modify { q =>
+                    val pruned = q.dropWhile(_.blockNum <= batchReq.blockNum)
+                    (pruned, pruned.headOption)
+                }
+                events <- this.qEvent.modify { q =>
+                    val pruned = q.dropWhile(_.requestId._2 < batchReq.requestNum)
+                    (pruned, pruned.take(maxRequests))
+                }
 
                 _ <- IO.raiseWhen(mAck.isEmpty && mBlock.isEmpty && events.isEmpty)(
                   EmptyNewMsgBatch
@@ -332,71 +352,104 @@ trait PeerLiaison(
               requests = events.toList
             )).attemptNarrow
 
-        def dequeueConfirmed(block: BlockConfirmed): IO[Unit] = {
-            val ackNum: AckNumber = AckNumber.neededToConfirm(block.header)
-            val ownConfirmedRequests: List[RequestNumber] = block.events.collect {
-                case x if x._1.peerNum == config.ownHeadPeerId.peerNum => x._1.requestNum
-            }
-            for {
-                _ <- this.qAck.update(q => q.dropWhile(_.ackId._2 <= ackNum))
-                _ <- this.qBlock.update(q => q.dropWhile(_.blockNum <= block.blockNum))
-                _ <- IO.whenA(ownConfirmedRequests.nonEmpty)(
-                  this.qEvent.update(q =>
-                      q.dropWhile(_.requestId.requestNum <= ownConfirmedRequests.max)
-                  )
+        /** No-op placeholder. All three outbox queues (`qAck`, `qBlock`, `qEvent`) are now pruned
+          * per-remote-peer in [[buildNewMsgBatch]] based on the incoming `GetMsgBatch` positions,
+          * which are the authoritative per-remote receipt signal. Pruning on local `BlockConfirmed`
+          * was incorrect for `qAck` (a slow remote may not yet have polled our outgoing ack for
+          * block N when we confirm it locally) and unifying the trigger keeps the protocol
+          * symmetric.
+          *
+          * Kept as a method (and the `BlockConfirmed` receive case) for the Final- block
+          * close-connection TODO in the receive handler.
+          */
+        def dequeueConfirmed(block: BlockConfirmed): IO[Unit] = IO.unit
+
+        /** Check whether the received [[NewMsgBatch]] matches what we're currently expecting on
+          * this link. Pure inspection — does not mutate `currentlyRequesting`. Call [[advanceTo]]
+          * with `Advance.next` to commit the new state when (and only when) the result is
+          * [[VerifyOutcome.Advance]].
+          */
+        def verify(receivedBatch: NewMsgBatch): IO[VerifyOutcome] =
+            this.currentlyRequesting.get.map(verifyAgainst(_, receivedBatch))
+
+        /** Commit a successful verification by advancing the outstanding request to `next`. Should
+          * be called only after [[verify]] returned [[VerifyOutcome.Advance]] carrying this same
+          * `next` — calling it otherwise would skip past valid state.
+          */
+        def advanceTo(next: GetMsgBatch): IO[Unit] =
+            this.currentlyRequesting.set(next)
+
+        /** Pure verification kernel. Compares the received batch against the expected next-batch
+          * contract and either:
+          *   - returns [[VerifyOutcome.Advance]] with the new [[GetMsgBatch]] for the caller to
+          *     advance to, or
+          *   - returns [[VerifyOutcome.Reject]] tagged with the first failing predicate.
+          *
+          * Predicates are checked in a fixed order; the first failure short-circuits, so the
+          * reported [[VerifyOutcome.Rejection]] is the most specific one available.
+          */
+        private def verifyAgainst(
+            current: GetMsgBatch,
+            received: NewMsgBatch
+        ): VerifyOutcome = {
+            import VerifyOutcome.{Advance, Reject, Rejection}
+
+            // 1. BatchNum must match the currently outstanding request exactly. Any
+            //    mismatch means the reply is for a different batch — stale duplicate
+            //    (received < current) or, indicating a logic bug, ahead of state.
+            if current.batchNum != received.batchNum then
+                return Reject(Rejection.BatchNumMismatch(current.batchNum, received.batchNum))
+
+            // 2. If an ack is present, its peer must be the remote peer and its number
+            //    must be exactly the next-expected ackNum after `current.ackNum`.
+            //    TODO: once ackNum switches to next-expected semantics, check
+            //          head == current.ackNum (same pattern as requestNum below).
+            val nextAckNum = current.ackNum.increment
+            received.ack match
+                case Some(a) if a.ackId.peerNum != remotePeerId.peerNum =>
+                    return Reject(Rejection.AckPeerMismatch(remotePeerId.peerNum, a.ackId.peerNum))
+                case Some(a) if a.ackNum != nextAckNum =>
+                    return Reject(Rejection.AckNumMismatch(nextAckNum, a.ackNum))
+                case _ => ()
+
+            // 3. If a block brief is present, its blockNum must be the next leader-block
+            //    of the remote peer after `current.blockNum`.
+            //    TODO: once blockNum switches to next-expected semantics, check
+            //          head == current.blockNum.
+            val nextBlockNum = remotePeerId.nextLeaderBlock(current.blockNum)
+            received.blockBrief match
+                case Some(b) if b.blockNum != nextBlockNum =>
+                    return Reject(Rejection.BlockNumMismatch(nextBlockNum, b.blockNum))
+                case _ => ()
+
+            // 4. If requests are present, the first must equal `current.requestNum` (the
+            //    next-expected event number) and subsequent requests must be consecutive.
+            received.requests.headOption match
+                case Some(r) if r.requestId.requestNum != current.requestNum =>
+                    return Reject(
+                      Rejection.RequestsHeadMismatch(current.requestNum, r.requestId.requestNum)
+                    )
+                case _ => ()
+            received.requests.iterator
+                .map(_.requestId)
+                .sliding(2)
+                .withPartial(false)
+                .collectFirst { case Seq(a, b) if !a.precedes(b) => (a, b) } match
+                case Some((a, b)) =>
+                    return Reject(Rejection.RequestsNotConsecutive(a, b))
+                case None => ()
+
+            // All checks passed: compute the next outstanding [[GetMsgBatch]].
+            Advance(
+              GetMsgBatch(
+                batchNum = current.batchNum.increment,
+                ackNum = received.ack.fold(current.ackNum)(_.ackNum),
+                blockNum = received.blockBrief.fold(current.blockNum)(_.blockNum),
+                requestNum = received.requests.lastOption.fold(current.requestNum)(
+                  _.requestId.requestNum.increment
                 )
-            } yield ()
-        }
-
-        def verifyBatchAndGetNext(receivedBatch: NewMsgBatch): IO[GetMsgBatch] = {
-            import receivedBatch.{ack, blockBrief, requests}
-            for {
-                current <- this.currentlyRequesting.get
-                nextBatchNum = current.batchNum.increment
-                nextAckNum = current.ackNum.increment
-                nextBlockNum = remotePeerId.nextLeaderBlock(current.blockNum)
-
-                correctBatchNum = current.batchNum == receivedBatch.batchNum
-
-                // Received ack num (if any) is the increment of the requested ack num.
-                // TODO: once ackNum switches to next-expected semantics, check head == current.ackNum
-                // (same pattern as correctReceivedRequestIds below).
-                correctAckNum = ack.forall(x =>
-                    x.ackId.peerNum == remotePeerId.peerNum &&
-                        x.ackNum == nextAckNum
-                )
-
-                // Received block num (if any) is the next leader block from the remote peer
-                // after the requested block num.
-                // TODO: once blockNum switches to next-expected semantics, check head == current.blockNum.
-                correctBlockNum = blockBrief.forall(_.blockNum == nextBlockNum)
-
-                // requestNum uses "next expected" semantics: current.requestNum is the first
-                // expected event number. The first received event (if any) must equal it, and
-                // subsequent events must be consecutive.
-                correctReceivedRequestIds =
-                    requests.headOption.forall(_.requestId.requestNum == current.requestNum) &&
-                        requests
-                            .map(_.requestId)
-                            .iterator
-                            .sliding(2)
-                            .withPartial(false)
-                            .forall(x => x.head.precedes(x(1)))
-
-                nextBatch =
-                    if correctBatchNum && correctAckNum && correctBlockNum && correctReceivedRequestIds
-                    then
-                        GetMsgBatch(
-                          batchNum = nextBatchNum,
-                          ackNum = ack.fold(current.ackNum)(_.ackNum),
-                          blockNum = blockBrief.fold(current.blockNum)(_.blockNum),
-                          requestNum = requests.lastOption.fold(current.requestNum)(
-                            _.requestId.requestNum.increment
-                          )
-                        )
-                    else current
-                _ <- this.currentlyRequesting.set(nextBatch)
-            } yield nextBatch
+              )
+            )
         }
     }
 }
@@ -437,6 +490,52 @@ object PeerLiaison {
     type Request =
         PreStart.type | ResendCurrent.type | RemoteBroadcast | GetMsgBatch | NewMsgBatch |
             BlockConfirmed
+
+    /** Outcome of verifying a [[NewMsgBatch]] against the receiver's expected [[GetMsgBatch]]
+      * state.
+      *
+      * The two-arm split decouples verification (a pure check) from state mutation: only
+      * [[VerifyOutcome.Advance]] should trigger a write of `currentlyRequesting` and the downstream
+      * dispatch of the batch's payload.
+      */
+    enum VerifyOutcome:
+        /** The received batch matches the expected next-batch contract. `next` is the new value the
+          * caller should write to `currentlyRequesting` and use as the outgoing [[GetMsgBatch]].
+          */
+        case Advance(next: GetMsgBatch)
+
+        /** The received batch was rejected. The protocol stays at the current [[GetMsgBatch]].
+          * `reason` carries the specific verification predicate that failed, for logging and
+          * triage.
+          */
+        case Reject(reason: VerifyOutcome.Rejection)
+
+    object VerifyOutcome:
+        /** Why a [[NewMsgBatch]] was rejected during verification. Each case carries the expected
+          * vs. received pair so the rejection can be diagnosed from a single log line.
+          */
+        enum Rejection:
+            case BatchNumMismatch(expected: Batch.Number, received: Batch.Number)
+            case AckPeerMismatch(expected: HeadPeerNumber, received: HeadPeerNumber)
+            case AckNumMismatch(expected: AckNumber, received: AckNumber)
+            case BlockNumMismatch(expected: BlockNumber, received: BlockNumber)
+            case RequestsHeadMismatch(expected: RequestNumber, received: RequestNumber)
+            case RequestsNotConsecutive(prev: RequestId, next: RequestId)
+
+            override def toString: String = this match
+                case BatchNumMismatch(e, r) =>
+                    s"BatchNumMismatch(expected=$e, received=$r)"
+                case AckPeerMismatch(e, r) =>
+                    s"AckPeerMismatch(expected=$e, received=$r)"
+                case AckNumMismatch(e, r) =>
+                    s"AckNumMismatch(expected=$e, received=$r)"
+                case BlockNumMismatch(e, r) =>
+                    s"BlockNumMismatch(expected=$e, received=$r)"
+                case RequestsHeadMismatch(e, r) =>
+                    s"RequestsHeadMismatch(expected=$e, received=$r)"
+                case RequestsNotConsecutive(p, n) =>
+                    s"RequestsNotConsecutive(prev=(${p.peerNum}:${p.requestNum}), " +
+                        s"next=(${n.peerNum}:${n.requestNum}))"
 
     case object PreStart
 

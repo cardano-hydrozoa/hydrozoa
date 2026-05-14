@@ -1,13 +1,13 @@
 package hydrozoa.multisig.consensus
 
-import cats.effect.{IO, Ref}
+import cats.effect.{IO, IOLocal, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.*
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{AckId, SoftAck}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
@@ -47,7 +47,6 @@ import scalus.uplc.builtin.{ByteString, platform}
   * soft-confirmed.
   */
 object ConsensusActor:
-
     type Config = OwnHeadPeerPublic.Section & HeadPeers.Section
 
     final case class Connections(
@@ -113,14 +112,16 @@ object ConsensusActor:
 
     def apply(
         config: Config,
-        pendingConnections: MultisigRegimeManager.PendingConnections | ConsensusActor.Connections
+        pendingConnections: MultisigRegimeManager.PendingConnections | ConsensusActor.Connections,
+        tracerLocal: IOLocal[Tracer]
     ): IO[ConsensusActor] =
         for {
             stateRef <- Ref[IO].of(State.initial)
         } yield new ConsensusActor(
           config = config,
           pendingConnections = pendingConnections,
-          stateRef = stateRef
+          stateRef = stateRef,
+          tracerLocal = tracerLocal
         )
 
     enum Error extends Throwable:
@@ -152,11 +153,12 @@ end ConsensusActor
 class ConsensusActor(
     config: ConsensusActor.Config,
     pendingConnections: MultisigRegimeManager.PendingConnections | ConsensusActor.Connections,
-    stateRef: Ref[IO, ConsensusActor.State]
+    stateRef: Ref[IO, ConsensusActor.State],
+    tracerLocal: IOLocal[Tracer]
 ) extends Actor[IO, ConsensusActor.Request]:
     import ConsensusActor.*
 
-    private val logger = Logging.loggerIO(s"ConsensusActor.${config.ownHeadPeerNum}")
+    given IOLocal[Tracer] = tracerLocal
 
     private val connections = Ref.unsafe[IO, Option[ConsensusActor.Connections]](None)
 
@@ -199,29 +201,34 @@ class ConsensusActor(
         case ack: SoftAck            => handleAck(ack)
     }
 
-    private def handleBrief(brief: BlockBrief.Next): IO[Unit] = for {
-        _ <- logger.debug(
-          s"handleBrief: block=${brief.blockNum} type=${brief.getClass.getSimpleName}"
-        )
-        _ <- withCell(brief.blockNum)(_.withBrief(brief))
+    private def preStartLocal: IO[Unit] = for {
+        _ <- Tracer.routeLocal(s"ConsensusActor.${config.ownHeadPeerNum}")
+        _ <- initializeConnections
     } yield ()
 
-    private def handleAck(ack: SoftAck): IO[Unit] = for {
-        conn <- getConnections
-        _ <- logger.debug(
-          s"handleAck: block=${ack.blockNum} peer=${ack.peerNum}" +
-              (if ack.peerNum == config.ownHeadPeerNum then " (own)" else "")
-        )
-        _ <- conn.tracer.ack(ack.blockNum: Int, ack.peerNum: Int, "soft")
-        // Validate peer
-        vk <- config
-            .headPeerVKey(ack.peerNum)
-            .liftTo[IO](CollectingError.UnexpectedPeer(ack.peerNum))
-        _ <- withCell(ack.blockNum)(_.withAck(ack, vk))
-        // Own ack scheduling: if this is the local peer's own ack, broadcast it (or postpone
-        // if the previous block's cell still exists, to maintain the spec ordering).
-        _ <- IO.whenA(ack.peerNum == config.ownHeadPeerNum)(scheduleOwnAck(ack))
-    } yield ()
+    private def handleBrief(brief: BlockBrief.Next): IO[Unit] =
+        Tracer.scopedCtx(
+          "blockNumber" -> brief.blockNum.toString,
+          "blockType" -> brief.getClass.getSimpleName
+        )(withCell(brief.blockNum)(_.withBrief(brief)))
+
+    private def handleAck(ack: SoftAck): IO[Unit] =
+        Tracer.scopedCtx(ack.toContext*)(for {
+            conn <- getConnections
+            _ <- Tracer.debug(
+              s"handleAck: block=${ack.blockNum} peer=${ack.peerNum}" +
+                  (if ack.peerNum == config.ownHeadPeerNum then " (own)" else "")
+            )
+            _ <- conn.tracer.ack(ack.blockNum: Int, ack.peerNum: Int, "soft")
+            // Validate peer
+            vk <- config
+                .headPeerVKey(ack.peerNum)
+                .liftTo[IO](CollectingError.UnexpectedPeer(ack.peerNum))
+            _ <- withCell(ack.blockNum)(_.withAck(ack, vk))
+            // Own ack scheduling: if this is the local peer's own ack, broadcast it (or postpone
+            // if the previous block's cell still exists, to maintain the spec ordering).
+            _ <- IO.whenA(ack.peerNum == config.ownHeadPeerNum)(scheduleOwnAck(ack))
+        } yield ())
 
     /** Decide whether to broadcast a fresh own ack immediately or postpone it onto the previous
       * block's cell. See the [[ConsensusActor]] class-level doc for postponed-ack semantics.
@@ -283,7 +290,7 @@ class ConsensusActor(
             case _: BlockBrief.Major => "major"
             case _: BlockBrief.Final => "final"
         }
-        _ <- logger.info(
+        _ <- Tracer.info(
           s"block soft-confirmed: block=${confirmed.blockNum} type=$confirmedBlockType " +
               s"v${confirmed.blockBrief.blockVersion.major: Int}.${confirmed.blockBrief.blockVersion.minor: Int}"
         )

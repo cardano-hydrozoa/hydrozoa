@@ -555,7 +555,7 @@ case class Suite(
               tracer = tracer
             )
 
-            consensusActor <- system.actorOf(ConsensusActor(nodeConfig, consensusConnections))
+            consensusActor <- system.actorOf(ConsensusActor(nodeConfig, consensusConnections, tracerLocal))
 
             _ <- consensusActorD.complete(consensusActor)
 
