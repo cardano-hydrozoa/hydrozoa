@@ -5,7 +5,7 @@ import cats.syntax.all.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorSystem
 import hydrozoa.integration.stage4.Commands.*
-import hydrozoa.lib.logging.Tracer
+import hydrozoa.lib.logging.{Logging, Tracer}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, ConsensusActor, EventSequencer, PeerLiaison, UserRequest, UserRequestWithId}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
@@ -32,21 +32,44 @@ private[stage4] case class PeerStack(
 // Block brief observer
 // ===================================
 
-/** Proxy actor wrapping ConsensusActor. Intercepts Block.Unsigned.{Minor,Major} to record
-  * block briefs; forwards everything else unchanged. Both leader-produced and
-  * follower-reproduced blocks flow through JointLedger.handleBlock → ConsensusActor, so
-  * this captures the complete ordered sequence seen by the peer.
+/** Proxy actor wrapping ConsensusActor. Intercepts Block.Unsigned.{Minor,Major} to record block
+  * briefs; forwards everything else unchanged. Both leader-produced and follower-reproduced blocks
+  * flow through JointLedger.handleBlock → ConsensusActor, so this captures the complete ordered
+  * sequence seen by the peer.
   */
 private[stage4] class BlockBriefObserver(
+    peerNum: HeadPeerNumber,
     real: ConsensusActor.Handle,
     briefs: Ref[IO, Vector[BlockBrief.Intermediate]],
 ) extends Actor[IO, ConsensusActor.Request]:
+    private val logger = Logging.loggerIO(s"Stage4.BlockBriefObserver.${peerNum: Int}")
     override def receive: Receive[IO, ConsensusActor.Request] = {
         case block: UMinor =>
-            briefs.update(_ :+ block.blockBrief) >> (real ! block)
+            logger.debug(
+              s"received UMinor block=${block.blockNum}, capturing brief and forwarding"
+            ) >>
+                briefs.update(_ :+ block.blockBrief) >>
+                logger.debug(
+                  s"brief captured for block=${block.blockNum}, forwarding to real ConsensusActor"
+                ) >>
+                (real ! block) >>
+                logger.debug(s"forwarded UMinor block=${block.blockNum} to real ConsensusActor")
         case block: UMajor =>
-            briefs.update(_ :+ block.blockBrief) >> (real ! block)
-        case msg => real ! msg
+            logger.debug(
+              s"received UMajor block=${block.blockNum}, capturing brief and forwarding"
+            ) >>
+                briefs.update(_ :+ block.blockBrief) >>
+                logger.debug(
+                  s"brief captured for block=${block.blockNum}, forwarding to real ConsensusActor"
+                ) >>
+                (real ! block) >>
+                logger.debug(s"forwarded UMajor block=${block.blockNum} to real ConsensusActor")
+        case msg =>
+            logger.debug(s"received non-block msg=${msg.getClass.getSimpleName}, forwarding") >>
+                (real ! msg) >>
+                logger.debug(
+                  s"forwarded non-block msg=${msg.getClass.getSimpleName} to real ConsensusActor"
+                )
     }
 
 // ===================================
@@ -64,6 +87,14 @@ case class Stage4Sut(
     peers: Map[HeadPeerNumber, Stage4PeerHandle],
     sutErrors: Ref[IO, List[String]],
     errorDrainer: Fiber[IO, Throwable, Nothing],
+    // Per-peer fibers that periodically poke each `CardanoLiaison` with
+    // `CardanoLiaison.Timeout`. Replaces the broken `setReceiveTimeout`-based polling
+    // (cats-actors `setReceiveTimeout` checks via a hardcoded 1s ping AND uses
+    // `System.currentTimeMillis()` rather than the F-effect clock — both unusable under
+    // TestControl). Each fiber sleeps `cardanoLiaisonPollingPeriod` of virtual time, then
+    // sends `Timeout` directly to the liaison's mailbox, which triggers a normal `runEffects`
+    // (poll L1 + push `PollResults` to BlockWeaver).
+    liaisonTickFibers: List[Fiber[IO, Throwable, Nothing]],
     blockBriefs: Map[HeadPeerNumber, Ref[IO, Vector[BlockBrief.Intermediate]]],
     submittedRequestIds: Ref[IO, Vector[RequestId]],
     tracerLocal: IOLocal[Tracer],

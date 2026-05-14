@@ -11,8 +11,6 @@ import org.scalacheck.rng.Seed
 import org.scalacheck.util.Pretty
 import test.SeedPhrase
 
-
-
 object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 on L1 mock"):
 
     override def overrideParameters(
@@ -22,8 +20,10 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
             //.withPropFilter(Some("Block promotion with real L2 txs"))
             //.withPropFilter(Some("Dusty head finalization"))
             //.withPropFilter(Some("Ongoing withdrawals"))
-//.withPropFilter(Some("Deposits"))
-//.withInitialSeed(Some(Seed.fromBase64("lr7yvfMC6Qxtovs5UjWZSfTcqzr7pHrzQ4_mcWApnUP=").get))
+            //.withPropFilter(Some("Deposits"))
+            //.withInitialSeed(
+            //  Some(Seed.fromBase64("lr7yvfMC6Qxtovs5UjWZSfTcqzr7pHrzQ4_mcWApnUP=").get)
+            //)
         // NB: careful, this will override -s from the command line
         // .withMinSuccessfulTests(100) // 10000
         // .withMaxSize(100) // 500

@@ -138,7 +138,8 @@ object CommandGenerators:
         reservedSubmissionDuration: FiniteDuration
     ): Gen[QuantizedFiniteDuration] = {
         // The duration of the block must not put us in the silence period
-        val silencePeriodStart = txTiming.txTiming.newSettlementEndTime(competingFallbackStartTime)
+        val silencePeriodStart =
+            txTiming.txTiming.newSettlementEndTime(competingFallbackStartTime)
         val availableDuration = silencePeriodStart - currentTime
 
         require(

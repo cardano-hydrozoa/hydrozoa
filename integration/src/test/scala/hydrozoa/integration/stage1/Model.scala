@@ -68,9 +68,8 @@ object Model:
         // Non-mutable part, always copy as it is, no changes please.
         //
         multiNodeConfig: MultiNodeConfig,
-
         //
-        reservedSubmissionDuration : FiniteDuration,
+        reservedSubmissionDuration: FiniteDuration,
 
         // The real-world instant at which the SUT should start processing commands.
         // None for mock mode (time is controlled via TestControl).
@@ -415,7 +414,6 @@ object Model:
             )
         }
 
-
         /** Register or reject [[Enqueued]] deposits depending on their [[ValidityFlag]], as derived
           * from the [[BlockAccumulator]].
           * @param events
@@ -725,10 +723,12 @@ object Model:
                   refundedThisBlock
                 )
 
-                blockCanStayMinor = state.multiNodeConfig.txTiming.blockCanStayMinor(
-                  blockEndTime,
-                  state.competingFallbackStartTime
-                ).value
+                blockCanStayMinor = state.multiNodeConfig.txTiming
+                    .blockCanStayMinor(
+                      blockEndTime,
+                      state.competingFallbackStartTime
+                    )
+                    .value
 
                 hasWithdrawals = accumulator.exists(_._2 match {
                     case e: L2Tx => e.l1utxos.nonEmpty

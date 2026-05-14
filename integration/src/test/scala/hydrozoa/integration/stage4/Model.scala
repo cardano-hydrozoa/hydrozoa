@@ -25,11 +25,10 @@ object Model {
 
     private val logger = Logging.logger("Stage4.Model")
 
-
     case class Params(
         multiNodeConfig: MultiNodeConfig,
         /** How long after depositAbsorptionStart we assume the deposit is available in L2.
-         */
+          */
         absorptionSlack: FiniteDuration,
         meanInterArrivalTimes: Map[HeadPeerNumber, FiniteDuration],
     )
@@ -39,6 +38,10 @@ object Model {
       */
     case class PendingDeposit(
         requestId: RequestId,
+        // Protocol-level deposit maturity time (= depositAbsorptionStartTime).
+        absorptionStartTime: QuantizedInstant,
+        // absorptionStartTime + Params.absorptionSlack — model's view of when the deposit's L2
+        // UTxOs become available in `utxosL2Active`.
         expectedAbsorptionTime: QuantizedInstant,
         l2Payload: ByteString,
         depositProduced: TransactionInput
@@ -51,8 +54,17 @@ object Model {
         // Pre-init L1 UTxOs per peer (before the init tx is applied); immutable
         preinitPeerUtxosL1: Map[HeadPeerNumber, Utxos],
 
-        // Per-peer simulated clock (used only during generation for deposit absorption)
-        currentModelTimes: Map[HeadPeerNumber, QuantizedInstant],
+        // Single cumulative model clock. Advances by `cmd.interArrivalDelay` (or `cmd.duration`
+        // for DelayCommand) on every command's runState. Stays in lockstep with the SUT virtual
+        // clock since the framework also calls IO.sleep with the same value before submission.
+        currentModelTime: QuantizedInstant,
+
+        // Real-clock anchor for non-TestControl runs. `Some(t)` means `genInitialState`
+        // computed `t = Instant.now() + 60s` and pinned the head's initial block end-time to
+        // it; `startupSut` will sleep until the wall clock reaches `t` (or abort if late).
+        // `None` for TestControl runs — virtual clock jumps instantly. See
+        // package.scala "Why TestControl is mandatory" for the full rationale.
+        takeoffTime: Option[java.time.Instant],
 
         // Shared (among peers) L2 active UTxO set
         utxosL2Active: Utxos,
@@ -65,14 +77,19 @@ object Model {
 
         // Per-peer deposits registered but not yet absorbed
         pendingDeposits: Map[HeadPeerNumber, List[PendingDeposit]],
+
+        // Validity flag the model assigned to each user request, in submission order. Used at
+        // shutdown to compare model's submission-order verdict against SUT's block-order verdict.
+        modelFlags: Map[RequestId, ValidityFlag],
+
+        // Every deposit ever registered, by RequestId. Retained even after absorption so that
+        // shutdownSut analysis has access to timing metadata (expectedAbsorptionTime, etc.).
+        registeredDeposits: Map[RequestId, PendingDeposit],
     ) {
         override def toString: String = "<stage4 model state (hidden)>"
 
         def nextRequestId(peerNum: HeadPeerNumber): RequestId =
             RequestId(peerNum = peerNum, requestNum = nextRequestNumbers(peerNum))
-
-        def modelTimeFor(peerNum: HeadPeerNumber): QuantizedInstant =
-            currentModelTimes(peerNum)
 
         def nodeConfigFor(peerNum: HeadPeerNumber): NodeConfig =
             params.multiNodeConfig.nodeConfigs(peerNum)
@@ -82,22 +99,25 @@ object Model {
     // Helpers
     // ===================================
 
-    /** Promote pending deposits whose expectedAbsorptionTime has been reached.
-      * Called as the first step of every runState so the active UTxO set is always up-to-date
-      * before the command is evaluated. In a discrete-event model time only advances on command
-      * fire, so "just when the time comes" means "when the clock first crosses the threshold."
+    /** Promote pending deposits whose expectedAbsorptionTime has been reached. Called as the first
+      * step of every runState so the active UTxO set is always up-to-date before the command is
+      * evaluated. With a single global clock, absorption is checked across all peers' pending
+      * deposits — once the clock crosses a deposit's expectedAbsorptionTime, every peer sees it.
       */
     private def absorbDeposits(
-        peerNum: HeadPeerNumber,
         newTime: QuantizedInstant,
         state: ModelState,
     ): ModelState = {
-        val (nowAbsorbed, stillPending) =
-            state.pendingDeposits(peerNum).partition { pd =>
-                pd.expectedAbsorptionTime <= newTime
+        val (newPendingByPeer, allAbsorbed) =
+            state.pendingDeposits.foldLeft(
+              Map.empty[HeadPeerNumber, List[PendingDeposit]] -> List.empty[PendingDeposit]
+            ) { case ((accPending, accAbsorbed), (peer, list)) =>
+                val (nowAbsorbed, stillPending) =
+                    list.partition(_.expectedAbsorptionTime <= newTime)
+                (accPending + (peer -> stillPending), accAbsorbed ++ nowAbsorbed)
             }
 
-        val newL2Utxos = nowAbsorbed.foldLeft(state.utxosL2Active) { (utxos, pd) =>
+        val newL2Utxos = allAbsorbed.foldLeft(state.utxosL2Active) { (utxos, pd) =>
             val l2Payload = pd.l2Payload.bytes
             val obligations =
                 Cbor.decode(l2Payload).to[Queue[GenesisObligation]].value.toList
@@ -107,7 +127,7 @@ object Model {
         }
 
         state.copy(
-          pendingDeposits = state.pendingDeposits + (peerNum -> stillPending),
+          pendingDeposits = newPendingByPeer,
           utxosL2Active = newL2Utxos,
         )
     }
@@ -120,11 +140,9 @@ object Model {
         override def runState(cmd: DelayCommand, state: ModelState): (Unit, ModelState) =
             import cmd.peerNum
             logger.debug(s"MODEL>> DelayCommand(peer=$peerNum, duration=${cmd.duration})")
-            val newTime = state.modelTimeFor(peerNum) + cmd.duration
-            val absorbed = absorbDeposits(peerNum, newTime, state)
-            () -> absorbed.copy(
-              currentModelTimes = absorbed.currentModelTimes + (peerNum -> newTime)
-            )
+            val newTime = state.currentModelTime + cmd.duration
+            val absorbed = absorbDeposits(newTime, state)
+            () -> absorbed.copy(currentModelTime = newTime)
 
         override def delay(cmd: DelayCommand): scala.concurrent.duration.FiniteDuration =
             cmd.duration.finiteDuration
@@ -143,9 +161,9 @@ object Model {
             import cmd.peerNum
             logger.debug(s"MODEL>> L2TxCommand(peer=$peerNum, requestId=${cmd.request.requestId})")
 
-            val newTime = state.modelTimeFor(peerNum) + cmd.interArrivalDelay
-            val stateAfterTime = absorbDeposits(peerNum, newTime, state).copy(
-              currentModelTimes = state.currentModelTimes + (peerNum -> newTime)
+            val newTime = state.currentModelTime + cmd.interArrivalDelay
+            val stateAfterTime = absorbDeposits(newTime, state).copy(
+              currentModelTime = newTime,
             )
 
             val nodeConfig = stateAfterTime.nodeConfigFor(peerNum)
@@ -159,7 +177,7 @@ object Model {
 
             val mutatorResult = HydrozoaTransactionMutator.transit(
               config = nodeConfig.headConfig,
-              time = stateAfterTime.modelTimeFor(peerNum),
+              time = stateAfterTime.currentModelTime,
               state = stateAfterTime.utxosL2Active,
               l2Tx = l2Tx
             )
@@ -176,6 +194,7 @@ object Model {
               utxosL2Active = newL2Utxos,
               nextRequestNumbers = stateAfterTime.nextRequestNumbers +
                   (peerNum -> stateAfterTime.nextRequestNumbers(peerNum).increment),
+              modelFlags = stateAfterTime.modelFlags + (cmd.request.requestId -> flag),
             )
     }
 
@@ -192,13 +211,14 @@ object Model {
               s"MODEL>> RegisterAndSubmitDepositCommand(peer=$peerNum, requestId=${cmd.request.requestId})"
             )
 
-            val newTime = state.modelTimeFor(peerNum) + cmd.interArrivalDelay
-            val stateAfterTime = absorbDeposits(peerNum, newTime, state).copy(
-              currentModelTimes = state.currentModelTimes + (peerNum -> newTime)
+            val newTime = state.currentModelTime + cmd.interArrivalDelay
+            val stateAfterTime = absorbDeposits(newTime, state).copy(
+              currentModelTime = newTime,
             )
 
             val pending = PendingDeposit(
               requestId = cmd.request.requestId,
+              absorptionStartTime = cmd.absorptionStartTime,
               expectedAbsorptionTime = cmd.expectedAbsorptionTime,
               l2Payload = cmd.l2Payload,
               depositProduced = cmd.depositProduced
@@ -213,6 +233,10 @@ object Model {
               nextRequestNumbers = stateAfterTime.nextRequestNumbers +
                   (peerNum -> stateAfterTime.nextRequestNumbers(peerNum).increment),
               peerUtxosL1 = stateAfterTime.peerUtxosL1 + (peerNum -> updatedPeerL1),
+              modelFlags =
+                  stateAfterTime.modelFlags + (cmd.request.requestId -> ValidityFlag.Valid),
+              registeredDeposits =
+                  stateAfterTime.registeredDeposits + (cmd.request.requestId -> pending),
             )
     }
 

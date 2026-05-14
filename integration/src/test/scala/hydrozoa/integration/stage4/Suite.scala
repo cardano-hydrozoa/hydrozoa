@@ -5,6 +5,7 @@ import cats.effect.{Deferred, IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.ActorSystem
 import com.suprnation.actor.event.Error as ActorError
+import com.suprnation.typelevel.actors.syntax.*
 import hydrozoa.config.head.initialization.{InitializationParametersGenTopDown, generateInitialBlock}
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.config.head.multisig.timing.generateYaciTxTiming
@@ -13,6 +14,7 @@ import hydrozoa.config.head.parameters.generateHeadParameters
 import hydrozoa.config.head.{InitParamsType, generateHeadConfig, generateHeadConfigBootstrap}
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.integration.stage4.Model.*
+import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant.mkOrderingOps
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import cats.effect.IOLocal
 import hydrozoa.lib.logging.{Logging, Tracer}
@@ -27,9 +29,8 @@ import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toUtxos}
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.joint.JointLedger
-import org.scalacheck.commands.{ModelBasedSuite, ScenarioGen}
-import org.scalacheck.rng.Seed
-import org.scalacheck.{Gen, Prop, Test, YetAnotherProperties}
+import org.scalacheck.commands.{AnyCommand, ModelBasedSuite, ScenarioGen}
+import org.scalacheck.{Gen, Prop}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.rules.{Context, UtxoEnv}
 import scalus.cardano.ledger.{CertState, TransactionInput, Utxos}
@@ -55,12 +56,19 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
     override def scenarioGen: ScenarioGen[ModelState, Stage4Sut] = Stage4ScenarioGen
 
     override def commandGenTweaker: [A] => Gen[A] => Gen[A] = [A] =>
-        (g: Gen[A]) => Gen.resize(50, g)
+        (g: Gen[A]) => Gen.resize(500, g)
+
+    override def onTestCaseGenerated(
+        initialState: ModelState,
+        commands: List[AnyCommand[ModelState, Stage4Sut]]
+    ): IO[Unit] =
+        super.onTestCaseGenerated(initialState, commands) >>
+            logger.info(Stage4Runner.renderTable(initialState, commands))
 
     override def initEnv: Unit = ()
 
     override def genInitialState(env: Unit): Gen[ModelState] =
-        Stage4Suite.genInitialState(nPeers = nPeers)
+        Stage4Suite.genInitialState(nPeers = nPeers, useTestControl = useTestControl)
 
     override def canStartupNewSut(): Boolean = true
 
@@ -73,10 +81,40 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
         // With TestControl, IO.sleep advances the virtual clock only while no actor fibers
         // exist; once actors are started their ping loops compete with tickOne, so the sleep
         // must come first (same pattern as stage1 Suite).
-        val startEpochMs = state.currentModelTimes.values.head.getEpochSecond * 1000L
+        val startEpochMs = state.currentModelTime.getEpochSecond * 1000L
 
         for
-            _ <- IO.sleep(FiniteDuration(startEpochMs, TimeUnit.MILLISECONDS))
+            // TestControl branch: jump the virtual clock from 0 to the head's start epoch.
+            // Without TestControl this would be a literal multi-decade real sleep, so it must
+            // be gated on `useTestControl`. The non-TestControl analogue is the
+            // `state.takeoffTime` wait below — `genInitialState` anchors `currentModelTime`
+            // at `now + 60s` for that mode, so wall-clock sleeping until the anchor is the
+            // right move.
+            _ <- IO.whenA(useTestControl)(
+              IO.sleep(FiniteDuration(startEpochMs, TimeUnit.MILLISECONDS))
+            )
+
+            // Non-TestControl branch: wait until the wall clock reaches `takeoffTime` so the
+            // model clock and the SUT wall clock coincide at command 1. Abort if setup
+            // overran the budget — better a loud failure than a test that starts with
+            // already-violated timing. Same shape as stage 1.
+            _ <- state.takeoffTime match {
+                case None => IO.unit
+                case Some(t) =>
+                    IO.realTimeInstant.flatMap { now =>
+                        if now.isAfter(t) then
+                            IO.raiseError(
+                              RuntimeException(
+                                s"Stage4 startupSut: initialization took too long " +
+                                    s"(takeoff: $t, now: $now)"
+                              )
+                            )
+                        else
+                            val sleepMs = t.toEpochMilli - now.toEpochMilli
+                            IO.sleep(FiniteDuration(sleepMs, TimeUnit.MILLISECONDS))
+                    }
+            }
+
             tracerLocal <- Tracer.makeLocal
             given cats.effect.IOLocal[Tracer] = tracerLocal
 
@@ -114,14 +152,22 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
                     val pending = pendingConnsMap(peerNum)
                     Tracer.scopedCtx("peer" -> s"${peerNum: Int}") {
                         for
-                            blockWeaver <- system.actorOf(BlockWeaver(nodeConfig, pending, tracerLocal))
+                            blockWeaver <- system.actorOf(
+                              BlockWeaver(nodeConfig, pending, tracerLocal)
+                            )
                             cardanoLiaison <- system.actorOf(
                               CardanoLiaison(nodeConfig, cardanoBackend, pending, tracerLocal)
                             )
                             eventSequencer <- system.actorOf(EventSequencer(nodeConfig, pending))
                             l2Ledger <- EutxoL2Ledger(nodeConfig)
                             jointLedger <- system.actorOf(
-                              JointLedger(nodeConfig, pending, l2Ledger, ProtocolTracer.noop, tracerLocal)
+                              JointLedger(
+                                nodeConfig,
+                                pending,
+                                l2Ledger,
+                                ProtocolTracer.noop,
+                                tracerLocal
+                              )
                             )
                             consensusActor <- system.actorOf(ConsensusActor(nodeConfig, pending, tracerLocal))
                         yield peerNum -> PeerStack(
@@ -149,6 +195,7 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
                     system
                         .actorOf(
                           BlockBriefObserver(
+                            peerNum,
                             peerStackMap(peerNum).consensusActor,
                             blockBriefsMap(peerNum)
                           )
@@ -157,7 +204,7 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
                 }
                 .map(_.toMap)
 
-            // Create one PeerLiaison per (local, remote) pair.
+            // Create one local PeerLiaison per (local, remote) pair.
             // peerLiaisonMap(A)(B.id) = the liaison at A directed to B.
             peerLiaisonMap <- peers
                 .traverse { peerNum =>
@@ -214,6 +261,21 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
                 .foreverM
                 .start
 
+            // Side-fiber per peer that periodically pokes its CardanoLiaison with
+            // `Timeout`. cats-actors' `setReceiveTimeout` is unusable under TestControl
+            // (1s-virtual-ping + wall-clock check), so we drive polling externally to
+            // honor `cardanoLiaisonPollingPeriod` in virtual time. `Temporal.sleep` is
+            // virtual-clock-aware, so each tick fires after `period` of virtual time and
+            // every peer's CardanoLiaison.runEffects runs at the configured cadence.
+            liaisonTickFibers <- peers.traverse { peerNum =>
+                val pollingPeriod = multiNodeConfig
+                    .nodeConfigs(peerNum)
+                    .nodeOperationMultisigConfig
+                    .cardanoLiaisonPollingPeriod
+                val liaison = peerStackMap(peerNum).cardanoLiaison
+                (IO.sleep(pollingPeriod) >> (liaison ! CardanoLiaison.Timeout)).foreverM.start
+            }
+
             submittedRequestIds <- Ref[IO].of(Vector.empty[RequestId])
         yield Stage4Sut(
           system = system,
@@ -223,29 +285,49 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
           },
           sutErrors = sutErrors,
           errorDrainer = errorDrainer,
+          liaisonTickFibers = liaisonTickFibers.toList,
           blockBriefs = blockBriefsMap,
           submittedRequestIds = submittedRequestIds,
           tracerLocal = tracerLocal,
         )
 
     override def shutdownSut(lastState: ModelState, sut: Stage4Sut): IO[Prop] =
-        // BlockWeaver's IO.sleep inside sleepSendWakeup keeps _isIdle=false for the full sleep
-        // duration, so waitForIdle would always time out. Terminate directly after a brief settle
-        // window that lets any in-flight fault-handling chains flush to eventStream.
         for
             _ <- logger.warn("shutdownSut")
+            // Drain before terminating: the leader's JointLedger is in `Producing` when the
+            // last command arrives, and its `userRequestState.requests` only become a
+            // `BlockBrief` when the block is sealed. Sealing happens when `BlockWeaver` decides
+            // it's time — driven by either the dead-man fallback push-out timer or a deposit
+            // decision wakeup, whichever fires first. Without `waitForIdle` we'd terminate
+            // before any of that completes and miss the in-progress block's events in the
+            // analysis, causing spurious liveness failures.
+            //
+            // `waitForIdle` returns when all mailboxes are empty, the child set is stable, and
+            // deadLetters are drained — it does NOT require "no scheduled future sleeps".
+            // BlockWeaver's `sleepSendWakeup` runs in a separate fiber, so between wakeups the
+            // actor's mailbox is empty and `isIdle` is true.
+            //
+            // `maxTimeout` is virtual under TestControl and elapses fast in real time; the
+            // default (30s virtual) is enough to drive a pending fallback or deposit-decision
+            // wakeup that seals the in-progress block. Under real-clock backends it would be
+            // wall-clock; stage4 currently uses only the mock backend so we keep the default.
+            // Cancel liaison tick fibers BEFORE waitForIdle/terminate so they stop pushing
+            // Timeout messages while the system is winding down (otherwise the system stays
+            // non-idle).
+            _ <- sut.liaisonTickFibers.traverse_(_.cancel)
+            _ <- sut.system.waitForIdle()
             _ <- sut.system.terminate()
             _ <- logger.warn("shutdownSut: system was terminated")
             _ <- IO.sleep(100.millis) // settle: let the drainer consume any last-cycle errors
             _ <- sut.errorDrainer.cancel
             errors <- sut.sutErrors.get
-            oracleProp <- analyzeBlockBriefs(sut)
+            analysisProp <- analyzeBlockBriefs(lastState, sut)
         yield
             if errors.nonEmpty then
                 Prop.exception(RuntimeException(s"SUT actor errors:\n${errors.mkString("\n")}"))
-            else oracleProp
+            else analysisProp
 
-    private def analyzeBlockBriefs(sut: Stage4Sut): IO[Prop] = for
+    private def analyzeBlockBriefs(lastState: ModelState, sut: Stage4Sut): IO[Prop] = for
         briefsByPeer <- sut.blockBriefs.toList
             .traverse { case (p, ref) => ref.get.map(p -> _) }
             .map(_.toMap)
@@ -255,63 +337,183 @@ case class Stage4Suite(label: String = "stage4", nPeers: Int = 2) extends ModelB
         canonicalBriefs = briefsByPeer(sortedPeers.head)
         submittedIds <- sut.submittedRequestIds.get
 
-        _ <- IO {
-            val colWidth = 72
-            val divider = s"+${"-" * (colWidth + 2)}+"
-            val header = s"| ${"Block".padTo(colWidth, ' ')} |"
+        _ <- IO(
+          printBlockTable(
+            canonicalBriefs,
+            sortedPeers,
+            briefsByPeer,
+            nPeers,
+            submittedIds,
+            lastState
+          )
+        )
+    yield propLiveness(submittedIds, canonicalBriefs) &&
+        propDepositTiming(lastState.registeredDeposits, canonicalBriefs) &&
+        propValidRatio(lastState, canonicalBriefs)
 
-            println(divider)
-            println(header)
-            println(divider)
+    // TODO: side-channel validity-error tracking + propNoStaleRejections
+    //
+    // `JointLedger.rejectEvent` records every rejection as `(reqId, ValidityFlag.Invalid)` in
+    // the in-progress block, so propLiveness sees the request landed in a brief — it cannot
+    // distinguish:
+    //   1. Reordering-induced ledger errors (e.g. `BadAllInputsUTxOException`) — legitimate
+    //      effect of stage4's leader scheduling, expected at stress.
+    //   2. Validity-window expirations (`UserRequestError.BlockOutOfRequestValidityInterval`)
+    //      — symptom of the request reaching the leader after `requestValidityEnd`, currently
+    //      caused by the per-peer model clock vs SUT virtual clock skew (see comment near
+    //      `Generator` validity computation).
+    //   3. SUT bugs producing wrong Invalid verdicts — what we actually want to catch.
+    //
+    // Plan:
+    //   - Add `Stage4Sut.rejections: Ref[IO, Vector[(RequestId, UserRequestError | L1/L2 err)]]`
+    //     populated from a tracer hook in `JointLedger.rejectEvent` (one entry per rejection,
+    //     across all peers).
+    //   - Add `propNoStaleRejections`: assert no `BlockOutOfRequestValidityInterval` rejections
+    //     occurred. Other rejection types are informational only (printed in the analysis
+    //     table) — they are the legitimate reordering signal stage4 wants to exercise.
+    //   - When `propNoStaleRejections` fails, the message must include the rejection's
+    //     timestamps (`blockCreationStartTime`, `requestValidityStart`, `requestValidityEnd`)
+    //     and the reqId, so the diagnostic is self-contained without grepping the log.
 
-            canonicalBriefs.foreach { brief =>
-                val blockType = brief match {
-                    case _: BlockBrief.Minor => "Min"; case _: BlockBrief.Major => "Maj"
-                }
-                val vMaj = brief.blockVersion.major.convert
-                val vMin = brief.blockVersion.minor.convert
-                val leader = (brief.blockNum: Int) % nPeers
-                val evs = brief.events.map { case (reqId, flag) =>
-                    val f = if flag == ValidityFlag.Valid then "V" else "I"
-                    s"p${reqId.peerNum.convert}:r${reqId.requestNum.convert}=$f"
-                }
-                val abs = brief.depositsAbsorbed.map(r =>
-                    s"abs:p${r.peerNum.convert}:r${r.requestNum.convert}"
-                )
-                val ref = brief.depositsRefunded.map(r =>
-                    s"ref:p${r.peerNum.convert}:r${r.requestNum.convert}"
-                )
-                val events = (evs ++ abs ++ ref).mkString(" ")
-                val label =
-                    s"#${brief.blockNum: Int} $blockType v$vMaj.$vMin lead=p$leader | $events"
-                println(s"| ${label.take(colWidth).padTo(colWidth, ' ')} |")
+    /** Property: every submitted request id eventually appears in some block — either as an event
+      * (Valid or Invalid) or as a deposit (absorbed or refunded). Catches silent message loss (e.g.
+      * the historical `Mempool.extractRequestsWhile` bug).
+      */
+    private def propLiveness(
+        submittedIds: Vector[RequestId],
+        canonicalBriefs: Vector[BlockBrief.Intermediate]
+    ): Prop = {
+        val processedIds: Set[RequestId] =
+            canonicalBriefs
+                .flatMap(b => b.events.map(_._1) ++ b.depositsAbsorbed ++ b.depositsRefunded)
+                .toSet
+        val missing = submittedIds.toSet -- processedIds
+        Prop(missing.isEmpty) :|
+            s"liveness: ${missing.size} submitted reqId(s) never appeared in any block: " +
+            s"${missing.toSeq.sortBy(r => (r.peerNum.convert, r.requestNum.convert)).mkString(", ")}"
+    }
+
+    /** Property: every absorbed deposit was mature by the time the absorbing block ended, i.e.
+      * `brief.endTime >= deposit.absorptionStartTime`. Refund-window check is a TODO — needs
+      * `depositAbsorptionEndTime` and the `notInPollResults` legitimate case which we don't track.
+      */
+    private def propDepositTiming(
+        registeredDeposits: Map[RequestId, PendingDeposit],
+        canonicalBriefs: Vector[BlockBrief.Intermediate]
+    ): Prop = {
+        val violations: Vector[String] =
+            for
+                brief <- canonicalBriefs
+                reqId <- brief.depositsAbsorbed.toVector
+                deposit <- registeredDeposits.get(reqId).toVector
+                if brief.endTime.convert < deposit.absorptionStartTime
+            yield s"reqId=$reqId absorbed at brief.endTime=${brief.endTime.convert} but " +
+                s"absorptionStartTime=${deposit.absorptionStartTime}"
+        Prop(violations.isEmpty) :|
+            s"deposit timing: ${violations.size} absorbed-too-early violation(s):\n" +
+            violations.mkString("\n")
+    }
+
+    /** Property: SUT's valid/total ratio is no greater than the model's, i.e. the SUT is not more
+      * permissive than the model. Compared as exact rationals via cross-multiplication.
+      *
+      * Both sides are restricted to L2-tx reqIds (excluding any deposit reqId — deposits go into
+      * `depositsAbsorbed` / `depositsRefunded` on the SUT side, but a rejected deposit registration
+      * ends up in `events` via `JointLedger.rejectEvent` and would otherwise inflate the SUT total
+      * relative to the model.
+      */
+    private def propValidRatio(
+        lastState: ModelState,
+        canonicalBriefs: Vector[BlockBrief.Intermediate]
+    ): Prop = {
+        val depositIds = lastState.registeredDeposits.keySet
+        val l2TxReqIds = lastState.modelFlags.keySet -- depositIds
+        val modelValid = l2TxReqIds.count(lastState.modelFlags(_) == ValidityFlag.Valid).toLong
+        val modelTotal = l2TxReqIds.size.toLong
+        val sutL2Events =
+            canonicalBriefs.flatMap(_.events).filterNot { case (r, _) => depositIds.contains(r) }
+        val sutValid = sutL2Events.count(_._2 == ValidityFlag.Valid).toLong
+        val sutTotal = sutL2Events.size.toLong
+
+        // sutValid/sutTotal <= modelValid/modelTotal  iff  sutValid*modelTotal <= modelValid*sutTotal
+        // Trivially holds when either total is 0 (vacuous).
+        val holds =
+            modelTotal == 0L || sutTotal == 0L ||
+                sutValid * modelTotal <= modelValid * sutTotal
+        Prop(holds) :|
+            s"valid ratio: SUT $sutValid/$sutTotal exceeds model $modelValid/$modelTotal " +
+            s"(SUT is more permissive than the model)"
+    }
+
+    private def printBlockTable(
+        canonicalBriefs: Vector[BlockBrief.Intermediate],
+        sortedPeers: Seq[HeadPeerNumber],
+        briefsByPeer: Map[HeadPeerNumber, Vector[BlockBrief.Intermediate]],
+        nPeers: Int,
+        submittedIds: Vector[RequestId],
+        lastState: ModelState
+    ): Unit = {
+        val colWidth = 72
+        val divider = s"+${"-" * (colWidth + 2)}+"
+        val header = s"| ${"Block".padTo(colWidth, ' ')} |"
+
+        println(divider)
+        println(header)
+        println(divider)
+
+        canonicalBriefs.foreach { brief =>
+            val blockType = brief match {
+                case _: BlockBrief.Minor => "Min"; case _: BlockBrief.Major => "Maj"
             }
-
-            println(divider)
-
-            val totalEvents = canonicalBriefs.map(_.events.length).sum
-            val totalValid = canonicalBriefs.flatMap(_.events).count(_._2 == ValidityFlag.Valid)
-            val totalInvalid = totalEvents - totalValid
-            val validPct = if totalEvents == 0 then 0.0 else totalValid.toDouble / totalEvents * 100
-
-            val processedIds =
-                canonicalBriefs.flatMap(b => b.events.map(_._1) ++ b.depositsAbsorbed).toSet
-            val commonPrefixLen = submittedIds.takeWhile(processedIds.contains).length
-
-            println(
-              f"Total: $totalEvents events in ${canonicalBriefs.length} blocks — valid=$totalValid ($validPct%.1f%%)  invalid=$totalInvalid"
+            val vMaj = brief.blockVersion.major.convert
+            val vMin = brief.blockVersion.minor.convert
+            val leader = (brief.blockNum: Int) % nPeers
+            val evs = brief.events.map { case (reqId, flag) =>
+                val f = if flag == ValidityFlag.Valid then "V" else "I"
+                s"p${reqId.peerNum.convert}:r${reqId.requestNum.convert}=$f"
+            }
+            val abs = brief.depositsAbsorbed.map(r =>
+                s"abs:p${r.peerNum.convert}:r${r.requestNum.convert}"
             )
-            println(
-              s"Peers: ${sortedPeers.map(p => s"p${p: Int}=${briefsByPeer(p).length}blks").mkString("  ")}"
+            val ref = brief.depositsRefunded.map(r =>
+                s"ref:p${r.peerNum.convert}:r${r.requestNum.convert}"
             )
-            println(
-              s"Common prefix: $commonPrefixLen / ${submittedIds.length} submitted IDs in block order"
-            )
-            println(
-              "Legend: Min=Minor Maj=Major v=version lead=leader p=peer r=requestNum V=valid I=invalid abs=deposit-absorbed ref=refunded"
-            )
+            val events = (evs ++ abs ++ ref).mkString(" ")
+            val label =
+                s"#${brief.blockNum: Int} $blockType v$vMaj.$vMin lead=p$leader | $events"
+            println(s"| ${label.take(colWidth).padTo(colWidth, ' ')} |")
         }
-    yield Prop.passed
+
+        println(divider)
+
+        // SUT processing order — each block contributes its absorbed deposits, then its events.
+        val sutOrder: Vector[RequestId] =
+            canonicalBriefs.flatMap(b => b.depositsAbsorbed ++ b.events.map(_._1)).toVector
+        val commonPrefixLen =
+            submittedIds.zip(sutOrder).takeWhile { case (a, b) => a == b }.length
+
+        val depositIds = lastState.registeredDeposits.keySet
+        val l2TxReqIds = lastState.modelFlags.keySet -- depositIds
+        val modelValid = l2TxReqIds.count(lastState.modelFlags(_) == ValidityFlag.Valid)
+        val modelTotal = l2TxReqIds.size
+        val sutL2Events =
+            canonicalBriefs.flatMap(_.events).filterNot { case (r, _) => depositIds.contains(r) }
+        val sutValid = sutL2Events.count(_._2 == ValidityFlag.Valid)
+        val sutTotal = sutL2Events.size
+
+        println(
+          s"Peers: ${sortedPeers.map(p => s"p${p: Int}=${briefsByPeer(p).length}blks").mkString("  ")}"
+        )
+        println(
+          s"Common prefix: $commonPrefixLen / ${submittedIds.length} (submission order vs SUT block order)"
+        )
+        println(
+          s"Valid/total (L2 txs) — model: $modelValid/$modelTotal  SUT: $sutValid/$sutTotal"
+        )
+        println(
+          "Legend: Min=Minor Maj=Major v=version lead=leader p=peer r=requestNum V=valid I=invalid abs=deposit-absorbed ref=refunded"
+        )
+    }
 
 // ===================================
 // Initial state generator (canonical location; Runner delegates here for @main)
@@ -323,20 +525,36 @@ object Stage4Suite:
         nPeers: Int = 2,
         absorptionSlack: FiniteDuration = 60.seconds,
         meanInterArrivalTime: HeadPeerNumber => FiniteDuration = _ => 12.seconds,
+        useTestControl: Boolean = true,
     ): Gen[ModelState] =
         val cardanoNetwork = CardanoNetwork.Preprod
         val testPeers = TestPeers.apply(SeedPhrase.Yaci, cardanoNetwork, nPeers)
         val testPeerToUtxos = yaciTestSauceGenesis(cardanoNetwork.network)(testPeers)
 
-        // This should be deterministic
+        // For non-TestControl runs we need the head's initial block end-time anchored at a
+        // small wall-clock offset in the future, so `startupSut` can sleep until that anchor
+        // and have the model clock and the wall clock coincide at command 1. 60s matches
+        // stage 1's budget; if 20-peer setup overruns it the test aborts (see startupSut).
+        // Under TestControl the virtual clock jumps instantly so any anchor works — we keep
+        // the deterministic 100-day random distribution to exercise different start epochs.
+        val takeoffTime: Option[java.time.Instant] =
+            if useTestControl then None
+            else Some(java.time.Instant.now().plusSeconds(60))
+
         val generateHeadStartTime = ReaderT((tp: TestPeers) =>
-            // Date and time (GMT): Thursday, January 1, 2026 at 12:00:00 AM, POSIX seconds
-            val anchorTime = 1767225600L
-            // 100 day range, seconds
-            val range = 86_400 * 100L
-            for
-                offset <- Gen.choose(0L, range)
-            yield BlockCreationEndTime(java.time.Instant.ofEpochSecond(anchorTime + offset).quantize(tp.slotConfig))
+            takeoffTime match {
+                case Some(t) =>
+                    Gen.const(BlockCreationEndTime(t.quantize(tp.slotConfig)))
+                case None =>
+                    // Date and time (GMT): Thursday, January 1, 2026 at 12:00:00 AM, POSIX seconds
+                    val anchorTime = 1767225600L
+                    // 100 day range, seconds
+                    val range = 86_400 * 100L
+                    for offset <- Gen.choose(0L, range)
+                    yield BlockCreationEndTime(
+                      java.time.Instant.ofEpochSecond(anchorTime + offset).quantize(tp.slotConfig)
+                    )
+            }
         )
 
         val generateHeadConfigBootstrap_ = generateHeadConfigBootstrap(
@@ -362,7 +580,16 @@ object Stage4Suite:
 
         for
             config <- MultiNodeConfig.generateWith(testPeers)(
-              generateHeadConfig = generateHeadConfig_
+              generateHeadConfig = generateHeadConfig_,
+              // Halve the maximum allowed polling period (the default is
+              // `headConfig.maxCardanoLiaisonPollingPeriod`). With a lower upper bound,
+              // every peer's CardanoLiaison polls L1 more frequently — peers see new
+              // deposits closer in time, which should reduce inter-peer skew that may
+              // currently produce mismatched block briefs at major-block consensus.
+              generateNodeOperationMultisigConfig = hc =>
+                  hydrozoa.config.node.operation.multisig.generateNodeOperationMultisigConfig(
+                    hc.maxCardanoLiaisonPollingPeriod / 2
+                  )
             )
 
             preinitPeerUtxosL1 = testPeerToUtxos.map((k, v) => k.headPeerNumber -> v)
@@ -391,31 +618,12 @@ object Stage4Suite:
             peers.map(pn => pn -> meanInterArrivalTime(pn)).toMap
           ),
           preinitPeerUtxosL1 = preinitPeerUtxosL1,
-          currentModelTimes = peers.map(_ -> startTime).toMap,
+          currentModelTime = startTime,
+          takeoffTime = takeoffTime,
           utxosL2Active = config.headConfig.initializationParameters.initialEvacuationMap.toUtxos,
           peerUtxosL1 = peerUtxosL1,
           nextRequestNumbers = peers.map(_ -> RequestNumber(0)).toMap,
           pendingDeposits = peers.map(_ -> Nil).toMap,
+          modelFlags = Map.empty,
+          registeredDeposits = Map.empty,
         )
-
-// ===================================
-// Test entry points
-// ===================================
-
-object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
-
-    override def overrideParameters(p: Test.Parameters): Test.Parameters =
-        p
-            //.withInitialSeed(Seed.fromBase64("7wf2XaHHBHdGl4XOoIpW8PvN2t8XFcR0fFE0RBX6pWG=").get)
-            .withInitialSeed(Seed.fromBase64("Irdkn14LUINcIDjKQOxKuN-GF2399UOCwL-C11NVESJ=").get)
-            .withWorkers(1)
-            .withMinSuccessfulTests(1)
-
-    lazy val _ = property("two peers head") =
-        Stage4Suite(label = "stage4-two-peers", nPeers = 2).property()
-
-    val _ = property("three peers head") =
-        Stage4Suite(label = "stage4-three-peers", nPeers = 3).property()
-
-    lazy val _ = property("twenty peers head") =
-        Stage4Suite(label = "stage4-twenty-peers", nPeers = 20).property()

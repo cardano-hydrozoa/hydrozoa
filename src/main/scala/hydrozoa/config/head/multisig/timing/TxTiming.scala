@@ -274,6 +274,14 @@ object TxTiming {
       DepositAbsorptionDuration(4.hours.quantize(slotConfig)),
     )
 
+    /** The cardano liaison polling period must be at least this many times shorter than
+      * [[depositMaturityDuration]]. Rationale: by the time a deposit reaches its absorption start
+      * time, every peer must have observed the deposit utxo on L1 in at least one poll cycle;
+      * otherwise the leader (which sees the deposit) and a follower (which doesn't yet) will
+      * disagree on whether to absorb or refund, breaking consensus.
+      */
+    val cardanoLiaisonPollingPeriodSafetyFactor: Int = 5
+
     trait Section {
         def txTiming: TxTiming
 
@@ -285,6 +293,12 @@ object TxTiming {
         def depositMaturityDuration: DepositMaturityDuration = txTiming.depositMaturityDuration
         def depositAbsorptionDuration: DepositAbsorptionDuration =
             txTiming.depositAbsorptionDuration
+
+        /** Maximum allowed [[cardanoLiaisonPollingPeriod]] consistent with this head's
+          * [[depositMaturityDuration]] (see [[cardanoLiaisonPollingPeriodSafetyFactor]]).
+          */
+        def maxCardanoLiaisonPollingPeriod: FiniteDuration =
+            depositMaturityDuration.finiteDuration / cardanoLiaisonPollingPeriodSafetyFactor.toLong
     }
 
     object Durations {

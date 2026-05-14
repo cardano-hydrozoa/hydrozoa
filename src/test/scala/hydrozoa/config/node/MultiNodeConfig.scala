@@ -98,8 +98,8 @@ object MultiNodeConfig {
             hydrozoa.config.head.generateHeadConfig(),
         generateNodeOperationEvacuationConfig: NodeOperationEvacuationConfigGen =
             generateNodeOperationEvacuationConfig,
-        generateNodeOperationMultisigConfig: Gen[NodeOperationMultisigConfig] =
-            generateNodeOperationMultisigConfig,
+        generateNodeOperationMultisigConfig: HeadConfig => Gen[NodeOperationMultisigConfig] = hc =>
+            generateNodeOperationMultisigConfig(hc.maxCardanoLiaisonPollingPeriod),
     ): Gen[MultiNodeConfig] = for {
         testPeers <- TestPeers.generate(spec)
         ret <- generateForTestPeers(
@@ -117,8 +117,8 @@ object MultiNodeConfig {
             hydrozoa.config.head.generateHeadConfig(),
         generateNodeOperationEvacuationConfig: NodeOperationEvacuationConfigGen =
             generateNodeOperationEvacuationConfig,
-        generateNodeOperationMultisigConfig: Gen[NodeOperationMultisigConfig] =
-            generateNodeOperationMultisigConfig,
+        generateNodeOperationMultisigConfig: HeadConfig => Gen[NodeOperationMultisigConfig] = hc =>
+            generateNodeOperationMultisigConfig(hc.maxCardanoLiaisonPollingPeriod),
     ): Gen[MultiNodeConfig] =
         generateForTestPeers(
           generateHeadConfig,
@@ -131,8 +131,8 @@ object MultiNodeConfig {
             hydrozoa.config.head.generateHeadConfig(),
         generateNodeOperationEvacuationConfig: NodeOperationEvacuationConfigGen =
             generateNodeOperationEvacuationConfig,
-        generateNodeOperationMultisigConfig: Gen[NodeOperationMultisigConfig] =
-            generateNodeOperationMultisigConfig,
+        generateNodeOperationMultisigConfig: HeadConfig => Gen[NodeOperationMultisigConfig] = hc =>
+            generateNodeOperationMultisigConfig(hc.maxCardanoLiaisonPollingPeriod),
     ): GenWithTestPeers[MultiNodeConfig] =
         for {
             testPeers <- ReaderT.ask
@@ -144,7 +144,7 @@ object MultiNodeConfig {
                   ], (HeadPeerNumber, NodePrivateConfig)](
                     testPeers.headPeerIds.toList.map(peerId =>
                         for {
-                            nomc <- generateNodeOperationMultisigConfig
+                            nomc <- generateNodeOperationMultisigConfig(headConfig)
                             ohpp = OwnHeadPeerPrivate(
                               testPeers.walletFor(peerId._1),
                               headConfig.headPeers
