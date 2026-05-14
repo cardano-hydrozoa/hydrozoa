@@ -156,7 +156,7 @@ trait PeerLiaison(
                                   s"GetMsgBatch: batch=${next.batchNum}, ack=${next.ackNum}, " +
                                       s"block=${next.blockNum}, req=${next.requestNum}"
                                 )
-                                 _ <- mermaid(msg)
+                                _ <- mermaid(msg)
                                 _ <- conn.remotePeerLiaison ! next
                                 _ <- x.ack.traverse_(conn.consensusActor ! _)
                                 _ <- x.blockBrief.traverse_(conn.blockWeaver ! _)
@@ -317,14 +317,35 @@ trait PeerLiaison(
 
                 _ <- this.queuesAreEmpty.ifM(IO.raiseError(EmptyNewMsgBatch), IO.unit)
 
+                // Prune queues in place (read-and-shrink in one `modify`) for every
+                // field based on what the remote has already received:
+                //   - `batchReq.ackNum`/`batchReq.blockNum`: "I have N, send me N+1"
+                //     ⇒ drop entries `<= N`.
+                //   - `batchReq.requestNum`: "send me requests with requestNum >= N"
+                //     ⇒ drop entries `< N`.
+                //
+                // Pruning per-remote on each incoming `GetMsgBatch` — NOT on local
+                // `BlockConfirmed` — is essential. Local consensus for block N
+                // confirms when WE receive enough acks for N from other peers; it
+                // does NOT imply every remote peer has polled OUR outgoing ack/
+                // brief/request for N. If we prune on local confirmation, a slow
+                // remote can miss content we own and the chain stalls (verification
+                // mismatch on next-expected positions). The remote's GetMsgBatch
+                // positions are the authoritative per-remote receipt signal.
+                //
                 // TODO: once ackNum/blockNum switch to next-expected semantics, change `<=` to `<`
-                mAck <- this.qAck.get.map(_.dropWhile(_.ackNum <= batchReq.ackNum).headOption)
-                mBlock <- this.qBlock.get.map(
-                  _.dropWhile(_.blockNum <= batchReq.blockNum).headOption
-                )
-                events <- this.qEvent.get.map(
-                  _.dropWhile(_.requestId._2 < batchReq.requestNum).take(maxRequests)
-                )
+                mAck <- this.qAck.modify { q =>
+                    val pruned = q.dropWhile(_.ackNum <= batchReq.ackNum)
+                    (pruned, pruned.headOption)
+                }
+                mBlock <- this.qBlock.modify { q =>
+                    val pruned = q.dropWhile(_.blockNum <= batchReq.blockNum)
+                    (pruned, pruned.headOption)
+                }
+                events <- this.qEvent.modify { q =>
+                    val pruned = q.dropWhile(_.requestId._2 < batchReq.requestNum)
+                    (pruned, pruned.take(maxRequests))
+                }
 
                 _ <- IO.raiseWhen(mAck.isEmpty && mBlock.isEmpty && events.isEmpty)(
                   EmptyNewMsgBatch
@@ -336,21 +357,17 @@ trait PeerLiaison(
               requests = events.toList
             )).attemptNarrow
 
-        def dequeueConfirmed(block: BlockConfirmed): IO[Unit] = {
-            val ackNum: AckNumber = AckNumber.neededToConfirm(block.header)
-            val ownConfirmedRequests: List[RequestNumber] = block.events.collect {
-                case x if x._1.peerNum == config.ownHeadPeerId.peerNum => x._1.requestNum
-            }
-            for {
-                _ <- this.qAck.update(q => q.dropWhile(_.ackId._2 <= ackNum))
-                _ <- this.qBlock.update(q => q.dropWhile(_.blockNum <= block.blockNum))
-                _ <- IO.whenA(ownConfirmedRequests.nonEmpty)(
-                  this.qEvent.update(q =>
-                      q.dropWhile(_.requestId.requestNum <= ownConfirmedRequests.max)
-                  )
-                )
-            } yield ()
-        }
+        /** No-op placeholder. All three outbox queues (`qAck`, `qBlock`, `qEvent`) are now pruned
+          * per-remote-peer in [[buildNewMsgBatch]] based on the incoming `GetMsgBatch` positions,
+          * which are the authoritative per-remote receipt signal. Pruning on local `BlockConfirmed`
+          * was incorrect for `qAck` (a slow remote may not yet have polled our outgoing ack for
+          * block N when we confirm it locally) and unifying the trigger keeps the protocol
+          * symmetric.
+          *
+          * Kept as a method (and the `BlockConfirmed` receive case) for the Final- block
+          * close-connection TODO in the receive handler.
+          */
+        def dequeueConfirmed(block: BlockConfirmed): IO[Unit] = IO.unit
 
         def verifyBatchAndGetNext(receivedBatch: NewMsgBatch): IO[GetMsgBatch] = {
             import receivedBatch.{ack, blockBrief, requests}

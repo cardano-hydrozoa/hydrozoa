@@ -433,11 +433,19 @@ case class Stage4Suite(
             // default (30s virtual) is enough to drive a pending fallback or deposit-decision
             // wakeup that seals the in-progress block. Under real-clock backends it would be
             // wall-clock; stage4 currently uses only the mock backend so we keep the default.
-            // Cancel liaison tick fibers BEFORE waitForIdle/terminate so they stop pushing
-            // Timeout messages while the system is winding down (otherwise the system stays
-            // non-idle).
-            _ <- sut.liaisonTickFibers.traverse_(_.cancel)
+            //
+            // Order matters: `waitForIdle` BEFORE cancelling liaison tick fibers. Cancelling
+            // ticks first stops the leader's CardanoLiaison from observing L1 settlement,
+            // which kills the path that drives the in-progress block to confirmation — the
+            // leader keeps applying its mempool tail but never gets `BlockConfirmed` because
+            // followers (with ticks cancelled too) stop emitting acks. The result was visible
+            // in WS real-clock 10-peer runs: ~15% of submitted reqIds never reached any
+            // brief because the leader's WIP block at shutdown was discarded by terminate.
+            // Letting ticks run during `waitForIdle` keeps the L1-polling-driven seal path
+            // alive long enough for the tail to land in confirmed blocks. `waitForIdle` can
+            // still return because the periods between ticks are mailbox-empty.
             _ <- sut.system.waitForIdle()
+            _ <- sut.liaisonTickFibers.traverse_(_.cancel)
             _ <- sut.system.terminate()
             _ <- logger.warn("shutdownSut: system was terminated")
             _ <- IO.sleep(100.millis) // settle: let the drainer consume any last-cycle errors
