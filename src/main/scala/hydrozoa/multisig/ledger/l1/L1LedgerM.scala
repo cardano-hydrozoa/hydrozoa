@@ -32,9 +32,9 @@ case class L1LedgerM[A] private (private val unL1LedgerM: RT[A]) {
 
     import L1LedgerM.*
 
-    private def map[B](f: A => B): L1LedgerM[B] = L1LedgerM(this.unL1LedgerM.map(f))
+    def map[B](f: A => B): L1LedgerM[B] = L1LedgerM(this.unL1LedgerM.map(f))
 
-    private def flatMap[B](f: A => L1LedgerM[B]): L1LedgerM[B] =
+    def flatMap[B](f: A => L1LedgerM[B]): L1LedgerM[B] =
         L1LedgerM(this.unL1LedgerM.flatMap(a => f(a).unL1LedgerM))
 
     /** Use [[runL1LedgerM()]] instead
@@ -77,6 +77,19 @@ object L1LedgerM {
       * effect is a list of pre-built refund txs).
       */
     def pure[A](a: A): L1LedgerM[A] = lift(Right(a))
+
+    /** Cats Monad instance enabling `traverse` and friends. Implements `tailRecM` via the
+      * StateT/ReaderT stack already used internally.
+      */
+    given cats.Monad[L1LedgerM] with {
+        override def pure[A](a: A): L1LedgerM[A] = L1LedgerM.pure(a)
+
+        override def flatMap[A, B](fa: L1LedgerM[A])(f: A => L1LedgerM[B]): L1LedgerM[B] =
+            fa.flatMap(f)
+
+        override def tailRecM[A, B](a: A)(f: A => L1LedgerM[Either[A, B]]): L1LedgerM[B] =
+            L1LedgerM(cats.Monad[RT].tailRecM(a)(a0 => f(a0).unL1LedgerM))
+    }
 
     /** Check that a deposit tx parses correctly and add the deposit utxo it produces to the
       * ledger's state.

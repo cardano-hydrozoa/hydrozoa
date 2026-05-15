@@ -448,7 +448,9 @@ final case class JointLedger(
                       brief = blockBrief,
                       evacuationMapDiff = evacDiffs,
                       payoutObligations = newJlState.l2LedgerState.payouts.toList,
-                      postDatedRefundTxs = pBlockBrief.userRequestState.postDatedRefundTxs.toList
+                      postDatedRefundTxs = pBlockBrief.userRequestState.postDatedRefundTxs.toList,
+                      absorbedDeposits = split.decisions.absorbed.depositUtxos,
+                      competingFallbackTxTime = pBlockBrief.competingFallbackTxTime
                     )
 
                     // Hand off the brief: emit our soft-ack and broadcast the brief.
@@ -612,13 +614,16 @@ final case class JointLedger(
                     // payouts are realized via the finalization tx. We surface the cumulative
                     // payout obligations and a "delete-all" diff for the prior evac map so
                     // StackComposer / StackEffectsBuilder see the full picture. No post-dated
-                    // refund txs on Final (any pending refunds get realized via finalization).
+                    // refund txs on Final (any pending refunds get realized via finalization),
+                    // and no absorbed deposits (a Final block doesn't absorb).
                     blockResult = BlockResult(
                       brief = blockBrief,
                       evacuationMapDiff = p.evacuationMap.evacuationMap.keys.toList
                           .map(EvacuationDiff.Delete.apply),
                       payoutObligations = p.evacuationMap.evacuationMap.values.toList,
-                      postDatedRefundTxs = Nil
+                      postDatedRefundTxs = Nil,
+                      absorbedDeposits = Nil,
+                      competingFallbackTxTime = p.competingFallbackTxTime
                     )
 
                     _ <- handleBlock(blockBrief, NotTriggered, blockResult)

@@ -1,8 +1,9 @@
 package hydrozoa.multisig.ledger.effects
 
-import hydrozoa.multisig.ledger.block.BlockType
+import cats.implicits.*
+import hydrozoa.multisig.ledger.block.{BlockBrief, BlockResult, BlockType}
 import hydrozoa.multisig.ledger.l1.L1LedgerM
-import hydrozoa.multisig.ledger.l1.tx.RefundTx
+import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, RefundTx, RolloutTx, SettlementTx}
 import hydrozoa.multisig.ledger.stack.StackEffects
 
 /** Slow-side effect derivation: from the partitioned stack content, produce the necessary L1 effect
@@ -48,26 +49,51 @@ object StackEffectsBuilder {
     def deriveRegular(
         partitions: List[Partition]
     ): L1LedgerM[StackEffects.Regular] = {
-        val refunds: List[RefundTx] = partitions.flatMap { p =>
-            p.blocks.toList.flatMap { b =>
-                b.brief match {
-                    case _: BlockType.Minor => b.postDatedRefundTxs
-                    case _: BlockType.Major => Nil // TODO: settlement absorbs refunds
-                    case _: BlockType.Final => Nil // TODO: finalization drains refunds
-                }
+        val allBlocks: List[BlockResult] = partitions.flatMap(_.blocks.toList)
+
+        // Refunds: per-Minor block, take its post-dated refund txs.
+        // Major / Final drain refunds via settlement / finalization (no per-block refund txs).
+        val refunds: List[RefundTx] = allBlocks.flatMap { b =>
+            b.brief match {
+                case _: BlockType.Minor => b.postDatedRefundTxs
+                case _: BlockType.Major => Nil
+                case _: BlockType.Final => Nil
             }
         }
-        // TODO(next slice): per-partition Major/Final/TrailingMinors construction.
-        L1LedgerM.pure(
-          StackEffects.Regular(
-            settlements = Nil,
-            fallbacks = Nil,
-            rollouts = Nil,
-            refunds = refunds,
-            evacCommits = Nil,
-            finalization = None
-          )
-        )
+
+        // Settlement / fallback / rollout — per Major block. Walk in stack order and call
+        // mkSettlementTxSeq, which advances the L1LedgerM treasury for the next major.
+        val majorBlocks: List[BlockResult] = allBlocks.collect {
+            case b if b.brief.isInstanceOf[BlockBrief.Major] => b
+        }
+
+        majorBlocks
+            .traverse { b =>
+                val majorBrief = b.brief.asInstanceOf[BlockBrief.Major]
+                L1LedgerM.mkSettlementTxSeq(
+                  nextKzg = majorBrief.header.kzgCommitment,
+                  absorbedDeposits = b.absorbedDeposits,
+                  payoutObligations = b.payoutObligations.toVector,
+                  blockCreationEndTime = majorBrief.header.endTime,
+                  competingFallbackValidityStart = b.competingFallbackTxTime
+                )
+            }
+            .map { seqs =>
+                val settlements: List[SettlementTx] = seqs.map(_.settlementTx)
+                val fallbacks: List[FallbackTx] = seqs.map(_.fallbackTx)
+                val rollouts: List[RolloutTx] = seqs.flatMap(_.rolloutTxs)
+
+                // TODO(next slice): per-partition Final + TrailingMinors construction
+                // (finalization tx, standalone evac commit).
+                StackEffects.Regular(
+                  settlements = settlements,
+                  fallbacks = fallbacks,
+                  rollouts = rollouts,
+                  refunds = refunds,
+                  evacCommits = Nil,
+                  finalization = None
+                )
+            }
     }
 
     /** Build the initial-stack (stack 0) effect bundle. The init tx is exogenous (head config); the
