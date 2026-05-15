@@ -3,7 +3,7 @@ package hydrozoa.multisig.ledger.effects
 import cats.implicits.*
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockResult, BlockType}
 import hydrozoa.multisig.ledger.l1.L1LedgerM
-import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, RefundTx, RolloutTx, SettlementTx}
+import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, FinalizationTx, RefundTx, RolloutTx, SettlementTx}
 import hydrozoa.multisig.ledger.stack.StackEffects
 
 /** Slow-side effect derivation: from the partitioned stack content, produce the necessary L1 effect
@@ -61,37 +61,79 @@ object StackEffectsBuilder {
             }
         }
 
-        // Settlement / fallback / rollout — per Major block. Walk in stack order and call
-        // mkSettlementTxSeq, which advances the L1LedgerM treasury for the next major.
-        val majorBlocks: List[BlockResult] = allBlocks.collect {
+        // Per-Major and per-Final, call the corresponding L1LedgerM helper. Walk in stack
+        // order; treasury advances through L1LedgerM state on each call. At most one Final
+        // block per stack (it terminates the chain), so we model the Final as Option[..].
+
+        // Final must be the last block in the stack if present. Build a helper that emits the
+        // L1LedgerM action for either a Major (SettlementTxSeq) or a Final (FinalizationTxSeq).
+        sealed trait BlockOutput
+        final case class FromMajor(seq: SettlementTxSeqOut) extends BlockOutput
+        final case class FromFinal(seq: FinalizationTxSeqOut) extends BlockOutput
+
+        // Type aliases to keep traverse local. We avoid pulling out the full enum imports.
+        type SettlementTxSeqOut = hydrozoa.multisig.ledger.l1.txseq.SettlementTxSeq
+        type FinalizationTxSeqOut = hydrozoa.multisig.ledger.l1.txseq.FinalizationTxSeq
+
+        val unlockBlocks: List[BlockResult] = allBlocks.collect {
             case b if b.brief.isInstanceOf[BlockBrief.Major] => b
+            case b if b.brief.isInstanceOf[BlockBrief.Final] => b
         }
 
-        majorBlocks
+        unlockBlocks
             .traverse { b =>
-                val majorBrief = b.brief.asInstanceOf[BlockBrief.Major]
-                L1LedgerM.mkSettlementTxSeq(
-                  nextKzg = majorBrief.header.kzgCommitment,
-                  absorbedDeposits = b.absorbedDeposits,
-                  payoutObligations = b.payoutObligations.toVector,
-                  blockCreationEndTime = majorBrief.header.endTime,
-                  competingFallbackValidityStart = b.competingFallbackTxTime
-                )
+                b.brief match {
+                    case majorBrief: BlockBrief.Major =>
+                        L1LedgerM
+                            .mkSettlementTxSeq(
+                              nextKzg = majorBrief.header.kzgCommitment,
+                              absorbedDeposits = b.absorbedDeposits,
+                              payoutObligations = b.payoutObligations.toVector,
+                              blockCreationEndTime = majorBrief.header.endTime,
+                              competingFallbackValidityStart = b.competingFallbackTxTime
+                            )
+                            .map(FromMajor.apply: SettlementTxSeqOut => BlockOutput)
+                    case _: BlockBrief.Final =>
+                        L1LedgerM
+                            .finalizeLedger(
+                              payoutObligationsRemaining = b.payoutObligations.toVector,
+                              competingFallbackValidityStart = b.competingFallbackTxTime
+                            )
+                            .map(FromFinal.apply: FinalizationTxSeqOut => BlockOutput)
+                    case _: BlockBrief.Minor =>
+                        // unreachable: unlockBlocks only contains Major / Final
+                        L1LedgerM.pure[BlockOutput](
+                          throw new IllegalStateException(
+                            "unlockBlocks contained a non-Major non-Final brief"
+                          )
+                        )
+                }
             }
-            .map { seqs =>
-                val settlements: List[SettlementTx] = seqs.map(_.settlementTx)
-                val fallbacks: List[FallbackTx] = seqs.map(_.fallbackTx)
-                val rollouts: List[RolloutTx] = seqs.flatMap(_.rolloutTxs)
+            .map { outs =>
+                val settlements: List[SettlementTx] = outs.collect { case FromMajor(s) =>
+                    s.settlementTx
+                }
+                val fallbacks: List[FallbackTx] = outs.collect { case FromMajor(s) =>
+                    s.fallbackTx
+                }
+                val majorRollouts: List[RolloutTx] = outs.collect { case FromMajor(s) =>
+                    s.rolloutTxs
+                }.flatten
+                val finalizations: List[FinalizationTx] = outs.collect { case FromFinal(f) =>
+                    f.finalizationTx
+                }
+                val finalRollouts: List[RolloutTx] = outs.collect { case FromFinal(f) =>
+                    f.rolloutTxs
+                }.flatten
 
-                // TODO(next slice): per-partition Final + TrailingMinors construction
-                // (finalization tx, standalone evac commit).
+                // TODO(next slice): TrailingMinors → StandaloneEvacCommitTx construction.
                 StackEffects.Regular(
                   settlements = settlements,
                   fallbacks = fallbacks,
-                  rollouts = rollouts,
+                  rollouts = majorRollouts ++ finalRollouts,
                   refunds = refunds,
                   evacCommits = Nil,
-                  finalization = None
+                  finalization = finalizations.headOption
                 )
             }
     }
