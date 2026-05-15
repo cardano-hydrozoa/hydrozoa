@@ -216,9 +216,21 @@ object Net {
             id: TransitionId
         ): Either[MissingTransitionSyntax[TransitionId], T]
 
-        def syntaxErrors: List[Syntax.Error] = List.empty
+        // Totality check: every ID registered in Net.Ids has a defined syntax entry.
+        // For map-backed nets this is guaranteed by construction, so this will always be true.
+        // Stored as a lazy val to avoid recomputation on repeated calls.
+        final lazy val isValidSyntax: Boolean =
+            arcIds.forall(getArcSyntax(_).isRight) &&
+                placeIds.forall(getPlaceSyntax(_).isRight) &&
+                transitionIds.forall(getTransitionSyntax(_).isRight)
 
-        final def isValidSyntax: Boolean = syntaxErrors.isEmpty
+        // The abstract-override mixin pattern (like Net.Topology's NoDanglingArcs / SingleArc)
+        // could be used here for richer invariants beyond totality — for example:
+        //   - every transition must have at least one connected arc
+        //   - no two places may share the same label
+        // Uncomment and extend if such constraints are needed:
+        // def syntaxErrors: List[Syntax.Error] = List.empty
+        // final def isValidSyntax: Boolean = syntaxErrors.isEmpty
     }
 
     object Syntax {
@@ -240,7 +252,8 @@ object Net {
       */
     trait Semantics[ArcId, PlaceId, TransitionId, A <: Arc.Semantics[P], P <: Place.Syntax[
       P
-    ] & Place.Semantics[P], T <: Transition.Semantics] {
+    ] & Place.Semantics[P], T <: Transition.Semantics]
+        extends Net.Ids[ArcId, PlaceId, TransitionId] {
         import Semantics.Error.*
         def getArcSemantics(id: ArcId): Either[MissingArcSemantics[ArcId], A]
 
@@ -257,9 +270,21 @@ object Net {
         final def netEnablingPredicate(t: TransitionId): Boolean =
             netEnablingPredicates(t).forall(identity)
 
-        def semanticsErrors: List[Net.Semantics.Error] = List.empty
+        // Totality check: every ID registered in Net.Ids has a defined semantics entry.
+        // For map-backed nets this is guaranteed by construction, so this will always be true.
+        // Stored as a lazy val to avoid recomputation on repeated calls.
+        final lazy val isValidSemantics: Boolean =
+            arcIds.forall(getArcSemantics(_).isRight) &&
+                placeIds.forall(getPlaceSemantics(_).isRight) &&
+                transitionIds.forall(getTransitionSemantics(_).isRight)
 
-        final def isValidSemantics: Boolean = semanticsErrors.isEmpty
+        // The abstract-override mixin pattern (like Net.Topology's NoDanglingArcs / SingleArc)
+        // could be used here for richer invariants beyond totality — for example:
+        //   - every transition must have at least one connected arc
+        //   - every BoundedPlace must start below capacity
+        // Uncomment and extend if such constraints are needed:
+        // def semanticsErrors: List[Net.Semantics.Error] = List.empty
+        // final def isValidSemantics: Boolean = semanticsErrors.isEmpty
     }
 
     object Semantics {
