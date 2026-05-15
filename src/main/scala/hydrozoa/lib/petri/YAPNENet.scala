@@ -24,15 +24,17 @@ case class YapnePlace(
     override val label: String,
     override val tokens: NonNegativeInt = NonNegativeInt.unsafeApply(0),
     val capacity: Option[PositiveInt] = None,
-    val finalMarking: Option[NonNegativeInt] = None,
+    override val finalMarking: Option[NonNegativeInt] = None,
     override val position: (Int, Int) = (0, 0),
     override val radius: PositiveInt = PositiveInt.unsafeApply(20),
 ) extends Place.Topology,
-      Place.Syntax.HasTokens[YapnePlace],
+      Place.Syntax.HasFinalMarking[YapnePlace],
       Place.Semantics[YapnePlace],
       Place.Presentation {
 
     override def withTokens(n: NonNegativeInt): YapnePlace = this.copy(tokens = n)
+    override def withFinalMarking(m: Option[NonNegativeInt]): YapnePlace =
+        this.copy(finalMarking = m)
     override def getMarking: NonNegativeInt = tokens
 
     override def markingErrors: List[Place.Semantics.MarkingError] =

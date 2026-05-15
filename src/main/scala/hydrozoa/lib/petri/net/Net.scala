@@ -1,6 +1,7 @@
 package hydrozoa.lib.petri.net
 
 import cats.data.NonEmptyList
+import hydrozoa.lib.number.NonNegativeInt
 import hydrozoa.lib.petri.net.Net.Topology.{MissingArcTopology, MissingPlaceTopology, MissingTransitionTopology}
 import hydrozoa.lib.petri.net.components.*
 
@@ -294,6 +295,47 @@ object Net {
 
             case class MissingTransitionSemantics[TransitionId](transitionId: TransitionId)
                 extends Error
+        }
+
+        /** Terminal-marking check, available on any net whose place type carries
+          * [[Place.Syntax.HasFinalMarking]]. Not mixed into the base [[Net.Semantics]] trait — nets
+          * that do not have a notion of final marking simply do not have these methods.
+          *
+          * A terminal state is valid when every place whose `finalMarking` is `Some(fm)` currently
+          * holds exactly `fm` tokens. Places with `finalMarking = None` are unconstrained.
+          */
+        object FinalMarking {
+            sealed trait Error extends Net.Error
+
+            object Error {
+                case class FinalMarkingNotReached[PlaceId](
+                    placeId: PlaceId,
+                    current: NonNegativeInt,
+                    expected: NonNegativeInt,
+                ) extends FinalMarking.Error
+            }
+
+            extension [
+                ArcId,
+                PlaceId,
+                TransitionId,
+                A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
+                P <: Place.Topology & Place.Syntax.HasFinalMarking[P] & Place.Semantics[P],
+                T <: Transition.Topology & Transition.Syntax & Transition.Semantics,
+                Self <: Net[ArcId, PlaceId, TransitionId, A, P, T, Self]
+            ](net: Net[ArcId, PlaceId, TransitionId, A, P, T, Self])
+                def terminalErrors: List[FinalMarking.Error] =
+                    net.placeIds.toList.flatMap { pid =>
+                        net.getPlaceSemantics(pid).toOption.toList.flatMap { place =>
+                            place.finalMarking match
+                                case None => Nil
+                                case Some(fm) =>
+                                    if (place.tokens: Int) == (fm: Int) then Nil
+                                    else List(Error.FinalMarkingNotReached(pid, place.tokens, fm))
+                        }
+                    }
+
+                def isValidTerminal: Boolean = terminalErrors.isEmpty
         }
     }
 

@@ -75,6 +75,16 @@ object Place {
             abstract override def markingEndos(newMarking: NonNegativeInt): List[Self => Self] =
                 ((acc: Self) => acc.withTokens(newMarking)) :: super.markingEndos(newMarking)
         }
+
+        /** Mixin for places that carry a target terminal token count. Extends [[HasTokens]] because
+          * `finalMarking: Option[NonNegativeInt]` is only interpretable when tokens are a
+          * `NonNegativeInt` count — this would not make sense on, e.g., a colored net.
+          */
+        trait HasFinalMarking[Self <: HasFinalMarking[Self]] extends HasTokens[Self] {
+            self: Self =>
+            val finalMarking: Option[NonNegativeInt]
+            def withFinalMarking(m: Option[NonNegativeInt]): Self
+        }
     }
 
     trait Semantics[Self <: Place.Syntax[Self] & Semantics[Self]] { self: Self =>
