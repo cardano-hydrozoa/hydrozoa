@@ -65,14 +65,17 @@ object Arc {
           */
         type FiringError = Arc.Semantics.FiringError
 
-        protected def enablingPredicates: List[P => Boolean] = List.empty
+        protected def enablingChecks: List[P => List[Arc.Semantics.EnablingError]] = List.empty
         // Each endo is a Kendo: a Kleisli endomorphism parameterized on Either[FiringError, _].
         // Using Kendo here makes it explicit that firing endos are effectful computations. In
         // the future, the effect type can be swapped out by the simulator (e.g., for IO or
         // StateT), without changing the arc semantics.
         protected def firingEndos: List[KendoT[[X] =>> Either[FiringError, X], P]] = List.empty
 
-        final def enabled(p: P): Boolean = enablingPredicates.forall(_(p))
+        final def enablingErrors(p: P): List[Arc.Semantics.EnablingError] =
+            enablingChecks.flatMap(_(p))
+
+        final def enabled(p: P): Boolean = enablingErrors(p).isEmpty
 
         /** Returns a typed error if firing fails. Does not check enabledness or place-side validity
           * — both are the simulator's concern.
@@ -90,6 +93,9 @@ object Arc {
 
     object Semantics {
 
+        /** Base trait for arc enabling errors. Not sealed; extend to add custom enabling errors. */
+        trait EnablingError extends Throwable
+
         /** Base trait for arc firing errors. Not sealed; extend to add custom firing errors. */
         trait FiringError extends Throwable
 
@@ -101,8 +107,13 @@ object Arc {
         trait PT[P <: Place.Syntax.HasTokens[P]](val weight: NonNegativeInt)
             extends Semantics[P],
               Weighted {
-            abstract override protected def enablingPredicates: List[P => Boolean] =
-                ((p: P) => p.tokens >= weight) :: super.enablingPredicates
+            abstract override protected def enablingChecks
+                : List[P => List[Arc.Semantics.EnablingError]] =
+                (
+                    (p: P) =>
+                        if p.tokens >= weight then Nil
+                        else List(PT.NotEnabled(p.tokens, weight))
+                ) :: super.enablingChecks
             abstract override protected def firingEndos
                 : List[KendoT[[X] =>> Either[Arc.Semantics.FiringError, X], P]] =
                 Kleisli((p: P) =>
@@ -117,7 +128,16 @@ object Arc {
 
         object PT {
 
-            /** Raised when a PT arc fires but the place has fewer tokens than the arc weight. */
+            /** Raised when a PT arc's enabling check fails (place has fewer tokens than weight). */
+            case class NotEnabled(tokens: NonNegativeInt, weight: NonNegativeInt)
+                extends EnablingError {
+                override def getMessage: String =
+                    s"PT arc not enabled: place has ${tokens.toInt} tokens, requires ${weight.toInt}"
+            }
+
+            /** Raised when a PT arc fires but the subtraction underflows NonNegativeInt. In
+              * practice this should not occur if [[NotEnabled]] is checked first.
+              */
             case class InsufficientTokens(tokens: NonNegativeInt, weight: NonNegativeInt)
                 extends FiringError {
                 override def getMessage: String =
@@ -153,8 +173,22 @@ object Arc {
 
         /** Enabled only if the place is empty. Does not fire. */
         trait Inhibitor[P <: Place.Syntax.HasTokens[P]] extends Semantics[P] {
-            abstract override protected def enablingPredicates: List[P => Boolean] =
-                ((p: P) => p.tokens == NonNegativeInt.unsafeApply(0)) :: super.enablingPredicates
+            abstract override protected def enablingChecks
+                : List[P => List[Arc.Semantics.EnablingError]] =
+                (
+                    (p: P) =>
+                        if p.tokens == NonNegativeInt.unsafeApply(0) then Nil
+                        else List(Inhibitor.NotEnabled(p.tokens))
+                ) :: super.enablingChecks
+        }
+
+        object Inhibitor {
+
+            /** Raised when an inhibitor arc's enabling check fails (place is non-empty). */
+            case class NotEnabled(tokens: NonNegativeInt) extends EnablingError {
+                override def getMessage: String =
+                    s"Inhibitor arc not enabled: place has ${tokens.toInt} tokens (requires 0)"
+            }
         }
 
         /** Drains all tokens from the place. Always arc-side enabled. */
@@ -173,8 +207,24 @@ object Arc {
         trait Read[P <: Place.Syntax.HasTokens[P]](val weight: NonNegativeInt)
             extends Semantics[P],
               Weighted {
-            abstract override protected def enablingPredicates: List[P => Boolean] =
-                ((p: P) => p.tokens >= weight) :: super.enablingPredicates
+            abstract override protected def enablingChecks
+                : List[P => List[Arc.Semantics.EnablingError]] =
+                (
+                    (p: P) =>
+                        if p.tokens >= weight then Nil
+                        else List(Read.NotEnabled(p.tokens, weight))
+                ) :: super.enablingChecks
+        }
+
+        object Read {
+
+            /** Raised when a read arc's enabling check fails (place has fewer tokens than weight).
+              */
+            case class NotEnabled(tokens: NonNegativeInt, weight: NonNegativeInt)
+                extends EnablingError {
+                override def getMessage: String =
+                    s"Read arc not enabled: place has ${tokens.toInt} tokens, requires ${weight.toInt}"
+            }
         }
     }
 

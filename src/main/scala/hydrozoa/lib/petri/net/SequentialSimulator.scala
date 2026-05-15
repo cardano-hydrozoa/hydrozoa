@@ -1,5 +1,6 @@
 package hydrozoa.lib.petri.net
 
+import cats.data.NonEmptyList
 import cats.implicits.*
 import hydrozoa.lib.petri.net.components.*
 
@@ -72,22 +73,17 @@ trait SequentialSimulator[
         arcPlacePairs
             .flatMap(_.traverse { (arcId, arc, placeId, place) =>
                 for
-                    _ <- Either.cond(
-                      arc.enabled(place),
-                      (),
-                      Simulator.FiringError.ArcNotEnabled(arcId, placeId)
-                    )
+                    _ <- NonEmptyList
+                        .fromList(arc.enablingErrors(place))
+                        .map(Simulator.FiringError.ArcNotEnabled(arcId, placeId, _))
+                        .toLeft(())
                     firedPlace <- arc
                         .fire(place)
                         .leftMap(Simulator.FiringError.ArcFiringFailed(arcId, _))
-                    _ <- Either.cond(
-                      firedPlace.validMarking,
-                      (),
-                      Simulator.FiringError.PlaceValidityViolated(
-                        placeId,
-                        firedPlace.markingError(firedPlace.getMarking)
-                      )
-                    )
+                    _ <- NonEmptyList
+                        .fromList(firedPlace.markingErrors)
+                        .map(Simulator.FiringError.PlaceValidityViolated(placeId, _))
+                        .toLeft(())
                 yield (placeId, firedPlace)
             })
             .map(withUpdatedPlaces)

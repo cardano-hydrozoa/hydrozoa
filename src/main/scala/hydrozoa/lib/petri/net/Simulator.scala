@@ -1,7 +1,7 @@
 package hydrozoa.lib.petri.net
 
 import cats.Monad
-import cats.data.StateT
+import cats.data.{NonEmptyList, StateT}
 import cats.implicits.*
 import hydrozoa.lib.petri.net.components.*
 
@@ -77,17 +77,21 @@ object Simulator {
         /** The requested transition ID is not present in the net. */
         case class TransitionNotFound[TransitionId](transitionId: TransitionId) extends FiringError
 
-        /** Arc `arcId` connected to place `placeId` has a false enabling predicate (E2). */
-        case class ArcNotEnabled[ArcId, PlaceId](arcId: ArcId, placeId: PlaceId) extends FiringError
+        /** Arc `arcId` connected to place `placeId` failed one or more enabling checks (E2). */
+        case class ArcNotEnabled[ArcId, PlaceId](
+            arcId: ArcId,
+            placeId: PlaceId,
+            errors: NonEmptyList[Arc.Semantics.EnablingError]
+        ) extends FiringError
 
         /** Arc `arcId`'s firing endo returned a [[Arc.Semantics.FiringError]]. */
         case class ArcFiringFailed[ArcId](arcId: ArcId, cause: Arc.Semantics.FiringError)
             extends FiringError
 
-        /** Place `placeId` has an invalid marking after firing (E1). */
+        /** Place `placeId` has one or more invalid marking constraints after firing (E1). */
         case class PlaceValidityViolated[PlaceId](
             placeId: PlaceId,
-            cause: Place.Semantics.MarkingError
+            cause: NonEmptyList[Place.Semantics.MarkingError]
         ) extends FiringError
 
         /** [[Net.Semantics.netEnablingPredicate]] returned false for the transition. */

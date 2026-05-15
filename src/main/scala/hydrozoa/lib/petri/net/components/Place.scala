@@ -1,5 +1,6 @@
 package hydrozoa.lib.petri.net.components
 
+import cats.data.NonEmptyList
 import hydrozoa.lib.number.{NonNegativeInt, PositiveInt}
 import hydrozoa.lib.petri.net.components.Place.Semantics.Bounded.Error.TooManyTokens
 
@@ -78,16 +79,14 @@ object Place {
 
     trait Semantics[Self <: Place.Syntax[Self] & Semantics[Self]] { self: Self =>
         type MarkingError = Place.Semantics.MarkingError
-        def markingError(marking: PlaceMarking): MarkingError
-        protected def markingPredicate: List[Boolean] = List.empty
 
-        final def validMarking: Boolean =
-            markingPredicate.forall(identity)
-        final def markValid(newMarking: PlaceMarking): Either[MarkingError, Self] =
+        def markingErrors: List[MarkingError] = List.empty
+
+        final def validMarking: Boolean = markingErrors.isEmpty
+
+        final def markValid(newMarking: PlaceMarking): Either[NonEmptyList[MarkingError], Self] =
             val candidateMarking = mark(newMarking)
-            if candidateMarking.validMarking
-            then Right(candidateMarking)
-            else Left(markingError(newMarking))
+            NonEmptyList.fromList(candidateMarking.markingErrors).toLeft(candidateMarking)
     }
 
     object Semantics {
@@ -100,8 +99,9 @@ object Place {
             self: Self =>
             val bound: PositiveInt
 
-            override protected def markingPredicate: List[Boolean] =
-                (this.tokens.toInt <= bound.toInt) :: super.markingPredicate
+            override def markingErrors: List[Place.Semantics.MarkingError] =
+                (if this.tokens.toInt > bound.toInt then List(TooManyTokens(tokens, bound))
+                 else Nil) ++ super.markingErrors
 
         }
 
@@ -134,11 +134,7 @@ case class UnboundedPlace(
       Place.Semantics[UnboundedPlace],
       Place.Syntax.HasTokens[UnboundedPlace],
       Place.Presentation {
-    // UnboundedPlace has no marking predicates, so validMarking is always true and
-    // markingError can never be called from markValid. Nothing encodes "no error possible".
-    override def markingError(marking: NonNegativeInt): Nothing =
-        scala.sys.error("BUG: UnboundedPlace cannot have a marking error")
-
+    // UnboundedPlace has no marking predicates, so markingErrors is always empty.
     override def withTokens(n: NonNegativeInt): UnboundedPlace = this.copy(tokens = n)
 
     override def getMarking: NonNegativeInt = tokens
@@ -154,8 +150,6 @@ case class BoundedPlace private (
       Place.Semantics.Bounded[BoundedPlace],
       Place.Presentation {
     override def withTokens(n: NonNegativeInt): BoundedPlace = this.copy(tokens = n)
-
-    override def markingError(marking: NonNegativeInt): MarkingError = TooManyTokens(marking, bound)
 
     override def getMarking: NonNegativeInt = tokens
 }
