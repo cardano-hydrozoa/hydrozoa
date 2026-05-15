@@ -239,8 +239,8 @@ object YapneNet {
   */
 object Demo extends IOApp {
 
+    import Net.Semantics.FinalMarking.*
     import YapneNet.yapneOps.*
-    import YapneNet.given_Encoder_YapneNet
     import MapNet.BuilderM.given
 
     object Places {
@@ -260,19 +260,21 @@ object Demo extends IOApp {
 
         val ambient: YapnePlace = YapnePlace(
           label = "Ambient",
-          tokens = NonNegativeInt.unsafeApply(100)
+          tokens = NonNegativeInt.unsafeApply(100),
+          finalMarking = Some(NonNegativeInt.unsafeApply(86)) // 100 - 7×2
         )
 
         val payoutObligations: YapnePlace = YapnePlace(
           label = "$PayoutObligations$",
           tokens = NonNegativeInt.unsafeApply(500),
-          finalMarking = Some(NonNegativeInt.unsafeApply(0))
+          finalMarking =
+              Some(NonNegativeInt.unsafeApply(59)) // 500 - 7×63; deadlocks here (59 < 63)
         )
 
         val evacuationOutput: YapnePlace = YapnePlace(
           label = "EvacuationOutput",
           tokens = NonNegativeInt.unsafeApply(0),
-          finalMarking = Some(NonNegativeInt.unsafeApply(500))
+          finalMarking = Some(NonNegativeInt.unsafeApply(441)) // 7×63
         )
 
         val collateral: YapnePlace = YapnePlace(
@@ -308,32 +310,20 @@ object Demo extends IOApp {
           label = "reference treasury script (1)"
         )
 
-        val spendResolved: YapneArc = YapnePTArc(
+        // PT(1)+TP(1) on p_1 collapses to a net-zero change — equivalent to a read.
+        val readResolved: YapneArc = YapneReadArc(
           arcPlaceId = "p_1",
           arcTransitionId = "t_0",
           weight = NonNegativeInt.unsafeApply(1),
-          label = "spend resolved treasury (1)"
+          label = "read resolved treasury (1)"
         )
 
-        val sendResolved: YapneArc = YapneTPArc(
-          arcPlaceId = "p_1",
-          arcTransitionId = "t_0",
-          weight = NonNegativeInt.unsafeApply(1),
-          label = "send resolved treasury (1)"
-        )
-
-        val spendFeeUtxos: YapneArc = YapnePTArc(
+        // PT(3)+TP(1) on p_2 collapses to a net -2 — equivalent to a single PT(2).
+        val spendAmbient: YapneArc = YapnePTArc(
           arcPlaceId = "p_2",
           arcTransitionId = "t_0",
-          weight = NonNegativeInt.unsafeApply(3),
-          label = "spend fee utxos (3)"
-        )
-
-        val sendChangeUtxo: YapneArc = YapneTPArc(
-          arcPlaceId = "p_2",
-          arcTransitionId = "t_0",
-          weight = NonNegativeInt.unsafeApply(1),
-          label = "send change utxo (1)"
+          weight = NonNegativeInt.unsafeApply(2),
+          label = "spend fee utxos net (2)"
         )
 
         val fulfillPayoutObligation: YapneArc = YapnePTArc(
@@ -361,10 +351,8 @@ object Demo extends IOApp {
             TreeMap.from(
               List(
                 readTreasury,
-                spendResolved,
-                sendResolved,
-                spendFeeUtxos,
-                sendChangeUtxo,
+                readResolved,
+                spendAmbient,
                 fulfillPayoutObligation,
                 sendEvacuationOutput,
                 useCollateral
@@ -386,8 +374,29 @@ object Demo extends IOApp {
 
     override def run(args: List[String]): IO[ExitCode] =
         for {
-            _ <- IO.println(s"Topology errors: ${evacuationNet.topologyErrors}")
-            _ <- IO.println(evacuationNet.asJson)
+            vs <- IO.fromEither(
+              ValidatedSimulator
+                  .validate(evacuationNet)
+                  .leftMap(errs =>
+                      new RuntimeException(
+                        errs.toList.map(_.getMessage).mkString("; ")
+                      )
+                  )
+            )
+            _ <- IO.println("Net is valid.")
+            // Fire t_0 repeatedly until it is no longer enabled.
+            finalVs = Iterator
+                .iterate(vs)(_.fire("t_0").fold(throw _, identity))
+                .dropWhile(_.isEnabled("t_0"))
+                .next()
+            _ <- IO.println(
+              s"Simulation complete. Enabled transitions: ${finalVs.enabledTransitions}"
+            )
+            finalNet = finalVs.get
+            _ <- IO.println(
+              s"Terminal errors:\n${finalNet.terminalErrors.map("  " + _.getMessage).mkString("\n")}"
+            )
+            _ <- IO.println(s"Is valid terminal: ${finalNet.isValidTerminal}")
         } yield ExitCode.Success
 
 }
