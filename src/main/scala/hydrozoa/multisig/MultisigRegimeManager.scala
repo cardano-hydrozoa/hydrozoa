@@ -61,6 +61,8 @@ trait MultisigRegimeManager(
                     Tracer.warn("Terminated peer liaison actor")
                 case Actors.EventSequencer =>
                     Tracer.warn("Terminated event sequencer actor")
+                case Actors.StackComposer =>
+                    Tracer.warn("Terminated stack composer actor")
             }
         case TerminatedDependency(dependencyType, _) =>
             dependencyType match {
@@ -101,6 +103,10 @@ trait MultisigRegimeManager(
               JointLedger(config, pendingConnections, l2Ledger, tracer, tracerLocal)
             )
 
+            stackComposer <- context.actorOf(
+              StackComposer(config, pendingConnections, tracerLocal)
+            )
+
             localPeerLiaisons <-
                 config.headPeerIds
                     .filterNot(_ == config.ownHeadPeerId)
@@ -117,6 +123,7 @@ trait MultisigRegimeManager(
               consensusActor = consensusActor,
               eventSequencer = eventSequencer,
               jointLedger = jointLedger,
+              stackComposer = stackComposer,
               peerLiaisons = localPeerLiaisons,
               remotePeerLiaisons = Map.empty,
               tracer = tracer,
@@ -139,6 +146,10 @@ trait MultisigRegimeManager(
               eventSequencer,
               TerminatedChild(Actors.EventSequencer, eventSequencer)
             )
+            _ <- context.watch(
+              stackComposer,
+              TerminatedChild(Actors.StackComposer, stackComposer)
+            )
         } yield ()
 }
 
@@ -151,6 +162,7 @@ object MultisigRegimeManager {
         consensusActor: ConsensusActor.Handle,
         eventSequencer: EventSequencer.Handle,
         jointLedger: JointLedger.Handle,
+        stackComposer: StackComposer.Handle,
         peerLiaisons: List[PeerLiaison.Handle],
         remotePeerLiaisons: Map[HeadPeerId, PeerLiaison.Handle],
         tracer: ProtocolTracer = ProtocolTracer.noop,
@@ -170,7 +182,8 @@ object MultisigRegimeManager {
       * [[https://app.excalidraw.com/s/9N3iw9j24UW/9eRJ7Dwu42X]]
       */
     enum Actors:
-        case BlockWeaver, CardanoLiaison, Consensus, JointLedger, PeerLiaison, EventSequencer
+        case BlockWeaver, CardanoLiaison, Consensus, JointLedger, PeerLiaison, EventSequencer,
+            StackComposer
 
     /** Requests received by the multisig regime manager. */
     type Request = PreStart.type | TerminatedChild | TerminatedDependency

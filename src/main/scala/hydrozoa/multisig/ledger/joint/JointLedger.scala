@@ -15,7 +15,7 @@ import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger.NotTriggered
 import hydrozoa.multisig.consensus.pollresults.PollResults
-import hydrozoa.multisig.consensus.{ConsensusActor, PeerLiaison, UserRequestWithId, pollresults}
+import hydrozoa.multisig.consensus.{ConsensusActor, PeerLiaison, StackComposer, UserRequestWithId, pollresults}
 import hydrozoa.multisig.ledger.block.*
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
@@ -115,6 +115,7 @@ final case class JointLedger(
                   Some(
                     Connections(
                       consensusActor = _connections.consensusActor,
+                      stackComposer = _connections.stackComposer,
                       peerLiaisons = _connections.peerLiaisons
                     )
                   )
@@ -425,7 +426,7 @@ final case class JointLedger(
                       blockCreationEndTime,
                       split.decisions
                     )
-                    (pBlockBrief, blockBrief) = blockBriefRes
+                    (pBlockBrief, blockBrief, evacDiffs) = blockBriefRes
 
                     // Verify the produced brief against the reference brief (follower mode).
                     _ <- panicOnMismatchWithExpectedBrief(referenceBlockBrief, blockBrief)
@@ -441,8 +442,16 @@ final case class JointLedger(
 
                     _ <- state.set(newJlState.done(blockBrief.header))
 
+                    // Slow side: emit per-block result (evac-map diff + payouts) for the
+                    // StackComposer to assemble into stacks. Independent of soft-confirmation.
+                    blockResult = BlockResult(
+                      brief = blockBrief,
+                      evacuationMapDiff = evacDiffs,
+                      payoutObligations = newJlState.l2LedgerState.payouts.toList
+                    )
+
                     // Hand off the brief: emit our soft-ack and broadcast the brief.
-                    _ <- handleBlock(blockBrief, finalizationLocallyTriggered)
+                    _ <- handleBlock(blockBrief, finalizationLocallyTriggered, blockResult)
                 } yield ()
             }
         }
@@ -454,7 +463,7 @@ final case class JointLedger(
         p: JointLedger.Producing,
         blockCreationEndTime: BlockCreationEndTime,
         decisions: DepositsMap.Decisions
-    ): IO[(JointLedger.Producing, BlockBrief.Intermediate)] = {
+    ): IO[(JointLedger.Producing, BlockBrief.Intermediate, Seq[EvacuationDiff])] = {
         val blockCreationStartTime = p.BlockCreationStartTime
         val previousHeader = p.previousBlockHeader
         val blockWithdrawnUtxos = p.l2LedgerState.payouts
@@ -482,7 +491,8 @@ final case class JointLedger(
             headerRes <-
                 if decisions.absorbed.isEmpty && blockWithdrawnUtxos.isEmpty
                 then
-                    val newEvacuationMap = applyDiffs(p.evacuationMap, p.l2LedgerState.diffs)
+                    val evacDiffs = p.l2LedgerState.diffs
+                    val newEvacuationMap = applyDiffs(p.evacuationMap, evacDiffs)
                     for {
                         newL2State <-
                             if decisions.refunded.isEmpty then IO.pure(p.l2LedgerState)
@@ -506,11 +516,12 @@ final case class JointLedger(
                               newEvacuationMap.kzgCommitment
                             )
                             .logWith
-                    } yield (newJLState, headerIntermediate)
+                    } yield (newJLState, headerIntermediate, evacDiffs)
                 else {
                     for {
                         newL2State <- executeL2Command(p, depositEventDecisions)
-                        newEvacuationMap = applyDiffs(p.evacuationMap, newL2State.diffs)
+                        evacDiffs = newL2State.diffs
+                        newEvacuationMap = applyDiffs(p.evacuationMap, evacDiffs)
                         _ <- Tracer.trace(s"New evacuation map: ${newEvacuationMap.evacuationMap}")
                         newJLState = p
                             .setL2LedgerState(newL2State)
@@ -528,9 +539,9 @@ final case class JointLedger(
                               kzgCommitment
                             )
                             .logWith
-                    } yield (newJLState, headerIntermediate)
+                    } yield (newJLState, headerIntermediate, evacDiffs)
                 }
-            (newJlState, headerIntermediate) = headerRes
+            (newJlState, headerIntermediate, evacDiffs) = headerRes
 
             // Block brief
             blockBrief: BlockBrief.Intermediate = headerIntermediate match {
@@ -554,13 +565,13 @@ final case class JointLedger(
                   s"  Block number: ${headerIntermediate.blockNum}\n" +
                   s"  Block brief: $blockBrief"
             )
-        } yield (newJlState, blockBrief)
+        } yield (newJlState, blockBrief, evacDiffs)
     }
 
     // `mkBlockEffectsIntermediate` (and the Final-branch effect construction inlined in
     // `completeBlockFinal`) used to build settlement / fallback / rollout / refund / finalization
-    // transactions here. That work is slow-cycle responsibility and lives (parked) in
-    // [[hydrozoa.multisig.consensus.StackActor]]. The fast cycle only handles briefs + header
+    // transactions here. That work is slow-cycle responsibility and lives in
+    // [[hydrozoa.multisig.consensus.StackComposer]]. The fast cycle only handles briefs + header
     // signatures.
 
     // Block completion Signal is provided to the joint ledger when the block weaver says it's time.
@@ -596,7 +607,18 @@ final case class JointLedger(
 
                     _ <- state.set(p.done(blockBrief.header))
 
-                    _ <- handleBlock(blockBrief, NotTriggered)
+                    // Slow side: on Final, the evac map drains entirely and all remaining
+                    // payouts are realized via the finalization tx. We surface the cumulative
+                    // payout obligations and a "delete-all" diff for the prior evac map so
+                    // StackComposer / StackEffectsBuilder see the full picture.
+                    blockResult = BlockResult(
+                      brief = blockBrief,
+                      evacuationMapDiff = p.evacuationMap.evacuationMap.keys.toList
+                          .map(EvacuationDiff.Delete.apply),
+                      payoutObligations = p.evacuationMap.evacuationMap.values.toList
+                    )
+
+                    _ <- handleBlock(blockBrief, NotTriggered, blockResult)
                 } yield ()
             }
         }
@@ -640,7 +662,8 @@ final case class JointLedger(
       */
     private def handleBlock(
         brief: BlockBrief.Next,
-        localFinalization: LocalFinalizationTrigger
+        localFinalization: LocalFinalizationTrigger,
+        blockResult: BlockResult
     ): IO[Unit] =
         for {
             conn <- getConnections
@@ -661,6 +684,9 @@ final case class JointLedger(
             softAck = ownHeadWallet.mkSoftAck(brief, localFinalization.asBoolean)
             _ <- conn.consensusActor ! brief
             _ <- conn.consensusActor ! softAck
+            // 3. Slow side: hand the block result to the stack composer (independent of fast
+            //    cycle).
+            _ <- conn.stackComposer ! blockResult
         } yield ()
 
     // TODO: classify the mismatch instead of emitting a generic "consensus is broken" panic.
@@ -701,6 +727,7 @@ object JointLedger {
 
     final case class Connections(
         consensusActor: ConsensusActor.Handle,
+        stackComposer: StackComposer.Handle,
         peerLiaisons: List[PeerLiaison.Handle]
     )
 

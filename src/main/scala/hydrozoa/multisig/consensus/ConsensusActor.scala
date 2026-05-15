@@ -55,6 +55,7 @@ object ConsensusActor:
         eventSequencer: EventSequencer.Handle,
         peerLiaisons: List[PeerLiaison.Handle],
         jointLedger: JointLedger.Handle,
+        stackComposer: StackComposer.Handle,
         tracer: hydrozoa.lib.tracing.ProtocolTracer = hydrozoa.lib.tracing.ProtocolTracer.noop,
     )
 
@@ -183,6 +184,7 @@ class ConsensusActor(
                       eventSequencer = _connections.eventSequencer,
                       peerLiaisons = _connections.peerLiaisons,
                       jointLedger = _connections.jointLedger,
+                      stackComposer = _connections.stackComposer,
                       tracer = _connections.tracer,
                     )
                   )
@@ -305,6 +307,7 @@ class ConsensusActor(
         _ <- conn.blockWeaver ! confirmed
         _ <- (conn.peerLiaisons ! confirmed).parallel
         _ <- conn.jointLedger ! confirmed
+        _ <- conn.stackComposer ! confirmed
 
         // Announce any postponed own-ack for the next block now that this cell is done.
         _ <- cell.postponedNextBlockOwnAck.traverse_(announceAck)

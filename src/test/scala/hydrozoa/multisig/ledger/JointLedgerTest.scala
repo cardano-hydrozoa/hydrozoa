@@ -21,7 +21,7 @@ import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.pollresults.PollResults
-import hydrozoa.multisig.consensus.{ConsensusActor, UserRequest, UserRequestBody, UserRequestHeader, UserRequestWithId}
+import hydrozoa.multisig.consensus.{ConsensusActor, StackComposer, UserRequest, UserRequestBody, UserRequestHeader, UserRequestWithId}
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.*
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Requests.*
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Scenarios.*
@@ -111,6 +111,11 @@ object JointLedgerTestHelpers {
         }
     }
 
+    /** No-op stand-in for [[StackComposer]] in tests that don't exercise slow-consensus paths. */
+    final case class StackComposerSink() extends Actor[IO, StackComposer.Request] {
+        override def receive: Receive[IO, StackComposer.Request] = { case _ => IO.unit }
+    }
+
     object ConsensusAgent {
         type State = Vector[Block.Unsigned.Next]
 
@@ -144,6 +149,7 @@ object JointLedgerTestHelpers {
             system <- PropertyM.run(ActorSystem[IO]("DappLedger").allocated.map(_._1))
 
             consensusAgent <- PropertyM.run(system.actorOf(ConsensusAgent()))
+            stackComposerSink <- PropertyM.run(system.actorOf(StackComposerSink()))
 
             eutxoLedger <- PropertyM.run(EutxoL2Ledger(config))
             tracerLocal <- PropertyM.run(Tracer.makeLocal)
@@ -153,6 +159,7 @@ object JointLedgerTestHelpers {
                   config,
                   JointLedger.Connections(
                     consensusActor = consensusAgent.narrowRequest[ConsensusActor.Request],
+                    stackComposer = stackComposerSink.narrowRequest[StackComposer.Request],
                     peerLiaisons = List()
                   ),
                   eutxoLedger,
