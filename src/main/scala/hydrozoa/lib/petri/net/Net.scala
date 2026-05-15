@@ -1,7 +1,6 @@
 package hydrozoa.lib.petri.net
 
 import cats.data.NonEmptyList
-import hydrozoa.lib.petri.net.Net.Syntax.MissingArcSyntax
 import hydrozoa.lib.petri.net.Net.Topology.{MissingArcTopology, MissingPlaceTopology, MissingTransitionTopology}
 import hydrozoa.lib.petri.net.components.*
 
@@ -11,7 +10,8 @@ trait Net[
     TransitionId,
     A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
     P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
-    T <: Transition.Topology & Transition.Syntax & Transition.Semantics
+    T <: Transition.Topology & Transition.Syntax & Transition.Semantics,
+    Self <: Net[ArcId, PlaceId, TransitionId, A, P, T, Self]
 ] extends Net.Ids[
       ArcId,
       PlaceId,
@@ -19,15 +19,7 @@ trait Net[
     ],
       Net.Topology[ArcId, PlaceId, TransitionId, A, P, T],
       Net.Syntax[ArcId, PlaceId, TransitionId, A, P, T],
-      Net.Semantics[ArcId, PlaceId, TransitionId, A, P, T] {
-
-    def getArc(
-        arcId: ArcId
-    ): Either[NonEmptyList[Net.Error], A] = ???
-
-//    override final def getArcSyntax(id: ArcId): Either[MissingArcSyntax[ArcId], A] = ???
-
-}
+      Net.Semantics[ArcId, PlaceId, TransitionId, A, P, T]
 
 object Net {
 
@@ -45,10 +37,9 @@ object Net {
       * @tparam ArcId
       */
     trait Ids[ArcId, PlaceId, TransitionId] {
-        val arcs: Set[ArcId]
-        val places: Set[PlaceId]
-        val transitions: Set[TransitionId]
-        // TODO: Add data variables
+        val arcIds: Set[ArcId]
+        val placeIds: Set[PlaceId]
+        val transitionIds: Set[TransitionId]
     }
 
     // =========================================================================
@@ -113,19 +104,19 @@ object Net {
         ] extends Topology[ArcId, PlaceId, TransitionId, A, P, T] {
             abstract override def topologyErrors: List[this.TopologyValidationError] = {
                 val danglingErrors = for {
-                    aid <- arcs.toList
+                    aid <- arcIds.toList
                     errors <- getArcTopology(aid) match {
                         case Left(missingArcTopology) => List(missingArcTopology)
                         case Right(arc) =>
                             val pid: PlaceId = arc.arcPlaceId
                             val tid: TransitionId = arc.arcTransitionId
-                            val placeError = Option.when(!places.contains(pid))(
+                            val placeError = Option.when(!placeIds.contains(pid))(
                               NoDanglingArcs.Error.DanglingArcPlace[ArcId, PlaceId, TransitionId](
                                 aid,
                                 pid
                               )
                             )
-                            val transitionError = Option.when(!transitions.contains(tid))(
+                            val transitionError = Option.when(!transitionIds.contains(tid))(
                               NoDanglingArcs.Error
                                   .DanglingArcTransition[ArcId, PlaceId, TransitionId](aid, tid)
                             )
@@ -162,7 +153,7 @@ object Net {
             abstract override def topologyErrors: List[this.TopologyValidationError] = {
                 val eitherArcs
                     : List[Either[MissingArcTopology[ArcId], (ArcId, PlaceId, TransitionId)]] =
-                    arcs.toList.map(arcId =>
+                    arcIds.toList.map(arcId =>
                         getArcTopology(arcId).map(arc =>
                             (arcId, arc.arcPlaceId, arc.arcTransitionId)
                         )
@@ -249,8 +240,7 @@ object Net {
       */
     trait Semantics[ArcId, PlaceId, TransitionId, A <: Arc.Semantics[P], P <: Place.Syntax[
       P
-    ] & Place.Semantics[P], T <: Transition.Semantics]
-        extends Net.Ids[ArcId, PlaceId, TransitionId] {
+    ] & Place.Semantics[P], T <: Transition.Semantics] {
         import Semantics.Error.*
         def getArcSemantics(id: ArcId): Either[MissingArcSemantics[ArcId], A]
 
@@ -264,11 +254,12 @@ object Net {
         // Composed under AND with all other enabling predicate levels; commutative by conjunction.
         protected def netEnablingPredicates(t: TransitionId): List[Boolean] = List.empty
 
-        final def isEnabled(t: TransitionId): Boolean = netEnablingPredicates(t).forall(identity)
+        final def netEnablingPredicate(t: TransitionId): Boolean =
+            netEnablingPredicates(t).forall(identity)
 
-        def semanticsErrors: List[Semantics.Error]
+        def semanticsErrors: List[Net.Semantics.Error] = List.empty
 
-        final def validSemantics: Boolean = semanticsErrors.isEmpty
+        final def isValidSemantics: Boolean = semanticsErrors.isEmpty
     }
 
     object Semantics {

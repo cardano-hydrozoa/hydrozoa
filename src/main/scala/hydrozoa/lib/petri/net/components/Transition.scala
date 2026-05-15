@@ -37,6 +37,7 @@ object Transition {
     object Syntax {
 
         trait HasSilent[Self <: HasSilent[Self]] extends Syntax { self: Self =>
+
             /** Controls whether the firing of this transition appears in the event logs.
               */
             def silent: Boolean
@@ -44,6 +45,7 @@ object Transition {
         }
 
         trait HasPriority[Self <: HasPriority[Self]] extends Syntax { self: Self =>
+
             /** I _believe_ this controls the relative priority of transitions when selecting among
               * all enabled transitions for auto-firing. I'm not certain of the precise semantics.
               */

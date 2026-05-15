@@ -1,9 +1,9 @@
 package hydrozoa.lib.petri
 
+import cats.implicits.*
 import hydrozoa.lib.petri.net.*
 import hydrozoa.lib.petri.net.Net.Semantics.Error
 import hydrozoa.lib.petri.net.components.*
-
 import scala.collection.immutable.TreeMap
 
 /** A full, canonical map-backed representation. Suitable for building and simulating typed nets.
@@ -43,12 +43,17 @@ case class MapNet[
     P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
     T <: Transition.Topology & Transition.Syntax & Transition.Semantics
 ](
-    val name: String,
-    val description: String,
-    val placesMap: TreeMap[PlaceId, P],
-    val transitionsMap: TreeMap[TransitionId, T],
-    val arcsMap: TreeMap[ArcId, A]
-) extends Net[ArcId, PlaceId, TransitionId, A, P, T],
+    placesMap: TreeMap[PlaceId, P],
+    transitionsMap: TreeMap[TransitionId, T],
+    arcsMap: TreeMap[ArcId, A]
+) extends Simulator[ArcId, PlaceId, TransitionId, A, P, T, MapNet[
+      ArcId,
+      PlaceId,
+      TransitionId,
+      A,
+      P,
+      T
+    ]],
       Net.Topology.NoDanglingArcs[ArcId, PlaceId, TransitionId, A, P, T],
       Net.Topology.SingleArc[ArcId, PlaceId, TransitionId, A, P, T] {
 
@@ -56,9 +61,9 @@ case class MapNet[
     // net.Id
     // ---------------------------------------------------------------------------
 
-    override val arcs: Set[ArcId] = arcsMap.keySet
-    override val places: Set[PlaceId] = placesMap.keySet
-    override val transitions: Set[TransitionId] = transitionsMap.keySet
+    override val arcIds: Set[ArcId] = arcsMap.keySet
+    override val placeIds: Set[PlaceId] = placesMap.keySet
+    override val transitionIds: Set[TransitionId] = transitionsMap.keySet
 
     // ---------------------------------------------------------------------------
     // Net.Topology.Topology (via NoDanglingArcs / SingleArc mixin chain)
@@ -113,54 +118,51 @@ case class MapNet[
         id: TransitionId
     ): Either[Error.MissingTransitionSemantics[TransitionId], T] =
         transitionsMap.get(id).toRight(Net.Semantics.Error.MissingTransitionSemantics(id))
-    def semanticsErrors: List[Net.Semantics.Error] = List.empty
-}
 
-//
-//    // ---------------------------------------------------------------------------
-//    // net.Id
-//    // ---------------------------------------------------------------------------
-//
-//    override val arcs: Set[ArcId] = arcsMap.keySet
-//    override val places: Set[PlaceId] = placesMap.keySet
-//    override val transitions: Set[TransitionId] = transitionsMap.keySet
-//
-//
-//
-//    override def fireTransition(t: TransitionId): Either[Simulator.FiringError[TransitionId], Self] = {
-//        // Arcs connected to this transition, in deterministic ArcId ordering.
-//        // Under the single-arc-per-(place,transition) constraint this order is trivially
-//        // irrelevant; with multi-arcs it gives a deterministic firing order.
-//        val connectedArcs = arcsMap.filter((_, a) => a.arcTransitionId == t)
-//
-//        // Check all enabling predicates (AND of all levels; commutative by conjunction).
-//        //   - arc-side: arc.enabled(p) for each (arc, place) pair
-//        //   - place-side: p.validMarking for each connected place
-//        //   - net-wide: netEnablingPredicates(t)
-//        // TODO: transition-side (Transition.Semantics is a stub — skip for now)
-//        val arcAndPlaceEnabled = connectedArcs.forall { (_, a) =>
-//            placesMap.get(a.arcPlaceId).exists(p => a.enabled(p) && p.validMarking)
-//        }
-//        val netEnabled = netEnablingPredicates(t).forall(identity)
-//
-//        if !arcAndPlaceEnabled || !netEnabled
-//        then Left(Simulator.FiringError.TransitionNotEnabled(t))
-//        else
-//            // Fire each arc sequentially, threading the updated place map through Either.
-//            // `placesMap.get(arc.arcPlaceId)` is safe here: the enabling check above confirmed
-//            // existence via `exists` for every connected arc.
-//            connectedArcs
-//                .foldLeft(Right(placesMap): Either[Simulator.FiringError[TransitionId], TreeMap[PlaceId, P]]) {
-//                    case (left @ Left(_), _) => left
-//                    case (Right(currentPlaces), (_, arc)) =>
-//                        arc.fire(currentPlaces(arc.arcPlaceId)) match {
-//                            case Left(e)     => Left(Simulator.FiringError.FireUnsafeFailure(t, e))
-//                            case Right(newP) => Right(currentPlaces.updated(arc.arcPlaceId, newP))
-//                        }
-//                }
-//                .map(newPlaces => this.copy(placesMap = newPlaces))
-//    }
-//}
-//
-//// TODO: MapNetOps / BuilderM (IndexedStateT monad transformer stack for building MapNets)
-////       Resurface when the builder pattern is needed downstream.
+    // ---------------------------------------------------------------------------
+    // Simulator
+    // ---------------------------------------------------------------------------
+
+    override def fire(
+        t: TransitionId
+    ): Either[Simulator.FiringError, MapNet[ArcId, PlaceId, TransitionId, A, P, T]] = {
+        // Check transition exists
+        if !transitionIds.contains(t) then return Left(Simulator.FiringError.TransitionNotFound(t))
+
+        // Check net-level enabling conditions
+        if !netEnablingPredicate(t) then return Left(Simulator.FiringError.NetEnablingFailed(t))
+
+        // Snapshot all (arc, place) pairs for this transition before firing any endo
+        val arcPlacePairs: List[(ArcId, A, PlaceId, P)] = for
+            (arcId, arc) <- arcsMap.toList
+            if arc.arcTransitionId == t
+            place <- placesMap.get(arc.arcPlaceId).toList
+        yield (arcId, arc, arc.arcPlaceId, place)
+
+        // For each arc: check arc-side enabling (E2), apply firing endo,
+        // then check place-side validity (E1). All against the pre-fire snapshot.
+        val firedPlaces: Either[Simulator.FiringError, List[(PlaceId, P)]] =
+            arcPlacePairs.traverse { (arcId, arc, placeId, place) =>
+                for
+                    _ <- Either.cond(
+                      arc.enabled(place),
+                      (),
+                      Simulator.FiringError.ArcNotEnabled(arcId, placeId)
+                    )
+                    firedPlace <- arc
+                        .fire(place)
+                        .leftMap(Simulator.FiringError.ArcFiringFailed(arcId, _))
+                    _ <- Either.cond(
+                      firedPlace.validMarking,
+                      (),
+                      Simulator.FiringError.PlaceValidityViolated(
+                        placeId,
+                        firedPlace.markingError(firedPlace.getMarking)
+                      )
+                    )
+                yield (placeId, firedPlace)
+            }
+
+        firedPlaces.map(updates => this.copy(placesMap = placesMap ++ updates))
+    }
+}

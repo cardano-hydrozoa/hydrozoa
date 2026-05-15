@@ -17,7 +17,7 @@ object Arc {
         val id: ArcId
     }
 
-    // TODO: This should probably take the Place and Transition _topology_ instead of just their ID? 
+    // TODO: This should probably take the Place and Transition _topology_ instead of just their ID?
     trait Topology[PlaceId, TransitionId] {
         def arcPlaceId: PlaceId
         def arcTransitionId: TransitionId
@@ -59,9 +59,10 @@ object Arc {
       *     syntax, then everything should commute.
       */
     trait Semantics[P <: Place.Syntax[P]] {
-        /** The error type that [[fire]] and [[fireUnsafe]] can produce. Defaults to the common
-          * base [[Arc.Semantics.FiringError]]; concrete arc implementations may narrow this to a
-          * more specific subtype.
+
+        /** The error type that [[fire]] and [[fireUnsafe]] can produce. Defaults to the common base
+          * [[Arc.Semantics.FiringError]]; concrete arc implementations may narrow this to a more
+          * specific subtype.
           */
         type FiringError = Arc.Semantics.FiringError
 
@@ -74,21 +75,22 @@ object Arc {
 
         final def enabled(p: P): Boolean = enablingPredicates.forall(_(p))
 
-        /** Returns a typed error if firing fails. Does not check enabledness or place-side
-          * validity — both are the simulator's concern.
+        /** Returns a typed error if firing fails. Does not check enabledness or place-side validity
+          * — both are the simulator's concern.
           */
         final def fire(p: P): Either[FiringError, P] = kendoFold(firingEndos).run(p)
 
         /** Does not check enabledness or place-side validity — both are the simulator's concern.
           *
-          * @throws Arc.Semantics.FiringError if firing fails (e.g.,
-          *   [[Arc.Semantics.PT.InsufficientTokens]])
+          * @throws Arc.Semantics.FiringError
+          *   if firing fails (e.g., [[Arc.Semantics.PT.InsufficientTokens]])
           */
         @throws[Arc.Semantics.FiringError]("if firing results in a FiringError")
         final def fireUnsafe(p: P): P = fire(p).fold(e => throw e, identity)
     }
 
     object Semantics {
+
         /** Base trait for arc firing errors. Not sealed; extend to add custom firing errors. */
         trait FiringError extends Throwable
 
@@ -102,16 +104,20 @@ object Arc {
               Weighted {
             abstract override protected def enablingPredicates: List[P => Boolean] =
                 ((p: P) => p.tokens >= weight) :: super.enablingPredicates
-            abstract override protected def firingEndos: List[KendoT[[X] =>> Either[Arc.Semantics.FiringError, X], P]] =
+            abstract override protected def firingEndos
+                : List[KendoT[[X] =>> Either[Arc.Semantics.FiringError, X], P]] =
                 Kleisli((p: P) =>
-                    (NonNegativeInt(p.tokens - weight)
+                    NonNegativeInt(p.tokens - weight)
                         .map(p.withTokens)
-                        .toRight(PT.InsufficientTokens(p.tokens, weight))
-                    ): Either[Arc.Semantics.FiringError, P]
+                        .toRight(PT.InsufficientTokens(p.tokens, weight)): Either[
+                      Arc.Semantics.FiringError,
+                      P
+                    ]
                 ) :: super.firingEndos
         }
 
         object PT {
+
             /** Raised when a PT arc fires but the place has fewer tokens than the arc weight. */
             case class InsufficientTokens(tokens: NonNegativeInt, weight: NonNegativeInt)
                 extends FiringError {
@@ -124,16 +130,20 @@ object Arc {
         trait TP[P <: Place.Syntax.HasTokens[P]](val weight: NonNegativeInt)
             extends Semantics[P],
               Weighted {
-            abstract override protected def firingEndos: List[KendoT[[X] =>> Either[Arc.Semantics.FiringError, X], P]] =
+            abstract override protected def firingEndos
+                : List[KendoT[[X] =>> Either[Arc.Semantics.FiringError, X], P]] =
                 Kleisli((p: P) =>
-                    (NonNegativeInt(p.tokens + weight)
+                    NonNegativeInt(p.tokens + weight)
                         .map(p.withTokens)
-                        .toRight(TP.TokenOverflow(p.tokens, weight))
-                    ): Either[Arc.Semantics.FiringError, P]
+                        .toRight(TP.TokenOverflow(p.tokens, weight)): Either[
+                      Arc.Semantics.FiringError,
+                      P
+                    ]
                 ) :: super.firingEndos
         }
 
         object TP {
+
             /** Raised when a TP arc fires but adding the weight would overflow NonNegativeInt. */
             case class TokenOverflow(tokens: NonNegativeInt, weight: NonNegativeInt)
                 extends FiringError {
@@ -150,9 +160,13 @@ object Arc {
 
         /** Drains all tokens from the place. Always arc-side enabled. */
         trait Reset[P <: Place.Syntax.HasTokens[P]] extends Semantics[P] {
-            abstract override protected def firingEndos: List[KendoT[[X] =>> Either[Arc.Semantics.FiringError, X], P]] =
+            abstract override protected def firingEndos
+                : List[KendoT[[X] =>> Either[Arc.Semantics.FiringError, X], P]] =
                 Kleisli((p: P) =>
-                    (Right(p.withTokens(NonNegativeInt.unsafeApply(0))): Either[Arc.Semantics.FiringError, P])
+                    Right(p.withTokens(NonNegativeInt.unsafeApply(0))): Either[
+                      Arc.Semantics.FiringError,
+                      P
+                    ]
                 ) :: super.firingEndos
         }
 

@@ -28,8 +28,6 @@ import hydrozoa.lib.petri.net.components.Place.Semantics.Bounded.Error.TooManyTo
   */
 object Place {
 
-
-    
     trait Id[PlaceId] {
         val id: PlaceId
     }
@@ -39,7 +37,7 @@ object Place {
     // by MapNet's `A` type bound at compile time. Net-wide structural validation (dangling
     // arcs, multiplicity) lives in net.Topology.
     trait Topology
-    
+
     /** Otherwise known as a "marking"
       *
       *   - Laws:
@@ -96,23 +94,24 @@ object Place {
 
         trait MarkingError extends Throwable
 
-
         trait Bounded[Self <: Syntax.HasTokens[Self] & Semantics[Self]]
             extends Semantics[Self]
             with Syntax.HasTokens[Self] {
             self: Self =>
             val bound: PositiveInt
-            
+
             override protected def markingPredicate: List[Boolean] =
                 (this.tokens.toInt <= bound.toInt) :: super.markingPredicate
 
         }
-        
+
         object Bounded {
             object Error {
-                case class TooManyTokens(tokens: NonNegativeInt, bound: PositiveInt) extends MarkingError {
-                    override def getMessage: String = "Failed constructing place: too many tokens. " +
-                        s"Max: $bound. Received: ${tokens.convert}"
+                case class TooManyTokens(tokens: NonNegativeInt, bound: PositiveInt)
+                    extends MarkingError {
+                    override def getMessage: String =
+                        "Failed constructing place: too many tokens. " +
+                            s"Max: $bound. Received: ${tokens.convert}"
                 }
             }
         }
@@ -155,7 +154,7 @@ case class BoundedPlace private (
       Place.Semantics.Bounded[BoundedPlace],
       Place.Presentation {
     override def withTokens(n: NonNegativeInt): BoundedPlace = this.copy(tokens = n)
-    
+
     override def markingError(marking: NonNegativeInt): MarkingError = TooManyTokens(marking, bound)
 
     override def getMarking: NonNegativeInt = tokens

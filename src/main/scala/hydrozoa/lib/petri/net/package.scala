@@ -19,17 +19,16 @@ package hydrozoa.lib.petri.net
   *
   * ## Arc multiplicity and firing endomorphism ordering
   *
-  * See [[hydrozoa.lib.petri.net.components]] for the general discussion. At the net level:
-  * the default topology restricts to at most one arc per (place, transition) direction, making
-  * firing endomorphisms trivially order-independent. Topologies that permit multi-arcs must
-  * either impose an explicit ordering or prove/property-test commutativity for their arc
-  * combinations.
+  * See [[hydrozoa.lib.petri.net.components]] for the general discussion. At the net level: the
+  * default topology restricts to at most one arc per (place, transition) direction, making firing
+  * endomorphisms trivially order-independent. Topologies that permit multi-arcs must either impose
+  * an explicit ordering or prove/property-test commutativity for their arc combinations.
   *
   * ## Net composition
   *
   * Two operations are planned (neither implemented yet):
-  *   - **Monoidal combination** (parallel): the disjoint union of two nets. Requires disjoint
-  *     ID sets; each net retains full ownership of its own places, transitions, and arcs.
+  *   - **Monoidal combination** (parallel): the disjoint union of two nets. Requires disjoint ID
+  *     sets; each net retains full ownership of its own places, transitions, and arcs.
   *   - **Gluing**: identifies a subset of places from one net with a subset from another,
   *     effectively merging them into shared interface places. Gluing is a _separate composition
   *     operator_, not something expressible within a single net's topology. After gluing, the
