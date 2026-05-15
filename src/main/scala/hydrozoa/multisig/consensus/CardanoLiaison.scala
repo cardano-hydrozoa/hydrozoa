@@ -18,6 +18,7 @@ import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.ledger.block.BlockVersion.Major.increment
 import hydrozoa.multisig.ledger.block.{BlockEffects, BlockHeader, BlockVersion}
 import hydrozoa.multisig.ledger.l1.tx.*
+import hydrozoa.multisig.ledger.stack.Stack
 import scala.collection.immutable.{Seq, TreeMap}
 import scala.math.Ordered.orderingToOrdered
 import scalus.cardano.ledger.Transaction.given
@@ -217,7 +218,9 @@ object CardanoLiaison:
 
     }
 
-    type Request = PreStart.type | BlockConfirmed.Major | BlockConfirmed.Final | Timeout.type
+    type Request =
+        PreStart.type | BlockConfirmed.Major | BlockConfirmed.Final | Timeout.type |
+            Stack.HardConfirmed
     type Handle = ActorRef[IO, Request]
 
     case object PreStart
@@ -290,6 +293,20 @@ trait CardanoLiaison(
                 Tracer.scopedCtx("cardanoLiaisonMode" -> "Timeout") {
                     Tracer.info("received Timeout, run effects...") >>
                         runEffects
+                }
+            case stack: Stack.HardConfirmed =>
+                Tracer.scopedCtx(
+                  "cardanoLiaisonMode" -> "Stack.HardConfirmed",
+                  "stackNum" -> s"${stack.round1.unsigned.brief.stackNum: Int}"
+                ) {
+                    // TODO(M9 full): submit per-effect L1 txs in dependency order:
+                    //   settlement / finalization (the unlock) first, then fallback,
+                    //   rollouts, refunds, evac commitments. For now we only acknowledge
+                    //   receipt — StackEffects bodies are placeholder until M1 lands.
+                    Tracer.info(
+                      "received Stack.HardConfirmed for stack " +
+                          s"${stack.round1.unsigned.brief.stackNum}"
+                    )
                 }
         }
 

@@ -61,6 +61,11 @@ final case class SlowConsensusActor(
     private def handleStackUnsigned(s: Stack.Unsigned): IO[Unit] = for {
         _ <- logger.info(s"Stub auto-confirming stack ${s.brief.stackNum}")
         conn <- getConnections
+        // Build a stub Stack.HardConfirmed (no real ack data) — matches auto-confirm
+        // behaviour. CardanoLiaison logs the receipt; real submission lands once the
+        // StackEffects bodies are real (M1).
+        hardConfirmed = Stack.HardConfirmed(Stack.Round1Confirmed(s))
+        _ <- conn.cardanoLiaison ! hardConfirmed
         _ <- conn.stackComposer ! PreviousStackHardConfirmation(s.brief.stackNum)
     } yield ()
 
@@ -81,6 +86,7 @@ final case class SlowConsensusActor(
                   Some(
                     Connections(
                       stackComposer = c.stackComposer,
+                      cardanoLiaison = c.cardanoLiaison,
                       peerLiaisons = c.peerLiaisons
                     )
                   )
@@ -97,6 +103,7 @@ object SlowConsensusActor {
 
     final case class Connections(
         stackComposer: StackComposer.Handle,
+        cardanoLiaison: CardanoLiaison.Handle,
         peerLiaisons: List[PeerLiaison.Handle]
     )
 
