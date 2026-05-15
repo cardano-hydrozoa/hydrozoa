@@ -36,9 +36,8 @@ import hydrozoa.multisig.ledger.stack.*
   *     longest-prefix `ready` view, validate composition, re-derive effects locally (deterministic
   *     per spec), wrap into [[Stack.Unsigned]], and hand to SlowConsensusActor.
   *
-  * Round-2 / sole-round signing details and effect-derivation bodies are TODO — this iteration
-  * exercises the wiring and the close-trigger semantics; downstream consumers (M1, M3 wallet, M6
-  * ack-aggregation) fill in the rest.
+  * Effect derivation, wallet signing, and own-ack bundling are live; the [[SlowConsensusActor]]
+  * still auto-confirms (M6 next slice will replace it with real ack aggregation across head peers).
   */
 final case class StackComposer(
     config: StackComposer.Config,
