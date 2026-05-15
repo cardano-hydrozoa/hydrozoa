@@ -63,6 +63,8 @@ trait MultisigRegimeManager(
                     Tracer.warn("Terminated event sequencer actor")
                 case Actors.StackComposer =>
                     Tracer.warn("Terminated stack composer actor")
+                case Actors.SlowConsensus =>
+                    Tracer.warn("Terminated slow consensus actor")
             }
         case TerminatedDependency(dependencyType, _) =>
             dependencyType match {
@@ -107,6 +109,10 @@ trait MultisigRegimeManager(
               StackComposer(config, pendingConnections, tracerLocal)
             )
 
+            slowConsensusActor <- context.actorOf(
+              SlowConsensusActor(config, pendingConnections, tracerLocal)
+            )
+
             localPeerLiaisons <-
                 config.headPeerIds
                     .filterNot(_ == config.ownHeadPeerId)
@@ -124,6 +130,7 @@ trait MultisigRegimeManager(
               eventSequencer = eventSequencer,
               jointLedger = jointLedger,
               stackComposer = stackComposer,
+              slowConsensusActor = slowConsensusActor,
               peerLiaisons = localPeerLiaisons,
               remotePeerLiaisons = Map.empty,
               tracer = tracer,
@@ -150,6 +157,10 @@ trait MultisigRegimeManager(
               stackComposer,
               TerminatedChild(Actors.StackComposer, stackComposer)
             )
+            _ <- context.watch(
+              slowConsensusActor,
+              TerminatedChild(Actors.SlowConsensus, slowConsensusActor)
+            )
         } yield ()
 }
 
@@ -163,6 +174,7 @@ object MultisigRegimeManager {
         eventSequencer: EventSequencer.Handle,
         jointLedger: JointLedger.Handle,
         stackComposer: StackComposer.Handle,
+        slowConsensusActor: SlowConsensusActor.Handle,
         peerLiaisons: List[PeerLiaison.Handle],
         remotePeerLiaisons: Map[HeadPeerId, PeerLiaison.Handle],
         tracer: ProtocolTracer = ProtocolTracer.noop,
@@ -183,7 +195,7 @@ object MultisigRegimeManager {
       */
     enum Actors:
         case BlockWeaver, CardanoLiaison, Consensus, JointLedger, PeerLiaison, EventSequencer,
-            StackComposer
+            StackComposer, SlowConsensus
 
     /** Requests received by the multisig regime manager. */
     type Request = PreStart.type | TerminatedChild | TerminatedDependency
