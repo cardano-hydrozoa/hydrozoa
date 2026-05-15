@@ -1,7 +1,6 @@
 package hydrozoa.lib.petri.net.components
 
 import hydrozoa.lib.number.NonNegativeInt
-import hydrozoa.lib.petri.net.components.Expression
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 
 object Transition {
@@ -18,26 +17,39 @@ object Transition {
         val id: TransitionId
     }
 
-    // Stub: there are not currently any topological properties. In the future, there may be typed "ports",
-    // connection limits, etc.
+    // Stub. Component-side acceptance predicates are deferred until the builder is designed.
+    // See Place.Topology for rationale.
     trait Topology
 
-    trait Semantics {
-        val precondition: Expression
-        val postcondition: Expression
-    }
+    // We don't currently support data expressions. These should likely be net-wide anyways.
+    trait Semantics
+//    {
+//        val precondition: Expression
+//        val postcondition: Expression
+//    }
 
-    trait Simulation {
+    object Semantics
 
-        /** Controls whether the firing of this transition appears in the event logs
-          */
-        def silent: Boolean
+    // Instantiation data is split into per-property sub-traits. See package.scala for documentation
+    // on the F-bounded polymorphism and mixin patterns used here.
+    trait Syntax
 
-        /** I _believe_ this controls the relative priority of transitions when selecting among all
-          * enabled transitions for auto-firing. I'm not certain of the precise semantics.
-          * @return
-          */
-        def priority: NonNegativeInt
+    object Syntax {
+
+        trait HasSilent[Self <: HasSilent[Self]] extends Syntax { self: Self =>
+            /** Controls whether the firing of this transition appears in the event logs.
+              */
+            def silent: Boolean
+            def withSilent(s: Boolean): Self
+        }
+
+        trait HasPriority[Self <: HasPriority[Self]] extends Syntax { self: Self =>
+            /** I _believe_ this controls the relative priority of transitions when selecting among
+              * all enabled transitions for auto-firing. I'm not certain of the precise semantics.
+              */
+            def priority: NonNegativeInt
+            def withPriority(p: NonNegativeInt): Self
+        }
     }
 
     /** @param label
@@ -66,15 +78,17 @@ object Transition {
   */
 case class TransitionNoId(
     override val label: String,
-    override val postcondition: Expression = (),
-    override val precondition: Expression = (),
-    override val delay: scala.concurrent.duration.FiniteDuration = 0.millis,
-    override val height: hydrozoa.lib.number.NonNegativeInt = NonNegativeInt.unsafeApply(50),
+    override val delay: FiniteDuration = 0.millis,
+    override val height: NonNegativeInt = NonNegativeInt.unsafeApply(50),
     override val position: (Int, Int) = (0, 0),
-    override val width: hydrozoa.lib.number.NonNegativeInt = NonNegativeInt.unsafeApply(20),
-    override val priority: hydrozoa.lib.number.NonNegativeInt = NonNegativeInt.unsafeApply(0),
+    override val width: NonNegativeInt = NonNegativeInt.unsafeApply(20),
+    override val priority: NonNegativeInt = NonNegativeInt.unsafeApply(0),
     override val silent: Boolean = false
 ) extends Transition.Topology,
       Transition.Semantics,
-      Transition.Simulation,
-      Transition.Presentation
+      Transition.Syntax.HasSilent[TransitionNoId],
+      Transition.Syntax.HasPriority[TransitionNoId],
+      Transition.Presentation {
+    override def withSilent(s: Boolean): TransitionNoId = this.copy(silent = s)
+    override def withPriority(p: NonNegativeInt): TransitionNoId = this.copy(priority = p)
+}
