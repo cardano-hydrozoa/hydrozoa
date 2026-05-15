@@ -181,12 +181,13 @@ object CardanoLiaison:
         type Final = BlockHeader.Fields.HasBlockNum & BlockHeader.Fields.HasBlockVersion &
             BlockEffects.HardConfirmed.Final.Section
 
-        /** For testing purposes, where we may not want to construct a whole Block.MultiSigned. */
+        /** For testing purposes, where we may not want to construct a whole Block.HardConfirmed. */
         sealed trait Minimal extends BlockHeader.Fields.HasBlockVersion
 
         object Minimal {
 
-            /** For testing purposes, where we may not want to construct a whole Block.MultiSigned.
+            /** For testing purposes, where we may not want to construct a whole
+              * Block.HardConfirmed.
               */
             final case class Major(
                 override val blockVersion: BlockVersion.Full,
@@ -200,7 +201,8 @@ object CardanoLiaison:
                     .Major(settlementTx, rolloutTxs, fallbackTx, postDatedRefundTxs)
             }
 
-            /** For testing purposes, where we may not want to construct a whole Block.MultiSigned.
+            /** For testing purposes, where we may not want to construct a whole
+              * Block.HardConfirmed.
               */
             final case class Final(
                 override val blockVersion: BlockVersion.Full,
@@ -307,7 +309,7 @@ trait CardanoLiaison(
     // Inbox handlers
     // ===================================
 
-    /** Handle [[Block.MultiSigned.Major]] request:
+    /** Handle [[Block.HardConfirmed.Major]] request:
       *   - saves the effects in the internal actor's state
       */
     protected[consensus] def handleMajorBlockL1Effects(block: BlockConfirmed.Major): IO[Unit] =
@@ -350,7 +352,7 @@ trait CardanoLiaison(
             _ <- Tracer.trace(s"state after update: ${newState.prettyDump}")
         } yield ()
 
-    /** Handle [[Block.MultiSigned.Final]] request:
+    /** Handle [[Block.HardConfirmed.Final]] request:
       *   - saves the effects in the internal actor's state
       */
     protected[consensus] def handleFinalBlockL1Effects(block: BlockConfirmed.Final): IO[Unit] =

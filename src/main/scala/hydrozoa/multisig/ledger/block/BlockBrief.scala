@@ -9,7 +9,7 @@ sealed trait BlockBrief extends BlockBrief.Section {
 
     def asUnsigned: this.type & BlockStatus.Unsigned =
         this.asInstanceOf[this.type & BlockStatus.Unsigned]
-    def asMultiSigned: this.type & BlockStatus.HardConfirmed =
+    def asHardConfirmed: this.type & BlockStatus.HardConfirmed =
         this.asInstanceOf[this.type & BlockStatus.HardConfirmed]
     def asSoftConfirmed: this.type & BlockStatus.SoftConfirmed =
         this.asInstanceOf[this.type & BlockStatus.SoftConfirmed]

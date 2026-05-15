@@ -2,6 +2,7 @@ package hydrozoa.multisig.consensus.peer
 
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.ledger.block.BlockNumber
+import hydrozoa.multisig.ledger.stack.StackNumber
 import io.circe.*
 import io.circe.generic.semiauto.*
 import scala.annotation.targetName
@@ -9,9 +10,15 @@ import scala.annotation.targetName
 final case class HeadPeerId(peerNum: HeadPeerNumber, nHeadPeers: PositiveInt) {
     require(peerNum.convert < nHeadPeers, "Peer ID must be less than the number of peers.")
 
-    /** Is the peer the consensus leader of the given block number? */
+    /** Is the peer the fast-cycle consensus leader of the given block number? */
     def isLeader(blockNum: BlockNumber): Boolean =
         blockNum.convert % nHeadPeers == peerNum.convert
+
+    /** Is the peer the slow-cycle leader of the given stack number? Round-robin schedule
+      * independent of the fast cycle, keyed on `stackNum` instead of `blockNum`.
+      */
+    def isSlowLeader(stackNum: StackNumber): Boolean =
+        stackNum.convert % nHeadPeers == peerNum.convert
 
     /** After the given block number, for which block number will the peer next be leader? */
     def nextLeaderBlock(blockNum: BlockNumber): BlockNumber = {
