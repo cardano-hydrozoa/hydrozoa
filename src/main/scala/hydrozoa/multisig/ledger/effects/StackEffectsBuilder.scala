@@ -28,10 +28,11 @@ object StackEffectsBuilder {
       * Per-block dispatch:
       *   - **Minor**: emit any post-dated refund txs the block carried (deposit refunds set up at
       *     registration time).
-      *   - **Major**: TODO — call `L1LedgerM.mkSettlementTxSeq(...)` for settlement + fallback +
-      *     rollouts using the block's `payoutObligations` + absorbed-deposit list.
-      *   - **Final**: TODO — call `L1LedgerM.finalizeLedger(...)` for finalization tx + rollouts;
-      *     no refunds (drained via finalization).
+      *   - **Major**: call `L1LedgerM.mkSettlementTxSeq(...)` for settlement + fallback + rollouts
+      *     using the block's `payoutObligations` + absorbed-deposit list. Treasury rotates through
+      *     `L1LedgerM` state.
+      *   - **Final**: call `L1LedgerM.finalizeLedger(...)` for finalization tx + rollouts. No
+      *     refunds (drained via finalization). At most one Final per stack.
       *
       * Per-partition compression:
       *   - **TrailingMinors**: TODO — build a [[StandaloneEvacCommitTx]] over the partition's final
@@ -41,10 +42,6 @@ object StackEffectsBuilder {
       * The first settlement / finalization across the produced lists is the round-2 unlock; the
       * caller (StackComposer) is responsible for marking it as such when building the HardAck
       * payload.
-      *
-      * **Current scope:** minor-only stacks fully handled (refund txs collected; no settlement /
-      * fallback / rollout; standalone evac commit deferred to next slice). Stacks containing Major
-      * / Final blocks fall through to TODOs.
       */
     def deriveRegular(
         partitions: List[Partition]
