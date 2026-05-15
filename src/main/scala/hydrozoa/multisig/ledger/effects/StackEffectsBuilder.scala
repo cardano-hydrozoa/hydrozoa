@@ -3,7 +3,7 @@ package hydrozoa.multisig.ledger.effects
 import cats.implicits.*
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockResult, BlockType}
 import hydrozoa.multisig.ledger.l1.L1LedgerM
-import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, FinalizationTx, RefundTx, RolloutTx, SettlementTx}
+import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, FinalizationTx, RefundTx, RolloutTx, SettlementTx, StandaloneEvacCommitTx}
 import hydrozoa.multisig.ledger.stack.StackEffects
 
 /** Slow-side effect derivation: from the partitioned stack content, produce the necessary L1 effect
@@ -35,9 +35,11 @@ object StackEffectsBuilder {
       *     refunds (drained via finalization). At most one Final per stack.
       *
       * Per-partition compression:
-      *   - **TrailingMinors**: TODO — build a [[StandaloneEvacCommitTx]] over the partition's final
-      *     cumulative evac-map state. The "necessary effects" rule keeps only the LAST standalone
-      *     evac commit per such partition.
+      *   - **TrailingMinors**: emit one [[StandaloneEvacCommitTx]] for the partition's LAST block's
+      *     cumulative KZG. The "necessary effects" rule keeps only the LAST standalone evac commit
+      *     per such partition — earlier ones are superseded. Tx body construction is stubbed
+      *     pending an on-chain script update; see
+      *     [[hydrozoa.multisig.ledger.l1.L1LedgerM.mkStandaloneEvacCommitTx]].
       *
       * The first settlement / finalization across the produced lists is the round-2 unlock; the
       * caller (StackComposer) is responsible for marking it as such when building the HardAck
@@ -77,62 +79,79 @@ object StackEffectsBuilder {
             case b if b.brief.isInstanceOf[BlockBrief.Final] => b
         }
 
-        unlockBlocks
-            .traverse { b =>
-                b.brief match {
-                    case majorBrief: BlockBrief.Major =>
-                        L1LedgerM
-                            .mkSettlementTxSeq(
-                              nextKzg = majorBrief.header.kzgCommitment,
-                              absorbedDeposits = b.absorbedDeposits,
-                              payoutObligations = b.payoutObligations.toVector,
-                              blockCreationEndTime = majorBrief.header.endTime,
-                              competingFallbackValidityStart = b.competingFallbackTxTime
-                            )
-                            .map(FromMajor.apply: SettlementTxSeqOut => BlockOutput)
-                    case _: BlockBrief.Final =>
-                        L1LedgerM
-                            .finalizeLedger(
-                              payoutObligationsRemaining = b.payoutObligations.toVector,
-                              competingFallbackValidityStart = b.competingFallbackTxTime
-                            )
-                            .map(FromFinal.apply: FinalizationTxSeqOut => BlockOutput)
-                    case _: BlockBrief.Minor =>
-                        // unreachable: unlockBlocks only contains Major / Final
-                        L1LedgerM.pure[BlockOutput](
-                          throw new IllegalStateException(
-                            "unlockBlocks contained a non-Major non-Final brief"
-                          )
+        val unlockTraversal: L1LedgerM[List[BlockOutput]] = unlockBlocks.traverse { b =>
+            b.brief match {
+                case majorBrief: BlockBrief.Major =>
+                    L1LedgerM
+                        .mkSettlementTxSeq(
+                          nextKzg = majorBrief.header.kzgCommitment,
+                          absorbedDeposits = b.absorbedDeposits,
+                          payoutObligations = b.payoutObligations.toVector,
+                          blockCreationEndTime = majorBrief.header.endTime,
+                          competingFallbackValidityStart = b.competingFallbackTxTime
                         )
-                }
+                        .map(FromMajor.apply: SettlementTxSeqOut => BlockOutput)
+                case _: BlockBrief.Final =>
+                    L1LedgerM
+                        .finalizeLedger(
+                          payoutObligationsRemaining = b.payoutObligations.toVector,
+                          competingFallbackValidityStart = b.competingFallbackTxTime
+                        )
+                        .map(FromFinal.apply: FinalizationTxSeqOut => BlockOutput)
+                case _: BlockBrief.Minor =>
+                    // unreachable: unlockBlocks only contains Major / Final
+                    L1LedgerM.pure[BlockOutput](
+                      throw new IllegalStateException(
+                        "unlockBlocks contained a non-Major non-Final brief"
+                      )
+                    )
             }
-            .map { outs =>
-                val settlements: List[SettlementTx] = outs.collect { case FromMajor(s) =>
-                    s.settlementTx
-                }
-                val fallbacks: List[FallbackTx] = outs.collect { case FromMajor(s) =>
-                    s.fallbackTx
-                }
-                val majorRollouts: List[RolloutTx] = outs.collect { case FromMajor(s) =>
-                    s.rolloutTxs
-                }.flatten
-                val finalizations: List[FinalizationTx] = outs.collect { case FromFinal(f) =>
-                    f.finalizationTx
-                }
-                val finalRollouts: List[RolloutTx] = outs.collect { case FromFinal(f) =>
-                    f.rolloutTxs
-                }.flatten
+        }
 
-                // TODO(next slice): TrailingMinors → StandaloneEvacCommitTx construction.
-                StackEffects.Regular(
-                  settlements = settlements,
-                  fallbacks = fallbacks,
-                  rollouts = majorRollouts ++ finalRollouts,
-                  refunds = refunds,
-                  evacCommits = Nil,
-                  finalization = finalizations.headOption
-                )
+        // Per spec: TrailingMinors partition keeps only the LAST evac commit. A stack has at
+        // most one TrailingMinors partition (and only as the last partition, since it implies
+        // no Major / Final follows). Compress by taking the partition's last block's
+        // cumulative KZG and emitting one standalone evac-commit tx for it.
+        //
+        // Treasury rotation order: any Major/Final unlocks rotate first, then the standalone
+        // evac commit rotates on top (no major-version bump). Done after the unlock traversal
+        // so the L1LedgerM state has the latest treasury when the evac commit fires.
+        val trailingMinorEvacCommits: L1LedgerM[List[StandaloneEvacCommitTx]] = partitions
+            .filter(_.closing == Partition.Closing.TrailingMinors)
+            .traverse { p =>
+                val lastKzg = p.blocks.last.brief.header.kzgCommitment
+                L1LedgerM.mkStandaloneEvacCommitTx(lastKzg)
             }
+
+        for {
+            outs <- unlockTraversal
+            evacCommits <- trailingMinorEvacCommits
+        } yield {
+            val settlements: List[SettlementTx] = outs.collect { case FromMajor(s) =>
+                s.settlementTx
+            }
+            val fallbacks: List[FallbackTx] = outs.collect { case FromMajor(s) =>
+                s.fallbackTx
+            }
+            val majorRollouts: List[RolloutTx] = outs.collect { case FromMajor(s) =>
+                s.rolloutTxs
+            }.flatten
+            val finalizations: List[FinalizationTx] = outs.collect { case FromFinal(f) =>
+                f.finalizationTx
+            }
+            val finalRollouts: List[RolloutTx] = outs.collect { case FromFinal(f) =>
+                f.rolloutTxs
+            }.flatten
+
+            StackEffects.Regular(
+              settlements = settlements,
+              fallbacks = fallbacks,
+              rollouts = majorRollouts ++ finalRollouts,
+              refunds = refunds,
+              evacCommits = evacCommits,
+              finalization = finalizations.headOption
+            )
+        }
     }
 
     /** Build the initial-stack (stack 0) effect bundle. The init tx is exogenous (head config); the
