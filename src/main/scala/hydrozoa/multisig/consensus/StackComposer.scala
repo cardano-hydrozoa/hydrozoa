@@ -28,9 +28,9 @@ import hydrozoa.multisig.ledger.stack.*
   *   - **Leader** (when `isSlowLeader(nextStackNum)`): on `PreviousStackHardConfirmation` OR after
   *     pairing a new block, attempts to close the next stack from the longest contiguous prefix.
   *     Closing means: build [[StackBrief]] + [[StackEffects]] (via
-  *     [[hydrozoa.multisig.ledger.effects.StackEffectsBuilder]] — body is `???` for now), wrap into
-  *     [[Stack.Unsigned]], hand off to [[SlowConsensusActor]], and broadcast the brief directly to
-  *     PeerLiaisons.
+  *     [[hydrozoa.multisig.ledger.effects.StackEffectsBuilder]] — minor-only stacks fully derive;
+  *     Major / Final fall through to TODOs in the next slice), wrap into [[Stack.Unsigned]], hand
+  *     off to [[SlowConsensusActor]], and broadcast the brief directly to PeerLiaisons.
   *   - **Follower**: when an inbound `StackBrief` for `lastClosedStackNum + 1` matches the local
   *     longest-prefix `ready` view, validate composition, re-derive effects locally (deterministic
   *     per spec), wrap into [[Stack.Unsigned]], and hand to SlowConsensusActor.
