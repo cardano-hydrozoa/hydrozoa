@@ -1,7 +1,8 @@
-package hydrozoa.lib.petri.net
+package hydrozoa.lib.petri
 
 import cats.data.NonEmptyList
 import cats.implicits.*
+import hydrozoa.lib.petri.net.*
 import hydrozoa.lib.petri.net.components.*
 
 /** A [[Simulator]] mixin that fires transitions sequentially: one arc at a time, in the order

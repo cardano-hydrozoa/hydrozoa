@@ -1,7 +1,7 @@
 package hydrozoa.lib.petri.net.components
 
 import hydrozoa.lib.number.NonNegativeInt
-import scala.concurrent.duration.{DurationInt, FiniteDuration}
+import scala.concurrent.duration.FiniteDuration
 
 object Transition {
     sealed trait Error extends Throwable
@@ -76,23 +76,4 @@ object Transition {
         val position: (Int, Int)
         val delay: FiniteDuration
     }
-}
-
-/** A canonical transition case class
-  */
-case class TransitionNoId(
-    override val label: String,
-    override val delay: FiniteDuration = 0.millis,
-    override val height: NonNegativeInt = NonNegativeInt.unsafeApply(50),
-    override val position: (Int, Int) = (0, 0),
-    override val width: NonNegativeInt = NonNegativeInt.unsafeApply(20),
-    override val priority: NonNegativeInt = NonNegativeInt.unsafeApply(0),
-    override val silent: Boolean = false
-) extends Transition.Topology,
-      Transition.Semantics,
-      Transition.Syntax.HasSilent[TransitionNoId],
-      Transition.Syntax.HasPriority[TransitionNoId],
-      Transition.Presentation {
-    override def withSilent(s: Boolean): TransitionNoId = this.copy(silent = s)
-    override def withPriority(p: NonNegativeInt): TransitionNoId = this.copy(priority = p)
 }
