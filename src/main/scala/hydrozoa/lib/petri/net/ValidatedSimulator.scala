@@ -49,14 +49,24 @@ object ValidatedSimulator {
         /** One or more topology constraints were violated (e.g. dangling arcs, duplicate arcs). See
           * [[Net.Topology.topologyErrors]] for full error definitions.
           */
-        case class TopologyInvalid(errors: NonEmptyList[Net.Topology.Error]) extends ValidationError
+        case class TopologyInvalid(errors: NonEmptyList[Net.Topology.Error])
+            extends ValidationError {
+            override def getMessage: String =
+                s"Net topology is invalid: ${errors.toList.map(_.getMessage).mkString("; ")}"
+        }
 
         /** One or more arc / place / transition IDs have no defined syntax entry. */
-        case class SyntaxInvalid(errors: NonEmptyList[Net.Syntax.Error]) extends ValidationError
+        case class SyntaxInvalid(errors: NonEmptyList[Net.Syntax.Error]) extends ValidationError {
+            override def getMessage: String =
+                s"Net syntax is invalid: ${errors.toList.map(_.getMessage).mkString("; ")}"
+        }
 
         /** One or more arc / place / transition IDs have no defined semantics entry. */
         case class SemanticsInvalid(errors: NonEmptyList[Net.Semantics.Error])
-            extends ValidationError
+            extends ValidationError {
+            override def getMessage: String =
+                s"Net semantics are invalid: ${errors.toList.map(_.getMessage).mkString("; ")}"
+        }
     }
 
     // =========================================================================

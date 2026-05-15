@@ -84,11 +84,19 @@ object Net {
     object Topology {
         trait Error extends Net.Error
 
-        case class MissingArcTopology[ArcId](arcId: ArcId) extends Error
+        case class MissingArcTopology[ArcId](arcId: ArcId) extends Error {
+            override def getMessage: String = s"Missing arc topology for arc ID: $arcId"
+        }
 
-        case class MissingPlaceTopology[PlaceId](placeId: PlaceId) extends Error
+        case class MissingPlaceTopology[PlaceId](placeId: PlaceId) extends Error {
+            override def getMessage: String = s"Missing place topology for place ID: $placeId"
+        }
 
-        case class MissingTransitionTopology[TransitionId](transitionId: TransitionId) extends Error
+        case class MissingTransitionTopology[TransitionId](transitionId: TransitionId)
+            extends Error {
+            override def getMessage: String =
+                s"Missing transition topology for transition ID: $transitionId"
+        }
 
         /** Mixin: validates that no arc references a place or transition ID absent from the net.
           *
@@ -132,6 +140,12 @@ object Net {
             enum Error[ArcId, PlaceId, TransitionId] extends Net.Topology.Error:
                 case DanglingArcPlace(arcId: ArcId, placeId: PlaceId)
                 case DanglingArcTransition(arcId: ArcId, transitionId: TransitionId)
+
+                override def getMessage: String = this match
+                    case DanglingArcPlace(arcId, placeId) =>
+                        s"Arc $arcId references place $placeId which is not in the net"
+                    case DanglingArcTransition(arcId, transitionId) =>
+                        s"Arc $arcId references transition $transitionId which is not in the net"
         }
 
         /** Mixin: validates at most one arc per (place, transition) pair.
@@ -186,8 +200,11 @@ object Net {
                 case class DuplicateArc[ArcId, PlaceId, TransitionId](
                     arcIds: NonEmptyList[ArcId],
                     placeId: PlaceId,
-                    transitionId: TransitionId
-                ) extends Topology.Error
+                    transitionId: TransitionId,
+                ) extends Topology.Error {
+                    override def getMessage: String =
+                        s"Multiple arcs [${arcIds.toList.mkString(", ")}] connect place $placeId to transition $transitionId"
+                }
             }
         }
     }
@@ -236,11 +253,17 @@ object Net {
     object Syntax {
         trait Error extends Net.Error
 
-        case class MissingArcSyntax[ArcId](arcId: ArcId) extends Error
+        case class MissingArcSyntax[ArcId](arcId: ArcId) extends Error {
+            override def getMessage: String = s"No syntax entry for arc ID: $arcId"
+        }
 
-        case class MissingPlaceSyntax[PlaceId](placeId: PlaceId) extends Error
+        case class MissingPlaceSyntax[PlaceId](placeId: PlaceId) extends Error {
+            override def getMessage: String = s"No syntax entry for place ID: $placeId"
+        }
 
-        case class MissingTransitionSyntax[TransitionId](transitionId: TransitionId) extends Error
+        case class MissingTransitionSyntax[TransitionId](transitionId: TransitionId) extends Error {
+            override def getMessage: String = s"No syntax entry for transition ID: $transitionId"
+        }
     }
 
     // =========================================================================
@@ -289,12 +312,19 @@ object Net {
     object Semantics {
         trait Error extends Net.Error
         object Error {
-            case class MissingArcSemantics[ArcId](arcId: ArcId) extends Error
+            case class MissingArcSemantics[ArcId](arcId: ArcId) extends Error {
+                override def getMessage: String = s"No semantics entry for arc ID: $arcId"
+            }
 
-            case class MissingPlaceSemantics[PlaceId](placeId: PlaceId) extends Error
+            case class MissingPlaceSemantics[PlaceId](placeId: PlaceId) extends Error {
+                override def getMessage: String = s"No semantics entry for place ID: $placeId"
+            }
 
             case class MissingTransitionSemantics[TransitionId](transitionId: TransitionId)
-                extends Error
+                extends Error {
+                override def getMessage: String =
+                    s"No semantics entry for transition ID: $transitionId"
+            }
         }
 
         /** Terminal-marking check, available on any net whose place type carries
@@ -312,7 +342,10 @@ object Net {
                     placeId: PlaceId,
                     current: NonNegativeInt,
                     expected: NonNegativeInt,
-                ) extends FinalMarking.Error
+                ) extends FinalMarking.Error {
+                    override def getMessage: String =
+                        s"Place $placeId has $current tokens but final marking requires $expected"
+                }
             }
 
             extension [

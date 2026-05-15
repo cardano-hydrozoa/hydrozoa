@@ -98,5 +98,8 @@ object SequentialSimulator {
       * via [[Net.Topology.isValidTopology]] before simulating.
       */
     case class DanglingArc[ArcId, PlaceId](arcId: ArcId, placeId: PlaceId)
-        extends Simulator.FiringError
+        extends Simulator.FiringError {
+        override def getMessage: String =
+            s"Arc $arcId references place $placeId which has no semantics entry; validate topology before simulating"
+    }
 }

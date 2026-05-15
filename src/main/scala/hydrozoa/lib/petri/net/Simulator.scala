@@ -75,27 +75,42 @@ object Simulator {
     object FiringError {
 
         /** The requested transition ID is not present in the net. */
-        case class TransitionNotFound[TransitionId](transitionId: TransitionId) extends FiringError
+        case class TransitionNotFound[TransitionId](transitionId: TransitionId)
+            extends FiringError {
+            override def getMessage: String = s"Transition not found: $transitionId"
+        }
 
         /** Arc `arcId` connected to place `placeId` failed one or more enabling checks (E2). */
         case class ArcNotEnabled[ArcId, PlaceId](
             arcId: ArcId,
             placeId: PlaceId,
-            errors: NonEmptyList[Arc.Semantics.EnablingError]
-        ) extends FiringError
+            errors: NonEmptyList[Arc.Semantics.EnablingError],
+        ) extends FiringError {
+            override def getMessage: String =
+                s"Arc $arcId on place $placeId is not enabled: ${errors.toList.map(_.getMessage).mkString("; ")}"
+        }
 
         /** Arc `arcId`'s firing endo returned a [[Arc.Semantics.FiringError]]. */
         case class ArcFiringFailed[ArcId](arcId: ArcId, cause: Arc.Semantics.FiringError)
-            extends FiringError
+            extends FiringError {
+            override def getMessage: String =
+                s"Arc $arcId firing failed: ${cause.getMessage}"
+        }
 
         /** Place `placeId` has one or more invalid marking constraints after firing (E1). */
         case class PlaceValidityViolated[PlaceId](
             placeId: PlaceId,
-            cause: NonEmptyList[Place.Semantics.MarkingError]
-        ) extends FiringError
+            cause: NonEmptyList[Place.Semantics.MarkingError],
+        ) extends FiringError {
+            override def getMessage: String =
+                s"Place $placeId has invalid marking after firing: ${cause.toList.map(_.getMessage).mkString("; ")}"
+        }
 
         /** [[Net.Semantics.netEnablingPredicate]] returned false for the transition. */
-        case class NetEnablingFailed[TransitionId](transitionId: TransitionId) extends FiringError
+        case class NetEnablingFailed[TransitionId](transitionId: TransitionId) extends FiringError {
+            override def getMessage: String =
+                s"Net-level enabling predicate failed for transition: $transitionId"
+        }
     }
 
     // =========================================================================

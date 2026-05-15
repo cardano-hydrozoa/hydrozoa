@@ -386,6 +386,7 @@ object Demo extends IOApp {
 
     override def run(args: List[String]): IO[ExitCode] =
         for {
+            _ <- IO.println(s"Topology errors: ${evacuationNet.topologyErrors}")
             _ <- IO.println(evacuationNet.asJson)
         } yield ExitCode.Success
 

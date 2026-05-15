@@ -10,7 +10,9 @@ object Transition {
         // TODO: data expressions can either be syntactically invalid or have dangling
         // variable references. We're not using them now, so this is simple. It should propagate
         // to a ValidityFlag in the future.
-        case object InvalidDataExpression extends Error
+        case object InvalidDataExpression extends Error {
+            override def getMessage: String = "Invalid data expression in transition"
+        }
     }
 
     trait Id[TransitionId] {
