@@ -26,8 +26,8 @@ import hydrozoa.lib.petri.net.components.*
   *
   * ## Monadic simulation
   *
-  * [[Simulator.Sim]] is the opaque simulation monad: `StateT[Either[FiringError, _], Self, A]`.
-  * It threads net state automatically and short-circuits on the first firing error. Use
+  * [[Simulator.Sim]] is the opaque simulation monad: `StateT[Either[FiringError, _], Self, A]`. It
+  * threads net state automatically and short-circuits on the first firing error. Use
   * [[Simulator.Sim.fire]], [[Simulator.Sim.inspect]], [[Simulator.Sim.isEnabled]], and
   * [[Simulator.Sim.enabledTransitions]] to build programs; [[Simulator.Sim.run]] to execute them.
   */
@@ -78,8 +78,7 @@ object Simulator {
         case class TransitionNotFound[TransitionId](transitionId: TransitionId) extends FiringError
 
         /** Arc `arcId` connected to place `placeId` has a false enabling predicate (E2). */
-        case class ArcNotEnabled[ArcId, PlaceId](arcId: ArcId, placeId: PlaceId)
-            extends FiringError
+        case class ArcNotEnabled[ArcId, PlaceId](arcId: ArcId, placeId: PlaceId) extends FiringError
 
         /** Arc `arcId`'s firing endo returned a [[Arc.Semantics.FiringError]]. */
         case class ArcFiringFailed[ArcId](arcId: ArcId, cause: Arc.Semantics.FiringError)
@@ -101,8 +100,8 @@ object Simulator {
 
     /** Opaque simulation monad: `StateT[Either[FiringError, _], S, A]`.
       *
-      * State `S` can only be modified via [[Sim.fire]]; all other operations are read-only.
-      * This prevents callers from constructing arbitrary net states outside of legitimate firings.
+      * State `S` can only be modified via [[Sim.fire]]; all other operations are read-only. This
+      * prevents callers from constructing arbitrary net states outside of legitimate firings.
       *
       * Programs are built from [[Sim.fire]], [[Sim.inspect]], [[Sim.isEnabled]], and
       * [[Sim.enabledTransitions]], composed via `map` / `flatMap` (or for-comprehensions with
@@ -183,8 +182,8 @@ object Simulator {
         // find this very given and loop. Named method call bypasses that search.
         given [S]: Monad[[A] =>> Sim[S, A]] =
             cats.data.IndexedStateT.catsDataMonadForIndexedStateT[
-                [X] =>> Either[Simulator.FiringError, X],
-                S
+              [X] =>> Either[Simulator.FiringError, X],
+              S
             ]
     }
 }
