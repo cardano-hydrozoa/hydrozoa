@@ -133,10 +133,10 @@ case class MapNet[
 object MapNet {
 
     // =========================================================================
-    // BuilderError
+    // BuilderError — shared by BuilderM and BuilderMOps
     // =========================================================================
 
-    /** Errors that can arise when building a [[MapNet]] with [[BuilderM]]. */
+    /** Errors that can arise when building a [[MapNet]] with [[BuilderMOps]]. */
     enum BuilderError[ArcId, PlaceId, TransitionId]:
         case PlaceIdConflict(placeId: PlaceId)
         case PlaceIdMissing(placeId: PlaceId)
@@ -163,25 +163,20 @@ object MapNet {
         MapNet(TreeMap.empty, TreeMap.empty, TreeMap.empty)
 
     // =========================================================================
-    // BuilderM — opaque builder monad
+    // BuilderM — class wrapping IndexedStateT
     // =========================================================================
 
-    /** Opaque builder monad: `IndexedStateT[Either[BuilderError, _], MapNet, MapNet, A]`.
+    /** Builder monad for [[MapNet]]: wraps `IndexedStateT[Either[BuilderError, _], MapNet, MapNet,
+      * Result]`.
       *
-      * Programs are assembled from the operations in [[BuilderM]] (add / remove / update for
-      * places, transitions, and arcs), composed via `map` / `flatMap` (or for-comprehensions with
-      * `import cats.syntax.all.*`), and executed with [[BuilderM.run]] or [[BuilderM.runEmpty]].
+      * `map` and `flatMap` are defined directly on the class, so for-comprehensions work without
+      * any import. Programs are built via [[BuilderMOps]], which fixes the 6 net type parameters
+      * once so that operations infer cleanly at every call site. Execute with [[run]] or
+      * [[runEmpty]].
       *
-      * The monad short-circuits on the first [[BuilderError]]. State can only be modified through
-      * the provided builder operations; use [[BuilderM.inspect]] for read-only access.
-      *
-      * ## Naming convention
-      *
-      * Operations without a trailing `_` are _strict_: they return a [[BuilderError]] if the
-      * precondition is violated (e.g. ID already exists, or ID not found). Operations with a
-      * trailing `_` are _force_ variants: they silently overwrite or no-op instead of failing.
+      * The monad short-circuits on the first [[BuilderError]].
       */
-    opaque type BuilderM[
+    final class BuilderM[
         ArcId,
         PlaceId,
         TransitionId,
@@ -189,381 +184,250 @@ object MapNet {
         P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
         T <: Transition.Topology & Transition.Syntax & Transition.Semantics,
         Result
-    ] = IndexedStateT[
-      [X] =>> Either[BuilderError[ArcId, PlaceId, TransitionId], X],
-      MapNet[ArcId, PlaceId, TransitionId, A, P, T],
-      MapNet[ArcId, PlaceId, TransitionId, A, P, T],
-      Result
-    ]
+    ] private[MapNet] (
+        private[MapNet] val inner: IndexedStateT[
+          [X] =>> Either[BuilderError[ArcId, PlaceId, TransitionId], X],
+          MapNet[ArcId, PlaceId, TransitionId, A, P, T],
+          MapNet[ArcId, PlaceId, TransitionId, A, P, T],
+          Result
+        ]
+    ) {
+        def map[B](
+            f: Result => B
+        ): BuilderM[ArcId, PlaceId, TransitionId, A, P, T, B] =
+            new BuilderM(inner.map(f))
+
+        def flatMap[B](
+            f: Result => BuilderM[ArcId, PlaceId, TransitionId, A, P, T, B]
+        ): BuilderM[ArcId, PlaceId, TransitionId, A, P, T, B] =
+            new BuilderM(inner.flatMap(r => f(r).inner))
+
+        def run(
+            initial: MapNet[ArcId, PlaceId, TransitionId, A, P, T]
+        ): Either[
+          BuilderError[ArcId, PlaceId, TransitionId],
+          (
+              MapNet[ArcId, PlaceId, TransitionId, A, P, T],
+              Result
+          )
+        ] = inner.run(initial)
+
+        def runEmpty(using
+            Ordering[ArcId],
+            Ordering[PlaceId],
+            Ordering[TransitionId]
+        ): Either[
+          BuilderError[ArcId, PlaceId, TransitionId],
+          (
+              MapNet[ArcId, PlaceId, TransitionId, A, P, T],
+              Result
+          )
+        ] = run(MapNet.empty[ArcId, PlaceId, TransitionId, A, P, T])
+    }
 
     object BuilderM {
 
-        // ----- Constructors --------------------------------------------------
-
-        def pure[
-            ArcId: Ordering,
-            PlaceId: Ordering,
-            TransitionId: Ordering,
+        /** `Monad` instance for `BuilderM[ArcId, PlaceId, TransitionId, A, P, T, _]`. Provides
+          * `traverse`, `sequence`, and other derived Cats combinators when in scope.
+          */
+        given [
+            ArcId,
+            PlaceId,
+            TransitionId,
             A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
             P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
-            T <: Transition.Topology & Transition.Syntax & Transition.Semantics,
-            Result
-        ](r: Result): BuilderM[ArcId, PlaceId, TransitionId, A, P, T, Result] =
-            IndexedStateT.pure(r)
+            T <: Transition.Topology & Transition.Syntax & Transition.Semantics
+        ]: Monad[[R] =>> BuilderM[ArcId, PlaceId, TransitionId, A, P, T, R]] with {
 
-        /** Read-only access to the current net state. */
-        def inspect[
-            ArcId: Ordering,
-            PlaceId: Ordering,
-            TransitionId: Ordering,
-            A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
-            P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
-            T <: Transition.Topology & Transition.Syntax & Transition.Semantics,
-            Result
-        ](
-            f: MapNet[ArcId, PlaceId, TransitionId, A, P, T] => Result
-        ): BuilderM[ArcId, PlaceId, TransitionId, A, P, T, Result] =
-            IndexedStateT.inspect(f)
+            private type BE = BuilderError[ArcId, PlaceId, TransitionId]
+            private type MN = MapNet[ArcId, PlaceId, TransitionId, A, P, T]
+
+            override def pure[R](r: R): BuilderM[ArcId, PlaceId, TransitionId, A, P, T, R] =
+                new BuilderM(IndexedStateT.pure(r))
+
+            override def flatMap[R, S](
+                fa: BuilderM[ArcId, PlaceId, TransitionId, A, P, T, R]
+            )(
+                f: R => BuilderM[ArcId, PlaceId, TransitionId, A, P, T, S]
+            ): BuilderM[ArcId, PlaceId, TransitionId, A, P, T, S] =
+                fa.flatMap(f)
+
+            // Delegates to IndexedStateT's tailRecM by explicit type application to avoid
+            // the circular implicit search that would arise from summon[Monad[BuilderM[...]]].
+            override def tailRecM[R, S](r: R)(
+                f: R => BuilderM[ArcId, PlaceId, TransitionId, A, P, T, Either[R, S]]
+            ): BuilderM[ArcId, PlaceId, TransitionId, A, P, T, S] =
+                new BuilderM(
+                  Monad[[Y] =>> IndexedStateT[[X] =>> Either[BE, X], MN, MN, Y]]
+                      .tailRecM(r)(r0 => f(r0).inner)
+                )
+        }
+    }
+
+    // =========================================================================
+    // BuilderMOps — fixed-type-param factory for BuilderM programs
+    // =========================================================================
+
+    /** Fixed-type-parameter factory for [[BuilderM]] programs. Instantiate once for your net type
+      * and import (or use) the result to get clean for-comprehension syntax without repeated type
+      * applications.
+      *
+      * {{{
+      * val ops = MapNet.BuilderMOps[String, String, String, MyArc, MyPlace, MyTransition]()
+      * import ops.*
+      *
+      * val program = for
+      *     _ <- addPlace("p1", myPlace)
+      *     _ <- addTransition("t1", myTransition)
+      *     _ <- addArc("a1", myArc)
+      * yield ()
+      *
+      * val net = program.runEmpty
+      * }}}
+      *
+      * ## Naming convention
+      *
+      * Operations without a trailing `_` are _strict_: they return a [[BuilderError]] if the
+      * precondition is violated (e.g. ID already exists, or ID not found). Operations with a
+      * trailing `_` are _force_ variants: they silently overwrite or no-op instead of failing.
+      */
+    case class BuilderMOps[
+        ArcId: Ordering,
+        PlaceId: Ordering,
+        TransitionId: Ordering,
+        A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
+        P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
+        T <: Transition.Topology & Transition.Syntax & Transition.Semantics
+    ]() {
+        private type BM[R] = BuilderM[ArcId, PlaceId, TransitionId, A, P, T, R]
+        private type MN = MapNet[ArcId, PlaceId, TransitionId, A, P, T]
+        private type BE = BuilderError[ArcId, PlaceId, TransitionId]
+
+        private def lift[R](f: MN => Either[BE, (MN, R)]): BM[R] =
+            new BuilderM(IndexedStateT(f))
+
+        // ----- Read-only access ----------------------------------------------
+
+        def inspect[R](f: MN => R): BM[R] =
+            new BuilderM(IndexedStateT.inspect(f))
 
         // ----- Place operations ----------------------------------------------
 
         /** Add a place. Fails with [[BuilderError.PlaceIdConflict]] if `id` is already present. */
-        def addPlace[
-            ArcId: Ordering,
-            PlaceId: Ordering,
-            TransitionId: Ordering,
-            A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
-            P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
-            T <: Transition.Topology & Transition.Syntax & Transition.Semantics
-        ](id: PlaceId, place: P): BuilderM[ArcId, PlaceId, TransitionId, A, P, T, Unit] =
-            IndexedStateT(mn =>
-                if mn.placesMap.contains(id) then Left(BuilderError.PlaceIdConflict(id))
-                else Right((mn.copy(placesMap = mn.placesMap.updated(id, place)), ()))
-            )
+        def addPlace(id: PlaceId, place: P): BM[Unit] = lift(mn =>
+            if mn.placesMap.contains(id) then Left(BuilderError.PlaceIdConflict(id))
+            else Right((mn.copy(placesMap = mn.placesMap.updated(id, place)), ()))
+        )
 
         /** Add or overwrite a place, regardless of whether `id` already exists. */
-        def addPlace_[
-            ArcId: Ordering,
-            PlaceId: Ordering,
-            TransitionId: Ordering,
-            A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
-            P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
-            T <: Transition.Topology & Transition.Syntax & Transition.Semantics
-        ](id: PlaceId, place: P): BuilderM[ArcId, PlaceId, TransitionId, A, P, T, Unit] =
-            IndexedStateT(mn => Right((mn.copy(placesMap = mn.placesMap.updated(id, place)), ())))
+        def addPlace_(id: PlaceId, place: P): BM[Unit] =
+            lift(mn => Right((mn.copy(placesMap = mn.placesMap.updated(id, place)), ())))
 
         /** Update an existing place. Fails with [[BuilderError.PlaceIdMissing]] if `id` is absent.
           */
-        def updatePlace[
-            ArcId: Ordering,
-            PlaceId: Ordering,
-            TransitionId: Ordering,
-            A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
-            P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
-            T <: Transition.Topology & Transition.Syntax & Transition.Semantics
-        ](id: PlaceId)(
-            f: P => P
-        ): BuilderM[ArcId, PlaceId, TransitionId, A, P, T, Unit] =
-            IndexedStateT(mn =>
-                mn.placesMap.get(id) match
-                    case None    => Left(BuilderError.PlaceIdMissing(id))
-                    case Some(p) => Right((mn.copy(placesMap = mn.placesMap.updated(id, f(p))), ()))
-            )
+        def updatePlace(id: PlaceId)(f: P => P): BM[Unit] = lift(mn =>
+            mn.placesMap.get(id) match
+                case None    => Left(BuilderError.PlaceIdMissing(id))
+                case Some(p) => Right((mn.copy(placesMap = mn.placesMap.updated(id, f(p))), ()))
+        )
 
         /** Update an existing place, or no-op if `id` is absent. */
-        def updatePlace_[
-            ArcId: Ordering,
-            PlaceId: Ordering,
-            TransitionId: Ordering,
-            A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
-            P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
-            T <: Transition.Topology & Transition.Syntax & Transition.Semantics
-        ](id: PlaceId)(
-            f: P => P
-        ): BuilderM[ArcId, PlaceId, TransitionId, A, P, T, Unit] =
-            IndexedStateT(mn =>
-                mn.placesMap.get(id) match
-                    case None    => Right((mn, ()))
-                    case Some(p) => Right((mn.copy(placesMap = mn.placesMap.updated(id, f(p))), ()))
-            )
+        def updatePlace_(id: PlaceId)(f: P => P): BM[Unit] = lift(mn =>
+            mn.placesMap.get(id) match
+                case None    => Right((mn, ()))
+                case Some(p) => Right((mn.copy(placesMap = mn.placesMap.updated(id, f(p))), ()))
+        )
 
         /** Remove a place. Fails with [[BuilderError.PlaceIdMissing]] if `id` is absent. */
-        def removePlace[
-            ArcId: Ordering,
-            PlaceId: Ordering,
-            TransitionId: Ordering,
-            A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
-            P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
-            T <: Transition.Topology & Transition.Syntax & Transition.Semantics
-        ](id: PlaceId): BuilderM[ArcId, PlaceId, TransitionId, A, P, T, Unit] =
-            IndexedStateT(mn =>
-                if mn.placesMap.contains(id) then
-                    Right((mn.copy(placesMap = mn.placesMap.removed(id)), ()))
-                else Left(BuilderError.PlaceIdMissing(id))
-            )
+        def removePlace(id: PlaceId): BM[Unit] = lift(mn =>
+            if mn.placesMap.contains(id) then
+                Right((mn.copy(placesMap = mn.placesMap.removed(id)), ()))
+            else Left(BuilderError.PlaceIdMissing(id))
+        )
 
         /** Remove a place, or no-op if `id` is absent. */
-        def removePlace_[
-            ArcId: Ordering,
-            PlaceId: Ordering,
-            TransitionId: Ordering,
-            A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
-            P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
-            T <: Transition.Topology & Transition.Syntax & Transition.Semantics
-        ](id: PlaceId): BuilderM[ArcId, PlaceId, TransitionId, A, P, T, Unit] =
-            IndexedStateT(mn => Right((mn.copy(placesMap = mn.placesMap.removed(id)), ())))
+        def removePlace_(id: PlaceId): BM[Unit] =
+            lift(mn => Right((mn.copy(placesMap = mn.placesMap.removed(id)), ())))
 
         // ----- Transition operations -----------------------------------------
 
         /** Add a transition. Fails with [[BuilderError.TransitionIdConflict]] if `id` is already
           * present.
           */
-        def addTransition[
-            ArcId: Ordering,
-            PlaceId: Ordering,
-            TransitionId: Ordering,
-            A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
-            P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
-            T <: Transition.Topology & Transition.Syntax & Transition.Semantics
-        ](id: TransitionId, transition: T): BuilderM[ArcId, PlaceId, TransitionId, A, P, T, Unit] =
-            IndexedStateT(mn =>
-                if mn.transitionsMap.contains(id) then Left(BuilderError.TransitionIdConflict(id))
-                else
-                    Right((mn.copy(transitionsMap = mn.transitionsMap.updated(id, transition)), ()))
-            )
+        def addTransition(id: TransitionId, transition: T): BM[Unit] = lift(mn =>
+            if mn.transitionsMap.contains(id) then Left(BuilderError.TransitionIdConflict(id))
+            else Right((mn.copy(transitionsMap = mn.transitionsMap.updated(id, transition)), ()))
+        )
 
         /** Add or overwrite a transition, regardless of whether `id` already exists. */
-        def addTransition_[
-            ArcId: Ordering,
-            PlaceId: Ordering,
-            TransitionId: Ordering,
-            A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
-            P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
-            T <: Transition.Topology & Transition.Syntax & Transition.Semantics
-        ](id: TransitionId, transition: T): BuilderM[ArcId, PlaceId, TransitionId, A, P, T, Unit] =
-            IndexedStateT(mn =>
-                Right(
-                  (mn.copy(transitionsMap = mn.transitionsMap.updated(id, transition)), ())
-                )
-            )
+        def addTransition_(id: TransitionId, transition: T): BM[Unit] = lift(mn =>
+            Right((mn.copy(transitionsMap = mn.transitionsMap.updated(id, transition)), ()))
+        )
 
         /** Update an existing transition. Fails with [[BuilderError.TransitionIdMissing]] if `id`
           * is absent.
           */
-        def updateTransition[
-            ArcId: Ordering,
-            PlaceId: Ordering,
-            TransitionId: Ordering,
-            A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
-            P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
-            T <: Transition.Topology & Transition.Syntax & Transition.Semantics
-        ](id: TransitionId)(
-            f: T => T
-        ): BuilderM[ArcId, PlaceId, TransitionId, A, P, T, Unit] =
-            IndexedStateT(mn =>
-                mn.transitionsMap.get(id) match
-                    case None =>
-                        Left(BuilderError.TransitionIdMissing(id))
-                    case Some(t) =>
-                        Right(
-                          (mn.copy(transitionsMap = mn.transitionsMap.updated(id, f(t))), ())
-                        )
-            )
+        def updateTransition(id: TransitionId)(f: T => T): BM[Unit] = lift(mn =>
+            mn.transitionsMap.get(id) match
+                case None => Left(BuilderError.TransitionIdMissing(id))
+                case Some(t) =>
+                    Right((mn.copy(transitionsMap = mn.transitionsMap.updated(id, f(t))), ()))
+        )
 
         /** Update an existing transition, or no-op if `id` is absent. */
-        def updateTransition_[
-            ArcId: Ordering,
-            PlaceId: Ordering,
-            TransitionId: Ordering,
-            A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
-            P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
-            T <: Transition.Topology & Transition.Syntax & Transition.Semantics
-        ](id: TransitionId)(
-            f: T => T
-        ): BuilderM[ArcId, PlaceId, TransitionId, A, P, T, Unit] =
-            IndexedStateT(mn =>
-                mn.transitionsMap.get(id) match
-                    case None =>
-                        Right((mn, ()))
-                    case Some(t) =>
-                        Right(
-                          (mn.copy(transitionsMap = mn.transitionsMap.updated(id, f(t))), ())
-                        )
-            )
+        def updateTransition_(id: TransitionId)(f: T => T): BM[Unit] = lift(mn =>
+            mn.transitionsMap.get(id) match
+                case None => Right((mn, ()))
+                case Some(t) =>
+                    Right((mn.copy(transitionsMap = mn.transitionsMap.updated(id, f(t))), ()))
+        )
 
         /** Remove a transition. Fails with [[BuilderError.TransitionIdMissing]] if `id` is absent.
           */
-        def removeTransition[
-            ArcId: Ordering,
-            PlaceId: Ordering,
-            TransitionId: Ordering,
-            A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
-            P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
-            T <: Transition.Topology & Transition.Syntax & Transition.Semantics
-        ](id: TransitionId): BuilderM[ArcId, PlaceId, TransitionId, A, P, T, Unit] =
-            IndexedStateT(mn =>
-                if mn.transitionsMap.contains(id) then
-                    Right((mn.copy(transitionsMap = mn.transitionsMap.removed(id)), ()))
-                else Left(BuilderError.TransitionIdMissing(id))
-            )
+        def removeTransition(id: TransitionId): BM[Unit] = lift(mn =>
+            if mn.transitionsMap.contains(id) then
+                Right((mn.copy(transitionsMap = mn.transitionsMap.removed(id)), ()))
+            else Left(BuilderError.TransitionIdMissing(id))
+        )
 
         /** Remove a transition, or no-op if `id` is absent. */
-        def removeTransition_[
-            ArcId: Ordering,
-            PlaceId: Ordering,
-            TransitionId: Ordering,
-            A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
-            P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
-            T <: Transition.Topology & Transition.Syntax & Transition.Semantics
-        ](id: TransitionId): BuilderM[ArcId, PlaceId, TransitionId, A, P, T, Unit] =
-            IndexedStateT(mn =>
-                Right((mn.copy(transitionsMap = mn.transitionsMap.removed(id)), ()))
-            )
+        def removeTransition_(id: TransitionId): BM[Unit] =
+            lift(mn => Right((mn.copy(transitionsMap = mn.transitionsMap.removed(id)), ())))
 
         // ----- Arc operations ------------------------------------------------
 
         /** Add an arc. Fails with [[BuilderError.ArcIdConflict]] if `id` is already present. */
-        def addArc[
-            ArcId: Ordering,
-            PlaceId: Ordering,
-            TransitionId: Ordering,
-            A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
-            P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
-            T <: Transition.Topology & Transition.Syntax & Transition.Semantics
-        ](id: ArcId, arc: A): BuilderM[ArcId, PlaceId, TransitionId, A, P, T, Unit] =
-            IndexedStateT(mn =>
-                if mn.arcsMap.contains(id) then Left(BuilderError.ArcIdConflict(id))
-                else Right((mn.copy(arcsMap = mn.arcsMap.updated(id, arc)), ()))
-            )
+        def addArc(id: ArcId, arc: A): BM[Unit] = lift(mn =>
+            if mn.arcsMap.contains(id) then Left(BuilderError.ArcIdConflict(id))
+            else Right((mn.copy(arcsMap = mn.arcsMap.updated(id, arc)), ()))
+        )
 
         /** Add or overwrite an arc, regardless of whether `id` already exists. */
-        def addArc_[
-            ArcId: Ordering,
-            PlaceId: Ordering,
-            TransitionId: Ordering,
-            A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
-            P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
-            T <: Transition.Topology & Transition.Syntax & Transition.Semantics
-        ](id: ArcId, arc: A): BuilderM[ArcId, PlaceId, TransitionId, A, P, T, Unit] =
-            IndexedStateT(mn => Right((mn.copy(arcsMap = mn.arcsMap.updated(id, arc)), ())))
+        def addArc_(id: ArcId, arc: A): BM[Unit] =
+            lift(mn => Right((mn.copy(arcsMap = mn.arcsMap.updated(id, arc)), ())))
 
         /** Update an existing arc. Fails with [[BuilderError.ArcIdMissing]] if `id` is absent. */
-        def updateArc[
-            ArcId: Ordering,
-            PlaceId: Ordering,
-            TransitionId: Ordering,
-            A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
-            P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
-            T <: Transition.Topology & Transition.Syntax & Transition.Semantics
-        ](id: ArcId)(
-            f: A => A
-        ): BuilderM[ArcId, PlaceId, TransitionId, A, P, T, Unit] =
-            IndexedStateT(mn =>
-                mn.arcsMap.get(id) match
-                    case None    => Left(BuilderError.ArcIdMissing(id))
-                    case Some(a) => Right((mn.copy(arcsMap = mn.arcsMap.updated(id, f(a))), ()))
-            )
+        def updateArc(id: ArcId)(f: A => A): BM[Unit] = lift(mn =>
+            mn.arcsMap.get(id) match
+                case None    => Left(BuilderError.ArcIdMissing(id))
+                case Some(a) => Right((mn.copy(arcsMap = mn.arcsMap.updated(id, f(a))), ()))
+        )
 
         /** Update an existing arc, or no-op if `id` is absent. */
-        def updateArc_[
-            ArcId: Ordering,
-            PlaceId: Ordering,
-            TransitionId: Ordering,
-            A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
-            P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
-            T <: Transition.Topology & Transition.Syntax & Transition.Semantics
-        ](id: ArcId)(
-            f: A => A
-        ): BuilderM[ArcId, PlaceId, TransitionId, A, P, T, Unit] =
-            IndexedStateT(mn =>
-                mn.arcsMap.get(id) match
-                    case None    => Right((mn, ()))
-                    case Some(a) => Right((mn.copy(arcsMap = mn.arcsMap.updated(id, f(a))), ()))
-            )
+        def updateArc_(id: ArcId)(f: A => A): BM[Unit] = lift(mn =>
+            mn.arcsMap.get(id) match
+                case None    => Right((mn, ()))
+                case Some(a) => Right((mn.copy(arcsMap = mn.arcsMap.updated(id, f(a))), ()))
+        )
 
         /** Remove an arc. Fails with [[BuilderError.ArcIdMissing]] if `id` is absent. */
-        def removeArc[
-            ArcId: Ordering,
-            PlaceId: Ordering,
-            TransitionId: Ordering,
-            A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
-            P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
-            T <: Transition.Topology & Transition.Syntax & Transition.Semantics
-        ](id: ArcId): BuilderM[ArcId, PlaceId, TransitionId, A, P, T, Unit] =
-            IndexedStateT(mn =>
-                if mn.arcsMap.contains(id) then
-                    Right((mn.copy(arcsMap = mn.arcsMap.removed(id)), ()))
-                else Left(BuilderError.ArcIdMissing(id))
-            )
+        def removeArc(id: ArcId): BM[Unit] = lift(mn =>
+            if mn.arcsMap.contains(id) then Right((mn.copy(arcsMap = mn.arcsMap.removed(id)), ()))
+            else Left(BuilderError.ArcIdMissing(id))
+        )
 
         /** Remove an arc, or no-op if `id` is absent. */
-        def removeArc_[
-            ArcId: Ordering,
-            PlaceId: Ordering,
-            TransitionId: Ordering,
-            A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
-            P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
-            T <: Transition.Topology & Transition.Syntax & Transition.Semantics
-        ](id: ArcId): BuilderM[ArcId, PlaceId, TransitionId, A, P, T, Unit] =
-            IndexedStateT(mn => Right((mn.copy(arcsMap = mn.arcsMap.removed(id)), ())))
-
-        // ----- Eliminators ---------------------------------------------------
-
-        extension [
-            ArcId: Ordering,
-            PlaceId: Ordering,
-            TransitionId: Ordering,
-            A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
-            P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
-            T <: Transition.Topology & Transition.Syntax & Transition.Semantics,
-            Result
-        ](bm: BuilderM[ArcId, PlaceId, TransitionId, A, P, T, Result])
-
-            /** Run the program from `initial`, returning the final net and result value. */
-            def run(
-                initial: MapNet[ArcId, PlaceId, TransitionId, A, P, T]
-            ): Either[
-              BuilderError[ArcId, PlaceId, TransitionId],
-              (
-                  MapNet[ArcId, PlaceId, TransitionId, A, P, T],
-                  Result
-              )
-            ] = (bm: IndexedStateT[
-              [X] =>> Either[BuilderError[ArcId, PlaceId, TransitionId], X],
-              MapNet[ArcId, PlaceId, TransitionId, A, P, T],
-              MapNet[ArcId, PlaceId, TransitionId, A, P, T],
-              Result
-            ]).run(initial)
-
-            /** Run the program from an empty net. */
-            def runEmpty: Either[
-              BuilderError[ArcId, PlaceId, TransitionId],
-              (
-                  MapNet[ArcId, PlaceId, TransitionId, A, P, T],
-                  Result
-              )
-            ] = run(MapNet.empty[ArcId, PlaceId, TransitionId, A, P, T])
-
-        // ----- Cats type class instance ---------------------------------------
-
-        /** `Monad` instance for `BuilderM[ArcId, PlaceId, TransitionId, A, P, T, _]`.
-          *
-          * Import `cats.syntax.all.*` to get `map`, `flatMap`, `traverse`, etc. on `BuilderM`
-          * values.
-          */
-        // Named call bypasses the circular implicit search that arises because BuilderM is
-        // transparent as IndexedStateT inside this object. See the analogous note in Simulator.Sim.
-        given [
-            ArcId: Ordering,
-            PlaceId: Ordering,
-            TransitionId: Ordering,
-            A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
-            P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
-            T <: Transition.Topology & Transition.Syntax & Transition.Semantics
-        ]: Monad[[Result] =>> BuilderM[ArcId, PlaceId, TransitionId, A, P, T, Result]] =
-            cats.data.IndexedStateT.catsDataMonadForIndexedStateT[
-              [X] =>> Either[BuilderError[ArcId, PlaceId, TransitionId], X],
-              MapNet[ArcId, PlaceId, TransitionId, A, P, T]
-            ]
+        def removeArc_(id: ArcId): BM[Unit] =
+            lift(mn => Right((mn.copy(arcsMap = mn.arcsMap.removed(id)), ())))
     }
 }
