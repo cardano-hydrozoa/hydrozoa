@@ -104,9 +104,7 @@ object Arc {
         }
 
         /** Removes `weight` tokens from the place. Enabled if place has >= weight tokens. */
-        trait PT[P <: Place.Syntax.HasTokens[P]](val weight: NonNegativeInt)
-            extends Semantics[P],
-              Weighted {
+        trait PT[P <: Place.Syntax.HasTokens[P]] extends Semantics[P], Weighted {
             abstract override protected def enablingChecks
                 : List[P => List[Arc.Semantics.EnablingError]] =
                 (
@@ -146,9 +144,7 @@ object Arc {
         }
 
         /** Adds `weight` tokens to the place. Always arc-side enabled. */
-        trait TP[P <: Place.Syntax.HasTokens[P]](val weight: NonNegativeInt)
-            extends Semantics[P],
-              Weighted {
+        trait TP[P <: Place.Syntax.HasTokens[P]] extends Semantics[P], Weighted {
             abstract override protected def firingEndos
                 : List[KendoT[[X] =>> Either[Arc.Semantics.FiringError, X], P]] =
                 Kleisli((p: P) =>
@@ -204,9 +200,7 @@ object Arc {
         }
 
         /** Enabled if the place has >= weight tokens. Does not fire. */
-        trait Read[P <: Place.Syntax.HasTokens[P]](val weight: NonNegativeInt)
-            extends Semantics[P],
-              Weighted {
+        trait Read[P <: Place.Syntax.HasTokens[P]] extends Semantics[P], Weighted {
             abstract override protected def enablingChecks
                 : List[P => List[Arc.Semantics.EnablingError]] =
                 (

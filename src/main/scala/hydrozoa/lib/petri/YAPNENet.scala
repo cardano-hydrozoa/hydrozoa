@@ -12,7 +12,7 @@ import io.circe.syntax.*
 import scala.collection.immutable.{Queue, TreeMap}
 
 // =============================================================================
-// YAPNEPlace — a unified place type for YAPNE nets
+// YapnePlace — a unified place type for YAPNE nets
 // =============================================================================
 
 /** A place type compatible with YAPNE serialization. Capacity is optional: `None` means unlimited
@@ -20,7 +20,7 @@ import scala.collection.immutable.{Queue, TreeMap}
   * `finalMarking` carries simulator semantics (it is the target marking for reachability /
   * termination checks), but those semantics are not yet implemented.
   */
-case class YAPNEPlace(
+case class YapnePlace(
     override val label: String,
     override val tokens: NonNegativeInt = NonNegativeInt.unsafeApply(0),
     val capacity: Option[PositiveInt] = None,
@@ -28,11 +28,11 @@ case class YAPNEPlace(
     override val position: (Int, Int) = (0, 0),
     override val radius: PositiveInt = PositiveInt.unsafeApply(20),
 ) extends Place.Topology,
-      Place.Syntax.HasTokens[YAPNEPlace],
-      Place.Semantics[YAPNEPlace],
+      Place.Syntax.HasTokens[YapnePlace],
+      Place.Semantics[YapnePlace],
       Place.Presentation {
 
-    override def withTokens(n: NonNegativeInt): YAPNEPlace = this.copy(tokens = n)
+    override def withTokens(n: NonNegativeInt): YapnePlace = this.copy(tokens = n)
     override def getMarking: NonNegativeInt = tokens
 
     override def markingErrors: List[Place.Semantics.MarkingError] =
@@ -45,88 +45,88 @@ case class YAPNEPlace(
 }
 
 // =============================================================================
-// YAPNEArc — sealed hierarchy, one subtype per YAPNE arc kind
+// YapneArc — sealed hierarchy, one subtype per YAPNE arc kind
 // =============================================================================
 
 /** Sealed arc type for YAPNE nets. Pattern-match on the concrete subtype to determine the arc kind
   * when encoding or decoding.
   */
-sealed trait YAPNEArc
+sealed trait YapneArc
     extends Arc.Topology[String, String],
       Arc.Syntax,
-      Arc.Semantics[YAPNEPlace],
+      Arc.Semantics[YapnePlace],
       Arc.Presentation
 
 /** Place-to-transition arc. Removes `weight` tokens from the place on firing. */
-case class YAPNEPTArc(
+case class YapnePTArc(
     override val arcPlaceId: String,
     override val arcTransitionId: String,
     override val weight: NonNegativeInt,
     override val label: String,
     override val points: Queue[(Int, Int)] = Queue.empty,
-) extends YAPNEArc,
-      Arc.Semantics.PT[YAPNEPlace](weight)
+) extends YapneArc,
+      Arc.Semantics.PT[YapnePlace]
 
 /** Transition-to-place arc. Adds `weight` tokens to the place on firing. */
-case class YAPNETPArc(
+case class YapneTPArc(
     override val arcPlaceId: String,
     override val arcTransitionId: String,
     override val weight: NonNegativeInt,
     override val label: String,
     override val points: Queue[(Int, Int)] = Queue.empty,
-) extends YAPNEArc,
-      Arc.Semantics.TP[YAPNEPlace](weight)
+) extends YapneArc,
+      Arc.Semantics.TP[YapnePlace]
 
 /** Inhibitor arc. Enabled only when the place is empty; does not consume tokens. */
-case class YAPNEInhibitorArc(
+case class YapneInhibitorArc(
     override val arcPlaceId: String,
     override val arcTransitionId: String,
     override val label: String,
     override val points: Queue[(Int, Int)] = Queue.empty,
-) extends YAPNEArc,
-      Arc.Semantics.Inhibitor[YAPNEPlace]
+) extends YapneArc,
+      Arc.Semantics.Inhibitor[YapnePlace]
 
 /** Reset arc. Drains all tokens from the place on firing; always arc-side enabled. */
-case class YAPNEResetArc(
+case class YapneResetArc(
     override val arcPlaceId: String,
     override val arcTransitionId: String,
     override val label: String,
     override val points: Queue[(Int, Int)] = Queue.empty,
-) extends YAPNEArc,
-      Arc.Semantics.Reset[YAPNEPlace]
+) extends YapneArc,
+      Arc.Semantics.Reset[YapnePlace]
 
 /** Read arc. Enabled when the place has >= `weight` tokens; does not consume tokens. */
-case class YAPNEReadArc(
+case class YapneReadArc(
     override val arcPlaceId: String,
     override val arcTransitionId: String,
     override val weight: NonNegativeInt,
     override val label: String,
     override val points: Queue[(Int, Int)] = Queue.empty,
-) extends YAPNEArc,
-      Arc.Semantics.Read[YAPNEPlace](weight)
+) extends YapneArc,
+      Arc.Semantics.Read[YapnePlace]
 
 // =============================================================================
-// YAPNENet — type alias and companion
+// YapneNet — type alias and companion
 // =============================================================================
 
 // TODO: If we have codecs for ArcId, PlaceId, and TransitionId, this can be done
 //   using context bounds. This will be essential for typed nets to not need to rewrite codecs each
 //   time. Using String IDs here matches the YAPNE JSON schema.
-type YAPNENet = MapNet[String, String, String, YAPNEArc, YAPNEPlace, TransitionNoId]
+type YapneNet = MapNet[String, String, String, YapneArc, YapnePlace, TransitionNoId]
 
-object YAPNENet {
+object YapneNet {
 
-    val yapneOps: MapNet.BuilderMOps[String, String, String, YAPNEArc, YAPNEPlace, TransitionNoId] =
+    val yapneOps: MapNet.BuilderMOps[String, String, String, YapneArc, YapnePlace, TransitionNoId] =
         MapNet.BuilderMOps()
 
-    type YAPNEBuilder[R] =
-        MapNet.BuilderM[String, String, String, YAPNEArc, YAPNEPlace, TransitionNoId, R]
+    type YapneBuilder[R] =
+        MapNet.BuilderM[String, String, String, YapneArc, YapnePlace, TransitionNoId, R]
 
-    given Encoder[YAPNENet] with {
+    given Encoder[YapneNet] with {
 
-        def apply(yapne: YAPNENet): Json = {
+        def apply(yapne: YapneNet): Json = {
 
-            def placeJson(pid: String, place: YAPNEPlace): Json =
+            def placeJson(pid: String, place: YapnePlace): Json =
                 Json.obj(
                   "id" -> pid.asJson,
                   "position" -> Json.obj(
@@ -164,8 +164,8 @@ object YAPNENet {
                   "postcondition" -> "".asJson // TODO
                 )
 
-            def arcJson(arcId: String, arc: YAPNEArc): Json = arc match {
-                case pt: YAPNEPTArc =>
+            def arcJson(arcId: String, arc: YapneArc): Json = arc match {
+                case pt: YapnePTArc =>
                     Json.obj(
                       "id" -> arcId.asJson,
                       "source" -> arc.arcPlaceId.asJson,
@@ -175,7 +175,7 @@ object YAPNENet {
                       "points" -> arc.points.toList.asJson,
                       "label" -> arc.label.asJson
                     )
-                case tp: YAPNETPArc =>
+                case tp: YapneTPArc =>
                     Json.obj(
                       "id" -> arcId.asJson,
                       "source" -> arc.arcTransitionId.asJson,
@@ -185,7 +185,7 @@ object YAPNENet {
                       "points" -> arc.points.toList.asJson,
                       "label" -> arc.label.asJson
                     )
-                case _: YAPNEInhibitorArc =>
+                case _: YapneInhibitorArc =>
                     Json.obj(
                       "id" -> arcId.asJson,
                       "source" -> arc.arcPlaceId.asJson,
@@ -196,7 +196,7 @@ object YAPNENet {
                       "points" -> arc.points.toList.asJson,
                       "label" -> arc.label.asJson
                     )
-                case rd: YAPNEReadArc =>
+                case rd: YapneReadArc =>
                     Json.obj(
                       "id" -> arcId.asJson,
                       "source" -> arc.arcPlaceId.asJson,
@@ -206,7 +206,7 @@ object YAPNENet {
                       "points" -> arc.points.toList.asJson,
                       "label" -> arc.label.asJson
                     )
-                case _: YAPNEResetArc =>
+                case _: YapneResetArc =>
                     Json.obj(
                       "id" -> arcId.asJson,
                       "source" -> arc.arcPlaceId.asJson,
@@ -237,49 +237,49 @@ object YAPNENet {
   */
 object Demo extends IOApp {
 
-    import YAPNENet.yapneOps.*
-    import YAPNENet.given_Encoder_YAPNENet
+    import YapneNet.yapneOps.*
+    import YapneNet.given_Encoder_YapneNet
     import MapNet.BuilderM.given
 
     object Places {
-        val treasuryRef: YAPNEPlace = YAPNEPlace(
+        val treasuryRef: YapnePlace = YapnePlace(
           label = "TreasuryRef",
           tokens = NonNegativeInt.unsafeApply(1),
           capacity = Some(PositiveInt.unsafeApply(1)),
           finalMarking = Some(NonNegativeInt.unsafeApply(1))
         )
 
-        val resolved: YAPNEPlace = YAPNEPlace(
+        val resolved: YapnePlace = YapnePlace(
           label = "Resolved",
           tokens = NonNegativeInt.unsafeApply(1),
           capacity = Some(PositiveInt.unsafeApply(1)),
           finalMarking = Some(NonNegativeInt.unsafeApply(1))
         )
 
-        val ambient: YAPNEPlace = YAPNEPlace(
+        val ambient: YapnePlace = YapnePlace(
           label = "Ambient",
           tokens = NonNegativeInt.unsafeApply(100)
         )
 
-        val payoutObligations: YAPNEPlace = YAPNEPlace(
+        val payoutObligations: YapnePlace = YapnePlace(
           label = "$PayoutObligations$",
           tokens = NonNegativeInt.unsafeApply(500),
           finalMarking = Some(NonNegativeInt.unsafeApply(0))
         )
 
-        val evacuationOutput: YAPNEPlace = YAPNEPlace(
+        val evacuationOutput: YapnePlace = YapnePlace(
           label = "EvacuationOutput",
           tokens = NonNegativeInt.unsafeApply(0),
           finalMarking = Some(NonNegativeInt.unsafeApply(500))
         )
 
-        val collateral: YAPNEPlace = YAPNEPlace(
+        val collateral: YapnePlace = YapnePlace(
           label = "Collateral",
           tokens = NonNegativeInt.unsafeApply(5),
           finalMarking = Some(NonNegativeInt.unsafeApply(5))
         )
 
-        val map: TreeMap[String, YAPNEPlace] = TreeMap.from(
+        val map: TreeMap[String, YapnePlace] = TreeMap.from(
           List(
             treasuryRef,
             resolved,
@@ -299,63 +299,63 @@ object Demo extends IOApp {
     }
 
     object Arcs {
-        val readTreasury: YAPNEArc = YAPNEReadArc(
+        val readTreasury: YapneArc = YapneReadArc(
           arcPlaceId = "p_0",
           arcTransitionId = "t_0",
           weight = NonNegativeInt.unsafeApply(1),
           label = "reference treasury script (1)"
         )
 
-        val spendResolved: YAPNEArc = YAPNEPTArc(
+        val spendResolved: YapneArc = YapnePTArc(
           arcPlaceId = "p_1",
           arcTransitionId = "t_0",
           weight = NonNegativeInt.unsafeApply(1),
           label = "spend resolved treasury (1)"
         )
 
-        val sendResolved: YAPNEArc = YAPNETPArc(
+        val sendResolved: YapneArc = YapneTPArc(
           arcPlaceId = "p_1",
           arcTransitionId = "t_0",
           weight = NonNegativeInt.unsafeApply(1),
           label = "send resolved treasury (1)"
         )
 
-        val spendFeeUtxos: YAPNEArc = YAPNEPTArc(
+        val spendFeeUtxos: YapneArc = YapnePTArc(
           arcPlaceId = "p_2",
           arcTransitionId = "t_0",
           weight = NonNegativeInt.unsafeApply(3),
           label = "spend fee utxos (3)"
         )
 
-        val sendChangeUtxo: YAPNEArc = YAPNETPArc(
+        val sendChangeUtxo: YapneArc = YapneTPArc(
           arcPlaceId = "p_2",
           arcTransitionId = "t_0",
           weight = NonNegativeInt.unsafeApply(1),
           label = "send change utxo (1)"
         )
 
-        val fulfillPayoutObligation: YAPNEArc = YAPNEPTArc(
+        val fulfillPayoutObligation: YapneArc = YapnePTArc(
           arcPlaceId = "p_3",
           arcTransitionId = "t_0",
           weight = NonNegativeInt.unsafeApply(63),
           label = "fulfill payout obligations (63)"
         )
 
-        val sendEvacuationOutput: YAPNEArc = YAPNETPArc(
+        val sendEvacuationOutput: YapneArc = YapneTPArc(
           arcPlaceId = "p_4",
           arcTransitionId = "t_0",
           weight = NonNegativeInt.unsafeApply(63),
           label = "send evacuation output (63)"
         )
 
-        val useCollateral: YAPNEArc = YAPNEReadArc(
+        val useCollateral: YapneArc = YapneReadArc(
           arcPlaceId = "p_5",
           arcTransitionId = "t_0",
           weight = NonNegativeInt.unsafeApply(1),
           label = "collateralize (1)"
         )
 
-        val map: TreeMap[String, YAPNEArc] =
+        val map: TreeMap[String, YapneArc] =
             TreeMap.from(
               List(
                 readTreasury,
@@ -370,8 +370,8 @@ object Demo extends IOApp {
             )
     }
 
-    val evacuationNet: YAPNENet = {
-        val builder: YAPNENet.YAPNEBuilder[Unit] =
+    val evacuationNet: YapneNet = {
+        val builder: YapneNet.YapneBuilder[Unit] =
             for {
                 _ <- Places.map.toList.traverse_ { case (pid, place) => addPlace(pid, place) }
                 _ <- Transitions.map.toList.traverse_ { case (tid, t) => addTransition(tid, t) }
@@ -384,7 +384,7 @@ object Demo extends IOApp {
 
     override def run(args: List[String]): IO[ExitCode] =
         for {
-            _ <- IO.println(evacuationNet.asJson.noSpaces)
+            _ <- IO.println(evacuationNet.asJson)
         } yield ExitCode.Success
 
 }
