@@ -1,7 +1,7 @@
 package hydrozoa.multisig.ledger.effects
 
 import cats.data.NonEmptyList
-import hydrozoa.multisig.ledger.block.{BlockResult, BlockVersion}
+import hydrozoa.multisig.ledger.block.{BlockResult, BlockType, BlockVersion}
 
 /** Per spec (`consensus/slow-consensus`): partition the stack's blocks by major version, and within
   * each partition keep all non-standalone-evac-commitment effects + only the LAST standalone evac
@@ -33,18 +33,57 @@ object Partition {
 
 object NecessaryEffectsPolicy {
 
-    /** Partition the stack's blocks by major version. The major version of the block transitions at
-      * Major / Final blocks; consecutive blocks sharing a major version belong to the same
-      * partition.
+    /** Partition the stack's blocks into a list of [[Partition]]s. Each partition is a maximal
+      * contiguous run of blocks ending at a Major / Final block (close-after-major). A trailing run
+      * of minors with no closing major / final yields one final
+      * [[Partition.Closing.TrailingMinors]] partition.
       *
-      * TODO(slow-consensus): implement. Algorithm sketch:
-      *   1. Walk `blocks` in order, tracking `currentMajor: BlockVersion.Major`.
-      *   2. Open a partition with the first block; close it whenever a Major or Final is
-      *      encountered (close-after-major), then open a new one starting with the next block.
-      *   3. The closing-block type of each partition determines `Partition.Closing`.
-      *   4. The last partition may be `TrailingMinors` if the stack ends with minor blocks after a
-      *      major.
+      * Per spec ("close-after-major"): a Major or Final block belongs to the partition it closes
+      * (it is the LAST block of that partition), then the next partition begins at the subsequent
+      * block. The major version of each partition is the version of its last block.
       */
-    def selectNecessaryEffects(blocks: NonEmptyList[BlockResult]): List[Partition] =
-        ??? // PR2: implement partition-by-major + last-evac-commit compression
+    def selectNecessaryEffects(blocks: NonEmptyList[BlockResult]): List[Partition] = {
+        val out = List.newBuilder[Partition]
+        var current = List.newBuilder[BlockResult]
+
+        for b <- blocks.toList do {
+            current += b
+            b.brief match {
+                case _: BlockType.Major =>
+                    val partBlocks = NonEmptyList.fromListUnsafe(current.result())
+                    out += Partition(
+                      partBlocks,
+                      b.brief.blockVersion.major,
+                      Partition.Closing.Major
+                    )
+                    current = List.newBuilder[BlockResult]
+                case _: BlockType.Final =>
+                    val partBlocks = NonEmptyList.fromListUnsafe(current.result())
+                    out += Partition(
+                      partBlocks,
+                      b.brief.blockVersion.major,
+                      Partition.Closing.Final
+                    )
+                    current = List.newBuilder[BlockResult]
+                case _: BlockType.Minor =>
+                    () // keep accumulating into the current partition
+            }
+        }
+
+        val tail = current.result()
+        if tail.nonEmpty then {
+            // Trailing minors: no closing major / final in this stack (or after the last one).
+            // Major version is the version of the last minor — minors don't change major
+            // version, so this equals whatever previous Major produced (or 0 for stack 1 with
+            // only minors after init).
+            val partBlocks = NonEmptyList.fromListUnsafe(tail)
+            out += Partition(
+              partBlocks,
+              partBlocks.last.brief.blockVersion.major,
+              Partition.Closing.TrailingMinors
+            )
+        }
+
+        out.result()
+    }
 }
