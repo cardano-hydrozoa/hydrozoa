@@ -47,26 +47,31 @@ final case class SlowConsensusActor(
                 _ <- initializeConnections
                 _ <- logger.info("SlowConsensusActor started (auto-confirm stub).")
             } yield ()
-        case s: Stack.Unsigned =>
-            handleStackUnsigned(s)
+        case h: SlowConsensusActor.StackHandoff =>
+            handleStackHandoff(h)
         case _: HardAck =>
             // Stub: ignore incoming hard-acks. Real impl will aggregate per-cell.
             IO.unit
     }
 
-    /** Auto-confirm stub: as soon as the StackComposer hands us a stack, signal hard-confirmation
-      * back so the next stack can close. Real impl will wait for all peers' acks across both rounds
-      * (or the single sole round) per [[hydrozoa.multisig.ledger.stack.StackEffects]] variant.
+    /** Auto-confirm stub: as soon as the StackComposer hands us a stack + its own hard-acks, signal
+      * hard-confirmation back so the next stack can close. Real impl (next slice) will collect
+      * remote peers' acks across both rounds (or the single sole round) per
+      * [[hydrozoa.multisig.ledger.stack.StackEffects]] variant, and schedule outbound own-ack
+      * broadcast (round-1 / sole immediately to PeerLiaisons; round-2 withheld until local round-1
+      * confirmation).
       */
-    private def handleStackUnsigned(s: Stack.Unsigned): IO[Unit] = for {
-        _ <- logger.info(s"Stub auto-confirming stack ${s.brief.stackNum}")
+    private def handleStackHandoff(h: SlowConsensusActor.StackHandoff): IO[Unit] = for {
+        _ <- logger.info(
+          s"Stub auto-confirming stack ${h.unsigned.brief.stackNum} (own acks: ${h.ownAcks.size})"
+        )
         conn <- getConnections
-        // Build a stub Stack.HardConfirmed (no real ack data) — matches auto-confirm
-        // behaviour. CardanoLiaison logs the receipt; real submission lands once the
-        // StackEffects bodies are real (M1).
-        hardConfirmed = Stack.HardConfirmed(Stack.Round1Confirmed(s))
+        // Build a stub Stack.HardConfirmed (no remote ack data) — matches auto-confirm
+        // behaviour. CardanoLiaison logs the receipt; real submission lands once the on-chain
+        // submission code is wired.
+        hardConfirmed = Stack.HardConfirmed(Stack.Round1Confirmed(h.unsigned))
         _ <- conn.cardanoLiaison ! hardConfirmed
-        _ <- conn.stackComposer ! PreviousStackHardConfirmation(s.brief.stackNum)
+        _ <- conn.stackComposer ! PreviousStackHardConfirmation(h.unsigned.brief.stackNum)
     } yield ()
 
     private def getConnections: IO[Connections] = for {
@@ -107,7 +112,19 @@ object SlowConsensusActor {
         peerLiaisons: List[PeerLiaison.Handle]
     )
 
-    type Request = PreStart.type | Stack.Unsigned | HardAck
+    type Request = PreStart.type | StackHandoff | HardAck
 
     case object PreStart
+
+    /** Bundle sent by [[StackComposer]] when it closes a stack: the unsigned stack plus the
+      * leader's (or follower's) own pre-signed hard-acks for every round the stack will need. The
+      * SlowConsensusActor manages outbound broadcast scheduling (round-1 / sole acks immediately to
+      * PeerLiaisons; round-2 withheld until local round-1 confirmation).
+      *
+      *   - 2-phase Regular stacks (settlement / finalization present): 2 acks per peer (round1 +
+      *     round2 Regular variants).
+      *   - 2-phase Initial stack: 2 acks per peer (round1 + round2 Initial variants).
+      *   - 1-phase Sole stacks (minor-only): 1 ack per peer (SolePayload).
+      */
+    final case class StackHandoff(unsigned: Stack.Unsigned, ownAcks: List[HardAck])
 }

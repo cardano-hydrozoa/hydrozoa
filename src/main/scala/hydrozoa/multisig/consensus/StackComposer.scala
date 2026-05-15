@@ -9,6 +9,7 @@ import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.logging.{Logging, Tracer}
 import hydrozoa.multisig.MultisigRegimeManager
+import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber}
 import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockResult, BlockType}
 import hydrozoa.multisig.ledger.effects.{NecessaryEffectsPolicy, StackEffectsBuilder}
 import hydrozoa.multisig.ledger.joint.JointLedger
@@ -161,14 +162,16 @@ final case class StackComposer(
                           s"${prefix.head.result.brief.blockNum}..${prefix.last.result.brief.blockNum}"
                     )
                     unsigned <- mkUnsigned(brief, prefix)
+                    handoff <- buildHandoff(unsigned)
                     conn <- getConnections
                     // Broadcast brief directly to PeerLiaisons (per plan: briefs go DIRECT,
                     // not via SlowConsensusActor). Each peer's outbox now has a stackBrief
                     // lane (M7).
                     _ <- (conn.peerLiaisons ! brief).parallel
-                    // Hand the unsigned stack to SlowConsensusActor (which will collect acks
-                    // and emit PreviousStackHardConfirmation back when saturated).
-                    _ <- conn.slowConsensusActor ! unsigned
+                    // Hand the unsigned stack + own pre-signed hard-acks to SlowConsensusActor
+                    // (which manages broadcast scheduling: round-1 / sole immediately, round-2
+                    // withheld until local round-1 confirmation).
+                    _ <- conn.slowConsensusActor ! handoff
                     _ <- state.update(_.afterClose(nextStackNum, prefix))
                 } yield ()
         }
@@ -189,8 +192,9 @@ final case class StackComposer(
                               s"blocks ${brief.firstBlockNum}..${brief.lastBlockNum}"
                         )
                         unsigned <- mkUnsigned(brief, expectedPrefix)
+                        handoff <- buildHandoff(unsigned)
                         conn <- getConnections
-                        _ <- conn.slowConsensusActor ! unsigned
+                        _ <- conn.slowConsensusActor ! handoff
                         _ <- state.update(_.afterClose(nextStackNum, expectedPrefix))
                     } yield ()
                 } else {
@@ -250,6 +254,56 @@ final case class StackComposer(
             Stack.Unsigned(brief, results, softConfirmations, effects)
         }
     }
+
+    /** Sign this peer's own hard-acks for every round the stack will need, allocating monotonic
+      * `HardAckNumber`s from the local counter. Bundles `(unsigned, ownAcks)` into a
+      * [[SlowConsensusActor.StackHandoff]] for the slow consensus actor.
+      *
+      * Per the plan, signing happens upfront at stack close (round-2's sig domain is the unlock tx
+      * body, which is fully known at this point). SlowConsensusActor manages outbound broadcast
+      * scheduling (round-1 / sole released immediately to PeerLiaisons; round-2 withheld until
+      * local round-1 confirmation).
+      */
+    private def buildHandoff(unsigned: Stack.Unsigned): IO[SlowConsensusActor.StackHandoff] =
+        state.modify { s =>
+            val effects = unsigned.effects match {
+                case r: StackEffects.Regular => r
+                case _: StackEffects.Initial =>
+                    throw new IllegalStateException(
+                      "buildHandoff: Initial stacks not yet supported by StackComposer leader path"
+                    )
+            }
+            val twoPhase = effects.settlements.nonEmpty || effects.finalization.isDefined
+            val wallet = config.ownHeadWallet
+
+            val (acks, newCounter) =
+                if twoPhase then {
+                    val n1 = s.ownHardAckNum
+                    val n2 = n1.increment
+                    val round1 = wallet.mkHardAckRound1Regular(
+                      stack = unsigned,
+                      hardAckNum = n1,
+                      finalizationRequested = false
+                    )
+                    val round2 = wallet.mkHardAckRound2Regular(
+                      stack = Stack.Round1Confirmed(unsigned),
+                      hardAckNum = n2,
+                      finalizationRequested = false
+                    )
+                    (List(round1, round2), n2.increment)
+                } else {
+                    val n = s.ownHardAckNum
+                    val sole = wallet.mkHardAckSole(
+                      stack = unsigned,
+                      hardAckNum = n,
+                      finalizationRequested = false
+                    )
+                    (List(sole), n.increment)
+                }
+
+            val handoff = SlowConsensusActor.StackHandoff(unsigned, acks)
+            (s.copy(ownHardAckNum = newCounter), handoff)
+        }
 
     private def getConnections: IO[Connections] = for {
         mConn <- connections.get
@@ -331,7 +385,12 @@ object StackComposer {
         inboundLeaderBrief: Map[StackNumber, StackBrief],
         lastClosedStackNum: StackNumber,
         lastClosedBlockNum: BlockNumber,
-        previousStackHardConfirmed: Boolean
+        previousStackHardConfirmed: Boolean,
+        /** Monotonic per-peer cursor for this peer's outgoing hard-acks. Advances by 1 for every
+          * HardAck this peer produces (round-1 + round-2 for 2-phase stacks; sole for 1-phase).
+          * Wire ordering invariant: round-1 always precedes round-2 for the same stackNum.
+          */
+        ownHardAckNum: HardAckNumber
     ) {
         def withBlockResult(r: BlockResult): State = {
             val pb = pending.getOrElse(r.brief.blockNum, PendingBlock.empty).withResult(r)
@@ -401,7 +460,8 @@ object StackComposer {
           lastClosedBlockNum = BlockNumber.zero,
           // Initial stack 0 boots with the trigger pre-armed (per spec: stack-0
           // hard-confirmation bootstraps the trigger chain).
-          previousStackHardConfirmed = true
+          previousStackHardConfirmed = true,
+          ownHardAckNum = HardAckNumber.zero
         )
     }
 }
