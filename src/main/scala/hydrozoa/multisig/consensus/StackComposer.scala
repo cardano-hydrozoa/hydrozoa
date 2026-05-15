@@ -11,6 +11,8 @@ import hydrozoa.lib.logging.{Logging, Tracer}
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockResult, BlockType}
 import hydrozoa.multisig.ledger.joint.JointLedger
+import hydrozoa.multisig.ledger.l1.L1LedgerM
+import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.stack.*
 
 /** Slow-consensus stack composer (M5).
@@ -49,6 +51,41 @@ final case class StackComposer(
     private val connections = Ref.unsafe[IO, Option[Connections]](None)
 
     val state: Ref[IO, State] = Ref.unsafe[IO, State](State.empty)
+
+    /** Slow-side L1 ledger state — owns the treasury chain. The slow side advances treasury on
+      * every settlement / finalization tx it produces; the fast side never touches it after the
+      * consensus split. The `deposits` field stays empty here: deposits absorption is a fast-side
+      * concern handled in [[JointLedger]]'s own [[L1LedgerM]] instance.
+      *
+      * Initialized from the head config's initialization tx (treasury produced by the init tx is
+      * the genesis treasury for stack 1's settlement).
+      */
+    private val l1State: Ref[IO, L1LedgerM.State] =
+        Ref.unsafe[IO, L1LedgerM.State](
+          L1LedgerM.State(
+            treasury = config.initializationTx.treasuryProduced,
+            deposits = DepositsMap.empty
+          )
+        )
+
+    /** Run an [[L1LedgerM]] action against the slow-side ledger state, advancing the treasury
+      * chain. Used by [[hydrozoa.multisig.ledger.effects.StackEffectsBuilder]] when the partition
+      * algorithm produces settlement / finalization txs.
+      *
+      * Not yet called — the call site lands when M1 (effect derivation body) is implemented.
+      */
+    @scala.annotation.unused
+    private def runL1Action[A](action: L1LedgerM[A]): IO[A] =
+        l1State.modify { st =>
+            action.run(config, st) match {
+                case Right((newSt, a)) => (newSt, IO.pure(a))
+                case Left(err) =>
+                    (
+                      st,
+                      Tracer.error(s"slow-side L1 action failed: $err") *> IO.raiseError(err)
+                    )
+            }
+        }.flatten
 
     override def preStart: IO[Unit] = for {
         _ <- context.self ! PreStart
