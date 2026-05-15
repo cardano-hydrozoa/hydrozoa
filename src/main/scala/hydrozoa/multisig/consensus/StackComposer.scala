@@ -10,6 +10,7 @@ import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.logging.{Logging, Tracer}
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockResult, BlockType}
+import hydrozoa.multisig.ledger.effects.{NecessaryEffectsPolicy, StackEffectsBuilder}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l1.L1LedgerM
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
@@ -69,12 +70,9 @@ final case class StackComposer(
         )
 
     /** Run an [[L1LedgerM]] action against the slow-side ledger state, advancing the treasury
-      * chain. Used by [[hydrozoa.multisig.ledger.effects.StackEffectsBuilder]] when the partition
-      * algorithm produces settlement / finalization txs.
-      *
-      * Not yet called — the call site lands when M1 (effect derivation body) is implemented.
+      * chain. Called from [[mkUnsigned]] when the partition algorithm produces settlement /
+      * finalization txs (currently no-ops for minor-only stacks; full impl pending the next slice).
       */
-    @scala.annotation.unused
     private def runL1Action[A](action: L1LedgerM[A]): IO[A] =
         l1State.modify { st =>
             action.run(config, st) match {
@@ -162,7 +160,7 @@ final case class StackComposer(
                       s"Leader closing stack $nextStackNum with blocks " +
                           s"${prefix.head.result.brief.blockNum}..${prefix.last.result.brief.blockNum}"
                     )
-                    unsigned = mkUnsigned(brief, prefix)
+                    unsigned <- mkUnsigned(brief, prefix)
                     conn <- getConnections
                     // Broadcast brief directly to PeerLiaisons (per plan: briefs go DIRECT,
                     // not via SlowConsensusActor). Each peer's outbox now has a stackBrief
@@ -190,7 +188,7 @@ final case class StackComposer(
                           s"Follower accepting stack $nextStackNum brief from leader; " +
                               s"blocks ${brief.firstBlockNum}..${brief.lastBlockNum}"
                         )
-                        unsigned = mkUnsigned(brief, expectedPrefix)
+                        unsigned <- mkUnsigned(brief, expectedPrefix)
                         conn <- getConnections
                         _ <- conn.slowConsensusActor ! unsigned
                         _ <- state.update(_.afterClose(nextStackNum, expectedPrefix))
@@ -235,24 +233,22 @@ final case class StackComposer(
         )
     }
 
-    /** Build a [[Stack.Unsigned]] from the prefix. The effects derivation is `???` until M1 lands;
-      * we use a placeholder empty `Regular` here so the actor wiring exercises end-to-end without
-      * throwing at runtime. Real derivation:
-      * `StackEffectsBuilder.deriveRegular(NecessaryEffectsPolicy.selectNecessaryEffects(...))`.
+    /** Build a [[Stack.Unsigned]] from the prefix. Runs the necessary-effects partition algorithm
+      * and the per-block effect derivation, threading the slow-side L1 ledger state through
+      * (treasury rotates on settlement / finalization).
+      *
+      * Current scope (M1 first slice): minor-only stacks fully derive — refund txs from each
+      * Minor's `postDatedRefundTxs`. Stacks containing Major or Final blocks build the same
+      * structure but with empty settlement / fallback / rollout / finalization (TODOs in
+      * [[StackEffectsBuilder]]).
       */
-    private def mkUnsigned(brief: StackBrief, prefix: List[ReadyBlock]): Stack.Unsigned = {
+    private def mkUnsigned(brief: StackBrief, prefix: List[ReadyBlock]): IO[Stack.Unsigned] = {
         val results = NonEmptyList.fromListUnsafe(prefix.map(_.result))
         val softConfirmations = NonEmptyList.fromListUnsafe(prefix.map(_.softConfirmed))
-        // TODO(M1): replace placeholder with the real necessary-effects derivation.
-        val placeholderEffects: StackEffects = StackEffects.Regular(
-          settlements = Nil,
-          fallbacks = Nil,
-          rollouts = Nil,
-          refunds = Nil,
-          evacCommits = Nil,
-          finalization = None
-        )
-        Stack.Unsigned(brief, results, softConfirmations, placeholderEffects)
+        val partitions = NecessaryEffectsPolicy.selectNecessaryEffects(results)
+        runL1Action(StackEffectsBuilder.deriveRegular(partitions)).map { effects =>
+            Stack.Unsigned(brief, results, softConfirmations, effects)
+        }
     }
 
     private def getConnections: IO[Connections] = for {

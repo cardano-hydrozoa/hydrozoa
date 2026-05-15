@@ -72,6 +72,12 @@ object L1LedgerM {
     private def lift[A](e: Either[L1LedgerM.Error, A]): L1LedgerM[A] =
         L1LedgerM(Kleisli.liftF(StateT.liftF(e)))
 
+    /** Inject a pure value into [[L1LedgerM]]. Useful when an effect-derivation path produces a
+      * value without needing to read or mutate the L1 state (e.g. minor-only stacks whose only
+      * effect is a list of pre-built refund txs).
+      */
+    def pure[A](a: A): L1LedgerM[A] = lift(Right(a))
+
     /** Check that a deposit tx parses correctly and add the deposit utxo it produces to the
       * ledger's state.
       *

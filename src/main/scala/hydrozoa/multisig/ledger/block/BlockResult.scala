@@ -2,6 +2,7 @@ package hydrozoa.multisig.ledger.block
 
 import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
+import hydrozoa.multisig.ledger.l1.tx.RefundTx
 
 /** Per-block local data emitted by [[hydrozoa.multisig.ledger.joint.JointLedger]] on local block
   * completion. Independent of soft-confirmation — fires immediately after the block is built
@@ -12,12 +13,16 @@ import hydrozoa.multisig.ledger.joint.obligation.Payout
   *
   *   - `evacuationMapDiff` — per-block delta to the evacuation map. Drives the block's standalone
   *     evac commitment (KZG commitment) and feeds into the next major's settlement tx.
-  *   - `payoutObligations` — refund + rollout obligations to be realized on L1. Drive the block's
-  *     refund txs (for minors absorbing deposits) and rollout txs (for L2 requests producing
-  *     immediate L1 payouts).
+  *   - `payoutObligations` — L2 payout obligations visible at this block (snapshot of the L2
+  *     ledger's `payouts` after this block's L2 mutations applied). The next Major / Final block in
+  *     the stack drains these into the settlement / finalization tx.
+  *   - `postDatedRefundTxs` — pre-built refund txs from deposit registration (signed at deposit
+  *     time per spec); attached to the block that absorbs the corresponding deposits and surfaced
+  *     on L1 by the slow side.
   */
 final case class BlockResult(
     brief: BlockBrief.Next,
     evacuationMapDiff: Seq[EvacuationDiff],
-    payoutObligations: List[Payout.Obligation]
+    payoutObligations: List[Payout.Obligation],
+    postDatedRefundTxs: List[RefundTx.PostDated]
 )
