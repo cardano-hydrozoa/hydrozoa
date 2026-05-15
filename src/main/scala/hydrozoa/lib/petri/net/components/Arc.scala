@@ -4,7 +4,6 @@ import cats.data.Kleisli
 import cats.implicits.*
 import hydrozoa.lib.cats.data.Kendo.{Kendo as KendoT, kendoFold}
 import hydrozoa.lib.number.NonNegativeInt
-
 import scala.collection.immutable.Queue
 
 /** This encodes the topological, configuration, simulation, and presentation data for arcs. Right
