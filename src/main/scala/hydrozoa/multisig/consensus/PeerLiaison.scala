@@ -10,10 +10,11 @@ import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.PeerLiaison.*
 import hydrozoa.multisig.consensus.PeerLiaison.Request.*
-import hydrozoa.multisig.consensus.ack.{AckId, AckNumber, SoftAck}
+import hydrozoa.multisig.consensus.ack.{AckId, AckNumber, HardAck, HardAckNumber, SoftAck}
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber, BlockStatus, BlockType}
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
+import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
 import scala.collection.immutable.Queue
 
 trait PeerLiaison(
@@ -53,6 +54,8 @@ trait PeerLiaison(
                     Connections(
                       blockWeaver = _connections.blockWeaver,
                       consensusActor = _connections.consensusActor,
+                      stackComposer = _connections.stackComposer,
+                      slowConsensusActor = _connections.slowConsensusActor,
                       remotePeerLiaison = _connections.remotePeerLiaisons(remotePeerId)
                     )
                   )
@@ -102,6 +105,13 @@ trait PeerLiaison(
                             logger.debug(s"outbox: soft ack block=${y.blockNum} peer=${y.peerNum}")
                         case y: BlockBrief.Next =>
                             logger.debug(s"outbox: block block=${y.blockNum}")
+                        case y: StackBrief =>
+                            logger.debug(s"outbox: stack brief stack=${y.stackNum}")
+                        case y: HardAck =>
+                            logger.debug(
+                              s"outbox: hard ack stack=${y.stackNum} peer=${y.peerNum} " +
+                                  s"round=${y.payload.round}"
+                            )
                     }
                     // Append the event to the corresponding queue in the state
                     _ <- state.appendToOutbox(x)
@@ -124,6 +134,9 @@ trait PeerLiaison(
                                   s"NewMsgBatch: batch=${newBatch.batchNum}, " +
                                       s"ack=${newBatch.ack.map(_.ackNum)}, " +
                                       s"block=${newBatch.blockBrief.map(_.blockNum)}, " +
+                                      s"stackBrief=${newBatch.stackBrief.map(_.stackNum)}, " +
+                                      s"hardAck=${newBatch.hardAck
+                                              .map(h => s"${h.stackNum}/${h.payload.round}")}, " +
                                       s"reqs=${newBatch.requests.map(_.requestId)}"
                                 )
                                 _ <- logger.debug(s"sending $msg")
@@ -149,12 +162,16 @@ trait PeerLiaison(
                                 _ <- state.advanceTo(next)
                                 msg <- IO.pure(
                                   s"GetMsgBatch: batch=${next.batchNum}, ack=${next.ackNum}, " +
-                                      s"block=${next.blockNum}, req=${next.requestNum}"
+                                      s"block=${next.blockNum}, " +
+                                      s"stackBrief=${next.stackBriefNum}, " +
+                                      s"hardAck=${next.hardAckNum}, req=${next.requestNum}"
                                 )
                                 _ <- mermaid(msg)
                                 _ <- conn.remotePeerLiaison ! next
                                 _ <- x.ack.traverse_(conn.consensusActor ! _)
                                 _ <- x.blockBrief.traverse_(conn.blockWeaver ! _)
+                                _ <- x.stackBrief.traverse_(conn.stackComposer ! _)
+                                _ <- x.hardAck.traverse_(conn.slowConsensusActor ! _)
                                 _ <- x.requests.traverse_(conn.blockWeaver ! _)
                             } yield ()
                         case VerifyOutcome.Reject(reason) =>
@@ -217,18 +234,26 @@ trait PeerLiaison(
         private val nAck = Ref.unsafe[IO, AckNumber](AckNumber(0))
         private val nBlock = Ref.unsafe[IO, BlockNumber](BlockNumber(0))
         private val nEvent = Ref.unsafe[IO, RequestNumber](RequestNumber(0))
+        private val nStackBrief = Ref.unsafe[IO, StackNumber](StackNumber.zero)
+        private val nHardAck = Ref.unsafe[IO, HardAckNumber](HardAckNumber.zero)
         private val qAck = Ref.unsafe[IO, Queue[SoftAck]](Queue())
         private val qBlock = Ref.unsafe[IO, Queue[BlockBrief.Next]](Queue())
         private val qEvent = Ref.unsafe[IO, Queue[UserRequestWithId]](Queue())
+        private val qStackBrief = Ref.unsafe[IO, Queue[StackBrief]](Queue())
+        private val qHardAck = Ref.unsafe[IO, Queue[HardAck]](Queue())
         private val sendBatchImmediately = Ref.unsafe[IO, Option[GetMsgBatch]](None)
 
-        /** Check whether there are no acks, blocks, or events queued-up to be sent out. */
+        /** Check whether there are no acks, blocks, events, stack briefs, or hard-acks queued-up to
+          * be sent out.
+          */
         private def queuesAreEmpty: IO[Boolean] =
             for {
                 ack <- this.qAck.get.map(_.isEmpty)
                 block <- this.qBlock.get.map(_.isEmpty)
                 event <- this.qEvent.get.map(_.isEmpty)
-            } yield ack && block && event
+                stackBrief <- this.qStackBrief.get.map(_.isEmpty)
+                hardAck <- this.qHardAck.get.map(_.isEmpty)
+            } yield ack && block && event && stackBrief && hardAck
 
         infix def appendToOutbox(x: RemoteBroadcast): IO[Unit] =
             x match {
@@ -265,6 +290,35 @@ trait PeerLiaison(
                         )
                         _ <- this.nBlock.set(nY)
                         _ <- this.qBlock.update(_ :+ y)
+                    } yield ()
+                case y: StackBrief =>
+                    // Slow leader's stack proposals: monotonically increasing by stackNum.
+                    // Followers' qStackBrief stays empty for stacks they don't lead.
+                    for {
+                        nStack <- this.nStackBrief.get
+                        nY = y.stackNum
+                        _ <- IO.raiseWhen(nY.convert != 0 && nStack.increment != nY)(
+                          Error(
+                            s"Bad StackBrief increment: last-seen: $nStack, attempted: $nY"
+                          )
+                        )
+                        _ <- this.nStackBrief.set(nY)
+                        _ <- this.qStackBrief.update(_ :+ y)
+                    } yield ()
+                case y: HardAck =>
+                    // Hard-acks: monotonically increasing per-peer by hardAckNum, regardless of
+                    // stackNum/round. Wire ordering invariant (round-1 precedes round-2 for the
+                    // same stack) is upheld by the producer (StackComposer / SlowConsensusActor).
+                    for {
+                        nHard <- this.nHardAck.get
+                        nY = y.hardAckNum
+                        _ <- IO.raiseWhen(nY.convert != 0 && nHard.increment != nY)(
+                          Error(
+                            s"Bad HardAck increment: last-seen: $nHard, attempted: $nY"
+                          )
+                        )
+                        _ <- this.nHardAck.set(nY)
+                        _ <- this.qHardAck.update(_ :+ y)
                     } yield ()
             }
 
@@ -304,10 +358,14 @@ trait PeerLiaison(
             (for {
                 nAck <- this.nAck.get
                 nBlock <- this.nBlock.get
+                nStack <- this.nStackBrief.get
+                nHard <- this.nHardAck.get
 
                 _ <- IO.raiseWhen(
                   nAck < batchReq.ackNum ||
-                      nBlock < batchReq.blockNum
+                      nBlock < batchReq.blockNum ||
+                      nStack < batchReq.stackBriefNum ||
+                      nHard < batchReq.hardAckNum
                 )(OutOfBoundsGetMsgBatch)
 
                 _ <- this.queuesAreEmpty.ifM(IO.raiseError(EmptyNewMsgBatch), IO.unit)
@@ -318,6 +376,8 @@ trait PeerLiaison(
                 //     ⇒ drop entries `<= N`.
                 //   - `batchReq.requestNum`: "send me requests with requestNum >= N"
                 //     ⇒ drop entries `< N`.
+                //   - `batchReq.stackBriefNum`/`batchReq.hardAckNum`: "I have N, send me N+1"
+                //     ⇒ drop entries `<= N`. (Slow-side cursors mirror ack/block semantics.)
                 //
                 // Pruning per-remote on each incoming `GetMsgBatch` — NOT on local
                 // `BlockConfirmed` — is essential. Local consensus for block N
@@ -337,18 +397,29 @@ trait PeerLiaison(
                     val pruned = q.dropWhile(_.blockNum <= batchReq.blockNum)
                     (pruned, pruned.headOption)
                 }
+                mStackBrief <- this.qStackBrief.modify { q =>
+                    val pruned = q.dropWhile(_.stackNum <= batchReq.stackBriefNum)
+                    (pruned, pruned.headOption)
+                }
+                mHardAck <- this.qHardAck.modify { q =>
+                    val pruned = q.dropWhile(_.hardAckNum <= batchReq.hardAckNum)
+                    (pruned, pruned.headOption)
+                }
                 events <- this.qEvent.modify { q =>
                     val pruned = q.dropWhile(_.requestId._2 < batchReq.requestNum)
                     (pruned, pruned.take(maxRequests))
                 }
 
-                _ <- IO.raiseWhen(mAck.isEmpty && mBlock.isEmpty && events.isEmpty)(
-                  EmptyNewMsgBatch
-                )
+                _ <- IO.raiseWhen(
+                  mAck.isEmpty && mBlock.isEmpty && events.isEmpty &&
+                      mStackBrief.isEmpty && mHardAck.isEmpty
+                )(EmptyNewMsgBatch)
             } yield NewMsgBatch(
               batchNum = batchReq.batchNum,
               ack = mAck,
               blockBrief = mBlock,
+              stackBrief = mStackBrief,
+              hardAck = mHardAck,
               requests = events.toList
             )).attemptNarrow
 
@@ -422,6 +493,31 @@ trait PeerLiaison(
                     return Reject(Rejection.BlockNumMismatch(nextBlockNum, b.blockNum))
                 case _ => ()
 
+            // 3a. If a stack brief is present, its stackNum must be exactly the next-expected
+            //     after `current.stackBriefNum`. Followers don't lead stacks, so stackBriefs
+            //     only flow from peers whose round-robin slot covers a given stackNum.
+            val nextStackBriefNum = current.stackBriefNum.increment
+            received.stackBrief match
+                case Some(sb) if sb.stackNum != nextStackBriefNum =>
+                    return Reject(
+                      Rejection.StackBriefNumMismatch(nextStackBriefNum, sb.stackNum)
+                    )
+                case _ => ()
+
+            // 3b. If a hard-ack is present, its peer must be the remote peer and its
+            //     hardAckNum must be exactly the next-expected after `current.hardAckNum`.
+            val nextHardAckNum = current.hardAckNum.increment
+            received.hardAck match
+                case Some(h) if h.ackId.peerNum != remotePeerId.peerNum =>
+                    return Reject(
+                      Rejection.HardAckPeerMismatch(remotePeerId.peerNum, h.ackId.peerNum)
+                    )
+                case Some(h) if h.hardAckNum != nextHardAckNum =>
+                    return Reject(
+                      Rejection.HardAckNumMismatch(nextHardAckNum, h.hardAckNum)
+                    )
+                case _ => ()
+
             // 4. If requests are present, the first must equal `current.requestNum` (the
             //    next-expected event number) and subsequent requests must be consecutive.
             received.requests.headOption match
@@ -445,6 +541,8 @@ trait PeerLiaison(
                 batchNum = current.batchNum.increment,
                 ackNum = received.ack.fold(current.ackNum)(_.ackNum),
                 blockNum = received.blockBrief.fold(current.blockNum)(_.blockNum),
+                stackBriefNum = received.stackBrief.fold(current.stackBriefNum)(_.stackNum),
+                hardAckNum = received.hardAck.fold(current.hardAckNum)(_.hardAckNum),
                 requestNum = received.requests.lastOption.fold(current.requestNum)(
                   _.requestId.requestNum.increment
                 )
@@ -472,6 +570,8 @@ object PeerLiaison {
     final case class Connections(
         blockWeaver: BlockWeaver.Handle,
         consensusActor: ConsensusActor.Handle,
+        stackComposer: StackComposer.Handle,
+        slowConsensusActor: SlowConsensusActor.Handle,
         remotePeerLiaison: PeerLiaison.Handle
     )
 
@@ -519,6 +619,9 @@ object PeerLiaison {
             case AckPeerMismatch(expected: HeadPeerNumber, received: HeadPeerNumber)
             case AckNumMismatch(expected: AckNumber, received: AckNumber)
             case BlockNumMismatch(expected: BlockNumber, received: BlockNumber)
+            case StackBriefNumMismatch(expected: StackNumber, received: StackNumber)
+            case HardAckPeerMismatch(expected: HeadPeerNumber, received: HeadPeerNumber)
+            case HardAckNumMismatch(expected: HardAckNumber, received: HardAckNumber)
             case RequestsHeadMismatch(expected: RequestNumber, received: RequestNumber)
             case RequestsNotConsecutive(prev: RequestId, next: RequestId)
 
@@ -531,6 +634,12 @@ object PeerLiaison {
                     s"AckNumMismatch(expected=$e, received=$r)"
                 case BlockNumMismatch(e, r) =>
                     s"BlockNumMismatch(expected=$e, received=$r)"
+                case StackBriefNumMismatch(e, r) =>
+                    s"StackBriefNumMismatch(expected=$e, received=$r)"
+                case HardAckPeerMismatch(e, r) =>
+                    s"HardAckPeerMismatch(expected=$e, received=$r)"
+                case HardAckNumMismatch(e, r) =>
+                    s"HardAckNumMismatch(expected=$e, received=$r)"
                 case RequestsHeadMismatch(e, r) =>
                     s"RequestsHeadMismatch(expected=$e, received=$r)"
                 case RequestsNotConsecutive(p, n) =>
@@ -573,7 +682,7 @@ object PeerLiaison {
     case object ResendCurrent
 
     object Request {
-        type RemoteBroadcast = SoftAck | BlockBrief.Next | UserRequestWithId
+        type RemoteBroadcast = SoftAck | BlockBrief.Next | UserRequestWithId | StackBrief | HardAck
 
         /** Request by a comm actor to its remote comm-actor counterpart for a batch of events,
           * blocks, or block acknowledgements originating from the remote peer.
@@ -596,6 +705,8 @@ object PeerLiaison {
             batchNum: Batch.Number,
             ackNum: AckNumber,
             blockNum: BlockNumber,
+            stackBriefNum: StackNumber,
+            hardAckNum: HardAckNumber,
             requestNum: RequestNumber
         )
 
@@ -604,6 +715,8 @@ object PeerLiaison {
               batchNum = Batch.Number(0),
               ackNum = AckNumber(0),
               blockNum = BlockNumber(0),
+              stackBriefNum = StackNumber.zero,
+              hardAckNum = HardAckNumber.zero,
               requestNum = RequestNumber(0)
             )
         }
@@ -627,6 +740,8 @@ object PeerLiaison {
             batchNum: Batch.Number,
             ack: Option[SoftAck],
             blockBrief: Option[BlockBrief.Next],
+            stackBrief: Option[StackBrief],
+            hardAck: Option[HardAck],
             requests: List[UserRequestWithId]
         )
     }

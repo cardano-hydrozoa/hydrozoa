@@ -4,6 +4,7 @@ import cats.data.NonEmptyList
 import cats.effect.{IO, IOLocal, Ref}
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
+import com.suprnation.typelevel.actors.syntax.BroadcastOps
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.logging.{Logging, Tracer}
@@ -126,8 +127,10 @@ final case class StackComposer(
                     )
                     unsigned = mkUnsigned(brief, prefix)
                     conn <- getConnections
-                    // TODO(M7): broadcast `brief` directly to PeerLiaisons once they accept
-                    // StackBrief on the wire (`stackBrief` outbox lane).
+                    // Broadcast brief directly to PeerLiaisons (per plan: briefs go DIRECT,
+                    // not via SlowConsensusActor). Each peer's outbox now has a stackBrief
+                    // lane (M7).
+                    _ <- (conn.peerLiaisons ! brief).parallel
                     // Hand the unsigned stack to SlowConsensusActor (which will collect acks
                     // and emit PreviousStackHardConfirmation back when saturated).
                     _ <- conn.slowConsensusActor ! unsigned

@@ -3,10 +3,11 @@ package hydrozoa.multisig.consensus.transport
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.consensus.PeerLiaison
 import hydrozoa.multisig.consensus.PeerLiaison.Request.{GetMsgBatch, NewMsgBatch}
-import hydrozoa.multisig.consensus.ack.{AckId, SoftAck}
+import hydrozoa.multisig.consensus.ack.{AckId, HardAckNumber, SoftAck}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
+import hydrozoa.multisig.ledger.stack.StackNumber
 import org.scalatest.funsuite.AnyFunSuite
 
 /** Round-trip tests for the wire codecs used by [[PeerWsTransport]].
@@ -42,6 +43,8 @@ class CodecsTest extends AnyFunSuite {
           batchNum = PeerLiaison.Batch.Number(42),
           ackNum = hydrozoa.multisig.consensus.ack.AckNumber(13),
           blockNum = BlockNumber(99),
+          stackBriefNum = StackNumber(4),
+          hardAckNum = HardAckNumber(8),
           requestNum = RequestNumber(7),
         )
         val frame = Frame.Msg(gmb)
@@ -50,6 +53,8 @@ class CodecsTest extends AnyFunSuite {
                 assert(decoded.batchNum == gmb.batchNum)
                 assert(decoded.ackNum == gmb.ackNum)
                 assert(decoded.blockNum == gmb.blockNum)
+                assert(decoded.stackBriefNum == gmb.stackBriefNum)
+                assert(decoded.hardAckNum == gmb.hardAckNum)
                 assert(decoded.requestNum == gmb.requestNum)
             case other => fail(s"Expected Msg(GetMsgBatch), got: $other")
         }
@@ -60,6 +65,8 @@ class CodecsTest extends AnyFunSuite {
           batchNum = PeerLiaison.Batch.Number(1),
           ack = None,
           blockBrief = None,
+          stackBrief = None,
+          hardAck = None,
           requests = Nil,
         )
         val frame = Frame.Msg(nmb)
@@ -68,6 +75,8 @@ class CodecsTest extends AnyFunSuite {
                 assert(decoded.batchNum == nmb.batchNum)
                 assert(decoded.ack.isEmpty)
                 assert(decoded.blockBrief.isEmpty)
+                assert(decoded.stackBrief.isEmpty)
+                assert(decoded.hardAck.isEmpty)
                 assert(decoded.requests.isEmpty)
             case other => fail(s"Expected Msg(NewMsgBatch), got: $other")
         }
@@ -86,6 +95,8 @@ class CodecsTest extends AnyFunSuite {
           batchNum = PeerLiaison.Batch.Number(3),
           ack = Some(ack),
           blockBrief = None,
+          stackBrief = None,
+          hardAck = None,
           requests = Nil,
         )
         val frame = Frame.Msg(nmb)
@@ -109,7 +120,7 @@ class CodecsTest extends AnyFunSuite {
 
     test("Frame.fromWire accepts GetMsgBatch and NewMsgBatch, rejects others") {
         val gmb = GetMsgBatch.initial
-        val nmb = NewMsgBatch(PeerLiaison.Batch.Number(0), None, None, Nil)
+        val nmb = NewMsgBatch(PeerLiaison.Batch.Number(0), None, None, None, None, Nil)
 
         assert(Frame.fromWire(gmb).contains(gmb))
         assert(Frame.fromWire(nmb).contains(nmb))

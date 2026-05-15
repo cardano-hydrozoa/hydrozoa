@@ -4,11 +4,12 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.multisig.consensus.PeerLiaison.Request.{GetMsgBatch, NewMsgBatch}
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
-import hydrozoa.multisig.consensus.ack.{AckId, AckNumber, SoftAck}
+import hydrozoa.multisig.consensus.ack.{AckId, AckNumber, HardAck, HardAckId, HardAckNumber, SoftAck}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{PeerLiaison, UserRequest, UserRequestBody, UserRequestHeader, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeader, BlockNumber}
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
+import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
 import io.circe.*
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
@@ -91,6 +92,56 @@ object Codecs {
     // ---- SoftAck ----
 
     given Codec[SoftAck] = deriveCodec[SoftAck]
+
+    // ---- StackNumber / HardAckNumber / HardAckId / HardAck ----
+    //
+    // StackBrief has its own derived Codec; we just need primitive opaque-type codecs +
+    // a placeholder for HardAck. Real HardAck wire codec lands when slow-side ack collection
+    // is wired (M6 full); the auto-confirm stub never serializes a HardAck.
+
+    given Codec[StackNumber] =
+        io.circe.Codec.from(
+          Decoder.decodeInt.map(StackNumber.apply),
+          Encoder.encodeInt.contramap((s: StackNumber) => s.convert)
+        )
+
+    given Codec[HardAckNumber] =
+        io.circe.Codec.from(
+          Decoder.decodeInt.map(HardAckNumber.apply),
+          Encoder.encodeInt.contramap((h: HardAckNumber) => h.convert)
+        )
+
+    given Codec[HardAckId] =
+        io.circe.Codec.from(
+          Decoder.instance(c =>
+              for {
+                  pn <- c.downField("peerNum").as[HeadPeerNumber]
+                  hn <- c.downField("hardAckNum").as[HardAckNumber]
+              } yield HardAckId(pn, hn)
+          ),
+          Encoder.instance((id: HardAckId) =>
+              Json.obj("peerNum" -> id.peerNum.asJson, "hardAckNum" -> id.hardAckNum.asJson)
+          )
+        )
+
+    /** Placeholder: full HardAck wire shape lands with M6 (real ack collection). For now we accept
+      * any JSON object on decode and encode an opaque sentinel — this codec exists only so
+      * [[NewMsgBatch]] derivation closes; the auto-confirm stub never routes a HardAck to the wire,
+      * and any premature serialization will fail loudly downstream.
+      */
+    given Codec[HardAck] =
+        io.circe.Codec.from(
+          Decoder.failed(
+            DecodingFailure("HardAck wire codec not implemented yet (TODO M6 full).", Nil)
+          ),
+          Encoder.instance((_: HardAck) =>
+              Json.obj(
+                "TODO" -> Json.fromString(
+                  "HardAck wire codec not implemented yet (TODO M6 full)."
+                )
+              )
+          )
+        )
 
     // ---- UserRequestWithId ----
     //
