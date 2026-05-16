@@ -63,7 +63,7 @@ sealed trait YapneArc
 case class YapnePTArc(
     override val arcPlaceId: String,
     override val arcTransitionId: String,
-    override val weight: NonNegativeInt,
+    override val weight: PositiveInt,
     override val label: String,
     override val points: Queue[(Int, Int)] = Queue.empty,
 ) extends YapneArc,
@@ -73,7 +73,7 @@ case class YapnePTArc(
 case class YapneTPArc(
     override val arcPlaceId: String,
     override val arcTransitionId: String,
-    override val weight: NonNegativeInt,
+    override val weight: PositiveInt,
     override val label: String,
     override val points: Queue[(Int, Int)] = Queue.empty,
 ) extends YapneArc,
@@ -101,7 +101,7 @@ case class YapneResetArc(
 case class YapneReadArc(
     override val arcPlaceId: String,
     override val arcTransitionId: String,
-    override val weight: NonNegativeInt,
+    override val weight: PositiveInt,
     override val label: String,
     override val points: Queue[(Int, Int)] = Queue.empty,
 ) extends YapneArc,
@@ -306,7 +306,7 @@ object Demo extends IOApp {
         val readTreasury: YapneArc = YapneReadArc(
           arcPlaceId = "p_0",
           arcTransitionId = "t_0",
-          weight = NonNegativeInt.unsafeApply(1),
+          weight = PositiveInt.unsafeApply(1),
           label = "reference treasury script (1)"
         )
 
@@ -314,7 +314,7 @@ object Demo extends IOApp {
         val readResolved: YapneArc = YapneReadArc(
           arcPlaceId = "p_1",
           arcTransitionId = "t_0",
-          weight = NonNegativeInt.unsafeApply(1),
+          weight = PositiveInt.unsafeApply(1),
           label = "read resolved treasury (1)"
         )
 
@@ -322,28 +322,28 @@ object Demo extends IOApp {
         val spendAmbient: YapneArc = YapnePTArc(
           arcPlaceId = "p_2",
           arcTransitionId = "t_0",
-          weight = NonNegativeInt.unsafeApply(2),
+          weight = PositiveInt.unsafeApply(2),
           label = "spend fee utxos net (2)"
         )
 
         val fulfillPayoutObligation: YapneArc = YapnePTArc(
           arcPlaceId = "p_3",
           arcTransitionId = "t_0",
-          weight = NonNegativeInt.unsafeApply(63),
+          weight = PositiveInt.unsafeApply(63),
           label = "fulfill payout obligations (63)"
         )
 
         val sendEvacuationOutput: YapneArc = YapneTPArc(
           arcPlaceId = "p_4",
           arcTransitionId = "t_0",
-          weight = NonNegativeInt.unsafeApply(63),
+          weight = PositiveInt.unsafeApply(63),
           label = "send evacuation output (63)"
         )
 
         val useCollateral: YapneArc = YapneReadArc(
           arcPlaceId = "p_5",
           arcTransitionId = "t_0",
-          weight = NonNegativeInt.unsafeApply(1),
+          weight = PositiveInt.unsafeApply(1),
           label = "collateralize (1)"
         )
 

@@ -3,7 +3,7 @@ package hydrozoa.lib.petri.net.components
 import cats.data.Kleisli
 import cats.implicits.*
 import hydrozoa.lib.cats.data.Kendo.{Kendo as KendoT, kendoFold}
-import hydrozoa.lib.number.NonNegativeInt
+import hydrozoa.lib.number.{NonNegativeInt, PositiveInt}
 import scala.collection.immutable.Queue
 
 /** This encodes the topological, configuration, simulation, and presentation data for arcs. Right
@@ -100,7 +100,7 @@ object Arc {
         trait FiringError extends Throwable
 
         trait Weighted {
-            val weight: NonNegativeInt
+            val weight: PositiveInt
         }
 
         /** Removes `weight` tokens from the place. Enabled if place has >= weight tokens. */
@@ -127,7 +127,7 @@ object Arc {
         object PT {
 
             /** Raised when a PT arc's enabling check fails (place has fewer tokens than weight). */
-            case class NotEnabled(tokens: NonNegativeInt, weight: NonNegativeInt)
+            case class NotEnabled(tokens: NonNegativeInt, weight: PositiveInt)
                 extends EnablingError {
                 override def getMessage: String =
                     s"PT arc not enabled: place has ${tokens.toInt} tokens, requires ${weight.toInt}"
@@ -136,7 +136,7 @@ object Arc {
             /** Raised when a PT arc fires but the subtraction underflows NonNegativeInt. In
               * practice this should not occur if [[NotEnabled]] is checked first.
               */
-            case class InsufficientTokens(tokens: NonNegativeInt, weight: NonNegativeInt)
+            case class InsufficientTokens(tokens: NonNegativeInt, weight: PositiveInt)
                 extends FiringError {
                 override def getMessage: String =
                     s"Insufficient tokens to fire PT arc: place has ${tokens.toInt}, arc requires ${weight.toInt}"
@@ -160,7 +160,7 @@ object Arc {
         object TP {
 
             /** Raised when a TP arc fires but adding the weight would overflow NonNegativeInt. */
-            case class TokenOverflow(tokens: NonNegativeInt, weight: NonNegativeInt)
+            case class TokenOverflow(tokens: NonNegativeInt, weight: PositiveInt)
                 extends FiringError {
                 override def getMessage: String =
                     s"Token overflow firing TP arc: place has ${tokens.toInt}, arc adds ${weight.toInt}"
@@ -214,7 +214,7 @@ object Arc {
 
             /** Raised when a read arc's enabling check fails (place has fewer tokens than weight).
               */
-            case class NotEnabled(tokens: NonNegativeInt, weight: NonNegativeInt)
+            case class NotEnabled(tokens: NonNegativeInt, weight: PositiveInt)
                 extends EnablingError {
                 override def getMessage: String =
                     s"Read arc not enabled: place has ${tokens.toInt} tokens, requires ${weight.toInt}"
