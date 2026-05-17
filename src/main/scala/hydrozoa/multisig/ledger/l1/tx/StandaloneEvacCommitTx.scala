@@ -1,5 +1,6 @@
 package hydrozoa.multisig.ledger.l1.tx
 
+import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
 import scalus.cardano.ledger.Transaction
@@ -24,5 +25,10 @@ final case class StandaloneEvacCommitTx(
     tx: Transaction,
     treasurySpent: MultisigTreasuryUtxo,
     treasuryProduced: MultisigTreasuryUtxo,
-    nextKzg: KzgCommitment
+    nextKzg: KzgCommitment,
+    /** The block whose header this evac commitment pins — the last block of the trailing-minor
+      * partition. The hard-ack signs THAT block's header (KZG lives on the header), keyed by this
+      * `committedBlockNum`.
+      */
+    committedBlockNum: BlockNumber
 )

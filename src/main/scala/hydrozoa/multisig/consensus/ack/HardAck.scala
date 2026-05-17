@@ -1,9 +1,10 @@
 package hydrozoa.multisig.consensus.ack
 
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.StackNumber
-import scalus.cardano.ledger.VKeyWitness
+import scalus.cardano.ledger.{Transaction, VKeyWitness}
 
 /** A head peer's hard acknowledgment of a closed stack — see `consensus/slow-consensus` in the
   * spec.
@@ -75,15 +76,21 @@ object HardAck {
         /** Per-effect signatures for everything in a regular stack EXCEPT the first
           * settlement/finalization (the round-2 unlock).
           *
-          * Maps are keyed by partition index (one partition per major version in the stack); inner
-          * maps with `(Int, Int)` keys are `(partitionIndex, withinPartitionIndex)`.
+          * `settlements` / `fallbacks` / `finalization` are keyed by partition index (one partition
+          * per major version in the stack); `rollouts` / `refunds` use
+          * `(partitionIndex, withinPartitionIndex)`.
+          *
+          * `evacCommits` is keyed by [[BlockNumber]] and carries a [[BlockHeader.HeaderSignature]]
+          * (NOT a [[TxSignature]]): a standalone evacuation commitment commits a *block header* —
+          * KZG commitments still live on `BlockHeader` (kept there so the rule-based on-chain code
+          * is untouched), so a peer signs the full header, the same shape a soft-ack signs.
           */
         final case class Regular(
             settlements: Map[Int, TxSignature],
             fallbacks: Map[Int, TxSignature],
             rollouts: Map[(Int, Int), TxSignature],
             refunds: Map[(Int, Int), TxSignature],
-            evacCommits: Map[Int, TxSignature],
+            evacCommits: Map[BlockNumber, BlockHeader.HeaderSignature],
             finalization: Map[Int, TxSignature]
         ) extends Payload.Round1
 
@@ -110,14 +117,51 @@ object HardAck {
         ) extends Payload.Round2
     }
 
-    /** Sole-round ack payload — 1-phase minor-only stacks only. Signs every effect (refund txs +
-      * the last evac commit). Same map shape as [[Round1Payload.Regular]] but conceptually a
-      * different round.
+    /** Sole-round ack payload — 1-phase minor-only stacks only.
+      *
+      * A minor-only stack is exactly one partition (minors don't bump the major version), so there
+      * is exactly ONE standalone evac commitment — `evacCommit` is a single
+      * `(blockNum, headerSig)`, not a map. `refunds` is keyed `(partitionIndex,
+      * withinPartitionIndex)` for shape-consistency with [[Round1Payload.Regular]] (partition index
+      * is always 0 here).
       */
     final case class SolePayload(
         refunds: Map[(Int, Int), TxSignature],
-        evacCommits: Map[Int, TxSignature]
+        evacCommit: (BlockNumber, BlockHeader.HeaderSignature)
     ) extends Payload {
         override def round: Round = Round.Sole
+    }
+
+    /** Pre-signing material the [[hydrozoa.multisig.consensus.peer.HeadPeerWallet]] is handed to
+      * produce a hard-ack. The wallet maps each entry through its signer and assembles the
+      * corresponding [[Payload]] — it never inspects a [[hydrozoa.multisig.ledger.stack.Stack]]
+      * itself (the caller does all the walking).
+      *
+      * Mirrors the payload shapes, but with raw material (tx bodies / header signing bytes) instead
+      * of signatures.
+      */
+    object SigningInputs {
+        final case class Round1Regular(
+            settlements: Map[Int, Transaction],
+            fallbacks: Map[Int, Transaction],
+            rollouts: Map[(Int, Int), Transaction],
+            refunds: Map[(Int, Int), Transaction],
+            evacCommits: Map[BlockNumber, BlockHeader.Minor.Onchain.Serialized],
+            finalization: Map[Int, Transaction]
+        )
+
+        final case class Round1Initial(fallback: Transaction)
+
+        final case class Round2Regular(unlock: Transaction)
+
+        final case class Round2Initial(
+            initTx: Transaction,
+            individualWitnesses: List[VKeyWitness]
+        )
+
+        final case class Sole(
+            refunds: Map[(Int, Int), Transaction],
+            evacCommit: (BlockNumber, BlockHeader.Minor.Onchain.Serialized)
+        )
     }
 }

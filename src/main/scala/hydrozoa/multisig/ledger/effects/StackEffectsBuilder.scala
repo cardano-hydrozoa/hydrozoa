@@ -119,8 +119,11 @@ object StackEffectsBuilder {
         val trailingMinorEvacCommits: L1LedgerM[List[StandaloneEvacCommitTx]] = partitions
             .filter(_.closing == Partition.Closing.TrailingMinors)
             .traverse { p =>
-                val lastKzg = p.blocks.last.brief.header.kzgCommitment
-                L1LedgerM.mkStandaloneEvacCommitTx(lastKzg)
+                val lastBlock = p.blocks.last.brief
+                L1LedgerM.mkStandaloneEvacCommitTx(
+                  nextKzg = lastBlock.header.kzgCommitment,
+                  committedBlockNum = lastBlock.blockNum
+                )
             }
 
         for {

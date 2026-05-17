@@ -206,7 +206,8 @@ object L1LedgerM {
       * coherent.
       */
     def mkStandaloneEvacCommitTx(
-        nextKzg: KzgCommitment
+        nextKzg: KzgCommitment,
+        committedBlockNum: hydrozoa.multisig.ledger.block.BlockNumber
     ): L1LedgerM[StandaloneEvacCommitTx] = for {
         state <- get
         treasurySpent = state.treasury
@@ -226,7 +227,8 @@ object L1LedgerM {
       tx = placeholderTx,
       treasurySpent = treasurySpent,
       treasuryProduced = treasuryProduced,
-      nextKzg = nextKzg
+      nextKzg = nextKzg,
+      committedBlockNum = committedBlockNum
     )
 
     /** Remove the absorbed/refunded deposits and update the treasury in the ledger state. Called

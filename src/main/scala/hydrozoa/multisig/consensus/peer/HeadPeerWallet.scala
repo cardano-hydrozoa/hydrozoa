@@ -8,8 +8,8 @@ import hydrozoa.lib.cardano.wallet.*
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, SoftAck}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber.given
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeader}
-import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, Tx, TxSignature}
-import hydrozoa.multisig.ledger.stack.{Stack, StackEffects, StackNumber}
+import hydrozoa.multisig.ledger.l1.tx.{Tx, TxSignature}
+import hydrozoa.multisig.ledger.stack.StackNumber
 import io.circe.*
 import io.circe.syntax.*
 import scala.language.implicitConversions
@@ -82,169 +82,93 @@ final class HeadPeerWallet(
 
     // ============================================================
     // Hard-ack signing — slow consensus (see consensus/slow-consensus in the spec)
+    //
+    // The wallet is a pure mapper: it signs exactly the material the caller hands it and
+    // never inspects a Stack / StackEffects. The StackComposer does all the walking and
+    // hands over a HardAck.SigningInputs.* struct.
     // ============================================================
 
-    /** Round-1 hard ack for a regular (non-initial) stack containing settlement or finalization.
-      * Signs every per-effect tx body EXCEPT the first settlement/finalization (the round-2
-      * unlock). Per partition position is mapped to list-index for now — single-partition stacks
-      * are the common case; multi-partition exercises the same code paths with multiple map
-      * entries.
-      *
-      * "First unlock" = the head of `settlements`; or `finalization` if `settlements` is empty. The
-      * caller (StackComposer) must use this method only for stacks where the unlock exists, i.e.
-      * [[StackEffects.Regular]] containing at least one settlement OR a finalization.
+    /** Round-1 hard ack for a regular (non-initial) stack. The caller has already removed the
+      * round-2 unlock (first settlement / finalization) from `in`. Each tx body is signed with
+      * `mkTxSignature`; each evac-commit *header* (KZG lives on the block header) is signed with
+      * `mkHeaderSignature`.
       */
     def mkHardAckRound1Regular(
-        stack: Stack.Unsigned,
-        hardAckNum: HardAckNumber
-    ): HardAck = {
-        val effects = stack.effects match {
-            case r: StackEffects.Regular => r
-            case _: StackEffects.Initial =>
-                throw new IllegalArgumentException(
-                  "mkHardAckRound1Regular requires StackEffects.Regular"
-                )
-        }
-        val firstUnlockIsSettlement = effects.settlements.nonEmpty
-
-        // Skip the first settlement (it's the round-2 unlock) when present.
-        val settlementsToSign = effects.settlements.zipWithIndex.collect {
-            case (tx, i) if !(firstUnlockIsSettlement && i == 0) => (i, mkTxSignature(tx.tx))
-        }.toMap
-        val fallbacks = effects.fallbacks.zipWithIndex.map { case (tx, i) =>
-            (i, mkTxSignature(tx.tx))
-        }.toMap
-        val rollouts = effects.rollouts.zipWithIndex.map { case (tx, i) =>
-            ((0, i), mkTxSignature(tx.tx))
-        }.toMap
-        val refunds = effects.refunds.zipWithIndex.map { case (tx, i) =>
-            ((0, i), mkTxSignature(tx.tx))
-        }.toMap
-        val evacCommits = effects.evacCommits.zipWithIndex.map { case (tx, i) =>
-            (i, mkTxSignature(tx.tx))
-        }.toMap
-        // Skip the finalization only if it's the unlock (i.e. no settlements precede it).
-        val finalization =
-            if firstUnlockIsSettlement then
-                effects.finalization.map(tx => 0 -> mkTxSignature(tx.tx)).toMap
-            else Map.empty[Int, TxSignature]
-
-        HardAck(
-          ackId = HardAckId(peerNum, hardAckNum),
-          stackNum = stack.brief.stackNum,
-          payload = HardAck.Round1Payload.Regular(
-            settlements = settlementsToSign,
-            fallbacks = fallbacks,
-            rollouts = rollouts,
-            refunds = refunds,
-            evacCommits = evacCommits,
-            finalization = finalization
-          )
-        )
-    }
+        stackNum: StackNumber,
+        hardAckNum: HardAckNumber,
+        in: HardAck.SigningInputs.Round1Regular
+    ): HardAck = HardAck(
+      ackId = HardAckId(peerNum, hardAckNum),
+      stackNum = stackNum,
+      payload = HardAck.Round1Payload.Regular(
+        settlements = in.settlements.view.mapValues(mkTxSignature).toMap,
+        fallbacks = in.fallbacks.view.mapValues(mkTxSignature).toMap,
+        rollouts = in.rollouts.view.mapValues(mkTxSignature).toMap,
+        refunds = in.refunds.view.mapValues(mkTxSignature).toMap,
+        evacCommits = in.evacCommits.view.mapValues(mkHeaderSignature).toMap,
+        finalization = in.finalization.view.mapValues(mkTxSignature).toMap
+      )
+    )
 
     /** Round-1 hard ack for the initial (stack 0) flow: a single signature over the locally derived
       * fallback tx body.
       */
     def mkHardAckRound1Initial(
         stackNum: StackNumber,
-        fallbackTx: FallbackTx,
-        hardAckNum: HardAckNumber
+        hardAckNum: HardAckNumber,
+        in: HardAck.SigningInputs.Round1Initial
     ): HardAck = HardAck(
       ackId = HardAckId(peerNum, hardAckNum),
       stackNum = stackNum,
-      payload = HardAck.Round1Payload.Initial(
-        fallbackSig = mkTxSignature(fallbackTx.tx)
-      )
+      payload = HardAck.Round1Payload.Initial(fallbackSig = mkTxSignature(in.fallback))
     )
 
     /** Round-2 hard ack for a regular stack: signs the first settlement / finalization (the unlock
-      * tx body). The unlock tx body is known at stack close, so the signature can be produced
-      * upfront — the SlowConsensusActor withholds outbound broadcast until local round-1
-      * confirmation.
+      * tx body). The unlock tx body is known at stack close, so the signature is produced upfront —
+      * the SlowConsensusActor withholds outbound broadcast until local round-1 confirmation.
       */
     def mkHardAckRound2Regular(
-        stack: Stack.Round1Confirmed,
-        hardAckNum: HardAckNumber
-    ): HardAck = {
-        val effects = stack.unsigned.effects match {
-            case r: StackEffects.Regular => r
-            case _: StackEffects.Initial =>
-                throw new IllegalArgumentException(
-                  "mkHardAckRound2Regular requires StackEffects.Regular"
-                )
-        }
-        val unlockSig: TxSignature = effects.settlements.headOption match {
-            case Some(s) => mkTxSignature(s.tx)
-            case None =>
-                effects.finalization match {
-                    case Some(f) => mkTxSignature(f.tx)
-                    case None =>
-                        throw new IllegalArgumentException(
-                          "mkHardAckRound2Regular: stack has no settlement and no finalization"
-                        )
-                }
-        }
-        HardAck(
-          ackId = HardAckId(peerNum, hardAckNum),
-          stackNum = stack.unsigned.brief.stackNum,
-          payload = HardAck.Round2Payload.Regular(firstUnlockSig = unlockSig)
-        )
-    }
+        stackNum: StackNumber,
+        hardAckNum: HardAckNumber,
+        in: HardAck.SigningInputs.Round2Regular
+    ): HardAck = HardAck(
+      ackId = HardAckId(peerNum, hardAckNum),
+      stackNum = stackNum,
+      payload = HardAck.Round2Payload.Regular(firstUnlockSig = mkTxSignature(in.unlock))
+    )
 
     /** Round-2 hard ack for the initial (stack 0) flow: signs the exogenous init tx body and
       * attaches the peer's individual key witnesses for any utxos the peer is funding from its
       * individual address (operator-supplied funding).
       */
     def mkHardAckRound2Initial(
-        stack: Stack.Round1Confirmed,
-        individualWitnesses: List[scalus.cardano.ledger.VKeyWitness],
-        hardAckNum: HardAckNumber
-    ): HardAck = {
-        val effects = stack.unsigned.effects match {
-            case i: StackEffects.Initial => i
-            case _: StackEffects.Regular =>
-                throw new IllegalArgumentException(
-                  "mkHardAckRound2Initial requires StackEffects.Initial (stack 0)"
-                )
-        }
-        HardAck(
-          ackId = HardAckId(peerNum, hardAckNum),
-          stackNum = stack.unsigned.brief.stackNum,
-          payload = HardAck.Round2Payload.Initial(
-            initTxSig = mkTxSignature(effects.initializationTx.tx),
-            individualWitnesses = individualWitnesses
-          )
-        )
-    }
+        stackNum: StackNumber,
+        hardAckNum: HardAckNumber,
+        in: HardAck.SigningInputs.Round2Initial
+    ): HardAck = HardAck(
+      ackId = HardAckId(peerNum, hardAckNum),
+      stackNum = stackNum,
+      payload = HardAck.Round2Payload.Initial(
+        initTxSig = mkTxSignature(in.initTx),
+        individualWitnesses = in.individualWitnesses
+      )
+    )
 
-    /** Sole-round hard ack for a 1-phase minor-only stack: signs every effect (refund txs + the
-      * partition's last evac commit). Used only when the stack has no settlement / no finalization
-      * — i.e. the only effects are refunds and standalone evac commits.
+    /** Sole-round hard ack for a 1-phase minor-only stack: signs every refund tx body + the single
+      * standalone evac commitment's block header.
       */
     def mkHardAckSole(
-        stack: Stack.Unsigned,
-        hardAckNum: HardAckNumber
-    ): HardAck = {
-        val effects = stack.effects match {
-            case r: StackEffects.Regular => r
-            case _: StackEffects.Initial =>
-                throw new IllegalArgumentException(
-                  "mkHardAckSole requires StackEffects.Regular (minor-only)"
-                )
-        }
-        val refunds = effects.refunds.zipWithIndex.map { case (tx, i) =>
-            ((0, i), mkTxSignature(tx.tx))
-        }.toMap
-        val evacCommits = effects.evacCommits.zipWithIndex.map { case (tx, i) =>
-            (i, mkTxSignature(tx.tx))
-        }.toMap
-        HardAck(
-          ackId = HardAckId(peerNum, hardAckNum),
-          stackNum = stack.brief.stackNum,
-          payload = HardAck.SolePayload(refunds = refunds, evacCommits = evacCommits)
-        )
-    }
+        stackNum: StackNumber,
+        hardAckNum: HardAckNumber,
+        in: HardAck.SigningInputs.Sole
+    ): HardAck = HardAck(
+      ackId = HardAckId(peerNum, hardAckNum),
+      stackNum = stackNum,
+      payload = HardAck.SolePayload(
+        refunds = in.refunds.view.mapValues(mkTxSignature).toMap,
+        evacCommit = (in.evacCommit._1, mkHeaderSignature(in.evacCommit._2))
+      )
+    )
 }
 
 object HeadPeerWallet:
