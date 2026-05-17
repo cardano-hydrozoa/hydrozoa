@@ -38,10 +38,13 @@ final case class HardAck(
 
     val toContext: Seq[(String, String)] =
         Seq(
-          "peer" -> peerNum.toString,
-          "ackId" -> ackId.toString,
+          // The peer that *signed* this hard-ack — distinct from the local peer where the
+          // log entry is produced.
+          "hardAckSigner" -> peerNum.toString,
+          // Disambiguate from a soft-ack id (ackId alone is ambiguous in mixed logs).
+          "hardAckId" -> ackId.toString,
           "stackNum" -> stackNum.toString,
-          "round" -> payload.roundLabel
+          "hardAckRound" -> payload.roundLabel
         )
 }
 
