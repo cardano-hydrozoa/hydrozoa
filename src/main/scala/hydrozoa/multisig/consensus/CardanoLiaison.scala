@@ -18,7 +18,7 @@ import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.ledger.block.BlockVersion.Major.increment
 import hydrozoa.multisig.ledger.block.{BlockEffects, BlockHeader, BlockVersion}
 import hydrozoa.multisig.ledger.l1.tx.*
-import hydrozoa.multisig.ledger.stack.Stack
+import hydrozoa.multisig.ledger.stack.{Stack, StackEffects}
 import scala.collection.immutable.{Seq, TreeMap}
 import scala.math.Ordered.orderingToOrdered
 import scalus.cardano.ledger.Transaction.given
@@ -219,13 +219,15 @@ object CardanoLiaison:
     }
 
     // Post fast/slow split, L1 effects are produced per *stack* by the slow cycle, so the
-    // only effect-bearing inbound is `Stack.HardConfirmed`. The legacy per-block
-    // `BlockConfirmed.{Major,Final}` types + their handlers + the effect-submission state
-    // machine (`handleMajorBlockL1Effects` / `handleFinalBlockL1Effects` / `runEffects` /
-    // `effectInputs`/`happyPathEffects`/`fallbackEffects`) are intentionally retained as
-    // internal building blocks for M9-full (which will rewire them to consume the stack's
-    // `StackEffects.Regular`), but they are NOT part of the actor's inbound contract any
-    // more — nothing sends them after the split.
+    // only effect-bearing inbound is `Stack.HardConfirmed`. M9-full (this commit) wires it:
+    // `handleStackL1Effects` translates the stack's `StackEffects.Regular` into the same
+    // effect-submission state machine the pre-split per-block path used
+    // (`mkHappyPathEffectInputsAndEffects` / `runEffects` /
+    // `effectInputs`/`happyPathEffects`/`fallbackEffects`). The legacy per-block
+    // `BlockConfirmed.{Major,Final}` types + `handleMajorBlockL1Effects` /
+    // `handleFinalBlockL1Effects` are no longer on any path (the stack path supersedes
+    // them); they are kept `@unused` purely as reference / for the (currently commented)
+    // `CardanoLiaisonTest` revival.
     type Request =
         PreStart.type | Timeout.type | Stack.HardConfirmed
     type Handle = ActorRef[IO, Request]
@@ -286,18 +288,28 @@ trait CardanoLiaison(
                   "cardanoLiaisonMode" -> "Stack.HardConfirmed",
                   "stackNum" -> s"${stack.round1.unsigned.brief.stackNum: Int}"
                 ) {
-                    // TODO(M9 full): submit the stack's transaction effects in dependency
-                    //   order — settlement / finalization (the unlock) first, then fallback,
-                    //   rollouts, refunds. Standalone evac commitments are NOT submitted
-                    //   here: they are dormant dispute-only records (presented to the L1
-                    //   dispute scripts in the rules-based regime, only after a fallback) —
-                    //   the consensus artifact is the header signature in the hard-ack,
-                    //   persisted by the (future) storage layer. M1 effect derivation is
-                    //   done; what's missing here is the actual tx submission/ordering.
+                    val effects = stack.round1.unsigned.effects
                     Tracer.info(
                       "received Stack.HardConfirmed for stack " +
                           s"${stack.round1.unsigned.brief.stackNum}"
-                    )
+                    ) >> (effects match {
+                        case reg: StackEffects.Regular =>
+                            // Learn the stack's effects, then run the submission state
+                            // machine immediately (mirrors the pre-split
+                            // `handle*BlockL1Effects >> runEffects`).
+                            handleStackL1Effects(reg) >> runEffects
+                        case _: StackEffects.Initial =>
+                            // Stack 0: the initialization tx + initial fallback are already
+                            // seeded into `State.initialState` from head config. The
+                            // slow-consensus boot path (StackComposer `Bootstrap`) is not
+                            // wired yet, so this branch is currently unreachable; (re)run
+                            // effects defensively so a hard-confirmed stack 0 still drives
+                            // the already-seeded init/fallback to L1.
+                            Tracer.info(
+                              "initial stack hard-confirmed; init/fallback already seeded " +
+                                  "at construction — running effects"
+                            ) >> runEffects
+                    })
                 }
         }
 
@@ -391,6 +403,106 @@ trait CardanoLiaison(
             })
             _ <- Tracer.trace(s"state after update: ${newState.prettyDump}")
         } yield ()
+
+    /** M9-full: learn a hard-confirmed stack's L1 effects into the submission state machine.
+      *
+      * Translates [[StackEffects.Regular]] into the same `(effectInputs, happyPathEffects,
+      * fallbackEffects, targetState)` shape the pre-split per-block handlers produced, so the
+      * existing `runEffects` / `mkDirectActions` machinery submits them in dependency order
+      * (backbone first via `EffectId (major, 0)`, then its rollouts `(major, 1..n)`; competing
+      * fallback resolved by `fallbackEffects.get(major.decrement)`).
+      *
+      * Backbones (settlements, then the optional finalization) are walked in stack/major order;
+      * each contributes one `EffectId` family keyed by its `majorVersionProduced`. Fallbacks are
+      * keyed by their settlement's `majorVersionProduced` (so the NEXT settlement finds its
+      * competing fallback via `major.decrement`), matching the legacy major-block path.
+      *
+      * NOT submitted here (intentional, matches pre-split behaviour + spec):
+      *   - `evacCommit` — a dormant dispute-only record, never an immediate L1 tx (presented to the
+      *     rules-based dispute scripts only after a fallback; the consensus artifact is the header
+      *     signature in the hard-ack, persisted by the future storage layer).
+      *   - `refunds` — the pre-split CardanoLiaison never submitted post-dated refund txs either;
+      *     refund-tx L1 submission is deferred (see `L1LedgerM.finalizeLedger` TODO fund14).
+      *
+      * Minor-only stacks (no settlement, no finalization) carry no backbone — nothing reaches L1;
+      * `targetState` is left unchanged.
+      */
+    private def handleStackL1Effects(eff: StackEffects.Regular): IO[Unit] = {
+        val backbones: List[SettlementTx | FinalizationTx] =
+            eff.settlements ++ eff.finalization.toList
+        for {
+            _ <- Tracer.info(
+              s"entering handleStackL1Effects: ${eff.settlements.size} settlement(s), " +
+                  s"${eff.fallbacks.size} fallback(s), ${eff.rollouts.size} rollout(s), " +
+                  s"finalization=${eff.finalization.isDefined}; NOT submitted: " +
+                  s"refunds=${eff.refunds.size} (fund14), " +
+                  s"evacCommit=${eff.evacCommit.isDefined} (dormant dispute record)"
+            )
+            _ <- IO.whenA(backbones.isEmpty)(
+              Tracer.info(
+                "minor-only stack: no backbone L1 effects to submit; targetState unchanged"
+              )
+            )
+            newState <- stateRef.updateAndGet { s =>
+                val withBackbones = backbones.foldLeft(s) { (acc, backbone) =>
+                    val (bInputs, bEffects) =
+                        mkHappyPathEffectInputsAndEffects(
+                          backbone,
+                          rolloutsFor(backbone, eff.rollouts)
+                        )
+                    acc.copy(
+                      effectInputs = acc.effectInputs ++ bInputs,
+                      happyPathEffects = acc.happyPathEffects ++ bEffects
+                    )
+                }
+                val withFallbacks =
+                    eff.settlements.zip(eff.fallbacks).foldLeft(withBackbones) {
+                        case (acc, (settlement, fallback)) =>
+                            acc.copy(fallbackEffects =
+                                acc.fallbackEffects +
+                                    (settlement.majorVersionProduced -> fallback)
+                            )
+                    }
+                val newTarget: TargetState = eff.finalization match {
+                    case Some(fin) => TargetState.Finalized(fin.tx.id)
+                    case None =>
+                        eff.settlements.lastOption match {
+                            case Some(lastS) =>
+                                TargetState.Active(lastS.treasuryProduced.utxoId)
+                            case None => withFallbacks.targetState
+                        }
+                }
+                withFallbacks.copy(targetState = newTarget)
+            }
+            _ <- Tracer.trace(s"state after stack effects: ${newState.prettyDump}")
+        } yield ()
+    }
+
+    /** The rollout txs belonging to one backbone (settlement / finalization), in chain order.
+      *
+      * `StackEffects.Regular.rollouts` is flat across the whole stack; a backbone owns the rollout
+      * chain that starts at the rollout utxo it produces (`mbRolloutProduced`), each subsequent
+      * rollout spending the previous one's produced rollout utxo until a [[RolloutTx.Last]].
+      * Linking by `utxo.input` is independent of the flat list's order and mirrors how
+      * `mkDirectAction` itself walks the chain on L1.
+      */
+    private def rolloutsFor(
+        backbone: SettlementTx | FinalizationTx,
+        all: List[RolloutTx]
+    ): List[RolloutTx] = {
+        @annotation.tailrec
+        def chain(spentInput: TransactionInput, acc: List[RolloutTx]): List[RolloutTx] =
+            all.find(_.rolloutSpent.utxo.input == spentInput) match {
+                case None => acc.reverse
+                case Some(r: RolloutTx.NotLast) =>
+                    chain(r.rolloutProduced.utxo.input, r :: acc)
+                case Some(r) => (r :: acc).reverse // RolloutTx.Last
+            }
+        backbone.mbRolloutProduced match {
+            case None    => Nil
+            case Some(u) => chain(u.utxo.input, Nil)
+        }
+    }
 
     private def mkHappyPathEffectInputsAndEffects(
         majorTx: SettlementTx | FinalizationTx,
