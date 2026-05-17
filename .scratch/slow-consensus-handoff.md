@@ -60,7 +60,10 @@ StackComposer (slow cycle, M5)
   │    ├─ sign own hard-acks upfront (round-1+round-2 OR sole)
   │    ├─ StackBrief             → PeerLiaisons  (DIRECT)
   │    └─ StackHandoff(unsigned, ownAcks)  → SlowConsensusActor
-  └─ Follower-mode: validate inbound StackBrief, re-derive, hand off
+  └─ Follower-mode: classify inbound StackBrief 3 ways —
+       structural divergence → rule-based fallback (TODO);
+       not-yet-covered → wait silently (re-fires on next event);
+       covered → build from EXACTLY the brief's range, re-derive, hand off
 
 SlowConsensusActor (M6, AUTO-CONFIRM STUB)
   ├─ on StackHandoff: log own-ack count, immediately emit
@@ -344,6 +347,15 @@ In priority order:
 5. **Initial stack (stack 0) boot path** — once M6 is real, wire the
    `Bootstrap` parameter so the initial stack flows through the same
    pipeline.
+
+6. **Follower robustness (explicit `Awaiting*` state).** The follower
+   now correctly distinguishes "not yet covered → wait silently" from
+   "structural divergence → fallback". This is correct for liveness via
+   the existing event-driven retry, but there is no timeout: a genuinely
+   stuck follower waits forever. An explicit `Awaiting*` state (à la
+   BlockWeaver's `AwaitingConfirmation`) would let it report *what*
+   it's blocked on and escalate to the rule-based fallback on timeout.
+   Pairs naturally with M6 + the divergence-fallback wiring.
 
 Option for George if scope feels too big: **land just M6 + real
 Codec[HardAck]** first as the deepest slice, validate the full

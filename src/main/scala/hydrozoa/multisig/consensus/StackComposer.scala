@@ -174,47 +174,68 @@ final case class StackComposer(
                 } yield ()
         }
 
-    /** Follower close-attempt: if the leader's brief for the next stack matches our local longest
-      * contiguous prefix, accept it and hand the (locally re-derived) Stack.Unsigned to
-      * SlowConsensusActor.
+    /** Follower close-attempt for the leader's announced stack. Classifies the brief against the
+      * local paired-block view into exactly three outcomes:
+      *
+      *   1. **Structural divergence** — `firstBlockNum != lastClosedBlockNum + 1` (the leader is
+      *      composing from a different single-flight position) or `last < first`. This is a genuine
+      *      consensus break: per the plan it triggers fallback into the rule-based regime. (TODO:
+      *      wire the fallback; for now warn — the brief never actually arrives over the wire yet
+      *      since SlowConsensusActor auto-confirms and there is no real multi-peer StackBrief
+      *      delivery.)
+      *   2. **Not yet covered** — structurally fine, but this follower hasn't paired every block in
+      *      `[first, last]` yet (a constituent block's `BlockResult` or its `Block.SoftConfirmed`
+      *      is still in flight). This is the common, benign case — NOT a divergence. Do nothing and
+      *      stay silent; `tryProgress` re-fires on the next `BlockResult` / `Block.SoftConfirmed` /
+      *      `StackBrief`, so the follower naturally waits until it catches up.
+      *   3. **Covered** — every block in `[first, last]` is paired. Build the stack from EXACTLY
+      *      the brief's range (not the local longest prefix — the leader may have closed earlier
+      *      than this follower could), re-derive effects locally, sign, and hand off.
       */
     private def tryCloseAsFollower(s: State, nextStackNum: StackNumber): IO[Unit] =
         s.inboundLeaderBrief.get(nextStackNum) match {
-            case None => IO.unit
+            case None => IO.unit // no brief yet — wait
             case Some(brief) =>
-                val expectedPrefix = s.longestReadyPrefix
-                if briefMatches(brief, expectedPrefix) then {
-                    for {
-                        _ <- Tracer.info(
-                          s"Follower accepting stack $nextStackNum brief from leader; " +
-                              s"blocks ${brief.firstBlockNum}..${brief.lastBlockNum}"
-                        )
-                        unsigned <- mkUnsigned(brief, expectedPrefix)
-                        handoff <- buildHandoff(unsigned)
-                        conn <- getConnections
-                        _ <- conn.slowConsensusActor ! handoff
-                        _ <- state.update(_.afterClose(nextStackNum, expectedPrefix))
-                    } yield ()
-                } else {
-                    // Mismatch: leader's brief disagrees with our local longest prefix.
-                    // TODO(M5): per plan, divergence triggers fallback into the rule-based
-                    // regime. For now, just log and stall (composer stays in current state).
-                    Tracer.warn(
-                      s"Follower stack $nextStackNum brief mismatch: leader says " +
-                          s"[${brief.firstBlockNum}..${brief.lastBlockNum}], local prefix " +
-                          s"would be [${expectedPrefix.headOption
-                                  .map(_.result.brief.blockNum)}..${expectedPrefix.lastOption
-                                  .map(_.result.brief.blockNum)}]"
-                    )
-                }
-        }
+                val expectedFirst = s.lastClosedBlockNum.increment
+                val structurallyConsistent =
+                    brief.firstBlockNum.convert == expectedFirst.convert &&
+                        brief.lastBlockNum.convert >= brief.firstBlockNum.convert
 
-    private def briefMatches(brief: StackBrief, prefix: List[ReadyBlock]): Boolean = {
-        if prefix.isEmpty then false
-        else
-            brief.firstBlockNum.convert == prefix.head.result.brief.blockNum.convert &&
-            brief.lastBlockNum.convert == prefix.last.result.brief.blockNum.convert
-    }
+                if !structurallyConsistent then
+                    // (1) genuine divergence — leader's composition is inconsistent with our
+                    // single-flight position. TODO(M5/M6): fall back to the rule-based regime.
+                    Tracer.warn(
+                      s"Follower stack $nextStackNum structural divergence: leader brief " +
+                          s"[${brief.firstBlockNum}..${brief.lastBlockNum}] but expected to " +
+                          s"start at $expectedFirst (lastClosedBlockNum=" +
+                          s"${s.lastClosedBlockNum}). TODO: rule-based fallback."
+                    )
+                else
+                    s.readySlice(brief.firstBlockNum, brief.lastBlockNum) match {
+                        case None =>
+                            // (2) not caught up — benign; wait for more BlockResults /
+                            // SoftConfirmeds. tryProgress re-fires on the next event.
+                            Tracer.debug(
+                              s"Follower waiting for stack $nextStackNum: paired blocks do " +
+                                  s"not yet cover [${brief.firstBlockNum}.." +
+                                  s"${brief.lastBlockNum}]"
+                            )
+                        case Some(slice) =>
+                            // (3) covered — accept exactly the brief's range.
+                            for {
+                                _ <- Tracer.info(
+                                  s"Follower accepting stack $nextStackNum brief from " +
+                                      s"leader; blocks ${brief.firstBlockNum}.." +
+                                      s"${brief.lastBlockNum}"
+                                )
+                                unsigned <- mkUnsigned(brief, slice)
+                                handoff <- buildHandoff(unsigned)
+                                conn <- getConnections
+                                _ <- conn.slowConsensusActor ! handoff
+                                _ <- state.update(_.afterClose(nextStackNum, slice))
+                            } yield ()
+                    }
+        }
 
     private def mkStackBrief(stackNum: StackNumber, prefix: List[ReadyBlock]): StackBrief =
         StackBrief(
@@ -488,6 +509,22 @@ object StackComposer {
                     case None     => acc.reverse
                 }
             loop(lastClosedBlockNum.increment, Nil)
+        }
+
+        /** The exact paired blocks for the inclusive range `[first, last]`, or `None` if any block
+          * in that range is not yet paired (the follower simply hasn't caught up yet — NOT a
+          * divergence). Caller must have already checked structural consistency (`first ==
+          * lastClosedBlockNum + 1`, `first <= last`).
+          */
+        def readySlice(first: BlockNumber, last: BlockNumber): Option[List[ReadyBlock]] = {
+            def loop(n: BlockNumber, acc: List[ReadyBlock]): Option[List[ReadyBlock]] =
+                if n.convert > last.convert then Some(acc.reverse)
+                else
+                    ready.get(n) match {
+                        case Some(rb) => loop(n.increment, rb :: acc)
+                        case None     => None // gap ⇒ not yet covered
+                    }
+            loop(first, Nil)
         }
 
         /** Apply the result of closing a stack: drain the prefix, advance counters, gate the next
