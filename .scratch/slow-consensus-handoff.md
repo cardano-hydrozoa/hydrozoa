@@ -71,8 +71,10 @@ SlowConsensusActor (M6, AUTO-CONFIRM STUB)
   │      PreviousStackHardConfirmation   → StackComposer
   └─ HardAck inputs IGNORED (no real ack aggregation yet)
 
-CardanoLiaison
-  └─ Stack.HardConfirmed: LOGS RECEIPT (no L1 submission yet)
+CardanoLiaison (M9-full)
+  └─ Stack.HardConfirmed: handleStackL1Effects → runEffects
+       (StackEffects.Regular → effectInputs/happyPathEffects/fallbackEffects;
+        evac commits + refunds NOT submitted)
 
 PeerLiaison transport (M7)
   ├─ outbox lanes: ack / blockBrief / event / stackBrief / hardAck
@@ -109,19 +111,25 @@ PeerLiaison transport (M7)
 - Outbox prune: per-remote on incoming GetMsgBatch cursors (matches the
   recently reworked soft-side pattern).
 
-### CardanoLiaison subscription (M9 partial — `1e0b78fd`, narrowed `064440c3`)
-- `Request` is now `PreStart | Timeout | Stack.HardConfirmed` — the
-  vestigial pre-split `BlockConfirmed.{Major,Final}` inbound was dropped
-  (nothing sends them post-split). Handler logs receipt only — tx
-  submission still TODO (settlement/finalization unlock first, then
-  fallback, rollouts, refunds; evac commitments are NOT submitted —
-  dormant dispute records).
-- The legacy per-block effect-submission machinery
-  (`BlockConfirmed.{Major,Final}` + `Minimal`,
-  `handleMajorBlockL1Effects` / `handleFinalBlockL1Effects` marked
-  `@unused`, `runEffects`, `effectInputs`/`happyPathEffects`/
-  `fallbackEffects`) is retained internally as the engine M9-full will
-  rewire to consume `StackEffects.Regular`.
+### CardanoLiaison L1 submission (M9-full — `1e0b78fd`, `064440c3`, `3ff4a47b`)
+- `Request` is `PreStart | Timeout | Stack.HardConfirmed` (vestigial
+  pre-split `BlockConfirmed.{Major,Final}` inbound dropped).
+- `handleStackL1Effects(StackEffects.Regular)` feeds the stack's effects
+  into the pre-split submission state machine
+  (`mkHappyPathEffectInputsAndEffects` → effectInputs/happyPathEffects;
+  fallbacks keyed by settlement `majorVersionProduced`; targetState =
+  Finalized if a Final block, else Active(last settlement treasury), else
+  unchanged for minor-only) then `runEffects` immediately — mirrors the
+  pre-split `handle*BlockL1Effects >> runEffects`.
+- `rolloutsFor` regroups the flat `StackEffects.Regular.rollouts` per
+  backbone by walking the rollout-utxo chain (order-independent).
+- NOT submitted (parity with pre-split + spec): evac commitments
+  (dormant) and post-dated refunds (no pre-split path; fund14).
+- `StackEffects.Initial` branch is defensive-only (init/fallback already
+  seeded from head config) until the Bootstrap boot path is wired.
+- Legacy `handleMajorBlockL1Effects` / `handleFinalBlockL1Effects` kept
+  `@unused` purely as reference / for the commented `CardanoLiaisonTest`;
+  nothing routes to them post-split (the stack path supersedes them).
 
 ### Slow-side L1LedgerM (M10 — `2b0c8496`)
 - `StackComposer` holds its own `L1LedgerM.State`, seeded from
@@ -217,21 +225,16 @@ real codecs for:
   `Map[BlockNumber, BlockHeader.HeaderSignature]` (evac commits) and the
   `SolePayload.evacCommit: (BlockNumber, HeaderSignature)` tuple
 
-### M9 full L1 submission (BLOCKER for M11 real assertions)
+### M9 full L1 submission — DONE (`3ff4a47b`)
 
-`CardanoLiaison`'s `Stack.HardConfirmed` handler currently only logs.
-Real impl needs to:
-1. Walk `Stack.HardConfirmed.round1.unsigned.effects: StackEffects.Regular`.
-2. Build submission queue in dependency order: first settlement OR
-   finalization (the unlock), then remaining settlements, fallbacks,
-   rollouts, refunds. **Evac commitments are NOT submitted** — they are
-   dormant dispute-only records; the consensus side just needs the
-   header signatures persisted (storage layer, future).
-3. Feed into the existing per-block effect-submission state machine
-   (`handleMajorBlockL1Effects` / `handleFinalBlockL1Effects` —
-   shapes are per-block bundled; will need adapter).
-4. `StandaloneEvacuationCommitment` is not an L1 submission at all —
-   skip it in CardanoLiaison entirely.
+`handleStackL1Effects` translates `StackEffects.Regular` into the
+existing submission state machine; see "What's done › CardanoLiaison L1
+submission" above. Dependency order is enforced by the existing
+`EffectId (major, 0)=backbone, (major,1..n)=rollouts` /
+`fallbackEffects.get(major.decrement)` machinery, so no separate
+submission-queue builder was needed. Evac commitments + refunds remain
+unsubmitted by design (dormant / fund14). Remaining M9-adjacent gap is
+only the storage layer for evac-commit header sigs (below).
 
 ### Standalone evacuation commitment — spec-aligned model (RESOLVED)
 
@@ -329,26 +332,22 @@ In priority order:
    of careful cell state-machine logic in `SlowConsensusActor.scala`.
    Pairs with real Codec[HardAck] in `Codecs.scala`.
 
-2. **M9 full L1 submission** — wires CardanoLiaison to submit slow-side
-   effects. Smaller than M6 but needs design work to bridge stack-level
-   effect lists into the existing per-block submission state machine.
-
-3. **M11 stage1 assertions** — once M9 full lands, change the
+2. **M11 stage1 assertions** — M9-full has landed; change the
    integration test to subscribe to Stack.HardConfirmed and assert
    tx-known on L1.
 
-4. **Storage layer for evac-commitment header signatures** — the slow
+3. **Storage layer for evac-commitment header signatures** — the slow
    side derives the `StandaloneEvacuationCommitment` records + their
    hard-ack header signatures, but nothing persists them or presents
    them to the L1 dispute scripts. (No on-chain script change is
    needed — an evac commitment is a dormant dispute-only record, not a
    tx.) Future / separate effort.
 
-5. **Initial stack (stack 0) boot path** — once M6 is real, wire the
+4. **Initial stack (stack 0) boot path** — once M6 is real, wire the
    `Bootstrap` parameter so the initial stack flows through the same
    pipeline.
 
-6. **Follower robustness (explicit `Awaiting*` state).** The follower
+5. **Follower robustness (explicit `Awaiting*` state).** The follower
    now correctly distinguishes "not yet covered → wait silently" from
    "structural divergence → fallback". This is correct for liveness via
    the existing event-driven retry, but there is no timeout: a genuinely
@@ -398,6 +397,9 @@ b64e3762 Refactor: standalone evac commitment is a dormant record, not a tx
 7d72fed2 Docs: refresh plan status table + handoff note for post-review state
 1b58cfa5 Refactor: typed PartitionIndex / WithinPartitionIndex for HardAck maps
 064440c3 Refactor: narrow CardanoLiaison.Request to the post-split inbound
+--- M9-full + relocation (2026-05-17, session resumed) ---
+639f5034 Refactor: move StandaloneEvacuationCommitment out of l1/tx → stack
+3ff4a47b Feat: M9-full — CardanoLiaison submits hard-confirmed stack's L1 effects
 ```
 
 Pushed to `origin/feature/slow-consensus` through `1b58cfa5`; the tail

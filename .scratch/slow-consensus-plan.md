@@ -342,7 +342,7 @@ Note `Stack.Unsigned` lives only inside each peer's StackComposer — it's not w
 | M6 SlowConsensusActor | ⚠️ auto-confirm stub | Real ack collection NOT implemented. Stub echoes PreviousStackHardConfirmation on any StackHandoff. |
 | M7 PeerLiaison stackBrief + hardAck lanes | ✅ done | Outbox lanes + cursors + verification + dispatch. Outbox prune driven by remote GetMsgBatch cursors. |
 | M8 L2-release | dropped | Removed (L2 books obligations at soft-confirmation time). |
-| M9 CardanoLiaison wiring | ⚠️ subscribe only | Stack.HardConfirmed handler logs receipt; tx submission TODO. Evac commitments are NOT submitted (dormant dispute records). |
+| M9 CardanoLiaison wiring | ✅ done | `handleStackL1Effects` feeds `StackEffects.Regular` into the pre-split submission state machine (effectInputs/happyPathEffects/fallbackEffects/targetState) then `runEffects`. Rollouts regrouped per backbone via utxo-chain walk. NOT submitted: evac commitments (dormant) + post-dated refunds (no pre-split path; fund14). Initial-stack branch defensive-only until Bootstrap wired. |
 | M10 L1LedgerM rotation | ✅ done | StackComposer owns L1LedgerM state seeded from initialBlock; treasury KZG advances ONLY via settlement/finalization (never via evac commit). |
 | M11 stage1/stage4 assertions | ⚠️ vacuous | Expected-effects accumulator stays empty until M9 full lands. |
 | BlockStatus naming sweep | ✅ done | `asMultiSigned` → `asHardConfirmed`. `AckNumber` → `SoftAckNumber` rename marked TODO (deferred sweep). |
