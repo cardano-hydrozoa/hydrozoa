@@ -33,57 +33,92 @@ object Partition {
 
 object NecessaryEffectsPolicy {
 
-    /** Partition the stack's blocks into a list of [[Partition]]s. Each partition is a maximal
-      * contiguous run of blocks ending at a Major / Final block (close-after-major). A trailing run
-      * of minors with no closing major / final yields one final
+    /** Partition the stack's blocks. Each partition is a maximal contiguous run of blocks ending at
+      * a Major / Final block (close-after-major: the boundary block is the LAST block of the
+      * partition it closes); a trailing run of minors with no closing major / final is one
       * [[Partition.Closing.TrailingMinors]] partition.
       *
-      * Per spec ("close-after-major"): a Major or Final block belongs to the partition it closes
-      * (it is the LAST block of that partition), then the next partition begins at the subsequent
-      * block. The major version of each partition is the version of its last block.
+      * Structural invariants this encodes (and enforces):
+      *   - A **Final** block terminates the head, so it is necessarily the LAST block of the stack
+      *     ⇒ there is at most ONE Final-closed partition and it is the last partition. A `require`
+      *     rejects a stack with blocks after a Final.
+      *   - A **TrailingMinors** partition exists only when no Major / Final follows the trailing
+      *     minors ⇒ there is at most ONE, and it is the last partition (the recursion terminates as
+      *     soon as it is produced — nothing can follow it).
+      *   - Every other partition is Major-closed.
+      *
+      * The major version of a partition is the version of its (last) boundary block; for a
+      * TrailingMinors partition it is the version of the last minor (minors don't bump the major
+      * version, so this is whatever the preceding Major produced, or 0 for a stack-1 minor-only
+      * run).
       */
     def selectNecessaryEffects(blocks: NonEmptyList[BlockResult]): List[Partition] = {
-        val out = List.newBuilder[Partition]
-        var current = List.newBuilder[BlockResult]
+        def isMinor(b: BlockResult): Boolean = b.brief match {
+            case _: BlockType.Minor => true
+            case _                  => false
+        }
 
-        for b <- blocks.toList do {
-            current += b
-            b.brief match {
-                case _: BlockType.Major =>
-                    val partBlocks = NonEmptyList.fromListUnsafe(current.result())
-                    out += Partition(
-                      partBlocks,
-                      b.brief.blockVersion.major,
-                      Partition.Closing.Major
-                    )
-                    current = List.newBuilder[BlockResult]
-                case _: BlockType.Final =>
-                    val partBlocks = NonEmptyList.fromListUnsafe(current.result())
-                    out += Partition(
-                      partBlocks,
-                      b.brief.blockVersion.major,
-                      Partition.Closing.Final
-                    )
-                    current = List.newBuilder[BlockResult]
-                case _: BlockType.Minor =>
-                    () // keep accumulating into the current partition
+        // `acc` holds completed partitions in reverse order. Tail-recursive: the only
+        // self-call (Major case) is in tail position; the TrailingMinors / Final cases are
+        // terminal because nothing can follow either of them in a well-formed stack.
+        @annotation.tailrec
+        def loop(
+            remaining: List[BlockResult],
+            acc: List[Partition]
+        ): List[Partition] =
+            remaining match {
+                case Nil =>
+                    // Reached only when the stack's last block was a Major (no trailing
+                    // minors, no Final) — that Major's partition is already in `acc`.
+                    acc.reverse
+                case all =>
+                    val (leadingMinors, rest) = all.span(isMinor)
+                    rest match {
+                        case Nil =>
+                            // No Major / Final boundary in what's left ⇒ pure trailing
+                            // minors. Necessarily the last partition: there is nothing after
+                            // it, so we finish here.
+                            val part = NonEmptyList.fromListUnsafe(leadingMinors)
+                            (Partition(
+                              part,
+                              part.last.brief.blockVersion.major,
+                              Partition.Closing.TrailingMinors
+                            ) :: acc).reverse
+                        case boundary :: tail =>
+                            val partBlocks =
+                                NonEmptyList.fromListUnsafe(leadingMinors :+ boundary)
+                            boundary.brief match {
+                                case _: BlockType.Major =>
+                                    loop(
+                                      tail,
+                                      Partition(
+                                        partBlocks,
+                                        boundary.brief.blockVersion.major,
+                                        Partition.Closing.Major
+                                      ) :: acc
+                                    )
+                                case _: BlockType.Final =>
+                                    require(
+                                      tail.isEmpty,
+                                      s"Final block ${boundary.brief.blockNum} is not the " +
+                                          s"last block of the stack (${tail.size} block(s) " +
+                                          "follow)"
+                                    )
+                                    (Partition(
+                                      partBlocks,
+                                      boundary.brief.blockVersion.major,
+                                      Partition.Closing.Final
+                                    ) :: acc).reverse
+                                case _: BlockType.Minor =>
+                                    // Unreachable: `span(isMinor)` guarantees `boundary` is
+                                    // the first non-minor block.
+                                    throw new IllegalStateException(
+                                      "span(isMinor) yielded a minor boundary"
+                                    )
+                            }
+                    }
             }
-        }
 
-        val tail = current.result()
-        if tail.nonEmpty then {
-            // Trailing minors: no closing major / final in this stack (or after the last one).
-            // Major version is the version of the last minor — minors don't change major
-            // version, so this equals whatever previous Major produced (or 0 for stack 1 with
-            // only minors after init).
-            val partBlocks = NonEmptyList.fromListUnsafe(tail)
-            out += Partition(
-              partBlocks,
-              partBlocks.last.brief.blockVersion.major,
-              Partition.Closing.TrailingMinors
-            )
-        }
-
-        out.result()
+        loop(blocks.toList, Nil)
     }
 }
