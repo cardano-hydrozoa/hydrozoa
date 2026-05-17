@@ -1,13 +1,13 @@
 package hydrozoa.multisig.ledger.stack
 
-import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, FinalizationTx, InitializationTx, RefundTx, RolloutTx, SettlementTx, StandaloneEvacuationCommitment}
+import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, FinalizationTx, InitializationTx, RefundTx, RolloutTx, SettlementTx}
 
 /** Necessary L1 effects for a closed stack, derived locally by each peer.
   *
   * Not every effect is a transaction: settlement / fallback / rollout / refund / finalization are
   * txs (hard-acked per tx body), but a standalone evac commitment commits a *block header* (KZG
   * lives on the header) and is hard-acked with a header signature, not a tx-body signature — see
-  * [[hydrozoa.multisig.ledger.l1.tx.StandaloneEvacuationCommitment]].
+  * [[StandaloneEvacuationCommitment]].
   *
   * **Never wire-broadcast** — only [[StackBrief]] travels on the wire. Each peer derives the
   * effects from its own [[hydrozoa.multisig.ledger.block.BlockResult]] stream + the leader's brief;

@@ -3,8 +3,8 @@ package hydrozoa.multisig.ledger.effects
 import cats.implicits.*
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockResult, BlockType}
 import hydrozoa.multisig.ledger.l1.L1LedgerM
-import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, FinalizationTx, RefundTx, RolloutTx, SettlementTx, StandaloneEvacuationCommitment}
-import hydrozoa.multisig.ledger.stack.StackEffects
+import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, FinalizationTx, RefundTx, RolloutTx, SettlementTx}
+import hydrozoa.multisig.ledger.stack.{StackEffects, StandaloneEvacuationCommitment}
 
 /** Slow-side effect derivation: from the partitioned stack content, produce the necessary L1
   * effects. An L1 effect is NOT always a transaction:

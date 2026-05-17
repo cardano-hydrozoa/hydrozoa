@@ -294,7 +294,7 @@ final case class StackComposer(
                     r.brief.blockNum -> r.brief.header.signingBytes
                 }.toMap
             def evacHeaderBytes(
-                ec: hydrozoa.multisig.ledger.l1.tx.StandaloneEvacuationCommitment
+                ec: StandaloneEvacuationCommitment
             ): (BlockNumber, BlockHeader.Minor.Onchain.Serialized) =
                 ec.committedBlockNum -> headerBytesByBlock(ec.committedBlockNum)
 

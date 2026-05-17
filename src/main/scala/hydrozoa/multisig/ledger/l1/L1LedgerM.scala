@@ -195,7 +195,7 @@ object L1LedgerM {
     // the L1 dispute-resolution scripts in the rules-based regime (only after a fallback
     // executes). The treasury's KZG advances on L1 only via settlement (major) / finalization
     // (final). The slow side builds the record purely in `StackEffectsBuilder` — see
-    // `hydrozoa.multisig.ledger.l1.tx.StandaloneEvacuationCommitment`.
+    // `hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment`.
 
     /** Remove the absorbed/refunded deposits and update the treasury in the ledger state. Called
       * when the block weaver sends the single to close the block in leader mode.
