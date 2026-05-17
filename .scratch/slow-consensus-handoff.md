@@ -20,6 +20,22 @@ handoff, without collecting any remote peers' hard-acks.
 Tests pass (the same 3 pre-existing flaky ScalaCheck failures as before;
 no regressions from this work).
 
+> **Post-handoff review pass (2026-05-17, commits `bbb6d6d4`..`b64e3762`).**
+> A review pass refined several things since this doc was first written —
+> dropped `HardAck.finalizationRequested`; disambiguated
+> `HardAck.toContext` keys; **evac-commit signature is a
+> `BlockHeader.HeaderSignature`** (KZG lives on the header), keyed by
+> `BlockNumber`; **wallet methods are now pure mappers over
+> `HardAck.SigningInputs.*`** (no `Stack` walking — `StackComposer` does
+> it); `AckNumber→SoftAckNumber` rename marked (deferred); BlockResult
+> `payoutObligations` clarified as L2 *withdrawals* (≠ refunds); dropped
+> redundant `StackBrief.firstMajorBlockNum`; and — biggest — the
+> **standalone evacuation commitment is now a spec-aligned dormant
+> record, not a transaction** (see that section below; `StandaloneEvacCommitTx`
+> + `L1LedgerM.mkStandaloneEvacCommitTx` removed). Spec-verified via the
+> whitepaper MCP. The body of this doc has been updated in place; the
+> sections below reflect the post-review state.
+
 ---
 
 ## Message-flow map (current state)
@@ -118,21 +134,32 @@ PeerLiaison transport (M7)
   (needed for `traverse`). (Earlier `mkStandaloneEvacCommitTx` removed —
   evac commitments don't touch the L1 ledger.)
 
-### Wallet signing (M3 — `7eec15e4`, integration `c2279816`)
+### Wallet signing (M3 — `7eec15e4`, integration `c2279816`, refined `bbb6d6d4`/`2466998b`)
 - Five wallet methods on `HeadPeerWallet`:
   `mkHardAckRound1Regular`, `mkHardAckRound1Initial`,
   `mkHardAckRound2Regular`, `mkHardAckRound2Initial`, `mkHardAckSole`.
+  **Now pure mappers**: each takes a `HardAck.SigningInputs.*` struct
+  (tx bodies / header signing bytes) + `stackNum` + `hardAckNum`, maps
+  each entry through `mkTxSignature` / `mkHeaderSignature`. They do NOT
+  inspect a `Stack` — `StackComposer.buildHandoff` does all the walking
+  and assembles the `SigningInputs`. `HardAck` no longer carries
+  `finalizationRequested` (derivable from the stack). Evac-commit
+  entries are `BlockHeader.HeaderSignature` keyed by `BlockNumber`.
 - StackComposer leader path bundles `(unsigned, ownAcks)` into
   `SlowConsensusActor.StackHandoff` and ships it. Round-2 sig is
   produced upfront (sig domain is the unlock tx body, known at close);
   SlowConsensusActor manages outbound scheduling (currently no-op).
 
-### Naming sweep (`218f71d4`)
+### Naming sweep (`218f71d4`, `1ee19360`)
 - `asMultiSigned` → `asHardConfirmed` on `BlockHeader`, `BlockBrief`,
   `BlockBody`. Stale `Block.MultiSigned` references in CardanoLiaison
   comments updated. `headerMultiSigned` field name kept (it's the
   aggregate of header sigs from SoftAcks — arguably belongs to fast side
   but rename is out of scope per the plan).
+- `AckNumber → SoftAckNumber` rename **marked with `TODO(rename)`** (to
+  parallel `HardAckNumber`); full rename touches AckId/SoftAck/
+  PeerLiaison/ConsensusActor/Codecs/tests so deferred to a dedicated
+  sweep. Stale `neededToConfirm` "AckBlock.Number" comments refreshed.
 
 ---
 
@@ -168,9 +195,15 @@ that fails on decode. Acceptable today because nothing broadcasts hard-acks
 yet (auto-confirm keeps them local). When M6 real impl lands, this needs
 real codecs for:
 - `TxSignature` (opaque `IArray[Byte]` — hex string)
-- `VKeyWitness` (scalus type — bytes round-trip)
-- `HardAck.Payload` discriminated union (5 variants)
-- `Map[Int, TxSignature]` / `Map[(Int, Int), TxSignature]`
+- `BlockHeader.HeaderSignature` (opaque `IArray[Byte]` — used for
+  evac-commit entries; there's already a hex codec for it in
+  `Codecs.scala` for SoftAck — reuse)
+- `VKeyWitness` (scalus type — bytes round-trip; Round2Initial only)
+- `HardAck.Payload` discriminated union (5 variants); note `HardAck` has
+  no `finalizationRequested` field anymore
+- `Map[Int, TxSignature]` / `Map[(Int, Int), TxSignature]` /
+  `Map[BlockNumber, BlockHeader.HeaderSignature]` (evac commits) and the
+  `SolePayload.evacCommit: (BlockNumber, HeaderSignature)` tuple
 
 ### M9 full L1 submission (BLOCKER for M11 real assertions)
 
@@ -325,9 +358,22 @@ bf376851 Chore: refresh StackEffectsBuilder docstring after Final slice
 7eec15e4 Feat: M3 — HardAck wallet signing methods
 c2279816 Feat: M3→M5 integration — leader signs own hard-acks upfront
 32dc35b6 Chore: refresh StackComposer docstring after M3 integration
+d6beadc4 Docs: hand-off note for George + plan status table
+--- post-handoff review pass (2026-05-17) ---
+bbb6d6d4 Refactor: drop HardAck.finalizationRequested (derivable from stack)
+f5f32b30 Refactor: disambiguate HardAck.toContext log keys
+2466998b Refactor: evac-commit sig is a HeaderSignature; wallet takes explicit inputs
+1ee19360 Docs: mark AckNumber -> SoftAckNumber rename + clarify ack-number comments
+6605b9e9 Docs: BlockResult — disambiguate payouts (withdrawals) from refunds
+97fce872 Docs: L1 effects are not all transactions (evac commit = header sig)
+843c9688 Refactor: drop StackBrief.firstMajorBlockNum (redundant)
+f89733d4 Docs: StackEffects.Regular — precise rollouts/refunds sourcing
+b64e3762 Refactor: standalone evac commitment is a dormant record, not a tx
 ```
 
-All pushed to `origin/feature/slow-consensus` (latest: `32dc35b6`).
+Pushed to `origin/feature/slow-consensus` through `843c9688`; the
+review-pass tail (`f89733d4`, `b64e3762`) is committed locally, not yet
+pushed.
 
 ---
 

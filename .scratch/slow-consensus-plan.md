@@ -330,27 +330,37 @@ Note `Stack.Unsigned` lives only inside each peer's StackComposer — it's not w
 
 ---
 
-## Implementation status (2026-05-15)
+## Implementation status (2026-05-17, post-review)
 
 | Milestone | Status | Notes |
 |-----------|--------|-------|
-| M1 effect derivation | ✅ done | All four block-type paths (Minor / Major / Final / TrailingMinors) live. `StandaloneEvacCommitTx` body is a placeholder — needs on-chain script change. |
-| M2 BlockResult + JointLedger outbound | ✅ done | BlockResult carries brief + evacuationMapDiff + payoutObligations + postDatedRefundTxs + absorbedDeposits + competingFallbackTxTime. |
-| M3 HardAck family + signing | ✅ done | 5 wallet methods (`mkHardAck{Round1Regular, Round1Initial, Round2Regular, Round2Initial, Sole}`). Real Codec[HardAck] still placeholder. |
-| M4 Stack data types | ✅ done | Stack.{Unsigned, Round1Confirmed, HardConfirmed} + StackBrief + StackEffects.{Regular, Initial}. |
-| M5 StackComposer | ✅ done | Mode-switch via `isSlowLeader(stackNum)`. Leader composes + signs upfront + broadcasts brief + hands off to SlowConsensusActor. Follower validates + signs + hands off. Initial-stack path throws (Bootstrap not yet wired). |
-| M6 SlowConsensusActor | ⚠️ auto-confirm stub | Real ack collection NOT yet implemented. Stub immediately echoes PreviousStackHardConfirmation on receiving any StackHandoff. |
+| M1 effect derivation | ✅ done | Minor / Major / Final paths produce real txs. TrailingMinors → `StandaloneEvacuationCommitment` — a pure dormant dispute-only RECORD (not a tx, no L1/treasury mutation), minor-only per spec. |
+| M2 BlockResult + JointLedger outbound | ✅ done | BlockResult = brief + evacuationMapDiff + payoutObligations(=L2 withdrawals, ≠ refunds) + postDatedRefundTxs + absorbedDeposits + competingFallbackTxTime. |
+| M3 HardAck family + signing | ✅ done | 5 wallet methods, now PURE mappers over `HardAck.SigningInputs.*` (no Stack walking). `HardAck` dropped `finalizationRequested` (derivable). evac-commit sig = `BlockHeader.HeaderSignature` keyed by `BlockNumber`. Real Codec[HardAck] still placeholder. |
+| M4 Stack data types | ✅ done | Stack.{Unsigned, Round1Confirmed, HardConfirmed} + StackBrief (no `firstMajorBlockNum` — redundant) + StackEffects.{Regular, Initial}. |
+| M5 StackComposer | ✅ done | Mode-switch via `isSlowLeader(stackNum)`. Leader composes + assembles SigningInputs + signs upfront + broadcasts brief + hands off. Follower validates + signs + hands off. Initial-stack path throws (Bootstrap not yet wired). |
+| M6 SlowConsensusActor | ⚠️ auto-confirm stub | Real ack collection NOT implemented. Stub echoes PreviousStackHardConfirmation on any StackHandoff. |
 | M7 PeerLiaison stackBrief + hardAck lanes | ✅ done | Outbox lanes + cursors + verification + dispatch. Outbox prune driven by remote GetMsgBatch cursors. |
-| M8 L2-release | dropped | Removed from plan (L2 already books obligations at soft-confirmation time). |
-| M9 CardanoLiaison wiring | ⚠️ subscribe only | Stack.HardConfirmed handler logs receipt; L1 submission TODO. |
-| M10 L1LedgerM rotation | ✅ done | StackComposer holds own L1LedgerM state seeded from initialBlock; treasury rotates through unlock txs + standalone evac commits. |
-| M11 stage1/stage4 assertions | ⚠️ vacuous | Test infrastructure unchanged; expected-effects accumulator stays empty until M9 full lands. |
-| BlockStatus naming sweep | ✅ done | `asMultiSigned` → `asHardConfirmed`. |
+| M8 L2-release | dropped | Removed (L2 books obligations at soft-confirmation time). |
+| M9 CardanoLiaison wiring | ⚠️ subscribe only | Stack.HardConfirmed handler logs receipt; tx submission TODO. Evac commitments are NOT submitted (dormant dispute records). |
+| M10 L1LedgerM rotation | ✅ done | StackComposer owns L1LedgerM state seeded from initialBlock; treasury KZG advances ONLY via settlement/finalization (never via evac commit). |
+| M11 stage1/stage4 assertions | ⚠️ vacuous | Expected-effects accumulator stays empty until M9 full lands. |
+| BlockStatus naming sweep | ✅ done | `asMultiSigned` → `asHardConfirmed`. `AckNumber` → `SoftAckNumber` rename marked TODO (deferred sweep). |
 
-**Remaining critical work for the full slow-consensus loop to *actually
-achieve consensus* rather than auto-confirm: M6 real ack collection + real
-Codec[HardAck].** See `.scratch/slow-consensus-handoff.md` for the
-hand-off note.
+**Post-handoff review pass (commits `bbb6d6d4`..`b64e3762`, 2026-05-17):**
+dropped `HardAck.finalizationRequested`; disambiguated `HardAck.toContext`
+keys; evac-commit sig → `HeaderSignature`; wallet methods → pure mappers
+over `SigningInputs`; `AckNumber→SoftAckNumber` rename marked; BlockResult
+payouts(=withdrawals) vs refunds disambiguated; "L1 effects ≠ all txs"
+clarified; dropped redundant `StackBrief.firstMajorBlockNum`; precise
+rollouts/refunds sourcing; **standalone evac commitment reworked to a
+spec-aligned dormant record** (`StandaloneEvacCommitTx` +
+`L1LedgerM.mkStandaloneEvacCommitTx` removed). All compile + hooks pass;
+no test regressions.
+
+**Remaining critical work for the loop to *actually achieve consensus*
+rather than auto-confirm: M6 real ack collection + real Codec[HardAck].**
+See `.scratch/slow-consensus-handoff.md`.
 
 ---
 
