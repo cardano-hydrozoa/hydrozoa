@@ -14,10 +14,9 @@ import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.l1.L1LedgerM.Error.{DepositTxInvalidTTL, ParseError, SettlementTxSeqBuilderError}
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
-import hydrozoa.multisig.ledger.l1.tx.{RefundTx, StandaloneEvacCommitTx}
+import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import hydrozoa.multisig.ledger.l1.txseq.{DepositRefundTxSeq, FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.l1.utxo.{DepositUtxo, MultisigTreasuryUtxo}
-import scalus.cardano.ledger.Transaction
 
 private type E[A] = Either[L1LedgerM.Error, A]
 private type S[A] = cats.data.StateT[E, L1LedgerM.State, A]
@@ -190,46 +189,13 @@ object L1LedgerM {
 
     }
 
-    /** Construct a standalone evacuation-commitment transaction that updates the treasury utxo's
-      * KZG commitment without performing a settlement (no deposits absorbed, no L2 payouts
-      * realized, no major version bump). Used by the slow side for the trailing-minors partition of
-      * a stack — the partition's last block's cumulative evac-map state is pinned to L1 via this
-      * tx.
-      *
-      * Advances `state.treasury` to the produced treasury utxo (same value, same versionMajor, new
-      * `commit` field).
-      *
-      * **Implementation status:** stubbed. Constructing a real on-chain transaction requires a
-      * coordinated change to `MultisigTreasuryValidator` to admit a datum-only update path. For now
-      * this returns a placeholder [[StandaloneEvacCommitTx]] wrapping an empty [[Transaction]]; the
-      * produced treasury utxo carries the new KZG so downstream callers (treasury rotation) stay
-      * coherent.
-      */
-    def mkStandaloneEvacCommitTx(
-        nextKzg: KzgCommitment,
-        committedBlockNum: hydrozoa.multisig.ledger.block.BlockNumber
-    ): L1LedgerM[StandaloneEvacCommitTx] = for {
-        state <- get
-        treasurySpent = state.treasury
-        // Produce a new treasury utxo with the same versionMajor and value, but with the new
-        // commit field. TODO: rebuild the actual on-chain output bytes / utxoId once the
-        // builder lands.
-        treasuryProduced = treasurySpent.copy(
-          datum = treasurySpent.datum.copy(commit = nextKzg)
-        )
-        newState = state.copy(treasury = treasuryProduced)
-        _ <- set(newState)
-        // TODO: build the real transaction body (consume treasurySpent.asUtxo, produce
-        // treasuryProduced.asUtxo, attach metadata, balance, finalize). Requires the
-        // MultisigTreasuryValidator script to accept this update mode.
-        placeholderTx = Transaction.empty
-    } yield StandaloneEvacCommitTx(
-      tx = placeholderTx,
-      treasurySpent = treasurySpent,
-      treasuryProduced = treasuryProduced,
-      nextKzg = nextKzg,
-      committedBlockNum = committedBlockNum
-    )
+    // NOTE: there is intentionally NO `mkStandaloneEvacCommitTx` here. A standalone
+    // evacuation commitment is NOT a transaction and does NOT touch the L1 ledger / treasury:
+    // it is a contingent, dormant record `(headId, blockVersion, kzgCommitment)` presented to
+    // the L1 dispute-resolution scripts in the rules-based regime (only after a fallback
+    // executes). The treasury's KZG advances on L1 only via settlement (major) / finalization
+    // (final). The slow side builds the record purely in `StackEffectsBuilder` — see
+    // `hydrozoa.multisig.ledger.l1.tx.StandaloneEvacuationCommitment`.
 
     /** Remove the absorbed/refunded deposits and update the treasury in the ledger state. Called
       * when the block weaver sends the single to close the block in leader mode.

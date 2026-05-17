@@ -299,15 +299,14 @@ trait CardanoLiaison(
                   "cardanoLiaisonMode" -> "Stack.HardConfirmed",
                   "stackNum" -> s"${stack.round1.unsigned.brief.stackNum: Int}"
                 ) {
-                    // TODO(M9 full): realize the stack's L1 effects in dependency order —
-                    //   settlement / finalization (the unlock) first, then fallback,
-                    //   rollouts, refunds, then the standalone evac commitment. Most are
-                    //   transactions to submit; the evac commitment is NOT — it commits a
-                    //   block header (KZG lives on the header), so its on-chain artifact is
-                    //   the treasury-datum-update tx (still a placeholder pending the
-                    //   on-chain script), while the consensus artifact is the header
-                    //   signature already in the hard-ack. M1 effect derivation is done;
-                    //   what's missing here is the actual submission/ordering.
+                    // TODO(M9 full): submit the stack's transaction effects in dependency
+                    //   order — settlement / finalization (the unlock) first, then fallback,
+                    //   rollouts, refunds. Standalone evac commitments are NOT submitted
+                    //   here: they are dormant dispute-only records (presented to the L1
+                    //   dispute scripts in the rules-based regime, only after a fallback) —
+                    //   the consensus artifact is the header signature in the hard-ack,
+                    //   persisted by the (future) storage layer. M1 effect derivation is
+                    //   done; what's missing here is the actual tx submission/ordering.
                     Tracer.info(
                       "received Stack.HardConfirmed for stack " +
                           s"${stack.round1.unsigned.brief.stackNum}"

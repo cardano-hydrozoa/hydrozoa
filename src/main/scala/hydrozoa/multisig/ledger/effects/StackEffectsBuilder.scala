@@ -3,7 +3,7 @@ package hydrozoa.multisig.ledger.effects
 import cats.implicits.*
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockResult, BlockType}
 import hydrozoa.multisig.ledger.l1.L1LedgerM
-import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, FinalizationTx, RefundTx, RolloutTx, SettlementTx, StandaloneEvacCommitTx}
+import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, FinalizationTx, RefundTx, RolloutTx, SettlementTx, StandaloneEvacuationCommitment}
 import hydrozoa.multisig.ledger.stack.StackEffects
 
 /** Slow-side effect derivation: from the partitioned stack content, produce the necessary L1
@@ -12,16 +12,20 @@ import hydrozoa.multisig.ledger.stack.StackEffects
   *   - **Transactions** — settlement / fallback / rollout / refund / finalization. Built via the
   *     existing [[L1LedgerM]] tx-construction helpers (`mkSettlementTxSeq`, `finalizeLedger`);
   *     hard-acked with a per-tx-body signature.
-  *   - **Evacuation commitments** — NOT transactions. An evac commitment commits a *block header*
-  *     (KZG commitments still live on `BlockHeader`, kept there so the rule-based on-chain code is
-  *     untouched), so it is hard-acked with a signature over the full block header — the same shape
-  *     a soft-ack signs, not a tx-body signature. The [[StandaloneEvacCommitTx]] value still
-  *     carries a (placeholder) tx for the eventual on-chain treasury-datum-update path, but the
-  *     *signed material* is the header.
+  *   - **Standalone evacuation commitments** — NOT transactions, and only for TrailingMinors
+  *     partitions (minor blocks). A contingent / dormant L1 effect: the record
+  *     [[StandaloneEvacuationCommitment]] `(committedBlockNum, blockVersion, kzg)` presented to the
+  *     L1 dispute-resolution scripts in the rules-based regime (only after a fallback) — never
+  *     submitted immediately, never a treasury mutation. Hard-acked by a signature over the minor
+  *     block's header (KZG lives on the header), the same shape a soft-ack signs. For initial/major
+  *     blocks the evac commitment is implicit in the initialization/settlement effect (immediate to
+  *     L1 on execution), so no standalone record / no separate signature there.
   *
   * Adds slow-side concerns on top of the helpers:
-  *   - Treasury rotation across stacks (re-enabled in M10 once slow consensus drives it).
-  *   - Standalone evacuation-commitment construction for trailing-minor partitions.
+  *   - Treasury rotation across stacks (re-enabled in M10 once slow consensus drives it) — only via
+  *     settlement / finalization, never via an evac commitment.
+  *   - Standalone evacuation-commitment construction for trailing-minor partitions (pure; no
+  *     L1-ledger interaction).
   *
   * Pure functions of `(L1LedgerM state at stack open) + List[Partition]` — no JointLedger lookup,
   * all required state threaded through inputs.
@@ -44,13 +48,13 @@ object StackEffectsBuilder {
       *   - **Final**: call `L1LedgerM.finalizeLedger(...)` for finalization tx + rollouts. No
       *     refunds (drained via finalization). At most one Final per stack.
       *
-      * Per-partition compression:
-      *   - **TrailingMinors**: emit one [[StandaloneEvacCommitTx]] for the partition's LAST block's
-      *     cumulative KZG. This is an evac *commitment*, hard-acked by signing that block's header
-      *     (not a tx body). The "necessary effects" rule keeps only the LAST standalone evac commit
-      *     per such partition — earlier ones are superseded. The placeholder tx body is stubbed
-      *     pending an on-chain script update; see
-      *     [[hydrozoa.multisig.ledger.l1.L1LedgerM.mkStandaloneEvacCommitTx]].
+      * Per-partition:
+      *   - **TrailingMinors**: emit one [[StandaloneEvacuationCommitment]] for the partition's LAST
+      *     minor block (its cumulative KZG). Pure record, no L1-ledger interaction; hard-acked by
+      *     signing that minor block's header (not a tx body). The "necessary effects" rule keeps
+      *     only the LAST standalone commitment per such partition — earlier ones are superseded.
+      *     Major-closed / Final-closed partitions get no standalone commitment (implicit in
+      *     settlement / subsumed by finalization).
       *
       * The first settlement / finalization across the produced lists is the round-2 unlock; the
       * caller (StackComposer) is responsible for marking it as such when building the HardAck
@@ -119,27 +123,30 @@ object StackEffectsBuilder {
             }
         }
 
-        // Per spec: TrailingMinors partition keeps only the LAST evac commit. A stack has at
-        // most one TrailingMinors partition (and only as the last partition, since it implies
-        // no Major / Final follows). Compress by taking the partition's last block's
-        // cumulative KZG and emitting one standalone evac-commit tx for it.
+        // Standalone evacuation commitments: ONLY for TrailingMinors partitions, one per
+        // partition over its LAST minor block. Per spec a standalone evac commitment exists
+        // only for minor blocks — for initial/major blocks the evac commitment is implicit in
+        // the initialization/settlement effect (carried to L1 immediately on execution; no
+        // standalone record, no separate signature). Final-closed partitions get none.
         //
-        // Treasury rotation order: any Major/Final unlocks rotate first, then the standalone
-        // evac commit rotates on top (no major-version bump). Done after the unlock traversal
-        // so the L1LedgerM state has the latest treasury when the evac commit fires.
-        val trailingMinorEvacCommits: L1LedgerM[List[StandaloneEvacCommitTx]] = partitions
+        // It is NOT a transaction and does NOT touch the L1 ledger/treasury — a pure record
+        // `(committedBlockNum, blockVersion, kzg)` that lays dormant and is presented to the
+        // L1 dispute-resolution scripts in the rules-based regime (only after a fallback).
+        // Necessary-effects compression: the partition's LAST minor supersedes the earlier
+        // ones, so we take only `p.blocks.last`.
+        val trailingMinorEvacCommits: List[StandaloneEvacuationCommitment] = partitions
             .filter(_.closing == Partition.Closing.TrailingMinors)
-            .traverse { p =>
+            .map { p =>
                 val lastBlock = p.blocks.last.brief
-                L1LedgerM.mkStandaloneEvacCommitTx(
-                  nextKzg = lastBlock.header.kzgCommitment,
-                  committedBlockNum = lastBlock.blockNum
+                StandaloneEvacuationCommitment(
+                  committedBlockNum = lastBlock.blockNum,
+                  blockVersion = lastBlock.header.blockVersion,
+                  kzgCommitment = lastBlock.header.kzgCommitment
                 )
             }
 
         for {
             outs <- unlockTraversal
-            evacCommits <- trailingMinorEvacCommits
         } yield {
             val settlements: List[SettlementTx] = outs.collect { case FromMajor(s) =>
                 s.settlementTx
@@ -162,7 +169,7 @@ object StackEffectsBuilder {
               fallbacks = fallbacks,
               rollouts = majorRollouts ++ finalRollouts,
               refunds = refunds,
-              evacCommits = evacCommits,
+              evacCommits = trailingMinorEvacCommits,
               finalization = finalizations.headOption
             )
         }

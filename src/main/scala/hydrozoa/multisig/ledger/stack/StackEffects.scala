@@ -1,13 +1,13 @@
 package hydrozoa.multisig.ledger.stack
 
-import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, FinalizationTx, InitializationTx, RefundTx, RolloutTx, SettlementTx, StandaloneEvacCommitTx}
+import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, FinalizationTx, InitializationTx, RefundTx, RolloutTx, SettlementTx, StandaloneEvacuationCommitment}
 
 /** Necessary L1 effects for a closed stack, derived locally by each peer.
   *
   * Not every effect is a transaction: settlement / fallback / rollout / refund / finalization are
   * txs (hard-acked per tx body), but a standalone evac commitment commits a *block header* (KZG
   * lives on the header) and is hard-acked with a header signature, not a tx-body signature — see
-  * [[hydrozoa.multisig.ledger.l1.tx.StandaloneEvacCommitTx]].
+  * [[hydrozoa.multisig.ledger.l1.tx.StandaloneEvacuationCommitment]].
   *
   * **Never wire-broadcast** — only [[StackBrief]] travels on the wire. Each peer derives the
   * effects from its own [[hydrozoa.multisig.ledger.block.BlockResult]] stream + the leader's brief;
@@ -36,9 +36,15 @@ object StackEffects:
       *   `BlockResult.postDatedRefundTxs`). Major/Final blocks contribute none — those drain
       *   refunds via settlement/finalization. Not a per-partition quantity.
       * @param evacCommits
-      *   ≤ one per partition: the LAST evac commitment of each partition that ends without a major
-      *   to absorb it. Earlier standalones in the same partition are dropped by the
-      *   necessary-effects compression.
+      *   one per **TrailingMinors** partition only (the partition's LAST minor block). Per spec, a
+      *   *standalone* evacuation commitment exists only for minor blocks; for initial/major blocks
+      *   the evacuation commitment is implicit in the initialization/settlement effect (carried to
+      *   L1 immediately when that effect executes — no standalone record, no separate signature).
+      *   It is a contingent / dormant L1 effect — a record `(headId, blockVersion, kzg)` presented
+      *   to the L1 dispute-resolution scripts in the rules-based regime, never submitted
+      *   immediately, never a treasury mutation. Hard-acked by signing the minor block's header
+      *   (KZG lives on the header). Necessary-effects compression: only the LAST standalone
+      *   commitment of the partition's minor run is kept (each supersedes its predecessors).
       * @param finalization
       *   present iff the stack contains a Final block; the unlock when no settlement precedes it in
       *   the stack.
@@ -48,7 +54,7 @@ object StackEffects:
         fallbacks: List[FallbackTx],
         rollouts: List[RolloutTx],
         refunds: List[RefundTx],
-        evacCommits: List[StandaloneEvacCommitTx],
+        evacCommits: List[StandaloneEvacuationCommitment],
         finalization: Option[FinalizationTx]
     ) extends StackEffects
 

@@ -68,7 +68,7 @@ PeerLiaison transport (M7)
 ### Types + data shapes (PR1 — `be9a9255`)
 - `multisig/ledger/stack/{StackNumber, StackBrief, Stack, StackEffects}.scala`
 - `multisig/ledger/block/BlockResult.scala`
-- `multisig/ledger/l1/tx/StandaloneEvacCommitTx.scala`
+- `multisig/ledger/l1/tx/StandaloneEvacuationCommitment.scala`
 - `multisig/consensus/ack/{HardAck, HardAckId, HardAckNumber}.scala`
 - `multisig/ledger/effects/{NecessaryEffectsPolicy, StackEffectsBuilder}.scala`
 
@@ -110,10 +110,13 @@ PeerLiaison transport (M7)
   - **Minor**: collects `postDatedRefundTxs`.
   - **Major**: calls `L1LedgerM.mkSettlementTxSeq(...)`.
   - **Final**: calls `L1LedgerM.finalizeLedger(...)`.
-  - **TrailingMinors partition**: calls
-    `L1LedgerM.mkStandaloneEvacCommitTx(lastKzg)`.
+  - **TrailingMinors partition**: builds a pure
+    `StandaloneEvacuationCommitment(committedBlockNum, blockVersion, kzg)`
+    record (no L1-ledger interaction). See the spec-aligned section
+    below.
 - `L1LedgerM`: added public `map`, `flatMap`, `pure`, `cats.Monad` given
-  (needed for `traverse`). Added `mkStandaloneEvacCommitTx`.
+  (needed for `traverse`). (Earlier `mkStandaloneEvacCommitTx` removed —
+  evac commitments don't touch the L1 ledger.)
 
 ### Wallet signing (M3 — `7eec15e4`, integration `c2279816`)
 - Five wallet methods on `HeadPeerWallet`:
@@ -176,20 +179,47 @@ Real impl needs to:
 1. Walk `Stack.HardConfirmed.round1.unsigned.effects: StackEffects.Regular`.
 2. Build submission queue in dependency order: first settlement OR
    finalization (the unlock), then remaining settlements, fallbacks,
-   rollouts, refunds, evac commits.
+   rollouts, refunds. **Evac commitments are NOT submitted** — they are
+   dormant dispute-only records; the consensus side just needs the
+   header signatures persisted (storage layer, future).
 3. Feed into the existing per-block effect-submission state machine
    (`handleMajorBlockL1Effects` / `handleFinalBlockL1Effects` —
    shapes are per-block bundled; will need adapter).
-4. Skip `StandaloneEvacCommitTx` for now — its `tx` field is a
-   `Transaction.empty` placeholder pending the on-chain script update.
+4. `StandaloneEvacuationCommitment` is not an L1 submission at all —
+   skip it in CardanoLiaison entirely.
 
-### StandaloneEvacCommitTx on-chain script
+### Standalone evacuation commitment — spec-aligned model (RESOLVED)
 
-`L1LedgerM.mkStandaloneEvacCommitTx` returns a `StandaloneEvacCommitTx`
-wrapping `Transaction.empty`. Real construction requires a coordinated
-on-chain change to `MultisigTreasuryValidator` to admit a "datum-only
-update" path (no major-version bump, no payouts, just `commit` field
-change). Out of scope for this PR.
+Spec-verified (whitepaper MCP `replicated-state-machine/effects#evacuation-commitment`,
+`#standalone-evacuation-commitment`, `consensus/slow-consensus#which-effects-are-necessary`):
+
+- A standalone evac commitment exists **only for minor blocks** —
+  TrailingMinors partitions. For initial/major blocks the evac
+  commitment is **implicit in the initialization/settlement effect** and
+  goes to L1 *immediately* when that effect executes; no standalone
+  record, no separate signature. Final-closed → none.
+- It is **NOT a transaction**. It is a contingent / dormant L1 effect: a
+  fixed-size record `(headId, blockVersion, kzg)` that lays dormant and
+  is presented to the L1 dispute-resolution scripts in the rules-based
+  regime — only after a fallback effect executes. Never submitted
+  immediately, never a treasury mutation.
+- Hard-acked by signing the minor block's **header** (KZG lives on the
+  header); persisted in the storage layer (FUTURE — not built) and
+  produced to the dispute script if needed.
+- Necessary-effects compression unchanged: only the LAST standalone
+  commitment per contiguous minor run is kept.
+
+Implemented: `StandaloneEvacCommitTx` (a treasury-rotating tx) +
+`L1LedgerM.mkStandaloneEvacCommitTx` removed; replaced by the pure
+record `StandaloneEvacuationCommitment(committedBlockNum, blockVersion,
+kzgCommitment)`. `StackEffectsBuilder` builds it purely (no L1-ledger
+interaction) for TrailingMinors partitions only. Consensus shape
+unchanged (`HardAck...evacCommits: Map[BlockNumber, HeaderSignature]`,
+keyed by `committedBlockNum`). `headId` is constant per head, supplied
+at dispute-presentation time — not carried in the in-memory effect.
+
+Still future (out of scope): the storage layer that persists these
+header signatures and the dispute-script presentation path.
 
 ### M11 real test assertions
 
