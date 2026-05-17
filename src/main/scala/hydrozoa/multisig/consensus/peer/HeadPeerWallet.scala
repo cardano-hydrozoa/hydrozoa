@@ -96,8 +96,7 @@ final class HeadPeerWallet(
       */
     def mkHardAckRound1Regular(
         stack: Stack.Unsigned,
-        hardAckNum: HardAckNumber,
-        finalizationRequested: Boolean
+        hardAckNum: HardAckNumber
     ): HardAck = {
         val effects = stack.effects match {
             case r: StackEffects.Regular => r
@@ -140,8 +139,7 @@ final class HeadPeerWallet(
             refunds = refunds,
             evacCommits = evacCommits,
             finalization = finalization
-          ),
-          finalizationRequested = finalizationRequested
+          )
         )
     }
 
@@ -151,15 +149,13 @@ final class HeadPeerWallet(
     def mkHardAckRound1Initial(
         stackNum: StackNumber,
         fallbackTx: FallbackTx,
-        hardAckNum: HardAckNumber,
-        finalizationRequested: Boolean
+        hardAckNum: HardAckNumber
     ): HardAck = HardAck(
       ackId = HardAckId(peerNum, hardAckNum),
       stackNum = stackNum,
       payload = HardAck.Round1Payload.Initial(
         fallbackSig = mkTxSignature(fallbackTx.tx)
-      ),
-      finalizationRequested = finalizationRequested
+      )
     )
 
     /** Round-2 hard ack for a regular stack: signs the first settlement / finalization (the unlock
@@ -169,8 +165,7 @@ final class HeadPeerWallet(
       */
     def mkHardAckRound2Regular(
         stack: Stack.Round1Confirmed,
-        hardAckNum: HardAckNumber,
-        finalizationRequested: Boolean
+        hardAckNum: HardAckNumber
     ): HardAck = {
         val effects = stack.unsigned.effects match {
             case r: StackEffects.Regular => r
@@ -193,8 +188,7 @@ final class HeadPeerWallet(
         HardAck(
           ackId = HardAckId(peerNum, hardAckNum),
           stackNum = stack.unsigned.brief.stackNum,
-          payload = HardAck.Round2Payload.Regular(firstUnlockSig = unlockSig),
-          finalizationRequested = finalizationRequested
+          payload = HardAck.Round2Payload.Regular(firstUnlockSig = unlockSig)
         )
     }
 
@@ -205,8 +199,7 @@ final class HeadPeerWallet(
     def mkHardAckRound2Initial(
         stack: Stack.Round1Confirmed,
         individualWitnesses: List[scalus.cardano.ledger.VKeyWitness],
-        hardAckNum: HardAckNumber,
-        finalizationRequested: Boolean
+        hardAckNum: HardAckNumber
     ): HardAck = {
         val effects = stack.unsigned.effects match {
             case i: StackEffects.Initial => i
@@ -221,8 +214,7 @@ final class HeadPeerWallet(
           payload = HardAck.Round2Payload.Initial(
             initTxSig = mkTxSignature(effects.initializationTx.tx),
             individualWitnesses = individualWitnesses
-          ),
-          finalizationRequested = finalizationRequested
+          )
         )
     }
 
@@ -232,8 +224,7 @@ final class HeadPeerWallet(
       */
     def mkHardAckSole(
         stack: Stack.Unsigned,
-        hardAckNum: HardAckNumber,
-        finalizationRequested: Boolean
+        hardAckNum: HardAckNumber
     ): HardAck = {
         val effects = stack.effects match {
             case r: StackEffects.Regular => r
@@ -251,8 +242,7 @@ final class HeadPeerWallet(
         HardAck(
           ackId = HardAckId(peerNum, hardAckNum),
           stackNum = stack.brief.stackNum,
-          payload = HardAck.SolePayload(refunds = refunds, evacCommits = evacCommits),
-          finalizationRequested = finalizationRequested
+          payload = HardAck.SolePayload(refunds = refunds, evacCommits = evacCommits)
         )
     }
 }

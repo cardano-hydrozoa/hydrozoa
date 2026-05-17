@@ -20,15 +20,18 @@ import scalus.cardano.ledger.VKeyWitness
   *   - **1-phase Sole** stacks (minor-only Regular): one ack per peer ([[HardAck.SolePayload]])
   *     over every effect (refund txs + the last evac commit).
   *
-  * Wire ordering: for each `(peer, stackNum)`, round-1 / sole hard-acks always precede round-2. The
-  * `finalizationRequested` flag mirrors [[SoftAck.finalizationRequested]] — per-peer request, not a
-  * confirmation.
+  * Wire ordering: for each `(peer, stackNum)`, round-1 / sole hard-acks always precede round-2.
+  *
+  * No `finalizationRequested` flag (unlike [[SoftAck]]): by the time a stack reaches hard-ack, all
+  * its blocks are already soft-confirmed, so whether the stack finalizes the head is derivable from
+  * its contents (`StackEffects.Regular.finalization.isDefined`, or a `Block.SoftConfirmed.Final` in
+  * the stack). The slow cycle ratifies effects; it does not decide block types — nothing tallies a
+  * per-peer finalization request here.
   */
 final case class HardAck(
     ackId: HardAckId,
     stackNum: StackNumber,
-    payload: HardAck.Payload,
-    finalizationRequested: Boolean
+    payload: HardAck.Payload
 ) {
     final transparent inline def hardAckNum: HardAckNumber = ackId.hardAckNum
     final transparent inline def peerNum: HeadPeerNumber = ackId.peerNum

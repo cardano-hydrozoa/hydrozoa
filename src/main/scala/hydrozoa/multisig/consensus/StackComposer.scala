@@ -281,21 +281,18 @@ final case class StackComposer(
                     val n2 = n1.increment
                     val round1 = wallet.mkHardAckRound1Regular(
                       stack = unsigned,
-                      hardAckNum = n1,
-                      finalizationRequested = false
+                      hardAckNum = n1
                     )
                     val round2 = wallet.mkHardAckRound2Regular(
                       stack = Stack.Round1Confirmed(unsigned),
-                      hardAckNum = n2,
-                      finalizationRequested = false
+                      hardAckNum = n2
                     )
                     (List(round1, round2), n2.increment)
                 } else {
                     val n = s.ownHardAckNum
                     val sole = wallet.mkHardAckSole(
                       stack = unsigned,
-                      hardAckNum = n,
-                      finalizationRequested = false
+                      hardAckNum = n
                     )
                     (List(sole), n.increment)
                 }
