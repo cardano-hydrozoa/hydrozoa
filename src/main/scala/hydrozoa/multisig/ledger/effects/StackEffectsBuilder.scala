@@ -6,10 +6,20 @@ import hydrozoa.multisig.ledger.l1.L1LedgerM
 import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, FinalizationTx, RefundTx, RolloutTx, SettlementTx, StandaloneEvacCommitTx}
 import hydrozoa.multisig.ledger.stack.StackEffects
 
-/** Slow-side effect derivation: from the partitioned stack content, produce the necessary L1 effect
-  * transactions. Wraps the existing [[L1LedgerM]] tx-construction helpers (`mkSettlementTxSeq`,
-  * `finalizeLedger`) and adds slow-side concerns:
+/** Slow-side effect derivation: from the partitioned stack content, produce the necessary L1
+  * effects. An L1 effect is NOT always a transaction:
   *
+  *   - **Transactions** — settlement / fallback / rollout / refund / finalization. Built via the
+  *     existing [[L1LedgerM]] tx-construction helpers (`mkSettlementTxSeq`, `finalizeLedger`);
+  *     hard-acked with a per-tx-body signature.
+  *   - **Evacuation commitments** — NOT transactions. An evac commitment commits a *block header*
+  *     (KZG commitments still live on `BlockHeader`, kept there so the rule-based on-chain code is
+  *     untouched), so it is hard-acked with a signature over the full block header — the same shape
+  *     a soft-ack signs, not a tx-body signature. The [[StandaloneEvacCommitTx]] value still
+  *     carries a (placeholder) tx for the eventual on-chain treasury-datum-update path, but the
+  *     *signed material* is the header.
+  *
+  * Adds slow-side concerns on top of the helpers:
   *   - Treasury rotation across stacks (re-enabled in M10 once slow consensus drives it).
   *   - Standalone evacuation-commitment construction for trailing-minor partitions.
   *
@@ -36,8 +46,9 @@ object StackEffectsBuilder {
       *
       * Per-partition compression:
       *   - **TrailingMinors**: emit one [[StandaloneEvacCommitTx]] for the partition's LAST block's
-      *     cumulative KZG. The "necessary effects" rule keeps only the LAST standalone evac commit
-      *     per such partition — earlier ones are superseded. Tx body construction is stubbed
+      *     cumulative KZG. This is an evac *commitment*, hard-acked by signing that block's header
+      *     (not a tx body). The "necessary effects" rule keeps only the LAST standalone evac commit
+      *     per such partition — earlier ones are superseded. The placeholder tx body is stubbed
       *     pending an on-chain script update; see
       *     [[hydrozoa.multisig.ledger.l1.L1LedgerM.mkStandaloneEvacCommitTx]].
       *
