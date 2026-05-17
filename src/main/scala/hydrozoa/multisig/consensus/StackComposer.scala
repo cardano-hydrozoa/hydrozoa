@@ -32,9 +32,12 @@ import hydrozoa.multisig.ledger.stack.*
   *     [[hydrozoa.multisig.ledger.effects.StackEffectsBuilder]] — minor-only stacks fully derive;
   *     Major / Final fall through to TODOs in the next slice), wrap into [[Stack.Unsigned]], hand
   *     off to [[SlowConsensusActor]], and broadcast the brief directly to PeerLiaisons.
-  *   - **Follower**: when an inbound `StackBrief` for `lastClosedStackNum + 1` matches the local
-  *     longest-prefix `ready` view, validate composition, re-derive effects locally (deterministic
-  *     per spec), wrap into [[Stack.Unsigned]], and hand to SlowConsensusActor.
+  *   - **Follower**: on an inbound `StackBrief` for `lastClosedStackNum + 1`, classify it three
+  *     ways — structural divergence (→ rule-based fallback, TODO); not-yet-covered (benign: paired
+  *     blocks don't yet span the brief's range — wait silently, re-fires on the next event);
+  *     covered (build [[Stack.Unsigned]] from EXACTLY the brief's range — the leader may have
+  *     closed earlier than this follower could — re-derive effects locally, sign, hand to
+  *     SlowConsensusActor).
   *
   * Effect derivation, wallet signing, and own-ack bundling are live; the [[SlowConsensusActor]]
   * still auto-confirms (M6 next slice will replace it with real ack aggregation across head peers).
