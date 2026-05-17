@@ -15,12 +15,16 @@ import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
   *
   *   - `evacuationMapDiff` — per-block delta to the evacuation map. Drives the block's standalone
   *     evac commitment (KZG commitment) and feeds into the next major's settlement tx.
-  *   - `payoutObligations` — L2 payout obligations visible at this block (snapshot of the L2
-  *     ledger's `payouts` after this block's L2 mutations applied). The next Major / Final block in
-  *     the stack drains these into the settlement / finalization tx.
+  *   - `payoutObligations` — L2 **withdrawal** obligations visible at this block (snapshot of the
+  *     L2 ledger's `payouts` after this block's L2 mutations applied). These are funds an L2
+  *     request moves out to L1; the next Major / Final block drains them into the settlement /
+  *     finalization tx. Distinct from deposit refunds (see `postDatedRefundTxs`) — refunds undo a
+  *     never-absorbed deposit; withdrawals are an L2-initiated exit. They are unrelated concepts
+  *     and travel on separate fields.
   *   - `postDatedRefundTxs` — pre-built refund txs from deposit registration (signed at deposit
-  *     time per spec); attached to the block that absorbs the corresponding deposits and surfaced
-  *     on L1 by the slow side.
+  *     time per spec); the L1 way to return a deposit that was not absorbed. Attached to the block
+  *     that decides the refund and surfaced on L1 by the slow side. Nothing to do with
+  *     `payoutObligations`.
   *   - `absorbedDeposits` — deposit utxos this block decided to absorb. Used by the next Major
   *     block's settlement tx construction (`mkSettlementTxSeq.absorbedDeposits`).
   *   - `competingFallbackTxTime` — fallback-tx validity start that the block's settlement /
