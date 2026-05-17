@@ -11,7 +11,7 @@ import hydrozoa.lib.logging.{Logging, Tracer}
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber}
 import hydrozoa.multisig.ledger.block.{Block, BlockHeader, BlockNumber, BlockResult}
-import hydrozoa.multisig.ledger.effects.{NecessaryEffectsPolicy, StackEffectsBuilder}
+import hydrozoa.multisig.ledger.effects.{NecessaryEffectsPolicy, PartitionIndex, StackEffectsBuilder, WithinPartitionIndex}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l1.L1LedgerM
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
@@ -278,7 +278,7 @@ final case class StackComposer(
             // Partition-index keys use list-index as a proxy (single-partition is the common
             // case; multi-partition exercises the same code paths with multiple entries).
             val refundsIn = effects.refunds.zipWithIndex.map { case (tx, i) =>
-                (0, i) -> tx.tx
+                (PartitionIndex.zero, WithinPartitionIndex(i)) -> tx.tx
             }.toMap
 
             val twoPhase = effects.settlements.nonEmpty || effects.finalization.isDefined
@@ -292,19 +292,20 @@ final case class StackComposer(
                     // Round-1 signs every effect EXCEPT the round-2 unlock (first
                     // settlement, or finalization when there's no settlement).
                     val round1Settlements = effects.settlements.zipWithIndex.collect {
-                        case (tx, i) if !(firstUnlockIsSettlement && i == 0) => i -> tx.tx
+                        case (tx, i) if !(firstUnlockIsSettlement && i == 0) =>
+                            PartitionIndex(i) -> tx.tx
                     }.toMap
                     val round1Fallbacks = effects.fallbacks.zipWithIndex.map { case (tx, i) =>
-                        i -> tx.tx
+                        PartitionIndex(i) -> tx.tx
                     }.toMap
                     val round1Rollouts = effects.rollouts.zipWithIndex.map { case (tx, i) =>
-                        (0, i) -> tx.tx
+                        (PartitionIndex.zero, WithinPartitionIndex(i)) -> tx.tx
                     }.toMap
                     val round1EvacCommits = effects.evacCommits.map(evacHeaderBytes).toMap
                     val round1Finalization =
                         if firstUnlockIsSettlement then
-                            effects.finalization.map(f => 0 -> f.tx).toMap
-                        else Map.empty[Int, scalus.cardano.ledger.Transaction]
+                            effects.finalization.map(f => PartitionIndex.zero -> f.tx).toMap
+                        else Map.empty[PartitionIndex, scalus.cardano.ledger.Transaction]
 
                     val unlockTx = effects.settlements.headOption
                         .map(_.tx)

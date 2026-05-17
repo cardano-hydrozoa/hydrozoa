@@ -2,6 +2,7 @@ package hydrozoa.multisig.consensus.ack
 
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber}
+import hydrozoa.multisig.ledger.effects.{PartitionIndex, WithinPartitionIndex}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.StackNumber
 import scalus.cardano.ledger.{Transaction, VKeyWitness}
@@ -86,12 +87,12 @@ object HardAck {
           * is untouched), so a peer signs the full header, the same shape a soft-ack signs.
           */
         final case class Regular(
-            settlements: Map[Int, TxSignature],
-            fallbacks: Map[Int, TxSignature],
-            rollouts: Map[(Int, Int), TxSignature],
-            refunds: Map[(Int, Int), TxSignature],
+            settlements: Map[PartitionIndex, TxSignature],
+            fallbacks: Map[PartitionIndex, TxSignature],
+            rollouts: Map[(PartitionIndex, WithinPartitionIndex), TxSignature],
+            refunds: Map[(PartitionIndex, WithinPartitionIndex), TxSignature],
             evacCommits: Map[BlockNumber, BlockHeader.HeaderSignature],
-            finalization: Map[Int, TxSignature]
+            finalization: Map[PartitionIndex, TxSignature]
         ) extends Payload.Round1
 
         /** Stack 0 round 1: signature over the locally-derived fallback tx body. */
@@ -126,7 +127,7 @@ object HardAck {
       * is always 0 here).
       */
     final case class SolePayload(
-        refunds: Map[(Int, Int), TxSignature],
+        refunds: Map[(PartitionIndex, WithinPartitionIndex), TxSignature],
         evacCommit: (BlockNumber, BlockHeader.HeaderSignature)
     ) extends Payload {
         override def round: Round = Round.Sole
@@ -142,12 +143,12 @@ object HardAck {
       */
     object SigningInputs {
         final case class Round1Regular(
-            settlements: Map[Int, Transaction],
-            fallbacks: Map[Int, Transaction],
-            rollouts: Map[(Int, Int), Transaction],
-            refunds: Map[(Int, Int), Transaction],
+            settlements: Map[PartitionIndex, Transaction],
+            fallbacks: Map[PartitionIndex, Transaction],
+            rollouts: Map[(PartitionIndex, WithinPartitionIndex), Transaction],
+            refunds: Map[(PartitionIndex, WithinPartitionIndex), Transaction],
             evacCommits: Map[BlockNumber, BlockHeader.Minor.Onchain.Serialized],
-            finalization: Map[Int, Transaction]
+            finalization: Map[PartitionIndex, Transaction]
         )
 
         final case class Round1Initial(fallback: Transaction)
@@ -160,7 +161,7 @@ object HardAck {
         )
 
         final case class Sole(
-            refunds: Map[(Int, Int), Transaction],
+            refunds: Map[(PartitionIndex, WithinPartitionIndex), Transaction],
             evacCommit: (BlockNumber, BlockHeader.Minor.Onchain.Serialized)
         )
     }
