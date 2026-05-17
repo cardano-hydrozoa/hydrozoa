@@ -87,17 +87,19 @@ object HardAck {
           * the finalization itself is the unlock it lives in [[Round2Payload]] instead, so it is
           * absent here.
           *
-          * `evacCommits` is keyed by [[BlockNumber]] and carries a [[BlockHeader.HeaderSignature]]
-          * (NOT a [[TxSignature]]): a standalone evacuation commitment commits a *block header* —
-          * KZG commitments still live on `BlockHeader` (kept there so the rule-based on-chain code
-          * is untouched), so a peer signs the full header, the same shape a soft-ack signs.
+          * `evacCommit` is a single `Option[(BlockNumber, [[BlockHeader.HeaderSignature]])]` — a
+          * stack has at most ONE TrailingMinors partition ⇒ at most one standalone evac commitment.
+          * It carries a header signature (NOT a [[TxSignature]]): a standalone evacuation
+          * commitment commits a *block header* — KZG commitments still live on `BlockHeader` (kept
+          * there so the rule-based on-chain code is untouched), so a peer signs the full header,
+          * the same shape a soft-ack signs.
           */
         final case class Regular(
             settlements: Map[PartitionIndex, TxSignature],
             fallbacks: Map[PartitionIndex, TxSignature],
             rollouts: Map[(PartitionIndex, WithinPartitionIndex), TxSignature],
             refunds: Map[(PartitionIndex, WithinPartitionIndex), TxSignature],
-            evacCommits: Map[BlockNumber, BlockHeader.HeaderSignature],
+            evacCommit: Option[(BlockNumber, BlockHeader.HeaderSignature)],
             finalization: Option[TxSignature]
         ) extends Payload.Round1
 
@@ -153,7 +155,7 @@ object HardAck {
             fallbacks: Map[PartitionIndex, Transaction],
             rollouts: Map[(PartitionIndex, WithinPartitionIndex), Transaction],
             refunds: Map[(PartitionIndex, WithinPartitionIndex), Transaction],
-            evacCommits: Map[BlockNumber, BlockHeader.Minor.Onchain.Serialized],
+            evacCommit: Option[(BlockNumber, BlockHeader.Minor.Onchain.Serialized)],
             finalization: Option[Transaction]
         )
 

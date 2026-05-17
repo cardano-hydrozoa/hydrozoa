@@ -134,8 +134,10 @@ object StackEffectsBuilder {
         // L1 dispute-resolution scripts in the rules-based regime (only after a fallback).
         // Necessary-effects compression: the partition's LAST minor supersedes the earlier
         // ones, so we take only `p.blocks.last`.
-        val trailingMinorEvacCommits: List[StandaloneEvacuationCommitment] = partitions
-            .filter(_.closing == Partition.Closing.TrailingMinors)
+        // At most ONE TrailingMinors partition per stack (it's necessarily the last —
+        // see NecessaryEffectsPolicy invariants), so ≤ 1 standalone evac commitment.
+        val trailingMinorEvacCommit: Option[StandaloneEvacuationCommitment] = partitions
+            .find(_.closing == Partition.Closing.TrailingMinors)
             .map { p =>
                 val lastBlock = p.blocks.last.brief
                 StandaloneEvacuationCommitment(
@@ -169,7 +171,7 @@ object StackEffectsBuilder {
               fallbacks = fallbacks,
               rollouts = majorRollouts ++ finalRollouts,
               refunds = refunds,
-              evacCommits = trailingMinorEvacCommits,
+              evacCommit = trailingMinorEvacCommit,
               finalization = finalizations.headOption
             )
         }

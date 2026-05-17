@@ -105,7 +105,7 @@ final class HeadPeerWallet(
         fallbacks = in.fallbacks.view.mapValues(mkTxSignature).toMap,
         rollouts = in.rollouts.view.mapValues(mkTxSignature).toMap,
         refunds = in.refunds.view.mapValues(mkTxSignature).toMap,
-        evacCommits = in.evacCommits.view.mapValues(mkHeaderSignature).toMap,
+        evacCommit = in.evacCommit.map((bn, bytes) => (bn, mkHeaderSignature(bytes))),
         finalization = in.finalization.map(mkTxSignature)
       )
     )

@@ -324,7 +324,7 @@ final case class StackComposer(
                     val round1Rollouts = effects.rollouts.zipWithIndex.map { case (tx, i) =>
                         (PartitionIndex.zero, WithinPartitionIndex(i)) -> tx.tx
                     }.toMap
-                    val round1EvacCommits = effects.evacCommits.map(evacHeaderBytes).toMap
+                    val round1EvacCommit = effects.evacCommit.map(evacHeaderBytes)
                     // At most one Final per stack. The finalization is signed in round 1 only
                     // when a settlement precedes it (settlement is the unlock); otherwise the
                     // finalization itself is the round-2 unlock and is signed there.
@@ -349,7 +349,7 @@ final case class StackComposer(
                         fallbacks = round1Fallbacks,
                         rollouts = round1Rollouts,
                         refunds = refundsIn,
-                        evacCommits = round1EvacCommits,
+                        evacCommit = round1EvacCommit,
                         finalization = round1Finalization
                       )
                     )
@@ -360,17 +360,15 @@ final case class StackComposer(
                     )
                     (List(round1, round2), n2.increment)
                 } else {
-                    // Minor-only stack: exactly one TrailingMinors partition ⇒ exactly one
-                    // standalone evac commit.
+                    // Minor-only stack: it is exactly one TrailingMinors partition ⇒ exactly
+                    // one standalone evac commit.
                     val n = s.ownHardAckNum
-                    val ec = effects.evacCommits match {
-                        case List(single) => single
-                        case other =>
-                            throw new IllegalStateException(
-                              "buildHandoff: minor-only stack must have exactly one evac " +
-                                  s"commit, got ${other.size}"
-                            )
-                    }
+                    val ec = effects.evacCommit.getOrElse(
+                      throw new IllegalStateException(
+                        "buildHandoff: minor-only stack must have exactly one evac commit, " +
+                            "but evacCommit is None"
+                      )
+                    )
                     val sole = wallet.mkHardAckSole(
                       stackNum = stackNum,
                       hardAckNum = n,
