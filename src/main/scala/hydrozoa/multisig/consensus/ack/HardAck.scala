@@ -77,9 +77,15 @@ object HardAck {
         /** Per-effect signatures for everything in a regular stack EXCEPT the first
           * settlement/finalization (the round-2 unlock).
           *
-          * `settlements` / `fallbacks` / `finalization` are keyed by partition index (one partition
-          * per major version in the stack); `rollouts` / `refunds` use
+          * `settlements` / `fallbacks` are keyed by partition index (one partition per major
+          * version in the stack); `rollouts` / `refunds` use
           * `(partitionIndex, withinPartitionIndex)`.
+          *
+          * `finalization` is a single `Option` — a stack has at most ONE Final block (Final
+          * terminates the head). It is present here only when a settlement precedes it (the
+          * settlement is then the round-2 unlock and the finalization is signed in round 1); when
+          * the finalization itself is the unlock it lives in [[Round2Payload]] instead, so it is
+          * absent here.
           *
           * `evacCommits` is keyed by [[BlockNumber]] and carries a [[BlockHeader.HeaderSignature]]
           * (NOT a [[TxSignature]]): a standalone evacuation commitment commits a *block header* —
@@ -92,7 +98,7 @@ object HardAck {
             rollouts: Map[(PartitionIndex, WithinPartitionIndex), TxSignature],
             refunds: Map[(PartitionIndex, WithinPartitionIndex), TxSignature],
             evacCommits: Map[BlockNumber, BlockHeader.HeaderSignature],
-            finalization: Map[PartitionIndex, TxSignature]
+            finalization: Option[TxSignature]
         ) extends Payload.Round1
 
         /** Stack 0 round 1: signature over the locally-derived fallback tx body. */
@@ -148,7 +154,7 @@ object HardAck {
             rollouts: Map[(PartitionIndex, WithinPartitionIndex), Transaction],
             refunds: Map[(PartitionIndex, WithinPartitionIndex), Transaction],
             evacCommits: Map[BlockNumber, BlockHeader.Minor.Onchain.Serialized],
-            finalization: Map[PartitionIndex, Transaction]
+            finalization: Option[Transaction]
         )
 
         final case class Round1Initial(fallback: Transaction)

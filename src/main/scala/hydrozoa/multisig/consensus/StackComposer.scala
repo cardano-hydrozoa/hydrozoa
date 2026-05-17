@@ -302,10 +302,12 @@ final case class StackComposer(
                         (PartitionIndex.zero, WithinPartitionIndex(i)) -> tx.tx
                     }.toMap
                     val round1EvacCommits = effects.evacCommits.map(evacHeaderBytes).toMap
+                    // At most one Final per stack. The finalization is signed in round 1 only
+                    // when a settlement precedes it (settlement is the unlock); otherwise the
+                    // finalization itself is the round-2 unlock and is signed there.
                     val round1Finalization =
-                        if firstUnlockIsSettlement then
-                            effects.finalization.map(f => PartitionIndex.zero -> f.tx).toMap
-                        else Map.empty[PartitionIndex, scalus.cardano.ledger.Transaction]
+                        if firstUnlockIsSettlement then effects.finalization.map(_.tx)
+                        else None
 
                     val unlockTx = effects.settlements.headOption
                         .map(_.tx)
