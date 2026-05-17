@@ -106,10 +106,19 @@ PeerLiaison transport (M7)
 - Outbox prune: per-remote on incoming GetMsgBatch cursors (matches the
   recently reworked soft-side pattern).
 
-### CardanoLiaison subscription (M9 partial — `1e0b78fd`)
-- Stack.HardConfirmed added to Request type. Handler logs receipt only —
-  L1 submission still TODO (notes: settlement/finalization unlock first,
-  then fallback, rollouts, refunds, evac commits).
+### CardanoLiaison subscription (M9 partial — `1e0b78fd`, narrowed `064440c3`)
+- `Request` is now `PreStart | Timeout | Stack.HardConfirmed` — the
+  vestigial pre-split `BlockConfirmed.{Major,Final}` inbound was dropped
+  (nothing sends them post-split). Handler logs receipt only — tx
+  submission still TODO (settlement/finalization unlock first, then
+  fallback, rollouts, refunds; evac commitments are NOT submitted —
+  dormant dispute records).
+- The legacy per-block effect-submission machinery
+  (`BlockConfirmed.{Major,Final}` + `Minimal`,
+  `handleMajorBlockL1Effects` / `handleFinalBlockL1Effects` marked
+  `@unused`, `runEffects`, `effectInputs`/`happyPathEffects`/
+  `fallbackEffects`) is retained internally as the engine M9-full will
+  rewire to consume `StackEffects.Regular`.
 
 ### Slow-side L1LedgerM (M10 — `2b0c8496`)
 - `StackComposer` holds its own `L1LedgerM.State`, seeded from
@@ -284,10 +293,12 @@ M5.
    fan out (Stack.HardConfirmed → Block.HardConfirmed events) vs.
    derived view in subscriber.
 
-2. **Partition indexing in HardAck payload maps.** Current wallet
-   methods use list-indices as partition_idx placeholders (e.g.
-   `((0, i), sig)` for rollouts/refunds). Single-partition stacks
-   work; multi-partition needs the M6 verifier to use matching
+2. **Partition indexing in HardAck payload maps.** Keys are now the
+   typed opaque wrappers `PartitionIndex` / `WithinPartitionIndex`
+   (`multisig/ledger/effects/PartitionIndex.scala`), not bare `Int`.
+   `StackComposer.buildHandoff` still assigns them positionally
+   (`PartitionIndex.zero` + list index) — fine for single-partition
+   stacks; multi-partition needs the M6 verifier to use matching
    indices when checking remote sigs. Document/test once M6 is real.
 
 3. **StackHandoff vs. emitting acks separately.** Currently
@@ -323,9 +334,12 @@ In priority order:
    integration test to subscribe to Stack.HardConfirmed and assert
    tx-known on L1.
 
-4. **StandaloneEvacCommit on-chain script** — coordinated on-chain
-   change. Separate effort from the off-chain code path. Mark it as
-   a follow-up issue.
+4. **Storage layer for evac-commitment header signatures** — the slow
+   side derives the `StandaloneEvacuationCommitment` records + their
+   hard-ack header signatures, but nothing persists them or presents
+   them to the L1 dispute scripts. (No on-chain script change is
+   needed — an evac commitment is a dormant dispute-only record, not a
+   tx.) Future / separate effort.
 
 5. **Initial stack (stack 0) boot path** — once M6 is real, wire the
    `Bootstrap` parameter so the initial stack flows through the same
@@ -369,10 +383,13 @@ f5f32b30 Refactor: disambiguate HardAck.toContext log keys
 843c9688 Refactor: drop StackBrief.firstMajorBlockNum (redundant)
 f89733d4 Docs: StackEffects.Regular — precise rollouts/refunds sourcing
 b64e3762 Refactor: standalone evac commitment is a dormant record, not a tx
+7d72fed2 Docs: refresh plan status table + handoff note for post-review state
+1b58cfa5 Refactor: typed PartitionIndex / WithinPartitionIndex for HardAck maps
+064440c3 Refactor: narrow CardanoLiaison.Request to the post-split inbound
 ```
 
-Pushed to `origin/feature/slow-consensus` through `843c9688`; the
-review-pass tail (`f89733d4`, `b64e3762`) is committed locally, not yet
+Pushed to `origin/feature/slow-consensus` through `1b58cfa5`; the tail
+(`064440c3` + this handoff/doc refresh) is committed locally, not yet
 pushed.
 
 ---
