@@ -28,9 +28,13 @@ object StackEffects:
       * @param fallbacks
       *   one per major-partition.
       * @param rollouts
-      *   per-partition rollout txs.
+      *   rollout txs emitted by each major/final partition's settlement/finalization tx-seq — one
+      *   batch per Major (from `mkSettlementTxSeq`) and per Final (from `finalizeLedger`).
+      *   Minor-only / TrailingMinors partitions produce no rollouts.
       * @param refunds
-      *   per-partition refund txs.
+      *   post-dated refund txs, one per Minor block that decided a deposit refund (carried in
+      *   `BlockResult.postDatedRefundTxs`). Major/Final blocks contribute none — those drain
+      *   refunds via settlement/finalization. Not a per-partition quantity.
       * @param evacCommits
       *   ≤ one per partition: the LAST evac commitment of each partition that ends without a major
       *   to absorb it. Earlier standalones in the same partition are dropped by the
