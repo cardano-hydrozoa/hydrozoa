@@ -10,7 +10,7 @@ import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.logging.{Logging, Tracer}
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber}
-import hydrozoa.multisig.ledger.block.{Block, BlockHeader, BlockNumber, BlockResult, BlockType}
+import hydrozoa.multisig.ledger.block.{Block, BlockHeader, BlockNumber, BlockResult}
 import hydrozoa.multisig.ledger.effects.{NecessaryEffectsPolicy, StackEffectsBuilder}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l1.L1LedgerM
@@ -217,24 +217,12 @@ final case class StackComposer(
             brief.lastBlockNum.convert == prefix.last.result.brief.blockNum.convert
     }
 
-    private def mkStackBrief(stackNum: StackNumber, prefix: List[ReadyBlock]): StackBrief = {
-        val first = prefix.head.result.brief
-        val last = prefix.last.result.brief
-        val firstMajor = prefix
-            .map(_.result.brief)
-            .find {
-                case _: BlockType.Major => true
-                case _: BlockType.Final => true
-                case _                  => false
-            }
-            .map(_.blockNum)
+    private def mkStackBrief(stackNum: StackNumber, prefix: List[ReadyBlock]): StackBrief =
         StackBrief(
           stackNum = stackNum,
-          firstBlockNum = first.blockNum,
-          lastBlockNum = last.blockNum,
-          firstMajorBlockNum = firstMajor
+          firstBlockNum = prefix.head.result.brief.blockNum,
+          lastBlockNum = prefix.last.result.brief.blockNum
         )
-    }
 
     /** Build a [[Stack.Unsigned]] from the prefix. Runs the necessary-effects partition algorithm
       * and the per-block effect derivation, threading the slow-side L1 ledger state through
