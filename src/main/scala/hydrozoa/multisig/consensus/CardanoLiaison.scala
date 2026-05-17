@@ -218,9 +218,16 @@ object CardanoLiaison:
 
     }
 
+    // Post fast/slow split, L1 effects are produced per *stack* by the slow cycle, so the
+    // only effect-bearing inbound is `Stack.HardConfirmed`. The legacy per-block
+    // `BlockConfirmed.{Major,Final}` types + their handlers + the effect-submission state
+    // machine (`handleMajorBlockL1Effects` / `handleFinalBlockL1Effects` / `runEffects` /
+    // `effectInputs`/`happyPathEffects`/`fallbackEffects`) are intentionally retained as
+    // internal building blocks for M9-full (which will rewire them to consume the stack's
+    // `StackEffects.Regular`), but they are NOT part of the actor's inbound contract any
+    // more — nothing sends them after the split.
     type Request =
-        PreStart.type | BlockConfirmed.Major | BlockConfirmed.Final | Timeout.type |
-            Stack.HardConfirmed
+        PreStart.type | Timeout.type | Stack.HardConfirmed
     type Handle = ActorRef[IO, Request]
 
     case object PreStart
@@ -269,26 +276,6 @@ trait CardanoLiaison(
         req match {
             case CardanoLiaison.PreStart =>
                 preStartLocal
-            case block: BlockConfirmed.Major =>
-                Tracer.scopedCtx(
-                  "cardanoLiaisonMode" -> "BlockConfirmed.Major",
-                  "blockNum" -> s"${block.blockNum: Int}"
-                ) {
-                    Tracer.info(
-                      s"received BlockConfirmed.Major for block ${block.blockVersion}"
-                    ) >>
-                        handleMajorBlockL1Effects(block) >> runEffects
-                }
-            case block: BlockConfirmed.Final =>
-                Tracer.scopedCtx(
-                  "cardanoLiaisonMode" -> "BlockConfirmed.Final",
-                  "blockNum" -> s"${block.blockNum: Int}"
-                ) {
-                    Tracer.info(
-                      s"received BlockConfirmed.Final for block ${block.blockVersion}"
-                    ) >>
-                        handleFinalBlockL1Effects(block) >> runEffects
-                }
             case CardanoLiaison.Timeout =>
                 Tracer.scopedCtx("cardanoLiaisonMode" -> "Timeout") {
                     Tracer.info("received Timeout, run effects...") >>
@@ -330,9 +317,13 @@ trait CardanoLiaison(
     // Inbox handlers
     // ===================================
 
-    /** Handle [[Block.HardConfirmed.Major]] request:
-      *   - saves the effects in the internal actor's state
+    /** Handle a per-block major effect bundle: saves the effects in the actor's state.
+      *
+      * Legacy pre-split entry point — no longer reachable from `receive` (effects are per-stack
+      * now). Retained as a building block for M9-full, which will call into the same state machine
+      * (`runEffects` etc.) with the stack's `StackEffects.Regular`.
       */
+    @scala.annotation.unused
     protected[consensus] def handleMajorBlockL1Effects(block: BlockConfirmed.Major): IO[Unit] =
         for {
             _ <- Tracer.info(s"entering handleMajorBlockL1Effects for block ${block.blockVersion}")
@@ -373,9 +364,12 @@ trait CardanoLiaison(
             _ <- Tracer.trace(s"state after update: ${newState.prettyDump}")
         } yield ()
 
-    /** Handle [[Block.HardConfirmed.Final]] request:
-      *   - saves the effects in the internal actor's state
+    /** Handle a per-block final effect bundle: saves the effects in the actor's state.
+      *
+      * Legacy pre-split entry point — no longer reachable from `receive` (effects are per-stack
+      * now). Retained as a building block for M9-full (see [[handleMajorBlockL1Effects]]).
       */
+    @scala.annotation.unused
     protected[consensus] def handleFinalBlockL1Effects(block: BlockConfirmed.Final): IO[Unit] =
         for {
             _ <- Tracer.info(s"entering handleFinalBlockL1Effects for block ${block.blockVersion}")
