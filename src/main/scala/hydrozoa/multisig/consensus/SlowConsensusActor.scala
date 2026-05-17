@@ -5,7 +5,7 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
-import hydrozoa.lib.logging.{Logging, Tracer}
+import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.StackComposer.PreviousStackHardConfirmation
 import hydrozoa.multisig.consensus.ack.HardAck
@@ -30,7 +30,6 @@ final case class SlowConsensusActor(
 ) extends Actor[IO, SlowConsensusActor.Request] {
     import SlowConsensusActor.*
 
-    private val logger = Logging.loggerIO(s"SlowConsensusActor.${config.ownHeadPeerNum}")
     given IOLocal[Tracer] = tracerLocal
 
     private val connections = Ref.unsafe[IO, Option[Connections]](None)
@@ -45,7 +44,7 @@ final case class SlowConsensusActor(
             for {
                 _ <- Tracer.routeLocal(s"SlowConsensusActor.${config.ownHeadPeerNum}")
                 _ <- initializeConnections
-                _ <- logger.info("SlowConsensusActor started (auto-confirm stub).")
+                _ <- Tracer.info("SlowConsensusActor started (auto-confirm stub).")
             } yield ()
         case h: SlowConsensusActor.StackHandoff =>
             handleStackHandoff(h)
@@ -62,7 +61,7 @@ final case class SlowConsensusActor(
       * confirmation).
       */
     private def handleStackHandoff(h: SlowConsensusActor.StackHandoff): IO[Unit] = for {
-        _ <- logger.info(
+        _ <- Tracer.info(
           s"Stub auto-confirming stack ${h.unsigned.brief.stackNum} (own acks: ${h.ownAcks.size})"
         )
         conn <- getConnections
