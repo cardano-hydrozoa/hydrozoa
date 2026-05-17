@@ -7,7 +7,7 @@ import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
-import hydrozoa.lib.logging.{Logging, Tracer}
+import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber}
 import hydrozoa.multisig.ledger.block.{Block, BlockHeader, BlockNumber, BlockResult}
@@ -46,7 +46,6 @@ final case class StackComposer(
 ) extends Actor[IO, StackComposer.Request] {
     import StackComposer.*
 
-    private val logger = Logging.loggerIO(s"StackComposer.${config.ownHeadPeerNum}")
     given IOLocal[Tracer] = tracerLocal
 
     private val connections = Ref.unsafe[IO, Option[Connections]](None)
@@ -95,7 +94,7 @@ final case class StackComposer(
             for {
                 _ <- Tracer.routeLocal(s"StackComposer.${config.ownHeadPeerNum}")
                 _ <- initializeConnections
-                _ <- logger.info("StackComposer started.")
+                _ <- Tracer.info("StackComposer started.")
             } yield ()
         case r: BlockResult =>
             handleBlockResult(r)
@@ -108,21 +107,21 @@ final case class StackComposer(
     }
 
     private def handleBlockResult(r: BlockResult): IO[Unit] = for {
-        _ <- logger.debug(s"BlockResult received for block ${r.brief.blockNum}")
+        _ <- Tracer.debug(s"BlockResult received for block ${r.brief.blockNum}")
         _ <- state.update(_.withBlockResult(r))
         _ <- state.update(_.tryPair(r.brief.blockNum))
         _ <- tryProgress
     } yield ()
 
     private def handleSoftConfirmed(b: Block.SoftConfirmed): IO[Unit] = for {
-        _ <- logger.debug(s"Block.SoftConfirmed received for block ${b.blockNum}")
+        _ <- Tracer.debug(s"Block.SoftConfirmed received for block ${b.blockNum}")
         _ <- state.update(_.withSoftConfirmed(b))
         _ <- state.update(_.tryPair(b.blockNum))
         _ <- tryProgress
     } yield ()
 
     private def handleIncomingStackBrief(brief: StackBrief): IO[Unit] = for {
-        _ <- logger.debug(s"StackBrief received for stack ${brief.stackNum}")
+        _ <- Tracer.debug(s"StackBrief received for stack ${brief.stackNum}")
         _ <- state.update(_.withInboundLeaderBrief(brief))
         _ <- tryProgress
     } yield ()
@@ -130,7 +129,7 @@ final case class StackComposer(
     private def handlePreviousStackHardConfirmation(
         p: PreviousStackHardConfirmation
     ): IO[Unit] = for {
-        _ <- logger.debug(s"PreviousStackHardConfirmation received for stack ${p.stackNum}")
+        _ <- Tracer.debug(s"PreviousStackHardConfirmation received for stack ${p.stackNum}")
         _ <- state.update(_.withPreviousStackHardConfirmed(p.stackNum))
         _ <- tryProgress
     } yield ()
@@ -156,7 +155,7 @@ final case class StackComposer(
             case prefix =>
                 val brief = mkStackBrief(nextStackNum, prefix)
                 for {
-                    _ <- logger.info(
+                    _ <- Tracer.info(
                       s"Leader closing stack $nextStackNum with blocks " +
                           s"${prefix.head.result.brief.blockNum}..${prefix.last.result.brief.blockNum}"
                     )
@@ -186,7 +185,7 @@ final case class StackComposer(
                 val expectedPrefix = s.longestReadyPrefix
                 if briefMatches(brief, expectedPrefix) then {
                     for {
-                        _ <- logger.info(
+                        _ <- Tracer.info(
                           s"Follower accepting stack $nextStackNum brief from leader; " +
                               s"blocks ${brief.firstBlockNum}..${brief.lastBlockNum}"
                         )
@@ -200,7 +199,7 @@ final case class StackComposer(
                     // Mismatch: leader's brief disagrees with our local longest prefix.
                     // TODO(M5): per plan, divergence triggers fallback into the rule-based
                     // regime. For now, just log and stall (composer stays in current state).
-                    logger.warn(
+                    Tracer.warn(
                       s"Follower stack $nextStackNum brief mismatch: leader says " +
                           s"[${brief.firstBlockNum}..${brief.lastBlockNum}], local prefix " +
                           s"would be [${expectedPrefix.headOption
