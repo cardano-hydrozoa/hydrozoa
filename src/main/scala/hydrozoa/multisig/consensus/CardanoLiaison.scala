@@ -423,6 +423,15 @@ trait CardanoLiaison(
       *
       * Minor-only stacks (no settlement, no finalization) carry no backbone — nothing reaches L1;
       * `targetState` is left unchanged.
+      *
+      * NOTE (M6 gap): the effect bodies learned here are the slow-consensus-ratified *bodies*, NOT
+      * yet augmented with the aggregated multisig witnesses from the saturated hard-acks —
+      * `Stack.HardConfirmed` does not even carry the acks yet (`Stack.Round1Confirmed.round1Acks` /
+      * `HardConfirmed.round2Acks` are unimplemented; SlowConsensusActor is the M6 auto-confirm
+      * stub). Submitting unwitnessed bodies cannot succeed on L1; the
+      * witness-aggregation/attachment step is part of M6 and is identical for the Initial path (see
+      * [[handleInitialStackL1Effects]]). This is unrelated to Bootstrap wiring (which is the
+      * separate matter of how stack 0 is *composed/produced*).
       */
     private def handleStackL1Effects(eff: StackEffects.Regular): IO[Unit] = {
         val backbones: List[SettlementTx | FinalizationTx] =
@@ -484,10 +493,13 @@ trait CardanoLiaison(
       * init tx (the round-2 Initial unlock) + the locally-derived fallback; this overrides the
       * seeded entries with them so `runEffects` submits the correct init tx.
       *
-      * NOTE: like the [[StackEffects.Regular]] path, the per-effect bodies here are not yet
-      * augmented with the multisig vkey witnesses aggregated in the round-2 Initial hard-acks —
-      * that witness-attachment step is the remaining Bootstrap-wiring concern (same shape as the
-      * Regular per-effect sig-attachment gap), tracked separately.
+      * NOTE (M6 gap): same as the [[handleStackL1Effects]] (Regular) path — the init tx / fallback
+      * bodies learned here are NOT yet augmented with the aggregated multisig witnesses from the
+      * saturated hard-acks (`Stack.HardConfirmed` doesn't carry the acks yet; SlowConsensusActor is
+      * the M6 auto-confirm stub). The witness-aggregation/attachment step is part of M6, identical
+      * for Regular and Initial. It is NOT a Bootstrap-wiring concern: Bootstrap wiring is the
+      * orthogonal, Initial-only matter of how stack 0 gets *composed/produced* (StackComposer's
+      * `Bootstrap` param), not how its effects get witnessed.
       */
     private def handleInitialStackL1Effects(eff: StackEffects.Initial): IO[Unit] = for {
         _ <- Tracer.info(
