@@ -77,49 +77,57 @@ object StackEffectsSigningInputs {
         unsigned.effects match {
             case e: StackEffects.Initial =>
                 Initial(fallback = e.fallbackTx.tx, initTx = e.initializationTx)
-            case effects: StackEffects.Regular =>
-                regular(unsigned, effects)
+            case _: StackEffects.Regular =>
+                mkRegular(unsigned)
         }
 
-    private def regular(
-        unsigned: Stack.Unsigned,
-        effects: StackEffects.Regular
-    ): Regular = {
-        // Evac-commit hard-ack binds the block's KZG commitment (that IS the standalone evac
-        // record). KZG is deliberately kept in the fast-consensus brief for now (TRANSITIONAL
-        // — see the note on BlockHeader.Fields.HasKzgCommitment), so `signingBytes` already
-        // carries it and these bytes happen to coincide with the soft-ack domain today; once
-        // KZG moves slow-side the slow side will need its own KZG-bearing serialization here.
-        val headerBytesByBlock: Map[BlockNumber, BlockHeader.Minor.Onchain.Serialized] =
-            unsigned.results.toList.map { r =>
-                r.brief.blockNum -> r.brief.header.signingBytes
-            }.toMap
-        def evacHeaderBytes(
-            ec: StandaloneEvacuationCommitment
-        ): (BlockNumber, BlockHeader.Minor.Onchain.Serialized) =
-            ec.committedBlockNum -> headerBytesByBlock(ec.committedBlockNum)
+    /** `effects` is `unsigned.effects` narrowed to [[StackEffects.Regular]] (the `case _ =>` arm is
+      * unreachable — `from` only calls this for a Regular stack).
+      */
+    private def mkRegular(unsigned: Stack.Unsigned): Regular =
+        unsigned.effects match {
+            case effects: StackEffects.Regular =>
+                // Evac-commit hard-ack binds the block's KZG commitment (that IS the standalone
+                // evac record). KZG is deliberately kept in the fast-consensus brief for now
+                // (TRANSITIONAL — see the note on BlockHeader.Fields.HasKzgCommitment), so
+                // `signingBytes` already carries it and these bytes happen to coincide with the
+                // soft-ack domain today; once KZG moves slow-side the slow side will need its
+                // own KZG-bearing serialization here.
+                val headerBytesByBlock: Map[BlockNumber, BlockHeader.Minor.Onchain.Serialized] =
+                    unsigned.results.toList.map { r =>
+                        r.brief.blockNum -> r.brief.header.signingBytes
+                    }.toMap
+                def evacHeaderBytes(
+                    ec: StandaloneEvacuationCommitment
+                ): (BlockNumber, BlockHeader.Minor.Onchain.Serialized) =
+                    ec.committedBlockNum -> headerBytesByBlock(ec.committedBlockNum)
 
-        Regular(
-          settlements = effects.settlements.zipWithIndex.map { case (tx, i) =>
-              PartitionIndex(i) -> tx.tx
-          }.toMap,
-          fallbacks = effects.fallbacks.zipWithIndex.map { case (tx, i) =>
-              PartitionIndex(i) -> tx.tx
-          }.toMap,
-          rollouts = effects.rollouts.zipWithIndex.map { case (tx, i) =>
-              (PartitionIndex.zero, WithinPartitionIndex(i)) -> tx.tx
-          }.toMap,
-          refunds = effects.refunds.zipWithIndex.map { case (tx, i) =>
-              (PartitionIndex.zero, WithinPartitionIndex(i)) -> tx.tx
-          }.toMap,
-          evacCommit = effects.evacCommit.map(evacHeaderBytes),
-          finalization = effects.finalization.map(_.tx),
-          unlock =
-              if effects.settlements.nonEmpty then Some(RegularUnlock.FirstSettlement)
-              else if effects.finalization.isDefined then Some(RegularUnlock.Finalization)
-              else None
-        )
-    }
+                Regular(
+                  settlements = effects.settlements.zipWithIndex.map { case (tx, i) =>
+                      PartitionIndex(i) -> tx.tx
+                  }.toMap,
+                  fallbacks = effects.fallbacks.zipWithIndex.map { case (tx, i) =>
+                      PartitionIndex(i) -> tx.tx
+                  }.toMap,
+                  rollouts = effects.rollouts.zipWithIndex.map { case (tx, i) =>
+                      (PartitionIndex.zero, WithinPartitionIndex(i)) -> tx.tx
+                  }.toMap,
+                  refunds = effects.refunds.zipWithIndex.map { case (tx, i) =>
+                      (PartitionIndex.zero, WithinPartitionIndex(i)) -> tx.tx
+                  }.toMap,
+                  evacCommit = effects.evacCommit.map(evacHeaderBytes),
+                  finalization = effects.finalization.map(_.tx),
+                  unlock =
+                      if effects.settlements.nonEmpty then Some(RegularUnlock.FirstSettlement)
+                      else if effects.finalization.isDefined then Some(RegularUnlock.Finalization)
+                      else None
+                )
+
+            case _ =>
+                throw new IllegalStateException(
+                  "StackEffectsSigningInputs.mkRegular: not a Regular stack"
+                )
+        }
 
     /** Deterministic per-peer predicate, shared by the wallet (which decides whether to attach its
       * own individual `VKeyWitness`) and [[hydrozoa.multisig.consensus.SlowConsensusActor]] (which
