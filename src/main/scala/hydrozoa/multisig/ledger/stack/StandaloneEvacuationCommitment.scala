@@ -1,13 +1,14 @@
 package hydrozoa.multisig.ledger.stack
 
-import hydrozoa.multisig.ledger.block.{BlockNumber, BlockVersion}
+import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 
 /** A standalone evacuation commitment — the per-spec record a **minor** block carries (see
   * `replicated-state-machine/effects#standalone-evacuation-commitment`).
   *
   * Lives in the `stack` package (a slow-consensus stack-effect datum held by
-  * [[StackEffects.Regular]]), deliberately NOT in `l1/tx`: it is not a transaction.
+  * [[StackEffects.Unsigned.Regular]] / [[StackEffects.HardConfirmed.Regular]]), deliberately NOT in
+  * `l1/tx`: it is not a transaction.
   *
   * It is a **contingent / dormant L1 effect**: a fixed-size record that "lays dormant" and is
   * presented to Hydrozoa's L1 dispute-resolution scripts in the rules-based regime — only after a
@@ -26,3 +27,20 @@ final case class StandaloneEvacuationCommitment(
     blockVersion: BlockVersion.Full,
     kzgCommitment: KzgCommitment
 )
+
+object StandaloneEvacuationCommitment {
+
+    /** The hard-confirmed form: the dormant record plus every head peer's signature over the
+      * committed minor block's header (the consensus artifact that makes the commitment usable —
+      * presented in the rule-based regime's vote tx after a fallback). Mirrors
+      * [[hydrozoa.multisig.ledger.block.BlockEffects.HardConfirmed.Minor]] `headerMultiSigned`.
+      *
+      * @param headerMultiSigned
+      *   one header signature per head peer (deterministic peer order), over `committedBlockNum`'s
+      *   header — the same bytes every peer hard-acked.
+      */
+    final case class MultiSigned(
+        commitment: StandaloneEvacuationCommitment,
+        headerMultiSigned: List[BlockHeader.Minor.HeaderSignature]
+    )
+}

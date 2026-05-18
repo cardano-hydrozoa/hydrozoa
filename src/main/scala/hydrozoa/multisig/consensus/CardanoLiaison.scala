@@ -220,7 +220,7 @@ object CardanoLiaison:
 
     // Post fast/slow split, L1 effects are produced per *stack* by the slow cycle, so the
     // only effect-bearing inbound is `Stack.HardConfirmed`. M9-full (this commit) wires it:
-    // `handleStackL1Effects` translates the stack's `StackEffects.Regular` into the same
+    // `handleStackL1Effects` translates the stack's `StackEffects.HardConfirmed.Regular` into the same
     // effect-submission state machine the pre-split per-block path used
     // (`mkHappyPathEffectInputsAndEffects` / `runEffects` /
     // `effectInputs`/`happyPathEffects`/`fallbackEffects`). The legacy per-block
@@ -297,12 +297,12 @@ trait CardanoLiaison(
                       "received Stack.HardConfirmed for stack " +
                           s"${stack.round1.unsigned.brief.stackNum}"
                     ) >> (effects match {
-                        case reg: StackEffects.Regular =>
+                        case reg: StackEffects.HardConfirmed.Regular =>
                             // Learn the stack's effects, then run the submission state
                             // machine immediately (mirrors the pre-split
                             // `handle*BlockL1Effects >> runEffects`).
                             handleStackL1Effects(reg) >> runEffects
-                        case ini: StackEffects.Initial =>
+                        case ini: StackEffects.HardConfirmed.Initial =>
                             // Stack 0. We MUST submit the initialization tx from the
                             // hard-confirmed initial stack — NOT `config.initializationTx`,
                             // which is the UNSIGNED body from head config. The config copy
@@ -334,7 +334,7 @@ trait CardanoLiaison(
       *
       * Legacy pre-split entry point — no longer reachable from `receive` (effects are per-stack
       * now). Retained as a building block for M9-full, which will call into the same state machine
-      * (`runEffects` etc.) with the stack's `StackEffects.Regular`.
+      * (`runEffects` etc.) with the stack's `StackEffects.HardConfirmed.Regular`.
       */
     @scala.annotation.unused
     protected[consensus] def handleMajorBlockL1Effects(block: BlockConfirmed.Major): IO[Unit] =
@@ -407,11 +407,11 @@ trait CardanoLiaison(
 
     /** M9-full: learn a hard-confirmed stack's L1 effects into the submission state machine.
       *
-      * Translates [[StackEffects.Regular]] into the same `(effectInputs, happyPathEffects,
-      * fallbackEffects, targetState)` shape the pre-split per-block handlers produced, so the
-      * existing `runEffects` / `mkDirectActions` machinery submits them in dependency order
-      * (backbone first via `EffectId (major, 0)`, then its rollouts `(major, 1..n)`; competing
-      * fallback resolved by `fallbackEffects.get(major.decrement)`).
+      * Translates [[StackEffects.HardConfirmed.Regular]] into the same `(effectInputs,
+      * happyPathEffects, fallbackEffects, targetState)` shape the pre-split per-block handlers
+      * produced, so the existing `runEffects` / `mkDirectActions` machinery submits them in
+      * dependency order (backbone first via `EffectId (major, 0)`, then its rollouts
+      * `(major, 1..n)`; competing fallback resolved by `fallbackEffects.get(major.decrement)`).
       *
       * Backbones (settlements, then the optional finalization) are walked in stack/major order;
       * each contributes one `EffectId` family keyed by its `majorVersionProduced`. Fallbacks are
@@ -434,7 +434,7 @@ trait CardanoLiaison(
       * [[handleInitialStackL1Effects]]). So they are submittable on L1 as is — no
       * witness-attachment step remains here.
       */
-    private def handleStackL1Effects(eff: StackEffects.Regular): IO[Unit] = {
+    private def handleStackL1Effects(eff: StackEffects.HardConfirmed.Regular): IO[Unit] = {
         val backbones: List[SettlementTx | FinalizationTx] =
             eff.settlements ++ eff.finalization.toList
         for {
@@ -490,9 +490,9 @@ trait CardanoLiaison(
       * `State.initialState` seeds `EffectId.initializationEffectId` from `config.initializationTx`
       * and `fallbackEffects(Major.zero)` from `config.initialFallbackTx`. That config init tx is
       * the **unsigned** body — usable only as a pre-confirmation placeholder, never submittable.
-      * Once stack 0 is hard-confirmed, [[StackEffects.Initial]] carries the slow-consensus-ratified
-      * init tx (the round-2 Initial unlock) + the locally-derived fallback; this overrides the
-      * seeded entries with them so `runEffects` submits the correct init tx.
+      * Once stack 0 is hard-confirmed, [[StackEffects.HardConfirmed.Initial]] carries the
+      * slow-consensus-ratified init tx (the round-2 Initial unlock) + the locally-derived fallback;
+      * this overrides the seeded entries with them so `runEffects` submits the correct init tx.
       *
       * As on the [[handleStackL1Effects]] (Regular) path, `eff`'s init tx + fallback bodies are
       * already MULTISIGNED — SlowConsensusActor aggregated the saturated round-1/round-2 Initial
@@ -501,29 +501,31 @@ trait CardanoLiaison(
       * *composed/produced* in the first place (StackComposer's `Bootstrap` param) — which is
       * orthogonal to (and unaffected by) this witnessing.
       */
-    private def handleInitialStackL1Effects(eff: StackEffects.Initial): IO[Unit] = for {
-        _ <- Tracer.info(
-          "entering handleInitialStackL1Effects: overriding the config-seeded UNSIGNED " +
-              "init tx + fallback with the hard-confirmed initial stack's"
-        )
-        newState <- stateRef.updateAndGet { s =>
-            s.copy(
-              targetState = TargetState.Active(eff.initializationTx.treasuryProduced.utxoId),
-              happyPathEffects = s.happyPathEffects
-                  .updated(EffectId.initializationEffectId, eff.initializationTx),
-              fallbackEffects = s.fallbackEffects.updated(BlockVersion.Major.zero, eff.fallbackTx)
+    private def handleInitialStackL1Effects(eff: StackEffects.HardConfirmed.Initial): IO[Unit] =
+        for {
+            _ <- Tracer.info(
+              "entering handleInitialStackL1Effects: overriding the config-seeded UNSIGNED " +
+                  "init tx + fallback with the hard-confirmed initial stack's"
             )
-        }
-        _ <- Tracer.trace(s"state after initial-stack effects: ${newState.prettyDump}")
-    } yield ()
+            newState <- stateRef.updateAndGet { s =>
+                s.copy(
+                  targetState = TargetState.Active(eff.initializationTx.treasuryProduced.utxoId),
+                  happyPathEffects = s.happyPathEffects
+                      .updated(EffectId.initializationEffectId, eff.initializationTx),
+                  fallbackEffects =
+                      s.fallbackEffects.updated(BlockVersion.Major.zero, eff.fallbackTx)
+                )
+            }
+            _ <- Tracer.trace(s"state after initial-stack effects: ${newState.prettyDump}")
+        } yield ()
 
     /** The rollout txs belonging to one backbone (settlement / finalization), in chain order.
       *
-      * `StackEffects.Regular.rollouts` is flat across the whole stack; a backbone owns the rollout
-      * chain that starts at the rollout utxo it produces (`mbRolloutProduced`), each subsequent
-      * rollout spending the previous one's produced rollout utxo until a [[RolloutTx.Last]].
-      * Linking by `utxo.input` is independent of the flat list's order and mirrors how
-      * `mkDirectAction` itself walks the chain on L1.
+      * `StackEffects.HardConfirmed.Regular.rollouts` is flat across the whole stack; a backbone
+      * owns the rollout chain that starts at the rollout utxo it produces (`mbRolloutProduced`),
+      * each subsequent rollout spending the previous one's produced rollout utxo until a
+      * [[RolloutTx.Last]]. Linking by `utxo.input` is independent of the flat list's order and
+      * mirrors how `mkDirectAction` itself walks the chain on L1.
       */
     private def rolloutsFor(
         backbone: SettlementTx | FinalizationTx,

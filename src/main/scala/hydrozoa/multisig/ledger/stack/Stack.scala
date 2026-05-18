@@ -23,7 +23,7 @@ object Stack:
         brief: StackBrief,
         results: NonEmptyList[BlockResult],
         softConfirmations: NonEmptyList[Block.SoftConfirmed],
-        effects: StackEffects
+        effects: StackEffects.Unsigned
     ) extends Stack
 
     final case class Round1Confirmed(
@@ -39,5 +39,5 @@ object Stack:
       */
     final case class HardConfirmed(
         round1: Round1Confirmed,
-        effects: StackEffects
+        effects: StackEffects.HardConfirmed
     ) extends Stack

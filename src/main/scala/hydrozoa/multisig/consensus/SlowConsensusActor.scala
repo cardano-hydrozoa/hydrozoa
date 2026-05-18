@@ -15,7 +15,7 @@ import hydrozoa.multisig.consensus.ack.{HardAck, HardAckRoundPlan, StackEffectsS
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber}
 import hydrozoa.multisig.ledger.l1.tx.{RefundTx, Tx, TxSignature}
-import hydrozoa.multisig.ledger.stack.{Stack, StackEffects, StackNumber}
+import hydrozoa.multisig.ledger.stack.{Stack, StackEffects, StackNumber, StandaloneEvacuationCommitment}
 import scala.util.control.NonFatal
 import scalus.cardano.ledger.{Transaction, TransactionHash, VKeyWitness}
 import scalus.crypto.ed25519.VerificationKey
@@ -312,7 +312,8 @@ final case class SlowConsensusActor(
             case c: Cell.WaitingRound2 => witnessMap2Phase(c, vkeys)
             case c: Cell.WaitingSole   => witnessMapSole(c, vkeys)
         }
-        signed <- attachWitnesses(cell.unsigned.effects, wmap)
+        evacSigs = evacSignatures(cell)
+        signed <- attachWitnesses(cell.unsigned.effects, wmap, evacSigs)
         _ <- Tracer.info(
           s"stack $stackNum HARD-CONFIRMED — aggregated witnesses onto ${wmap.size} " +
               "effect tx(s); emitting downstream"
@@ -389,19 +390,50 @@ final case class SlowConsensusActor(
     ): WitnessMap =
         allPeers.foldLeft(Map.empty: WitnessMap) { (m, peer) =>
             c.sole.get(peer).fold(m) { p =>
-                // evacCommit is a block-header sig, not a tx — nothing to attach for it.
+                // evacCommit is a block-header sig, not a tx — it is aggregated separately
+                // by `evacSignatures`, never into the tx WitnessMap.
                 pairTxMap(m, vkeys(peer), c.plan.sole.refunds, p.refunds)
             }
         }
 
-    /** Attach the aggregated witnesses onto each effect tx body. A standalone evac commitment is
-      * not a tx (no witnesses); everything else is a [[Tx]] keyed by its `tx.id`.
+    /** Every peer's signature over the stack's standalone evac commitment's block header, in
+      * deterministic [[allPeers]] order. A standalone evac commitment is hard-acked with a header
+      * signature (not a tx-body signature), so these are aggregated separately from the tx
+      * [[WitnessMap]] and attached as [[StandaloneEvacuationCommitment.MultiSigned]].
+      *
+      * Empty when the stack has no standalone evac commitment (no TrailingMinors partition); a
+      * present commitment has one header signature per peer (verification already enforced presence
+      * + keyset before the round saturated).
+      */
+    private def evacSignatures(
+        cell: Cell.WaitingRound2 | Cell.WaitingSole
+    ): List[BlockHeader.Minor.HeaderSignature] =
+        allPeers.toList.flatMap { peer =>
+            cell match {
+                case c: Cell.WaitingRound2 =>
+                    c.round1
+                        .get(peer)
+                        .collect { case r: HardAck.Round1Payload.Regular =>
+                            r.evacCommit.map(_._2)
+                        }
+                        .flatten
+                case c: Cell.WaitingSole =>
+                    c.sole.get(peer).map(_.evacCommit._2)
+            }
+        }
+
+    /** Attach the aggregated signatures onto each effect. Tx bodies (settlement / fallback /
+      * rollout / refund / finalization) take their multisig [[VKeyWitness]]es from `wmap` keyed by
+      * `tx.id`; the standalone evac commitment is not a tx — it takes every peer's header signature
+      * (`evacSigs`) as a [[StandaloneEvacuationCommitment.MultiSigned]]. Produces the
+      * [[StackEffects.HardConfirmed]] held by [[Stack.HardConfirmed]].
       */
     private def attachWitnesses(
-        effects: StackEffects,
-        wmap: WitnessMap
-    ): IO[StackEffects] = effects match {
-        case r: StackEffects.Regular =>
+        effects: StackEffects.Unsigned,
+        wmap: WitnessMap,
+        evacSigs: List[BlockHeader.Minor.HeaderSignature]
+    ): IO[StackEffects.HardConfirmed] = effects match {
+        case r: StackEffects.Unsigned.Regular =>
             for {
                 ss <- r.settlements.traverse(signOne(_, wmap))
                 fb <- r.fallbacks.traverse(signOne(_, wmap))
@@ -410,18 +442,23 @@ final case class SlowConsensusActor(
                     signOne(pd, wmap).widen[RefundTx]
                 }
                 fi <- r.finalization.traverse(signOne(_, wmap))
-            } yield r.copy(
+            } yield StackEffects.HardConfirmed.Regular(
               settlements = ss,
               fallbacks = fb,
               rollouts = ro,
               refunds = rf,
+              evacCommit =
+                  r.evacCommit.map(StandaloneEvacuationCommitment.MultiSigned(_, evacSigs)),
               finalization = fi
             )
-        case i: StackEffects.Initial =>
+        case i: StackEffects.Unsigned.Initial =>
             for {
                 it <- signOne(i.initializationTx, wmap)
                 fb <- signOne(i.fallbackTx, wmap)
-            } yield i.copy(initializationTx = it, fallbackTx = fb)
+            } yield StackEffects.HardConfirmed.Initial(
+              initializationTx = it,
+              fallbackTx = fb
+            )
     }
 
     private def signOne[A <: Tx[A]](a: A, wmap: WitnessMap): IO[A] =

@@ -62,7 +62,7 @@ object StackEffectsBuilder {
       */
     def deriveRegular(
         partitions: List[StackPartition]
-    ): L1LedgerM[StackEffects.Regular] = {
+    ): L1LedgerM[StackEffects.Unsigned.Regular] = {
         val allBlocks: List[BlockResult] = partitions.flatMap(_.blocks.toList)
 
         // Refunds: per-Minor block, take its post-dated refund txs.
@@ -166,7 +166,7 @@ object StackEffectsBuilder {
                 f.rolloutTxs
             }.flatten
 
-            StackEffects.Regular(
+            StackEffects.Unsigned.Regular(
               settlements = settlements,
               fallbacks = fallbacks,
               rollouts = majorRollouts ++ finalRollouts,
@@ -184,6 +184,6 @@ object StackEffectsBuilder {
       * function should be callable without an L1LedgerM action since stack 0 happens before any
       * treasury rotation. Likely signature change once StackComposer's `Bootstrap` is in.
       */
-    def deriveInitial: StackEffects.Initial =
+    def deriveInitial: StackEffects.Unsigned.Initial =
         ??? // PR2: implement initialization-stack effect construction
 }

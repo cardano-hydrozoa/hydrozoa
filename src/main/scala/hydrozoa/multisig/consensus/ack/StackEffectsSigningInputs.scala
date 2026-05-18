@@ -74,18 +74,18 @@ object StackEffectsSigningInputs {
     /** Derive the flat signing inputs from a closed stack — total over [[StackEffects]]. */
     def from(unsigned: Stack.Unsigned): StackEffectsSigningInputs =
         unsigned.effects match {
-            case e: StackEffects.Initial =>
+            case e: StackEffects.Unsigned.Initial =>
                 Initial(fallback = e.fallbackTx.tx, initTx = e.initializationTx)
-            case _: StackEffects.Regular =>
+            case _: StackEffects.Unsigned.Regular =>
                 mkRegular(unsigned)
         }
 
-    /** `effects` is `unsigned.effects` narrowed to [[StackEffects.Regular]] (the `case _ =>` arm is
-      * unreachable — `from` only calls this for a Regular stack).
+    /** `effects` is `unsigned.effects` narrowed to [[StackEffects.Unsigned.Regular]] (the
+      * `case _ =>` arm is unreachable — `from` only calls this for a Regular stack).
       */
     private def mkRegular(unsigned: Stack.Unsigned): Regular =
         unsigned.effects match {
-            case effects: StackEffects.Regular =>
+            case effects: StackEffects.Unsigned.Regular =>
                 // Evac-commit hard-ack binds the block's KZG commitment (that IS the standalone
                 // evac record). KZG is deliberately kept in the fast-consensus brief for now
                 // (TRANSITIONAL — see the note on BlockHeader.Fields.HasKzgCommitment), so

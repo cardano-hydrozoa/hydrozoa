@@ -25,9 +25,9 @@ import scalus.cardano.ledger.{Transaction, VKeyWitness}
   *
   * No `finalizationRequested` flag (unlike [[SoftAck]]): by the time a stack reaches hard-ack, all
   * its blocks are already soft-confirmed, so whether the stack finalizes the head is derivable from
-  * its contents (`StackEffects.Regular.finalization.isDefined`, or a `Block.SoftConfirmed.Final` in
-  * the stack). The slow cycle ratifies effects; it does not decide block types — nothing tallies a
-  * per-peer finalization request here.
+  * its contents (`StackEffects.Unsigned.Regular.finalization.isDefined`, or a
+  * `Block.SoftConfirmed.Final` in the stack). The slow cycle ratifies effects; it does not decide
+  * block types — nothing tallies a per-peer finalization request here.
   */
 final case class HardAck(
     ackId: HardAckId,
