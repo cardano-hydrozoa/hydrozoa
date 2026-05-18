@@ -5,7 +5,7 @@ import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.dummySigningKey
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.cardano.wallet.*
-import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HardAckSigningPlan, SoftAck}
+import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, SoftAck, StackEffectsSigningInputs}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber.given
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeader}
 import hydrozoa.multisig.ledger.l1.tx.{Tx, TxSignature}
@@ -145,8 +145,8 @@ final class HeadPeerWallet(
       *     tx actually spends an input at this peer's own individual address. If it does not, the
       *     list MUST stay empty: Cardano L1 rejects a tx carrying a vkey witness it does not need.
       *     The predicate is the shared, deterministic
-      *     [[HardAckSigningPlan.spendsFromIndividualAddress]] (the verifier enforces the same iff
-      *     rule on remote peers).
+      *     [[StackEffectsSigningInputs.spendsFromIndividualAddress]] (the verifier enforces the
+      *     same iff rule on remote peers).
       */
     def mkHardAckRound2Initial(
         stackNum: StackNumber,
@@ -158,7 +158,8 @@ final class HeadPeerWallet(
       payload = HardAck.Round2Payload.Initial(
         initTxSig = mkTxSignature(in.initTx.tx),
         individualWitnesses =
-            if HardAckSigningPlan.spendsFromIndividualAddress(in.initTx, exportVerificationKey)
+            if StackEffectsSigningInputs
+                    .spendsFromIndividualAddress(in.initTx, exportVerificationKey)
             then List(mkVKeyWitness(in.initTx.tx))
             else Nil
       )

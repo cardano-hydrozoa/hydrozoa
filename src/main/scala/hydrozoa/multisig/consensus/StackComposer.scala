@@ -9,7 +9,7 @@ import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.MultisigRegimeManager
-import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckSigningPlan}
+import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckRoundPlan, StackEffectsSigningInputs}
 import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockResult}
 import hydrozoa.multisig.ledger.effects.{NecessaryEffectsPolicy, StackEffectsBuilder}
 import hydrozoa.multisig.ledger.joint.JointLedger
@@ -279,51 +279,53 @@ final case class StackComposer(
             val wallet = config.ownHeadWallet
             val stackNum = unsigned.brief.stackNum
 
-            // Per-effect signing material is derived by the shared, deterministic
-            // [[HardAckSigningPlan]] (same code path SlowConsensusActor uses to verify remote
-            // peers' sigs). The composer only allocates monotonic HardAckNumbers and maps the
-            // plan through its wallet — it does not key effects itself.
-            val (acks, newCounter) = HardAckSigningPlan.from(unsigned) match {
-                case HardAckSigningPlan.TwoPhase(r1, r2) =>
-                    val n1 = s.ownHardAckNum
-                    val n2 = n1.increment
-                    val round1 = wallet.mkHardAckRound1Regular(
-                      stackNum = stackNum,
-                      hardAckNum = n1,
-                      in = r1
-                    )
-                    val round2 = wallet.mkHardAckRound2Regular(
-                      stackNum = stackNum,
-                      hardAckNum = n2,
-                      in = r2
-                    )
-                    (List(round1, round2), n2.increment)
-                case HardAckSigningPlan.Initial(r1, r2) =>
-                    // Stack 0: structurally 2-phase, exogenous unlock. Same counter
-                    // discipline as TwoPhase; the Initial wallet methods sign the
-                    // fallback (round 1) and the init tx body + carried witnesses (round 2).
-                    val n1 = s.ownHardAckNum
-                    val n2 = n1.increment
-                    val round1 = wallet.mkHardAckRound1Initial(
-                      stackNum = stackNum,
-                      hardAckNum = n1,
-                      in = r1
-                    )
-                    val round2 = wallet.mkHardAckRound2Initial(
-                      stackNum = stackNum,
-                      hardAckNum = n2,
-                      in = r2
-                    )
-                    (List(round1, round2), n2.increment)
-                case HardAckSigningPlan.Sole(sole) =>
-                    val n = s.ownHardAckNum
-                    val soleAck = wallet.mkHardAckSole(
-                      stackNum = stackNum,
-                      hardAckNum = n,
-                      in = sole
-                    )
-                    (List(soleAck), n.increment)
-            }
+            // Per-effect signing material is the shared, deterministic flat
+            // [[StackEffectsSigningInputs]]; [[HardAckRoundPlan]] frames it into rounds (same
+            // code path SlowConsensusActor uses to verify remote peers' sigs). The composer
+            // only allocates monotonic HardAckNumbers and maps the framed inputs through its
+            // wallet — it does not key effects itself.
+            val (acks, newCounter) =
+                HardAckRoundPlan.from(StackEffectsSigningInputs.from(unsigned)) match {
+                    case HardAckRoundPlan.TwoPhase(r1, r2) =>
+                        val n1 = s.ownHardAckNum
+                        val n2 = n1.increment
+                        val round1 = wallet.mkHardAckRound1Regular(
+                          stackNum = stackNum,
+                          hardAckNum = n1,
+                          in = r1
+                        )
+                        val round2 = wallet.mkHardAckRound2Regular(
+                          stackNum = stackNum,
+                          hardAckNum = n2,
+                          in = r2
+                        )
+                        (List(round1, round2), n2.increment)
+                    case HardAckRoundPlan.Initial(r1, r2) =>
+                        // Stack 0: structurally 2-phase, exogenous unlock. Same counter
+                        // discipline as TwoPhase; the Initial wallet methods sign the
+                        // fallback (round 1) and the init tx body + carried witnesses (round 2).
+                        val n1 = s.ownHardAckNum
+                        val n2 = n1.increment
+                        val round1 = wallet.mkHardAckRound1Initial(
+                          stackNum = stackNum,
+                          hardAckNum = n1,
+                          in = r1
+                        )
+                        val round2 = wallet.mkHardAckRound2Initial(
+                          stackNum = stackNum,
+                          hardAckNum = n2,
+                          in = r2
+                        )
+                        (List(round1, round2), n2.increment)
+                    case HardAckRoundPlan.Sole(sole) =>
+                        val n = s.ownHardAckNum
+                        val soleAck = wallet.mkHardAckSole(
+                          stackNum = stackNum,
+                          hardAckNum = n,
+                          in = sole
+                        )
+                        (List(soleAck), n.increment)
+                }
 
             val handoff = SlowConsensusActor.StackHandoff(unsigned, acks)
             (s.copy(ownHardAckNum = newCounter), handoff)

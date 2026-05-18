@@ -10,7 +10,7 @@ import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.StackComposer.PreviousStackHardConfirmation
-import hydrozoa.multisig.consensus.ack.{HardAck, HardAckSigningPlan}
+import hydrozoa.multisig.consensus.ack.{HardAck, HardAckRoundPlan, StackEffectsSigningInputs}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
@@ -23,9 +23,10 @@ import scalus.uplc.builtin.platform
 /** Slow-consensus actor (M6).
   *
   * Aggregates per-effect hard-acks from all head peers for each closed stack, verifies every
-  * signature against the locally-derived effect bodies (the same [[HardAckSigningPlan]] the
-  * StackComposer signed against — determinism makes the sigs comparable), and on saturation emits
-  * `Stack.HardConfirmed` to CardanoLiaison + `PreviousStackHardConfirmation` to StackComposer.
+  * signature against the locally-derived effect bodies (the same flat [[StackEffectsSigningInputs]]
+  * the StackComposer signed against, framed into rounds by [[HardAckRoundPlan]] — determinism makes
+  * the sigs comparable), and on saturation emits `Stack.HardConfirmed` to CardanoLiaison +
+  * `PreviousStackHardConfirmation` to StackComposer.
   *
   * It owns no wallet: StackComposer signs all of this peer's hard-acks upfront and bundles them
   * into a [[SlowConsensusActor.StackHandoff]]. This actor manages only the outbound *schedule* of
@@ -97,8 +98,8 @@ final case class SlowConsensusActor(
         Tracer.scopedCtx("stackNum" -> h.unsigned.brief.stackNum.toString) {
             val stackNum = h.unsigned.brief.stackNum
             val ownPeer = config.ownHeadPeerNum
-            HardAckSigningPlan.from(h.unsigned) match {
-                case plan: HardAckSigningPlan.TwoPhase =>
+            HardAckRoundPlan.from(StackEffectsSigningInputs.from(h.unsigned)) match {
+                case plan: HardAckRoundPlan.TwoPhase =>
                     for {
                         ownR1 <- h.ownAcks
                             .collectFirst {
@@ -113,7 +114,7 @@ final case class SlowConsensusActor(
                             .liftTo[IO](HandoffError.MissingOwnAck("own round-2 (Regular)"))
                         _ <- start2Phase(stackNum, ownPeer, h.unsigned, plan, ownR1, ownR2)
                     } yield ()
-                case plan: HardAckSigningPlan.Initial =>
+                case plan: HardAckRoundPlan.Initial =>
                     for {
                         ownR1 <- h.ownAcks
                             .collectFirst {
@@ -128,7 +129,7 @@ final case class SlowConsensusActor(
                             .liftTo[IO](HandoffError.MissingOwnAck("own round-2 (Initial)"))
                         _ <- start2Phase(stackNum, ownPeer, h.unsigned, plan, ownR1, ownR2)
                     } yield ()
-                case plan: HardAckSigningPlan.Sole =>
+                case plan: HardAckRoundPlan.Sole =>
                     for {
                         ownSole <- h.ownAcks
                             .collectFirst { case a @ HardAck(_, _, p: HardAck.SolePayload) =>
@@ -369,9 +370,9 @@ final case class SlowConsensusActor(
         peer: HeadPeerNumber,
         p: HardAck.Payload.Round1
     ): IO[Unit] = (plan, p) match {
-        case (tp: HardAckSigningPlan.TwoPhase, r: HardAck.Round1Payload.Regular) =>
+        case (tp: HardAckRoundPlan.TwoPhase, r: HardAck.Round1Payload.Regular) =>
             verifyRound1(tp, peer, r)
-        case (ip: HardAckSigningPlan.Initial, r: HardAck.Round1Payload.Initial) =>
+        case (ip: HardAckRoundPlan.Initial, r: HardAck.Round1Payload.Initial) =>
             verifyRound1Initial(ip, peer, r)
         case _ =>
             IO.raiseError(CellError.PlanPayloadMismatch("round-1", p.roundLabel))
@@ -382,9 +383,9 @@ final case class SlowConsensusActor(
         peer: HeadPeerNumber,
         p: HardAck.Payload.Round2
     ): IO[Unit] = (plan, p) match {
-        case (tp: HardAckSigningPlan.TwoPhase, r: HardAck.Round2Payload.Regular) =>
+        case (tp: HardAckRoundPlan.TwoPhase, r: HardAck.Round2Payload.Regular) =>
             verifyRound2(tp, peer, r)
-        case (ip: HardAckSigningPlan.Initial, r: HardAck.Round2Payload.Initial) =>
+        case (ip: HardAckRoundPlan.Initial, r: HardAck.Round2Payload.Initial) =>
             verifyRound2Initial(ip, peer, r)
         case _ =>
             IO.raiseError(CellError.PlanPayloadMismatch("round-2", p.roundLabel))
@@ -392,7 +393,7 @@ final case class SlowConsensusActor(
 
     /** Initial stack round 1: a single sig over the locally-derived fallback tx body. */
     private def verifyRound1Initial(
-        plan: HardAckSigningPlan.Initial,
+        plan: HardAckRoundPlan.Initial,
         peer: HeadPeerNumber,
         p: HardAck.Round1Payload.Initial
     ): IO[Unit] =
@@ -408,14 +409,14 @@ final case class SlowConsensusActor(
       *     smuggle a witness L1 would reject, stalling submission).
       */
     private def verifyRound2Initial(
-        plan: HardAckSigningPlan.Initial,
+        plan: HardAckRoundPlan.Initial,
         peer: HeadPeerNumber,
         p: HardAck.Round2Payload.Initial
     ): IO[Unit] = for {
         vk <- peerVKey(peer)
         initTx = plan.round2.initTx
         _ <- verifyTx(vk, initTx.tx, p.initTxSig)
-        expected = HardAckSigningPlan.spendsFromIndividualAddress(initTx, vk)
+        expected = StackEffectsSigningInputs.spendsFromIndividualAddress(initTx, vk)
         _ <- (expected, p.individualWitnesses) match {
             case (false, Nil) => IO.unit
             case (false, extra) =>
@@ -451,7 +452,7 @@ final case class SlowConsensusActor(
     } yield ()
 
     private def verifyRound1(
-        plan: HardAckSigningPlan.TwoPhase,
+        plan: HardAckRoundPlan.TwoPhase,
         peer: HeadPeerNumber,
         p: HardAck.Round1Payload.Regular
     ): IO[Unit] = for {
@@ -477,14 +478,14 @@ final case class SlowConsensusActor(
     } yield ()
 
     private def verifyRound2(
-        plan: HardAckSigningPlan.TwoPhase,
+        plan: HardAckRoundPlan.TwoPhase,
         peer: HeadPeerNumber,
         p: HardAck.Round2Payload.Regular
     ): IO[Unit] =
         peerVKey(peer).flatMap(vk => verifyTx(vk, plan.round2.unlock, p.firstUnlockSig))
 
     private def verifySole(
-        plan: HardAckSigningPlan.Sole,
+        plan: HardAckRoundPlan.Sole,
         peer: HeadPeerNumber,
         p: HardAck.SolePayload
     ): IO[Unit] = for {
@@ -572,7 +573,7 @@ object SlowConsensusActor {
       * stack — both use the same WaitingRound1 → WaitingRound2 machinery, only the payload variant
       * + verification differ.
       */
-    type TwoPhasePlan = HardAckSigningPlan.TwoPhase | HardAckSigningPlan.Initial
+    type TwoPhasePlan = HardAckRoundPlan.TwoPhase | HardAckRoundPlan.Initial
 
     /** Per-stack aggregation cell. The 2-phase cells store the round-payload *supertypes*
       * (`HardAck.Payload.Round1`/`Round2`) so Regular and Initial share one state machine;
@@ -596,7 +597,7 @@ object SlowConsensusActor {
 
         final case class WaitingSole(
             unsigned: Stack.Unsigned,
-            plan: HardAckSigningPlan.Sole,
+            plan: HardAckRoundPlan.Sole,
             sole: Map[HeadPeerNumber, HardAck.SolePayload]
         ) extends Cell
     }
