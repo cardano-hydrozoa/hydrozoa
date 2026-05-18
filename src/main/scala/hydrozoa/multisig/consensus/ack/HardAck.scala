@@ -13,12 +13,12 @@ import scalus.cardano.ledger.{Transaction, VKeyWitness}
   * Hard-acks are emitted by [[hydrozoa.multisig.consensus.SlowConsensusActor]] in one of three
   * shapes, depending on the stack's [[hydrozoa.multisig.ledger.stack.StackEffects]] variant:
   *
-  *   - **2-phase Regular** stacks (containing settlement/finalization): two acks per peer per stack
-  *     — round 1 ([[HardAck.Round1Payload.Regular]]) over every effect except the first settlement
-  *     / finalization, and round 2 ([[HardAck.Round2Payload.Regular]]) over that first unlock.
   *   - **2-phase Initial** stack 0: round 1 ([[HardAck.Round1Payload.Initial]]) over the locally
   *     derived fallback tx; round 2 ([[HardAck.Round2Payload.Initial]]) over the exogenous init tx
   *     body, plus per-peer individual key witnesses for utxos this peer is funding.
+  *   - **2-phase Regular** stacks (containing settlement/finalization): two acks per peer per stack
+  *     — round 1 ([[HardAck.Round1Payload.Regular]]) over every effect except the first settlement
+  *     / finalization, and round 2 ([[HardAck.Round2Payload.Regular]]) over that first unlock.
   *   - **1-phase Sole** stacks (minor-only Regular): one ack per peer ([[HardAck.SolePayload]])
   *     over every effect (refund txs + the last evac commit).
   *
@@ -74,6 +74,11 @@ object HardAck {
     /** Round-1 ack payload variants — varies by [[StackEffects]] shape. */
     object Round1Payload {
 
+        /** Stack 0 round 1: signature over the locally-derived fallback tx body. */
+        final case class Initial(
+            fallbackSig: TxSignature
+        ) extends Payload.Round1
+
         /** Per-effect signatures for everything in a regular stack EXCEPT the first
           * settlement/finalization (the round-2 unlock).
           *
@@ -104,20 +109,10 @@ object HardAck {
             evacCommit: Option[(BlockNumber, BlockHeader.HeaderSignature)],
             finalization: Option[TxSignature]
         ) extends Payload.Round1
-
-        /** Stack 0 round 1: signature over the locally-derived fallback tx body. */
-        final case class Initial(
-            fallbackSig: TxSignature
-        ) extends Payload.Round1
     }
 
     /** Round-2 ack payload variants — the "unlock" round. */
     object Round2Payload {
-
-        /** Round-2 in a regular stack: signature over the FIRST settlement / finalization. */
-        final case class Regular(
-            firstUnlockSig: TxSignature
-        ) extends Payload.Round2
 
         /** Stack 0 round 2: init tx body sig + this peer's individual key witnesses for any utxos
           * it is funding from its individual address (operator-supplied funding).
@@ -125,6 +120,11 @@ object HardAck {
         final case class Initial(
             initTxSig: TxSignature,
             individualWitnesses: List[VKeyWitness]
+        ) extends Payload.Round2
+
+        /** Round-2 in a regular stack: signature over the FIRST settlement / finalization. */
+        final case class Regular(
+            firstUnlockSig: TxSignature
         ) extends Payload.Round2
     }
 
@@ -152,18 +152,7 @@ object HardAck {
       * of signatures.
       */
     object SigningInputs {
-        final case class Round1Regular(
-            settlements: Map[PartitionIndex, Transaction],
-            fallbacks: Map[PartitionIndex, Transaction],
-            rollouts: Map[(PartitionIndex, WithinPartitionIndex), Transaction],
-            refunds: Map[(PartitionIndex, WithinPartitionIndex), Transaction],
-            evacCommit: Option[(BlockNumber, BlockHeader.Minor.Onchain.Serialized)],
-            finalization: Option[Transaction]
-        )
-
         final case class Round1Initial(fallback: Transaction)
-
-        final case class Round2Regular(unlock: Transaction)
 
         /** The rich [[InitializationTx]] (not just its body) so the wallet/verifier can resolve the
           * init tx's spent inputs to addresses: each head peer contributes an individual
@@ -173,6 +162,17 @@ object HardAck {
           * (a pure plan can't sign them).
           */
         final case class Round2Initial(initTx: InitializationTx)
+
+        final case class Round1Regular(
+            settlements: Map[PartitionIndex, Transaction],
+            fallbacks: Map[PartitionIndex, Transaction],
+            rollouts: Map[(PartitionIndex, WithinPartitionIndex), Transaction],
+            refunds: Map[(PartitionIndex, WithinPartitionIndex), Transaction],
+            evacCommit: Option[(BlockNumber, BlockHeader.Minor.Onchain.Serialized)],
+            finalization: Option[Transaction]
+        )
+
+        final case class Round2Regular(unlock: Transaction)
 
         final case class Sole(
             refunds: Map[(PartitionIndex, WithinPartitionIndex), Transaction],

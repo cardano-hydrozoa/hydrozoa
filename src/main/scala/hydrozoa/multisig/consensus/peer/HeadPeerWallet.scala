@@ -88,28 +88,6 @@ final class HeadPeerWallet(
     // hands over a HardAck.SigningInputs.* struct.
     // ============================================================
 
-    /** Round-1 hard ack for a regular (non-initial) stack. The caller has already removed the
-      * round-2 unlock (first settlement / finalization) from `in`. Each tx body is signed with
-      * `mkTxSignature`; each evac-commit *header* (KZG lives on the block header) is signed with
-      * `mkHeaderSignature`.
-      */
-    def mkHardAckRound1Regular(
-        stackNum: StackNumber,
-        hardAckNum: HardAckNumber,
-        in: HardAck.SigningInputs.Round1Regular
-    ): HardAck = HardAck(
-      ackId = HardAckId(peerNum, hardAckNum),
-      stackNum = stackNum,
-      payload = HardAck.Round1Payload.Regular(
-        settlements = in.settlements.view.mapValues(mkTxSignature).toMap,
-        fallbacks = in.fallbacks.view.mapValues(mkTxSignature).toMap,
-        rollouts = in.rollouts.view.mapValues(mkTxSignature).toMap,
-        refunds = in.refunds.view.mapValues(mkTxSignature).toMap,
-        evacCommit = in.evacCommit.map((bn, bytes) => (bn, mkHeaderSignature(bytes))),
-        finalization = in.finalization.map(mkTxSignature)
-      )
-    )
-
     /** Round-1 hard ack for the initial (stack 0) flow: a single signature over the locally derived
       * fallback tx body.
       */
@@ -121,20 +99,6 @@ final class HeadPeerWallet(
       ackId = HardAckId(peerNum, hardAckNum),
       stackNum = stackNum,
       payload = HardAck.Round1Payload.Initial(fallbackSig = mkTxSignature(in.fallback))
-    )
-
-    /** Round-2 hard ack for a regular stack: signs the first settlement / finalization (the unlock
-      * tx body). The unlock tx body is known at stack close, so the signature is produced upfront —
-      * the SlowConsensusActor withholds outbound broadcast until local round-1 confirmation.
-      */
-    def mkHardAckRound2Regular(
-        stackNum: StackNumber,
-        hardAckNum: HardAckNumber,
-        in: HardAck.SigningInputs.Round2Regular
-    ): HardAck = HardAck(
-      ackId = HardAckId(peerNum, hardAckNum),
-      stackNum = stackNum,
-      payload = HardAck.Round2Payload.Regular(firstUnlockSig = mkTxSignature(in.unlock))
     )
 
     /** Round-2 hard ack for the initial (stack 0) flow. Two distinct witness roles, both produced
@@ -163,6 +127,42 @@ final class HeadPeerWallet(
             then List(mkVKeyWitness(in.initTx.tx))
             else Nil
       )
+    )
+
+    /** Round-1 hard ack for a regular (non-initial) stack. The caller has already removed the
+      * round-2 unlock (first settlement / finalization) from `in`. Each tx body is signed with
+      * `mkTxSignature`; each evac-commit *header* (KZG lives on the block header) is signed with
+      * `mkHeaderSignature`.
+      */
+    def mkHardAckRound1Regular(
+        stackNum: StackNumber,
+        hardAckNum: HardAckNumber,
+        in: HardAck.SigningInputs.Round1Regular
+    ): HardAck = HardAck(
+      ackId = HardAckId(peerNum, hardAckNum),
+      stackNum = stackNum,
+      payload = HardAck.Round1Payload.Regular(
+        settlements = in.settlements.view.mapValues(mkTxSignature).toMap,
+        fallbacks = in.fallbacks.view.mapValues(mkTxSignature).toMap,
+        rollouts = in.rollouts.view.mapValues(mkTxSignature).toMap,
+        refunds = in.refunds.view.mapValues(mkTxSignature).toMap,
+        evacCommit = in.evacCommit.map((bn, bytes) => (bn, mkHeaderSignature(bytes))),
+        finalization = in.finalization.map(mkTxSignature)
+      )
+    )
+
+    /** Round-2 hard ack for a regular stack: signs the first settlement / finalization (the unlock
+      * tx body). The unlock tx body is known at stack close, so the signature is produced upfront —
+      * the SlowConsensusActor withholds outbound broadcast until local round-1 confirmation.
+      */
+    def mkHardAckRound2Regular(
+        stackNum: StackNumber,
+        hardAckNum: HardAckNumber,
+        in: HardAck.SigningInputs.Round2Regular
+    ): HardAck = HardAck(
+      ackId = HardAckId(peerNum, hardAckNum),
+      stackNum = stackNum,
+      payload = HardAck.Round2Payload.Regular(firstUnlockSig = mkTxSignature(in.unlock))
     )
 
     /** Sole-round hard ack for a 1-phase minor-only stack: signs every refund tx body + the single
