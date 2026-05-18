@@ -361,10 +361,20 @@ no test regressions.
 **M9-full + M6 landed (2026-05-17, session resumed; commits
 `3ff4a47b`..`23cecfe4`):** the slow loop now *actually achieves
 consensus* — real per-effect hard-ack verification + saturation, no
-auto-confirm; hard-confirmed stacks submit their L1 effects. Remaining:
-M11 (real stage1/stage4 effect-presence assertions — now unblocked),
-initial-stack Bootstrap boot path, evac-commit storage/dispute layer
-(future). See `.scratch/slow-consensus-handoff.md`.
+auto-confirm; hard-confirmed stacks submit their L1 effects. Shared
+`HardAckSigningPlan` (`consensus/ack/`) is the single source of truth
+both StackComposer (sign) and SlowConsensusActor (verify) use, so
+multi-partition index assignment can't diverge between signer and
+verifier. Remaining: M11 (real stage1/stage4 effect-presence assertions
+— now unblocked), initial-stack Bootstrap boot path, evac-commit
+storage/dispute layer (future). Full `sbtn test` post-M6: 693 pass / 3
+failed / 3 ignored — the 3 are the documented pre-existing flakes
+(`BlockWeaverTest`, `JointLedgerTest`); no regressions.
+
+(The separate "for George" hand-off note was removed once Ilia resumed
+driving this directly — this plan + the status table + git log are the
+single source of truth. Unique forward-looking notes from it were folded
+into Open Questions below.)
 
 > Review checkpoint requested by Ilia *after M9+M6, before the M11/test
 > phase*.
@@ -671,6 +681,8 @@ Re-enable treasury utxo rotation on settlement (Major stacks). On Final stack ha
 6. **`firstSettlementOrFinalizationSig` field naming.** Multi-major stacks contain multiple settlements; per spec only the FIRST is withheld for round 2. Round-2 carries one sig. Rename to `firstUnlockSig` for clarity.
 
 7. **TODO: `Block.HardConfirmed` event + status.** The slow side produces `Stack.HardConfirmed`, but downstream consumers (RequestSequencer, BlockStatus transitions, possibly others) likely want per-block granularity. Likely shape: thin fan-out — when `Stack.HardConfirmed(blocks=[N..M])` fires, emit `Block.HardConfirmed.Next(N..M)` and drive `BlockStatus.asHardConfirmed`. Decide concrete shape (event vs derived view) when wiring slow side; the notion of a hard-confirmed *block* will be used by many components, so a first-class type is worth considering.
+
+8. **Follower robustness — explicit `Awaiting*` state with timeout (open).** The follower correctly distinguishes "not yet covered → wait silently, re-fires on the next event" from "structural divergence → rule-based fallback". That's correct for liveness via the existing event-driven retry, but there is **no timeout**: a genuinely stuck follower (a constituent block's pair never arrives) waits forever. An explicit `Awaiting*` state (à la BlockWeaver's `AwaitingConfirmation`) would let the follower report *what* it is blocked on and escalate to the rule-based fallback / dead-man's switch on timeout. Pairs naturally with the divergence-fallback wiring (currently a TODO in `tryCloseAsFollower`). Not blocking for Phase A; revisit with the fallback path. (Salvaged from the retired George hand-off note.)
 
 ---
 
