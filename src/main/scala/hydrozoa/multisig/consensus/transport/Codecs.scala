@@ -8,7 +8,9 @@ import hydrozoa.multisig.consensus.ack.{AckId, AckNumber, HardAck, HardAckId, Ha
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{PeerLiaison, UserRequest, UserRequestBody, UserRequestHeader, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeader, BlockNumber}
+import hydrozoa.multisig.ledger.effects.{PartitionIndex, WithinPartitionIndex}
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
+import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
 import io.circe.*
 import io.circe.generic.semiauto.*
@@ -124,21 +126,145 @@ object Codecs {
           )
         )
 
-    /** Placeholder: full HardAck wire shape lands with M6 (real ack collection). For now we accept
-      * any JSON object on decode and encode an opaque sentinel — this codec exists only so
-      * [[NewMsgBatch]] derivation closes; the auto-confirm stub never routes a HardAck to the wire,
-      * and any premature serialization will fail loudly downstream.
+    private given Codec[TxSignature] =
+        io.circe.Codec.from(
+          Decoder.decodeString.emap(s =>
+              ByteVector
+                  .fromHex(s)
+                  .toRight(s"Invalid hex for TxSignature: $s")
+                  .map(bv => TxSignature(IArray.from(bv.toArray)))
+          ),
+          Encoder.encodeString.contramap((sig: TxSignature) =>
+              ByteVector(IArray.genericWrapArray(sig.untagged).toArray).toHex
+          )
+        )
+
+    /** Maps in the hard-ack payload are keyed by opaque [[PartitionIndex]] / tuple keys, which have
+      * no `KeyEncoder`. Serialize them as a JSON array of `[key, value]` pairs (circe's automatic
+      * tuple instances), independent of key shape.
       */
+    private def entriesCodec[K: Encoder: Decoder, V: Encoder: Decoder]: Codec[Map[K, V]] =
+        io.circe.Codec.from(
+          Decoder.decodeList[(K, V)].map(_.toMap),
+          Encoder.encodeList[(K, V)].contramap(_.toList)
+        )
+
+    private given partitionSigMapCodec: Codec[Map[PartitionIndex, TxSignature]] = entriesCodec
+    private given withinPartitionSigMapCodec
+        : Codec[Map[(PartitionIndex, WithinPartitionIndex), TxSignature]] = entriesCodec
+
+    /** Real `Codec[HardAck]` (M6). Discriminated by a `kind` tag. Regular / Sole / Round1Initial
+      * round-trip fully; `Round2Initial` (init-tx sig + per-peer `VKeyWitness` list) is the only
+      * variant left unsupported on the wire — the initial-stack boot path (StackComposer
+      * `Bootstrap`) is not wired yet, so a Round2Initial never reaches transport. It fails loudly
+      * if one ever does, rather than silently mis-round-tripping.
+      */
+    private given Codec[HardAck.Payload] = {
+        import HardAck.{Round1Payload, Round2Payload, SolePayload}
+        val enc = Encoder.instance[HardAck.Payload] {
+            case p: Round1Payload.Regular =>
+                Json.obj(
+                  "kind" -> "round1Regular".asJson,
+                  "settlements" -> p.settlements.asJson,
+                  "fallbacks" -> p.fallbacks.asJson,
+                  "rollouts" -> p.rollouts.asJson,
+                  "refunds" -> p.refunds.asJson,
+                  "evacCommit" -> p.evacCommit.asJson,
+                  "finalization" -> p.finalization.asJson
+                )
+            case p: Round1Payload.Initial =>
+                Json.obj("kind" -> "round1Initial".asJson, "fallbackSig" -> p.fallbackSig.asJson)
+            case p: Round2Payload.Regular =>
+                Json.obj(
+                  "kind" -> "round2Regular".asJson,
+                  "firstUnlockSig" -> p.firstUnlockSig.asJson
+                )
+            case _: Round2Payload.Initial =>
+                throw new IllegalStateException(
+                  "HardAck.Round2Payload.Initial is not wire-supported " +
+                      "(initial-stack boot path not wired)"
+                )
+            case p: SolePayload =>
+                Json.obj(
+                  "kind" -> "sole".asJson,
+                  "refunds" -> p.refunds.asJson,
+                  "evacCommit" -> p.evacCommit.asJson
+                )
+        }
+        val dec = Decoder.instance[HardAck.Payload] { c =>
+            c.downField("kind").as[String].flatMap {
+                case "round1Regular" =>
+                    for {
+                        settlements <- c
+                            .downField("settlements")
+                            .as[Map[PartitionIndex, TxSignature]]
+                        fallbacks <- c
+                            .downField("fallbacks")
+                            .as[Map[PartitionIndex, TxSignature]]
+                        rollouts <- c
+                            .downField("rollouts")
+                            .as[Map[(PartitionIndex, WithinPartitionIndex), TxSignature]]
+                        refunds <- c
+                            .downField("refunds")
+                            .as[Map[(PartitionIndex, WithinPartitionIndex), TxSignature]]
+                        evacCommit <- c
+                            .downField("evacCommit")
+                            .as[Option[(BlockNumber, BlockHeader.HeaderSignature)]]
+                        finalization <- c.downField("finalization").as[Option[TxSignature]]
+                    } yield Round1Payload.Regular(
+                      settlements,
+                      fallbacks,
+                      rollouts,
+                      refunds,
+                      evacCommit,
+                      finalization
+                    )
+                case "round1Initial" =>
+                    c.downField("fallbackSig")
+                        .as[TxSignature]
+                        .map(Round1Payload.Initial.apply)
+                case "round2Regular" =>
+                    c.downField("firstUnlockSig")
+                        .as[TxSignature]
+                        .map(Round2Payload.Regular.apply)
+                case "round2Initial" =>
+                    Left(
+                      DecodingFailure(
+                        "HardAck.Round2Payload.Initial is not wire-supported " +
+                            "(initial-stack boot path not wired)",
+                        c.history
+                      )
+                    )
+                case "sole" =>
+                    for {
+                        refunds <- c
+                            .downField("refunds")
+                            .as[Map[(PartitionIndex, WithinPartitionIndex), TxSignature]]
+                        evacCommit <- c
+                            .downField("evacCommit")
+                            .as[(BlockNumber, BlockHeader.HeaderSignature)]
+                    } yield SolePayload(refunds, evacCommit)
+                case other =>
+                    Left(DecodingFailure(s"Unknown HardAck.Payload kind: $other", c.history))
+            }
+        }
+        io.circe.Codec.from(dec, enc)
+    }
+
     given Codec[HardAck] =
         io.circe.Codec.from(
-          Decoder.failed(
-            DecodingFailure("HardAck wire codec not implemented yet (TODO M6 full).", Nil)
+          Decoder.instance(c =>
+              for {
+                  ackId <- c.downField("ackId").as[HardAckId]
+                  stackNum <- c.downField("stackNum").as[StackNumber]
+                  payload <- c.downField("payload").as[HardAck.Payload]
+              } yield HardAck(ackId, stackNum, payload)
           ),
-          Encoder.instance((_: HardAck) =>
+          Encoder.instance((a: HardAck) =>
               Json.obj(
-                "TODO" -> Json.fromString(
-                  "HardAck wire codec not implemented yet (TODO M6 full)."
-                )
+                "ackId" -> a.ackId.asJson,
+                "stackNum" -> a.stackNum.asJson,
+                "payload" -> a.payload.asJson
               )
           )
         )

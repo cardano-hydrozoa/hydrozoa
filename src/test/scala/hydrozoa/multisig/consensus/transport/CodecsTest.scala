@@ -3,10 +3,12 @@ package hydrozoa.multisig.consensus.transport
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.consensus.PeerLiaison
 import hydrozoa.multisig.consensus.PeerLiaison.Request.{GetMsgBatch, NewMsgBatch}
-import hydrozoa.multisig.consensus.ack.{AckId, HardAckNumber, SoftAck}
+import hydrozoa.multisig.consensus.ack.{AckId, HardAck, HardAckId, HardAckNumber, SoftAck}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber}
+import hydrozoa.multisig.ledger.effects.{PartitionIndex, WithinPartitionIndex}
 import hydrozoa.multisig.ledger.event.RequestNumber
+import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.StackNumber
 import org.scalatest.funsuite.AnyFunSuite
 
@@ -116,6 +118,99 @@ class CodecsTest extends AnyFunSuite {
                 }
             case other => fail(s"Expected Msg(NewMsgBatch), got: $other")
         }
+    }
+
+    // HardAck payloads carry opaque `TxSignature` (IArray-backed) so structural `==` is
+    // reference-sensitive; assert JSON stability instead — encode, parse, re-encode, compare.
+    // This catches "encodes but decodes to a different value" without IArray equality pitfalls.
+    private def assertJsonStable(frame: Frame): Unit = {
+        val text = Frame.encode(frame)
+        Frame.parse(text) match {
+            case Right(decoded) =>
+                assert(
+                  Frame.encode(decoded) == text,
+                  s"re-encode differs:\n  first: $text\n  again: ${Frame.encode(decoded)}"
+                )
+            case Left(err) => fail(s"Frame.parse failed: $err\nText: $text")
+        }
+    }
+
+    private def sig(bs: Int*): TxSignature = TxSignature(IArray.from(bs.map(_.toByte)))
+
+    private def hardAckFrame(payload: HardAck.Payload): Frame =
+        Frame.Msg(
+          NewMsgBatch(
+            batchNum = PeerLiaison.Batch.Number(5),
+            ack = None,
+            blockBrief = None,
+            stackBrief = None,
+            hardAck = Some(
+              HardAck(
+                ackId = HardAckId(HeadPeerNumber(2), HardAckNumber(9)),
+                stackNum = StackNumber(6),
+                payload = payload
+              )
+            ),
+            requests = Nil,
+          )
+        )
+
+    test("Frame.Msg(NewMsgBatch with HardAck Round1Regular) round-trips") {
+        assertJsonStable(
+          hardAckFrame(
+            HardAck.Round1Payload.Regular(
+              settlements = Map(PartitionIndex(1) -> sig(1, 2, 3)),
+              fallbacks = Map(PartitionIndex(0) -> sig(4, 5)),
+              rollouts = Map((PartitionIndex.zero, WithinPartitionIndex(0)) -> sig(6, 7, 8)),
+              refunds = Map(
+                (PartitionIndex.zero, WithinPartitionIndex(0)) -> sig(9),
+                (PartitionIndex.zero, WithinPartitionIndex(1)) -> sig(10, 11)
+              ),
+              evacCommit = Some(
+                (
+                  BlockNumber(7),
+                  BlockHeader.Minor.HeaderSignature(IArray[Byte](12.toByte, 13.toByte))
+                )
+              ),
+              finalization = Some(sig(14, 15))
+            )
+          )
+        )
+    }
+
+    test("Frame.Msg(NewMsgBatch with HardAck Round1Regular, empty options) round-trips") {
+        assertJsonStable(
+          hardAckFrame(
+            HardAck.Round1Payload.Regular(
+              settlements = Map.empty,
+              fallbacks = Map.empty,
+              rollouts = Map.empty,
+              refunds = Map.empty,
+              evacCommit = None,
+              finalization = None
+            )
+          )
+        )
+    }
+
+    test("Frame.Msg(NewMsgBatch with HardAck Round2Regular) round-trips") {
+        assertJsonStable(hardAckFrame(HardAck.Round2Payload.Regular(firstUnlockSig = sig(20, 21))))
+    }
+
+    test("Frame.Msg(NewMsgBatch with HardAck Round1Initial) round-trips") {
+        assertJsonStable(hardAckFrame(HardAck.Round1Payload.Initial(fallbackSig = sig(30))))
+    }
+
+    test("Frame.Msg(NewMsgBatch with HardAck Sole) round-trips") {
+        assertJsonStable(
+          hardAckFrame(
+            HardAck.SolePayload(
+              refunds = Map((PartitionIndex.zero, WithinPartitionIndex(0)) -> sig(40, 41)),
+              evacCommit =
+                  (BlockNumber(3), BlockHeader.Minor.HeaderSignature(IArray[Byte](42.toByte)))
+            )
+          )
+        )
     }
 
     test("Frame.fromWire accepts GetMsgBatch and NewMsgBatch, rejects others") {
