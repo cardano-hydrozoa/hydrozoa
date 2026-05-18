@@ -24,7 +24,7 @@ Actor flow:
 - All hard-ack signing lives in StackComposer (which holds the wallet for slow-side signing). Both round-1 and round-2 acks are signed upfront at stack close — round-2 signs over the unlock tx body, which is known at close time, so no dependence on round-1 confirmation for signing.
 - SlowConsensusActor is a pure ack aggregator + scheduled-broadcast controller + confirmation emitter — no wallet, no signing. Withholds own round-2 ack until local round-1 confirmation observed, then releases it to PeerLiaisons for broadcast. Mirrors the pre-split ConsensusActor's "scheduled own ack" pattern (formerly used for major-block round-2 acks).
 
-**Codebase naming.** Current codebase: `ConsensusActor` is the fast-side soft-ack collector; `SlowConsensusActor` is the slow-side stub that this work fills in. This document's `SlowConsensusActor` references already match the codebase class name. Whether to rename `ConsensusActor` → `FastConsensusActor` for symmetry is a separate decision, not blocking.
+**Codebase naming.** `ConsensusActor` is the fast-side soft-ack collector; `SlowConsensusActor` is the slow-side hard-ack collector (implemented — M6). Whether to rename `ConsensusActor` → `FastConsensusActor` for symmetry is a separate decision, not blocking.
 
 ## Design principle: fast/slow isomorphism, gated by soft-confirmation
 
@@ -180,7 +180,16 @@ Processed during `PreStart` — the actor injects these into its `pending` / `re
 - Sole ack: sig over last evac commitment from the stack's single partition + per-tx sigs over each minor block's refund txs.
 - One round; on sole-round confirmation the stack is hard-confirmed. L1 submission of refund txs (the evac commitment itself is not a standalone L1 tx — it's a value carried into the next major's settlement / used in dispute resolution).
 
-## Stack data types (sketch)
+## Stack data types (original sketch — illustrative)
+
+> The sketch below is the *original design intent* and has since diverged
+> from the implemented types (e.g. `HardAck` no longer carries
+> `finalizationRequested`; the standalone evac commitment is a dormant
+> `StandaloneEvacuationCommitment` record, not a tx, surfaced as a single
+> `Option`; `StackBrief` dropped `firstMajorBlockNum`; `Stack.{Round1Confirmed,
+> HardConfirmed}` are thin wrappers carrying no ack data). Treat it as
+> shape-intent only — the source under `multisig/ledger/stack/` +
+> `multisig/consensus/ack/` is authoritative.
 
 ```scala
 // Per-block local data — pushed by JointLedger on local block completion.
@@ -293,44 +302,45 @@ StackComposer (leader role — peer where isSlowLeader(stackNum) holds)
   └─ when previous-stack hard-confirmation received AND ready queue's longest contiguous prefix non-empty:
        ├─ close stack: drain ready prefix (any combination of minors / majors / final)
        ├─ build StackBrief
-       ├─ derive necessary effects (or use StackEffects.Initial for stack 0)
+       ├─ derive necessary effects (Regular; StackEffects.Initial for stack 0 throws — Bootstrap unwired)
        ├─ build Stack.Unsigned
-       ├─ sign own round-1 + round-2 hard acks upfront (or sole hard ack for minor-only)
+       ├─ HardAckSigningPlan.from(unsigned) → sign own round-1 + round-2 (or sole) upfront
        ├─ broadcast StackBrief                       → PeerLiaisons (DIRECT)
-       └─ Stack.Unsigned + all own hard acks         → SlowConsensusActor
-                                                       (which broadcasts round-1/sole ack immediately,
-                                                        withholds round-2 until local round-1 confirmation)
+       └─ StackHandoff(Stack.Unsigned, own hard acks) → SlowConsensusActor
 
 StackComposer (follower role)
   ├─ pair streams
   ├─ wait for incoming StackBrief from PeerLiaison (DIRECT)
-  └─ when leader's StackBrief arrives AND all constituent blockNums locally paired:
-       ├─ validate composition; re-derive necessary effects locally
-       ├─ sign own round-1 + round-2 hard acks upfront (or sole)
-       └─ Stack.Unsigned + all own hard acks         → SlowConsensusActor
+  └─ when leader's StackBrief arrives, classify vs locally-paired blocks:
+       structural divergence → rule-based fallback (TODO);
+       not-yet-covered → wait silently (re-fires on next event);
+       covered → build Stack.Unsigned from EXACTLY the brief's range,
+                 HardAckSigningPlan → sign own acks upfront,
+                 StackHandoff → SlowConsensusActor
 
-SlowConsensusActor (per-stack cell, pure ack aggregator + scheduled ack broadcaster)
-  ├─ on (Stack.Unsigned, all own acks) from StackComposer:
-  │    ├─ create cell
-  │    ├─ deposit own round-1 / sole ack into cell
+SlowConsensusActor (per-stack cell SM; pure aggregator + scheduled broadcaster, no wallet)
+  ├─ on StackHandoff from StackComposer:
+  │    ├─ HardAckSigningPlan.from(unsigned)  ← SAME plan the signer used (single source of truth)
+  │    ├─ create cell (WaitingRound1→Round2 | WaitingSole); verify+insert own ack
   │    ├─ broadcast own round-1 / sole ack          → PeerLiaisons (immediately)
-  │    └─ stash own round-2 ack in cell (withheld until local round-1 confirmation)
-  ├─ Phase 1: collect round-1 hard acks from PeerLiaisons (other peers); verify per-effect sigs
-  ├─ on local round-1 confirmation:
-  │    └─ release stashed own round-2 ack            → PeerLiaisons (broadcast to other peers)
-  ├─ Phase 2: collect round-2 hard acks from PeerLiaisons; verify per-variant payload
-  └─ on local round-2 confirmation:
-       ├─ Stack.HardConfirmed (with both ack sets)   → CardanoLiaison (L1 submit, dependency order)
-       └─                                            → StackComposer (PreviousStackHardConfirmation signal)
+  │    ├─ withhold own round-2 ack in the cell (until local round-1 confirmation)
+  │    └─ replay any per-stackNum orphan acks buffered before the cell existed
+  ├─ on remote HardAck ← PeerLiaisons: verify every per-effect sig + evac header sig
+  │    vs the plan, keyset-exact; aggregate per peer (early round-2 verified+stashed).
+  │    bad sig / keyset ⇒ RAISE → divergence ⇒ rule-based fallback (not a silent drop)
+  ├─ on round-1 saturation (all head peers): release withheld own round-2 → PeerLiaisons
+  └─ on round-2 (or sole) saturation:
+       ├─ Stack.HardConfirmed (thin wrapper, no ack data) → CardanoLiaison (L1 submit, dep order)
+       └─ PreviousStackHardConfirmation                   → StackComposer (unblocks next stack)
        (Hard-ack / stack-brief outboxes are pruned by PeerLiaisons on incoming GetMsgBatch cursors, not on hard confirmation.)
        (No JointLedger callback — L2 obligations already booked at soft-confirmation; user notification via RequestSequencer is a follow-up PR.)
 ```
 
-Note `Stack.Unsigned` lives only inside each peer's StackComposer — it's not wire-broadcast. Only `StackBrief` + `HardAck`s travel.
+Note `Stack.Unsigned` lives only inside each peer's StackComposer — it's not wire-broadcast. Only `StackBrief` + `HardAck`s travel. Effects are re-derived locally by every peer (deterministic), never wired.
 
 ---
 
-## Implementation status (2026-05-17, post-review)
+## Implementation status (current — M1–M10 + M6 done; M11 remaining)
 
 | Milestone | Status | Notes |
 |-----------|--------|-------|
@@ -344,37 +354,21 @@ Note `Stack.Unsigned` lives only inside each peer's StackComposer — it's not w
 | M8 L2-release | dropped | Removed (L2 books obligations at soft-confirmation time). |
 | M9 CardanoLiaison wiring | ✅ done | `handleStackL1Effects` feeds `StackEffects.Regular` into the pre-split submission state machine (effectInputs/happyPathEffects/fallbackEffects/targetState) then `runEffects`. Rollouts regrouped per backbone via utxo-chain walk. NOT submitted: evac commitments (dormant) + post-dated refunds (no pre-split path; fund14). Initial-stack branch defensive-only until Bootstrap wired. |
 | M10 L1LedgerM rotation | ✅ done | StackComposer owns L1LedgerM state seeded from initialBlock; treasury KZG advances ONLY via settlement/finalization (never via evac commit). |
-| M11 stage1/stage4 assertions | ⚠️ vacuous | Expected-effects accumulator stays empty until M9 full lands. |
+| M11 stage1/stage4 assertions | ⚠️ vacuous | Expected-effects accumulator still empty; now unblocked by M9-full + M6 — restore real assertions next. |
 | BlockStatus naming sweep | ✅ done | `asMultiSigned` → `asHardConfirmed`. `AckNumber` → `SoftAckNumber` rename marked TODO (deferred sweep). |
 
-**Post-handoff review pass (commits `bbb6d6d4`..`b64e3762`, 2026-05-17):**
-dropped `HardAck.finalizationRequested`; disambiguated `HardAck.toContext`
-keys; evac-commit sig → `HeaderSignature`; wallet methods → pure mappers
-over `SigningInputs`; `AckNumber→SoftAckNumber` rename marked; BlockResult
-payouts(=withdrawals) vs refunds disambiguated; "L1 effects ≠ all txs"
-clarified; dropped redundant `StackBrief.firstMajorBlockNum`; precise
-rollouts/refunds sourcing; **standalone evac commitment reworked to a
-spec-aligned dormant record** (`StandaloneEvacCommitTx` +
-`L1LedgerM.mkStandaloneEvacCommitTx` removed). All compile + hooks pass;
-no test regressions.
+**Remaining work:** M11 (real stage1/stage4 effect-presence assertions —
+now unblocked by M9-full + M6); initial-stack `Bootstrap` boot path
+(StackComposer + `HardAckSigningPlan` throw on `StackEffects.Initial`;
+the `Round2Initial` wire codec is deliberately unsupported until then);
+evac-commit storage / dispute-presentation layer (future, out of scope —
+dormant dispute-only records, no on-chain script change). Latest full
+`sbtn test`: 693 pass / 3 failed / 3 ignored, the 3 being the documented
+pre-existing flakes (`BlockWeaverTest`, `JointLedgerTest`); no
+regressions.
 
-**M9-full + M6 landed (2026-05-17, session resumed; commits
-`3ff4a47b`..`23cecfe4`):** the slow loop now *actually achieves
-consensus* — real per-effect hard-ack verification + saturation, no
-auto-confirm; hard-confirmed stacks submit their L1 effects. Shared
-`HardAckSigningPlan` (`consensus/ack/`) is the single source of truth
-both StackComposer (sign) and SlowConsensusActor (verify) use, so
-multi-partition index assignment can't diverge between signer and
-verifier. Remaining: M11 (real stage1/stage4 effect-presence assertions
-— now unblocked), initial-stack Bootstrap boot path, evac-commit
-storage/dispute layer (future). Full `sbtn test` post-M6: 693 pass / 3
-failed / 3 ignored — the 3 are the documented pre-existing flakes
-(`BlockWeaverTest`, `JointLedgerTest`); no regressions.
-
-(The separate "for George" hand-off note was removed once Ilia resumed
-driving this directly — this plan + the status table + git log are the
-single source of truth. Unique forward-looking notes from it were folded
-into Open Questions below.)
+(Per-commit / per-session implementation history lives in the auto-memory
+note, not here — this doc is design + current status only.)
 
 > Review checkpoint requested by Ilia *after M9+M6, before the M11/test
 > phase*.
@@ -682,13 +676,4 @@ Re-enable treasury utxo rotation on settlement (Major stacks). On Final stack ha
 
 7. **TODO: `Block.HardConfirmed` event + status.** The slow side produces `Stack.HardConfirmed`, but downstream consumers (RequestSequencer, BlockStatus transitions, possibly others) likely want per-block granularity. Likely shape: thin fan-out — when `Stack.HardConfirmed(blocks=[N..M])` fires, emit `Block.HardConfirmed.Next(N..M)` and drive `BlockStatus.asHardConfirmed`. Decide concrete shape (event vs derived view) when wiring slow side; the notion of a hard-confirmed *block* will be used by many components, so a first-class type is worth considering.
 
-8. **Follower robustness — explicit `Awaiting*` state with timeout (open).** The follower correctly distinguishes "not yet covered → wait silently, re-fires on the next event" from "structural divergence → rule-based fallback". That's correct for liveness via the existing event-driven retry, but there is **no timeout**: a genuinely stuck follower (a constituent block's pair never arrives) waits forever. An explicit `Awaiting*` state (à la BlockWeaver's `AwaitingConfirmation`) would let the follower report *what* it is blocked on and escalate to the rule-based fallback / dead-man's switch on timeout. Pairs naturally with the divergence-fallback wiring (currently a TODO in `tryCloseAsFollower`). Not blocking for Phase A; revisit with the fallback path. (Salvaged from the retired George hand-off note.)
-
----
-
-## Ordering suggestion
-
-- **PR1** = M1 + M2 + M3 + M4. Types + JointLedger outbound + pure effect derivation. Additive only, no wiring. Stage4 still green via fast-only path.
-- **PR2** = M5 + M6 + M7 + M9 + M10 + M11. Wiring + tests. Cuts over to the new path. (M8 dropped.)
-
-If PR2 too big, split M5 + M6 (actors) from M7 + M9 (transport + L1 submission). But intermediate state has stacks confirmed internally yet never reaching L1 — prefer one larger PR.
+8. **Follower robustness — explicit `Awaiting*` state with timeout (open).** The follower correctly distinguishes "not yet covered → wait silently, re-fires on the next event" from "structural divergence → rule-based fallback". That's correct for liveness via the existing event-driven retry, but there is **no timeout**: a genuinely stuck follower (a constituent block's pair never arrives) waits forever. An explicit `Awaiting*` state (à la BlockWeaver's `AwaitingConfirmation`) would let the follower report *what* it is blocked on and escalate to the rule-based fallback / dead-man's switch on timeout. Pairs naturally with the divergence-fallback wiring (currently a TODO in `tryCloseAsFollower`). Not blocking for Phase A; revisit with the fallback path.
