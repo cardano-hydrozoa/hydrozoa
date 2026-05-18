@@ -74,7 +74,7 @@ object RuleBasedTreasuryUtxo {
 
 // TODO: this class could further decompose the value into "Vote tokens" and an implicit "Treasury Token".
 //   The primary benefit to doing so would be encoding the expected invariants at the type level, which may make
-//   model checking or formalization easier. It also gives us the ability to add a
+//   model checking or formalization easier.
 final case class RuleBasedTreasuryOutput(datum: RuleBasedTreasuryDatum, value: Value) {
 
     def toOutput(using config: RuleBasedTreasuryOutput.Config): Babbage =

@@ -291,14 +291,14 @@ object MapNet {
       * precondition is violated (e.g. ID already exists, or ID not found). Operations with a
       * trailing `_` are _force_ variants: they silently overwrite or no-op instead of failing.
       */
-    case class BuilderMOps[
+    class BuilderMOps[
         ArcId: Ordering,
         PlaceId: Ordering,
         TransitionId: Ordering,
         A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
         P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
         T <: Transition.Topology & Transition.Syntax & Transition.Semantics
-    ]() {
+    ] {
         private type BM[R] = BuilderM[ArcId, PlaceId, TransitionId, A, P, T, R]
         private type MN = MapNet[ArcId, PlaceId, TransitionId, A, P, T]
         private type BE = BuilderError[ArcId, PlaceId, TransitionId]
