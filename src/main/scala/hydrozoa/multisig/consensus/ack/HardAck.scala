@@ -3,7 +3,7 @@ package hydrozoa.multisig.consensus.ack
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber}
 import hydrozoa.multisig.ledger.effects.{PartitionIndex, WithinPartitionIndex}
-import hydrozoa.multisig.ledger.l1.tx.TxSignature
+import hydrozoa.multisig.ledger.l1.tx.{InitializationTx, TxSignature}
 import hydrozoa.multisig.ledger.stack.StackNumber
 import scalus.cardano.ledger.{Transaction, VKeyWitness}
 
@@ -163,10 +163,14 @@ object HardAck {
 
         final case class Round2Regular(unlock: Transaction)
 
-        final case class Round2Initial(
-            initTx: Transaction,
-            individualWitnesses: List[VKeyWitness]
-        )
+        /** The rich [[InitializationTx]] (not just its body) so the wallet/verifier can resolve the
+          * init tx's spent inputs to addresses: each head peer contributes an individual
+          * `VKeyWitness` **iff** the init tx spends an input at its own individual address — and
+          * MUST NOT otherwise (Cardano L1 rejects superfluous vkey witnesses). Those individual
+          * witnesses are produced per-peer by the wallet during round-2 consensus, NOT carried here
+          * (a pure plan can't sign them).
+          */
+        final case class Round2Initial(initTx: InitializationTx)
 
         final case class Sole(
             refunds: Map[(PartitionIndex, WithinPartitionIndex), Transaction],

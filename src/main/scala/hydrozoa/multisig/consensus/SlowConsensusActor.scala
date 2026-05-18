@@ -398,17 +398,57 @@ final case class SlowConsensusActor(
     ): IO[Unit] =
         peerVKey(peer).flatMap(vk => verifyTx(vk, plan.round1.fallback, p.fallbackSig))
 
-    /** Initial stack round 2: sig over the exogenous init tx body. The carried
-      * `individualWitnesses` are operator-supplied vkey witnesses for utxos funded from individual
-      * addresses — those are validated by L1 tx validation (the multisig script / the inputs they
-      * unlock), not by slow consensus, so we verify only the consensus `initTxSig` here.
+    /** Initial stack round 2. Two checks, mirroring the two witness roles:
+      *   - `initTxSig` — this peer's head-multisig contribution over the init tx body (always
+      *     required); verified like any tx sig.
+      *   - `individualWitnesses` — enforce the iff / no-extra-witness rule with the SAME shared
+      *     deterministic predicate the signer used: if the init tx spends an input at this peer's
+      *     individual address there must be ≥1 individual witness and each must verify over the
+      *     init tx; if it spends none, the list MUST be empty (a divergent peer could otherwise
+      *     smuggle a witness L1 would reject, stalling submission).
       */
     private def verifyRound2Initial(
         plan: HardAckSigningPlan.Initial,
         peer: HeadPeerNumber,
         p: HardAck.Round2Payload.Initial
-    ): IO[Unit] =
-        peerVKey(peer).flatMap(vk => verifyTx(vk, plan.round2.initTx, p.initTxSig))
+    ): IO[Unit] = for {
+        vk <- peerVKey(peer)
+        initTx = plan.round2.initTx
+        _ <- verifyTx(vk, initTx.tx, p.initTxSig)
+        expected = HardAckSigningPlan.spendsFromIndividualAddress(initTx, vk)
+        _ <- (expected, p.individualWitnesses) match {
+            case (false, Nil) => IO.unit
+            case (false, extra) =>
+                IO.raiseError(
+                  CellError.KeysetMismatch(
+                    "round2Initial.individualWitnesses (peer funds no init input)",
+                    "0",
+                    extra.size.toString
+                  )
+                )
+            case (true, Nil) =>
+                IO.raiseError(
+                  CellError.KeysetMismatch(
+                    "round2Initial.individualWitnesses (peer funds an init input)",
+                    ">=1",
+                    "0"
+                  )
+                )
+            case (true, ws) =>
+                ws.traverse_(w =>
+                    IO.delay(
+                      platform.verifyEd25519Signature(w.vkey, initTx.tx.id, w.signature)
+                    ).handleErrorWith {
+                        case NonFatal(_) => IO.pure(false)
+                        case e           => IO.raiseError(e)
+                    }.flatMap(ok =>
+                        IO.raiseUnless(ok)(
+                          CellError.BadSignature("round2Initial individual witness")
+                        )
+                    )
+                )
+        }
+    } yield ()
 
     private def verifyRound1(
         plan: HardAckSigningPlan.TwoPhase,

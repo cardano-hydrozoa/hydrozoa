@@ -5,7 +5,7 @@ import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.dummySigningKey
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.cardano.wallet.*
-import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, SoftAck}
+import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HardAckSigningPlan, SoftAck}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber.given
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeader}
 import hydrozoa.multisig.ledger.l1.tx.{Tx, TxSignature}
@@ -137,9 +137,16 @@ final class HeadPeerWallet(
       payload = HardAck.Round2Payload.Regular(firstUnlockSig = mkTxSignature(in.unlock))
     )
 
-    /** Round-2 hard ack for the initial (stack 0) flow: signs the exogenous init tx body and
-      * attaches the peer's individual key witnesses for any utxos the peer is funding from its
-      * individual address (operator-supplied funding).
+    /** Round-2 hard ack for the initial (stack 0) flow. Two distinct witness roles, both produced
+      * here (collected across peers during stack-0 consensus):
+      *   - `initTxSig` — this peer's contribution to the head **multisig** native script (minting
+      *     the head tokens); always present.
+      *   - `individualWitnesses` — a plain `VKeyWitness` for the init tx, attached **iff** the init
+      *     tx actually spends an input at this peer's own individual address. If it does not, the
+      *     list MUST stay empty: Cardano L1 rejects a tx carrying a vkey witness it does not need.
+      *     The predicate is the shared, deterministic
+      *     [[HardAckSigningPlan.spendsFromIndividualAddress]] (the verifier enforces the same iff
+      *     rule on remote peers).
       */
     def mkHardAckRound2Initial(
         stackNum: StackNumber,
@@ -149,8 +156,11 @@ final class HeadPeerWallet(
       ackId = HardAckId(peerNum, hardAckNum),
       stackNum = stackNum,
       payload = HardAck.Round2Payload.Initial(
-        initTxSig = mkTxSignature(in.initTx),
-        individualWitnesses = in.individualWitnesses
+        initTxSig = mkTxSignature(in.initTx.tx),
+        individualWitnesses =
+            if HardAckSigningPlan.spendsFromIndividualAddress(in.initTx, exportVerificationKey)
+            then List(mkVKeyWitness(in.initTx.tx))
+            else Nil
       )
     )
 

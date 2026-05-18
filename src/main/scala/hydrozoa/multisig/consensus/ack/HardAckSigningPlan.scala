@@ -1,8 +1,12 @@
 package hydrozoa.multisig.consensus.ack
 
+import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.addrKeyHash
 import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber}
 import hydrozoa.multisig.ledger.effects.{PartitionIndex, WithinPartitionIndex}
+import hydrozoa.multisig.ledger.l1.tx.InitializationTx
 import hydrozoa.multisig.ledger.stack.{Stack, StackEffects, StandaloneEvacuationCommitment}
+import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
+import scalus.crypto.ed25519.VerificationKey
 
 /** Pure derivation of the per-effect signing material for a closed [[Stack.Unsigned]].
   *
@@ -36,10 +40,12 @@ object HardAckSigningPlan {
     final case class Sole(sole: HardAck.SigningInputs.Sole) extends HardAckSigningPlan
 
     /** Initial stack (stack 0). Structurally 2-phase, but the unlock is exogenous: round 1 signs
-      * the locally-derived fallback tx body, round 2 signs the exogenous initialization tx body +
-      * the per-peer individual key witnesses already carried on it (operator-supplied funding for
-      * utxos spent from individual addresses). Verified/handled by the same 2-phase cell machinery
-      * as [[TwoPhase]].
+      * the locally-derived fallback tx body; round 2 signs the exogenous init tx body (the head
+      * **multisig** contribution) and, per peer, attaches an individual `VKeyWitness` iff the init
+      * tx spends an input at that peer's own individual address — those individual witnesses are
+      * produced by each wallet during round-2 consensus and collected across peers, NOT carried on
+      * the exogenous tx. Verified/handled by the same 2-phase cell machinery as [[TwoPhase]] (see
+      * [[spendsFromIndividualAddress]]).
       */
     final case class Initial(
         round1: HardAck.SigningInputs.Round1Initial,
@@ -55,22 +61,48 @@ object HardAckSigningPlan {
     def from(unsigned: Stack.Unsigned): HardAckSigningPlan =
         unsigned.effects match {
             case e: StackEffects.Initial =>
-                // Pure: both bodies come straight off the stack. The individual witnesses are
-                // the operator-supplied vkey witnesses already attached to the exogenous init
-                // tx (the multisig sig itself is the round-2 `initTxSig`, aggregated by
-                // consensus). `headId`-style per-peer wallet signing is not needed here — the
-                // wallet only signs the init/fallback bodies.
+                // Pure: only the bodies come off the stack. The per-peer individual witnesses
+                // are NOT derivable here — each head peer's wallet produces its own during
+                // round-2 consensus (see `spendsFromIndividualAddress`), and they are collected
+                // across peers' round-2 acks. The pure plan just hands over the rich
+                // InitializationTx so wallet + verifier can resolve its spent inputs.
                 HardAckSigningPlan.Initial(
                   round1 = HardAck.SigningInputs.Round1Initial(fallback = e.fallbackTx.tx),
-                  round2 = HardAck.SigningInputs.Round2Initial(
-                    initTx = e.initializationTx.tx,
-                    individualWitnesses =
-                        e.initializationTx.tx.witnessSetRaw.value.vkeyWitnesses.toSet.toList
-                  )
+                  round2 = HardAck.SigningInputs.Round2Initial(initTx = e.initializationTx)
                 )
             case effects: StackEffects.Regular =>
                 regularPlan(unsigned, effects)
         }
+
+    /** Deterministic per-peer predicate, shared by the wallet (which decides whether to attach its
+      * own individual `VKeyWitness`) and [[hydrozoa.multisig.consensus.SlowConsensusActor]] (which
+      * enforces the iff / no-extra-witness rule when verifying a remote peer's round-2 Initial
+      * ack): does the initial stack's init tx spend any input locked at the peer's individual
+      * (key-hash) address?
+      *
+      * Cardano L1 rejects a tx carrying a vkey witness that signs nothing it spends, so a peer MUST
+      * contribute an individual witness exactly when this is true and MUST NOT otherwise. (The init
+      * tx's *multisig* contribution — minting the head tokens — is the separate round-2
+      * `initTxSig`, always present.)
+      */
+    def spendsFromIndividualAddress(
+        initTx: InitializationTx,
+        vkey: VerificationKey
+    ): Boolean = {
+        val kh = vkey.addrKeyHash
+        initTx.tx.body.value.inputs.toSeq.exists { in =>
+            initTx.resolvedUtxos.utxos.get(in).exists { out =>
+                out.address match {
+                    case sa: ShelleyAddress =>
+                        sa.payment match {
+                            case ShelleyPaymentPart.Key(h) => h == kh
+                            case _: ShelleyPaymentPart     => false
+                        }
+                    case _ => false
+                }
+            }
+        }
+    }
 
     /** The 2-phase / sole plan for a non-initial (regular) stack. */
     private def regularPlan(
