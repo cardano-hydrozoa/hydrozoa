@@ -1,7 +1,6 @@
 package hydrozoa.lib.petri.net
 
 import cats.data.NonEmptyList
-import hydrozoa.lib.number.NonNegativeInt
 import hydrozoa.lib.petri.net.Net.Topology.{MissingArcTopology, MissingPlaceTopology, MissingTransitionTopology}
 import hydrozoa.lib.petri.net.components.*
 
@@ -338,13 +337,13 @@ object Net {
             sealed trait Error extends Net.Error
 
             object Error {
-                case class FinalMarkingNotReached[PlaceId](
+                case class FinalMarkingNotReached[PlaceId, Marking](
                     placeId: PlaceId,
-                    current: NonNegativeInt,
-                    expected: NonNegativeInt,
+                    current: Marking,
+                    expected: Marking,
                 ) extends FinalMarking.Error {
                     override def getMessage: String =
-                        s"Place $placeId has $current tokens but final marking requires $expected"
+                        s"Place $placeId has marking $current but final marking requires $expected"
                 }
             }
 
@@ -363,8 +362,8 @@ object Net {
                             place.finalMarking match
                                 case None => Nil
                                 case Some(fm) =>
-                                    if (place.tokens: Int) == (fm: Int) then Nil
-                                    else List(Error.FinalMarkingNotReached(pid, place.tokens, fm))
+                                    if place.marking == fm then Nil
+                                    else List(Error.FinalMarkingNotReached(pid, place.marking, fm))
                         }
                     }
 

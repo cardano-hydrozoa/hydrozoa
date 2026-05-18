@@ -80,14 +80,14 @@ object Simulator {
             override def getMessage: String = s"Transition not found: $transitionId"
         }
 
-        /** Arc `arcId` connected to place `placeId` failed one or more enabling checks (E2). */
+        /** Arc `arcId` connected to place `placeId` failed its enabling check (E2). */
         case class ArcNotEnabled[ArcId, PlaceId](
             arcId: ArcId,
             placeId: PlaceId,
-            errors: NonEmptyList[Arc.Semantics.EnablingError],
+            error: Arc.Semantics.EnablingError,
         ) extends FiringError {
             override def getMessage: String =
-                s"Arc $arcId on place $placeId is not enabled: ${errors.toList.map(_.getMessage).mkString("; ")}"
+                s"Arc $arcId on place $placeId is not enabled: ${error.getMessage}"
         }
 
         /** Arc `arcId`'s firing endo returned a [[Arc.Semantics.FiringError]]. */

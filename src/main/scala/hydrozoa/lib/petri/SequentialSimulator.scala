@@ -74,8 +74,8 @@ trait SequentialSimulator[
         arcPlacePairs
             .flatMap(_.traverse { (arcId, arc, placeId, place) =>
                 for
-                    _ <- NonEmptyList
-                        .fromList(arc.enablingErrors(place))
+                    _ <- arc
+                        .enablingError(place)
                         .map(Simulator.FiringError.ArcNotEnabled(arcId, placeId, _))
                         .toLeft(())
                     firedPlace <- arc

@@ -22,7 +22,7 @@ import scala.collection.immutable.{Queue, TreeMap}
   */
 case class YapnePlace(
     override val label: String,
-    override val tokens: NonNegativeInt = NonNegativeInt.unsafeApply(0),
+    override val marking: NonNegativeInt = NonNegativeInt.unsafeApply(0),
     val capacity: Option[PositiveInt] = None,
     override val finalMarking: Option[NonNegativeInt] = None,
     override val position: (Int, Int) = (0, 0),
@@ -32,17 +32,17 @@ case class YapnePlace(
       Place.Semantics[YapnePlace],
       Place.Presentation {
 
-    override def withTokens(n: NonNegativeInt): YapnePlace = this.copy(tokens = n)
+    override type PlaceMarking = NonNegativeInt
+    override def mark(n: NonNegativeInt): YapnePlace = this.copy(marking = n)
     override def withFinalMarking(m: Option[NonNegativeInt]): YapnePlace =
         this.copy(finalMarking = m)
-    override def getMarking: NonNegativeInt = tokens
 
     override def markingErrors: List[Place.Semantics.MarkingError] =
         capacity match
             case None =>
                 Nil
             case Some(bound) =>
-                if tokens.toInt > bound.toInt then List(TooManyTokens(tokens, bound))
+                if marking.toInt > bound.toInt then List(TooManyTokens(marking, bound))
                 else Nil
 }
 
@@ -136,7 +136,7 @@ object YapneNet {
                     "y" -> place.position._2.asJson
                   ),
                   "label" -> place.label.asJson,
-                  "tokens" -> place.tokens.asJson,
+                  "tokens" -> place.marking.asJson,
                   "capacity" -> (place.capacity match {
                       case None     => Json.Null
                       case Some(pi) => pi.asJson
@@ -246,40 +246,40 @@ object Demo extends IOApp {
     object Places {
         val treasuryRef: YapnePlace = YapnePlace(
           label = "TreasuryRef",
-          tokens = NonNegativeInt.unsafeApply(1),
+          marking = NonNegativeInt.unsafeApply(1),
           capacity = Some(PositiveInt.unsafeApply(1)),
           finalMarking = Some(NonNegativeInt.unsafeApply(1))
         )
 
         val resolved: YapnePlace = YapnePlace(
           label = "Resolved",
-          tokens = NonNegativeInt.unsafeApply(1),
+          marking = NonNegativeInt.unsafeApply(1),
           capacity = Some(PositiveInt.unsafeApply(1)),
           finalMarking = Some(NonNegativeInt.unsafeApply(1))
         )
 
         val ambient: YapnePlace = YapnePlace(
           label = "Ambient",
-          tokens = NonNegativeInt.unsafeApply(100),
+          marking = NonNegativeInt.unsafeApply(100),
           finalMarking = Some(NonNegativeInt.unsafeApply(86)) // 100 - 7×2
         )
 
         val payoutObligations: YapnePlace = YapnePlace(
           label = "$PayoutObligations$",
-          tokens = NonNegativeInt.unsafeApply(500),
+          marking = NonNegativeInt.unsafeApply(500),
           finalMarking =
               Some(NonNegativeInt.unsafeApply(59)) // 500 - 7×63; deadlocks here (59 < 63)
         )
 
         val evacuationOutput: YapnePlace = YapnePlace(
           label = "EvacuationOutput",
-          tokens = NonNegativeInt.unsafeApply(0),
+          marking = NonNegativeInt.unsafeApply(0),
           finalMarking = Some(NonNegativeInt.unsafeApply(441)) // 7×63
         )
 
         val collateral: YapnePlace = YapnePlace(
           label = "Collateral",
-          tokens = NonNegativeInt.unsafeApply(5),
+          marking = NonNegativeInt.unsafeApply(5),
           finalMarking = Some(NonNegativeInt.unsafeApply(5))
         )
 

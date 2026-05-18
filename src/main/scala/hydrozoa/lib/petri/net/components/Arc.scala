@@ -1,8 +1,5 @@
 package hydrozoa.lib.petri.net.components
 
-import cats.data.Kleisli
-import cats.implicits.*
-import hydrozoa.lib.cats.data.Kendo.{Kendo as KendoT, kendoFold}
 import hydrozoa.lib.number.{NonNegativeInt, PositiveInt}
 import scala.collection.immutable.Queue
 
@@ -53,34 +50,24 @@ object Arc {
       *     - Note that `fire` returns a typed error and `fireUnsafe` throws, but neither checks
       *       that the resulting marking is valid. Validity is a _Place_ semantics concern. This
       *       coherence condition must be checked at the net-wide/simulator level.
-      *   - Trait mixins are linearized. This means that if you mixin two traits that act on the
-      *     same place data, they may not commute. If all traits act on only "their own" place
-      *     syntax, then everything should commute.
+      *
+      * Each concrete arc type must explicitly implement both [[enablingError]] and [[fire]]:
+      *   - Return `None` from [[enablingError]] if the arc is always enabled.
+      *   - Return `Right(p)` from [[fire]] if the arc has no effect on the place.
       */
     trait Semantics[P <: Place.Syntax[P]] {
 
-        /** The error type that [[fire]] and [[fireUnsafe]] can produce. Defaults to the common base
-          * [[Arc.Semantics.FiringError]]; concrete arc implementations may narrow this to a more
-          * specific subtype.
+        /** The single enabling condition for this arc against the given place state. Returns `None`
+          * if the arc is enabled, or `Some(error)` with the reason it is not.
           */
-        type FiringError = Arc.Semantics.FiringError
+        def enablingError(p: P): Option[Arc.Semantics.EnablingError]
 
-        protected def enablingChecks: List[P => List[Arc.Semantics.EnablingError]] = List.empty
-        // Each endo is a Kendo: a Kleisli endomorphism parameterized on Either[FiringError, _].
-        // Using Kendo here makes it explicit that firing endos are effectful computations. In
-        // the future, the effect type can be swapped out by the simulator (e.g., for IO or
-        // StateT), without changing the arc semantics.
-        protected def firingEndos: List[KendoT[[X] =>> Either[FiringError, X], P]] = List.empty
-
-        final def enablingErrors(p: P): List[Arc.Semantics.EnablingError] =
-            enablingChecks.flatMap(_(p))
-
-        final def enabled(p: P): Boolean = enablingErrors(p).isEmpty
-
-        /** Returns a typed error if firing fails. Does not check enabledness or place-side validity
-          * — both are the simulator's concern.
+        /** Apply this arc's firing effect to the place. Does not check enabledness or place-side
+          * validity — both are the simulator's concern.
           */
-        final def fire(p: P): Either[FiringError, P] = kendoFold(firingEndos).run(p)
+        def fire(p: P): Either[Arc.Semantics.FiringError, P]
+
+        final def enabled(p: P): Boolean = enablingError(p).isEmpty
 
         /** Does not check enabledness or place-side validity — both are the simulator's concern.
           *
@@ -104,24 +91,15 @@ object Arc {
         }
 
         /** Removes `weight` tokens from the place. Enabled if place has >= weight tokens. */
-        trait PT[P <: Place.Syntax.HasTokens[P]] extends Semantics[P], Weighted {
-            abstract override protected def enablingChecks
-                : List[P => List[Arc.Semantics.EnablingError]] =
-                (
-                    (p: P) =>
-                        if p.tokens >= weight then Nil
-                        else List(PT.NotEnabled(p.tokens, weight))
-                ) :: super.enablingChecks
-            abstract override protected def firingEndos
-                : List[KendoT[[X] =>> Either[Arc.Semantics.FiringError, X], P]] =
-                Kleisli((p: P) =>
-                    NonNegativeInt(p.tokens - weight)
-                        .map(p.withTokens)
-                        .toRight(PT.InsufficientTokens(p.tokens, weight)): Either[
-                      Arc.Semantics.FiringError,
-                      P
-                    ]
-                ) :: super.firingEndos
+        trait PT[P <: Place.Syntax.WithTokens[P]] extends Semantics[P], Weighted {
+            override def enablingError(p: P): Option[Arc.Semantics.EnablingError] =
+                if p.marking >= weight then None
+                else Some(PT.NotEnabled(p.marking, weight))
+
+            override def fire(p: P): Either[Arc.Semantics.FiringError, P] =
+                NonNegativeInt(p.marking - weight)
+                    .map(p.mark)
+                    .toRight(PT.InsufficientTokens(p.marking, weight))
         }
 
         object PT {
@@ -144,17 +122,13 @@ object Arc {
         }
 
         /** Adds `weight` tokens to the place. Always arc-side enabled. */
-        trait TP[P <: Place.Syntax.HasTokens[P]] extends Semantics[P], Weighted {
-            abstract override protected def firingEndos
-                : List[KendoT[[X] =>> Either[Arc.Semantics.FiringError, X], P]] =
-                Kleisli((p: P) =>
-                    NonNegativeInt(p.tokens + weight)
-                        .map(p.withTokens)
-                        .toRight(TP.TokenOverflow(p.tokens, weight)): Either[
-                      Arc.Semantics.FiringError,
-                      P
-                    ]
-                ) :: super.firingEndos
+        trait TP[P <: Place.Syntax.WithTokens[P]] extends Semantics[P], Weighted {
+            override def enablingError(p: P): Option[Arc.Semantics.EnablingError] = None
+
+            override def fire(p: P): Either[Arc.Semantics.FiringError, P] =
+                NonNegativeInt(p.marking + weight)
+                    .map(p.mark)
+                    .toRight(TP.TokenOverflow(p.marking, weight))
         }
 
         object TP {
@@ -167,15 +141,13 @@ object Arc {
             }
         }
 
-        /** Enabled only if the place is empty. Does not fire. */
-        trait Inhibitor[P <: Place.Syntax.HasTokens[P]] extends Semantics[P] {
-            abstract override protected def enablingChecks
-                : List[P => List[Arc.Semantics.EnablingError]] =
-                (
-                    (p: P) =>
-                        if p.tokens == NonNegativeInt.unsafeApply(0) then Nil
-                        else List(Inhibitor.NotEnabled(p.tokens))
-                ) :: super.enablingChecks
+        /** Enabled only if the place is empty. Does not fire (identity on place state). */
+        trait Inhibitor[P <: Place.Syntax.WithTokens[P]] extends Semantics[P] {
+            override def enablingError(p: P): Option[Arc.Semantics.EnablingError] =
+                if p.marking == NonNegativeInt.unsafeApply(0) then None
+                else Some(Inhibitor.NotEnabled(p.marking))
+
+            override def fire(p: P): Either[Arc.Semantics.FiringError, P] = Right(p)
         }
 
         object Inhibitor {
@@ -188,26 +160,20 @@ object Arc {
         }
 
         /** Drains all tokens from the place. Always arc-side enabled. */
-        trait Reset[P <: Place.Syntax.HasTokens[P]] extends Semantics[P] {
-            abstract override protected def firingEndos
-                : List[KendoT[[X] =>> Either[Arc.Semantics.FiringError, X], P]] =
-                Kleisli((p: P) =>
-                    Right(p.withTokens(NonNegativeInt.unsafeApply(0))): Either[
-                      Arc.Semantics.FiringError,
-                      P
-                    ]
-                ) :: super.firingEndos
+        trait Reset[P <: Place.Syntax.WithTokens[P]] extends Semantics[P] {
+            override def enablingError(p: P): Option[Arc.Semantics.EnablingError] = None
+
+            override def fire(p: P): Either[Arc.Semantics.FiringError, P] =
+                Right(p.mark(NonNegativeInt.unsafeApply(0)))
         }
 
-        /** Enabled if the place has >= weight tokens. Does not fire. */
-        trait Read[P <: Place.Syntax.HasTokens[P]] extends Semantics[P], Weighted {
-            abstract override protected def enablingChecks
-                : List[P => List[Arc.Semantics.EnablingError]] =
-                (
-                    (p: P) =>
-                        if p.tokens >= weight then Nil
-                        else List(Read.NotEnabled(p.tokens, weight))
-                ) :: super.enablingChecks
+        /** Enabled if the place has >= weight tokens. Does not fire (identity on place state). */
+        trait Read[P <: Place.Syntax.WithTokens[P]] extends Semantics[P], Weighted {
+            override def enablingError(p: P): Option[Arc.Semantics.EnablingError] =
+                if p.marking >= weight then None
+                else Some(Read.NotEnabled(p.marking, weight))
+
+            override def fire(p: P): Either[Arc.Semantics.FiringError, P] = Right(p)
         }
 
         object Read {
