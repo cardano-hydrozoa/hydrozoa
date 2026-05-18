@@ -10,15 +10,20 @@ split itself, May 12; this doc covers what's been built on top, May 14–15).
 
 ## TL;DR
 
-Slow consensus is **architecturally complete** end-to-end — all actors talk,
-all effect derivation produces real txs, leader signs own hard-acks upfront.
-The only thing that doesn't *actually verify* is the slow consensus
-aggregation itself: `SlowConsensusActor` is an auto-confirm stub that
-immediately echoes `PreviousStackHardConfirmation` on receiving a stack
-handoff, without collecting any remote peers' hard-acks.
+Slow consensus is **functionally complete** end-to-end — all actors talk,
+effect derivation produces real txs, leader signs own hard-acks upfront,
+**`SlowConsensusActor` now does real per-stack ack aggregation +
+per-effect signature verification (no more auto-confirm)**, and
+hard-confirmed stacks submit their L1 effects via `CardanoLiaison`
+(M9-full). Real `Codec[HardAck]` is in place so hard-acks traverse the
+wire.
 
-Tests pass (the same 3 pre-existing flaky ScalaCheck failures as before;
-no regressions from this work).
+Remaining: M11 real stage1/stage4 effect-presence assertions (now
+unblocked), the initial-stack `Bootstrap` boot path, and the future
+evac-commit storage/dispute layer.
+
+> **Review checkpoint:** Ilia asked to re-review after M9+M6, before the
+> M11/test phase. Commits `3ff4a47b`..`23cecfe4` (this session).
 
 > **Post-handoff review pass (2026-05-17, commits `bbb6d6d4`..`b64e3762`).**
 > A review pass refined several things since this doc was first written —
@@ -65,11 +70,17 @@ StackComposer (slow cycle, M5)
        not-yet-covered → wait silently (re-fires on next event);
        covered → build from EXACTLY the brief's range, re-derive, hand off
 
-SlowConsensusActor (M6, AUTO-CONFIRM STUB)
-  ├─ on StackHandoff: log own-ack count, immediately emit
-  │      Stack.HardConfirmed             → CardanoLiaison
-  │      PreviousStackHardConfirmation   → StackComposer
-  └─ HardAck inputs IGNORED (no real ack aggregation yet)
+SlowConsensusActor (M6, REAL)
+  ├─ on StackHandoff: derive HardAckSigningPlan; create cell
+  │    (WaitingRound1→Round2 | WaitingSole); verify+insert own ack;
+  │    broadcast own round-1/sole → PeerLiaisons; replay orphans
+  ├─ on remote HardAck: verify every per-effect sig + evac header sig
+  │    vs the plan (keyset-exact); aggregate per peer
+  ├─ round-1 saturation: release withheld own round-2 → PeerLiaisons
+  └─ on saturation (all head peers): emit
+         Stack.HardConfirmed             → CardanoLiaison
+         PreviousStackHardConfirmation   → StackComposer
+     (bad sig / keyset ⇒ raise: divergence → rule-based fallback)
 
 CardanoLiaison (M9-full)
   └─ Stack.HardConfirmed: handleStackL1Effects → runEffects
@@ -97,10 +108,38 @@ PeerLiaison transport (M7)
 - `StackComposer` replaces `StackActor` stub; subscribes to BlockResult +
   Block.SoftConfirmed; pairs them; manages leader/follower mode; broadcasts
   StackBrief; hands off Stack.Unsigned + own acks to SlowConsensusActor.
-- `SlowConsensusActor` replaces stub; auto-confirms on receipt; emits
-  Stack.HardConfirmed + PreviousStackHardConfirmation.
-1- Both wired into `MultisigRegimeManager.Connections`; `isSlowLeader(stackNum)`
+- `SlowConsensusActor` (M6, real — see dedicated section below) does
+  per-stack ack aggregation + verification; emits Stack.HardConfirmed +
+  PreviousStackHardConfirmation on saturation.
+- Both wired into `MultisigRegimeManager.Connections`; `isSlowLeader(stackNum)`
   on `HeadPeerId`.
+
+### SlowConsensusActor — real ack collection (M6 — `4a2470aa`, `463bea52`, `23cecfe4`)
+- `HardAckSigningPlan` (`consensus/ack/`) extracted from
+  `StackComposer.buildHandoff`: pure `from(Stack.Unsigned)` →
+  `TwoPhase(Round1Regular, Round2Regular)` | `Sole`. **Single source of
+  truth** — the composer signs against it; the SlowConsensusActor
+  reconstructs the byte-identical keyed message set to verify remote
+  sigs. (StackComposer no longer keys effects itself.)
+- Per-stackNum `Cell`: `WaitingRound1 → WaitingRound2` (2-phase) /
+  `WaitingSole` (minor-only). Saturation = a verified ack from every
+  head peer (own included).
+- Own round-1/sole broadcast immediately; own round-2 withheld in the
+  cell, released on local round-1 confirmation (fast-side "scheduled own
+  ack" analogue). Early remote round-2 verified-and-stashed, folded in
+  on transition. Per-stackNum orphan buffer for acks arriving before the
+  local handoff; replayed (and verified) on cell creation.
+- Verification: each `TxSignature` via `verifyEd25519Signature` against
+  the locally-derived tx body; evac-commit header sig against the minor
+  header bytes; **keyset required to match exactly**. Bad sig / keyset
+  ⇒ raise (deterministic-derivation divergence ⇒ halt → rule-based
+  fallback per plan). Stricter than the fast side (which discards the
+  verify boolean).
+- Real `Codec[HardAck]` (`463bea52`): discriminated by `kind`;
+  round1Regular / round2Regular / round1Initial / sole full round-trip;
+  `round2Initial` an explicit failure (VKeyWitness list; initial-stack
+  boot path unwired). Opaque/tuple map keys → `[[k,v],…]` arrays. +5
+  CodecsTest round-trips.
 
 ### Wire transport (M7 — `2115a5b6`)
 - `PeerLiaison`: `stackBrief` + `hardAck` outbox lanes, cursors
@@ -185,45 +224,22 @@ PeerLiaison transport (M7)
 
 ## What's NOT done
 
-### M6 real ack collection (BLOCKER for end-to-end slow consensus)
+### M6 real ack collection — DONE (`4a2470aa` → `463bea52` → `23cecfe4`)
 
-`SlowConsensusActor` auto-confirms on any received StackHandoff. To make
-slow consensus real:
+`SlowConsensusActor` is a real per-stack aggregation cell SM (no more
+auto-confirm) — see "What's done › SlowConsensusActor (M6)" below and the
+actor's class doc. Shared `HardAckSigningPlan` (extracted from
+StackComposer) is the single source of truth both the signer and the
+verifier use.
 
-1. Maintain a per-stackNum cell tracking phase + per-peer acks
-   collected (similar to fast `ConsensusActor.ConsensusCell` but
-   round-aware).
-2. On StackHandoff: stash own acks; broadcast round-1 / sole own ack
-   to PeerLiaisons immediately; withhold round-2 own ack.
-3. On remote HardAck (round-1 / sole): verify each per-effect sig
-   against local effect-tx bodies; aggregate; check saturation
-   (all head peers acked round-1).
-4. On round-1 saturation: release own round-2 ack → PeerLiaisons;
-   transition cell to WaitingForRound2.
-5. On remote HardAck (round-2): verify; aggregate; on round-2
-   saturation: build Stack.HardConfirmed; emit to CardanoLiaison +
-   PreviousStackHardConfirmation to StackComposer.
-6. Postponed-ack stash for early N+1 acks (mirrors fast-side pattern).
+### Real Codec[HardAck] — DONE (`463bea52`)
 
-Spec reference: `consensus/slow-consensus` in the gummiworm-whitepaper.
-Plan section M6, lines ~488–542 of `.scratch/slow-consensus-plan.md`.
-
-### Real Codec[HardAck] (BLOCKS hard-acks actually traversing wire)
-
-`multisig/consensus/transport/Codecs.scala` has a placeholder Codec[HardAck]
-that fails on decode. Acceptable today because nothing broadcasts hard-acks
-yet (auto-confirm keeps them local). When M6 real impl lands, this needs
-real codecs for:
-- `TxSignature` (opaque `IArray[Byte]` — hex string)
-- `BlockHeader.HeaderSignature` (opaque `IArray[Byte]` — used for
-  evac-commit entries; there's already a hex codec for it in
-  `Codecs.scala` for SoftAck — reuse)
-- `VKeyWitness` (scalus type — bytes round-trip; Round2Initial only)
-- `HardAck.Payload` discriminated union (5 variants); note `HardAck` has
-  no `finalizationRequested` field anymore
-- `Map[Int, TxSignature]` / `Map[(Int, Int), TxSignature]` /
-  `Map[BlockNumber, BlockHeader.HeaderSignature]` (evac commits) and the
-  `SolePayload.evacCommit: (BlockNumber, HeaderSignature)` tuple
+Real discriminated `Codec[HardAck]` in `Codecs.scala`: round1Regular /
+round2Regular / round1Initial / sole round-trip fully; `round2Initial`
+(needs a `VKeyWitness` list) is an explicit encode/decode failure — the
+initial-stack boot path is unwired so it never reaches transport. New
+hex `Codec[TxSignature]`; opaque/tuple map keys serialize as
+`[[k,v],…]` arrays (`entriesCodec`). CodecsTest +5 round-trips.
 
 ### M9 full L1 submission — DONE (`3ff4a47b`)
 
@@ -326,15 +342,17 @@ M5.
 
 In priority order:
 
-1. **M6 real ack collection** — the BIG remaining piece. Replaces
-   auto-confirm. Without it the slow side doesn't actually achieve
-   consensus, even though everything else is wired. ~200–300 lines
-   of careful cell state-machine logic in `SlowConsensusActor.scala`.
-   Pairs with real Codec[HardAck] in `Codecs.scala`.
+1. **M11 stage1/stage4 assertions** — M6 + M9-full have landed and
+   unblock this. Change the integration tests to subscribe to
+   Stack.HardConfirmed and assert tx-known on L1 + exercise both
+   1-phase (minor-only sole) and 2-phase paths, round-2-after-round-1,
+   multi-partition necessary-effects. (Currently vacuous —
+   `List.empty[BlockEffects.Unsigned]` accumulator.)
 
-2. **M11 stage1 assertions** — M9-full has landed; change the
-   integration test to subscribe to Stack.HardConfirmed and assert
-   tx-known on L1.
+2. **Initial stack (stack 0) boot path** — wire the `Bootstrap`
+   parameter so the initial stack flows through the same pipeline
+   (StackComposer + HardAckSigningPlan both throw on Initial today; the
+   Round2Initial wire codec is also deliberately unsupported until this).
 
 3. **Storage layer for evac-commitment header signatures** — the slow
    side derives the `StandaloneEvacuationCommitment` records + their
@@ -343,11 +361,7 @@ In priority order:
    needed — an evac commitment is a dormant dispute-only record, not a
    tx.) Future / separate effort.
 
-4. **Initial stack (stack 0) boot path** — once M6 is real, wire the
-   `Bootstrap` parameter so the initial stack flows through the same
-   pipeline.
-
-5. **Follower robustness (explicit `Awaiting*` state).** The follower
+4. **Follower robustness (explicit `Awaiting*` state).** The follower
    now correctly distinguishes "not yet covered → wait silently" from
    "structural divergence → fallback". This is correct for liveness via
    the existing event-driven retry, but there is no timeout: a genuinely
@@ -356,10 +370,10 @@ In priority order:
    it's blocked on and escalate to the rule-based fallback on timeout.
    Pairs naturally with M6 + the divergence-fallback wiring.
 
-Option for George if scope feels too big: **land just M6 + real
-Codec[HardAck]** first as the deepest slice, validate the full
-end-to-end consensus loop with TestControl-style multi-peer tests,
-then take M9 / M11 / Initial as follow-up PRs.
+M6 + real Codec[HardAck] + M9-full have landed — the deepest slice
+(end-to-end real consensus) is in. Natural follow-up split: M11
+(test restoration) next, then Initial-stack Bootstrap + the
+evac-commit storage/dispute layer as separate efforts.
 
 ---
 
@@ -397,22 +411,28 @@ b64e3762 Refactor: standalone evac commitment is a dormant record, not a tx
 7d72fed2 Docs: refresh plan status table + handoff note for post-review state
 1b58cfa5 Refactor: typed PartitionIndex / WithinPartitionIndex for HardAck maps
 064440c3 Refactor: narrow CardanoLiaison.Request to the post-split inbound
---- M9-full + relocation (2026-05-17, session resumed) ---
+--- M9-full + M6 (2026-05-17, session resumed) ---
 639f5034 Refactor: move StandaloneEvacuationCommitment out of l1/tx → stack
 3ff4a47b Feat: M9-full — CardanoLiaison submits hard-confirmed stack's L1 effects
+ab2a3bf2 Docs: M9-full done — refresh plan status table + handoff note
+4a2470aa Refactor: extract HardAckSigningPlan (shared signing-input derivation)
+463bea52 Feat: M6 — real Codec[HardAck] (Regular / Sole / Round1Initial)
+23cecfe4 Feat: M6 — SlowConsensusActor real ack collection (replaces auto-confirm)
 ```
 
-Pushed to `origin/feature/slow-consensus` through `1b58cfa5`; the tail
-(`064440c3` + this handoff/doc refresh) is committed locally, not yet
-pushed.
+Pushed to `origin/feature/slow-consensus` through `639f5034`; the tail
+(`3ff4a47b`..`23cecfe4` + this doc refresh) is committed locally, not
+yet pushed (awaiting the post-M9+M6 review).
 
 ---
 
 ## Test status
 
-`sbtn test` passes with 688/691 — same 3 pre-existing flaky ScalaCheck
-failures as before this work started (`BlockWeaverTest`,
-`JointLedgerTest` "Falsified after 0 passed tests"). No regressions
-from any of the 17 commits. Last full run: 2026-05-15.
+`sbtn test`: 693 passed / 3 failed / 3 ignored — the 3 failures are the
+same pre-existing flaky ScalaCheck props as before this work started
+(`BlockWeaverTest`, `JointLedgerTest` "Falsified after 0 passed tests").
+ScalaTest side 613/613 incl. `CodecsTest` (+5 HardAck round-trips). No
+regressions from M9-full or M6. Last full run: 2026-05-17 (post-M6,
+~40 min).
 
 Pre-commit hook (`just lint-check` + `just fmt-check`) clean.

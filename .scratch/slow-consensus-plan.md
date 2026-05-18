@@ -336,10 +336,10 @@ Note `Stack.Unsigned` lives only inside each peer's StackComposer — it's not w
 |-----------|--------|-------|
 | M1 effect derivation | ✅ done | Minor / Major / Final paths produce real txs. TrailingMinors → `StandaloneEvacuationCommitment` — a pure dormant dispute-only RECORD (not a tx, no L1/treasury mutation), minor-only per spec. |
 | M2 BlockResult + JointLedger outbound | ✅ done | BlockResult = brief + evacuationMapDiff + payoutObligations(=L2 withdrawals, ≠ refunds) + postDatedRefundTxs + absorbedDeposits + competingFallbackTxTime. |
-| M3 HardAck family + signing | ✅ done | 5 wallet methods, now PURE mappers over `HardAck.SigningInputs.*` (no Stack walking). `HardAck` dropped `finalizationRequested` (derivable). evac-commit sig = `BlockHeader.HeaderSignature` keyed by `BlockNumber`. Real Codec[HardAck] still placeholder. |
+| M3 HardAck family + signing | ✅ done | 5 wallet methods, now PURE mappers over `HardAck.SigningInputs.*` (no Stack walking). `HardAck` dropped `finalizationRequested` (derivable). evac-commit sig = `BlockHeader.HeaderSignature` keyed by `BlockNumber`. Real Codec[HardAck] landed in M6. |
 | M4 Stack data types | ✅ done | Stack.{Unsigned, Round1Confirmed, HardConfirmed} + StackBrief (no `firstMajorBlockNum` — redundant) + StackEffects.{Regular, Initial}. |
 | M5 StackComposer | ✅ done | Mode-switch via `isSlowLeader(stackNum)`. Leader composes (longest contiguous prefix) + assembles SigningInputs + signs upfront + broadcasts brief + hands off. Follower classifies the brief 3 ways: structural divergence (→ rule-based fallback, TODO) / not-yet-covered (benign — wait silently, re-fires on next event) / covered (build from EXACTLY the brief's range, sign, hand off). Initial-stack path throws (Bootstrap not yet wired). |
-| M6 SlowConsensusActor | ⚠️ auto-confirm stub | Real ack collection NOT implemented. Stub echoes PreviousStackHardConfirmation on any StackHandoff. |
+| M6 SlowConsensusActor | ✅ done | Real per-stack cell SM (WaitingRound1→Round2 / WaitingSole). Verifies every per-effect sig + evac header sig against the shared `HardAckSigningPlan` (extracted from StackComposer; single source of truth) + keyset-exact. Own round-1/sole broadcast immediately, round-2 withheld until local round-1 confirmation. Early-round-2 stash + per-stackNum orphan buffer. Bad sig/keyset ⇒ raise (divergence→fallback). Real `Codec[HardAck]` (Regular/Sole/Round1Initial; Round2Initial wire-unsupported until Bootstrap). CodecsTest: 5 round-trips. |
 | M7 PeerLiaison stackBrief + hardAck lanes | ✅ done | Outbox lanes + cursors + verification + dispatch. Outbox prune driven by remote GetMsgBatch cursors. |
 | M8 L2-release | dropped | Removed (L2 books obligations at soft-confirmation time). |
 | M9 CardanoLiaison wiring | ✅ done | `handleStackL1Effects` feeds `StackEffects.Regular` into the pre-split submission state machine (effectInputs/happyPathEffects/fallbackEffects/targetState) then `runEffects`. Rollouts regrouped per backbone via utxo-chain walk. NOT submitted: evac commitments (dormant) + post-dated refunds (no pre-split path; fund14). Initial-stack branch defensive-only until Bootstrap wired. |
@@ -358,9 +358,16 @@ spec-aligned dormant record** (`StandaloneEvacCommitTx` +
 `L1LedgerM.mkStandaloneEvacCommitTx` removed). All compile + hooks pass;
 no test regressions.
 
-**Remaining critical work for the loop to *actually achieve consensus*
-rather than auto-confirm: M6 real ack collection + real Codec[HardAck].**
-See `.scratch/slow-consensus-handoff.md`.
+**M9-full + M6 landed (2026-05-17, session resumed; commits
+`3ff4a47b`..`23cecfe4`):** the slow loop now *actually achieves
+consensus* — real per-effect hard-ack verification + saturation, no
+auto-confirm; hard-confirmed stacks submit their L1 effects. Remaining:
+M11 (real stage1/stage4 effect-presence assertions — now unblocked),
+initial-stack Bootstrap boot path, evac-commit storage/dispute layer
+(future). See `.scratch/slow-consensus-handoff.md`.
+
+> Review checkpoint requested by Ilia *after M9+M6, before the M11/test
+> phase*.
 
 ---
 
