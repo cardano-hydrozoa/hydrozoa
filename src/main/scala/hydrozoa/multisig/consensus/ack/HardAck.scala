@@ -2,9 +2,8 @@ package hydrozoa.multisig.consensus.ack
 
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber}
-import hydrozoa.multisig.ledger.effects.{PartitionIndex, WithinPartitionIndex}
 import hydrozoa.multisig.ledger.l1.tx.{InitializationTx, TxSignature}
-import hydrozoa.multisig.ledger.stack.StackNumber
+import hydrozoa.multisig.ledger.stack.{PartitionIndex, StackNumber, WithinPartitionIndex}
 import scalus.cardano.ledger.{Transaction, VKeyWitness}
 
 /** A head peer's hard acknowledgment of a closed stack — see `consensus/slow-consensus` in the

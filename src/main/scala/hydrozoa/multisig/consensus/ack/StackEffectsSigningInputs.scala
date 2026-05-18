@@ -2,9 +2,8 @@ package hydrozoa.multisig.consensus.ack
 
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.addrKeyHash
 import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber}
-import hydrozoa.multisig.ledger.effects.{PartitionIndex, WithinPartitionIndex}
 import hydrozoa.multisig.ledger.l1.tx.InitializationTx
-import hydrozoa.multisig.ledger.stack.{Stack, StackEffects, StandaloneEvacuationCommitment}
+import hydrozoa.multisig.ledger.stack.{PartitionIndex, Stack, StackEffects, StandaloneEvacuationCommitment, WithinPartitionIndex}
 import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.Transaction
 import scalus.crypto.ed25519.VerificationKey

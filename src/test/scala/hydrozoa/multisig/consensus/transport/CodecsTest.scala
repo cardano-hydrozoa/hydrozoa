@@ -6,10 +6,9 @@ import hydrozoa.multisig.consensus.PeerLiaison.Request.{GetMsgBatch, NewMsgBatch
 import hydrozoa.multisig.consensus.ack.{AckId, HardAck, HardAckId, HardAckNumber, SoftAck}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber}
-import hydrozoa.multisig.ledger.effects.{PartitionIndex, WithinPartitionIndex}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
-import hydrozoa.multisig.ledger.stack.StackNumber
+import hydrozoa.multisig.ledger.stack.{PartitionIndex, StackNumber, WithinPartitionIndex}
 import org.scalatest.funsuite.AnyFunSuite
 
 /** Round-trip tests for the wire codecs used by [[PeerWsTransport]].

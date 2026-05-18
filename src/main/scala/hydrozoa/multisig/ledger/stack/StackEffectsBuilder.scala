@@ -1,10 +1,9 @@
-package hydrozoa.multisig.ledger.effects
+package hydrozoa.multisig.ledger.stack
 
 import cats.implicits.*
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockResult, BlockType}
 import hydrozoa.multisig.ledger.l1.L1LedgerM
 import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, FinalizationTx, RefundTx, RolloutTx, SettlementTx}
-import hydrozoa.multisig.ledger.stack.{StackEffects, StandaloneEvacuationCommitment}
 
 /** Slow-side effect derivation: from the partitioned stack content, produce the necessary L1
   * effects. An L1 effect is NOT always a transaction:
@@ -28,8 +27,8 @@ import hydrozoa.multisig.ledger.stack.{StackEffects, StandaloneEvacuationCommitm
   *   - Standalone evacuation-commitment construction for trailing-minor partitions (pure; no
   *     L1-ledger interaction).
   *
-  * Pure functions of `(L1LedgerM state at stack open) + List[Partition]` — no JointLedger lookup,
-  * all required state threaded through inputs.
+  * Pure functions of `(L1LedgerM state at stack open) + List[StackPartition]` — no JointLedger
+  * lookup, all required state threaded through inputs.
   *
   * **Block-by-block construction:** per the slow-consensus plan, effects are built per-block
   * (mirroring the deleted `mkBlockEffectsIntermediate` from the fast path), not aggregated
@@ -62,7 +61,7 @@ object StackEffectsBuilder {
       * payload.
       */
     def deriveRegular(
-        partitions: List[Partition]
+        partitions: List[StackPartition]
     ): L1LedgerM[StackEffects.Regular] = {
         val allBlocks: List[BlockResult] = partitions.flatMap(_.blocks.toList)
 
@@ -136,9 +135,9 @@ object StackEffectsBuilder {
         // Necessary-effects compression: the partition's LAST minor supersedes the earlier
         // ones, so we take only `p.blocks.last`.
         // At most ONE TrailingMinors partition per stack (it's necessarily the last —
-        // see NecessaryEffectsPolicy invariants), so ≤ 1 standalone evac commitment.
+        // see StackPartition invariants), so ≤ 1 standalone evac commitment.
         val trailingMinorEvacCommit: Option[StandaloneEvacuationCommitment] = partitions
-            .find(_.closing == Partition.Closing.TrailingMinors)
+            .find(_.closing == StackPartition.Closing.TrailingMinors)
             .map { p =>
                 val lastBlock = p.blocks.last.brief
                 StandaloneEvacuationCommitment(

@@ -1,6 +1,6 @@
 package hydrozoa.multisig.consensus.ack
 
-import hydrozoa.multisig.ledger.effects.PartitionIndex
+import hydrozoa.multisig.ledger.stack.PartitionIndex
 
 /** Round framing for the slow-consensus hard-ack protocol — a **consensus** concern, NOT a signing
   * one. Signing is one-shot over the flat [[StackEffectsSigningInputs]]; this only decides how

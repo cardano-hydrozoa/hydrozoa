@@ -26,7 +26,7 @@ import hydrozoa.lib.tracing.ProtocolTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost.URL
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendMock, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, ConsensusActor, EventSequencer}
+import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, ConsensusActor, EventSequencer, StackComposer}
 import hydrozoa.multisig.ledger.block.{Block, BlockEffects, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toUtxos}
 import hydrozoa.multisig.ledger.event.RequestNumber
@@ -527,8 +527,14 @@ case class Suite(
 
             agent <- system.actorOf(AgentActor(jointLedgerD, consensusActorD, cardanoLiaison))
 
+            // StackComposer stub — stage1 does not exercise slow consensus (that is M11).
+            stackComposerStub <- system.actorOf(new Actor[IO, StackComposer.Request] {
+                override def receive: Receive[IO, StackComposer.Request] = _ => IO.pure(())
+            })
+
             jointLedgerConnections = JointLedger.Connections(
               consensusActor = agent,
+              stackComposer = stackComposerStub,
               peerLiaisons = List(),
             )
 
@@ -552,6 +558,7 @@ case class Suite(
               eventSequencer = eventSequencerStub,
               peerLiaisons = List.empty,
               jointLedger = jointLedger,
+              stackComposer = stackComposerStub,
               tracer = tracer
             )
 

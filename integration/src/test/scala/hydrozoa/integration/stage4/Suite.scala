@@ -24,7 +24,7 @@ import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
 import hydrozoa.multisig.consensus.transport.{PeerWsTransport, RemotePeerProxy}
-import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, ConsensusActor, EventSequencer, PeerLiaison}
+import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, ConsensusActor, EventSequencer, PeerLiaison, SlowConsensusActor, StackComposer}
 import org.http4s.Uri
 import com.comcast.ip4s.{Host, Port, host}
 import hydrozoa.multisig.ledger.block.BlockBrief
@@ -190,12 +190,20 @@ case class Stage4Suite(
                               )
                             )
                             consensusActor <- system.actorOf(ConsensusActor(nodeConfig, pending, tracerLocal))
+                            stackComposer <- system.actorOf(
+                              StackComposer(nodeConfig, pending, tracerLocal)
+                            )
+                            slowConsensusActor <- system.actorOf(
+                              SlowConsensusActor(nodeConfig, pending, tracerLocal)
+                            )
                         yield peerNum -> PeerStack(
                           blockWeaver,
                           cardanoLiaison,
                           eventSequencer,
                           jointLedger,
-                          consensusActor
+                          consensusActor,
+                          stackComposer,
+                          slowConsensusActor
                         )
                     }
                 }
@@ -288,6 +296,8 @@ case class Stage4Suite(
                         consensusActor = observerMap(peerNum),
                         eventSequencer = stack.eventSequencer,
                         jointLedger = stack.jointLedger,
+                        stackComposer = stack.stackComposer,
+                        slowConsensusActor = stack.slowConsensusActor,
                         peerLiaisons = localLiaisons,
                         remotePeerLiaisons = remoteLiaisonsByPeer(peerNum),
                       )

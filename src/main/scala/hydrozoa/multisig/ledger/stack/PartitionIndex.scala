@@ -1,10 +1,10 @@
-package hydrozoa.multisig.ledger.effects
+package hydrozoa.multisig.ledger.stack
 
 import io.circe.*
 import scala.util.Try
 
 /** Zero-based index of a major-version partition within a stack (a stack is partitioned by major
-  * version — see [[NecessaryEffectsPolicy]]). Keys the per-partition entries of a hard-ack payload
+  * version — see [[StackPartition]]). Keys the per-partition entries of a hard-ack payload
   * (settlement / fallback / finalization), so logs and maps say *which* partition rather than a
   * bare `Int`.
   */

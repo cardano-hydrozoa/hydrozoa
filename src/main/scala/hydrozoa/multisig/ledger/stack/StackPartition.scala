@@ -1,15 +1,15 @@
-package hydrozoa.multisig.ledger.effects
+package hydrozoa.multisig.ledger.stack
 
 import cats.data.NonEmptyList
 import hydrozoa.multisig.ledger.block.{BlockResult, BlockType, BlockVersion}
 
-/** Per spec (`consensus/slow-consensus`): partition the stack's blocks by major version, and within
-  * each partition keep all non-standalone-evac-commitment effects + only the LAST standalone evac
-  * commitment.
+/** A **partition** of a slow-consensus stack: a maximal contiguous run of blocks that share the
+  * same major version. Per spec (`consensus/slow-consensus`) the stack is partitioned by major
+  * version, and within each partition all non-standalone-evac-commitment effects are kept plus only
+  * the LAST standalone evac commitment.
   *
-  * A **partition** is a maximal contiguous run of blocks in the stack that share the same major
-  * version. The first block of a non-leading partition is by definition a [[Block.Major]] (since
-  * crossing a partition boundary requires a major-version increment).
+  * The first block of a non-leading partition is by definition a [[Block.Major]] (since crossing a
+  * partition boundary requires a major-version increment).
   *
   * The closing block of a partition determines what L1 effects are produced for it:
   *
@@ -20,23 +20,20 @@ import hydrozoa.multisig.ledger.block.{BlockResult, BlockType, BlockVersion}
   *     follows it): keep only the LAST evac commitment of the partition. Earlier ones are
   *     superseded by the later one (each commits to cumulative state).
   */
-final case class Partition(
+final case class StackPartition(
     blocks: NonEmptyList[BlockResult],
     majorVersion: BlockVersion.Major,
-    closing: Partition.Closing
+    closing: StackPartition.Closing
 )
 
-object Partition {
+object StackPartition {
     enum Closing:
         case Major, Final, TrailingMinors
-}
-
-object NecessaryEffectsPolicy {
 
     /** Partition the stack's blocks. Each partition is a maximal contiguous run of blocks ending at
       * a Major / Final block (close-after-major: the boundary block is the LAST block of the
       * partition it closes); a trailing run of minors with no closing major / final is one
-      * [[Partition.Closing.TrailingMinors]] partition.
+      * [[StackPartition.Closing.TrailingMinors]] partition.
       *
       * Structural invariants this encodes (and enforces):
       *   - A **Final** block terminates the head, so it is necessarily the LAST block of the stack
@@ -52,7 +49,7 @@ object NecessaryEffectsPolicy {
       * version, so this is whatever the preceding Major produced, or 0 for a stack-1 minor-only
       * run).
       */
-    def selectNecessaryEffects(blocks: NonEmptyList[BlockResult]): List[Partition] = {
+    def partition(blocks: NonEmptyList[BlockResult]): List[StackPartition] = {
         def isMinor(b: BlockResult): Boolean = b.brief match {
             case _: BlockType.Minor => true
             case _                  => false
@@ -64,8 +61,8 @@ object NecessaryEffectsPolicy {
         @annotation.tailrec
         def loop(
             remaining: List[BlockResult],
-            acc: List[Partition]
-        ): List[Partition] =
+            acc: List[StackPartition]
+        ): List[StackPartition] =
             remaining match {
                 case Nil =>
                     // Reached only when the stack's last block was a Major (no trailing
@@ -79,10 +76,10 @@ object NecessaryEffectsPolicy {
                             // minors. Necessarily the last partition: there is nothing after
                             // it, so we finish here.
                             val part = NonEmptyList.fromListUnsafe(leadingMinors)
-                            (Partition(
+                            (StackPartition(
                               part,
                               part.last.brief.blockVersion.major,
-                              Partition.Closing.TrailingMinors
+                              StackPartition.Closing.TrailingMinors
                             ) :: acc).reverse
                         case boundary :: tail =>
                             val partBlocks =
@@ -91,10 +88,10 @@ object NecessaryEffectsPolicy {
                                 case _: BlockType.Major =>
                                     loop(
                                       tail,
-                                      Partition(
+                                      StackPartition(
                                         partBlocks,
                                         boundary.brief.blockVersion.major,
-                                        Partition.Closing.Major
+                                        StackPartition.Closing.Major
                                       ) :: acc
                                     )
                                 case _: BlockType.Final =>
@@ -104,10 +101,10 @@ object NecessaryEffectsPolicy {
                                           s"last block of the stack (${tail.size} block(s) " +
                                           "follow)"
                                     )
-                                    (Partition(
+                                    (StackPartition(
                                       partBlocks,
                                       boundary.brief.blockVersion.major,
-                                      Partition.Closing.Final
+                                      StackPartition.Closing.Final
                                     ) :: acc).reverse
                                 case _: BlockType.Minor =>
                                     // Unreachable: `span(isMinor)` guarantees `boundary` is

@@ -8,10 +8,9 @@ import hydrozoa.multisig.consensus.ack.{AckId, AckNumber, HardAck, HardAckId, Ha
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{PeerLiaison, UserRequest, UserRequestBody, UserRequestHeader, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeader, BlockNumber}
-import hydrozoa.multisig.ledger.effects.{PartitionIndex, WithinPartitionIndex}
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
-import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
+import hydrozoa.multisig.ledger.stack.{PartitionIndex, StackBrief, StackNumber, WithinPartitionIndex}
 import io.circe.*
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*

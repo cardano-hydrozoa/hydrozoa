@@ -17,6 +17,17 @@ sealed trait StackEffects
 
 object StackEffects:
 
+    /** Stack 0 only. The initialization tx is exogenous (head config).
+      *
+      *   - Round 1 signs the fallback tx body (locally derived from initTx + head params).
+      *   - Round 2 signs the init tx body + each peer's individual key witnesses for utxos spent
+      *     from its individual addresses.
+      */
+    final case class Initial(
+        initializationTx: InitializationTx,
+        fallbackTx: FallbackTx
+    ) extends StackEffects
+
     /** Stack 1+. Regular slow-consensus flow.
       *
       * The lists are ordered. For [[Regular]] stacks containing at least one major or final block,
@@ -38,7 +49,7 @@ object StackEffects:
       * @param evacCommit
       *   the single standalone evacuation commitment of the stack's TrailingMinors partition, if it
       *   has one (`None` otherwise). A stack has AT MOST ONE TrailingMinors partition (it is
-      *   necessarily the last — see [[NecessaryEffectsPolicy]] invariants) ⇒ at most one standalone
+      *   necessarily the last — see [[StackPartition]] invariants) ⇒ at most one standalone
       *   commitment. Per spec a *standalone* evac commitment exists only for minor blocks; for
       *   initial/major blocks the evac commitment is implicit in the initialization/settlement
       *   effect (carried to L1 immediately when that effect executes — no standalone record, no
@@ -58,15 +69,4 @@ object StackEffects:
         refunds: List[RefundTx],
         evacCommit: Option[StandaloneEvacuationCommitment],
         finalization: Option[FinalizationTx]
-    ) extends StackEffects
-
-    /** Stack 0 only. The initialization tx is exogenous (head config).
-      *
-      *   - Round 1 signs the fallback tx body (locally derived from initTx + head params).
-      *   - Round 2 signs the init tx body + each peer's individual key witnesses for utxos spent
-      *     from its individual addresses.
-      */
-    final case class Initial(
-        initializationTx: InitializationTx,
-        fallbackTx: FallbackTx
     ) extends StackEffects

@@ -11,7 +11,6 @@ import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckRoundPlan, StackEffectsSigningInputs}
 import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockResult}
-import hydrozoa.multisig.ledger.effects.{NecessaryEffectsPolicy, StackEffectsBuilder}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l1.L1LedgerM
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
@@ -28,10 +27,10 @@ import hydrozoa.multisig.ledger.stack.*
   *
   *   - **Leader** (when `isSlowLeader(nextStackNum)`): on `PreviousStackHardConfirmation` OR after
   *     pairing a new block, attempts to close the next stack from the longest contiguous prefix.
-  *     Closing means: build [[StackBrief]] + [[StackEffects]] (via
-  *     [[hydrozoa.multisig.ledger.effects.StackEffectsBuilder]] — minor-only stacks fully derive;
-  *     Major / Final fall through to TODOs in the next slice), wrap into [[Stack.Unsigned]], hand
-  *     off to [[SlowConsensusActor]], and broadcast the brief directly to PeerLiaisons.
+  *     Closing means: build [[StackBrief]] + [[StackEffects]] (via [[StackEffectsBuilder]] —
+  *     minor-only stacks fully derive; Major / Final fall through to TODOs in the next slice), wrap
+  *     into [[Stack.Unsigned]], hand off to [[SlowConsensusActor]], and broadcast the brief
+  *     directly to PeerLiaisons.
   *   - **Follower**: on an inbound `StackBrief` for `lastClosedStackNum + 1`, classify it three
   *     ways — structural divergence (→ rule-based fallback, TODO); not-yet-covered (benign: paired
   *     blocks don't yet span the brief's range — wait silently, re-fires on the next event);
@@ -259,7 +258,7 @@ final case class StackComposer(
     private def mkUnsigned(brief: StackBrief, prefix: List[ReadyBlock]): IO[Stack.Unsigned] = {
         val results = NonEmptyList.fromListUnsafe(prefix.map(_.result))
         val softConfirmations = NonEmptyList.fromListUnsafe(prefix.map(_.softConfirmed))
-        val partitions = NecessaryEffectsPolicy.selectNecessaryEffects(results)
+        val partitions = StackPartition.partition(results)
         runL1Action(StackEffectsBuilder.deriveRegular(partitions)).map { effects =>
             Stack.Unsigned(brief, results, softConfirmations, effects)
         }
