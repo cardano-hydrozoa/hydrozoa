@@ -1,5 +1,6 @@
 package hydrozoa.multisig.consensus
 
+import cats.data.Validated.{Invalid, Valid}
 import cats.effect.{IO, IOLocal, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
@@ -13,10 +14,10 @@ import hydrozoa.multisig.consensus.StackComposer.PreviousStackHardConfirmation
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckRoundPlan, StackEffectsSigningInputs}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber}
-import hydrozoa.multisig.ledger.l1.tx.TxSignature
-import hydrozoa.multisig.ledger.stack.{Stack, StackNumber}
+import hydrozoa.multisig.ledger.l1.tx.{RefundTx, Tx, TxSignature}
+import hydrozoa.multisig.ledger.stack.{Stack, StackEffects, StackNumber}
 import scala.util.control.NonFatal
-import scalus.cardano.ledger.Transaction
+import scalus.cardano.ledger.{Transaction, TransactionHash, VKeyWitness}
 import scalus.crypto.ed25519.VerificationKey
 import scalus.uplc.builtin.platform
 
@@ -264,9 +265,9 @@ final case class SlowConsensusActor(
             case Some(c: Cell.WaitingRound1) if c.round1.keySet == allPeers =>
                 completeRound1(stackNum, c)
             case Some(c: Cell.WaitingRound2) if c.round2.keySet == allPeers =>
-                completeStack(stackNum, c.unsigned)
+                completeStack(stackNum, c)
             case Some(c: Cell.WaitingSole) if c.sole.keySet == allPeers =>
-                completeStack(stackNum, c.unsigned)
+                completeStack(stackNum, c)
             case _ => IO.unit
         }
     }
@@ -284,20 +285,156 @@ final case class SlowConsensusActor(
         round2 = c.round2Stash.updated(ownPeer, ownR2Payload)
         _ <- putCell(
           stackNum,
-          Cell.WaitingRound2(unsigned = c.unsigned, plan = c.plan, round2 = round2)
+          Cell.WaitingRound2(
+            unsigned = c.unsigned,
+            plan = c.plan,
+            round1 = c.round1,
+            round2 = round2
+          )
         )
         _ <- broadcast(c.ownRound2)
         _ <- tryAdvance(stackNum)
     } yield ()
 
-    private def completeStack(stackNum: StackNumber, unsigned: Stack.Unsigned): IO[Unit] = for {
+    /** A round saturated. Aggregate every collected per-peer hard-ack signature into
+      * `VKeyWitness`es, attach them onto the matching effect tx bodies, and emit the
+      * now-multisigned [[Stack.HardConfirmed]] (CardanoLiaison can submit it to L1 as is) plus the
+      * `PreviousStackHardConfirmation` that unblocks the next stack. The raw acks have served their
+      * purpose (verified + aggregated) and are dropped with the cell.
+      */
+    private def completeStack(
+        stackNum: StackNumber,
+        cell: Cell.WaitingRound2 | Cell.WaitingSole
+    ): IO[Unit] = for {
         conn <- getConnections
-        _ <- Tracer.info(s"stack $stackNum HARD-CONFIRMED — emitting downstream")
-        hardConfirmed = Stack.HardConfirmed(Stack.Round1Confirmed(unsigned))
+        vkeys <- allPeers.toList.traverse(p => peerVKey(p).map(p -> _)).map(_.toMap)
+        wmap = cell match {
+            case c: Cell.WaitingRound2 => witnessMap2Phase(c, vkeys)
+            case c: Cell.WaitingSole   => witnessMapSole(c, vkeys)
+        }
+        signed <- attachWitnesses(cell.unsigned.effects, wmap)
+        _ <- Tracer.info(
+          s"stack $stackNum HARD-CONFIRMED — aggregated witnesses onto ${wmap.size} " +
+              "effect tx(s); emitting downstream"
+        )
+        hardConfirmed = Stack.HardConfirmed(Stack.Round1Confirmed(cell.unsigned), signed)
         _ <- conn.cardanoLiaison ! hardConfirmed
         _ <- conn.stackComposer ! PreviousStackHardConfirmation(stackNum)
         _ <- stateRef.update(_.dropCell(stackNum))
     } yield ()
+
+    // ===================================
+    // Witness aggregation — per-peer hard-ack sigs → VKeyWitnesses keyed by effect tx hash
+    // ===================================
+
+    private type WitnessMap = Map[TransactionHash, Set[VKeyWitness]]
+
+    private def witnessOf(vk: VerificationKey, sig: TxSignature): VKeyWitness =
+        VKeyWitness(vk, sig)
+
+    extension (m: WitnessMap)
+        private def add(h: TransactionHash, w: VKeyWitness): WitnessMap =
+            m.updated(h, m.getOrElse(h, Set.empty) + w)
+        private def addAll(h: TransactionHash, ws: Iterable[VKeyWitness]): WitnessMap =
+            m.updated(h, m.getOrElse(h, Set.empty) ++ ws)
+
+    /** Pair the locally-derived plan tx-map with one peer's sig-map (identical keysets — already
+      * enforced by `verifyTxMap`) and fold each `(tx, peer-sig)` into a witness on `tx.id`.
+      */
+    private def pairTxMap[K](
+        m: WitnessMap,
+        vk: VerificationKey,
+        txs: Map[K, Transaction],
+        sigs: Map[K, TxSignature]
+    ): WitnessMap =
+        txs.foldLeft(m) { case (acc, (k, tx)) =>
+            sigs.get(k).fold(acc)(s => acc.add(tx.id, witnessOf(vk, s)))
+        }
+
+    private def witnessMap2Phase(
+        c: Cell.WaitingRound2,
+        vkeys: Map[HeadPeerNumber, VerificationKey]
+    ): WitnessMap =
+        allPeers.foldLeft(Map.empty: WitnessMap) { (m, peer) =>
+            val vk = vkeys(peer)
+            val afterR1 = (c.plan, c.round1.get(peer)) match {
+                case (tp: HardAckRoundPlan.TwoPhase, Some(r: HardAck.Round1Payload.Regular)) =>
+                    val m1 = pairTxMap(m, vk, tp.round1.settlements, r.settlements)
+                    val m2 = pairTxMap(m1, vk, tp.round1.fallbacks, r.fallbacks)
+                    val m3 = pairTxMap(m2, vk, tp.round1.rollouts, r.rollouts)
+                    val m4 = pairTxMap(m3, vk, tp.round1.refunds, r.refunds)
+                    (tp.round1.finalization, r.finalization) match {
+                        case (Some(tx), Some(s)) => m4.add(tx.id, witnessOf(vk, s))
+                        case _                   => m4
+                    }
+                case (ip: HardAckRoundPlan.Initial, Some(r: HardAck.Round1Payload.Initial)) =>
+                    m.add(ip.round1.fallback.id, witnessOf(vk, r.fallbackSig))
+                case _ => m // verification already excluded mismatches / missing acks
+            }
+            (c.plan, c.round2.get(peer)) match {
+                case (tp: HardAckRoundPlan.TwoPhase, Some(r: HardAck.Round2Payload.Regular)) =>
+                    afterR1.add(tp.round2.unlock.id, witnessOf(vk, r.firstUnlockSig))
+                case (ip: HardAckRoundPlan.Initial, Some(r: HardAck.Round2Payload.Initial)) =>
+                    val txId = ip.round2.initTx.tx.id
+                    afterR1
+                        .add(txId, witnessOf(vk, r.initTxSig))
+                        .addAll(txId, r.individualWitnesses)
+                case _ => afterR1
+            }
+        }
+
+    private def witnessMapSole(
+        c: Cell.WaitingSole,
+        vkeys: Map[HeadPeerNumber, VerificationKey]
+    ): WitnessMap =
+        allPeers.foldLeft(Map.empty: WitnessMap) { (m, peer) =>
+            c.sole.get(peer).fold(m) { p =>
+                // evacCommit is a block-header sig, not a tx — nothing to attach for it.
+                pairTxMap(m, vkeys(peer), c.plan.sole.refunds, p.refunds)
+            }
+        }
+
+    /** Attach the aggregated witnesses onto each effect tx body. A standalone evac commitment is
+      * not a tx (no witnesses); everything else is a [[Tx]] keyed by its `tx.id`.
+      */
+    private def attachWitnesses(
+        effects: StackEffects,
+        wmap: WitnessMap
+    ): IO[StackEffects] = effects match {
+        case r: StackEffects.Regular =>
+            for {
+                ss <- r.settlements.traverse(signOne(_, wmap))
+                fb <- r.fallbacks.traverse(signOne(_, wmap))
+                ro <- r.rollouts.traverse(signOne(_, wmap))
+                rf <- r.refunds.traverse { case pd: RefundTx.PostDated =>
+                    signOne(pd, wmap).widen[RefundTx]
+                }
+                fi <- r.finalization.traverse(signOne(_, wmap))
+            } yield r.copy(
+              settlements = ss,
+              fallbacks = fb,
+              rollouts = ro,
+              refunds = rf,
+              finalization = fi
+            )
+        case i: StackEffects.Initial =>
+            for {
+                it <- signOne(i.initializationTx, wmap)
+                fb <- signOne(i.fallbackTx, wmap)
+            } yield i.copy(initializationTx = it, fallbackTx = fb)
+    }
+
+    private def signOne[A <: Tx[A]](a: A, wmap: WitnessMap): IO[A] =
+        wmap.get(a.tx.id).filter(_.nonEmpty) match {
+            // No collected witnesses for this body — leave it (shouldn't happen for a required
+            // effect; a divergent / absent ack would have raised at verification).
+            case None => IO.pure(a)
+            case Some(ws) =>
+                a.addSignatures(ws) match {
+                    case Valid(signed) => IO.pure(signed)
+                    case Invalid(e)    => IO.raiseError(e.head)
+                }
+        }
 
     // ===================================
     // Verification (against the locally-derived plan + the signer's vkey)
@@ -592,6 +729,9 @@ object SlowConsensusActor {
         final case class WaitingRound2(
             unsigned: Stack.Unsigned,
             plan: TwoPhasePlan,
+            // Carried through from round 1: needed at hard-confirmation to aggregate the
+            // non-unlock per-effect signatures into witnesses (round 2 only signs the unlock).
+            round1: Map[HeadPeerNumber, HardAck.Payload.Round1],
             round2: Map[HeadPeerNumber, HardAck.Payload.Round2]
         ) extends Cell
 

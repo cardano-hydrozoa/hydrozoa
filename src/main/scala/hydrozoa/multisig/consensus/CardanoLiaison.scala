@@ -288,7 +288,11 @@ trait CardanoLiaison(
                   "cardanoLiaisonMode" -> "Stack.HardConfirmed",
                   "stackNum" -> s"${stack.round1.unsigned.brief.stackNum: Int}"
                 ) {
-                    val effects = stack.round1.unsigned.effects
+                    // The MULTISIGNED effects: SlowConsensusActor has aggregated every head
+                    // peer's hard-ack signature into VKeyWitnesses and attached them onto
+                    // these tx bodies, so they are L1-submittable as is (NOT
+                    // `round1.unsigned.effects`, which are the unwitnessed bodies).
+                    val effects = stack.effects
                     Tracer.info(
                       "received Stack.HardConfirmed for stack " +
                           s"${stack.round1.unsigned.brief.stackNum}"
@@ -424,14 +428,11 @@ trait CardanoLiaison(
       * Minor-only stacks (no settlement, no finalization) carry no backbone — nothing reaches L1;
       * `targetState` is left unchanged.
       *
-      * NOTE (M6 gap): the effect bodies learned here are the slow-consensus-ratified *bodies*, NOT
-      * yet augmented with the aggregated multisig witnesses from the saturated hard-acks —
-      * `Stack.HardConfirmed` does not even carry the acks yet (`Stack.Round1Confirmed.round1Acks` /
-      * `HardConfirmed.round2Acks` are unimplemented; SlowConsensusActor is the M6 auto-confirm
-      * stub). Submitting unwitnessed bodies cannot succeed on L1; the
-      * witness-aggregation/attachment step is part of M6 and is identical for the Initial path (see
-      * [[handleInitialStackL1Effects]]). This is unrelated to Bootstrap wiring (which is the
-      * separate matter of how stack 0 is *composed/produced*).
+      * The effect bodies in `eff` are already MULTISIGNED: SlowConsensusActor aggregates every head
+      * peer's verified hard-ack signature into `VKeyWitness`es and attaches them onto each effect
+      * tx before emitting `Stack.HardConfirmed.effects` (same for the Initial path, see
+      * [[handleInitialStackL1Effects]]). So they are submittable on L1 as is — no
+      * witness-attachment step remains here.
       */
     private def handleStackL1Effects(eff: StackEffects.Regular): IO[Unit] = {
         val backbones: List[SettlementTx | FinalizationTx] =
@@ -493,13 +494,12 @@ trait CardanoLiaison(
       * init tx (the round-2 Initial unlock) + the locally-derived fallback; this overrides the
       * seeded entries with them so `runEffects` submits the correct init tx.
       *
-      * NOTE (M6 gap): same as the [[handleStackL1Effects]] (Regular) path — the init tx / fallback
-      * bodies learned here are NOT yet augmented with the aggregated multisig witnesses from the
-      * saturated hard-acks (`Stack.HardConfirmed` doesn't carry the acks yet; SlowConsensusActor is
-      * the M6 auto-confirm stub). The witness-aggregation/attachment step is part of M6, identical
-      * for Regular and Initial. It is NOT a Bootstrap-wiring concern: Bootstrap wiring is the
-      * orthogonal, Initial-only matter of how stack 0 gets *composed/produced* (StackComposer's
-      * `Bootstrap` param), not how its effects get witnessed.
+      * As on the [[handleStackL1Effects]] (Regular) path, `eff`'s init tx + fallback bodies are
+      * already MULTISIGNED — SlowConsensusActor aggregated the saturated round-1/round-2 Initial
+      * hard-acks (including each peer's individual funding witnesses) into the witnesses on these
+      * bodies. The remaining Initial-only gap is *Bootstrap wiring* — how stack 0 gets
+      * *composed/produced* in the first place (StackComposer's `Bootstrap` param) — which is
+      * orthogonal to (and unaffected by) this witnessing.
       */
     private def handleInitialStackL1Effects(eff: StackEffects.Initial): IO[Unit] = for {
         _ <- Tracer.info(

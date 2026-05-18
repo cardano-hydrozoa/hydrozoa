@@ -9,9 +9,12 @@ import hydrozoa.multisig.ledger.block.{Block, BlockResult}
   *     (follower); per-effect bodies are derived but no hard-acks are aggregated yet.
   *   - [[Stack.Round1Confirmed]] — round-1 hard-acks (per-effect signatures for everything except
   *     the first settlement / finalization unlock) are saturated.
-  *   - [[Stack.HardConfirmed]] — round-2 hard-acks (the unlock tx body) are saturated. For 1-phase
-  *     (minor-only) stacks, `round2Acks` is empty and the sole-round acks live inside
-  *     [[Stack.Round1Confirmed.round1Acks]].
+  *   - [[Stack.HardConfirmed]] — every required round is saturated (round 2 / the unlock for
+  *     2-phase stacks; the sole round for minor-only ones). The collected per-peer hard-ack
+  *     signatures have been aggregated into `VKeyWitness`es and attached onto the effect tx bodies:
+  *     [[HardConfirmed.effects]] is the **multisigned** effect set, submittable on L1 as is. (The
+  *     raw acks have served their purpose at this point — they are verified and aggregated by
+  *     [[hydrozoa.multisig.consensus.SlowConsensusActor]], not carried further.)
   */
 sealed trait Stack
 
@@ -25,10 +28,16 @@ object Stack:
 
     final case class Round1Confirmed(
         unsigned: Unsigned
-        // round1Acks: NonEmptyList[HardAckRound1] — populated by SlowConsensusActor (M3/M6)
+        // round1Acks live transiently inside SlowConsensusActor's cell; once round 2 / sole
+        // saturates they are aggregated into witnesses on HardConfirmed.effects, not stored here.
     ) extends Stack
 
+    /** @param effects
+      *   the stack's effects with every head peer's `VKeyWitness` attached (a standalone evac
+      *   commitment is NOT a tx and carries no witnesses — it is unchanged from `round1.unsigned`).
+      *   These bodies are L1-submittable as is.
+      */
     final case class HardConfirmed(
-        round1: Round1Confirmed
-        // round2Acks: List[HardAckRound2] — empty for minor-only 1-phase stacks
+        round1: Round1Confirmed,
+        effects: StackEffects
     ) extends Stack
