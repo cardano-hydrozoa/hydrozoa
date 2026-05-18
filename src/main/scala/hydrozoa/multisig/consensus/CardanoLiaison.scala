@@ -298,17 +298,14 @@ trait CardanoLiaison(
                             // machine immediately (mirrors the pre-split
                             // `handle*BlockL1Effects >> runEffects`).
                             handleStackL1Effects(reg) >> runEffects
-                        case _: StackEffects.Initial =>
-                            // Stack 0: the initialization tx + initial fallback are already
-                            // seeded into `State.initialState` from head config. The
-                            // slow-consensus boot path (StackComposer `Bootstrap`) is not
-                            // wired yet, so this branch is currently unreachable; (re)run
-                            // effects defensively so a hard-confirmed stack 0 still drives
-                            // the already-seeded init/fallback to L1.
-                            Tracer.info(
-                              "initial stack hard-confirmed; init/fallback already seeded " +
-                                  "at construction — running effects"
-                            ) >> runEffects
+                        case ini: StackEffects.Initial =>
+                            // Stack 0. We MUST submit the initialization tx from the
+                            // hard-confirmed initial stack — NOT `config.initializationTx`,
+                            // which is the UNSIGNED body from head config. The config copy
+                            // is only a pre-confirmation placeholder seeded by
+                            // `State.initialState`; this overrides it (init effect +
+                            // initial fallback) with the slow-consensus-ratified ones.
+                            handleInitialStackL1Effects(ini) >> runEffects
                     })
                 }
         }
@@ -477,6 +474,36 @@ trait CardanoLiaison(
             _ <- Tracer.trace(s"state after stack effects: ${newState.prettyDump}")
         } yield ()
     }
+
+    /** M9 — learn the hard-confirmed *initial* stack's L1 effects (stack 0).
+      *
+      * `State.initialState` seeds `EffectId.initializationEffectId` from `config.initializationTx`
+      * and `fallbackEffects(Major.zero)` from `config.initialFallbackTx`. That config init tx is
+      * the **unsigned** body — usable only as a pre-confirmation placeholder, never submittable.
+      * Once stack 0 is hard-confirmed, [[StackEffects.Initial]] carries the slow-consensus-ratified
+      * init tx (the round-2 Initial unlock) + the locally-derived fallback; this overrides the
+      * seeded entries with them so `runEffects` submits the correct init tx.
+      *
+      * NOTE: like the [[StackEffects.Regular]] path, the per-effect bodies here are not yet
+      * augmented with the multisig vkey witnesses aggregated in the round-2 Initial hard-acks —
+      * that witness-attachment step is the remaining Bootstrap-wiring concern (same shape as the
+      * Regular per-effect sig-attachment gap), tracked separately.
+      */
+    private def handleInitialStackL1Effects(eff: StackEffects.Initial): IO[Unit] = for {
+        _ <- Tracer.info(
+          "entering handleInitialStackL1Effects: overriding the config-seeded UNSIGNED " +
+              "init tx + fallback with the hard-confirmed initial stack's"
+        )
+        newState <- stateRef.updateAndGet { s =>
+            s.copy(
+              targetState = TargetState.Active(eff.initializationTx.treasuryProduced.utxoId),
+              happyPathEffects = s.happyPathEffects
+                  .updated(EffectId.initializationEffectId, eff.initializationTx),
+              fallbackEffects = s.fallbackEffects.updated(BlockVersion.Major.zero, eff.fallbackTx)
+            )
+        }
+        _ <- Tracer.trace(s"state after initial-stack effects: ${newState.prettyDump}")
+    } yield ()
 
     /** The rollout txs belonging to one backbone (settlement / finalization), in chain order.
       *
