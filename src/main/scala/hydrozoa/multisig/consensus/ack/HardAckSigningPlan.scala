@@ -109,9 +109,12 @@ object HardAckSigningPlan {
         unsigned: Stack.Unsigned,
         effects: StackEffects.Regular
     ): HardAckSigningPlan = {
-        // Header signing bytes by blockNum — an evac commitment commits a *block header* (KZG
-        // lives on the header), so a peer signs the full minor header, the same shape a
-        // soft-ack signs.
+        // Header signing bytes by blockNum — the evac-commit hard-ack must bind the block's
+        // KZG commitment (that IS the standalone evac record). KZG is deliberately kept in
+        // the fast-consensus brief for now (TRANSITIONAL — see the note on
+        // BlockHeader.Fields.HasKzgCommitment), so `signingBytes` already carries it and
+        // these bytes happen to coincide with the soft-ack domain today; once KZG moves
+        // slow-side the slow side will need its own KZG-bearing serialization here.
         val headerBytesByBlock: Map[BlockNumber, BlockHeader.Minor.Onchain.Serialized] =
             unsigned.results.toList.map { r =>
                 r.brief.blockNum -> r.brief.header.signingBytes

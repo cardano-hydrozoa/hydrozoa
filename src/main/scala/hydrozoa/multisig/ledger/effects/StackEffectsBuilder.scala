@@ -17,9 +17,10 @@ import hydrozoa.multisig.ledger.stack.{StackEffects, StandaloneEvacuationCommitm
   *     [[StandaloneEvacuationCommitment]] `(committedBlockNum, blockVersion, kzg)` presented to the
   *     L1 dispute-resolution scripts in the rules-based regime (only after a fallback) — never
   *     submitted immediately, never a treasury mutation. Hard-acked by a signature over the minor
-  *     block's header (KZG lives on the header), the same shape a soft-ack signs. For initial/major
-  *     blocks the evac commitment is implicit in the initialization/settlement effect (immediate to
-  *     L1 on execution), so no standalone record / no separate signature there.
+  *     block's header (it binds the block's KZG; KZG is transitionally kept in the brief — see the
+  *     TRANSITIONAL note on `BlockHeader.Fields.HasKzgCommitment`). For initial/major blocks the
+  *     evac commitment is implicit in the initialization/settlement effect (immediate to L1 on
+  *     execution), so no standalone record / no separate signature there.
   *
   * Adds slow-side concerns on top of the helpers:
   *   - Treasury rotation across stacks (re-enabled in M10 once slow consensus drives it) — only via

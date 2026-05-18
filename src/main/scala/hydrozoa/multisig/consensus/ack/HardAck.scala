@@ -90,9 +90,11 @@ object HardAck {
           * `evacCommit` is a single `Option[(BlockNumber, [[BlockHeader.HeaderSignature]])]` — a
           * stack has at most ONE TrailingMinors partition ⇒ at most one standalone evac commitment.
           * It carries a header signature (NOT a [[TxSignature]]): a standalone evacuation
-          * commitment commits a *block header* — KZG commitments still live on `BlockHeader` (kept
-          * there so the rule-based on-chain code is untouched), so a peer signs the full header,
-          * the same shape a soft-ack signs.
+          * commitment commits a *block header* — it must bind the block's KZG commitment (that IS
+          * the standalone evac record). KZG is deliberately kept in the fast-consensus brief *for
+          * now* so the rule-based on-chain code is untouched (TRANSITIONAL — see the note on
+          * `BlockHeader.Fields.HasKzgCommitment`), so a peer signs the full header and today those
+          * bytes coincide with the soft-ack domain; that coincidence ends once KZG moves slow-side.
           */
         final case class Regular(
             settlements: Map[PartitionIndex, TxSignature],
