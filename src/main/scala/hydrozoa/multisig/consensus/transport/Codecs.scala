@@ -97,9 +97,9 @@ object Codecs {
 
     // ---- StackNumber / HardAckNumber / HardAckId / HardAck ----
     //
-    // StackBrief has its own derived Codec; we just need primitive opaque-type codecs +
-    // a placeholder for HardAck. Real HardAck wire codec lands when slow-side ack collection
-    // is wired (M6 full); the auto-confirm stub never serializes a HardAck.
+    // StackBrief has its own derived Codec; here we add the opaque-type primitives and the
+    // real discriminated HardAck wire codec (M6 — slow-side ack collection is live, so
+    // hard-acks now traverse the wire between peers).
 
     given Codec[StackNumber] =
         io.circe.Codec.from(
