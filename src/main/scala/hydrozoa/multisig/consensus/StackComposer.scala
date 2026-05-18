@@ -298,6 +298,23 @@ final case class StackComposer(
                       in = r2
                     )
                     (List(round1, round2), n2.increment)
+                case HardAckSigningPlan.Initial(r1, r2) =>
+                    // Stack 0: structurally 2-phase, exogenous unlock. Same counter
+                    // discipline as TwoPhase; the Initial wallet methods sign the
+                    // fallback (round 1) and the init tx body + carried witnesses (round 2).
+                    val n1 = s.ownHardAckNum
+                    val n2 = n1.increment
+                    val round1 = wallet.mkHardAckRound1Initial(
+                      stackNum = stackNum,
+                      hardAckNum = n1,
+                      in = r1
+                    )
+                    val round2 = wallet.mkHardAckRound2Initial(
+                      stackNum = stackNum,
+                      hardAckNum = n2,
+                      in = r2
+                    )
+                    (List(round1, round2), n2.increment)
                 case HardAckSigningPlan.Sole(sole) =>
                     val n = s.ownHardAckNum
                     val soleAck = wallet.mkHardAckSole(

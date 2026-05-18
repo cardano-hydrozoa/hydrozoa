@@ -102,30 +102,31 @@ final case class SlowConsensusActor(
                     for {
                         ownR1 <- h.ownAcks
                             .collectFirst {
-                                case a @ HardAck(_, _, p: HardAck.Round1Payload.Regular) => (a, p)
+                                case a @ HardAck(_, _, p: HardAck.Round1Payload.Regular) =>
+                                    (a, p: HardAck.Payload.Round1)
                             }
                             .liftTo[IO](HandoffError.MissingOwnAck("own round-1 (Regular)"))
                         ownR2 <- h.ownAcks
                             .collectFirst {
-                                case a @ HardAck(_, _, p: HardAck.Round2Payload.Regular) => (a, p)
+                                case a @ HardAck(_, _, _: HardAck.Round2Payload.Regular) => a
                             }
                             .liftTo[IO](HandoffError.MissingOwnAck("own round-2 (Regular)"))
-                        _ <- verifyRound1(plan, ownPeer, ownR1._2)
-                        _ <- verifyRound2(plan, ownPeer, ownR2._2)
-                        cell = Cell.WaitingRound1(
-                          unsigned = h.unsigned,
-                          plan = plan,
-                          round1 = Map(ownPeer -> ownR1._2),
-                          ownRound2 = ownR2._1,
-                          round2Stash = Map.empty
-                        )
-                        _ <- putCell(stackNum, cell)
-                        _ <- Tracer.info(
-                          s"stack $stackNum handed off (2-phase); broadcasting own round-1"
-                        )
-                        _ <- broadcast(ownR1._1)
-                        _ <- replayOrphans(stackNum)
-                        _ <- tryAdvance(stackNum)
+                        _ <- start2Phase(stackNum, ownPeer, h.unsigned, plan, ownR1, ownR2)
+                    } yield ()
+                case plan: HardAckSigningPlan.Initial =>
+                    for {
+                        ownR1 <- h.ownAcks
+                            .collectFirst {
+                                case a @ HardAck(_, _, p: HardAck.Round1Payload.Initial) =>
+                                    (a, p: HardAck.Payload.Round1)
+                            }
+                            .liftTo[IO](HandoffError.MissingOwnAck("own round-1 (Initial)"))
+                        ownR2 <- h.ownAcks
+                            .collectFirst {
+                                case a @ HardAck(_, _, _: HardAck.Round2Payload.Initial) => a
+                            }
+                            .liftTo[IO](HandoffError.MissingOwnAck("own round-2 (Initial)"))
+                        _ <- start2Phase(stackNum, ownPeer, h.unsigned, plan, ownR1, ownR2)
                     } yield ()
                 case plan: HardAckSigningPlan.Sole =>
                     for {
@@ -150,6 +151,43 @@ final case class SlowConsensusActor(
                     } yield ()
             }
         }
+
+    /** Shared 2-phase cell creation (Regular + Initial): verify own acks against the plan, create
+      * WaitingRound1, broadcast own round-1, replay orphans, advance.
+      */
+    private def start2Phase(
+        stackNum: StackNumber,
+        ownPeer: HeadPeerNumber,
+        unsigned: Stack.Unsigned,
+        plan: TwoPhasePlan,
+        ownR1: (HardAck, HardAck.Payload.Round1),
+        ownR2: HardAck
+    ): IO[Unit] = for {
+        _ <- verify2PhaseRound1(plan, ownPeer, ownR1._2)
+        ownR2p <- round2PayloadOf(ownR2)
+        _ <- verify2PhaseRound2(plan, ownPeer, ownR2p)
+        _ <- putCell(
+          stackNum,
+          Cell.WaitingRound1(
+            unsigned = unsigned,
+            plan = plan,
+            round1 = Map(ownPeer -> ownR1._2),
+            ownRound2 = ownR2,
+            round2Stash = Map.empty
+          )
+        )
+        _ <- Tracer.info(
+          s"stack $stackNum handed off (2-phase); broadcasting own round-1"
+        )
+        _ <- broadcast(ownR1._1)
+        _ <- replayOrphans(stackNum)
+        _ <- tryAdvance(stackNum)
+    } yield ()
+
+    private def round2PayloadOf(a: HardAck): IO[HardAck.Payload.Round2] = a.payload match {
+        case p: HardAck.Payload.Round2 => IO.pure(p)
+        case other => IO.raiseError(CellError.UnexpectedPayload(a.stackNum, other.roundLabel))
+    }
 
     // ===================================
     // Remote acks
@@ -177,14 +215,14 @@ final case class SlowConsensusActor(
         cell match {
             case c: Cell.WaitingRound1 =>
                 h.payload match {
-                    case p: HardAck.Round1Payload.Regular =>
-                        verifyRound1(c.plan, peer, p).as(
+                    case p: HardAck.Payload.Round1 =>
+                        verify2PhaseRound1(c.plan, peer, p).as(
                           c.copy(round1 = c.round1.updated(peer, p))
                         )
-                    case p: HardAck.Round2Payload.Regular =>
+                    case p: HardAck.Payload.Round2 =>
                         // Early round-2 (peer reached round-1 confirmation before us).
                         // plan.round2 is known at cell creation, so verify now and stash.
-                        verifyRound2(c.plan, peer, p).as(
+                        verify2PhaseRound2(c.plan, peer, p).as(
                           c.copy(round2Stash = c.round2Stash.updated(peer, p))
                         )
                     case other =>
@@ -192,11 +230,11 @@ final case class SlowConsensusActor(
                 }
             case c: Cell.WaitingRound2 =>
                 h.payload match {
-                    case p: HardAck.Round2Payload.Regular =>
-                        verifyRound2(c.plan, peer, p).as(
+                    case p: HardAck.Payload.Round2 =>
+                        verify2PhaseRound2(c.plan, peer, p).as(
                           c.copy(round2 = c.round2.updated(peer, p))
                         )
-                    case _: HardAck.Round1Payload.Regular =>
+                    case _: HardAck.Payload.Round1 =>
                         // Round-1 already saturated; a duplicate / late round-1 is benign.
                         Tracer
                             .debug(
@@ -241,11 +279,7 @@ final case class SlowConsensusActor(
           s"stack $stackNum round-1 confirmed; releasing own round-2 ack"
         )
         ownPeer = config.ownHeadPeerNum
-        ownR2Payload <- c.ownRound2.payload match {
-            case p: HardAck.Round2Payload.Regular => IO.pure(p)
-            case other =>
-                IO.raiseError(CellError.UnexpectedPayload(stackNum, other.roundLabel))
-        }
+        ownR2Payload <- round2PayloadOf(c.ownRound2)
         round2 = c.round2Stash.updated(ownPeer, ownR2Payload)
         _ <- putCell(
           stackNum,
@@ -325,6 +359,56 @@ final case class SlowConsensusActor(
               )
             )
     }
+
+    /** Dispatch a round-1 payload to the verifier matching the cell's plan variant. A
+      * plan/payload-shape mismatch (e.g. an Initial payload against a TwoPhase plan) is a protocol
+      * error ⇒ raise.
+      */
+    private def verify2PhaseRound1(
+        plan: TwoPhasePlan,
+        peer: HeadPeerNumber,
+        p: HardAck.Payload.Round1
+    ): IO[Unit] = (plan, p) match {
+        case (tp: HardAckSigningPlan.TwoPhase, r: HardAck.Round1Payload.Regular) =>
+            verifyRound1(tp, peer, r)
+        case (ip: HardAckSigningPlan.Initial, r: HardAck.Round1Payload.Initial) =>
+            verifyRound1Initial(ip, peer, r)
+        case _ =>
+            IO.raiseError(CellError.PlanPayloadMismatch("round-1", p.roundLabel))
+    }
+
+    private def verify2PhaseRound2(
+        plan: TwoPhasePlan,
+        peer: HeadPeerNumber,
+        p: HardAck.Payload.Round2
+    ): IO[Unit] = (plan, p) match {
+        case (tp: HardAckSigningPlan.TwoPhase, r: HardAck.Round2Payload.Regular) =>
+            verifyRound2(tp, peer, r)
+        case (ip: HardAckSigningPlan.Initial, r: HardAck.Round2Payload.Initial) =>
+            verifyRound2Initial(ip, peer, r)
+        case _ =>
+            IO.raiseError(CellError.PlanPayloadMismatch("round-2", p.roundLabel))
+    }
+
+    /** Initial stack round 1: a single sig over the locally-derived fallback tx body. */
+    private def verifyRound1Initial(
+        plan: HardAckSigningPlan.Initial,
+        peer: HeadPeerNumber,
+        p: HardAck.Round1Payload.Initial
+    ): IO[Unit] =
+        peerVKey(peer).flatMap(vk => verifyTx(vk, plan.round1.fallback, p.fallbackSig))
+
+    /** Initial stack round 2: sig over the exogenous init tx body. The carried
+      * `individualWitnesses` are operator-supplied vkey witnesses for utxos funded from individual
+      * addresses — those are validated by L1 tx validation (the multisig script / the inputs they
+      * unlock), not by slow consensus, so we verify only the consensus `initTxSig` here.
+      */
+    private def verifyRound2Initial(
+        plan: HardAckSigningPlan.Initial,
+        peer: HeadPeerNumber,
+        p: HardAck.Round2Payload.Initial
+    ): IO[Unit] =
+        peerVKey(peer).flatMap(vk => verifyTx(vk, plan.round2.initTx, p.initTxSig))
 
     private def verifyRound1(
         plan: HardAckSigningPlan.TwoPhase,
@@ -444,21 +528,30 @@ object SlowConsensusActor {
       */
     final case class StackHandoff(unsigned: Stack.Unsigned, ownAcks: List[HardAck])
 
-    /** Per-stack aggregation cell. */
+    /** A 2-phase stack is either a regular one (settlement / finalization present) or the initial
+      * stack — both use the same WaitingRound1 → WaitingRound2 machinery, only the payload variant
+      * + verification differ.
+      */
+    type TwoPhasePlan = HardAckSigningPlan.TwoPhase | HardAckSigningPlan.Initial
+
+    /** Per-stack aggregation cell. The 2-phase cells store the round-payload *supertypes*
+      * (`HardAck.Payload.Round1`/`Round2`) so Regular and Initial share one state machine;
+      * verification dispatches on `(plan, payload)`.
+      */
     sealed trait Cell { def unsigned: Stack.Unsigned }
     object Cell {
         final case class WaitingRound1(
             unsigned: Stack.Unsigned,
-            plan: HardAckSigningPlan.TwoPhase,
-            round1: Map[HeadPeerNumber, HardAck.Round1Payload.Regular],
+            plan: TwoPhasePlan,
+            round1: Map[HeadPeerNumber, HardAck.Payload.Round1],
             ownRound2: HardAck,
-            round2Stash: Map[HeadPeerNumber, HardAck.Round2Payload.Regular]
+            round2Stash: Map[HeadPeerNumber, HardAck.Payload.Round2]
         ) extends Cell
 
         final case class WaitingRound2(
             unsigned: Stack.Unsigned,
-            plan: HardAckSigningPlan.TwoPhase,
-            round2: Map[HeadPeerNumber, HardAck.Round2Payload.Regular]
+            plan: TwoPhasePlan,
+            round2: Map[HeadPeerNumber, HardAck.Payload.Round2]
         ) extends Cell
 
         final case class WaitingSole(
@@ -493,6 +586,7 @@ object SlowConsensusActor {
         case NoCell(stackNum: StackNumber)
         case UnknownPeer(peer: HeadPeerNumber)
         case UnexpectedPayload(stackNum: StackNumber, roundLabel: String)
+        case PlanPayloadMismatch(round: String, payloadRound: String)
         case BadSignature(what: String)
         case KeysetMismatch(label: String, expected: String, actual: String)
         override def getMessage: String = this match
@@ -500,6 +594,8 @@ object SlowConsensusActor {
             case UnknownPeer(p) => s"Unknown head peer $p"
             case UnexpectedPayload(s, r) =>
                 s"Unexpected $r payload for stack $s in current phase"
+            case PlanPayloadMismatch(r, pr) =>
+                s"Plan/payload variant mismatch at $r: payload round=$pr"
             case BadSignature(w) => s"Hard-ack signature verification failed for $w"
             case KeysetMismatch(l, e, a) =>
                 s"Hard-ack keyset mismatch for $l: expected $e, got $a"

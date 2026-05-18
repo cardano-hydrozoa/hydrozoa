@@ -35,22 +35,48 @@ object HardAckSigningPlan {
     /** 1-phase minor-only stack: no settlement, no finalization. */
     final case class Sole(sole: HardAck.SigningInputs.Sole) extends HardAckSigningPlan
 
-    /** Derive the plan from a closed regular stack.
+    /** Initial stack (stack 0). Structurally 2-phase, but the unlock is exogenous: round 1 signs
+      * the locally-derived fallback tx body, round 2 signs the exogenous initialization tx body +
+      * the per-peer individual key witnesses already carried on it (operator-supplied funding for
+      * utxos spent from individual addresses). Verified/handled by the same 2-phase cell machinery
+      * as [[TwoPhase]].
+      */
+    final case class Initial(
+        round1: HardAck.SigningInputs.Round1Initial,
+        round2: HardAck.SigningInputs.Round2Initial
+    ) extends HardAckSigningPlan
+
+    /** Derive the plan from a closed stack — total over [[StackEffects]].
       *
       * @throws IllegalStateException
-      *   for `StackEffects.Initial` (the boot path is not wired yet — see StackComposer
-      *   `Bootstrap`), or for the impossible-by-construction cases (a 2-phase stack with neither
-      *   settlement nor finalization; a minor-only stack with no evac commitment).
+      *   only for impossible-by-construction cases (a 2-phase regular stack with neither settlement
+      *   nor finalization; a minor-only stack with no evac commitment).
       */
-    def from(unsigned: Stack.Unsigned): HardAckSigningPlan = {
-        val effects = unsigned.effects match {
-            case r: StackEffects.Regular => r
-            case _: StackEffects.Initial =>
-                throw new IllegalStateException(
-                  "HardAckSigningPlan.from: Initial stacks not yet supported"
+    def from(unsigned: Stack.Unsigned): HardAckSigningPlan =
+        unsigned.effects match {
+            case e: StackEffects.Initial =>
+                // Pure: both bodies come straight off the stack. The individual witnesses are
+                // the operator-supplied vkey witnesses already attached to the exogenous init
+                // tx (the multisig sig itself is the round-2 `initTxSig`, aggregated by
+                // consensus). `headId`-style per-peer wallet signing is not needed here — the
+                // wallet only signs the init/fallback bodies.
+                HardAckSigningPlan.Initial(
+                  round1 = HardAck.SigningInputs.Round1Initial(fallback = e.fallbackTx.tx),
+                  round2 = HardAck.SigningInputs.Round2Initial(
+                    initTx = e.initializationTx.tx,
+                    individualWitnesses =
+                        e.initializationTx.tx.witnessSetRaw.value.vkeyWitnesses.toSet.toList
+                  )
                 )
+            case effects: StackEffects.Regular =>
+                regularPlan(unsigned, effects)
         }
 
+    /** The 2-phase / sole plan for a non-initial (regular) stack. */
+    private def regularPlan(
+        unsigned: Stack.Unsigned,
+        effects: StackEffects.Regular
+    ): HardAckSigningPlan = {
         // Header signing bytes by blockNum — an evac commitment commits a *block header* (KZG
         // lives on the header), so a peer signs the full minor header, the same shape a
         // soft-ack signs.
