@@ -13,9 +13,9 @@ import hydrozoa.multisig.ledger.effects.PartitionIndex
   *     effects aren't yet hard-confirmed (atomicity).
   *   - **1-phase / sole** (minor-only stack): one round over all the effect signatures.
   *
-  * Both the signer (StackComposer assembling its own acks) and the verifier (SlowConsensusActor)
-  * frame the *same* flat inputs the *same* way, so the round each signature belongs to is itself
-  * deterministic.
+  * The round a signature lands in is a pure function of the flat inputs (which effect is the
+  * unlock), so framing needs no extra peer coordination — the cross-peer determinism it relies on
+  * is that of [[StackEffectsSigningInputs]] (see its "Determinism" note), not restated here.
   */
 sealed trait HardAckRoundPlan
 
