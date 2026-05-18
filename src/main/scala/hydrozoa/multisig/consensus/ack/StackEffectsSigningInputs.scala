@@ -32,11 +32,24 @@ sealed trait StackEffectsSigningInputs
 
 object StackEffectsSigningInputs {
 
-    /** Which regular-stack effect is the round-2 *unlock* (the L1 entry point all other effects
-      * depend on). Selecting it is a property of the effects; the round *framing* that uses it
-      * lives in [[HardAckRoundPlan]].
+    // Variants in chronological order: stack 0 (Initial) first, then stack 1+ (Regular).
+
+    /** Stack 0. The init tx is exogenous; round framing signs the fallback then the init tx — see
+      * [[HardAckRoundPlan]]. The rich [[InitializationTx]] is kept so the wallet/verifier can
+      * resolve the init tx's spent inputs for the individual-witness rule
+      * ([[spendsFromIndividualAddress]]).
       */
-    enum Unlock:
+    final case class Initial(
+        fallback: Transaction,
+        initTx: InitializationTx
+    ) extends StackEffectsSigningInputs
+
+    /** Which effect of a [[Regular]] stack is the round-2 *unlock* (the L1 entry point all other
+      * effects depend on). Scoped to `Regular` only — the [[Initial]] stack's unlock is
+      * structurally fixed (always the init tx), so it needs no selector. Selecting it is a property
+      * of the effects; the round *framing* that uses it lives in [[HardAckRoundPlan]].
+      */
+    enum RegularUnlock:
         /** The first settlement (`settlements(PartitionIndex.zero)`). */
         case FirstSettlement
 
@@ -56,17 +69,7 @@ object StackEffectsSigningInputs {
         refunds: Map[(PartitionIndex, WithinPartitionIndex), Transaction],
         evacCommit: Option[(BlockNumber, BlockHeader.Minor.Onchain.Serialized)],
         finalization: Option[Transaction],
-        unlock: Option[Unlock]
-    ) extends StackEffectsSigningInputs
-
-    /** Stack 0. The init tx is exogenous; round framing signs the fallback then the init tx — see
-      * [[HardAckRoundPlan]]. The rich [[InitializationTx]] is kept so the wallet/verifier can
-      * resolve the init tx's spent inputs for the individual-witness rule
-      * ([[spendsFromIndividualAddress]]).
-      */
-    final case class Initial(
-        fallback: Transaction,
-        initTx: InitializationTx
+        unlock: Option[RegularUnlock]
     ) extends StackEffectsSigningInputs
 
     /** Derive the flat signing inputs from a closed stack — total over [[StackEffects]]. */
@@ -112,8 +115,8 @@ object StackEffectsSigningInputs {
           evacCommit = effects.evacCommit.map(evacHeaderBytes),
           finalization = effects.finalization.map(_.tx),
           unlock =
-              if effects.settlements.nonEmpty then Some(Unlock.FirstSettlement)
-              else if effects.finalization.isDefined then Some(Unlock.Finalization)
+              if effects.settlements.nonEmpty then Some(RegularUnlock.FirstSettlement)
+              else if effects.finalization.isDefined then Some(RegularUnlock.Finalization)
               else None
         )
     }

@@ -21,14 +21,8 @@ sealed trait HardAckRoundPlan
 
 object HardAckRoundPlan {
 
-    /** 2-phase regular stack: round 1 = every effect except the unlock; round 2 = the unlock. */
-    final case class TwoPhase(
-        round1: HardAck.SigningInputs.Round1Regular,
-        round2: HardAck.SigningInputs.Round2Regular
-    ) extends HardAckRoundPlan
-
-    /** 1-phase minor-only stack: the only round. */
-    final case class Sole(sole: HardAck.SigningInputs.Sole) extends HardAckRoundPlan
+    // Variants in chronological order: stack 0 (Initial) first, then stack 1+ (regular:
+    // TwoPhase / Sole).
 
     /** Initial stack (stack 0): round 1 signs the locally-derived fallback; round 2 signs the
       * exogenous init tx body (the head multisig contribution) and, per peer, attaches an
@@ -40,6 +34,15 @@ object HardAckRoundPlan {
         round1: HardAck.SigningInputs.Round1Initial,
         round2: HardAck.SigningInputs.Round2Initial
     ) extends HardAckRoundPlan
+
+    /** 2-phase regular stack: round 1 = every effect except the unlock; round 2 = the unlock. */
+    final case class TwoPhase(
+        round1: HardAck.SigningInputs.Round1Regular,
+        round2: HardAck.SigningInputs.Round2Regular
+    ) extends HardAckRoundPlan
+
+    /** 1-phase minor-only stack: the only round. */
+    final case class Sole(sole: HardAck.SigningInputs.Sole) extends HardAckRoundPlan
 
     /** Frame the flat signing inputs into the round packaging.
       *
@@ -69,7 +72,7 @@ object HardAckRoundPlan {
                 case Some(unlock) =>
                     // Round 1 = everything except the unlock; round 2 = the unlock.
                     val (round1Settlements, round1Finalization, unlockTx) = unlock match {
-                        case StackEffectsSigningInputs.Unlock.FirstSettlement =>
+                        case StackEffectsSigningInputs.RegularUnlock.FirstSettlement =>
                             (
                               r.settlements - PartitionIndex.zero,
                               r.finalization, // signed in round 1 (settlement is the unlock)
@@ -80,7 +83,7 @@ object HardAckRoundPlan {
                                 )
                               )
                             )
-                        case StackEffectsSigningInputs.Unlock.Finalization =>
+                        case StackEffectsSigningInputs.RegularUnlock.Finalization =>
                             (
                               r.settlements, // empty when finalization is the unlock
                               None, // the finalization IS the round-2 unlock
