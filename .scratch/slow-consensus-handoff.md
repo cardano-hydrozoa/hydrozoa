@@ -99,7 +99,7 @@ PeerLiaison transport (M7)
   StackBrief; hands off Stack.Unsigned + own acks to SlowConsensusActor.
 - `SlowConsensusActor` replaces stub; auto-confirms on receipt; emits
   Stack.HardConfirmed + PreviousStackHardConfirmation.
-- Both wired into `MultisigRegimeManager.Connections`; `isSlowLeader(stackNum)`
+1- Both wired into `MultisigRegimeManager.Connections`; `isSlowLeader(stackNum)`
   on `HeadPeerId`.
 
 ### Wire transport (M7 — `2115a5b6`)

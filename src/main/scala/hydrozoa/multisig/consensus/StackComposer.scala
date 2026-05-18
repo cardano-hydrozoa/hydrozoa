@@ -9,9 +9,9 @@ import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.MultisigRegimeManager
-import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber}
-import hydrozoa.multisig.ledger.block.{Block, BlockHeader, BlockNumber, BlockResult}
-import hydrozoa.multisig.ledger.effects.{NecessaryEffectsPolicy, PartitionIndex, StackEffectsBuilder, WithinPartitionIndex}
+import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckSigningPlan}
+import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockResult}
+import hydrozoa.multisig.ledger.effects.{NecessaryEffectsPolicy, StackEffectsBuilder}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l1.L1LedgerM
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
@@ -276,109 +276,37 @@ final case class StackComposer(
       */
     private def buildHandoff(unsigned: Stack.Unsigned): IO[SlowConsensusActor.StackHandoff] =
         state.modify { s =>
-            val effects = unsigned.effects match {
-                case r: StackEffects.Regular => r
-                case _: StackEffects.Initial =>
-                    throw new IllegalStateException(
-                      "buildHandoff: Initial stacks not yet supported by StackComposer leader path"
-                    )
-            }
             val wallet = config.ownHeadWallet
             val stackNum = unsigned.brief.stackNum
 
-            // Header signing bytes by blockNum — the wallet signs evac-commit *headers*
-            // (KZG lives on the header), so the composer must surface them here. The wallet
-            // never walks the stack itself.
-            val headerBytesByBlock: Map[BlockNumber, BlockHeader.Minor.Onchain.Serialized] =
-                unsigned.results.toList.map { r =>
-                    r.brief.blockNum -> r.brief.header.signingBytes
-                }.toMap
-            def evacHeaderBytes(
-                ec: StandaloneEvacuationCommitment
-            ): (BlockNumber, BlockHeader.Minor.Onchain.Serialized) =
-                ec.committedBlockNum -> headerBytesByBlock(ec.committedBlockNum)
-
-            // Partition-index keys use list-index as a proxy (single-partition is the common
-            // case; multi-partition exercises the same code paths with multiple entries).
-            val refundsIn = effects.refunds.zipWithIndex.map { case (tx, i) =>
-                (PartitionIndex.zero, WithinPartitionIndex(i)) -> tx.tx
-            }.toMap
-
-            val twoPhase = effects.settlements.nonEmpty || effects.finalization.isDefined
-
-            val (acks, newCounter) =
-                if twoPhase then {
+            // Per-effect signing material is derived by the shared, deterministic
+            // [[HardAckSigningPlan]] (same code path SlowConsensusActor uses to verify remote
+            // peers' sigs). The composer only allocates monotonic HardAckNumbers and maps the
+            // plan through its wallet — it does not key effects itself.
+            val (acks, newCounter) = HardAckSigningPlan.from(unsigned) match {
+                case HardAckSigningPlan.TwoPhase(r1, r2) =>
                     val n1 = s.ownHardAckNum
                     val n2 = n1.increment
-
-                    val firstUnlockIsSettlement = effects.settlements.nonEmpty
-                    // Round-1 signs every effect EXCEPT the round-2 unlock (first
-                    // settlement, or finalization when there's no settlement).
-                    val round1Settlements = effects.settlements.zipWithIndex.collect {
-                        case (tx, i) if !(firstUnlockIsSettlement && i == 0) =>
-                            PartitionIndex(i) -> tx.tx
-                    }.toMap
-                    val round1Fallbacks = effects.fallbacks.zipWithIndex.map { case (tx, i) =>
-                        PartitionIndex(i) -> tx.tx
-                    }.toMap
-                    val round1Rollouts = effects.rollouts.zipWithIndex.map { case (tx, i) =>
-                        (PartitionIndex.zero, WithinPartitionIndex(i)) -> tx.tx
-                    }.toMap
-                    val round1EvacCommit = effects.evacCommit.map(evacHeaderBytes)
-                    // At most one Final per stack. The finalization is signed in round 1 only
-                    // when a settlement precedes it (settlement is the unlock); otherwise the
-                    // finalization itself is the round-2 unlock and is signed there.
-                    val round1Finalization =
-                        if firstUnlockIsSettlement then effects.finalization.map(_.tx)
-                        else None
-
-                    val unlockTx = effects.settlements.headOption
-                        .map(_.tx)
-                        .orElse(effects.finalization.map(_.tx))
-                        .getOrElse(
-                          throw new IllegalStateException(
-                            "buildHandoff: 2-phase stack has no settlement and no finalization"
-                          )
-                        )
-
                     val round1 = wallet.mkHardAckRound1Regular(
                       stackNum = stackNum,
                       hardAckNum = n1,
-                      in = HardAck.SigningInputs.Round1Regular(
-                        settlements = round1Settlements,
-                        fallbacks = round1Fallbacks,
-                        rollouts = round1Rollouts,
-                        refunds = refundsIn,
-                        evacCommit = round1EvacCommit,
-                        finalization = round1Finalization
-                      )
+                      in = r1
                     )
                     val round2 = wallet.mkHardAckRound2Regular(
                       stackNum = stackNum,
                       hardAckNum = n2,
-                      in = HardAck.SigningInputs.Round2Regular(unlock = unlockTx)
+                      in = r2
                     )
                     (List(round1, round2), n2.increment)
-                } else {
-                    // Minor-only stack: it is exactly one TrailingMinors partition ⇒ exactly
-                    // one standalone evac commit.
+                case HardAckSigningPlan.Sole(sole) =>
                     val n = s.ownHardAckNum
-                    val ec = effects.evacCommit.getOrElse(
-                      throw new IllegalStateException(
-                        "buildHandoff: minor-only stack must have exactly one evac commit, " +
-                            "but evacCommit is None"
-                      )
-                    )
-                    val sole = wallet.mkHardAckSole(
+                    val soleAck = wallet.mkHardAckSole(
                       stackNum = stackNum,
                       hardAckNum = n,
-                      in = HardAck.SigningInputs.Sole(
-                        refunds = refundsIn,
-                        evacCommit = evacHeaderBytes(ec)
-                      )
+                      in = sole
                     )
-                    (List(sole), n.increment)
-                }
+                    (List(soleAck), n.increment)
+            }
 
             val handoff = SlowConsensusActor.StackHandoff(unsigned, acks)
             (s.copy(ownHardAckNum = newCounter), handoff)
