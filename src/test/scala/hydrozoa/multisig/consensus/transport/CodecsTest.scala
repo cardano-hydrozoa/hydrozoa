@@ -1,5 +1,6 @@
 package hydrozoa.multisig.consensus.transport
 
+import cats.data.NonEmptyList
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.consensus.PeerLiaison
 import hydrozoa.multisig.consensus.PeerLiaison.Request.{GetMsgBatch, NewMsgBatch}
@@ -8,7 +9,7 @@ import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
-import hydrozoa.multisig.ledger.stack.{PartitionIndex, StackNumber, WithinPartitionIndex}
+import hydrozoa.multisig.ledger.stack.StackNumber
 import org.scalatest.funsuite.AnyFunSuite
 
 /** Round-trip tests for the wire codecs used by [[PeerWsTransport]].
@@ -158,20 +159,21 @@ class CodecsTest extends AnyFunSuite {
         assertJsonStable(
           hardAckFrame(
             HardAck.Round1Payload.Regular(
-              settlements = Map(PartitionIndex(1) -> sig(1, 2, 3)),
-              fallbacks = Map(PartitionIndex(0) -> sig(4, 5)),
-              rollouts = Map((PartitionIndex.zero, WithinPartitionIndex(0)) -> sig(6, 7, 8)),
-              refunds = Map(
-                (PartitionIndex.zero, WithinPartitionIndex(0)) -> sig(9),
-                (PartitionIndex.zero, WithinPartitionIndex(1)) -> sig(10, 11)
-              ),
-              evacCommit = Some(
-                (
-                  BlockNumber(7),
-                  BlockHeader.Minor.HeaderSignature(IArray[Byte](12.toByte, 13.toByte))
+              NonEmptyList.of(
+                HardAck.PartitionSig.Major(
+                  settlement = None, // the round-2 unlock partition
+                  fallback = sig(4, 5),
+                  rollouts = List(sig(6, 7, 8)),
+                  refunds = List(sig(9), sig(10, 11)),
+                  sec = Some(
+                    BlockHeader.Minor.HeaderSignature(IArray[Byte](12.toByte, 13.toByte))
+                  )
+                ),
+                HardAck.PartitionSig.Minor(
+                  sec = BlockHeader.Minor.HeaderSignature(IArray[Byte](14.toByte)),
+                  refunds = List(sig(15, 16))
                 )
-              ),
-              finalization = Some(sig(14, 15))
+              )
             )
           )
         )
@@ -181,12 +183,9 @@ class CodecsTest extends AnyFunSuite {
         assertJsonStable(
           hardAckFrame(
             HardAck.Round1Payload.Regular(
-              settlements = Map.empty,
-              fallbacks = Map.empty,
-              rollouts = Map.empty,
-              refunds = Map.empty,
-              evacCommit = None,
-              finalization = None
+              NonEmptyList.of(
+                HardAck.PartitionSig.Final(finalization = None, rollouts = Nil)
+              )
             )
           )
         )
@@ -204,9 +203,8 @@ class CodecsTest extends AnyFunSuite {
         assertJsonStable(
           hardAckFrame(
             HardAck.SolePayload(
-              refunds = Map((PartitionIndex.zero, WithinPartitionIndex(0)) -> sig(40, 41)),
-              evacCommit =
-                  (BlockNumber(3), BlockHeader.Minor.HeaderSignature(IArray[Byte](42.toByte)))
+              sec = BlockHeader.Minor.HeaderSignature(IArray[Byte](42.toByte)),
+              refunds = List(sig(40, 41))
             )
           )
         )

@@ -18,7 +18,7 @@ import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.ledger.block.BlockVersion.Major.increment
 import hydrozoa.multisig.ledger.block.{BlockEffects, BlockHeader, BlockVersion}
 import hydrozoa.multisig.ledger.l1.tx.*
-import hydrozoa.multisig.ledger.stack.{Stack, StackEffects}
+import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects}
 import scala.collection.immutable.{Seq, TreeMap}
 import scala.math.Ordered.orderingToOrdered
 import scalus.cardano.ledger.Transaction.given
@@ -435,15 +435,41 @@ trait CardanoLiaison(
       * witness-attachment step remains here.
       */
     private def handleStackL1Effects(eff: StackEffects.HardConfirmed.Regular): IO[Unit] = {
+        // Flatten the partition-indexed effects into the (settlements, fallbacks, rollouts,
+        // finalization) the submission state machine consumes. Each Major partition carries its
+        // own settlement+fallback together (so `settlements.zip(fallbacks)` aligns exactly);
+        // rollouts come from every Major / Final partition; refunds + SEC are NOT submitted.
+        val parts = eff.partitions.toList
+        val settlements: List[SettlementTx] =
+            parts.collect { case PartitionEffects.Major(s, _, _, _, _) => s }
+        val fallbacks: List[FallbackTx] =
+            parts.collect { case PartitionEffects.Major(_, f, _, _, _) => f }
+        val finalization: Option[FinalizationTx] =
+            parts.collectFirst { case PartitionEffects.Final(f, _) => f }
+        val allRollouts: List[RolloutTx] = parts.flatMap {
+            case PartitionEffects.Major(_, _, ro, _, _) => ro
+            case PartitionEffects.Final(_, ro)          => ro
+            case PartitionEffects.Minor(_, _)           => Nil
+        }
+        val refundCount = parts.map {
+            case PartitionEffects.Major(_, _, _, rf, _) => rf.size
+            case PartitionEffects.Minor(_, rf)          => rf.size
+            case PartitionEffects.Final(_, _)           => 0
+        }.sum
+        val evacCount = parts.count {
+            case PartitionEffects.Major(_, _, _, _, sec) => sec.isDefined
+            case PartitionEffects.Minor(_, _)            => true
+            case PartitionEffects.Final(_, _)            => false
+        }
         val backbones: List[SettlementTx | FinalizationTx] =
-            eff.settlements ++ eff.finalization.toList
+            settlements ++ finalization.toList
         for {
             _ <- Tracer.info(
-              s"entering handleStackL1Effects: ${eff.settlements.size} settlement(s), " +
-                  s"${eff.fallbacks.size} fallback(s), ${eff.rollouts.size} rollout(s), " +
-                  s"finalization=${eff.finalization.isDefined}; NOT submitted: " +
-                  s"refunds=${eff.refunds.size} (fund14), " +
-                  s"evacCommit=${eff.evacCommit.isDefined} (dormant dispute record)"
+              s"entering handleStackL1Effects: ${settlements.size} settlement(s), " +
+                  s"${fallbacks.size} fallback(s), ${allRollouts.size} rollout(s), " +
+                  s"finalization=${finalization.isDefined}; NOT submitted: " +
+                  s"refunds=$refundCount (fund14), " +
+                  s"evacCommit(s)=$evacCount (dormant dispute record)"
             )
             _ <- IO.whenA(backbones.isEmpty)(
               Tracer.info(
@@ -455,7 +481,7 @@ trait CardanoLiaison(
                     val (bInputs, bEffects) =
                         mkHappyPathEffectInputsAndEffects(
                           backbone,
-                          rolloutsFor(backbone, eff.rollouts)
+                          rolloutsFor(backbone, allRollouts)
                         )
                     acc.copy(
                       effectInputs = acc.effectInputs ++ bInputs,
@@ -463,17 +489,17 @@ trait CardanoLiaison(
                     )
                 }
                 val withFallbacks =
-                    eff.settlements.zip(eff.fallbacks).foldLeft(withBackbones) {
+                    settlements.zip(fallbacks).foldLeft(withBackbones) {
                         case (acc, (settlement, fallback)) =>
                             acc.copy(fallbackEffects =
                                 acc.fallbackEffects +
                                     (settlement.majorVersionProduced -> fallback)
                             )
                     }
-                val newTarget: TargetState = eff.finalization match {
+                val newTarget: TargetState = finalization match {
                     case Some(fin) => TargetState.Finalized(fin.tx.id)
                     case None =>
-                        eff.settlements.lastOption match {
+                        settlements.lastOption match {
                             case Some(lastS) =>
                                 TargetState.Active(lastS.treasuryProduced.utxoId)
                             case None => withFallbacks.targetState

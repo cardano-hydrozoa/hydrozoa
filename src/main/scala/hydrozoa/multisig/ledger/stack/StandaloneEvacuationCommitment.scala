@@ -21,11 +21,28 @@ import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
   * is not carried in this in-memory effect. `committedBlockNum` is kept so the slow side can key
   * the hard-ack header signature (the consensus artifact paired with this record at dispute time)
   * by block number.
+  *
+  * `header` carries the committed minor block's serialized header — the exact bytes the SEC
+  * hard-ack signs over. Keeping it here makes the SEC effect **self-contained for signing**: the
+  * signer and verifier derive the SEC signing material straight off this effect, with no
+  * `BlockResult` / `Stack.Unsigned.results` lookup (PR #446 review — `results` is a
+  * construction-only input and is being removed). KZG lives on the header transitionally, so today
+  * these bytes coincide with the soft-ack header domain.
+  *
+  * @param committedBlockNum
+  *   the committed minor block's number
+  * @param blockVersion
+  *   that block's full version
+  * @param kzgCommitment
+  *   the dormant record's KZG commitment (spec content)
+  * @param header
+  *   the committed minor block's serialized header — the SEC signing bytes
   */
 final case class StandaloneEvacuationCommitment(
     committedBlockNum: BlockNumber,
     blockVersion: BlockVersion.Full,
-    kzgCommitment: KzgCommitment
+    kzgCommitment: KzgCommitment,
+    header: BlockHeader.Minor.Onchain.Serialized
 )
 
 object StandaloneEvacuationCommitment {

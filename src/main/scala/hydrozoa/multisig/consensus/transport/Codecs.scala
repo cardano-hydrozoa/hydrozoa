@@ -1,5 +1,6 @@
 package hydrozoa.multisig.consensus.transport
 
+import cats.data.NonEmptyList
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.multisig.consensus.PeerLiaison.Request.{GetMsgBatch, NewMsgBatch}
@@ -10,7 +11,7 @@ import hydrozoa.multisig.consensus.{PeerLiaison, UserRequest, UserRequestBody, U
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeader, BlockNumber}
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
-import hydrozoa.multisig.ledger.stack.{PartitionIndex, StackBrief, StackNumber, WithinPartitionIndex}
+import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
 import io.circe.*
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
@@ -138,19 +139,62 @@ object Codecs {
           )
         )
 
-    /** Maps in the hard-ack payload are keyed by opaque [[PartitionIndex]] / tuple keys, which have
-      * no `KeyEncoder`. Serialize them as a JSON array of `[key, value]` pairs (circe's automatic
-      * tuple instances), independent of key shape.
+    /** Per-partition signature bundle — discriminated by `kind` (mirrors
+      * [[hydrozoa.multisig.ledger.stack.PartitionEffects]]).
       */
-    private def entriesCodec[K: Encoder: Decoder, V: Encoder: Decoder]: Codec[Map[K, V]] =
-        io.circe.Codec.from(
-          Decoder.decodeList[(K, V)].map(_.toMap),
-          Encoder.encodeList[(K, V)].contramap(_.toList)
-        )
-
-    private given partitionSigMapCodec: Codec[Map[PartitionIndex, TxSignature]] = entriesCodec
-    private given withinPartitionSigMapCodec
-        : Codec[Map[(PartitionIndex, WithinPartitionIndex), TxSignature]] = entriesCodec
+    private given Codec[HardAck.PartitionSig] = {
+        import HardAck.PartitionSig
+        val enc = Encoder.instance[PartitionSig] {
+            case p: PartitionSig.Major =>
+                Json.obj(
+                  "kind" -> "major".asJson,
+                  "settlement" -> p.settlement.asJson,
+                  "fallback" -> p.fallback.asJson,
+                  "rollouts" -> p.rollouts.asJson,
+                  "refunds" -> p.refunds.asJson,
+                  "sec" -> p.sec.asJson
+                )
+            case p: PartitionSig.Final =>
+                Json.obj(
+                  "kind" -> "final".asJson,
+                  "finalization" -> p.finalization.asJson,
+                  "rollouts" -> p.rollouts.asJson
+                )
+            case p: PartitionSig.Minor =>
+                Json.obj(
+                  "kind" -> "minor".asJson,
+                  "sec" -> p.sec.asJson,
+                  "refunds" -> p.refunds.asJson
+                )
+        }
+        val dec = Decoder.instance[PartitionSig] { c =>
+            c.downField("kind").as[String].flatMap {
+                case "major" =>
+                    for {
+                        settlement <- c.downField("settlement").as[Option[TxSignature]]
+                        fallback <- c.downField("fallback").as[TxSignature]
+                        rollouts <- c.downField("rollouts").as[List[TxSignature]]
+                        refunds <- c.downField("refunds").as[List[TxSignature]]
+                        sec <- c.downField("sec").as[Option[BlockHeader.HeaderSignature]]
+                    } yield PartitionSig.Major(settlement, fallback, rollouts, refunds, sec)
+                case "final" =>
+                    for {
+                        finalization <- c.downField("finalization").as[Option[TxSignature]]
+                        rollouts <- c.downField("rollouts").as[List[TxSignature]]
+                    } yield PartitionSig.Final(finalization, rollouts)
+                case "minor" =>
+                    for {
+                        sec <- c.downField("sec").as[BlockHeader.HeaderSignature]
+                        refunds <- c.downField("refunds").as[List[TxSignature]]
+                    } yield PartitionSig.Minor(sec, refunds)
+                case other =>
+                    Left(
+                      DecodingFailure(s"Unknown HardAck.PartitionSig kind: $other", c.history)
+                    )
+            }
+        }
+        io.circe.Codec.from(dec, enc)
+    }
 
     /** Real `Codec[HardAck]` (M6). Discriminated by a `kind` tag. Regular / Sole / Round1Initial
       * round-trip fully; `Round2Initial` (init-tx sig + per-peer `VKeyWitness` list) is the only
@@ -164,12 +208,7 @@ object Codecs {
             case p: Round1Payload.Regular =>
                 Json.obj(
                   "kind" -> "round1Regular".asJson,
-                  "settlements" -> p.settlements.asJson,
-                  "fallbacks" -> p.fallbacks.asJson,
-                  "rollouts" -> p.rollouts.asJson,
-                  "refunds" -> p.refunds.asJson,
-                  "evacCommit" -> p.evacCommit.asJson,
-                  "finalization" -> p.finalization.asJson
+                  "partitions" -> p.partitions.asJson
                 )
             case p: Round1Payload.Initial =>
                 Json.obj("kind" -> "round1Initial".asJson, "fallbackSig" -> p.fallbackSig.asJson)
@@ -186,38 +225,16 @@ object Codecs {
             case p: SolePayload =>
                 Json.obj(
                   "kind" -> "sole".asJson,
-                  "refunds" -> p.refunds.asJson,
-                  "evacCommit" -> p.evacCommit.asJson
+                  "sec" -> p.sec.asJson,
+                  "refunds" -> p.refunds.asJson
                 )
         }
         val dec = Decoder.instance[HardAck.Payload] { c =>
             c.downField("kind").as[String].flatMap {
                 case "round1Regular" =>
-                    for {
-                        settlements <- c
-                            .downField("settlements")
-                            .as[Map[PartitionIndex, TxSignature]]
-                        fallbacks <- c
-                            .downField("fallbacks")
-                            .as[Map[PartitionIndex, TxSignature]]
-                        rollouts <- c
-                            .downField("rollouts")
-                            .as[Map[(PartitionIndex, WithinPartitionIndex), TxSignature]]
-                        refunds <- c
-                            .downField("refunds")
-                            .as[Map[(PartitionIndex, WithinPartitionIndex), TxSignature]]
-                        evacCommit <- c
-                            .downField("evacCommit")
-                            .as[Option[(BlockNumber, BlockHeader.HeaderSignature)]]
-                        finalization <- c.downField("finalization").as[Option[TxSignature]]
-                    } yield Round1Payload.Regular(
-                      settlements,
-                      fallbacks,
-                      rollouts,
-                      refunds,
-                      evacCommit,
-                      finalization
-                    )
+                    c.downField("partitions")
+                        .as[NonEmptyList[HardAck.PartitionSig]]
+                        .map(Round1Payload.Regular.apply)
                 case "round1Initial" =>
                     c.downField("fallbackSig")
                         .as[TxSignature]
@@ -236,13 +253,9 @@ object Codecs {
                     )
                 case "sole" =>
                     for {
-                        refunds <- c
-                            .downField("refunds")
-                            .as[Map[(PartitionIndex, WithinPartitionIndex), TxSignature]]
-                        evacCommit <- c
-                            .downField("evacCommit")
-                            .as[(BlockNumber, BlockHeader.HeaderSignature)]
-                    } yield SolePayload(refunds, evacCommit)
+                        sec <- c.downField("sec").as[BlockHeader.HeaderSignature]
+                        refunds <- c.downField("refunds").as[List[TxSignature]]
+                    } yield SolePayload(sec, refunds)
                 case other =>
                     Left(DecodingFailure(s"Unknown HardAck.Payload kind: $other", c.history))
             }

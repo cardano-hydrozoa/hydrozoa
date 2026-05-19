@@ -5,11 +5,10 @@ import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.dummySigningKey
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.cardano.wallet.*
-import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, SoftAck, StackEffectsSigningInputs}
+import hydrozoa.multisig.consensus.ack.SoftAck
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber.given
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeader}
 import hydrozoa.multisig.ledger.l1.tx.{Tx, TxSignature}
-import hydrozoa.multisig.ledger.stack.StackNumber
 import io.circe.*
 import io.circe.syntax.*
 import scala.language.implicitConversions
@@ -80,106 +79,11 @@ final class HeadPeerWallet(
       finalizationRequested = finalizationRequested
     )
 
-    // ============================================================
-    // Hard-ack signing — slow consensus (see consensus/slow-consensus in the spec)
-    //
-    // The wallet is a pure mapper: it signs exactly the material the caller hands it and
-    // never inspects a Stack / StackEffects. The StackComposer does all the walking and
-    // hands over a HardAck.SigningInputs.* struct.
-    // ============================================================
-
-    /** Round-1 hard ack for the initial (stack 0) flow: a single signature over the locally derived
-      * fallback tx body.
-      */
-    def mkHardAckRound1Initial(
-        stackNum: StackNumber,
-        hardAckNum: HardAckNumber,
-        in: HardAck.SigningInputs.Round1Initial
-    ): HardAck = HardAck(
-      ackId = HardAckId(peerNum, hardAckNum),
-      stackNum = stackNum,
-      payload = HardAck.Round1Payload.Initial(fallbackSig = mkTxSignature(in.fallback))
-    )
-
-    /** Round-2 hard ack for the initial (stack 0) flow. Two distinct witness roles, both produced
-      * here (collected across peers during stack-0 consensus):
-      *   - `initTxSig` — this peer's contribution to the head **multisig** native script (minting
-      *     the head tokens); always present.
-      *   - `individualWitnesses` — a plain `VKeyWitness` for the init tx, attached **iff** the init
-      *     tx actually spends an input at this peer's own individual address. If it does not, the
-      *     list MUST stay empty: Cardano L1 rejects a tx carrying a vkey witness it does not need.
-      *     The predicate is the shared, deterministic
-      *     [[StackEffectsSigningInputs.spendsFromIndividualAddress]] (the verifier enforces the
-      *     same iff rule on remote peers).
-      */
-    def mkHardAckRound2Initial(
-        stackNum: StackNumber,
-        hardAckNum: HardAckNumber,
-        in: HardAck.SigningInputs.Round2Initial
-    ): HardAck = HardAck(
-      ackId = HardAckId(peerNum, hardAckNum),
-      stackNum = stackNum,
-      payload = HardAck.Round2Payload.Initial(
-        initTxSig = mkTxSignature(in.initTx.tx),
-        individualWitnesses =
-            if StackEffectsSigningInputs
-                    .spendsFromIndividualAddress(in.initTx, exportVerificationKey)
-            then List(mkVKeyWitness(in.initTx.tx))
-            else Nil
-      )
-    )
-
-    /** Round-1 hard ack for a regular (non-initial) stack. The caller has already removed the
-      * round-2 unlock (first settlement / finalization) from `in`. Each tx body is signed with
-      * `mkTxSignature`; each evac-commit *header* (KZG lives on the block header) is signed with
-      * `mkHeaderSignature`.
-      */
-    def mkHardAckRound1Regular(
-        stackNum: StackNumber,
-        hardAckNum: HardAckNumber,
-        in: HardAck.SigningInputs.Round1Regular
-    ): HardAck = HardAck(
-      ackId = HardAckId(peerNum, hardAckNum),
-      stackNum = stackNum,
-      payload = HardAck.Round1Payload.Regular(
-        settlements = in.settlements.view.mapValues(mkTxSignature).toMap,
-        fallbacks = in.fallbacks.view.mapValues(mkTxSignature).toMap,
-        rollouts = in.rollouts.view.mapValues(mkTxSignature).toMap,
-        refunds = in.refunds.view.mapValues(mkTxSignature).toMap,
-        evacCommit = in.evacCommit.map((bn, bytes) => (bn, mkHeaderSignature(bytes))),
-        finalization = in.finalization.map(mkTxSignature)
-      )
-    )
-
-    /** Round-2 hard ack for a regular stack: signs the first settlement / finalization (the unlock
-      * tx body). The unlock tx body is known at stack close, so the signature is produced upfront —
-      * the SlowConsensusActor withholds outbound broadcast until local round-1 confirmation.
-      */
-    def mkHardAckRound2Regular(
-        stackNum: StackNumber,
-        hardAckNum: HardAckNumber,
-        in: HardAck.SigningInputs.Round2Regular
-    ): HardAck = HardAck(
-      ackId = HardAckId(peerNum, hardAckNum),
-      stackNum = stackNum,
-      payload = HardAck.Round2Payload.Regular(firstUnlockSig = mkTxSignature(in.unlock))
-    )
-
-    /** Sole-round hard ack for a 1-phase minor-only stack: signs every refund tx body + the single
-      * standalone evac commitment's block header.
-      */
-    def mkHardAckSole(
-        stackNum: StackNumber,
-        hardAckNum: HardAckNumber,
-        in: HardAck.SigningInputs.Sole
-    ): HardAck = HardAck(
-      ackId = HardAckId(peerNum, hardAckNum),
-      stackNum = stackNum,
-      payload = HardAck.SolePayload(
-        refunds = in.refunds.view.mapValues(mkTxSignature).toMap,
-        evacCommit = (in.evacCommit._1, mkHeaderSignature(in.evacCommit._2))
-      )
-    )
+    // Hard-ack signing material is produced by StackComposer (which walks the partition-indexed
+    // StackEffects and applies the shared PartitionEffects.unlock rule). The wallet only exposes
+    // the signing primitives above — mkTxSignature / mkVKeyWitness / mkHeaderSignature — plus
+    // exportVerificationKey for the Initial individual-witness iff rule
+    // (StackEffects.spendsFromIndividualAddress).
 }
 
 object HeadPeerWallet:

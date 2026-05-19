@@ -1,10 +1,11 @@
 package hydrozoa.multisig.consensus.ack
 
+import cats.data.NonEmptyList
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber}
-import hydrozoa.multisig.ledger.l1.tx.{InitializationTx, TxSignature}
-import hydrozoa.multisig.ledger.stack.{PartitionIndex, StackNumber, WithinPartitionIndex}
-import scalus.cardano.ledger.{Transaction, VKeyWitness}
+import hydrozoa.multisig.ledger.block.BlockHeader
+import hydrozoa.multisig.ledger.l1.tx.TxSignature
+import hydrozoa.multisig.ledger.stack.StackNumber
+import scalus.cardano.ledger.VKeyWitness
 
 /** A head peer's hard acknowledgment of a closed stack — see `consensus/slow-consensus` in the
   * spec.
@@ -70,6 +71,47 @@ object HardAck {
         sealed trait Round2 extends Payload { final override def round: Round = Round.Two }
     }
 
+    /** Per-partition signatures — the spine of a regular hard-ack, mirroring
+      * [[hydrozoa.multisig.ledger.stack.PartitionEffects]] (one [[PartitionSig]] per partition,
+      * same order, same kind). Tx-body signatures are [[TxSignature]]; the standalone evac
+      * commitment is signed over a *block header* so its signature is a
+      * [[BlockHeader.HeaderSignature]] (not a `TxSignature`).
+      *
+      * In a round-1 payload the **unlock partition's** settlement / finalization signature is
+      * absent (`None`) — it travels in [[Round2Payload.Regular]] instead. Every other slot is
+      * present. Which partition is the unlock is the shared
+      * [[hydrozoa.multisig.ledger.stack.PartitionEffects.unlock]] rule (not re-derived here).
+      */
+    sealed trait PartitionSig
+
+    object PartitionSig {
+
+        /** A [[PartitionEffects.Major]] partition's sigs. `settlement` is `None` iff this is the
+          * round-2 unlock partition (its sig is the [[Round2Payload.Regular.firstUnlockSig]]).
+          */
+        final case class Major(
+            settlement: Option[TxSignature],
+            fallback: TxSignature,
+            rollouts: List[TxSignature],
+            refunds: List[TxSignature],
+            sec: Option[BlockHeader.HeaderSignature]
+        ) extends PartitionSig
+
+        /** A [[PartitionEffects.Final]] partition's sigs. `finalization` is `None` iff this Final
+          * is the round-2 unlock (no Major preceded it).
+          */
+        final case class Final(
+            finalization: Option[TxSignature],
+            rollouts: List[TxSignature]
+        ) extends PartitionSig
+
+        /** A [[PartitionEffects.Minor]] partition's sigs. SEC is mandatory (header sig). */
+        final case class Minor(
+            sec: BlockHeader.HeaderSignature,
+            refunds: List[TxSignature]
+        ) extends PartitionSig
+    }
+
     /** Round-1 ack payload variants — varies by [[StackEffects]] shape. */
     object Round1Payload {
 
@@ -78,35 +120,12 @@ object HardAck {
             fallbackSig: TxSignature
         ) extends Payload.Round1
 
-        /** Per-effect signatures for everything in a regular stack EXCEPT the first
-          * settlement/finalization (the round-2 unlock).
-          *
-          * `settlements` / `fallbacks` are keyed by partition index (one partition per major
-          * version in the stack); `rollouts` / `refunds` use
-          * `(partitionIndex, withinPartitionIndex)`.
-          *
-          * `finalization` is a single `Option` — a stack has at most ONE Final block (Final
-          * terminates the head). It is present here only when a settlement precedes it (the
-          * settlement is then the round-2 unlock and the finalization is signed in round 1); when
-          * the finalization itself is the unlock it lives in [[Round2Payload]] instead, so it is
-          * absent here.
-          *
-          * `evacCommit` is a single `Option[(BlockNumber, [[BlockHeader.HeaderSignature]])]` — a
-          * stack has at most ONE TrailingMinors partition ⇒ at most one standalone evac commitment.
-          * It carries a header signature (NOT a [[TxSignature]]): a standalone evacuation
-          * commitment commits a *block header* — it must bind the block's KZG commitment (that IS
-          * the standalone evac record). KZG is deliberately kept in the fast-consensus brief *for
-          * now* so the rule-based on-chain code is untouched (TRANSITIONAL — see the note on
-          * `BlockHeader.Fields.HasKzgCommitment`), so a peer signs the full header and today those
-          * bytes coincide with the soft-ack domain; that coincidence ends once KZG moves slow-side.
+        /** Per-partition signatures for a regular stack, EXCEPT the round-2 unlock (the unlock
+          * partition's settlement / finalization slot is `None` here — see [[PartitionSig]]). Same
+          * partition order as [[StackEffects.Unsigned.Regular.partitions]].
           */
         final case class Regular(
-            settlements: Map[PartitionIndex, TxSignature],
-            fallbacks: Map[PartitionIndex, TxSignature],
-            rollouts: Map[(PartitionIndex, WithinPartitionIndex), TxSignature],
-            refunds: Map[(PartitionIndex, WithinPartitionIndex), TxSignature],
-            evacCommit: Option[(BlockNumber, BlockHeader.HeaderSignature)],
-            finalization: Option[TxSignature]
+            partitions: NonEmptyList[PartitionSig]
         ) extends Payload.Round1
     }
 
@@ -127,55 +146,16 @@ object HardAck {
         ) extends Payload.Round2
     }
 
-    /** Sole-round ack payload — 1-phase minor-only stacks only.
-      *
-      * A minor-only stack is exactly one partition (minors don't bump the major version), so there
-      * is exactly ONE standalone evac commitment — `evacCommit` is a single
-      * `(blockNum, headerSig)`, not a map. `refunds` is keyed `(partitionIndex,
-      * withinPartitionIndex)` for shape-consistency with [[Round1Payload.Regular]] (partition index
-      * is always 0 here).
+    /** Sole-round ack payload — 1-phase minor-only stacks only. A minor-only stack is exactly one
+      * [[PartitionEffects.Minor]] partition (the leading minor run is the whole stack), so this is
+      * that single partition's sigs: the mandatory SEC header signature + the minors' refund tx
+      * signatures (= a [[PartitionSig.Minor]], inlined for the wire).
       */
     final case class SolePayload(
-        refunds: Map[(PartitionIndex, WithinPartitionIndex), TxSignature],
-        evacCommit: (BlockNumber, BlockHeader.HeaderSignature)
+        sec: BlockHeader.HeaderSignature,
+        refunds: List[TxSignature]
     ) extends Payload {
         override def round: Round = Round.Sole
     }
 
-    /** Pre-signing material the [[hydrozoa.multisig.consensus.peer.HeadPeerWallet]] is handed to
-      * produce a hard-ack. The wallet maps each entry through its signer and assembles the
-      * corresponding [[Payload]] — it never inspects a [[hydrozoa.multisig.ledger.stack.Stack]]
-      * itself (the caller does all the walking).
-      *
-      * Mirrors the payload shapes, but with raw material (tx bodies / header signing bytes) instead
-      * of signatures.
-      */
-    object SigningInputs {
-        final case class Round1Initial(fallback: Transaction)
-
-        /** The rich [[InitializationTx]] (not just its body) so the wallet/verifier can resolve the
-          * init tx's spent inputs to addresses: each head peer contributes an individual
-          * `VKeyWitness` **iff** the init tx spends an input at its own individual address — and
-          * MUST NOT otherwise (Cardano L1 rejects superfluous vkey witnesses). Those individual
-          * witnesses are produced per-peer by the wallet during round-2 consensus, NOT carried here
-          * (a pure plan can't sign them).
-          */
-        final case class Round2Initial(initTx: InitializationTx)
-
-        final case class Round1Regular(
-            settlements: Map[PartitionIndex, Transaction],
-            fallbacks: Map[PartitionIndex, Transaction],
-            rollouts: Map[(PartitionIndex, WithinPartitionIndex), Transaction],
-            refunds: Map[(PartitionIndex, WithinPartitionIndex), Transaction],
-            evacCommit: Option[(BlockNumber, BlockHeader.Minor.Onchain.Serialized)],
-            finalization: Option[Transaction]
-        )
-
-        final case class Round2Regular(unlock: Transaction)
-
-        final case class Sole(
-            refunds: Map[(PartitionIndex, WithinPartitionIndex), Transaction],
-            evacCommit: (BlockNumber, BlockHeader.Minor.Onchain.Serialized)
-        )
-    }
 }

@@ -64,12 +64,15 @@
     <logger name="Stage4.Sut" level="info"/>
     <logger name="Stage4.Suite" level="info"/>
     <logger name="Stage4.BlockBriefObserver" level="info"/>
+    <logger name="Stage4.StackObserver" level="debug"/>
 
 
     <!-- hydrozoa -->
     <!-- default: warn -->
     <logger name="BlockWeaver" level="info"/>
+    <logger name="StackComposer" level="debug"/>
     <logger name="ConsensusActor" level="debug"/>
+    <logger name="SlowConsensusActor" level="debug"/>
     <logger name="EventSequencer" level="info"/>
     <logger name="CardanoLiaison" level="warn"/>
     <logger name="JointLedger" level="info"/>

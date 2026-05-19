@@ -9,7 +9,7 @@ import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.MultisigRegimeManager
-import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckRoundPlan, StackEffectsSigningInputs}
+import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
 import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockResult}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l1.L1LedgerM
@@ -257,10 +257,9 @@ final case class StackComposer(
       */
     private def mkUnsigned(brief: StackBrief, prefix: List[ReadyBlock]): IO[Stack.Unsigned] = {
         val results = NonEmptyList.fromListUnsafe(prefix.map(_.result))
-        val softConfirmations = NonEmptyList.fromListUnsafe(prefix.map(_.softConfirmed))
         val partitions = StackPartition.partition(results)
         runL1Action(StackEffectsBuilder.deriveRegular(partitions)).map { effects =>
-            Stack.Unsigned(brief, results, softConfirmations, effects)
+            Stack.Unsigned(brief, effects)
         }
     }
 
@@ -277,54 +276,132 @@ final case class StackComposer(
         state.modify { s =>
             val wallet = config.ownHeadWallet
             val stackNum = unsigned.brief.stackNum
+            val peer = config.ownHeadPeerNum
 
-            // Per-effect signing material is the shared, deterministic flat
-            // [[StackEffectsSigningInputs]]; [[HardAckRoundPlan]] frames it into rounds (same
-            // code path SlowConsensusActor uses to verify remote peers' sigs). The composer
-            // only allocates monotonic HardAckNumbers and maps the framed inputs through its
-            // wallet — it does not key effects itself.
-            val (acks, newCounter) =
-                HardAckRoundPlan.from(StackEffectsSigningInputs.from(unsigned)) match {
-                    case HardAckRoundPlan.TwoPhase(r1, r2) =>
-                        val n1 = s.ownHardAckNum
-                        val n2 = n1.increment
-                        val round1 = wallet.mkHardAckRound1Regular(
-                          stackNum = stackNum,
-                          hardAckNum = n1,
-                          in = r1
-                        )
-                        val round2 = wallet.mkHardAckRound2Regular(
-                          stackNum = stackNum,
-                          hardAckNum = n2,
-                          in = r2
-                        )
-                        (List(round1, round2), n2.increment)
-                    case HardAckRoundPlan.Initial(r1, r2) =>
-                        // Stack 0: structurally 2-phase, exogenous unlock. Same counter
-                        // discipline as TwoPhase; the Initial wallet methods sign the
-                        // fallback (round 1) and the init tx body + carried witnesses (round 2).
-                        val n1 = s.ownHardAckNum
-                        val n2 = n1.increment
-                        val round1 = wallet.mkHardAckRound1Initial(
-                          stackNum = stackNum,
-                          hardAckNum = n1,
-                          in = r1
-                        )
-                        val round2 = wallet.mkHardAckRound2Initial(
-                          stackNum = stackNum,
-                          hardAckNum = n2,
-                          in = r2
-                        )
-                        (List(round1, round2), n2.increment)
-                    case HardAckRoundPlan.Sole(sole) =>
-                        val n = s.ownHardAckNum
-                        val soleAck = wallet.mkHardAckSole(
-                          stackNum = stackNum,
-                          hardAckNum = n,
-                          in = sole
-                        )
-                        (List(soleAck), n.increment)
-                }
+            // The composer walks the partition-indexed StackEffects and applies the shared
+            // PartitionEffects.unlock rule to pack this peer's sigs into two explicit acks
+            // (round-1 = everything except the unlock; round-2 = the unlock) or one sole ack.
+            // No StackEffectsSigningInputs / HardAckRoundPlan indirection — the effects ARE the
+            // canonical structure; SlowConsensusActor verifies/aggregates against the same.
+
+            def partitionSig(
+                pe: PartitionEffects[StandaloneEvacuationCommitment],
+                idx: Int,
+                unlock: Option[PartitionEffects.Unlock]
+            ): HardAck.PartitionSig = pe match {
+                case PartitionEffects.Major(settlement, fallback, rollouts, refunds, sec) =>
+                    val isUnlock = unlock.contains(PartitionEffects.Unlock.Settlement(idx))
+                    HardAck.PartitionSig.Major(
+                      settlement = Option.unless(isUnlock)(wallet.mkTxSignature(settlement.tx)),
+                      fallback = wallet.mkTxSignature(fallback.tx),
+                      rollouts = rollouts.map(r => wallet.mkTxSignature(r.tx)),
+                      refunds = refunds.map(r => wallet.mkTxSignature(r.tx)),
+                      sec = sec.map(s => wallet.mkHeaderSignature(s.header))
+                    )
+                case PartitionEffects.Final(finalization, rollouts) =>
+                    val isUnlock = unlock.contains(PartitionEffects.Unlock.Finalization(idx))
+                    HardAck.PartitionSig.Final(
+                      finalization = Option.unless(isUnlock)(wallet.mkTxSignature(finalization.tx)),
+                      rollouts = rollouts.map(r => wallet.mkTxSignature(r.tx))
+                    )
+                case PartitionEffects.Minor(sec, refunds) =>
+                    HardAck.PartitionSig.Minor(
+                      sec = wallet.mkHeaderSignature(sec.header),
+                      refunds = refunds.map(r => wallet.mkTxSignature(r.tx))
+                    )
+            }
+
+            def unlockSig(
+                u: PartitionEffects.Unlock,
+                parts: NonEmptyList[PartitionEffects[StandaloneEvacuationCommitment]]
+            ) = u match {
+                case PartitionEffects.Unlock.Settlement(i) =>
+                    parts.toList(i) match {
+                        case PartitionEffects.Major(settlement, _, _, _, _) =>
+                            wallet.mkTxSignature(settlement.tx)
+                        case _ =>
+                            throw new IllegalStateException(
+                              s"unlock Settlement($i) is not a Major partition"
+                            )
+                    }
+                case PartitionEffects.Unlock.Finalization(i) =>
+                    parts.toList(i) match {
+                        case PartitionEffects.Final(finalization, _) =>
+                            wallet.mkTxSignature(finalization.tx)
+                        case _ =>
+                            throw new IllegalStateException(
+                              s"unlock Finalization($i) is not a Final partition"
+                            )
+                    }
+            }
+
+            val (acks, newCounter) = unsigned.effects match {
+                case r: StackEffects.Unsigned.Regular =>
+                    PartitionEffects.unlock(r.partitions) match {
+                        case Some(u) =>
+                            val n1 = s.ownHardAckNum
+                            val n2 = n1.increment
+                            val sigs = r.partitions.zipWithIndex.map { case (pe, i) =>
+                                partitionSig(pe, i, Some(u))
+                            }
+                            val round1 = HardAck(
+                              HardAckId(peer, n1),
+                              stackNum,
+                              HardAck.Round1Payload.Regular(sigs)
+                            )
+                            val round2 = HardAck(
+                              HardAckId(peer, n2),
+                              stackNum,
+                              HardAck.Round2Payload.Regular(unlockSig(u, r.partitions))
+                            )
+                            (List(round1, round2), n2.increment)
+                        case None =>
+                            // Sole / 1-phase: exactly one Minor partition.
+                            val n = s.ownHardAckNum
+                            val sole = r.partitions.head match {
+                                case PartitionEffects.Minor(sec, refunds) =>
+                                    HardAck(
+                                      HardAckId(peer, n),
+                                      stackNum,
+                                      HardAck.SolePayload(
+                                        sec = wallet.mkHeaderSignature(sec.header),
+                                        refunds = refunds.map(rt => wallet.mkTxSignature(rt.tx))
+                                      )
+                                    )
+                                case _ =>
+                                    throw new IllegalStateException(
+                                      "sole stack's single partition is not Minor"
+                                    )
+                            }
+                            (List(sole), n.increment)
+                    }
+                case i: StackEffects.Unsigned.Initial =>
+                    // Stack 0: structurally 2-phase, exogenous unlock (the init tx).
+                    val n1 = s.ownHardAckNum
+                    val n2 = n1.increment
+                    val round1 = HardAck(
+                      HardAckId(peer, n1),
+                      stackNum,
+                      HardAck.Round1Payload.Initial(
+                        fallbackSig = wallet.mkTxSignature(i.fallbackTx.tx)
+                      )
+                    )
+                    val round2 = HardAck(
+                      HardAckId(peer, n2),
+                      stackNum,
+                      HardAck.Round2Payload.Initial(
+                        initTxSig = wallet.mkTxSignature(i.initializationTx.tx),
+                        individualWitnesses =
+                            if StackEffects.spendsFromIndividualAddress(
+                                  i.initializationTx,
+                                  wallet.exportVerificationKey
+                                )
+                            then List(wallet.mkVKeyWitness(i.initializationTx.tx))
+                            else Nil
+                      )
+                    )
+                    (List(round1, round2), n2.increment)
+            }
 
             val handoff = SlowConsensusActor.StackHandoff(unsigned, acks)
             (s.copy(ownHardAckNum = newCounter), handoff)

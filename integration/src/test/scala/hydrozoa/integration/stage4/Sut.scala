@@ -14,6 +14,7 @@ import BlockBrief.{Minor as BMinor, Major as BMajor}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.joint.JointLedger
+import hydrozoa.multisig.ledger.stack.Stack
 import org.scalacheck.commands.SutCommand
 
 // ===================================
@@ -73,6 +74,42 @@ private[stage4] class BlockBriefObserver(
     }
 
 // ===================================
+// Stack observer
+// ===================================
+
+/** Proxy actor wrapping CardanoLiaison. Intercepts every `Stack.HardConfirmed` the peer's
+  * SlowConsensusActor emits (the slow cycle's terminal artifact) to record the per-peer sequence
+  * of hard-confirmed stacks; forwards everything else (and the stack itself) unchanged so the real
+  * CardanoLiaison still drives L1 submission. Parallels [[BlockBriefObserver]] on the slow side.
+  */
+private[stage4] class StackObserver(
+    peerNum: HeadPeerNumber,
+    real: CardanoLiaison.Handle,
+    stacks: Ref[IO, Vector[Stack.HardConfirmed]],
+) extends Actor[IO, CardanoLiaison.Request]:
+    private val logger = Logging.loggerIO(s"Stage4.StackObserver.${peerNum: Int}")
+    override def receive: Receive[IO, CardanoLiaison.Request] = {
+        case s: Stack.HardConfirmed =>
+            val brief = s.round1.unsigned.brief
+            logger.debug(
+              s"received Stack.HardConfirmed stack=${brief.stackNum} " +
+                  s"blocks=${brief.firstBlockNum}..${brief.lastBlockNum}, " +
+                  "capturing and forwarding"
+            ) >>
+                stacks.update(_ :+ s) >>
+                (real ! s) >>
+                logger.debug(
+                  s"forwarded Stack.HardConfirmed stack=${brief.stackNum} to real CardanoLiaison"
+                )
+        case msg =>
+            logger.debug(s"received non-stack msg=${msg.getClass.getSimpleName}, forwarding") >>
+                (real ! msg) >>
+                logger.debug(
+                  s"forwarded non-stack msg=${msg.getClass.getSimpleName} to real CardanoLiaison"
+                )
+    }
+
+// ===================================
 // Stage 4 SUT
 // ===================================
 
@@ -96,6 +133,10 @@ case class Stage4Sut(
     // (poll L1 + push `PollResults` to BlockWeaver).
     liaisonTickFibers: List[Fiber[IO, Throwable, Nothing]],
     blockBriefs: Map[HeadPeerNumber, Ref[IO, Vector[BlockBrief.Intermediate]]],
+    // Per-peer hard-confirmed stacks captured by [[StackObserver]] (the slow cycle's
+    // terminal artifact), parallel to `blockBriefs` on the fast side. Used by
+    // `analyzeBlockBriefs` to assert the slow side covered every observed block.
+    stacks: Map[HeadPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]],
     submittedRequestIds: Ref[IO, Vector[RequestId]],
     tracerLocal: IOLocal[Tracer],
     // Cleanup hooks for resources allocated outside the actor system (currently the

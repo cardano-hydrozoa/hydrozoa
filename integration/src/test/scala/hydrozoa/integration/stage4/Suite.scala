@@ -32,6 +32,7 @@ import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toUtxos}
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.joint.JointLedger
+import hydrozoa.multisig.ledger.stack.Stack
 import org.scalacheck.commands.{AnyCommand, ModelBasedSuite, ScenarioGen}
 import org.scalacheck.{Gen, Prop}
 import scalus.cardano.address.ShelleyAddress
@@ -232,6 +233,30 @@ case class Stage4Suite(
                 }
                 .map(_.toMap)
 
+            // Create stack-collecting observers wrapping each peer's CardanoLiaison.
+            // Injected via Connections so SlowConsensusActor is unaware; captures every
+            // hard-confirmed stack the slow cycle emits (parallel to BlockBriefObserver
+            // on the fast side).
+            stacksMap <- peers
+                .traverse { peerNum =>
+                    Ref[IO].of(Vector.empty[Stack.HardConfirmed]).map(peerNum -> _)
+                }
+                .map(_.toMap)
+
+            stackObserverMap <- peers
+                .traverse { peerNum =>
+                    system
+                        .actorOf(
+                          StackObserver(
+                            peerNum,
+                            peerStackMap(peerNum).cardanoLiaison,
+                            stacksMap(peerNum)
+                          )
+                        )
+                        .map(peerNum -> _)
+                }
+                .map(_.toMap)
+
             // Create one local PeerLiaison per (local, remote) pair.
             // peerLiaisonMap(A)(B.id) = the liaison at A directed to B.
             peerLiaisonMap <- peers
@@ -292,7 +317,10 @@ case class Stage4Suite(
                     .complete(
                       MultisigRegimeManager.Connections(
                         blockWeaver = stack.blockWeaver,
-                        cardanoLiaison = stack.cardanoLiaison,
+                        // Route the slow cycle's Stack.HardConfirmed through StackObserver
+                        // (forwards to the real CardanoLiaison) so the test can assert
+                        // coverage; mirrors observerMap on consensusActor.
+                        cardanoLiaison = stackObserverMap(peerNum),
                         consensusActor = observerMap(peerNum),
                         eventSequencer = stack.eventSequencer,
                         jointLedger = stack.jointLedger,
@@ -341,6 +369,7 @@ case class Stage4Suite(
           errorDrainer = errorDrainer,
           liaisonTickFibers = liaisonTickFibers.toList,
           blockBriefs = blockBriefsMap,
+          stacks = stacksMap,
           submittedRequestIds = submittedRequestIds,
           tracerLocal = tracerLocal,
           transportCleanup = transportCleanup,
@@ -479,6 +508,17 @@ case class Stage4Suite(
         canonicalBriefs = briefsByPeer(sortedPeers.head)
         submittedIds <- sut.submittedRequestIds.get
 
+        stacksByPeer <- sut.stacks.toList
+            .traverse { case (p, ref) => ref.get.map(p -> _) }
+            .map(_.toMap)
+        canonicalStacks = stacksByPeer(sortedPeers.head)
+        _ <- logger.info(
+          "hard-confirmed stacks per peer: " +
+              sortedPeers
+                  .map(p => s"peer${p: Int}=${stacksByPeer.getOrElse(p, Vector.empty).size}")
+                  .mkString(", ")
+        )
+
         _ <- IO(
           printBlockTable(
             canonicalBriefs,
@@ -491,7 +531,8 @@ case class Stage4Suite(
         )
     yield propLiveness(submittedIds, canonicalBriefs) &&
         propDepositTiming(lastState.registeredDeposits, canonicalBriefs) &&
-        propValidRatio(lastState, canonicalBriefs)
+        propValidRatio(lastState, canonicalBriefs) &&
+        propStackCoverage(canonicalBriefs, canonicalStacks)
 
     // TODO: side-channel validity-error tracking + propNoStaleRejections
     //
@@ -585,6 +626,35 @@ case class Stage4Suite(
         Prop(holds) :|
             s"valid ratio: SUT $sutValid/$sutTotal exceeds model $modelValid/$modelTotal " +
             s"(SUT is more permissive than the model)"
+    }
+
+    /** Property: the slow cycle made progress and kept up — it hard-confirmed at least one stack
+      * and, by shutdown idle, every block the fast cycle produced (observed via
+      * [[BlockBriefObserver]]) is contained in some hard-confirmed stack (observed via
+      * [[StackObserver]]). Catches a slow side that stalls, never closes a stack, or fails to
+      * aggregate hard-acks into [[Stack.HardConfirmed]]. Both observers read the canonical peer.
+      */
+    private def propStackCoverage(
+        canonicalBriefs: Vector[BlockBrief.Intermediate],
+        canonicalStacks: Vector[Stack.HardConfirmed]
+    ): Prop = {
+        // A stack covers the inclusive block range [firstBlockNum, lastBlockNum] from its
+        // brief (the stack no longer carries its BlockResults — PR #446 review dropped
+        // Stack.Unsigned.results; the brief range is the authoritative span).
+        val coveredRanges: Vector[(Int, Int)] =
+            canonicalStacks.map { s =>
+                val b = s.round1.unsigned.brief
+                ((b.firstBlockNum: Int), (b.lastBlockNum: Int))
+            }
+        def covered(n: BlockNumber): Boolean =
+            coveredRanges.exists { case (lo, hi) => lo <= (n: Int) && (n: Int) <= hi }
+        val observedBlocks: Set[BlockNumber] = canonicalBriefs.map(_.blockNum).toSet
+        val uncovered = observedBlocks.filterNot(covered)
+        (Prop(canonicalStacks.nonEmpty) :|
+            "stack coverage: slow cycle hard-confirmed no stacks") &&
+            (Prop(uncovered.isEmpty) :|
+                s"stack coverage: ${uncovered.size} observed block(s) never in any " +
+                s"hard-confirmed stack: ${uncovered.toSeq.sorted.mkString(", ")}")
     }
 
     private def printBlockTable(

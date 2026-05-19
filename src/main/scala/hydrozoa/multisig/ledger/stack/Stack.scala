@@ -1,8 +1,5 @@
 package hydrozoa.multisig.ledger.stack
 
-import cats.data.NonEmptyList
-import hydrozoa.multisig.ledger.block.{Block, BlockResult}
-
 /** A closed slow-consensus stack at one of three signing stages.
   *
   *   - [[Stack.Unsigned]] — composed locally (leader) or validated against the leader's brief
@@ -19,10 +16,16 @@ import hydrozoa.multisig.ledger.block.{Block, BlockResult}
 sealed trait Stack
 
 object Stack:
+    /** @param brief
+      *   the stack's composition (the only thing wire-broadcast)
+      * @param effects
+      *   the locally-derived, partition-indexed effects. `BlockResult`s are a construction-only
+      *   input (consumed by partitioning + derivation in `StackComposer.mkUnsigned`) and are NOT
+      *   retained — every datum the slow side still needs (incl. each SEC's minor header bytes) is
+      *   carried on `effects` itself (PR #446 review).
+      */
     final case class Unsigned(
         brief: StackBrief,
-        results: NonEmptyList[BlockResult],
-        softConfirmations: NonEmptyList[Block.SoftConfirmed],
         effects: StackEffects.Unsigned
     ) extends Stack
 
@@ -33,9 +36,10 @@ object Stack:
     ) extends Stack
 
     /** @param effects
-      *   the stack's effects with every head peer's `VKeyWitness` attached (a standalone evac
-      *   commitment is NOT a tx and carries no witnesses — it is unchanged from `round1.unsigned`).
-      *   These bodies are L1-submittable as is.
+      *   the partition-indexed effects with every head peer's signature aggregated in: tx bodies
+      *   carry the multisig `VKeyWitness`es; each partition's standalone evac commitment is a
+      *   [[StandaloneEvacuationCommitment.MultiSigned]] (the dormant record + all peers' header
+      *   signatures). Tx bodies are L1-submittable as is; the SEC is dispute-usable.
       */
     final case class HardConfirmed(
         round1: Round1Confirmed,

@@ -40,6 +40,137 @@ Actor flow:
 
 `JointLedger.proxyConfirmation` will be retired. It was a March-era kludge using the L2 ledger as a routing point for confirmation results; new design writes confirmation results to their proper destinations directly (slow consensus → CardanoLiaison L1 submission; user-facing notifications → RequestSequencer in a follow-up PR — see Out-of-scope). No L2-ledger callback is needed: refund obligations are already booked at minor-block soft-confirmation time.
 
+## Partition-indexed effects refactor (PR #446 review, 2026-05-18)
+
+**SUPERSEDES** the flat-maps / `BlockEffects`-mirroring representation, the tail-based
+`StackPartition.Closing` model, the "≤1 SEC per stack ⇒ Option" collapse, and the
+`StackEffectsSigningInputs` + `HardAckRoundPlan` SSoT machinery described elsewhere in this
+doc. Where older prose conflicts, this section wins.
+
+### A. Head-based partition classification
+
+Classify a partition by the block that **opens** it, not what closes it. The opening block
+owns the same-major-version minors that **follow** it (flips the old close-after-major model).
+
+| Kind | Shape | Effects |
+|---|---|---|
+| **Major** | `Major + (trailing minors, same major version)*` | Settlement + fallback + rollouts + trailing minors' refunds **+ SEC for the partition's last minor — optional, iff >=1 trailing minor** |
+| **Final** | `Final` alone | Finalization + rollouts (+ deinit) |
+| **Minor** | leading minor run; stops at next Major/Final or stack end | **SEC for the latest minor — mandatory** + those minors' refunds |
+| **Initial** | stack 0, single partition | Initialization (separate `StackEffects.Initial`, not in the partition list) |
+
+Per-stack partition sequence for a regular stack: `[Minor?] [Major]* [Final?]`. A Minor-headed
+partition can only ever lead the stack (every other minor run is absorbed as a Major's tail).
+An all-minor stack = one Minor partition = the sole/1-phase case.
+
+`StackPartition.Closing { Major, Final, TrailingMinors }` (tail semantics) -> head-based
+`StackPartition.Kind { Initial, Major, Final, Minor }`.
+
+**Why SEC even when a settlement/finalization follows:** the settlement/finalization's L1
+execution is **not guaranteed**. The post-settlement trailing minors advance KZG beyond the
+settlement snapshot; if it never lands, voting in the rule-based regime needs the latest
+minor's KZG. So the SEC is per minor-containing partition, **not** <=1 per stack. (The earlier
+"a following major/final cancels the previous minors' SEC" assumption was wrong - dropped.)
+
+### B. `StackEffects` becomes partition-indexed
+
+The partition is the natural spine for a *stack* (mirroring flat `BlockEffects` was right for
+per-*block* effects, wrong here). One list replaces the four parallel maps.
+
+```
+sealed trait PartitionEffects
+object PartitionEffects:
+  case class Major(
+    settlement: SettlementTx, fallback: FallbackTx,
+    rollouts: List[RolloutTx], refunds: List[RefundTx],
+    sec: Option[StandaloneEvacuationCommitment]      // last trailing minor, iff any
+  ) extends PartitionEffects
+  case class Final(finalization: FinalizationTx, rollouts: List[RolloutTx])
+    extends PartitionEffects
+  case class Minor(sec: StandaloneEvacuationCommitment, refunds: List[RefundTx])
+    extends PartitionEffects
+
+StackEffects.Unsigned.Regular(partitions: NonEmptyList[PartitionEffects])
+StackEffects.HardConfirmed.Regular(partitions: NonEmptyList[PartitionEffects])
+  // HardConfirmed: tx wrappers witnessed in place; sec -> StandaloneEvacuationCommitment.MultiSigned
+```
+
+- `PartitionIndex` = list index. **`WithinPartitionIndex` deleted** - intra-partition
+  rollouts/refunds are ordered lists; the `(PartitionIndex, WithinPartitionIndex)` tuple keys
+  go away.
+- `NonEmptyList` - a Regular stack always has >=1 partition.
+- `StackEffects.Initial` stays its own variant (not in the partition list).
+- Refunds are per-partition (each minor's `postDatedRefundTxs` attach to the partition that
+  owns the minor).
+
+### C. `Stack.Unsigned` drops `results`
+
+`results: NonEmptyList[BlockResult]` is a **construction-time input** consumed by
+`StackPartition.partition` + effect derivation in `mkUnsigned`; it is not stack state. Only
+one post-construction reader exists: `StackEffectsSigningInputs.scala:96` building SEC header
+signing bytes. Resolve by making the SEC effect **self-contained** - the
+`StandaloneEvacuationCommitment` carries the minor header serialization
+(`BlockHeader.Minor.Onchain.Serialized`) so SEC signing material derives from `effects`, not
+`results`. Then remove `Stack.Unsigned.results`. (Open: `softConfirmations` may also be a
+construction-only field / the better SEC-header source - evaluate during the refactor.)
+
+### D. Two explicit acks; drop `HardAckRoundPlan` + `StackEffectsSigningInputs`
+
+Three jobs were conflated; separating them collapses the machinery:
+
+1. **Splitting own sigs into round-1/round-2** = a *signing-side* packaging decision. The
+   signer (StackComposer/wallet) signs each effect, knows the unlock, and **already emits
+   round-1 and round-2 as separate acks** in `StackHandoff.ownAcks`. `SlowConsensusActor`
+   never splits own acks - it `collectFirst`s the pre-split ones. Nothing to re-derive.
+2. **Verifying remote sigs** needs the effect *bodies*, not a round plan. With
+   partition-indexed `Stack.Unsigned.effects`, verification pairs
+   `ack.partitions[i].<role>Sig` <-> `effects.partitions[i].<role>.tx.id` directly;
+   `verifyTxMap`'s keyset-match becomes a structural shape check over the partition list.
+3. **Aggregating verified sigs -> witnesses** = walk partition-indexed effects, pair by index.
+   The plan's keyed tx-maps were only a flattening crutch for the parallel-maps shape.
+
+`StackEffectsSigningInputs` + `HardAckRoundPlan` existed because flat parallel maps needed a
+deterministic flatten + round-frame both sides re-derive identically. Partition-indexed
+`StackEffects` **is** that canonical structure => both are **removed**. What remains:
+
+- A single shared pure **unlock-selection function** over the partition list: *the first
+  Major partition's settlement; else the Final partition's finalization*. The signer calls it
+  to pack round-1 vs round-2; the verifier calls the same function to know round-2's expected
+  target. A shared *function*, not a type both must mirror.
+- `HardAck.Round1Payload.Regular` = `NonEmptyList[PartitionSig]` (same spine), with **only
+  the unlock partition's settlement/finalization sig excised** (that one slot
+  `Option`/absent). `Round2Payload.Regular` unchanged (the single `firstUnlockSig`).
+  `SolePayload` = the Minor-partition case (SEC + refund sigs).
+- `SlowConsensusActor` keeps **no plan**: the cell carries the partition-indexed
+  `Stack.Unsigned.effects`; verify + aggregate index acks into it by partition. Own acks
+  arrive pre-split in the handoff; remote acks arrive per-round on the wire.
+
+### E. Files touched (single change set - B+C+D+the head-based partition model are one PR)
+
+- `multisig/ledger/stack/StackPartition.scala` - `Closing`->head-based `Kind`; head-based
+  partitioning algorithm.
+- `multisig/ledger/stack/StackEffects.scala` - `Regular` -> `NonEmptyList[PartitionEffects]`
+  ADT (Unsigned + HardConfirmed).
+- `multisig/ledger/stack/StandaloneEvacuationCommitment.scala` - carry minor header
+  serialization; keep `.MultiSigned`.
+- `multisig/ledger/stack/StackEffectsBuilder.scala` - emit per-partition effects incl. SEC
+  per the head-based rules.
+- `multisig/ledger/stack/Stack.scala` - drop `results` (and reassess `softConfirmations`).
+- `multisig/ledger/stack/PartitionIndex.scala` - delete `WithinPartitionIndex`.
+- `multisig/consensus/ack/HardAck.scala` - `Round1Payload.Regular` ->
+  `NonEmptyList[PartitionSig]` w/ excised unlock; `SolePayload` = Minor case.
+- `multisig/consensus/ack/StackEffectsSigningInputs.scala`,
+  `multisig/consensus/ack/HardAckRoundPlan.scala` - **delete**; replace with the shared
+  unlock-selection function (home TBD: `StackEffects` companion or `Stack`).
+- `multisig/consensus/peer/HeadPeerWallet.scala`, `StackComposer.scala` - sign per-partition;
+  pack two explicit acks via the unlock rule.
+- `multisig/consensus/SlowConsensusActor.scala` - drop plan; cell carries effects;
+  verify/aggregate by partition index.
+- `multisig/consensus/CardanoLiaison.scala` - consume partition-indexed `HardConfirmed`.
+- `multisig/consensus/transport/Codecs.scala` (+ `CodecsTest`) - `HardAck` wire shape.
+- `integration/.../stage4/{Sut,Suite}.scala` - `propStackCoverage` reads partition-indexed
+  effects.
+
 ## Scope
 
 **In:**
@@ -262,7 +393,7 @@ case class HardAck(
     payload: HardAckRound1 | HardAckRound2,    // round discriminated by payload type
     finalizationRequested: Bool,                // mirrors SoftAck.finalizationRequested (per-peer flag, NOT a confirmation)
 )
-
+‎.scratch
 sealed trait Stack
 object Stack:
     case class Unsigned(
