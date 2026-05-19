@@ -82,7 +82,7 @@ final case class DisputeActor(
                         _ <- Tracer.warn(
                           "Cardano backend error encountered. This may be due to " +
                               "timeout, utxo contention, rollbacks, or timing skew, but it may also be a genuine error." +
-                              s"Error: $e"
+                              s"\n\tError: \n$e"
                         )
                     } yield Error.RecoverableCardanoBackendError(e))
                 case Right(a) => EitherT.right[DisputeActor.Error.RecoverableErrors](IO.pure(a))
@@ -96,7 +96,7 @@ final case class DisputeActor(
             _ <- EitherT.right(Tracer.info(s"Submitting Tx with Id ${tx.id}"))
             _ <- EitherT.right(
               Tracer.debug(
-                s"\n\tPretty: ${summon[Pretty[Transaction]].pretty(tx)}" +
+                s"\n\tPretty: ${summon[Pretty[Transaction]].pretty(tx).render(100)}" +
                     s"\n\tcbor: ${HexUtil.encodeHexString(tx.toCbor)}"
               )
             )
@@ -105,10 +105,12 @@ final case class DisputeActor(
     }
 
     private def getDisputeCollateral
-        : EitherT[IO, DisputeActor.Error.RecoverableErrors, CollateralUtxo] =
+        : EitherT[IO, DisputeActor.Error.RecoverableErrors, CollateralUtxo] = {
+        val peerAddr = config.ownHeadWallet.exportVerificationKey.shelleyAddress()
         for {
+            _ <- EitherT.liftF(Tracer.debug(s"Looking for collateral utxos at address ${peerAddr}"))
             collateralCandidates <- handleCardanoBackendError(
-              cardanoBackend.utxosAt(config.ownHeadWallet.exportVerificationKey.shelleyAddress())
+              cardanoBackend.utxosAt(peerAddr)
             )
             collateralUtxoTuple <- collateralCandidates.filter((_, to) =>
                 to.value.isOnlyAda
@@ -143,8 +145,9 @@ final case class DisputeActor(
                         res <- IO.raiseError(NoSuitableCollateralUtxosFound)
                     } yield res)
             }
-
+            _ <- EitherT.liftF(Tracer.debug("Found collateral utxo"))
         } yield CollateralUtxo(collateralUtxoTuple._1, collateralOutput)
+    }
 
     def handleDisputeRes: IO[Either[DisputeActor.Error.RecoverableErrors, Unit]] = {
         val et: EitherT[IO, DisputeActor.Error.RecoverableErrors, Unit] = for {
@@ -178,10 +181,12 @@ final case class DisputeActor(
                       signatures = signatures,
                     )
                     for {
+                        _ <- EitherT.liftF(Tracer.info("Building vote Tx"))
                         voteTx <- builder.result match {
                             case Left(e)   => EitherT.liftF(IO.raiseError(Error.BuildError.Vote(e)))
                             case Right(tx) => EitherT.right(IO.pure(tx))
                         }
+                        _ <- EitherT.liftF(Tracer.info("Submitting vote Tx"))
                         _ <- signAndSubmitTx(voteTx.tx)
                     } yield ()
 
@@ -192,6 +197,8 @@ final case class DisputeActor(
                     val keySorted = otherUtxos.sortBy(_.voteOutput.key)
                     val continuing = keySorted.head
                     for {
+                        _ <- EitherT.liftF(Tracer.info("Tallying..."))
+
                         removed <- keySorted.tail.find(voteUtxo =>
                             voteUtxo.voteOutput.key == continuing.voteOutput.link
                         ) match {
@@ -225,6 +232,7 @@ final case class DisputeActor(
                 // Resolve
                 case (None, lastVoteUtxo) if lastVoteUtxo.length == 1 =>
                     for {
+                        _ <- EitherT.liftF(Tracer.info("Resolving treasury..."))
                         resolutionTx <- ResolutionTx
                             .Build(
                               // FIXME: Partial, just doing this cast during a refactor
@@ -252,10 +260,19 @@ final case class DisputeActor(
     }
 
     override def preStart: IO[Unit] =
-        context.setReceiveTimeout(config.evacuationBotPollingPeriod, ())
+        context.self ! Requests.PreStart
 
-    override def receive: Receive[IO, Requests.Request] = { case _: Requests.HandleDisputeRes =>
-        handleDisputeRes
+    private def preStartLocal: IO[Unit] =
+        for {
+            _ <- context.setReceiveTimeout(config.evacuationBotPollingPeriod, ())
+
+            _ <- Tracer.routeLocal(s"DisputeActor.${config.ownHeadPeerNum}")
+        } yield ()
+
+    override def receive: Receive[IO, Requests.Request] = {
+        case _: Requests.PreStart.type => preStartLocal
+        case _: Requests.HandleDisputeRes =>
+            handleDisputeRes
     }
 
     /** Queries the cardano backend for all utxos at the dispute resolution address, and then parses
@@ -346,7 +363,10 @@ object DisputeActor {
     type Handle = ActorRef[IO, Requests.Request]
 
     object Requests {
-        type Request = HandleDisputeRes
+
+        case object PreStart
+
+        type Request = HandleDisputeRes | PreStart.type
 
         // Placeholder, I'm not sure if we need any additional state here
         type HandleDisputeRes = Unit

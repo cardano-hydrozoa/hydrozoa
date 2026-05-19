@@ -113,12 +113,13 @@ object InitialDisputeUtxos:
     // The voting deadline is passed in from the TestControl-aware caller so it is anchored to the
     // simulated clock rather than System.currentTimeMillis().
     def gen(
-        fallbackTxId: TransactionHash, // [SYNTHETIC] stands in for the real fallback tx hash
-        now: QuantizedInstant,          // simulated "now", read from inside TestControl
+        fallbackTxId: TransactionHash,  // [SYNTHETIC] stands in for the real fallback tx hash
+        now: QuantizedInstant,           // simulated "now", read from inside TestControl
+        votingDuration: FiniteDuration,  // overrides env.votingDuration so tests can use short windows
         nEvacs: Int = 100,               // [SYNTHETIC] number of entries in the evacuation map
     )(using env: MultiNodeConfig): Gen[InitialDisputeUtxos] =
         val nPeers = env.headConfig.nHeadPeers.convert
-        val votingDeadline: BigInt = now.toPosixTime + env.votingDuration.finiteDuration.toMillis
+        val votingDeadline: BigInt = now.toPosixTime + votingDuration.toMillis
 
         // [SYNTHETIC] KZG G2 setup (reuses the same approach as the existing DisputeActorTest)
         val setup = TrustedSetup

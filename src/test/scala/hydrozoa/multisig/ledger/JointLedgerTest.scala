@@ -57,7 +57,10 @@ import test.{TestMFixedEnv, *}
 
 // Pretty Printers for more manageable scalacheck logs
 given ppMultiNodeConfig: (MultiNodeConfig => Pretty) = nodeConfig =>
-    Pretty(_ => "MultiNodeConfig (too long to print)")
+    Pretty(_ =>
+        "MultiNodeConfig Summary:" +
+            s"\n\tnPeers: ${nodeConfig.nHeadPeers}"
+    )
 
 // TODO: restore? Do we use it?
 //given ppTestPeers: (TestPeers => Pretty) = testPeers =>
