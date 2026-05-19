@@ -145,8 +145,12 @@ object ContraTracer {
     given [M[_]: Monad, S]: Monoid[ContraTracer[M, S]] with {
         override def empty: ContraTracer[M, S] = nullTracer
 
-        override def combine(x: ContraTracer[M, S], y: ContraTracer[M, S]): ContraTracer[M, S] =
-            Semigroup[ContraTracer[M, S]].combine(x, y)
+        override def combine(x: ContraTracer[M, S], y: ContraTracer[M, S]): ContraTracer[M, S] = {
+            def const[A, B](a: A)(b: => B): A = a
+            def discard(tunit: (Unit, Unit)): Unit = const(())(tunit)
+            def arrDiscard = Arrow[[X, Y] =>> TracerA[M, X, Y]].lift(discard)
+            ContraTracer((x.use &&& y.use) >>> arrDiscard)
+        }
     }
 
     /** -- | Make an emitting tracer from a callback. -- mkTracer :: Applicative m => (a -> m ()) ->

@@ -8,7 +8,7 @@ import cats.syntax.all.*
 import hydrozoa.*
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
-import hydrozoa.lib.logging.Tracer
+import hydrozoa.lib.logging.{ContraTracer, LogEvent, Tracer}
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.rulebased.DisputeActor
@@ -97,7 +97,17 @@ object DisputePropertyTest extends Properties("RBR Dispute Property"):
 
               (sharedBackend, utxoSnapshot) = backendAndSnapshot
 
-              tracer <- lift(Tracer.makeLocal)
+              // Fires when any peer's actor logs "Treasury is Resolved", shutting down all systems early.
+              // actorRunDuration remains as a timeout fallback in case the signal is never emitted.
+              resolvedSignal <- lift(IO.deferred[Unit])
+
+              tracer <- lift {
+                  val signalTracer: Tracer = ContraTracer.emit { (ev: LogEvent) =>
+                      if ev.msg == "Treasury is Resolved" then resolvedSignal.complete(()).void
+                      else IO.unit
+                  }
+                  Tracer.makeLocal.flatMap(local => local.update(_ |+| signalTracer).as(local))
+              }
 
               // Plan:
               //   - Create a stage-1 style time machine for two different peer systems which get executed concurrently
@@ -115,11 +125,12 @@ object DisputePropertyTest extends Properties("RBR Dispute Property"):
                                   signatures = signatures,
                                   tracerLocal = tracer
                                 )(using env.nodeConfigs(peerId))
-                              ).void >> IO.sleep(actorRunDuration)
+                              ).void >> IO.race(IO.sleep(actorRunDuration), resolvedSignal.get).void
                           }
                       }
 
-                  // Run all peer systems in parallel; each keeps its ActorSystem alive for actorRunDuration.
+                  // Run all peer systems in parallel. Each exits when the resolved signal fires
+                  // (any peer observed "Treasury is Resolved") or actorRunDuration elapses, whichever is first.
                   // Then snapshot the full terminal UTxO set from the shared backend.
                   peerSystems.parSequence >> utxoSnapshot
               }
