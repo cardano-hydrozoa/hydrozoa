@@ -17,6 +17,7 @@ import hydrozoa.lib.logging.Tracer
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.ledger.block.BlockHeader
+import hydrozoa.multisig.ledger.l1.tx.Tx
 import hydrozoa.rulebased.DisputeActor.Error.NoSuitableCollateralUtxosFound
 import hydrozoa.rulebased.DisputeActor.Error.ParseError.Treasury.TreasuryResolved
 import hydrozoa.rulebased.DisputeActor.{Error, *}
@@ -89,18 +90,23 @@ final case class DisputeActor(
             }
         } yield a
 
-    private def signAndSubmitTx(
-        tx: Transaction
+    private def signAndSubmitTx[TxType <: Tx[TxType]](
+        tx: Tx[TxType],
     ): EitherT[IO, DisputeActor.Error.RecoverableErrors, Unit] = {
         for {
-            _ <- EitherT.right(Tracer.info(s"Submitting Tx with Id ${tx.id}"))
+            _ <- EitherT.right(
+              Tracer.info(s"Submitting ${tx.transactionFamily} with Id ${tx.tx.id}")
+            )
             _ <- EitherT.right(
               Tracer.debug(
-                s"\n\tPretty: ${summon[Pretty[Transaction]].pretty(tx).render(100)}" +
-                    s"\n\tcbor: ${HexUtil.encodeHexString(tx.toCbor)}"
+                s"\n\tPretty: ${summon[Pretty[Transaction]].pretty(tx.tx).render(100)}" +
+                    s"\n\tcbor: ${HexUtil.encodeHexString(tx.tx.toCbor)}"
               )
             )
-            res <- handleCardanoBackendError(cardanoBackend.submitTx(tx.selfSigned))
+            res <- handleCardanoBackendError(cardanoBackend.submitTx(tx.tx.selfSigned))
+            _ <- EitherT.right(
+              Tracer.info(s"SUCCESS submitting ${tx.transactionFamily} with Id ${tx.tx.id}")
+            )
         } yield res
     }
 
@@ -187,7 +193,7 @@ final case class DisputeActor(
                             case Right(tx) => EitherT.right(IO.pure(tx))
                         }
                         _ <- EitherT.liftF(Tracer.info("Submitting vote Tx"))
-                        _ <- signAndSubmitTx(voteTx.tx)
+                        _ <- signAndSubmitTx[VoteTx](voteTx)
                     } yield ()
 
                 // Tally
@@ -226,7 +232,7 @@ final case class DisputeActor(
                             case Left(e) => EitherT.liftF(IO.raiseError(Error.BuildError.Tally(e)))
                             case Right(tx) => EitherT.right(IO.pure(tx))
                         }
-                        _ <- signAndSubmitTx(tallyTx.tx)
+                        _ <- signAndSubmitTx(tallyTx)
                     } yield ()
 
                 // Resolve
@@ -245,7 +251,7 @@ final case class DisputeActor(
                                 EitherT.liftF(IO.raiseError(Error.BuildError.Resolution(e)))
                             case Right(tx) => EitherT.right(IO.pure(tx))
                         }
-                        _ <- signAndSubmitTx(resolutionTx.tx)
+                        _ <- signAndSubmitTx(resolutionTx)
                     } yield ()
 
                 // This should not be able to happen. If the treasury is unresolved,
@@ -311,6 +317,27 @@ final case class DisputeActor(
                     peerPkh == ownPkh
                 case _ => false
             }
+
+            _ <-
+                if votePartition._1.headOption.isDefined
+                then
+                    Tracer.debug(
+                      "Own peer has already voted, parseDisputeUtxos will return (None,_)"
+                    )
+                else
+                    Tracer.debug(
+                      "Own peer has not voted yet, parseDisputeUtxos will return (Some(_),_)"
+                    )
+
+            _ <-
+                if votePartition._2.isEmpty
+                then Tracer.debug("No VoteUtxo[Voted] found")
+                else
+                    Tracer.debug(
+                      "Found VoteUtxo[Voted] for (key, link)s " +
+                          s"${votePartition._2.map(v => (v.voteOutput.key, v.voteOutput.link))}"
+                    )
+
         } yield (
           votePartition._1.headOption.map(_.asInstanceOf[VoteUtxo[AwaitingVote]]),
           votePartition._2
@@ -452,8 +479,12 @@ object DisputeActor {
     // obtained from the parameters to this class
     def parseRBTreasury(
         utxos: Utxos
-    )(using config: Config): EitherT[IO, Error.RecoverableErrors, RuleBasedTreasuryUtxo] =
+    )(using
+        config: Config,
+        tracer: IOLocal[Tracer]
+    ): EitherT[IO, Error.RecoverableErrors, RuleBasedTreasuryUtxo] =
         for {
+            _ <- EitherT.liftF(Tracer.debug("parsing RuleBased Treasury"))
             utxo <- utxos.size match {
                 // May happen due to rollback, ignore and try again
                 case 0 => EitherT.left(IO.pure(Error.ParseError.Treasury.TreasuryMissing))
@@ -466,8 +497,11 @@ object DisputeActor {
 
             rbTreasuryOut <- EitherT.right(IO.fromEither(RuleBasedTreasuryOutput(utxo.output)))
             unresolvedRbt <- rbTreasuryOut.datum match {
-                case _: RuleBasedTreasuryDatum.Unresolved => EitherT.right(IO.pure(rbTreasuryOut))
-                case _: RuleBasedTreasuryDatum.Resolved   => EitherT.left(IO.pure(TreasuryResolved))
+                case _: RuleBasedTreasuryDatum.Unresolved =>
+                    EitherT.right(Tracer.info("Treasury is Unresolved") >> IO.pure(rbTreasuryOut))
+                case _: RuleBasedTreasuryDatum.Resolved =>
+                    EitherT.left(Tracer.info("Treasury is Resolved") >> IO.pure(TreasuryResolved))
+
             }
         } yield RuleBasedTreasuryUtxo(utxo.input, unresolvedRbt)
 }

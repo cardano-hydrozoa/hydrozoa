@@ -72,8 +72,8 @@ object DisputePropertyTest extends Properties("RBR Dispute Property"):
               // All peers co-sign the block header (a voted block requires all signatures)
               signatures = env.multisignHeader(blockHeader).toList
 
-              sharedBackend <- lift(
-                CardanoBackendMock.mockIO(
+              backendAndSnapshot <- lift(
+                CardanoBackendMock.mockIOWithSnapshot(
                   MockState(
                     ledgerState = State(initialUtxos.allUtxos(using env)),
                     currentSlot = now.toSlot
@@ -95,6 +95,8 @@ object DisputePropertyTest extends Properties("RBR Dispute Property"):
                 )
               )
 
+              (sharedBackend, utxoSnapshot) = backendAndSnapshot
+
               tracer <- lift(Tracer.makeLocal)
 
               // Plan:
@@ -102,7 +104,7 @@ object DisputePropertyTest extends Properties("RBR Dispute Property"):
               //   - Run them side-by-side until the Resolved utxo appears
               //   - Stop both actor systems
               //   - Inspect the utxo state from the cardano backend
-              result <- lift {
+              terminalUtxos <- lift {
                   val peerSystems: List[IO[Unit]] =
                       env.nodePrivateConfigs.toList.map { (peerId, _) =>
                           ActorSystem[IO](s"Dispute System for peer $peerId").use { system =>
@@ -117,30 +119,24 @@ object DisputePropertyTest extends Properties("RBR Dispute Property"):
                           }
                       }
 
-                  // Run all peer systems in parallel; each keeps its ActorSystem alive for actorRunDuration
-                  peerSystems.parSequence >>
-                      // Snapshot the terminal state from the shared backend
-                      (for {
-                          utxosAtDisputeAddr <- sharedBackend
-                              .utxosAt(env.headConfig.ruleBasedDisputeResolutionAddress)
-                              .flatMap(_.fold(e => IO.raiseError(RuntimeException(e.toString)), IO.pure))
-                          utxosAtTreasuryAddr <- sharedBackend
-                              .utxosAt(env.headConfig.ruleBasedTreasuryAddress)
-                              .flatMap(_.fold(e => IO.raiseError(RuntimeException(e.toString)), IO.pure))
-                      } yield (utxosAtDisputeAddr, utxosAtTreasuryAddr))
+                  // Run all peer systems in parallel; each keeps its ActorSystem alive for actorRunDuration.
+                  // Then snapshot the full terminal UTxO set from the shared backend.
+                  peerSystems.parSequence >> utxoSnapshot
               }
 
-              (utxosAtDisputeAddr, utxosAtTreasuryAddr) = result
+              classification <- lift(IO.fromEither(
+                DisputeAbstraction.classify(terminalUtxos)(using env)
+                    .left.map(e => RuntimeException(e.getMessage))
+              ))
 
               _ <- assertWith(
-                utxosAtDisputeAddr.isEmpty,
-                s"No vote UTxOs should remain at the dispute address after resolution, " +
-                    s"but found ${utxosAtDisputeAddr.size}"
+                classification.votes.isEmpty,
+                s"No vote UTxOs should remain after resolution, " +
+                    s"but found ${classification.votes.size}"
               )
               _ <- assertWith(
-                utxosAtTreasuryAddr.size == 1,
-                s"Exactly 1 resolved treasury UTxO should be at the treasury address, " +
-                    s"but found ${utxosAtTreasuryAddr.size}"
+                classification.treasury.isDefined,
+                "Exactly 1 resolved treasury UTxO should exist after resolution, but found none"
               )
           yield true,
           PropertyM.pick(MultiNodeConfig.generate(TestPeersSpec.default)(

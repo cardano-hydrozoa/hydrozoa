@@ -201,7 +201,17 @@ object CardanoBackendMock {
         initialState: MockState,
         mutator: Mutator = CardanoMutator,
         mkContext: Long => Context = Context.testMainnet
-    ): IO[CardanoBackend[IO]] = {
+    ): IO[CardanoBackend[IO]] =
+        mockIOWithSnapshot(initialState, mutator, mkContext).map(_._1)
+
+    /** Like [[mockIO]] but also returns an `IO[Utxos]` that reads the current UTxO set from the
+      * shared state ref. Useful for inspecting the terminal ledger state after actors finish.
+      */
+    def mockIOWithSnapshot(
+        initialState: MockState,
+        mutator: Mutator = CardanoMutator,
+        mkContext: Long => Context = Context.testMainnet
+    ): IO[(CardanoBackend[IO], IO[Utxos])] = {
         logger.info("Running Cardano backend mock in IO...")
         logger.debug(s"initial utxo ids: ${initialState.ledgerState.utxos.map(_._1)}")
 
@@ -224,7 +234,7 @@ object CardanoBackendMock {
                     } yield ret
                 }
 
-            new CardanoBackend[IO] {
+            val backend: CardanoBackend[IO] = new CardanoBackend[IO] {
                 override def utxosAt(
                     address: ShelleyAddress
                 ): IO[Either[CardanoBackend.Error, Utxos]] =
@@ -256,6 +266,10 @@ object CardanoBackendMock {
                 override def resolve(input: TransactionInput): IO[Either[Error, Option[Utxo]]] =
                     transformer(mock.resolve(input))
             }
+
+            val snapshot: IO[Utxos] = stateRef.get.map(_.ledgerState.utxos)
+
+            (backend, snapshot)
         }
     }
 }

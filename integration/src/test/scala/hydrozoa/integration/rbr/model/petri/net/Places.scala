@@ -24,11 +24,15 @@ object RBRPlaceId {
 
 enum RBRPlaceId:
     case TreasuryRefPlaceId
+    case ResolvedTreasuryPlaceId
     case ResolvedPlaceId
     case AmbientPlaceId
     case PayoutObligationsPlaceId // synthetic
     case EvacuationOutputPlaceId
     case CollateralPlaceId
+    case VotedPlaceId
+    case UnvotedPlaceId
+    case DisputeRefPlaceId
 
 object TreasuryRefPlace {
     case object OnlyOneTokenAllowed extends MarkingError {
