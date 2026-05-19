@@ -39,7 +39,19 @@ case class DisputeClassification(
     disputeScriptRef: Option[ScriptReferenceUtxos.DisputeScriptUtxo],
     // Everything that did not match any known category
     ambient: Utxos
-)
+) {
+    /** Cardinality projection: maps each [[RBRPlaceId]] to the number of UTxOs classified there.
+      * Suitable for comparison against a petri-net marking derived from model expectations.
+      */
+    def toCardinalities: Map[RBRPlaceId, Int] = Map(
+      TreasuryRefPlaceId      -> treasuryScriptRef.size,
+      DisputeRefPlaceId       -> disputeScriptRef.size,
+      ResolvedTreasuryPlaceId -> treasury.size,
+      VotedPlaceId            -> votes.size,
+      CollateralPlaceId       -> collaterals.size,
+      AmbientPlaceId          -> ambient.size
+    )
+}
 
 object DisputeAbstraction {
 

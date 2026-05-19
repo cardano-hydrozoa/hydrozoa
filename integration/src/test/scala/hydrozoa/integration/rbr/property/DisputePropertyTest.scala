@@ -8,6 +8,8 @@ import cats.syntax.all.*
 import hydrozoa.*
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
+import hydrozoa.integration.rbr.model.petri.net.RBRPlaceId
+import hydrozoa.integration.rbr.model.petri.net.RBRPlaceId.*
 import hydrozoa.lib.logging.{ContraTracer, LogEvent, Tracer}
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
 import hydrozoa.multisig.ledger.block.BlockHeader
@@ -27,7 +29,7 @@ object DisputePropertyTest extends Properties("RBR Dispute Property"):
     override def overrideParameters(
         p: org.scalacheck.Test.Parameters
     ): org.scalacheck.Test.Parameters =
-        p.withMinSuccessfulTests(3)
+        p.withMinSuccessfulTests(10)
 
     val votingDuration   = 5.seconds
     val postVotingSlack  = 20.seconds
@@ -140,14 +142,24 @@ object DisputePropertyTest extends Properties("RBR Dispute Property"):
                     .left.map(e => RuntimeException(e.getMessage))
               ))
 
-              _ <- assertWith(
-                classification.votes.isEmpty,
-                s"No vote UTxOs should remain after resolution, " +
-                    s"but found ${classification.votes.size}"
+              nPeers = env.headConfig.nHeadPeers.convert
+
+              expectedCardinalities: Map[RBRPlaceId, Int] = Map(
+                TreasuryRefPlaceId      -> 1,      // treasury script ref UTxO unchanged
+                DisputeRefPlaceId       -> 1,      // dispute script ref UTxO unchanged
+                ResolvedTreasuryPlaceId -> 1,      // treasury resolved
+                VotedPlaceId            -> 0,      // all votes consumed by resolution TX
+                CollateralPlaceId       -> nPeers, // collateral not consumed when scripts pass
+                AmbientPlaceId          -> 0       // no unexpected UTxOs
               )
+
+              actualCardinalities = classification.toCardinalities
+
               _ <- assertWith(
-                classification.treasury.isDefined,
-                "Exactly 1 resolved treasury UTxO should exist after resolution, but found none"
+                actualCardinalities == expectedCardinalities,
+                s"Cardinality mismatch:\n" +
+                    s"  expected: $expectedCardinalities\n" +
+                    s"  actual:   $actualCardinalities"
               )
           yield true,
           PropertyM.pick(MultiNodeConfig.generate(TestPeersSpec.default)(
