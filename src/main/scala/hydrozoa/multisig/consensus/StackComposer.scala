@@ -579,6 +579,11 @@ object StackComposer {
           // Initial stack 0 boots with the trigger pre-armed (per spec: stack-0
           // hard-confirmation bootstraps the trigger chain).
           previousStackHardConfirmed = true,
+          // Next hard-ack number to assign. 0-based: the PeerLiaison hard-ack
+          // lane is next-expected with an initial cursor of 0 (see the
+          // GetMsgBatch cursor protocol in PeerLiaison), so the first hard-ack
+          // is number 0. The initial stack, once injected, takes 0 = round-1,
+          // 1 = round-2.
           ownHardAckNum = HardAckNumber.zero
         )
     }

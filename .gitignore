@@ -59,4 +59,4 @@ old/**
 
 # traces
 /hydrozoa-trace.jsonl
-/integration/stage4-peers-interaction.mmd
+A**/*.mmd

@@ -231,14 +231,14 @@ trait PeerLiaison(
           * [[startResendTimer]]) and by the [[NewMsgBatch]] handler to detect duplicates.
           */
         def getCurrentlyRequesting: IO[GetMsgBatch] = this.currentlyRequesting.get
-        private val nAck = Ref.unsafe[IO, AckNumber](AckNumber(0))
-        private val nBlock = Ref.unsafe[IO, BlockNumber](BlockNumber(0))
-        private val nEvent = Ref.unsafe[IO, RequestNumber](RequestNumber(0))
+        private val nAck = Ref.unsafe[IO, AckNumber](AckNumber.zero)
+        private val nBlock = Ref.unsafe[IO, BlockNumber](BlockNumber.zero)
+        private val nRequest = Ref.unsafe[IO, RequestNumber](RequestNumber.zero)
         private val nStackBrief = Ref.unsafe[IO, StackNumber](StackNumber.zero)
         private val nHardAck = Ref.unsafe[IO, HardAckNumber](HardAckNumber.zero)
         private val qAck = Ref.unsafe[IO, Queue[SoftAck]](Queue())
         private val qBlock = Ref.unsafe[IO, Queue[BlockBrief.Next]](Queue())
-        private val qEvent = Ref.unsafe[IO, Queue[UserRequestWithId]](Queue())
+        private val qRequest = Ref.unsafe[IO, Queue[UserRequestWithId]](Queue())
         private val qStackBrief = Ref.unsafe[IO, Queue[StackBrief]](Queue())
         private val qHardAck = Ref.unsafe[IO, Queue[HardAck]](Queue())
         private val sendBatchImmediately = Ref.unsafe[IO, Option[GetMsgBatch]](None)
@@ -250,7 +250,7 @@ trait PeerLiaison(
             for {
                 ack <- this.qAck.get.map(_.isEmpty)
                 block <- this.qBlock.get.map(_.isEmpty)
-                event <- this.qEvent.get.map(_.isEmpty)
+                event <- this.qRequest.get.map(_.isEmpty)
                 stackBrief <- this.qStackBrief.get.map(_.isEmpty)
                 hardAck <- this.qHardAck.get.map(_.isEmpty)
             } yield ack && block && event && stackBrief && hardAck
@@ -259,20 +259,20 @@ trait PeerLiaison(
             x match {
                 case y: UserRequestWithId =>
                     for {
-                        nEvent <- this.nEvent.get
+                        nEvent <- this.nRequest.get
                         nY = y.requestId.requestNum
                         _ <- IO.raiseWhen(nY.convert != 0L && nEvent.increment != nY)(
                           Error(s"Bad LedgerEvent increment: last-seen: $nEvent, attempted: $nY")
                         )
-                        _ <- this.nEvent.set(nY)
-                        _ <- this.qEvent.update(_ :+ y)
+                        _ <- this.nRequest.set(nY)
+                        _ <- this.qRequest.update(_ :+ y)
                     } yield ()
                 case y: SoftAck =>
                     for {
                         nAck <- this.nAck.get
                         nY = y.ackNum
                         _ <- IO.raiseWhen(nY.convert != 0L && nAck.increment != nY)(
-                          Error("Bad SoftAck increment: last-seen: $nEvent, attempted: $nY")
+                          Error("Bad SoftAck increment: last-seen: $nRequest, attempted: $nY")
                         )
                         _ <- this.nAck.set(nY)
                         _ <- this.qAck.update(_ :+ y)
@@ -360,37 +360,50 @@ trait PeerLiaison(
                 nBlock <- this.nBlock.get
                 nStack <- this.nStackBrief.get
                 nHard <- this.nHardAck.get
+                nRequest <- this.nRequest.get
 
+                // OutOfBounds sanity guard, one per lane: the remote's cursor can
+                // never legitimately exceed what we've produced (`nX` = highest
+                // number ever appended to this outbox; monotonic, prune-independent).
+                //   - block (LAST-SEEN): cursor = "highest seen", so cursor must be
+                //     `<= nBlock`            ⇒ error iff `nBlock < blockNum`.
+                //   - next-expected lanes (ack/stackBrief/hardAck/request): cursor =
+                //     "next number wanted", which may legitimately reach
+                //     `last-produced + 1` (remote got the latest, wants the next),
+                //     so cursor must be `<= nX + 1`
+                //                            ⇒ error iff `nX.increment < cursor`.
+                // Never false-fires, including at startup where each cursor equals
+                // its initial value and `nX == 0` (e.g. ack: `1 <= 0.increment`).
                 _ <- IO.raiseWhen(
-                  nAck < batchReq.ackNum ||
+                  nAck.increment < batchReq.ackNum ||
                       nBlock < batchReq.blockNum ||
-                      nStack < batchReq.stackBriefNum ||
-                      nHard < batchReq.hardAckNum
+                      nStack.increment < batchReq.stackBriefNum ||
+                      nHard.increment < batchReq.hardAckNum ||
+                      nRequest.increment < batchReq.requestNum
                 )(OutOfBoundsGetMsgBatch)
 
                 _ <- this.queuesAreEmpty.ifM(IO.raiseError(EmptyNewMsgBatch), IO.unit)
 
-                // Prune queues in place (read-and-shrink in one `modify`) for every
-                // field based on what the remote has already received:
-                //   - `batchReq.ackNum`/`batchReq.blockNum`: "I have N, send me N+1"
-                //     ⇒ drop entries `<= N`.
-                //   - `batchReq.requestNum`: "send me requests with requestNum >= N"
-                //     ⇒ drop entries `< N`.
-                //   - `batchReq.stackBriefNum`/`batchReq.hardAckNum`: "I have N, send me N+1"
-                //     ⇒ drop entries `<= N`. (Slow-side cursors mirror ack/block semantics.)
+                // Prune queues in place (read-and-shrink in one `modify`) per the
+                // GetMsgBatch cursor protocol (see the note on `GetMsgBatch`):
+                //   - ack / stackBrief / hardAck / request lanes are NEXT-EXPECTED:
+                //     the cursor is the next number the remote wants ⇒ drop
+                //     `< cursor`, keep the head (`>= cursor`). The head is retained
+                //     until the remote's cursor moves PAST it, so a dropped batch is
+                //     simply re-sent on the next request (retransmit-safe).
+                //   - the block lane is still LAST-SEEN ("I have N, send me N+1")
+                //     ⇒ drop `<= cursor`.
                 //
                 // Pruning per-remote on each incoming `GetMsgBatch` — NOT on local
                 // `BlockConfirmed` — is essential. Local consensus for block N
                 // confirms when WE receive enough acks for N from other peers; it
                 // does NOT imply every remote peer has polled OUR outgoing ack/
                 // brief/request for N. If we prune on local confirmation, a slow
-                // remote can miss content we own and the chain stalls (verification
-                // mismatch on next-expected positions). The remote's GetMsgBatch
-                // positions are the authoritative per-remote receipt signal.
-                //
-                // TODO: once ackNum/blockNum switch to next-expected semantics, change `<=` to `<`
+                // remote can miss content we own and the chain stalls. The remote's
+                // GetMsgBatch positions are the authoritative per-remote receipt
+                // signal.
                 mAck <- this.qAck.modify { q =>
-                    val pruned = q.dropWhile(_.ackNum <= batchReq.ackNum)
+                    val pruned = q.dropWhile(_.ackNum < batchReq.ackNum)
                     (pruned, pruned.headOption)
                 }
                 mBlock <- this.qBlock.modify { q =>
@@ -398,14 +411,14 @@ trait PeerLiaison(
                     (pruned, pruned.headOption)
                 }
                 mStackBrief <- this.qStackBrief.modify { q =>
-                    val pruned = q.dropWhile(_.stackNum <= batchReq.stackBriefNum)
+                    val pruned = q.dropWhile(_.stackNum < batchReq.stackBriefNum)
                     (pruned, pruned.headOption)
                 }
                 mHardAck <- this.qHardAck.modify { q =>
-                    val pruned = q.dropWhile(_.hardAckNum <= batchReq.hardAckNum)
+                    val pruned = q.dropWhile(_.hardAckNum < batchReq.hardAckNum)
                     (pruned, pruned.headOption)
                 }
-                events <- this.qEvent.modify { q =>
+                events <- this.qRequest.modify { q =>
                     val pruned = q.dropWhile(_.requestId._2 < batchReq.requestNum)
                     (pruned, pruned.take(maxRequests))
                 }
@@ -423,7 +436,7 @@ trait PeerLiaison(
               requests = events.toList
             )).attemptNarrow
 
-        /** No-op placeholder. All three outbox queues (`qAck`, `qBlock`, `qEvent`) are now pruned
+        /** No-op placeholder. All three outbox queues (`qAck`, `qBlock`, `qRequest`) are now pruned
           * per-remote-peer in [[buildNewMsgBatch]] based on the incoming `GetMsgBatch` positions,
           * which are the authoritative per-remote receipt signal. Pruning on local `BlockConfirmed`
           * was incorrect for `qAck` (a slow remote may not yet have polled our outgoing ack for
@@ -471,50 +484,49 @@ trait PeerLiaison(
             if current.batchNum != received.batchNum then
                 return Reject(Rejection.BatchNumMismatch(current.batchNum, received.batchNum))
 
-            // 2. If an ack is present, its peer must be the remote peer and its number
-            //    must be exactly the next-expected ackNum after `current.ackNum`.
-            //    TODO: once ackNum switches to next-expected semantics, check
-            //          head == current.ackNum (same pattern as requestNum below).
-            val nextAckNum = current.ackNum.increment
+            // 2. If an ack is present, its peer must be the remote peer and its
+            //    number must equal the next-expected `current.ackNum` (next-expected
+            //    cursor — same pattern as requestNum below).
             received.ack match
                 case Some(a) if a.ackId.peerNum != remotePeerId.peerNum =>
                     return Reject(Rejection.AckPeerMismatch(remotePeerId.peerNum, a.ackId.peerNum))
-                case Some(a) if a.ackNum != nextAckNum =>
-                    return Reject(Rejection.AckNumMismatch(nextAckNum, a.ackNum))
+                case Some(a) if a.ackNum != current.ackNum =>
+                    return Reject(Rejection.AckNumMismatch(current.ackNum, a.ackNum))
                 case _ => ()
 
             // 3. If a block brief is present, its blockNum must be the next leader-block
-            //    of the remote peer after `current.blockNum`.
-            //    TODO: once blockNum switches to next-expected semantics, check
-            //          head == current.blockNum.
+            //    of the remote peer after `current.blockNum`. The block lane stays
+            //    last-seen: per-peer block numbers are sparse (round-robin leadership,
+            //    `nextLeaderBlock`, not contiguous `+1`) and block 0 is distributed
+            //    out-of-band via the head config, so it cannot join the next-expected
+            //    scheme.
             val nextBlockNum = remotePeerId.nextLeaderBlock(current.blockNum)
             received.blockBrief match
                 case Some(b) if b.blockNum != nextBlockNum =>
                     return Reject(Rejection.BlockNumMismatch(nextBlockNum, b.blockNum))
                 case _ => ()
 
-            // 3a. If a stack brief is present, its stackNum must be exactly the next-expected
-            //     after `current.stackBriefNum`. Followers don't lead stacks, so stackBriefs
-            //     only flow from peers whose round-robin slot covers a given stackNum.
-            val nextStackBriefNum = current.stackBriefNum.increment
+            // 3a. If a stack brief is present, its stackNum must equal the
+            //     next-expected `current.stackBriefNum`. Followers don't lead stacks,
+            //     so stackBriefs only flow from peers whose round-robin slot covers a
+            //     given stackNum.
             received.stackBrief match
-                case Some(sb) if sb.stackNum != nextStackBriefNum =>
+                case Some(sb) if sb.stackNum != current.stackBriefNum =>
                     return Reject(
-                      Rejection.StackBriefNumMismatch(nextStackBriefNum, sb.stackNum)
+                      Rejection.StackBriefNumMismatch(current.stackBriefNum, sb.stackNum)
                     )
                 case _ => ()
 
             // 3b. If a hard-ack is present, its peer must be the remote peer and its
-            //     hardAckNum must be exactly the next-expected after `current.hardAckNum`.
-            val nextHardAckNum = current.hardAckNum.increment
+            //     hardAckNum must equal the next-expected `current.hardAckNum`.
             received.hardAck match
                 case Some(h) if h.ackId.peerNum != remotePeerId.peerNum =>
                     return Reject(
                       Rejection.HardAckPeerMismatch(remotePeerId.peerNum, h.ackId.peerNum)
                     )
-                case Some(h) if h.hardAckNum != nextHardAckNum =>
+                case Some(h) if h.hardAckNum != current.hardAckNum =>
                     return Reject(
-                      Rejection.HardAckNumMismatch(nextHardAckNum, h.hardAckNum)
+                      Rejection.HardAckNumMismatch(current.hardAckNum, h.hardAckNum)
                     )
                 case _ => ()
 
@@ -539,10 +551,11 @@ trait PeerLiaison(
             Advance(
               GetMsgBatch(
                 batchNum = current.batchNum.increment,
-                ackNum = received.ack.fold(current.ackNum)(_.ackNum),
+                ackNum = received.ack.fold(current.ackNum)(_.ackNum.increment),
                 blockNum = received.blockBrief.fold(current.blockNum)(_.blockNum),
-                stackBriefNum = received.stackBrief.fold(current.stackBriefNum)(_.stackNum),
-                hardAckNum = received.hardAck.fold(current.hardAckNum)(_.hardAckNum),
+                stackBriefNum =
+                    received.stackBrief.fold(current.stackBriefNum)(_.stackNum.increment),
+                hardAckNum = received.hardAck.fold(current.hardAckNum)(_.hardAckNum.increment),
                 requestNum = received.requests.lastOption.fold(current.requestNum)(
                   _.requestId.requestNum.increment
                 )
@@ -684,22 +697,60 @@ object PeerLiaison {
     object Request {
         type RemoteBroadcast = SoftAck | BlockBrief.Next | UserRequestWithId | StackBrief | HardAck
 
-        /** Request by a comm actor to its remote comm-actor counterpart for a batch of events,
-          * blocks, or block acknowledgements originating from the remote peer.
+        /** Request by a comm actor to its remote comm-actor counterpart for a batch of acks,
+          * blocks, stack briefs, hard-acks, and user requests originating from the remote peer.
+          *
+          * ====Cursor protocol====
+          *
+          * Four of the five lanes — `ackNum`, `stackBriefNum`, `hardAckNum`, `requestNum` — share
+          * ONE '''next-expected''' cursor contract. `blockNum` is the lone exception (see below).
+          *
+          * Next-expected lanes:
+          *
+          *   - The cursor names the NEXT number the requester wants. The responder
+          *     (`buildNewMsgBatch`) prunes each queue with `dropWhile(_ < cursor)` and sends the
+          *     head. It RETAINS the head until the requester's cursor moves PAST it, so a lost
+          *     batch is just re-sent on the next request (retransmit-safe).
+          *   - The verifier (`verifyAgainst`) requires the received element's number to equal the
+          *     cursor exactly (`received == current`), then advances the cursor to
+          *     `received.increment` (requests: to `last.increment`).
+          *   - The initial cursor is each lane's FIRST emitted number, so the very first element
+          *     validates against `GetMsgBatch.initial`:
+          *     - `requestNum` = 0 — user requests are 0-indexed per peer.
+          *     - `hardAckNum` = 0 — the per-peer hard-ack counter is 0-based; it tracks the slow
+          *       cycle from stack 0, so the initial stack (once injected) takes 0 = round-1, 1 =
+          *       round-2.
+          *     - `ackNum` = 1 — `SoftAck.ackNum == blockNum`; block 0 is the config-bootstrapped
+          *       block and is never acked over the wire, so the first soft-ack is for block 1.
+          *     - `stackBriefNum` = 1 — cursor == `stackNum`; stack 0 is bootstrap-confirmed and
+          *       never briefed, so the first brief is stack 1.
+          *   - The producer side (`appendToOutbox`) independently enforces gap-free monotonic
+          *     numbering, so the wire stream is always contiguous from the initial cursor — the
+          *     precondition for `received == current`.
+          *
+          * `blockNum` stays '''last-seen''' ("I have N, send me N+1"; prune `<= N`; verify against
+          * `nextLeaderBlock`). It cannot join the next-expected scheme because per-peer block
+          * numbers are sparse — round-robin leadership means a given remote leads only a subset of
+          * block numbers, so the per-link stream is not contiguous `+1` — and block 0 is
+          * distributed out-of-band via the head config.
+          *
+          * Every lane additionally carries an `OutOfBounds` sanity guard in `buildNewMsgBatch`: the
+          * remote's cursor may never exceed what we've produced (last-seen ⇒ `<= produced`;
+          * next-expected ⇒ `<= produced + 1`). It never false-fires in correct operation; tripping
+          * it means protocol desync/corruption and raises rather than silently stalling.
           *
           * @param batchNum
           *   Batch number that increases by one for every consecutive batch.
           * @param ackNum
-          *   The requester's last seen block acknowledgement from the remote peer. TODO: switch to
-          *   next-expected semantics (like requestNum) once block 0 is distributed via the batch
-          *   channel instead of out-of-band via the head config.
+          *   Next-expected soft-ack number (== block number) from the remote peer.
           * @param blockNum
-          *   The requester's last seen block from the remote peer. TODO: switch to next-expected
-          *   semantics (like requestNum) once block 0 is distributed via the batch channel instead
-          *   of out-of-band via the head config.
+          *   Last-seen block from the remote peer (round-robin; see above).
+          * @param stackBriefNum
+          *   Next-expected stack-brief number (== stack number) from the remote peer.
+          * @param hardAckNum
+          *   Next-expected hard-ack number from the remote peer.
           * @param requestNum
-          *   Next-expected event number from the remote peer (inclusive): the responder sends all
-          *   events with requestNum >= this value.
+          *   Next-expected user-request number from the remote peer (inclusive).
           */
         final case class GetMsgBatch(
             batchNum: Batch.Number,
@@ -711,13 +762,18 @@ object PeerLiaison {
         )
 
         object GetMsgBatch {
+            // Each cursor is initialised to its lane's FIRST emitted number (see the
+            // cursor-protocol note above): requests and hard-acks are 0-based;
+            // soft-acks (== blockNum) and stack briefs (== stackNum) are 1-based
+            // because block 0 / stack 0 are config/bootstrap artefacts never sent
+            // over this channel.
             def initial: GetMsgBatch = GetMsgBatch(
               batchNum = Batch.Number(0),
-              ackNum = AckNumber(0),
-              blockNum = BlockNumber(0),
-              stackBriefNum = StackNumber.zero,
+              ackNum = AckNumber.zero.increment,
+              blockNum = BlockNumber.zero,
+              stackBriefNum = StackNumber.zero.increment,
               hardAckNum = HardAckNumber.zero,
-              requestNum = RequestNumber(0)
+              requestNum = RequestNumber.zero
             )
         }
 
