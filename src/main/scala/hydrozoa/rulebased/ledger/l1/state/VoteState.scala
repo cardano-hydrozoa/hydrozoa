@@ -31,8 +31,8 @@ object VoteDatum {
                 val i = x._2
                 val pkh = x._1
                 VoteState.VoteDatum(
-                  key = i,
-                  link = if i < numPeers then i + 1 else 0,
+                  key = i + 1,
+                  link = if i < numPeers - 1 then i + 2 else 0,
                   voteStatus = AwaitingVote(pkh)
                 )
             }

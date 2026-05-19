@@ -141,7 +141,8 @@ object JointLedgerTestHelpers {
 
             config = multiNodeConfig.nodeConfigs(HeadPeerNumber.zero)
 
-            system <- PropertyM.run(ActorSystem[IO]("DappLedger").allocated.map(_._1))
+            // We should be using _.use instead...
+            system <- PropertyM.run(ActorSystem[IO]("JointLedger").allocated.map(_._1))
 
             consensusAgent <- PropertyM.run(system.actorOf(ConsensusAgent()))
 

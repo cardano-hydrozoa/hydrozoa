@@ -4,6 +4,7 @@ import cats.*
 import cats.data.*
 import cats.effect.*
 import cats.syntax.all.*
+import com.bloxbean.cardano.client.util.HexUtil
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.*
@@ -12,9 +13,9 @@ import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.node.NodePrivateConfig
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.{pubKeyHash, shelleyAddress}
 import hydrozoa.lib.cardano.scalus.ledger.{CollateralOutput, CollateralUtxo}
+import hydrozoa.lib.logging.Tracer
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.backend.cardano.CardanoBackend
-import hydrozoa.multisig.backend.cardano.CardanoBackend.Error.*
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.rulebased.DisputeActor.Error.NoSuitableCollateralUtxosFound
 import hydrozoa.rulebased.DisputeActor.Error.ParseError.Treasury.TreasuryResolved
@@ -30,6 +31,7 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.{DatumOption, Transaction, TransactionOutput, Utxo, Utxos}
 import scalus.cardano.onchain.plutus.v3.PubKeyHash
 import scalus.uplc.builtin.Data.fromData
+import scalus.utils.Pretty
 
 // TODO: relocate
 extension (tx: Transaction) {
@@ -60,26 +62,47 @@ final case class DisputeActor(
     blockHeader: BlockHeader.Minor.Onchain,
     cardanoBackend: CardanoBackend[IO],
     signatures: List[BlockHeader.Minor.HeaderSignature],
+    tracerLocal: IOLocal[Tracer]
 )(using config: Config)
     extends Actor[IO, DisputeActor.Requests.Request] {
+
+    given IOLocal[Tracer] = tracerLocal
+
     private def handleCardanoBackendError[A](
         action: IO[Either[CardanoBackend.Error, A]]
     ): EitherT[IO, DisputeActor.Error.RecoverableErrors, A] =
         for {
             res <- EitherT.liftF(action)
             a <- res match {
-                case Left(e: Timeout) =>
-                    EitherT.left(IO.pure(Error.RecoverableCardanoBackendError(e)))
+                // All backend errors (Timeout, InvalidTx, etc.) are recoverable: swallow and retry on
+                // the next poll. We expect transient failures from UTxO contention, validity-interval
+                // mismatches (e.g. tally attempted before deadline), and rollbacks.
                 case Left(e) =>
-                    EitherT.liftF(IO.raiseError(Error.UnrecoverableCardanoBackendError(e)))
+                    EitherT.left(for {
+                        _ <- Tracer.warn(
+                          "Cardano backend error encountered. This may be due to " +
+                              "timeout, utxo contention, rollbacks, or timing skew, but it may also be a genuine error." +
+                              s"Error: $e"
+                        )
+                    } yield Error.RecoverableCardanoBackendError(e))
                 case Right(a) => EitherT.right[DisputeActor.Error.RecoverableErrors](IO.pure(a))
             }
         } yield a
 
     private def signAndSubmitTx(
         tx: Transaction
-    ): EitherT[IO, DisputeActor.Error.RecoverableErrors, Unit] =
-        handleCardanoBackendError(cardanoBackend.submitTx(tx.selfSigned))
+    ): EitherT[IO, DisputeActor.Error.RecoverableErrors, Unit] = {
+        for {
+            _ <- EitherT.right(Tracer.info(s"Submitting Tx with Id ${tx.id}"))
+            _ <- EitherT.right(
+              Tracer.debug(
+                s"\n\tPretty: ${summon[Pretty[Transaction]].pretty(tx)}" +
+                    s"\n\tcbor: ${HexUtil.encodeHexString(tx.toCbor)}"
+              )
+            )
+            res <- handleCardanoBackendError(cardanoBackend.submitTx(tx.selfSigned))
+        } yield res
+    }
 
     private def getDisputeCollateral
         : EitherT[IO, DisputeActor.Error.RecoverableErrors, CollateralUtxo] =
@@ -112,7 +135,13 @@ final case class DisputeActor(
                         )
                       )
                     )
-                case _ => EitherT.liftF(IO.raiseError(NoSuitableCollateralUtxosFound))
+                case _ =>
+                    EitherT.liftF(for {
+                        _ <- Tracer.error(
+                          s"Could not find a collateral utxo for peer ${config.ownHeadPeerNum}"
+                        )
+                        res <- IO.raiseError(NoSuitableCollateralUtxosFound)
+                    } yield res)
             }
 
         } yield CollateralUtxo(collateralUtxoTuple._1, collateralOutput)

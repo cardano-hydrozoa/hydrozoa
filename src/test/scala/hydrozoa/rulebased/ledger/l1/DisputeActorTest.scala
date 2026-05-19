@@ -8,6 +8,7 @@ import hydrozoa.config.*
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.{addrKeyHash, pubKeyHash}
+import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.commitment.TrustedSetup
@@ -175,10 +176,13 @@ object DisputeActorTestHelpers {
                     )
               )
             )
+            tracer <- lift(Tracer.makeLocal)
+
             disputeActor = DisputeActor(
               blockHeader = blockHeader,
               cardanoBackend = cardanoBackend,
-              signatures = env.multisignHeader(blockHeader).toList
+              signatures = env.multisignHeader(blockHeader).toList,
+              tracerLocal = tracer
             )(using env.nodeConfigs.head._2)
         } yield disputeActor
 }

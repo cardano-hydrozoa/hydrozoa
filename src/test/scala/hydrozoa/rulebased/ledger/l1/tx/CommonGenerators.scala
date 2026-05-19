@@ -23,6 +23,7 @@ import scalus.cardano.onchain.plutus.v1.ArbitraryInstances.genByteStringOfN
 import scalus.cardano.onchain.plutus.v3.TokenName
 import scalus.crypto.ed25519.VerificationKey
 import scalus.uplc.builtin.ByteString
+import scalus.uplc.builtin.Data.toData
 import scalus.uplc.builtin.bls12_381.G2Element
 import test.*
 
@@ -118,7 +119,13 @@ object CommonGenerators {
             coin <- arbitrary[Coin].map(_ + Coin.ada(100))
         } yield CollateralUtxo(
           input,
-          CollateralOutput(addrKeyHash, ShelleyDelegationPart.Null, coin, None, None)
+          CollateralOutput(
+            addrKeyHash,
+            ShelleyDelegationPart.Null,
+            coin,
+            Some(DatumOption.Inline(toData(ByteString.fromString("collateral")))),
+            None
+          )
         )
 
     def genOnchainBlockHeader(versionMajor: BigInt): Gen[BlockHeader.Minor.Onchain] =
