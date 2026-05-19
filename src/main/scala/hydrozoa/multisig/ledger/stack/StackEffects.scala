@@ -12,7 +12,7 @@ import scalus.crypto.ed25519.VerificationKey
   * [[hydrozoa.multisig.ledger.block.BlockEffects]]:
   *
   *   - [[StackEffects.Unsigned]] — bodies as derived, no aggregated hard-ack signatures. Held by
-  *     [[Stack.Unsigned]] / [[Stack.Round1Confirmed]].
+  *     [[Stack.Unsigned]].
   *   - [[StackEffects.HardConfirmed]] — every head peer's hard-ack signature aggregated in: tx
   *     bodies carry the multisig `VKeyWitness`es; the standalone evac commitment carries every
   *     peer's header signature ([[StandaloneEvacuationCommitment.MultiSigned]]). Held by

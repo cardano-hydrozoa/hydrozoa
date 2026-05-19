@@ -305,7 +305,7 @@ final case class SlowConsensusActor(
           s"stack $stackNum HARD-CONFIRMED — aggregated witnesses onto ${wmap.size} " +
               "effect tx(s); emitting downstream"
         )
-        hardConfirmed = Stack.HardConfirmed(Stack.Round1Confirmed(cell.unsigned), signed)
+        hardConfirmed = Stack.HardConfirmed(cell.unsigned, signed)
         _ <- conn.cardanoLiaison ! hardConfirmed
         _ <- conn.stackComposer ! PreviousStackHardConfirmation(stackNum)
         _ <- stateRef.update(_.dropCell(stackNum))

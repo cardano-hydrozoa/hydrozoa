@@ -643,7 +643,7 @@ case class Stage4Suite(
         // Stack.Unsigned.results; the brief range is the authoritative span).
         val coveredRanges: Vector[(Int, Int)] =
             canonicalStacks.map { s =>
-                val b = s.round1.unsigned.brief
+                val b = s.unsigned.brief
                 ((b.firstBlockNum: Int), (b.lastBlockNum: Int))
             }
         def covered(n: BlockNumber): Boolean =
