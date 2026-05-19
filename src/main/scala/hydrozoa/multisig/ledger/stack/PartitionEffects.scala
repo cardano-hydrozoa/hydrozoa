@@ -22,9 +22,12 @@ object PartitionEffects:
       * fallback + rollouts) + its trailing minors' post-dated refunds, plus an SEC for the
       * partition's **last minor** iff the partition has >= 1 trailing minor.
       *
-      * The SEC is NOT redundant with the settlement: the settlement's L1 execution is not
-      * guaranteed, and the post-settlement trailing minors advance KZG beyond the settlement
-      * snapshot — voting in the rule-based regime needs the latest minor's commitment.
+      * The SEC commits the partition's last minor, which has the SAME major version as the Major.
+      * It complements rather than duplicates the settlement: the settlement snapshots state AT the
+      * Major; the trailing minors advance L2 state past that snapshot at the same major version.
+      * Carrying the SEC in THIS partition — not deferring it to be subsumed by the next major's
+      * settlement — keeps the latest-minor commitment available to the rule-based regime even if
+      * the NEXT partition's settlement never executes onchain.
       */
     final case class Major[+S](
         settlement: SettlementTx,

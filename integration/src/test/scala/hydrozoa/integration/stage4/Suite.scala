@@ -32,7 +32,7 @@ import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toUtxos}
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.joint.JointLedger
-import hydrozoa.multisig.ledger.stack.Stack
+import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects}
 import org.scalacheck.commands.{AnyCommand, ModelBasedSuite, ScenarioGen}
 import org.scalacheck.{Gen, Prop}
 import scalus.cardano.address.ShelleyAddress
@@ -484,6 +484,26 @@ case class Stage4Suite(
             // alive long enough for the tail to land in confirmed blocks. `waitForIdle` can
             // still return because the periods between ticks are mailbox-empty.
             _ <- sut.system.waitForIdle()
+
+            // Slow-cycle tail drain. `waitForIdle` returns when mailboxes are empty + child
+            // set stable + deadLetters drained — but it does NOT wait for scheduled future
+            // sleeps. The `PeerLiaison` resend timer (`startResendTimer`) ticks in its own
+            // fiber via `IO.sleep(peerLiaisonResendInterval) >> ResendCurrent`; between
+            // ticks every actor's mailbox is empty and the system reports idle. Under
+            // `TransportMode.WebSocket` that interval is real wall-clock, so when the very
+            // last stack is closed only milliseconds before `waitForIdle` is called, its
+            // hard-acks have not yet completed the cross-peer round-trip needed to
+            // saturate every peer's `SlowConsensusActor`. `terminate()` immediately after
+            // `waitForIdle` drops the last stack from `StackObserver`'s record, causing a
+            // spurious `propStackCoverage` failure on whatever block(s) sit in that final
+            // stack. Sleeping ≥ 2 × `peerLiaisonResendInterval` guarantees at least one
+            // full resend cycle fires across every link so the tail acks land. The fast
+            // cycle has its own analogous tail-drain (the L1-polling tick path described
+            // just above); this is its slow-cycle counterpart.
+            slowTailDrain = lastState.params.multiNodeConfig.nodeConfigs.values.head
+                .peerLiaisonResendInterval * 2
+            _ <- IO.sleep(slowTailDrain)
+
             _ <- sut.liaisonTickFibers.traverse_(_.cancel)
             _ <- sut.system.terminate()
             _ <- logger.warn("shutdownSut: system was terminated")
@@ -529,6 +549,8 @@ case class Stage4Suite(
             lastState
           )
         )
+
+        _ <- IO(printStackTable(canonicalStacks, sortedPeers, stacksByPeer, nPeers))
     yield propLiveness(submittedIds, canonicalBriefs) &&
         propDepositTiming(lastState.registeredDeposits, canonicalBriefs) &&
         propValidRatio(lastState, canonicalBriefs) &&
@@ -724,6 +746,68 @@ case class Stage4Suite(
         )
         println(
           "Legend: Min=Minor Maj=Major v=version lead=leader p=peer r=requestNum V=valid I=invalid abs=deposit-absorbed ref=refunded"
+        )
+    }
+
+    /** Mirror of [[printBlockTable]] for the slow cycle: one row per hard-confirmed stack on the
+      * canonical peer, showing the stack number, covered block range, partition spine (Min/Maj/Fin
+      * kinds, in stack order), and the round-2 unlock selection (settlement-at-i, finalization-at-i,
+      * or sole-acknowledgment / no unlock). Stack-0 renders as `Init`. Followed by a per-peer
+      * stack-count line for cross-peer convergence at a glance.
+      */
+    private def printStackTable(
+        canonicalStacks: Vector[Stack.HardConfirmed],
+        sortedPeers: Seq[HeadPeerNumber],
+        stacksByPeer: Map[HeadPeerNumber, Vector[Stack.HardConfirmed]],
+        nPeers: Int
+    ): Unit = {
+        val colWidth = 72
+        val divider = s"+${"-" * (colWidth + 2)}+"
+        val header = s"| ${"Stack".padTo(colWidth, ' ')} |"
+
+        println(divider)
+        println(header)
+        println(divider)
+
+        canonicalStacks.foreach { stack =>
+            val brief = stack.unsigned.brief
+            val sNum = brief.stackNum: Int
+            val first = brief.firstBlockNum: Int
+            val last = brief.lastBlockNum: Int
+            val nBlks = last - first + 1
+            // Slow-consensus leadership schedule is round-robin by stack number, mirroring
+            // fast-consensus block-number round-robin.
+            val leader = sNum % nPeers
+            val (kindStr, partsStr) = stack.effects match {
+                case _: StackEffects.HardConfirmed.Initial =>
+                    ("Init", "init+fallback")
+                case r: StackEffects.HardConfirmed.Regular =>
+                    val parts = r.partitions.toList.map {
+                        case _: PartitionEffects.Minor[?] => "Min"
+                        case _: PartitionEffects.Major[?] => "Maj"
+                        case _: PartitionEffects.Final    => "Fin"
+                    }
+                    val unlockStr = PartitionEffects.unlock(r.partitions) match {
+                        case Some(PartitionEffects.Unlock.Settlement(i))   => s"sttlmnt@$i"
+                        case Some(PartitionEffects.Unlock.Finalization(i)) => s"fin@$i"
+                        case None                                          => "sole"
+                    }
+                    ("Reg", s"[${parts.mkString(",")}] u=$unlockStr")
+            }
+            val blkLabel = if nBlks == 1 then "blk" else "blks"
+            val label =
+                s"#$sNum [$first..$last] ($nBlks $blkLabel) $kindStr lead=p$leader | $partsStr"
+            println(s"| ${label.take(colWidth).padTo(colWidth, ' ')} |")
+        }
+
+        println(divider)
+
+        println(
+          s"Peers: ${sortedPeers.map(p => s"p${p: Int}=${stacksByPeer(p).length}stk").mkString("  ")}"
+        )
+        println(
+          "Legend: Init=initial stack Reg=regular Min/Maj/Fin=partition kinds " +
+              "u=unlock (set=settlement, fin=finalization, sole=no unlock) @i=partition index"
         )
     }
 
