@@ -67,6 +67,9 @@ object Arc {
           */
         def fire(p: P): Either[Arc.Semantics.FiringError, P]
 
+        // Kleisli[ Either [E, _], P, P] -- Kendo[Either[E,_], P]
+        // Kendo[ EitherT[F[_], _], E, _], P]
+
         final def enabled(p: P): Boolean = enablingError(p).isEmpty
 
         /** Does not check enabledness or place-side validity — both are the simulator's concern.

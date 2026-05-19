@@ -26,7 +26,7 @@ enum RBRPlaceId:
     case TreasuryRefPlaceId
     case ResolvedPlaceId
     case AmbientPlaceId
-    case PayoutObligationsPlaceId
+    case PayoutObligationsPlaceId // synthetic
     case EvacuationOutputPlaceId
     case CollateralPlaceId
 
