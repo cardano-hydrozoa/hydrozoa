@@ -164,8 +164,7 @@ object RuleBasedTreasuryOutput {
 
     case class TreasuryDatumContainsInvalidDeadline(wrapped: Throwable) extends ParseError {
         override def getMessage: String =
-            "Could not convert voting deadline. "
-                ++ "Wrapped message: ${t.wrapped.getMessage}"
+            s"Could not convert voting deadline. Wrapped message: ${wrapped.getMessage}"
     }
 
     case object TreasuryDatumResolved extends ParseError {

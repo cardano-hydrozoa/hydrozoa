@@ -2,135 +2,73 @@ package hydrozoa.rulebased.ledger.l1.tx
 
 import cats.effect.unsafe.implicits.global
 import hydrozoa.*
-import hydrozoa.config.HydrozoaBlueprint
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
 import hydrozoa.config.head.peers.HeadPeers
-import hydrozoa.config.node.MultiNodeConfig
+import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Resolved
-import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.*
+import hydrozoa.rulebased.ledger.l1.tx.CommonGeneratorsTypes.{genEmptyTreasuryResolvedDatum, Version}
 import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
-import monocle.*
 import monocle.syntax.all.*
-import org.scalacheck.{Arbitrary, Gen, Properties}
-import scalus.cardano.ledger.ArbitraryInstances.given
+import org.scalacheck.{Gen, Properties}
 import scalus.cardano.ledger.{Utxo as _, *}
 import scalus.uplc.builtin.ByteString
-import scalus.uplc.builtin.ByteString.hex
-import spire.compat.integral
-import spire.math.Rational
-import spire.syntax.literals.r
+import registry.scalacheck.*
 
-def genEmptyResolvedTreasuryUtxo(
-    fallbackTxId: TransactionHash,
-    voteTokensAmount: Int
-)(using
-    config: CardanoNetwork.Section & HasTokenNames & HeadPeers.Section
-): Gen[RuleBasedTreasuryUtxo] = {
-    val g1Generator =
-        hex"97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb"
-    val dummyParams = ByteString.empty
-    val dummySetup = scalus.cardano.onchain.plutus.prelude.List.empty
+private lazy val deinitGens =
+    // Auto-derive the recipe from its case-class fields; everything else below tunes those fields.
+    gen[DeinitTx.Build] +:
+        // Bound the treasury Coin: the default `arbitrary[Coin]` is unbounded `Long`, which
+        // overflows when summed with collateral / change downstream.
+        refineGen[Coin](Gen.choose(2_000_000L, 100_000_000L)) +:
+        // Make sure that the treasury UTXO's output meets Cardano's per-output min-ADA
+        refineGen[DeinitTx.Build](ensureMinAda) +:
+        // Use a `Resolved` treasury datum (with an empty trusted setup): deinit only fires
+        // post-tally, and the datum body is irrelevant on this path — the validator only checks
+        // that all beacon / vote tokens are burned.
+        gen(genEmptyTreasuryResolvedDatum) +:
+        // Set the treasury value to ADA + 1 beacon + (nPeers+1) vote tokens, matching exactly
+        // what the deinit tx must burn.
+        gen(genTreasuryValue) +:
+        CommonGenerators.gens
 
-    val emptyResolvedDatum = Resolved(
-      evacuationActive = g1Generator,
-      version = (BigInt(1), BigInt(0)),
-      setup = dummySetup
-    )
-
+def genTreasuryValue(
+    config: HeadPeers.Section & HasTokenNames,
+    coin: Coin,
+): Gen[Value] =
     val headMp = config.headMultisigScript.policyId
-    val beaconTokenName = config.headTokenNames.treasuryTokenName
-    val voteTokenName = config.headTokenNames.voteTokenName
-
-    for {
-        outputIx <- Gen.choose(0, 5)
-    } yield {
-        val txId = TransactionInput(fallbackTxId, outputIx)
-        val scriptAddr = HydrozoaBlueprint.mkTreasuryAddress(config.network)
-        val value = Value(config.babbageUtxoMinLovelace(PositiveInt.unsafeApply(150)))
-            + Value.asset(headMp, beaconTokenName, 1)
-            + Value.asset(headMp, voteTokenName, voteTokensAmount)
-
-        val output = RuleBasedTreasuryOutput(
-          emptyResolvedDatum,
-          value
-        )
-        val treasuryUtxo = RuleBasedTreasuryUtxo(
-          txId,
-          output
-        )
-
-        // Respect minAda
-        val outputMinAda = treasuryUtxo.toUtxo.toTuple._2.ensureMinAda(config)
-        treasuryUtxo.focus(_.treasuryOutput.value).set(outputMinAda.value)
-    }
-}
-
-def genRational: Gen[Rational] =
-    for {
-        den <- Gen.choose(1, 20)
-    } yield Rational(1, den)
-
-def genShares(n: Int): Gen[List[Rational]] =
-    Gen.frequency(
-      1 -> Gen.const(r"1" +: List.fill(n - 1)(r"0")),
-      3 -> {
-          val share = Rational(1, n)
-          List.fill(n)(share)
-      },
-      5 -> {
-          if n == 1 then Gen.const(List(r"1"))
-          else
-              for {
-                  r <- Gen.choose(1, n - 1)
-                  randomShares <- Gen.listOfN(r, genRational).suchThat(_.sum <= 1)
-              } yield randomShares ++ List.fill(n - (r + 1))(r"0") :+ (r"1" - randomShares.sum)
-      }
+    val voteTokensAmount = config.nHeadPeers.toInt + 1
+    Gen.const(
+      Value(coin)
+          + Value.asset(headMp, config.headTokenNames.treasuryTokenName, 1)
+          + Value.asset(headMp, config.headTokenNames.voteTokenName, voteTokensAmount)
     )
 
-/** Generate a simplified DeinitTx Recipe for testing */
-// FIXME: The arguments to this function can be simplified once the DeinitTx itself is updated to use the new
-// configuration
-def genSimpleDeinitTxBuilder(using
-    config: CardanoNetwork.Section & HeadPeers.Section & HasTokenNames
-): Gen[DeinitTx.Build] =
-
-    for {
-        fallbackTxId <- Arbitrary.arbitrary[TransactionHash]
-        treasuryUtxo <- genEmptyResolvedTreasuryUtxo(
-          fallbackTxId,
-          config.nHeadPeers.toInt + 1
-        )
-        akh <- Arbitrary.arbitrary[AddrKeyHash]
-        collateralUtxo <- genCollateralUtxo(akh)(using config)
-
-    } yield {
-        DeinitTx.Build(
-          treasuryUtxo = treasuryUtxo,
-          collateralUtxo = collateralUtxo
-        )
-    }
+def ensureMinAda(
+    raw: RuleBasedTreasuryUtxo,
+    config: HeadPeers.Section & HasTokenNames & CardanoNetwork.Section,
+): RuleBasedTreasuryUtxo =
+    val outputMinAda = raw.toUtxo(using config).toTuple._2.ensureMinAda(config)
+    raw.focus(_.treasuryOutput.value).replace(outputMinAda.value)
 
 object DeinitTxTest extends Properties("Deinit Tx Test") {
     import MultiNodeConfig.*
 
-    val _ = property("Deinit Simple Happy Path") = runDefault(
-      for {
-          env <- ask
-          _ <- {
-              given MultiNodeConfig = env
-              for {
-                  builder <- pick(genSimpleDeinitTxBuilder)
-                  deinitTx <- failLeft(builder.result(using env.nodeConfigs.head._2))
-                  _ <- assertWith(deinitTx.tx != null, "Transaction should not be null")
-                  _ <- assertWith(
-                    builder.treasuryUtxo == deinitTx.treasuryUtxoSpent,
-                    "Spent treasury UTXO should match recipe input"
-                  )
-              } yield ()
-          }
-      } yield true
-    )
+    val _ = property("Deinit Simple Happy Path") = runDefault {
+        // Pin one MultiNodeConfig across both `forAll` samples.
+        val gens = deinitGens.const[MultiNodeConfig]
+        for {
+            nc <- forAll[NodeConfig](gens)
+            builder <- forAll[DeinitTx.Build](gens)
+            deinitTx <- failLeft(builder.result(using nc))
+            _ <- assertWith(deinitTx.tx != null, "Transaction should not be null")
+            _ <- assertWith(
+              builder.treasuryUtxo == deinitTx.treasuryUtxoSpent,
+              "Spent treasury UTXO should match recipe input"
+            )
+        } yield true
+    }
 }
