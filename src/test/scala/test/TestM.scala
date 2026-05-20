@@ -7,6 +7,7 @@ import cats.effect.unsafe.IORuntime
 import cats.effect.unsafe.implicits.*
 import cats.syntax.all.*
 import org.scalacheck.PropertyM.{monadForPropM, monadicIO}
+import org.scalacheck.util.Pretty
 import org.scalacheck.{Gen, Prop, PropertyM}
 
 private type PT[A] = PropertyM[IO, A]
@@ -44,7 +45,9 @@ object TestM {
             env <- ask
         } yield f(env)
 
-    def pick[R, A](gen: Gen[A]): TestM[R, A] = TestM(Kleisli.liftF(PropertyM.pick(gen)))
+    def pick[R, A](gen: Gen[A])(using pp: A => Pretty): TestM[R, A] = TestM(
+      Kleisli.liftF(PropertyM.pick(gen))
+    )
 
     def pure[R, A](a: A): TestM[R, A] = TestM(Kleisli.pure(a))
 
@@ -58,7 +61,8 @@ object TestM {
     )
 
     /** Given a computation of type [[TestM]] that returns a value that can be implicitly turned
-      * into a [[Prop]], run the computation.
+      * into a [[Prop]], run the computation. Automatically places the result of the initializer
+      * in-scope as a `given` context parameter
       * @param testM
       *   The computation to run
       * @param initializer
@@ -80,7 +84,10 @@ object TestM {
           // access to the fully-initialized environment
           for {
               env <- initializer
-              res <- testM.unTestM.run(env)
+              res <- {
+                  given R = env
+                  testM.unTestM.run(env)
+              }
           } yield res
         )
     }
@@ -125,7 +132,7 @@ final class TestMFixedEnv[R](dummy: Boolean = true) {
 
     def asks[A](f: R => A): TestM[R, A] = TestM.asks[R, A](f)
 
-    def pick[A](gen: Gen[A]): TestM[R, A] = TestM.pick[R, A](gen)
+    def pick[A](gen: Gen[A])(using pp: A => Pretty): TestM[R, A] = TestM.pick[R, A](gen)
 
     def pure[A](a: A): TestM[R, A] = TestM.pure[R, A](a)
 

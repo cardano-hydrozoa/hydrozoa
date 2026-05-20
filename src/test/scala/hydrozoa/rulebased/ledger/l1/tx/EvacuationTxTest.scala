@@ -154,8 +154,8 @@ def genEvacuationTxBuild(using config: MultiNodeConfig): Gen[EvacuationTx.Build]
 
     } yield EvacuationTx.Build(
       treasuryUtxo = adjustedTreasuryUtxo,
-      evacuatees = evacuatees,
-      notEvacuatedYet = evacMap,
+      evacuateesToTryNext = evacuatees,
+      allRemainingEvacuatees = evacMap,
       feeUtxos = Map(feeUtxo.toTuple),
       collateralUtxo = collateralUtxo
     )
@@ -218,7 +218,7 @@ object EvacuationTxTest extends Properties("EvacuationTx Test") {
             "Treasury UTXO produced should not be null"
           )
           _ <- assertWith(
-            evacuationTx.evacuatedOutputs.length == builder.evacuatees.size,
+            evacuationTx.evacuatedOutputs.length == builder.evacuateesToTryNext.size,
             "Evacuated outputs should match builder's evacuatees"
             // Note this holds because we're not
             // testing large numbers of evacuations
@@ -227,7 +227,7 @@ object EvacuationTxTest extends Properties("EvacuationTx Test") {
 
           // Verify residual treasury value is correct
           totalEvacuations =
-              builder.evacuatees.totalValue
+              builder.evacuateesToTryNext.totalValue
           expectedResidual = builder.treasuryUtxo.treasuryOutput.value - totalEvacuations
           _ <- assertWith(
             evacuationTx.treasuryUtxoProduced.treasuryOutput.value == expectedResidual,

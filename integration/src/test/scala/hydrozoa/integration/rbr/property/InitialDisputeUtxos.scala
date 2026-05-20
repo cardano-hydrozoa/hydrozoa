@@ -72,10 +72,14 @@ import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators
 import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryUtxo, VoteOutput, VoteUtxo}
+import hydrozoa.multisig.ledger.joint.EvacuationMap
 import org.scalacheck.Gen
-import scalus.cardano.ledger.{Coin, TransactionHash, TransactionInput, Utxos}
+import scalus.cardano.ledger.DatumOption.Inline
+import scalus.cardano.ledger.{Coin, DatumOption, TransactionHash, TransactionInput, Utxos}
 import scalus.cardano.onchain.plutus.v3.PubKeyHash
 import scalus.uplc.builtin.Builtins.blake2b_224
+import scalus.uplc.builtin.ByteString
+import scalus.uplc.builtin.Data.toData
 import scalus.uplc.builtin.bls12_381.G2Element
 import test.Generators.Hydrozoa.genEvacuationMap
 
@@ -93,6 +97,8 @@ case class InitialDisputeUtxos(
     collateralUtxos: Map[HeadPeerNumber, CollateralUtxo],
     // Reference script UTxOs from MultiNodeConfig
     refScriptUtxos: Map[TransactionInput, scalus.cardano.ledger.TransactionOutput],
+    // Evacuation map generated at fallback — used by EvacuationActor as evacuationMapAtFallback
+    evacuationMap: EvacuationMap,
 ):
     // The KZG commitment all peers should vote for in the happy-path scenario
     def kzgCommitment: VoteState.KzgCommitment = defaultVoteUtxo.voteOutput.status.commitment
@@ -102,10 +108,13 @@ case class InitialDisputeUtxos(
         given voteOutputConfig: hydrozoa.rulebased.ledger.l1.utxo.VoteOutputConfig =
             env.nodeConfigs.values.head
 
-        val treasuryEntry = treasury.utxoId -> treasury.treasuryOutput.toOutput(using env.headConfig)
+        val treasuryEntry =
+            treasury.utxoId -> treasury.treasuryOutput.toOutput(using env.headConfig)
         val peerVotes = peerVoteUtxos.values.map(v => v.input -> v.toUtxo.output)
         val defaultVote = defaultVoteUtxo.input -> defaultVoteUtxo.toUtxo.output
-        val collaterals = collateralUtxos.values.map(c => c.input -> c.collateralOutput.toOutput(using env.headConfig))
+        val collaterals = collateralUtxos.values.map(c =>
+            c.input -> c.collateralOutput.toOutput(using env.headConfig)
+        )
         (Map(treasuryEntry, defaultVote) ++ peerVotes ++ collaterals ++ refScriptUtxos).toMap
 
 object InitialDisputeUtxos:
@@ -113,22 +122,28 @@ object InitialDisputeUtxos:
     // The voting deadline is passed in from the TestControl-aware caller so it is anchored to the
     // simulated clock rather than System.currentTimeMillis().
     def gen(
-        fallbackTxId: TransactionHash,  // [SYNTHETIC] stands in for the real fallback tx hash
-        now: QuantizedInstant,           // simulated "now", read from inside TestControl
-        votingDuration: FiniteDuration,  // overrides env.votingDuration so tests can use short windows
-        nEvacs: Int = 100,               // [SYNTHETIC] number of entries in the evacuation map
+        fallbackTxId: TransactionHash, // [SYNTHETIC] stands in for the real fallback tx hash
+        now: QuantizedInstant, // simulated "now", read from inside TestControl
+        votingDuration: FiniteDuration, // overrides env.votingDuration so tests can use short windows
+        nEvacs: Int = 100, // [SYNTHETIC] number of entries in the evacuation map
     )(using env: MultiNodeConfig): Gen[InitialDisputeUtxos] =
         val nPeers = env.headConfig.nHeadPeers.convert
         val votingDeadline: BigInt = now.toPosixTime + votingDuration.toMillis
 
         // [SYNTHETIC] KZG G2 setup (reuses the same approach as the existing DisputeActorTest)
         val setup = TrustedSetup
-            .takeSrsG2(63)
+            .takeSrsG2(64)
             .map(p2 => G2Element(p2).toCompressedByteString)
 
-        for
-            evacMap <- genEvacuationMap(nEvacs)(using env.headConfig)
+        val genEvacuationSentinelDatum: Gen[Option[DatumOption]] =
+            Gen.const(Some(Inline(ByteString.fromString("evacuation").toData)))
 
+        for
+
+            evacMap <- genEvacuationMap(nEvacs, genDatum =  genEvacuationSentinelDatum)(using env.headConfig)
+
+            treasuryValue = evacMap.totalValue
+            
             // [SYNTHETIC] Treasury UTxO at output index 0 of the (synthetic) fallback tx
             treasury <- CommonGenerators.genRuleBasedTreasuryUtxo(
               fallbackTxId,
@@ -136,7 +151,8 @@ object InitialDisputeUtxos:
                 deadlineVoting = votingDeadline,
                 versionMajor = BigInt(1),
                 setup = setup
-              )
+              ),
+                Gen.const(treasuryValue)
             )(using env.headConfig)
 
             // [SYNTHETIC] Peer vote UTxOs at output indices nPeers+1 .. 2*nPeers
@@ -145,7 +161,10 @@ object InitialDisputeUtxos:
                 val key = BigInt(i + 1)
                 val link = if i < nPeers - 1 then BigInt(i + 2) else BigInt(0)
                 val voteOutput = VoteOutput[VoteStatus.AwaitingVote](
-                  key, link, Coin.ada(5), PositiveInt.unsafeApply(1),
+                  key,
+                  link,
+                  Coin.ada(5),
+                  PositiveInt.unsafeApply(1),
                   VoteStatus.AwaitingVote(PubKeyHash(blake2b_224(vkey)))
                 )
                 val input = TransactionInput(fallbackTxId, nPeers + 1 + i)
@@ -155,22 +174,35 @@ object InitialDisputeUtxos:
             // [SYNTHETIC] Default vote at output index 2*nPeers+1: key=0, link=1, pre-voted
             defaultVoteUtxo =
                 val voteOutput = VoteOutput[VoteStatus.Voted](
-                  BigInt(0), BigInt(1), Coin.ada(5), PositiveInt.unsafeApply(1),
+                  BigInt(0),
+                  BigInt(1),
+                  Coin.ada(5),
+                  PositiveInt.unsafeApply(1),
                   VoteStatus.Voted(evacMap.kzgCommitment, BigInt(0))
                 )
                 VoteUtxo(TransactionInput(fallbackTxId, 2 * nPeers + 1), voteOutput)
 
             // [SYNTHETIC] ADA-only collateral UTxO per peer, at each peer's own head address
-            collateralUtxos <- Gen.sequence[List[(HeadPeerNumber, CollateralUtxo)], (HeadPeerNumber, CollateralUtxo)](
-              env.nodePrivateConfigs.toList.map { (peerId, peerConfig) =>
-                  CommonGenerators
-                      .genCollateralUtxo(
-                        peerConfig.ownHeadWallet.exportVerificationKey.addrKeyHash
-                      )(using env.headConfig)
-                      .map(peerId -> _)
-              }
-            ).map(_.toMap)
+            collateralUtxos <- Gen
+                .sequence[List[(HeadPeerNumber, CollateralUtxo)], (HeadPeerNumber, CollateralUtxo)](
+                  env.nodePrivateConfigs.toList.map { (peerId, peerConfig) =>
+                      CommonGenerators
+                          .genCollateralUtxo(
+                            peerConfig.ownHeadWallet.exportVerificationKey.addrKeyHash
+                          )(using env.headConfig)
+                          .map(peerId -> _)
+                  }
+                )
+                .map(_.toMap)
 
-            refScriptUtxos = env.nodeConfigs.values.flatMap(_.scriptReferenceUtxos.toList.map(_.toTuple)).toMap
-
-        yield InitialDisputeUtxos(treasury, peerVoteUtxos, defaultVoteUtxo, collateralUtxos, refScriptUtxos)
+            refScriptUtxos = env.nodeConfigs.values
+                .flatMap(_.scriptReferenceUtxos.toList.map(_.toTuple))
+                .toMap
+        yield InitialDisputeUtxos(
+          treasury,
+          peerVoteUtxos,
+          defaultVoteUtxo,
+          collateralUtxos,
+          refScriptUtxos,
+          evacMap
+        )

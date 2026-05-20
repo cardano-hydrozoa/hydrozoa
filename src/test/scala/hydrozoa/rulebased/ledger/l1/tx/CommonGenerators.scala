@@ -87,15 +87,13 @@ object CommonGenerators {
 
     def genRuleBasedTreasuryUtxo(
         fallbackTxId: TransactionHash,
-        unresolvedDatum: Unresolved
+        unresolvedDatum: Unresolved,
+        genNonBecaonValue: Gen[Value] // must be coherent with evac map
     )(using
         config: CardanoNetwork.Section & HasTokenNames & HeadPeers.Section
     ): Gen[RuleBasedTreasuryUtxo] =
         for {
-            adaAmount <- Arbitrary
-                .arbitrary[Coin]
-                .map(c => Coin(math.abs(c.value) + 1000000L)) // Ensure minimum ADA
-
+            nonBeaconValue <- genNonBecaonValue
             // Treasury is always the first output of the fallback tx
             txId = TransactionInput(fallbackTxId, 0)
             scriptAddr = HydrozoaBlueprint.mkTreasuryAddress(config.network)
@@ -104,7 +102,7 @@ object CommonGenerators {
             beaconToken = Value.asset(config.headMultisigScript.policyId, beaconTokenAssetName, 1)
             output = RuleBasedTreasuryOutput(
               unresolvedDatum,
-              Value(adaAmount) + beaconToken
+              nonBeaconValue + beaconToken
             )
         } yield RuleBasedTreasuryUtxo(
           utxoId = txId,

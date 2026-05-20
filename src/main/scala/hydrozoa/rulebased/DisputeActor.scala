@@ -407,7 +407,7 @@ object DisputeActor {
         ) extends Recoverable
 
         type UnrecoverableErrors = Unrecoverable
-        sealed trait Unrecoverable extends Throwable
+        sealed trait Unrecoverable extends Exception
         case object TreasuryUnresolvedButNoVotes extends Unrecoverable
         case class NoCompatibleVoteForTallyingFound(voteUtxos: Seq[VoteUtxo[VoteStatus]])
             extends Unrecoverable {

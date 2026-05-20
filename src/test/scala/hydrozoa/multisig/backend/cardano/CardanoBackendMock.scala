@@ -22,7 +22,7 @@ final case class MockState(
     ledgerState: LedgerState,
     currentSlot: Slot = Slot(0),
     knownTxs: Set[TransactionHash] = Set.empty,
-    submittedTxs: List[Transaction] = List.empty
+    submittedTxs: List[(Utxos, Transaction)] = List.empty
 )
 
 object MockState:
@@ -129,13 +129,13 @@ class CardanoBackendMock private (
             // Transactions are stored oldest first, reverse to get newest first
             allTxsReversed = state.submittedTxs.reverse
             // Take transactions after the 'after' transaction (excluding it)
-            txsAfter = allTxsReversed.takeWhile(_.id != after)
-            // Extract transactions with continuing inputs (input + output with asset)
-            result = txsAfter.flatMap(tx =>
-                continuingInputRedeemer(tx, asset, state.ledgerState.utxos).map(redeemer =>
-                    tx.id -> redeemer
-                )
-            )
+            txsAfter = allTxsReversed.takeWhile(_._2.id != after)
+            // Extract transactions with continuing inputs (input + output with asset).
+            // Use the pre-application UTxO snapshot so historical inputs (already consumed)
+            // can still be found — mirrors the Blockfrost implementation's historical query.
+            result = txsAfter.flatMap { (preUtxos, tx) =>
+                continuingInputRedeemer(tx, asset, preUtxos).map(redeemer => tx.id -> redeemer)
+            }
         } yield Right(result)
     }
 
@@ -173,7 +173,7 @@ class CardanoBackendMock private (
                             val newState: MockState = state.copy(
                               ledgerState = newLedgerState,
                               knownTxs = state.knownTxs + tx.id,
-                              submittedTxs = state.submittedTxs :+ tx
+                              submittedTxs = state.submittedTxs :+ (state.ledgerState.utxos, tx)
                             )
                             set[MockState](newState) >> pure(Right(()))
                     }

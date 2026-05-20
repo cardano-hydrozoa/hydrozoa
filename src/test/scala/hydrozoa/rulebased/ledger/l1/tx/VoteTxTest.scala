@@ -84,7 +84,8 @@ def genVoteTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[VoteTx.Build] 
 
         treasuryUtxo <- genRuleBasedTreasuryUtxo(
           fallbackTxId = fallbackTxId,
-          treasuryDatum
+          treasuryDatum,
+          ArbitraryInstances.given_Arbitrary_Value.arbitrary
         )
 
         // Generate a vote UTXO with NoVote status (input)

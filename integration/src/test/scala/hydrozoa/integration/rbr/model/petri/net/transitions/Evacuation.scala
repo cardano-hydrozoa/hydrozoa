@@ -104,7 +104,7 @@ object EvacuationNet {
               ),
             )
             _ <- addPlace(
-              ResolvedPlaceId,
+              ResolvedTreasuryPlaceId,
               ResolvedPlace(
                 marking = NonNegativeInt.unsafeApply(1),
                 finalMarking = Some(NonNegativeInt.unsafeApply(1)),
@@ -139,7 +139,7 @@ object EvacuationNet {
             )
             _ <- addArc(
               RBRArcId.ReadResolved,
-              EvacuationReadArc(ResolvedPlaceId, EvacuationId, PositiveInt.unsafeApply(1)),
+              EvacuationReadArc(ResolvedTreasuryPlaceId, EvacuationId, PositiveInt.unsafeApply(1)),
             )
             // PT(3)+TP(1) on Ambient collapses to net -2
             _ <- addArc(

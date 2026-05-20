@@ -6,6 +6,7 @@ import cats.effect.unsafe.implicits.global
 import hydrozoa.*
 import hydrozoa.config.*
 import hydrozoa.config.node.MultiNodeConfig
+import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, evacuationKeyOrdering}
 import hydrozoa.rulebased.EvacuationActor
@@ -58,11 +59,14 @@ object EvacuationActorTestHelpers {
               )
             )
 
+            tracerLocal <- lift(Tracer.makeLocal)
+
         } yield EvacuationActor(
-          toEvacuate = subset,
+          thisNodeEvacuates = subset,
           cardanoBackend = cardanoBackend,
           evacuationMapAtFallback = evacMapFull,
-          fallbackTxHash = fallbackTxHash
+          fallbackTxHash = fallbackTxHash,
+          tracerLocal = tracerLocal
         )(using
           env.nodeConfigs.head._2
         )

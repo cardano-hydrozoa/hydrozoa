@@ -71,24 +71,26 @@ private object EvacuationTxOps {
                 case NoEvacuatees =>
                     "No evacuatees provided"
                 case NotASubset(evacuatees, evacuationMap) =>
-                    s"Evacuatees are not a subset of the evacuation map. Evacuatees: ${evacuatees.evacuationMap.keySet}, Evacuation map: ${evacuationMap.evacuationMap.keySet}"
+                    "Evacuatees are not a subset of the evacuation map." +
+                        s"Evacuatees - EvacuationMap = ${evacuatees.evacuationMap.keySet
+                                -- evacuationMap.evacuationMap.keySet}"
                 case MembershipError(wrapped) =>
                     s"Membership error: ${wrapped}"
                 case BuilderError((buildError, explanation)) =>
                     s"Builder error: $explanation - $buildError"
     }
 
-    /** @param evacuatees
+    /** @param evacuateesToTryNext
       *   The sub-map of evacuations to try in this transaction
-      * @param notEvacuatedYet
+      * @param allRemainingEvacuatees
       *   The map of all evacuations that still need to be processed
       * @param feeUtxos
       *   Utxos to use to pay the fees
       */
     final case class Build(
         treasuryUtxo: RuleBasedTreasuryUtxo,
-        evacuatees: EvacuationMap,
-        notEvacuatedYet: EvacuationMap,
+        evacuateesToTryNext: EvacuationMap,
+        allRemainingEvacuatees: EvacuationMap,
         collateralUtxo: CollateralUtxo,
         feeUtxos: Utxos,
     ) {
@@ -106,12 +108,12 @@ private object EvacuationTxOps {
             // "loop" requires that the subset actually be a subset. We establish this once before looping, and
             // rely on `halveEvacuation` to maintain this property
             _ <- Either.cond(
-              test = evacuatees.evacuationMap.keySet
-                  .subsetOf(notEvacuatedYet.evacuationMap.keySet),
+              test = evacuateesToTryNext.evacuationMap.keySet
+                  .subsetOf(allRemainingEvacuatees.evacuationMap.keySet),
               right = (),
               left = EvacuationTx.Build.Error.NotASubset(
-                evacuatees = evacuatees,
-                evaucationMap = notEvacuatedYet
+                evacuatees = evacuateesToTryNext,
+                evaucationMap = allRemainingEvacuatees
               )
             )
 
@@ -119,7 +121,7 @@ private object EvacuationTxOps {
 
             res <- {
                 given Resolved = treasuryDatum
-                loop(evacuatees)
+                loop(evacuateesToTryNext)
             }
         } yield res
 
@@ -135,10 +137,16 @@ private object EvacuationTxOps {
                   left = EvacuationTx.Build.Error.NoEvacuatees
                 )
 
+                // The subset we will actually evacuate in this transaction (capped at 63).
+                // All subsequent computations (membership proof, outputs, residual) must use this
+                // same subset so that the on-chain value invariant holds:
+                //   treasuryInput = treasuryOutput + Σ evacuationOutput
+                evacuatingNow = EvacuationMap(evacuatees.evacuationMap.take(63))
+
                 membershipProof <- Membership
                     .mkMembershipProofValidated(
-                      set = notEvacuatedYet,
-                      subset = evacuatees
+                      set = allRemainingEvacuatees,
+                      subset = evacuatingNow
                     )
                     .left
                     .map(Build.Error.MembershipError(_))
@@ -146,7 +154,7 @@ private object EvacuationTxOps {
                 // From this point we should choose and stick to a particular order of withdrawals, so
                 // to order of outputs in the tx (starting from index 1) and the order of utxo ids in
                 // the redeemer should be the same.
-                evacuationList = evacuatees.evacuationMap.toList
+                evacuationList = evacuatingNow.evacuationMap.toList
 
                 evacuationRedeemer = TreasuryRedeemer.Evacuate(
                   EvacuateRedeemer(
@@ -164,7 +172,7 @@ private object EvacuationTxOps {
 
                 residualValue <- calculateResidualTreasury(
                   treasuryUtxo,
-                  evacuatees
+                  evacuatingNow
                 )
 
                 /////////////

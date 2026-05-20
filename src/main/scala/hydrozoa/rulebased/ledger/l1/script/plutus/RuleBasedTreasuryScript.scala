@@ -40,6 +40,7 @@ object RuleBasedTreasuryValidator extends Validator {
 
     given ToData[TreasuryRedeemer] = ToData.derived
 
+    // TODO: inline these fields into TreasuryRedeemer to avoid extra data deconstruction?
     case class EvacuateRedeemer(
         evacuationKeys: List[EvacuationKey],
         // membership proof for evacuation keys and the updated accumulator at the same time
@@ -100,7 +101,7 @@ object RuleBasedTreasuryValidator extends Validator {
     private inline val EvacuateBeaconTokenShouldBePreserved =
         "Beacon token should be preserved in treasury output"
     private inline val EvacuateValueShouldBePreserved =
-        "Value invariant should hold: treasuryInput = treasuryOutput + Σ evacuatealOutput"
+        "Value invariant should hold: treasuryInput = treasuryOutput + Σ evacuationOutput"
     private inline val EvacuateOutputAccumulatorUpdated =
         "Accumulator in the output should be properly updated"
 
