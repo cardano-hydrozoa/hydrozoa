@@ -10,17 +10,27 @@ import scalus.cardano.ledger.VKeyWitness
 /** A head peer's hard acknowledgment of a closed stack — see `consensus/slow-consensus` in the
   * spec.
   *
-  * Hard-acks are emitted by [[hydrozoa.multisig.consensus.SlowConsensusActor]] in one of three
-  * shapes, depending on the stack's [[hydrozoa.multisig.ledger.stack.StackEffects]] variant:
+  * Hard-acks are emitted by [[hydrozoa.multisig.consensus.SlowConsensusActor]] in the wire shapes
+  * listed below by `(stack kind, round, partition layout)`. The two top groups — Initial and Sole —
+  * are single-shape; the third (Regular) splits into four cases by partition layout, ordered by
+  * structural complexity (fewest slots first):
   *
-  *   - **2-phase Initial** stack 0: round 1 ([[HardAck.Round1Payload.Initial]]) over the locally
-  *     derived fallback tx; round 2 ([[HardAck.Round2Payload.Initial]]) over the exogenous init tx
-  *     body, plus per-peer individual key witnesses for utxos this peer is funding.
-  *   - **2-phase Regular** stacks (containing settlement/finalization): two acks per peer per stack
-  *     — round 1 ([[HardAck.Round1Payload.Regular]]) over every effect except the first settlement
-  *     / finalization, and round 2 ([[HardAck.Round2Payload.Regular]]) over that first unlock.
-  *   - **1-phase Sole** stacks (minor-only Regular): one ack per peer ([[HardAck.SolePayload]])
-  *     over every effect (refund txs + the last evac commit).
+  *   - **Initial** (2-phase, stack 0 only):
+  *     1. [[HardAck.Round1Payload.Initial]] — signature over the locally derived fallback tx.
+  *     2. [[HardAck.Round2Payload.Initial]] — head-multisig signature over the exogenous init tx
+  *        body + this peer's individual `VKeyWitness`es for utxos it funds from its individual
+  *        address.
+  *   - **Sole** (1-phase, minor-only Regular stack):
+  *     3. [[HardAck.SolePayload]] — mandatory SEC header signature + every refund tx signature for
+  *        the leading minor run. Single ack per peer per stack.
+  *   - **Regular 2-phase** (Regular stack containing settlement and/or finalization). Round 2 is
+  *     always [[HardAck.Round2Payload.Regular]] — one tx signature over the unlock (first Major's
+  *     settlement, else the Final's finalization, per
+  *     [[hydrozoa.multisig.ledger.stack.PartitionEffects.unlock]]). Round 1 has four shapes:
+  *     4. [[OnlyPartial]] — `[Major]` or `[Final]`.
+  *     5. [[PartialThenCompletes]] — `[Major, Major* (Major | Final)]`.
+  *     6. [[MinorThenPartial]] — `[Minor, Major]` or `[Minor, Final]`.
+  *     7. [[MinorThenPartialThenCompletes]] — `[Minor, Major, Major* (Major | Final)]`.
   *
   * Wire ordering: for each `(peer, stackNum)`, round-1 / sole hard-acks always precede round-2.
   *
@@ -83,13 +93,13 @@ object HardAck {
           * partition list can take given the `[Minor?] [Major]* [Final?]` layout produced by
           * [[hydrozoa.multisig.ledger.stack.StackPartition]] and the unlock rule from
           * [[hydrozoa.multisig.ledger.stack.PartitionEffects.unlock]] (first Major's settlement;
-          * else — when no Major — the Final's finalization). Cases listed by partition layout
-          * `[Minor?]` × `(at least one trailing Complete?)`:
+          * else — when no Major — the Final's finalization). Cases listed in order of growing
+          * structural complexity (fewest slots first):
           *
-          *   1. [[MinorThenPartial]] — `[Minor, Major]` or `[Minor, Final]`
-          *   2. [[MinorThenPartialThenCompletes]] — `[Minor, Major, Major* (Major | Final)]`
-          *   3. [[OnlyPartial]] — `[Major]` or `[Final]`
-          *   4. [[PartialThenCompletes]] — `[Major, Major* (Major | Final)]`
+          *   1. [[OnlyPartial]] — `[Major]` or `[Final]`
+          *   2. [[PartialThenCompletes]] — `[Major, Major* (Major | Final)]`
+          *   3. [[MinorThenPartial]] — `[Minor, Major]` or `[Minor, Final]`
+          *   4. [[MinorThenPartialThenCompletes]] — `[Minor, Major, Major* (Major | Final)]`
           *
           * The trailing `Major* (Major | Final)` in cases 2 and 4 reads as "zero or more Majors,
           * then exactly one terminal element (a Major or the Final)" — i.e. ≥ 1 trailing Complete,
@@ -105,7 +115,7 @@ object HardAck {
           * at all, which is cases 1 and 3).
           *
           * In every case there is EXACTLY one [[PartitionSigs.Partial]] (the round-1 unlock
-          * partition); everything else is the leading [[PartitionSigs.Minor]] (cases 1, 2) and/or
+          * partition); everything else is the leading [[PartitionSigs.Minor]] (cases 3, 4) and/or
           * post-partial [[PartitionSigs.Complete]] slots (cases 2, 4). The 4 variants make every
           * other arrangement unrepresentable — no slot-list invariants to runtime-check.
           *
@@ -117,7 +127,27 @@ object HardAck {
 
         object Regular {
 
-            /** Case 1: leading Minor partition then the round-1 unlock partition (a single Major
+            /** Case 1: the entire stack is exactly one partition (a Major or Final), which IS the
+              * round-1 unlock. Effects' partition list: `[Major]` (`partial` = `MajorPartial`) or
+              * `[Final]` (`partial` = `FinalPartial`, only fires when the stack contains no Major
+              * at all).
+              */
+            final case class OnlyPartial(
+                partial: PartitionSigs.Partial
+            ) extends Regular
+
+            /** Case 2: the unlock Major at index 0 followed by ≥ 1 further Complete partitions —
+              * zero or more `MajorComplete` optionally followed by exactly one terminal
+              * `FinalComplete` (Final is layout-terminal). Effects' partition list:
+              * `[Major, Major* (Major | Final)]`. `partial` is always a
+              * [[PartitionSigs.MajorPartial]] here.
+              */
+            final case class PartialThenCompletes(
+                partial: PartitionSigs.MajorPartial,
+                completes: NonEmptyList[PartitionSigs.Complete]
+            ) extends Regular
+
+            /** Case 3: leading Minor partition then the round-1 unlock partition (a single Major
               * or Final), nothing further. Effects' partition list: `[Minor, Major]` (`partial`
               * = `MajorPartial`) or `[Minor, Final]` (`partial` = `FinalPartial`, only fires when
               * the stack contains no Major at all).
@@ -127,7 +157,7 @@ object HardAck {
                 partial: PartitionSigs.Partial
             ) extends Regular
 
-            /** Case 2: leading Minor partition, then the unlock Major, then ≥ 1 further Complete
+            /** Case 4: leading Minor partition, then the unlock Major, then ≥ 1 further Complete
               * partitions. The completes are zero or more `MajorComplete` optionally followed by
               * exactly one terminal `FinalComplete` (Final is layout-terminal). Effects' partition
               * list: `[Minor, Major, Major* (Major | Final)]`. `partial` is always a
@@ -140,36 +170,16 @@ object HardAck {
                 completes: NonEmptyList[PartitionSigs.Complete]
             ) extends Regular
 
-            /** Case 3: the entire stack is exactly one partition (a Major or Final), which IS the
-              * round-1 unlock. Effects' partition list: `[Major]` (`partial` = `MajorPartial`) or
-              * `[Final]` (`partial` = `FinalPartial`, only fires when the stack contains no Major
-              * at all).
-              */
-            final case class OnlyPartial(
-                partial: PartitionSigs.Partial
-            ) extends Regular
-
-            /** Case 4: the unlock Major at index 0 followed by ≥ 1 further Complete partitions —
-              * zero or more `MajorComplete` optionally followed by exactly one terminal
-              * `FinalComplete` (Final is layout-terminal). Effects' partition list:
-              * `[Major, Major* (Major | Final)]`. `partial` is always a
-              * [[PartitionSigs.MajorPartial]] here.
-              */
-            final case class PartialThenCompletes(
-                partial: PartitionSigs.MajorPartial,
-                completes: NonEmptyList[PartitionSigs.Complete]
-            ) extends Regular
-
             /** Flatten a `Regular` variant back to the partition-aligned slot sequence (leading
               * Minor if any, then Partial, then Completes if any). Used by the verifier to zip sigs
               * vs effects partition-by-partition without re-dispatching on the variant.
               */
             def asSlots(r: Regular): NonEmptyList[PartitionSigs] = r match {
-                case MinorThenPartial(m, p) => NonEmptyList.of(m, p)
-                case MinorThenPartialThenCompletes(m, p, cs) =>
-                    NonEmptyList(m, p :: cs.toList)
                 case OnlyPartial(p)              => NonEmptyList.one(p)
                 case PartialThenCompletes(p, cs) => NonEmptyList(p, cs.toList)
+                case MinorThenPartial(m, p)      => NonEmptyList.of(m, p)
+                case MinorThenPartialThenCompletes(m, p, cs) =>
+                    NonEmptyList(m, p :: cs.toList)
             }
         }
 
