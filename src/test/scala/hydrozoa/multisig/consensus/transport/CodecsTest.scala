@@ -155,23 +155,32 @@ class CodecsTest extends AnyFunSuite {
           )
         )
 
-    test("Frame.Msg(NewMsgBatch with HardAck Round1Regular) round-trips") {
+    test("Frame.Msg(NewMsgBatch with HardAck Round1Regular: OnlyPartial) round-trips") {
         assertJsonStable(
           hardAckFrame(
-            HardAck.Round1Payload.Regular(
-              NonEmptyList.of(
-                HardAck.PartitionSig.Major(
-                  settlement = None, // the round-2 unlock partition
-                  fallback = sig(4, 5),
-                  rollouts = List(sig(6, 7, 8)),
-                  refunds = List(sig(9), sig(10, 11)),
-                  sec = Some(
-                    BlockHeader.Minor.HeaderSignature(IArray[Byte](12.toByte, 13.toByte))
-                  )
-                ),
-                HardAck.PartitionSig.Minor(
-                  sec = BlockHeader.Minor.HeaderSignature(IArray[Byte](14.toByte)),
-                  refunds = List(sig(15, 16))
+            HardAck.Round1Payload.Regular.OnlyPartial(
+              partial = HardAck.Round1Payload.PartitionSigs.FinalPartial(rollouts = Nil)
+            )
+          )
+        )
+    }
+
+    test("Frame.Msg(NewMsgBatch with HardAck Round1Regular: PartialThenCompletes) round-trips") {
+        assertJsonStable(
+          hardAckFrame(
+            HardAck.Round1Payload.Regular.PartialThenCompletes(
+              partial = HardAck.Round1Payload.PartitionSigs.MajorPartial(
+                fallback = sig(4, 5),
+                rollouts = List(sig(6, 7, 8)),
+                refunds = List(sig(9), sig(10, 11)),
+                sec = Some(
+                  BlockHeader.Minor.HeaderSignature(IArray[Byte](12.toByte, 13.toByte))
+                )
+              ),
+              completes = NonEmptyList.of(
+                HardAck.Round1Payload.PartitionSigs.FinalComplete(
+                  finalization = sig(44),
+                  rollouts = List(sig(45), sig(46))
                 )
               )
             )
@@ -179,12 +188,47 @@ class CodecsTest extends AnyFunSuite {
         )
     }
 
-    test("Frame.Msg(NewMsgBatch with HardAck Round1Regular, empty options) round-trips") {
+    test("Frame.Msg(NewMsgBatch with HardAck Round1Regular: MinorThenPartial) round-trips") {
         assertJsonStable(
           hardAckFrame(
-            HardAck.Round1Payload.Regular(
-              NonEmptyList.of(
-                HardAck.PartitionSig.Final(finalization = None, rollouts = Nil)
+            HardAck.Round1Payload.Regular.MinorThenPartial(
+              minor = HardAck.Round1Payload.PartitionSigs.Minor(
+                sec = BlockHeader.Minor.HeaderSignature(IArray[Byte](14.toByte)),
+                refunds = List(sig(15, 16))
+              ),
+              partial = HardAck.Round1Payload.PartitionSigs.MajorPartial(
+                fallback = sig(50),
+                rollouts = Nil,
+                refunds = List(sig(51)),
+                sec = None
+              )
+            )
+          )
+        )
+    }
+
+    test(
+      "Frame.Msg(NewMsgBatch with HardAck Round1Regular: " +
+          "MinorThenPartialThenCompletes) round-trips"
+    ) {
+        assertJsonStable(
+          hardAckFrame(
+            HardAck.Round1Payload.Regular.MinorThenPartialThenCompletes(
+              minor = HardAck.Round1Payload.PartitionSigs.Minor(
+                sec = BlockHeader.Minor.HeaderSignature(IArray[Byte](60.toByte)),
+                refunds = Nil
+              ),
+              partial = HardAck.Round1Payload.PartitionSigs.MajorPartial(
+                fallback = sig(61),
+                rollouts = Nil,
+                refunds = Nil,
+                sec = Some(BlockHeader.Minor.HeaderSignature(IArray[Byte](62.toByte)))
+              ),
+              completes = NonEmptyList.of(
+                HardAck.Round1Payload.PartitionSigs.FinalComplete(
+                  finalization = sig(63),
+                  rollouts = List(sig(64))
+                )
               )
             )
           )

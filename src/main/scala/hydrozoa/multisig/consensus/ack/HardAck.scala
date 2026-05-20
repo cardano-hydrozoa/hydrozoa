@@ -71,47 +71,6 @@ object HardAck {
         sealed trait Round2 extends Payload { final override def round: Round = Round.Two }
     }
 
-    /** Per-partition signatures — the spine of a regular hard-ack, mirroring
-      * [[hydrozoa.multisig.ledger.stack.PartitionEffects]] (one [[PartitionSig]] per partition,
-      * same order, same kind). Tx-body signatures are [[TxSignature]]; the standalone evac
-      * commitment is signed over a *block header* so its signature is a
-      * [[BlockHeader.HeaderSignature]] (not a `TxSignature`).
-      *
-      * In a round-1 payload the **unlock partition's** settlement / finalization signature is
-      * absent (`None`) — it travels in [[Round2Payload.Regular]] instead. Every other slot is
-      * present. Which partition is the unlock is the shared
-      * [[hydrozoa.multisig.ledger.stack.PartitionEffects.unlock]] rule (not re-derived here).
-      */
-    sealed trait PartitionSig
-
-    object PartitionSig {
-
-        /** A [[PartitionEffects.Major]] partition's sigs. `settlement` is `None` iff this is the
-          * round-2 unlock partition (its sig is the [[Round2Payload.Regular.firstUnlockSig]]).
-          */
-        final case class Major(
-            settlement: Option[TxSignature],
-            fallback: TxSignature,
-            rollouts: List[TxSignature],
-            refunds: List[TxSignature],
-            sec: Option[BlockHeader.HeaderSignature]
-        ) extends PartitionSig
-
-        /** A [[PartitionEffects.Final]] partition's sigs. `finalization` is `None` iff this Final
-          * is the round-2 unlock (no Major preceded it).
-          */
-        final case class Final(
-            finalization: Option[TxSignature],
-            rollouts: List[TxSignature]
-        ) extends PartitionSig
-
-        /** A [[PartitionEffects.Minor]] partition's sigs. SEC is mandatory (header sig). */
-        final case class Minor(
-            sec: BlockHeader.HeaderSignature,
-            refunds: List[TxSignature]
-        ) extends PartitionSig
-    }
-
     /** Round-1 ack payload variants — varies by [[StackEffects]] shape. */
     object Round1Payload {
 
@@ -120,36 +79,209 @@ object HardAck {
             fallbackSig: TxSignature
         ) extends Payload.Round1
 
-        /** Per-partition signatures for a regular stack, EXCEPT the round-2 unlock (the unlock
-          * partition's settlement / finalization slot is `None` here — see [[PartitionSig]]). Same
-          * partition order as [[StackEffects.Unsigned.Regular.partitions]].
+        /** Round-1 sigs for a regular stack. Four structurally exclusive cases, one per shape the
+          * partition list can take given the `[Minor?] [Major]* [Final?]` layout produced by
+          * [[hydrozoa.multisig.ledger.stack.StackPartition]] and the unlock rule from
+          * [[hydrozoa.multisig.ledger.stack.PartitionEffects.unlock]] (first Major's settlement;
+          * else — when no Major — the Final's finalization). Cases listed by partition layout
+          * `[Minor?]` × `(at least one trailing Complete?)`:
+          *
+          *   1. [[MinorThenPartial]] — `[Minor, Major]` or `[Minor, Final]`
+          *   2. [[MinorThenPartialThenCompletes]] — `[Minor, Major, Major* (Major | Final)]`
+          *   3. [[OnlyPartial]] — `[Major]` or `[Final]`
+          *   4. [[PartialThenCompletes]] — `[Major, Major* (Major | Final)]`
+          *
+          * The trailing `Major* (Major | Final)` in cases 2 and 4 reads as "zero or more Majors,
+          * then exactly one terminal element (a Major or the Final)" — i.e. ≥ 1 trailing Complete,
+          * with at most one Final at the very end and nothing after it. Empty trailing is excluded
+          * by construction (`completes: NonEmptyList[PartitionSigs.Complete]`) — that's cases 1/3's
+          * shape, not 2/4's.
+          *
+          * Note: a Final partition is always layout-terminal (the `[Minor?] [Major]* [Final?]`
+          * grammar forbids anything after a Final). So cases 2 and 4's `completes` field is of
+          * shape `Major* (Major | Final)` — ≥ 1 `MajorComplete`s with at most one terminal
+          * `FinalComplete` at the very end. And in cases 2 and 4 the partial is ALWAYS a
+          * [[PartitionSigs.MajorPartial]] (a `FinalPartial` is only possible when there is no Major
+          * at all, which is cases 1 and 3).
+          *
+          * In every case there is EXACTLY one [[PartitionSigs.Partial]] (the round-1 unlock
+          * partition); everything else is the leading [[PartitionSigs.Minor]] (cases 1, 2) and/or
+          * post-partial [[PartitionSigs.Complete]] slots (cases 2, 4). The 4 variants make every
+          * other arrangement unrepresentable — no slot-list invariants to runtime-check.
+          *
+          * Field order in each variant matches the partition order of the corresponding
+          * [[hydrozoa.multisig.ledger.stack.StackEffects.Unsigned.Regular.partitions]] list:
+          * leading Minor (if any) → Partial → Completes (if any).
           */
-        final case class Regular(
-            partitions: NonEmptyList[PartitionSig]
-        ) extends Payload.Round1
+        sealed trait Regular extends Payload.Round1
+
+        object Regular {
+
+            /** Case 1: leading Minor partition then the round-1 unlock partition (a single Major
+              * or Final), nothing further. Effects' partition list: `[Minor, Major]` (`partial`
+              * = `MajorPartial`) or `[Minor, Final]` (`partial` = `FinalPartial`, only fires when
+              * the stack contains no Major at all).
+              */
+            final case class MinorThenPartial(
+                minor: PartitionSigs.Minor,
+                partial: PartitionSigs.Partial
+            ) extends Regular
+
+            /** Case 2: leading Minor partition, then the unlock Major, then ≥ 1 further Complete
+              * partitions. The completes are zero or more `MajorComplete` optionally followed by
+              * exactly one terminal `FinalComplete` (Final is layout-terminal). Effects' partition
+              * list: `[Minor, Major, Major* (Major | Final)]`. `partial` is always a
+              * [[PartitionSigs.MajorPartial]] here — there is at least one Major in the stack, so
+              * the unlock rule selects it (not the Final).
+              */
+            final case class MinorThenPartialThenCompletes(
+                minor: PartitionSigs.Minor,
+                partial: PartitionSigs.MajorPartial,
+                completes: NonEmptyList[PartitionSigs.Complete]
+            ) extends Regular
+
+            /** Case 3: the entire stack is exactly one partition (a Major or Final), which IS the
+              * round-1 unlock. Effects' partition list: `[Major]` (`partial` = `MajorPartial`) or
+              * `[Final]` (`partial` = `FinalPartial`, only fires when the stack contains no Major
+              * at all).
+              */
+            final case class OnlyPartial(
+                partial: PartitionSigs.Partial
+            ) extends Regular
+
+            /** Case 4: the unlock Major at index 0 followed by ≥ 1 further Complete partitions —
+              * zero or more `MajorComplete` optionally followed by exactly one terminal
+              * `FinalComplete` (Final is layout-terminal). Effects' partition list:
+              * `[Major, Major* (Major | Final)]`. `partial` is always a
+              * [[PartitionSigs.MajorPartial]] here.
+              */
+            final case class PartialThenCompletes(
+                partial: PartitionSigs.MajorPartial,
+                completes: NonEmptyList[PartitionSigs.Complete]
+            ) extends Regular
+
+            /** Flatten a `Regular` variant back to the partition-aligned slot sequence (leading
+              * Minor if any, then Partial, then Completes if any). Used by the verifier to zip sigs
+              * vs effects partition-by-partition without re-dispatching on the variant.
+              */
+            def asSlots(r: Regular): NonEmptyList[PartitionSigs] = r match {
+                case MinorThenPartial(m, p) => NonEmptyList.of(m, p)
+                case MinorThenPartialThenCompletes(m, p, cs) =>
+                    NonEmptyList(m, p :: cs.toList)
+                case OnlyPartial(p)              => NonEmptyList.one(p)
+                case PartialThenCompletes(p, cs) => NonEmptyList(p, cs.toList)
+            }
+        }
+
+        /** A single partition's round-1 sigs. Three categories — [[PartitionSigs.Partial]] (the
+          * round-1 unlock partition's sig set, missing the unlocking sig),
+          * [[PartitionSigs.Complete]] (a non-unlock Major or Final, all sigs present), and
+          * [[PartitionSigs.Minor]] (always complete; structurally distinct because Minor can only
+          * appear as the leading partition and is never the round-1 unlock).
+          *
+          * Round-coupling (unlock vs not) lives at this round-1-payload-scoped slot level — NOT on
+          * partition-level data — because being "the unlock partition" is a property of the stack's
+          * round-1 slicing, not of the partition itself. Tx-body sigs are [[TxSignature]]; the
+          * standalone evac commitment is signed over a block header so its signature is a
+          * [[BlockHeader.HeaderSignature]].
+          */
+        sealed trait PartitionSigs
+
+        object PartitionSigs {
+
+            /** Partial = the round-1 unlock partition's sigs, MISSING the unlocking sig (settlement
+              * for [[MajorPartial]], finalization for [[FinalPartial]]). The missing sig travels in
+              * [[Round2Payload.Regular.firstUnlockSig]].
+              */
+            sealed trait Partial extends PartitionSigs
+
+            /** Complete = a non-unlock Major or Final partition's sigs, ALL present. Does NOT
+              * include [[Minor]] — Minor stands alone because it can never be the round-1 unlock
+              * and can only appear as the leading partition (see [[PartitionSigs]]'s scaladoc).
+              */
+            sealed trait Complete extends PartitionSigs
+
+            final case class MajorComplete(
+                settlement: TxSignature,
+                fallback: TxSignature,
+                rollouts: List[TxSignature],
+                refunds: List[TxSignature],
+                sec: Option[BlockHeader.HeaderSignature]
+            ) extends Complete
+
+            final case class MajorPartial(
+                fallback: TxSignature,
+                rollouts: List[TxSignature],
+                refunds: List[TxSignature],
+                sec: Option[BlockHeader.HeaderSignature]
+            ) extends Partial
+
+            final case class FinalComplete(
+                finalization: TxSignature,
+                rollouts: List[TxSignature]
+            ) extends Complete
+
+            final case class FinalPartial(
+                rollouts: List[TxSignature]
+            ) extends Partial
+
+            /** Minor: leading-partition slot (every sig present). Never the unlock; never appears
+              * mid-sequence (trailing minors are absorbed into their Major partition's `sec`).
+              */
+            final case class Minor(
+                sec: BlockHeader.HeaderSignature,
+                refunds: List[TxSignature]
+            ) extends PartitionSigs
+        }
     }
 
-    /** Round-2 ack payload variants — the "unlock" round. */
+    /** Round-2 ack payload variants — the "unlock" round.
+      *
+      * ===Atomicity invariant===
+      *
+      * Round 2 covers '''exactly one transaction''' (its multisig sig comes together in this
+      * round). This is load-bearing for protocol atomicity: round-1 effects are released only after
+      * round-2 saturates, so round 2 is the single point where the last signer commits. If round 2
+      * covered TWO independent txs, the last signer could publish a sig for one and withhold the
+      * other — breaking the all-or-nothing release that the round split exists to provide. Every
+      * variant below therefore carries sigs for ONE tx only.
+      *
+      * Concretely:
+      *   - [[Regular]]: one sig over the unlock tx (settlement OR finalization — exactly one, per
+      *     [[hydrozoa.multisig.ledger.stack.PartitionEffects.unlock]]).
+      *   - [[Initial]]: BOTH fields ([[Initial.initTxSig]] and [[Initial.individualWitnesses]]) are
+      *     signatures over the SAME initialization transaction — head-multisig contribution + this
+      *     peer's individual-address witnesses for utxos it funds from its individual address. One
+      *     tx, two witness kinds, one round-2 commit point.
+      */
     object Round2Payload {
 
-        /** Stack 0 round 2: init tx body sig + this peer's individual key witnesses for any utxos
-          * it is funding from its individual address (operator-supplied funding).
+        /** Stack 0 round 2 — all signatures here are over the SAME initialization tx (one tx, two
+          * witness kinds; see the round-2 atomicity invariant above):
+          *   - [[initTxSig]]: this peer's head-multisig signature over the init tx body.
+          *   - [[individualWitnesses]]: this peer's individual-address `VKeyWitness`es for any
+          *     utxos it funds from its individual address (operator-supplied funding) — also over
+          *     the same init tx.
           */
         final case class Initial(
             initTxSig: TxSignature,
             individualWitnesses: List[VKeyWitness]
         ) extends Payload.Round2
 
-        /** Round-2 in a regular stack: signature over the FIRST settlement / finalization. */
+        /** Round-2 in a regular stack: signature over the FIRST settlement / finalization (the
+          * single unlock tx per [[hydrozoa.multisig.ledger.stack.PartitionEffects.unlock]]; see the
+          * round-2 atomicity invariant above).
+          */
         final case class Regular(
             firstUnlockSig: TxSignature
         ) extends Payload.Round2
     }
 
     /** Sole-round ack payload — 1-phase minor-only stacks only. A minor-only stack is exactly one
-      * [[PartitionEffects.Minor]] partition (the leading minor run is the whole stack), so this is
-      * that single partition's sigs: the mandatory SEC header signature + the minors' refund tx
-      * signatures (= a [[PartitionSig.Minor]], inlined for the wire).
+      * [[hydrozoa.multisig.ledger.stack.PartitionEffects.Minor]] partition (the leading minor run
+      * is the whole stack), so this is that single partition's sigs: the mandatory SEC header
+      * signature + the minors' refund tx signatures (same shape as
+      * [[Round1Payload.PartitionSigs.Minor]], inlined for the wire).
       */
     final case class SolePayload(
         sec: BlockHeader.HeaderSignature,

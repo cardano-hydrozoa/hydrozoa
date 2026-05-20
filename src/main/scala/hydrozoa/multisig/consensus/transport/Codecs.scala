@@ -139,57 +139,213 @@ object Codecs {
           )
         )
 
-    /** Per-partition signature bundle — discriminated by `kind` (mirrors
-      * [[hydrozoa.multisig.ledger.stack.PartitionEffects]]).
+    /** Per-partition round-1 slot — discriminated by `kind`. Five variants because the slot shape
+      * varies by both partition kind (Major/Final/Minor — mirrors
+      * [[hydrozoa.multisig.ledger.stack.PartitionEffects]]) AND by whether the partition is the
+      * round-1 unlock partition for its stack (Major/MajorUnlock and Final/FinalUnlock; Minor is
+      * never the unlock).
       */
-    private given Codec[HardAck.PartitionSig] = {
-        import HardAck.PartitionSig
-        val enc = Encoder.instance[PartitionSig] {
-            case p: PartitionSig.Major =>
+    private given Codec[HardAck.Round1Payload.PartitionSigs] = {
+        import HardAck.Round1Payload.PartitionSigs
+        val enc = Encoder.instance[PartitionSigs] {
+            case p: PartitionSigs.MajorComplete =>
                 Json.obj(
-                  "kind" -> "major".asJson,
+                  "kind" -> "majorComplete".asJson,
                   "settlement" -> p.settlement.asJson,
                   "fallback" -> p.fallback.asJson,
                   "rollouts" -> p.rollouts.asJson,
                   "refunds" -> p.refunds.asJson,
                   "sec" -> p.sec.asJson
                 )
-            case p: PartitionSig.Final =>
+            case p: PartitionSigs.MajorPartial =>
                 Json.obj(
-                  "kind" -> "final".asJson,
+                  "kind" -> "majorPartial".asJson,
+                  "fallback" -> p.fallback.asJson,
+                  "rollouts" -> p.rollouts.asJson,
+                  "refunds" -> p.refunds.asJson,
+                  "sec" -> p.sec.asJson
+                )
+            case p: PartitionSigs.FinalComplete =>
+                Json.obj(
+                  "kind" -> "finalComplete".asJson,
                   "finalization" -> p.finalization.asJson,
                   "rollouts" -> p.rollouts.asJson
                 )
-            case p: PartitionSig.Minor =>
+            case p: PartitionSigs.FinalPartial =>
+                Json.obj(
+                  "kind" -> "finalPartial".asJson,
+                  "rollouts" -> p.rollouts.asJson
+                )
+            case p: PartitionSigs.Minor =>
                 Json.obj(
                   "kind" -> "minor".asJson,
                   "sec" -> p.sec.asJson,
                   "refunds" -> p.refunds.asJson
                 )
         }
-        val dec = Decoder.instance[PartitionSig] { c =>
+        val dec = Decoder.instance[PartitionSigs] { c =>
             c.downField("kind").as[String].flatMap {
-                case "major" =>
+                case "majorComplete" =>
                     for {
-                        settlement <- c.downField("settlement").as[Option[TxSignature]]
+                        settlement <- c.downField("settlement").as[TxSignature]
                         fallback <- c.downField("fallback").as[TxSignature]
                         rollouts <- c.downField("rollouts").as[List[TxSignature]]
                         refunds <- c.downField("refunds").as[List[TxSignature]]
                         sec <- c.downField("sec").as[Option[BlockHeader.HeaderSignature]]
-                    } yield PartitionSig.Major(settlement, fallback, rollouts, refunds, sec)
-                case "final" =>
+                    } yield PartitionSigs.MajorComplete(
+                      settlement,
+                      fallback,
+                      rollouts,
+                      refunds,
+                      sec
+                    )
+                case "majorPartial" =>
                     for {
-                        finalization <- c.downField("finalization").as[Option[TxSignature]]
+                        fallback <- c.downField("fallback").as[TxSignature]
                         rollouts <- c.downField("rollouts").as[List[TxSignature]]
-                    } yield PartitionSig.Final(finalization, rollouts)
+                        refunds <- c.downField("refunds").as[List[TxSignature]]
+                        sec <- c.downField("sec").as[Option[BlockHeader.HeaderSignature]]
+                    } yield PartitionSigs.MajorPartial(fallback, rollouts, refunds, sec)
+                case "finalComplete" =>
+                    for {
+                        finalization <- c.downField("finalization").as[TxSignature]
+                        rollouts <- c.downField("rollouts").as[List[TxSignature]]
+                    } yield PartitionSigs.FinalComplete(finalization, rollouts)
+                case "finalPartial" =>
+                    for {
+                        rollouts <- c.downField("rollouts").as[List[TxSignature]]
+                    } yield PartitionSigs.FinalPartial(rollouts)
                 case "minor" =>
                     for {
                         sec <- c.downField("sec").as[BlockHeader.HeaderSignature]
                         refunds <- c.downField("refunds").as[List[TxSignature]]
-                    } yield PartitionSig.Minor(sec, refunds)
+                    } yield PartitionSigs.Minor(sec, refunds)
                 case other =>
                     Left(
-                      DecodingFailure(s"Unknown HardAck.PartitionSig kind: $other", c.history)
+                      DecodingFailure(
+                        s"Unknown HardAck.Round1Payload.PartitionSigs kind: $other",
+                        c.history
+                      )
+                    )
+            }
+        }
+        io.circe.Codec.from(dec, enc)
+    }
+
+    // ---- PartitionSigs subtype codecs (Partial / Complete / Minor) ----
+    //
+    // The PartitionSigs codec above already round-trips any concrete variant; these subtype codecs are
+    // narrowing adapters used by `Round1Payload.Regular`'s field types (Partial / Complete /
+    // Minor). At decode time they re-tag a successfully-decoded PartitionSigs as the expected subtype
+    // and fail if the wire variant doesn't belong to that subtype family.
+
+    private given Codec[HardAck.Round1Payload.PartitionSigs.Partial] = io.circe.Codec.from(
+      summon[Decoder[HardAck.Round1Payload.PartitionSigs]].emap {
+          case p: HardAck.Round1Payload.PartitionSigs.Partial => Right(p)
+          case other =>
+              Left(s"Expected PartitionSigs.Partial, got ${other.getClass.getSimpleName}")
+      },
+      summon[Encoder[HardAck.Round1Payload.PartitionSigs]].contramap(identity)
+    )
+
+    private given Codec[HardAck.Round1Payload.PartitionSigs.Complete] = io.circe.Codec.from(
+      summon[Decoder[HardAck.Round1Payload.PartitionSigs]].emap {
+          case c: HardAck.Round1Payload.PartitionSigs.Complete => Right(c)
+          case other =>
+              Left(s"Expected PartitionSigs.Complete, got ${other.getClass.getSimpleName}")
+      },
+      summon[Encoder[HardAck.Round1Payload.PartitionSigs]].contramap(identity)
+    )
+
+    private given Codec[HardAck.Round1Payload.PartitionSigs.Minor] = io.circe.Codec.from(
+      summon[Decoder[HardAck.Round1Payload.PartitionSigs]].emap {
+          case m: HardAck.Round1Payload.PartitionSigs.Minor => Right(m)
+          case other =>
+              Left(s"Expected PartitionSigs.Minor, got ${other.getClass.getSimpleName}")
+      },
+      summon[Encoder[HardAck.Round1Payload.PartitionSigs]].contramap(identity)
+    )
+
+    private given Codec[HardAck.Round1Payload.PartitionSigs.MajorPartial] = io.circe.Codec.from(
+      summon[Decoder[HardAck.Round1Payload.PartitionSigs]].emap {
+          case mp: HardAck.Round1Payload.PartitionSigs.MajorPartial => Right(mp)
+          case other =>
+              Left(s"Expected PartitionSigs.MajorPartial, got ${other.getClass.getSimpleName}")
+      },
+      summon[Encoder[HardAck.Round1Payload.PartitionSigs]].contramap(identity)
+    )
+
+    /** Round-1 regular payload — 4-way discriminated by `subKind` (one variant per partition-list
+      * layout; see [[HardAck.Round1Payload.Regular]]).
+      */
+    private given Codec[HardAck.Round1Payload.Regular] = {
+        import HardAck.Round1Payload.Regular as R
+        val enc = Encoder.instance[R] {
+            case r: R.OnlyPartial =>
+                Json.obj(
+                  "subKind" -> "onlyPartial".asJson,
+                  "partial" -> r.partial.asJson
+                )
+            case r: R.PartialThenCompletes =>
+                Json.obj(
+                  "subKind" -> "partialThenCompletes".asJson,
+                  "partial" -> r.partial.asJson,
+                  "completes" -> r.completes.asJson
+                )
+            case r: R.MinorThenPartial =>
+                Json.obj(
+                  "subKind" -> "minorThenPartial".asJson,
+                  "minor" -> r.minor.asJson,
+                  "partial" -> r.partial.asJson
+                )
+            case r: R.MinorThenPartialThenCompletes =>
+                Json.obj(
+                  "subKind" -> "minorThenPartialThenCompletes".asJson,
+                  "minor" -> r.minor.asJson,
+                  "partial" -> r.partial.asJson,
+                  "completes" -> r.completes.asJson
+                )
+        }
+        val dec = Decoder.instance[R] { c =>
+            c.downField("subKind").as[String].flatMap {
+                case "onlyPartial" =>
+                    for {
+                        partial <- c
+                            .downField("partial")
+                            .as[HardAck.Round1Payload.PartitionSigs.Partial]
+                    } yield R.OnlyPartial(partial)
+                case "partialThenCompletes" =>
+                    for {
+                        partial <- c
+                            .downField("partial")
+                            .as[HardAck.Round1Payload.PartitionSigs.MajorPartial]
+                        completes <- c
+                            .downField("completes")
+                            .as[NonEmptyList[HardAck.Round1Payload.PartitionSigs.Complete]]
+                    } yield R.PartialThenCompletes(partial, completes)
+                case "minorThenPartial" =>
+                    for {
+                        minor <- c.downField("minor").as[HardAck.Round1Payload.PartitionSigs.Minor]
+                        partial <- c
+                            .downField("partial")
+                            .as[HardAck.Round1Payload.PartitionSigs.Partial]
+                    } yield R.MinorThenPartial(minor, partial)
+                case "minorThenPartialThenCompletes" =>
+                    for {
+                        minor <- c.downField("minor").as[HardAck.Round1Payload.PartitionSigs.Minor]
+                        partial <- c
+                            .downField("partial")
+                            .as[HardAck.Round1Payload.PartitionSigs.MajorPartial]
+                        completes <- c
+                            .downField("completes")
+                            .as[NonEmptyList[HardAck.Round1Payload.PartitionSigs.Complete]]
+                    } yield R.MinorThenPartialThenCompletes(minor, partial, completes)
+                case other =>
+                    Left(
+                      DecodingFailure(
+                        s"Unknown HardAck.Round1Payload.Regular subKind: $other",
+                        c.history
+                      )
                     )
             }
         }
@@ -208,7 +364,7 @@ object Codecs {
             case p: Round1Payload.Regular =>
                 Json.obj(
                   "kind" -> "round1Regular".asJson,
-                  "partitions" -> p.partitions.asJson
+                  "regular" -> p.asJson
                 )
             case p: Round1Payload.Initial =>
                 Json.obj("kind" -> "round1Initial".asJson, "fallbackSig" -> p.fallbackSig.asJson)
@@ -232,9 +388,7 @@ object Codecs {
         val dec = Decoder.instance[HardAck.Payload] { c =>
             c.downField("kind").as[String].flatMap {
                 case "round1Regular" =>
-                    c.downField("partitions")
-                        .as[NonEmptyList[HardAck.PartitionSig]]
-                        .map(Round1Payload.Regular.apply)
+                    c.downField("regular").as[Round1Payload.Regular]
                 case "round1Initial" =>
                     c.downField("fallbackSig")
                         .as[TxSignature]

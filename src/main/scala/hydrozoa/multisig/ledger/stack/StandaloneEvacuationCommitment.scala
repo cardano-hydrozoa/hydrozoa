@@ -18,9 +18,9 @@ import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
   *
   * Per spec the on-L1 record is `(headId, blockVersion, kzgCommitment)`. `headId` is constant per
   * head and supplied at dispute-presentation time (the storage/dispute layer is future work), so it
-  * is not carried in this in-memory effect. `committedBlockNum` is kept so the slow side can key
-  * the hard-ack header signature (the consensus artifact paired with this record at dispute time)
-  * by block number.
+  * is not carried in this in-memory effect. `blockNum` is kept so the slow side can key the
+  * hard-ack header signature (the consensus artifact paired with this record at dispute time) by
+  * block number.
   *
   * `header` carries the committed minor block's serialized header — the exact bytes the SEC
   * hard-ack signs over. Keeping it here makes the SEC effect **self-contained for signing**: the
@@ -29,7 +29,7 @@ import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
   * construction-only input and is being removed). KZG lives on the header transitionally, so today
   * these bytes coincide with the soft-ack header domain.
   *
-  * @param committedBlockNum
+  * @param blockNum
   *   the committed minor block's number
   * @param blockVersion
   *   that block's full version
@@ -39,7 +39,7 @@ import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
   *   the committed minor block's serialized header — the SEC signing bytes
   */
 final case class StandaloneEvacuationCommitment(
-    committedBlockNum: BlockNumber,
+    blockNum: BlockNumber,
     blockVersion: BlockVersion.Full,
     kzgCommitment: KzgCommitment,
     header: BlockHeader.Minor.Onchain.Serialized
@@ -53,8 +53,8 @@ object StandaloneEvacuationCommitment {
       * [[hydrozoa.multisig.ledger.block.BlockEffects.HardConfirmed.Minor]] `headerMultiSigned`.
       *
       * @param headerMultiSigned
-      *   one header signature per head peer (deterministic peer order), over `committedBlockNum`'s
-      *   header — the same bytes every peer hard-acked.
+      *   one header signature per head peer (deterministic peer order), over `blockNum`'s header —
+      *   the same bytes every peer hard-acked.
       */
     final case class MultiSigned(
         commitment: StandaloneEvacuationCommitment,

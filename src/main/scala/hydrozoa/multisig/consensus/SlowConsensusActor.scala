@@ -375,23 +375,46 @@ final case class SlowConsensusActor(
         m: WitnessMap,
         vk: VerificationKey,
         e: PartitionEffects[StandaloneEvacuationCommitment],
-        s: HardAck.PartitionSig
+        s: HardAck.Round1Payload.PartitionSigs
     ): WitnessMap = (e, s) match {
         case (
               PartitionEffects.Major(settlement, fallback, rollouts, refunds, _),
-              HardAck.PartitionSig.Major(sSettlement, sFallback, sRollouts, sRefunds, _)
+              HardAck.Round1Payload.PartitionSigs.MajorComplete(
+                sSettlement,
+                sFallback,
+                sRollouts,
+                sRefunds,
+                _
+              )
             ) =>
-            m.addOpt(settlement.tx.id, vk, sSettlement)
+            m.add(settlement.tx.id, witnessOf(vk, sSettlement))
                 .add(fallback.tx.id, witnessOf(vk, sFallback))
                 .addZip(rollouts.map(_.tx), vk, sRollouts)
                 .addZip(refunds.map(_.tx), vk, sRefunds)
         case (
-              PartitionEffects.Final(finalization, rollouts),
-              HardAck.PartitionSig.Final(sFinalization, sRollouts)
+              PartitionEffects.Major(_, fallback, rollouts, refunds, _),
+              HardAck.Round1Payload.PartitionSigs.MajorPartial(sFallback, sRollouts, sRefunds, _)
             ) =>
-            m.addOpt(finalization.tx.id, vk, sFinalization)
+            // Settlement sig is deferred to Round2Payload.Regular.firstUnlockSig — not here.
+            m.add(fallback.tx.id, witnessOf(vk, sFallback))
                 .addZip(rollouts.map(_.tx), vk, sRollouts)
-        case (PartitionEffects.Minor(_, refunds), HardAck.PartitionSig.Minor(_, sRefunds)) =>
+                .addZip(refunds.map(_.tx), vk, sRefunds)
+        case (
+              PartitionEffects.Final(finalization, rollouts),
+              HardAck.Round1Payload.PartitionSigs.FinalComplete(sFinalization, sRollouts)
+            ) =>
+            m.add(finalization.tx.id, witnessOf(vk, sFinalization))
+                .addZip(rollouts.map(_.tx), vk, sRollouts)
+        case (
+              PartitionEffects.Final(_, rollouts),
+              HardAck.Round1Payload.PartitionSigs.FinalPartial(sRollouts)
+            ) =>
+            // Finalization sig is deferred to Round2Payload.Regular.firstUnlockSig — not here.
+            m.addZip(rollouts.map(_.tx), vk, sRollouts)
+        case (
+              PartitionEffects.Minor(_, refunds),
+              HardAck.Round1Payload.PartitionSigs.Minor(_, sRefunds)
+            ) =>
             m.addZip(refunds.map(_.tx), vk, sRefunds)
         case _ => m // verification already rejected kind mismatches
     }
@@ -406,9 +429,11 @@ final case class SlowConsensusActor(
                     val vk = vkeys(peer)
                     val afterR1 = (regularPartitions(c.unsigned), c.round1.get(peer)) match {
                         case (Some(parts), Some(r: HardAck.Round1Payload.Regular)) =>
-                            parts.toList.zip(r.partitions.toList).foldLeft(m) {
-                                case (acc, (e, sg)) => partitionWitnesses(acc, vk, e, sg)
-                            }
+                            parts.toList
+                                .zip(HardAck.Round1Payload.Regular.asSlots(r).toList)
+                                .foldLeft(m) { case (acc, (e, sg)) =>
+                                    partitionWitnesses(acc, vk, e, sg)
+                                }
                         case (None, Some(r: HardAck.Round1Payload.Initial)) =>
                             c.unsigned.effects match {
                                 case i: StackEffects.Unsigned.Initial =>
@@ -464,19 +489,21 @@ final case class SlowConsensusActor(
         regularPartitions(cell.unsigned) match {
             case None => Nil
             case Some(parts) =>
-                val peerSigParts: List[Option[NonEmptyList[HardAck.PartitionSig]]] =
+                val peerSigParts: List[Option[NonEmptyList[HardAck.Round1Payload.PartitionSigs]]] =
                     allPeers.toList.map { peer =>
                         cell match {
                             case c: Cell.WaitingRound2 =>
                                 c.round1.get(peer).collect {
-                                    case r: HardAck.Round1Payload.Regular => r.partitions
+                                    case r: HardAck.Round1Payload.Regular =>
+                                        HardAck.Round1Payload.Regular.asSlots(r)
                                 }
                             case c: Cell.WaitingSole =>
                                 c.sole
                                     .get(peer)
                                     .map(p =>
                                         NonEmptyList.one(
-                                          HardAck.PartitionSig.Minor(p.sec, p.refunds)
+                                          HardAck.Round1Payload.PartitionSigs
+                                              .Minor(p.sec, p.refunds)
                                         )
                                     )
                         }
@@ -485,9 +512,24 @@ final case class SlowConsensusActor(
                     peerSigParts.flatMap {
                         case Some(sps) =>
                             sps.toList.lift(i).flatMap {
-                                case HardAck.PartitionSig.Major(_, _, _, _, sec) => sec
-                                case HardAck.PartitionSig.Minor(sec, _)          => Some(sec)
-                                case _: HardAck.PartitionSig.Final               => None
+                                case HardAck.Round1Payload.PartitionSigs.MajorComplete(
+                                      _,
+                                      _,
+                                      _,
+                                      _,
+                                      sec
+                                    ) =>
+                                    sec
+                                case HardAck.Round1Payload.PartitionSigs.MajorPartial(
+                                      _,
+                                      _,
+                                      _,
+                                      sec
+                                    ) =>
+                                    sec
+                                case HardAck.Round1Payload.PartitionSigs.Minor(sec, _) => Some(sec)
+                                case _: HardAck.Round1Payload.PartitionSigs.FinalComplete => None
+                                case _: HardAck.Round1Payload.PartitionSigs.FinalPartial  => None
                             }
                         case None => None
                     }
@@ -605,34 +647,6 @@ final case class SlowConsensusActor(
           CellError.KeysetMismatch(label, txs.length.toString, sigs.length.toString)
         ) >> txs.zip(sigs).traverse_ { case (tx, sg) => verifyTx(vk, tx, sg) }
 
-    private def verifyOptUnlock(
-        vk: VerificationKey,
-        label: String,
-        tx: Transaction,
-        isUnlock: Boolean,
-        sOpt: Option[TxSignature]
-    ): IO[Unit] =
-        if isUnlock then
-            IO.raiseUnless(sOpt.isEmpty)(
-              CellError.KeysetMismatch(
-                s"$label (unlock ⇒ absent in round-1)",
-                "absent",
-                "present"
-              )
-            )
-        else
-            sOpt match {
-                case Some(sg) => verifyTx(vk, tx, sg)
-                case None =>
-                    IO.raiseError(
-                      CellError.KeysetMismatch(
-                        s"$label (non-unlock ⇒ present)",
-                        "present",
-                        "absent"
-                      )
-                    )
-            }
-
     private def verifySecOpt(
         vk: VerificationKey,
         eSec: Option[StandaloneEvacuationCommitment],
@@ -653,21 +667,45 @@ final case class SlowConsensusActor(
     private def verifyPartition(
         vk: VerificationKey,
         e: PartitionEffects[StandaloneEvacuationCommitment],
-        s: HardAck.PartitionSig,
+        s: HardAck.Round1Payload.PartitionSigs,
         isSettlementUnlock: Boolean,
         isFinalizationUnlock: Boolean
     ): IO[Unit] = (e, s) match {
         case (
               PartitionEffects.Major(settlement, fallback, rollouts, refunds, sec),
-              HardAck.PartitionSig.Major(sSettlement, sFallback, sRollouts, sRefunds, sSec)
+              HardAck.Round1Payload.PartitionSigs.MajorComplete(
+                sSettlement,
+                sFallback,
+                sRollouts,
+                sRefunds,
+                sSec
+              )
             ) =>
             for {
-                _ <- verifyOptUnlock(
-                  vk,
-                  "partition.settlement",
-                  settlement.tx,
-                  isSettlementUnlock,
-                  sSettlement
+                _ <- IO.raiseWhen(isSettlementUnlock)(
+                  CellError.KeysetMismatch(
+                    "partition.settlement (unlock ⇒ MajorUnlock slot)",
+                    "MajorUnlock",
+                    "Major"
+                  )
+                )
+                _ <- verifyTx(vk, settlement.tx, sSettlement)
+                _ <- verifyTx(vk, fallback.tx, sFallback)
+                _ <- verifyTxList(vk, "partition.rollouts", rollouts.map(_.tx), sRollouts)
+                _ <- verifyTxList(vk, "partition.refunds", refunds.map(_.tx), sRefunds)
+                _ <- verifySecOpt(vk, sec, sSec)
+            } yield ()
+        case (
+              PartitionEffects.Major(_, fallback, rollouts, refunds, sec),
+              HardAck.Round1Payload.PartitionSigs.MajorPartial(sFallback, sRollouts, sRefunds, sSec)
+            ) =>
+            for {
+                _ <- IO.raiseUnless(isSettlementUnlock)(
+                  CellError.KeysetMismatch(
+                    "partition.settlement (non-unlock ⇒ Major slot)",
+                    "Major",
+                    "MajorUnlock"
+                  )
                 )
                 _ <- verifyTx(vk, fallback.tx, sFallback)
                 _ <- verifyTxList(vk, "partition.rollouts", rollouts.map(_.tx), sRollouts)
@@ -676,19 +714,37 @@ final case class SlowConsensusActor(
             } yield ()
         case (
               PartitionEffects.Final(finalization, rollouts),
-              HardAck.PartitionSig.Final(sFinalization, sRollouts)
+              HardAck.Round1Payload.PartitionSigs.FinalComplete(sFinalization, sRollouts)
             ) =>
             for {
-                _ <- verifyOptUnlock(
-                  vk,
-                  "partition.finalization",
-                  finalization.tx,
-                  isFinalizationUnlock,
-                  sFinalization
+                _ <- IO.raiseWhen(isFinalizationUnlock)(
+                  CellError.KeysetMismatch(
+                    "partition.finalization (unlock ⇒ FinalUnlock slot)",
+                    "FinalUnlock",
+                    "Final"
+                  )
+                )
+                _ <- verifyTx(vk, finalization.tx, sFinalization)
+                _ <- verifyTxList(vk, "partition.rollouts", rollouts.map(_.tx), sRollouts)
+            } yield ()
+        case (
+              PartitionEffects.Final(_, rollouts),
+              HardAck.Round1Payload.PartitionSigs.FinalPartial(sRollouts)
+            ) =>
+            for {
+                _ <- IO.raiseUnless(isFinalizationUnlock)(
+                  CellError.KeysetMismatch(
+                    "partition.finalization (non-unlock ⇒ Final slot)",
+                    "Final",
+                    "FinalUnlock"
+                  )
                 )
                 _ <- verifyTxList(vk, "partition.rollouts", rollouts.map(_.tx), sRollouts)
             } yield ()
-        case (PartitionEffects.Minor(sec, refunds), HardAck.PartitionSig.Minor(sSec, sRefunds)) =>
+        case (
+              PartitionEffects.Minor(sec, refunds),
+              HardAck.Round1Payload.PartitionSigs.Minor(sSec, sRefunds)
+            ) =>
             verifyHeader(vk, sec.header, sSec) >>
                 verifyTxList(vk, "partition.refunds", refunds.map(_.tx), sRefunds)
         case _ =>
@@ -708,7 +764,7 @@ final case class SlowConsensusActor(
     ): IO[Unit] = {
         val unlock = PartitionEffects.unlock(r.partitions)
         val es = r.partitions.toList
-        val ss = p.partitions.toList
+        val ss = HardAck.Round1Payload.Regular.asSlots(p).toList
         IO.raiseUnless(es.length == ss.length)(
           CellError.KeysetMismatch("round1.partitions", es.length.toString, ss.length.toString)
         ) >> es.zip(ss).zipWithIndex.traverse_ { case ((e, sg), i) =>

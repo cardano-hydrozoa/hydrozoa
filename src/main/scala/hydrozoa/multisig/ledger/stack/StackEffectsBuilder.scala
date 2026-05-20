@@ -66,7 +66,7 @@ object StackEffectsBuilder {
         def secOf(b: BlockResult): StandaloneEvacuationCommitment = {
             val h = b.brief.header
             StandaloneEvacuationCommitment(
-              committedBlockNum = b.brief.blockNum,
+              blockNum = b.brief.blockNum,
               blockVersion = h.blockVersion,
               kzgCommitment = h.kzgCommitment,
               header = h.signingBytes
