@@ -551,10 +551,23 @@ case class Stage4Suite(
         )
 
         _ <- IO(printStackTable(canonicalStacks, sortedPeers, stacksByPeer, nPeers))
+
+        // Mock backend resolves instantly; one attempt is enough. Kept the (attempts, sleep)
+        // knob so a Yaci / Blockfrost-backed stage4 future swap just bumps these.
+        effectsLandedProp <- {
+            given IOLocal[Tracer] = sut.tracerLocal
+            EffectsLanded.propEffectsLanded(
+              canonicalStacks,
+              sut.cardanoBackend,
+              attempts = 1,
+              sleep = 0.seconds,
+            )
+        }
     yield propLiveness(submittedIds, canonicalBriefs) &&
         propDepositTiming(lastState.registeredDeposits, canonicalBriefs) &&
         propValidRatio(lastState, canonicalBriefs) &&
-        propStackCoverage(canonicalBriefs, canonicalStacks)
+        propStackCoverage(canonicalBriefs, canonicalStacks) &&
+        effectsLandedProp
 
     // TODO: side-channel validity-error tracking + propNoStaleRejections
     //
