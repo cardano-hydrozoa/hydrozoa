@@ -1,55 +1,16 @@
-# Haskell
-dist/
-dist-*/
-cabal-dev/
-*.semanticdb
-*.o
-*.hi
-*.hie
-*.chi
-*.chs.h
-*.dyn_o
-*.dyn_hi
-.hpc
-.hsenv
-.cabal-sandbox/
-cabal.sandbox.config
-*.prof
-*.aux
-*.hp
-*.eventlog
-.stack-work/
-cabal.project.local
-cabal.project.local~
-.HTF/
-.ghc.environment.*
-
 # Direnv
 .direnv
 .pre-commit-config.yaml
 
-# Aiken
-build/
-artifacts
-
 # Scala
 .bsp/
 .idea/
+.metals
+.bloop
 project/project
 project/target
 target/
-
-# tx dumping ground
-txsl1.out
-txsl2.out
-
-# logs and outputs
-**/*.log
-
-.metals
-.bloop
-
-old/**
+**/*.semanticdb
 
 # justfile
 .just/notify
@@ -57,6 +18,10 @@ old/**
 # dotenv
 .env
 
-# traces
+# traces and logs
 /hydrozoa-trace.jsonl
-/integration/stage4-peers-interaction.mmd
+**/*.log
+**/*.mmd
+
+#scratches
+.scratch
