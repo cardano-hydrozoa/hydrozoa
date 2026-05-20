@@ -195,8 +195,8 @@ object EffectsLanded {
     }
 
     /** Render the per-block effects table + aggregate stats footer as a single multi-line
-      * string, matching the visual style of [[Stage4Suite#printBlockTable]] /
-      * [[Stage4Suite#printStackTable]]. Kept as pure rendering so callers can route it to the
+      * string, matching the visual style of [[Stage4Suite#traceBlockTable]] /
+      * [[Stage4Suite#traceStackTable]]. Kept as pure rendering so callers can route it to the
       * tracer (or anywhere else) — see [[traceEffectsTable]].
       */
     def renderEffectsTable(results: List[BlockResult]): String = {

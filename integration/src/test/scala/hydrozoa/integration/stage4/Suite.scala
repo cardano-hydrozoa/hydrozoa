@@ -518,56 +518,54 @@ case class Stage4Suite(
                 Prop.exception(RuntimeException(s"SUT actor errors:\n${errors.mkString("\n")}"))
             else analysisProp
 
-    private def analyzeBlockBriefs(lastState: ModelState, sut: Stage4Sut): IO[Prop] = for
-        briefsByPeer <- sut.blockBriefs.toList
-            .traverse { case (p, ref) => ref.get.map(p -> _) }
-            .map(_.toMap)
+    private def analyzeBlockBriefs(lastState: ModelState, sut: Stage4Sut): IO[Prop] = {
+        given IOLocal[Tracer] = sut.tracerLocal
+        for
+            briefsByPeer <- sut.blockBriefs.toList
+                .traverse { case (p, ref) => ref.get.map(p -> _) }
+                .map(_.toMap)
 
-        sortedPeers = briefsByPeer.keys.toSeq.sortBy(p => p: Int)
-        nPeers = sortedPeers.length
-        canonicalBriefs = briefsByPeer(sortedPeers.head)
-        submittedIds <- sut.submittedRequestIds.get
+            sortedPeers = briefsByPeer.keys.toSeq.sortBy(p => p: Int)
+            nPeers = sortedPeers.length
+            canonicalBriefs = briefsByPeer(sortedPeers.head)
+            submittedIds <- sut.submittedRequestIds.get
 
-        stacksByPeer <- sut.stacks.toList
-            .traverse { case (p, ref) => ref.get.map(p -> _) }
-            .map(_.toMap)
-        canonicalStacks = stacksByPeer(sortedPeers.head)
-        _ <- logger.info(
-          "hard-confirmed stacks per peer: " +
-              sortedPeers
-                  .map(p => s"peer${p: Int}=${stacksByPeer.getOrElse(p, Vector.empty).size}")
-                  .mkString(", ")
-        )
+            stacksByPeer <- sut.stacks.toList
+                .traverse { case (p, ref) => ref.get.map(p -> _) }
+                .map(_.toMap)
+            canonicalStacks = stacksByPeer(sortedPeers.head)
+            _ <- logger.info(
+              "hard-confirmed stacks per peer: " +
+                  sortedPeers
+                      .map(p => s"peer${p: Int}=${stacksByPeer.getOrElse(p, Vector.empty).size}")
+                      .mkString(", ")
+            )
 
-        _ <- IO(
-          printBlockTable(
-            canonicalBriefs,
-            sortedPeers,
-            briefsByPeer,
-            nPeers,
-            submittedIds,
-            lastState
-          )
-        )
+            _ <- traceBlockTable(
+              canonicalBriefs,
+              sortedPeers,
+              briefsByPeer,
+              nPeers,
+              submittedIds,
+              lastState,
+            )
 
-        _ <- IO(printStackTable(canonicalStacks, sortedPeers, stacksByPeer, nPeers))
+            _ <- traceStackTable(canonicalStacks, sortedPeers, stacksByPeer, nPeers)
 
-        // Mock backend resolves instantly; one attempt is enough. Kept the (attempts, sleep)
-        // knob so a Yaci / Blockfrost-backed stage4 future swap just bumps these.
-        effectsLandedProp <- {
-            given IOLocal[Tracer] = sut.tracerLocal
-            EffectsLanded.propEffectsLanded(
+            // Mock backend resolves instantly; one attempt is enough. Kept the (attempts, sleep)
+            // knob so a Yaci / Blockfrost-backed stage4 future swap just bumps these.
+            effectsLandedProp <- EffectsLanded.propEffectsLanded(
               canonicalStacks,
               sut.cardanoBackend,
               attempts = 1,
               sleep = 0.seconds,
             )
-        }
-    yield propLiveness(submittedIds, canonicalBriefs) &&
-        propDepositTiming(lastState.registeredDeposits, canonicalBriefs) &&
-        propValidRatio(lastState, canonicalBriefs) &&
-        propStackCoverage(canonicalBriefs, canonicalStacks) &&
-        effectsLandedProp
+        yield propLiveness(submittedIds, canonicalBriefs) &&
+            propDepositTiming(lastState.registeredDeposits, canonicalBriefs) &&
+            propValidRatio(lastState, canonicalBriefs) &&
+            propStackCoverage(canonicalBriefs, canonicalStacks) &&
+            effectsLandedProp
+    }
 
     // TODO: side-channel validity-error tracking + propNoStaleRejections
     //
@@ -692,23 +690,19 @@ case class Stage4Suite(
                 s"hard-confirmed stack: ${uncovered.toSeq.sorted.mkString(", ")}")
     }
 
-    private def printBlockTable(
+    private def traceBlockTable(
         canonicalBriefs: Vector[BlockBrief.Intermediate],
         sortedPeers: Seq[HeadPeerNumber],
         briefsByPeer: Map[HeadPeerNumber, Vector[BlockBrief.Intermediate]],
         nPeers: Int,
         submittedIds: Vector[RequestId],
-        lastState: ModelState
-    ): Unit = {
+        lastState: ModelState,
+    )(using IOLocal[Tracer]): IO[Unit] = {
         val colWidth = 72
         val divider = s"+${"-" * (colWidth + 2)}+"
         val header = s"| ${"Block".padTo(colWidth, ' ')} |"
 
-        println(divider)
-        println(header)
-        println(divider)
-
-        canonicalBriefs.foreach { brief =>
+        val rows = canonicalBriefs.map { brief =>
             val blockType = brief match {
                 case _: BlockBrief.Minor => "Min"; case _: BlockBrief.Major => "Maj"
             }
@@ -728,10 +722,8 @@ case class Stage4Suite(
             val events = (evs ++ abs ++ ref).mkString(" ")
             val label =
                 s"#${brief.blockNum: Int} $blockType v$vMaj.$vMin lead=p$leader | $events"
-            println(s"| ${label.take(colWidth).padTo(colWidth, ' ')} |")
+            s"| ${label.take(colWidth).padTo(colWidth, ' ')} |"
         }
-
-        println(divider)
 
         // SUT processing order — each block contributes its absorbed deposits, then its events.
         val sutOrder: Vector[RequestId] =
@@ -748,41 +740,38 @@ case class Stage4Suite(
         val sutValid = sutL2Events.count(_._2 == ValidityFlag.Valid)
         val sutTotal = sutL2Events.size
 
-        println(
-          s"Peers: ${sortedPeers.map(p => s"p${p: Int}=${briefsByPeer(p).length}blks").mkString("  ")}"
-        )
-        println(
-          s"Common prefix: $commonPrefixLen / ${submittedIds.length} (submission order vs SUT block order)"
-        )
-        println(
-          s"Valid/total (L2 txs) — model: $modelValid/$modelTotal  SUT: $sutValid/$sutTotal"
-        )
-        println(
-          "Legend: Min=Minor Maj=Major v=version lead=leader p=peer r=requestNum V=valid I=invalid abs=deposit-absorbed ref=refunded"
-        )
+        val peersLine =
+            s"Peers: ${sortedPeers.map(p => s"p${p: Int}=${briefsByPeer(p).length}blks").mkString("  ")}"
+        val prefixLine =
+            s"Common prefix: $commonPrefixLen / ${submittedIds.length} (submission order vs SUT block order)"
+        val ratioLine =
+            s"Valid/total (L2 txs) — model: $modelValid/$modelTotal  SUT: $sutValid/$sutTotal"
+        val legend =
+            "Legend: Min=Minor Maj=Major v=version lead=leader p=peer r=requestNum V=valid I=invalid abs=deposit-absorbed ref=refunded"
+
+        val text = (divider :: header :: divider :: rows.toList ++
+            (divider :: peersLine :: prefixLine :: ratioLine :: legend :: Nil))
+            .mkString("\n", "\n", "")
+        Tracer.info(text)
     }
 
-    /** Mirror of [[printBlockTable]] for the slow cycle: one row per hard-confirmed stack on the
+    /** Mirror of [[traceBlockTable]] for the slow cycle: one row per hard-confirmed stack on the
       * canonical peer, showing the stack number, covered block range, partition spine (Min/Maj/Fin
       * kinds, in stack order), and the round-2 unlock selection (settlement-at-i, finalization-at-i,
       * or sole-acknowledgment / no unlock). Stack-0 renders as `Init`. Followed by a per-peer
       * stack-count line for cross-peer convergence at a glance.
       */
-    private def printStackTable(
+    private def traceStackTable(
         canonicalStacks: Vector[Stack.HardConfirmed],
         sortedPeers: Seq[HeadPeerNumber],
         stacksByPeer: Map[HeadPeerNumber, Vector[Stack.HardConfirmed]],
-        nPeers: Int
-    ): Unit = {
+        nPeers: Int,
+    )(using IOLocal[Tracer]): IO[Unit] = {
         val colWidth = 72
         val divider = s"+${"-" * (colWidth + 2)}+"
         val header = s"| ${"Stack".padTo(colWidth, ' ')} |"
 
-        println(divider)
-        println(header)
-        println(divider)
-
-        canonicalStacks.foreach { stack =>
+        val rows = canonicalStacks.map { stack =>
             val brief = stack.unsigned.brief
             val sNum = brief.stackNum: Int
             val first = brief.firstBlockNum: Int
@@ -810,18 +799,19 @@ case class Stage4Suite(
             val blkLabel = if nBlks == 1 then "blk" else "blks"
             val label =
                 s"#$sNum [$first..$last] ($nBlks $blkLabel) $kindStr lead=p$leader | $partsStr"
-            println(s"| ${label.take(colWidth).padTo(colWidth, ' ')} |")
+            s"| ${label.take(colWidth).padTo(colWidth, ' ')} |"
         }
 
-        println(divider)
+        val peersLine =
+            s"Peers: ${sortedPeers.map(p => s"p${p: Int}=${stacksByPeer(p).length}stk").mkString("  ")}"
+        val legend =
+            "Legend: Init=initial stack Reg=regular Min/Maj/Fin=partition kinds " +
+                "u=unlock (set=settlement, fin=finalization, sole=no unlock) @i=partition index"
 
-        println(
-          s"Peers: ${sortedPeers.map(p => s"p${p: Int}=${stacksByPeer(p).length}stk").mkString("  ")}"
-        )
-        println(
-          "Legend: Init=initial stack Reg=regular Min/Maj/Fin=partition kinds " +
-              "u=unlock (set=settlement, fin=finalization, sole=no unlock) @i=partition index"
-        )
+        val text = (divider :: header :: divider :: rows.toList ++
+            (divider :: peersLine :: legend :: Nil))
+            .mkString("\n", "\n", "")
+        Tracer.info(text)
     }
 
 // ===================================
