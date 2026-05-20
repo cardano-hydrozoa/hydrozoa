@@ -14,7 +14,7 @@ import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.config.node.operation.evacuation.generateNodeOperationEvacuationConfig
 import hydrozoa.config.node.operation.multisig.generateNodeOperationMultisigConfig
-import hydrozoa.integration.stage1.Model.CurrentTime.{AfterCompetingFallbackStartTime, BeforeHappyPathExpiration}
+import hydrozoa.integration.stage1.Model.CurrentTime.BeforeHappyPathExpiration
 import hydrozoa.integration.stage1.Model.{BlockCycle, CurrentTime}
 import hydrozoa.integration.stage1.SuiteCardano.*
 import hydrozoa.integration.stage1.model.Deposits
@@ -27,18 +27,16 @@ import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost.URL
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendMock, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, ConsensusActor, EventSequencer, StackComposer}
-import hydrozoa.multisig.ledger.block.{Block, BlockEffects, BlockNumber, BlockVersion}
+import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toUtxos}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.joint.JointLedger
-import hydrozoa.multisig.ledger.l1.tx.{FinalizationTx, SettlementTx}
-import org.scalacheck.Prop.propBoolean
 import org.scalacheck.commands.{ModelBasedSuite, ScenarioGen}
 import org.scalacheck.{Gen, Prop}
 import org.typelevel.log4cats.Logger
 import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.rules.{Context, UtxoEnv}
-import scalus.cardano.ledger.{CardanoInfo, CertState, Coin, EvaluatorMode, PlutusScriptEvaluator, ProtocolParams, SlotConfig, Transaction, TransactionHash, TransactionOutput, Utxo, Utxos, Value}
+import scalus.cardano.ledger.{CardanoInfo, CertState, Coin, EvaluatorMode, PlutusScriptEvaluator, ProtocolParams, SlotConfig, Transaction, TransactionOutput, Utxo, Utxos, Value}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Send, Spend}
 import scalus.cardano.txbuilder.{Change, TransactionBuilder}
 import test.TestPeerName.Alice
@@ -687,118 +685,12 @@ case class Suite(
           */
         _ <- sut.system.waitForIdle(maxTimeout = 5.minutes)
 
-        // Next part of the property is to check that expected effects were submitted and are
-        // known to the Cardano backend. With the fast/slow consensus split, the fast cycle no
-        // longer produces effects — the slow cycle will (parked, see `StackActor`). Leave the
-        // expected-effects accumulator empty so the assertion is vacuously satisfied until the
-        // slow side is wired up.
-        effects <- IO.pure(List.empty[hydrozoa.multisig.ledger.block.BlockEffects.Unsigned])
-
-        expectedEffects: List[(String, TransactionHash)] = mkExpectedEffects(
-          lastState.multiNodeConfig.headConfig.initialBlock.initializationTx.tx.id,
-          lastState.multiNodeConfig.headConfig.initialBlock.fallbackTx.tx.id,
-          effects,
-          lastState.getCurrentTime
-        )
-
-        _ <- IO.whenA(expectedEffects.nonEmpty)(
-          loggerIO.info(s"Utxo set size: ${lastState.utxosL2Active.size}") >>
-              loggerIO.info("Expected effects:" + expectedEffects.map { case (label, hash) =>
-                  s"\n\t- $label: $hash"
-              }.mkString)
-        )
-
-        // In Yaci transactions may appear a bit slowly
-        effectsResults <- {
-            def poll(attempt: Int): IO[List[Either[Throwable, Boolean]]] =
-                IO.traverse(expectedEffects) { case (_, hash) =>
-                    sut.cardanoBackend.isTxKnown(hash)
-                }.flatMap { results =>
-                    val allKnown = results.forall(_.contains(true))
-                    if allKnown || attempt >= 9 then IO.pure(results)
-                    else IO.sleep(1.second) >> poll(attempt + 1)
-                }
-            poll(0)
-        }
-
-        // Finally we have to terminate the actor system, otherwise in TestControl.ownTestPeer
-        // this will loop indefinitely.
+        // L1 effect-presence assertion lives in stage4 ([[Stage4Suite.propEffectsLanded]]).
+        // Stage1 deliberately stubs the slow side (no `SlowConsensusActor`, no `StackComposer`)
+        // and won't grow one — stage4 already covers happy/fallback per-block disjunction over
+        // observed `Stack.HardConfirmed`. Stage1's job is now bounded to driving the fast cycle
+        // end-to-end through real Yaci/Blockfrost L1 backends to catch L1-side breakage; effect
+        // semantics are tested in stage4.
         _ <- sut.system.terminate()
-    } yield {
-        val missing = expectedEffects.zip(effectsResults).collect {
-            case ((label, txHash), Right(false)) => s"$label tx not found: $txHash"
-            case ((label, txHash), Left(err))    => s"error checking $label tx $txHash: $err"
-        }
-        missing.isEmpty :| s"missing effects: ${missing.mkString(", ")}"
-    }
-
-    enum TxLabel:
-        case Init, Settlement, Rollout, Finalization, Deinit, Fallback
-
-    /** Compute the list of tx hashes expected to have been submitted to L1, each tagged with its
-      * role.
-      *
-      * The initialization tx and happy-path backbone txs (settlementTx, finalizationTx, rolloutTxs,
-      * deinitTx) are always expected.
-      *
-      * If currentTime is AfterCompetingFallbackStartTime and the last effect is not Final, the
-      * competing fallback is also expected. The competing fallback is the one from the last Major
-      * effect, or the initialization fallback if no Major effect exists yet.
-      */
-    private def mkExpectedEffects(
-        initTxHash: TransactionHash,
-        fallbackTxHash: TransactionHash,
-        effects: List[BlockEffects.Unsigned],
-        currentTime: CurrentTime
-    ): List[(String, TransactionHash)] = {
-        val initHash = (TxLabel.Init.toString, initTxHash)
-
-        def payoutSuffix(n: Option[Int]): String = n.fold("")(c => s"($c payouts)")
-
-        val happyPathHashes: List[(String, TransactionHash)] = effects.flatMap {
-            case e: BlockEffects.Unsigned.Major =>
-                (
-                  s"${TxLabel.Settlement}${payoutSuffix(e.settlementTx.payoutCount)}",
-                  e.settlementTx.tx.id
-                ) ::
-                    e.rolloutTxs.map(tx =>
-                        (s"${TxLabel.Rollout}(${tx.payoutCount} payouts)", tx.tx.id)
-                    )
-            case e: BlockEffects.Unsigned.Final =>
-                (
-                  s"${TxLabel.Finalization}${payoutSuffix(e.finalizationTx.payoutCount)}",
-                  e.finalizationTx.tx.id
-                ) ::
-                    e.rolloutTxs.map(tx =>
-                        (s"${TxLabel.Rollout}(${tx.payoutCount} payouts)", tx.tx.id)
-                    )
-            case _: BlockEffects.Unsigned.Minor   => Nil
-            case _: BlockEffects.Unsigned.Initial => Nil
-        }
-
-        val fallbackHash: List[(String, TransactionHash)] = currentTime match {
-            case AfterCompetingFallbackStartTime(_)
-                if !effects.lastOption.exists(_.isInstanceOf[BlockEffects.Unsigned.Final]) =>
-                // Last Major's fallback, or the init fallback if no Major block completed yet
-                effects
-                    .collect { case e: BlockEffects.Unsigned.Major => e.fallbackTx.tx.id }
-                    .lastOption
-                    .orElse(Some(fallbackTxHash))
-                    .map((TxLabel.Fallback.toString, _))
-                    .toList
-            case _ => Nil
-        }
-
-        initHash :: happyPathHashes ++ fallbackHash
-    }
+    } yield Prop.passed
 }
-
-extension (tx: SettlementTx)
-    def payoutCount: Option[Int] = tx match
-        case t: SettlementTx.WithPayouts => Some(t.payoutCount)
-        case _: SettlementTx.NoPayouts   => None
-
-extension (tx: FinalizationTx)
-    def payoutCount: Option[Int] = tx match
-        case t: FinalizationTx.WithPayouts => Some(t.payoutCount)
-        case _: FinalizationTx.NoPayouts   => None
