@@ -13,7 +13,7 @@ case class UnboundedPlace(
       Place.Syntax[UnboundedPlace],
       Place.Semantics[UnboundedPlace],
       Place.Presentation {
-    // UnboundedPlace has no marking predicates, so markingErrors is always empty.
+    // UnboundedPlace has no marking predicates, so markingError is always None.
     override type PlaceMarking = NonNegativeInt
     override def mark(n: NonNegativeInt): UnboundedPlace = copy(marking = n)
 }

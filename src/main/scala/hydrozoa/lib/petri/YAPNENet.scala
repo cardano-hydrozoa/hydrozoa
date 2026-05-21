@@ -37,13 +37,10 @@ case class YapnePlace(
     override def withFinalMarking(m: Option[NonNegativeInt]): YapnePlace =
         this.copy(finalMarking = m)
 
-    override def markingErrors: List[Place.Semantics.MarkingError] =
-        capacity match
-            case None =>
-                Nil
-            case Some(bound) =>
-                if marking.toInt > bound.toInt then List(TooManyTokens(marking, bound))
-                else Nil
+    override def markingError: Option[Place.Semantics.MarkingError] =
+        capacity.flatMap(bound =>
+            Option.when(marking.toInt > bound.toInt)(TooManyTokens(marking, bound))
+        )
 }
 
 // =============================================================================

@@ -48,9 +48,9 @@ case class TreasuryRefPlace(
     override def withFinalMarking(m: Option[NonNegativeInt]): TreasuryRefPlace =
         copy(finalMarking = m)
 
-    override def markingErrors: List[MarkingError] =
-        if marking.toInt != 1 then TreasuryRefPlace.OnlyOneTokenAllowed :: super.markingErrors
-        else super.markingErrors
+    override def markingError: Option[MarkingError] =
+        if marking.toInt != 1 then Some(TreasuryRefPlace.OnlyOneTokenAllowed) else None
+
 }
 
 case class ResolvedPlace(
@@ -106,8 +106,8 @@ case class CollateralPlace(
     override def withFinalMarking(m: Option[NonNegativeInt]): CollateralPlace =
         copy(finalMarking = m)
 
-    override def markingErrors: List[MarkingError] =
+    override def markingError: Option[MarkingError] =
         if marking.toInt != expectedCount
-        then CollateralPlace.WrongCount(expectedCount, marking.toInt) :: super.markingErrors
-        else super.markingErrors
+        then Some(CollateralPlace.WrongCount(expectedCount, marking.toInt))
+        else None
 }

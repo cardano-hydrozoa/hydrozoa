@@ -1,6 +1,5 @@
 package hydrozoa.lib.petri.net.components
 
-import cats.data.NonEmptyList
 import hydrozoa.lib.number.{NonNegativeInt, PositiveInt}
 import hydrozoa.lib.petri.net.components.Place.Semantics.Bounded.Error.TooManyTokens
 
@@ -69,13 +68,13 @@ object Place {
     trait Semantics[Self <: Place.Syntax[Self] & Semantics[Self]] { self: Self =>
         type MarkingError = Place.Semantics.MarkingError
 
-        def markingErrors: List[MarkingError] = List.empty
+        def markingError: Option[MarkingError] = None
 
-        final def validMarking: Boolean = markingErrors.isEmpty
+        final def validMarking: Boolean = markingError.isEmpty
 
-        final def markValid(newMarking: PlaceMarking): Either[NonEmptyList[MarkingError], Self] =
+        final def markValid(newMarking: PlaceMarking): Either[MarkingError, Self] =
             val candidateMarking = mark(newMarking)
-            NonEmptyList.fromList(candidateMarking.markingErrors).toLeft(candidateMarking)
+            candidateMarking.markingError.toLeft(candidateMarking)
     }
 
     object Semantics {
@@ -87,9 +86,8 @@ object Place {
             self: Self =>
             val bound: PositiveInt
 
-            override def markingErrors: List[Place.Semantics.MarkingError] =
-                (if marking.toInt > bound.toInt then List(TooManyTokens(marking, bound))
-                 else Nil) ++ super.markingErrors
+            override def markingError: Option[Place.Semantics.MarkingError] =
+                Option.when(marking.toInt > bound.toInt)(TooManyTokens(marking, bound))
         }
 
         object Bounded {

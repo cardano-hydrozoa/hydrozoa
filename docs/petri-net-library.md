@@ -72,7 +72,7 @@ classDiagram
     }
     class PlaceSemantics["Place.Semantics[Self]"] {
         <<trait>>
-        +markingErrors() List[MarkingError]
+        +markingError() Option[MarkingError]
         +validMarking() Boolean
         +markValid(PlaceMarking) Either
     }

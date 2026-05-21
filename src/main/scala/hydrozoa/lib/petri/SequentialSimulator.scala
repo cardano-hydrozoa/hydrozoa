@@ -1,6 +1,5 @@
 package hydrozoa.lib.petri
 
-import cats.data.NonEmptyList
 import cats.implicits.*
 import hydrozoa.lib.petri.net.*
 import hydrozoa.lib.petri.net.components.*
@@ -81,8 +80,7 @@ trait SequentialSimulator[
                     firedPlace <- arc
                         .fire(place)
                         .leftMap(Simulator.FiringError.ArcFiringFailed(arcId, _))
-                    _ <- NonEmptyList
-                        .fromList(firedPlace.markingErrors)
+                    _ <- firedPlace.markingError
                         .map(Simulator.FiringError.PlaceValidityViolated(placeId, _))
                         .toLeft(())
                 yield (placeId, firedPlace)

@@ -1,7 +1,7 @@
 package hydrozoa.lib.petri.net
 
 import cats.Monad
-import cats.data.{NonEmptyList, StateT}
+import cats.data.StateT
 import cats.implicits.*
 import hydrozoa.lib.petri.net.components.*
 
@@ -97,13 +97,13 @@ object Simulator {
                 s"Arc $arcId firing failed: ${cause.getMessage}"
         }
 
-        /** Place `placeId` has one or more invalid marking constraints after firing (E1). */
+        /** Place `placeId` has an invalid marking constraint after firing (E1). */
         case class PlaceValidityViolated[PlaceId](
             placeId: PlaceId,
-            cause: NonEmptyList[Place.Semantics.MarkingError],
+            cause: Place.Semantics.MarkingError,
         ) extends FiringError {
             override def getMessage: String =
-                s"Place $placeId has invalid marking after firing: ${cause.toList.map(_.getMessage).mkString("; ")}"
+                s"Place $placeId has invalid marking after firing: ${cause.getMessage}"
         }
 
         /** [[Net.Semantics.netEnablingPredicate]] returned false for the transition. */
