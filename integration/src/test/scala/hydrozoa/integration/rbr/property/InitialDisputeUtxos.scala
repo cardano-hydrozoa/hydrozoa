@@ -87,6 +87,9 @@ object InitialDisputeUtxos:
             .takeSrsG2(64)
             .map(p2 => G2Element(p2).toCompressedByteString)
 
+        // Evacuation UTxOs carry a fixed sentinel datum ("evacuation") rather than real
+        // per-output data. The DisputeClassifier abstraction function keys on this sentinel
+        // to identify evacuation outputs without needing to decode production-format datums.
         val genEvacuationSentinelDatum: Gen[Option[DatumOption]] =
             Gen.const(Some(Inline(ByteString.fromString("evacuation").toData)))
 
@@ -136,7 +139,9 @@ object InitialDisputeUtxos:
                 )
                 VoteUtxo(TransactionInput(fallbackTxId, 2 * nPeers + 1), voteOutput)
 
-            // [SYNTHETIC] ADA-only collateral UTxO per peer, at each peer's own head address
+            // [SYNTHETIC] ADA-only collateral UTxO per peer, at each peer's own head address.
+            // Collateral outputs carry a fixed sentinel datum ("collateral") so the abstraction
+            // function can identify them without decoding production-format datums.
             collateralUtxos <- Gen
                 .sequence[List[(HeadPeerNumber, CollateralUtxo)], (HeadPeerNumber, CollateralUtxo)](
                   env.nodePrivateConfigs.toList.map { (peerId, peerConfig) =>
