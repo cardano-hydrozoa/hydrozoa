@@ -133,7 +133,8 @@ object InitialDisputeUtxos:
                 val voteOutput = VoteOutput[VoteStatus.Voted](
                   BigInt(0),
                   BigInt(1),
-                  Coin.ada(5),
+                  env.headConfig.collectiveContingency.defaultVoteDeposit
+                      + env.headConfig.collectiveContingency.minAdaForTreasury,
                   PositiveInt.unsafeApply(1),
                   VoteStatus.Voted(evacMap.kzgCommitment, BigInt(0))
                 )

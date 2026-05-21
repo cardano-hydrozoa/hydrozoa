@@ -233,7 +233,7 @@ object EvacuationTxTest extends Properties("EvacuationTx Test") {
 
             // Pre-calculated powers of tau
             val crsG2 =
-                TrustedSetup.takeSrsG2(64).map(G2Element.apply)
+                TrustedSetup.takeSrsG2(65).map(G2Element.apply)
 
             RuleBasedTreasuryValidator.checkMembership(crsG2, commitmentG1, subset, proof) == true
         )

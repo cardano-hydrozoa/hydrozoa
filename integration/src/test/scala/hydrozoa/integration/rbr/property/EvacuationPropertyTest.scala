@@ -32,18 +32,11 @@ import scala.concurrent.duration.{DurationInt, FiniteDuration}
 CURRENT STATUS:
 - The test only tests "happy path" behavior, where every peer votes for the same commitment
 - We start with a mocked fallback tx
-- We go through dispute + resolution successfully
-- We go through evacuation up until the final recursive evacuation.
-  - EvacuationTx builder cannot balance in some cases because the minAda in the output treasury is too small
-    (say, 25 ADA vs the necessary 29).
-    - This causes the balancer to increases the treasury's ada, which breaks the value invariant
-        treasuryInput = treasuryOutput + evacuatedTotal
-    - This then causes a plutus script error, which crashes the evacuation actor (it is unrecoverable)
-  - The solution is _probably_ to increase the amount that the resolution transaction reserves for the treasury.
+- We go through dispute + resolution + evacuation successfully
+- Full classification of the utxo state matches
 - Next steps (in order):
-  - ensure full classification matches
   - Instead of starting the actors individually, start them with the rule-based regime manager
-  - Add in a cardano backend proxy to drop transactions from certain peers and regain some determinism (rig the races)
+  - Add in a cardano backend proxy to drop transactions from certain peers and regain some determinism ("rig the races")
   - Vote for different commitments
   - start with an actual fallback
   - add deinit
@@ -59,7 +52,6 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
         p: org.scalacheck.Test.Parameters
     ): org.scalacheck.Test.Parameters =
         p.withMinSuccessfulTests(3)
-//            .withInitialSeed(org.scalacheck.rng.Seed.fromBase64("4vIY0T61oMWbCS-0R8WCW6qUpqczPAZmtj97v75k0pL=").get)
 
     // These might need to be tuned. Basically we don't want to end up in a spin loop.
     //  TODO: How can we detect this in the actors themselves?
@@ -97,7 +89,6 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
               now = QuantizedInstant.ofEpochSeconds(env.slotConfig, 20000000000L)
 
               nEvacs <- pick(Gen.choose(1, 1000).label("nEvacs"))
-//              nEvacs <- pick(Gen.const(50).label("nEvacs"))
 
               // Generate the synthetic post-fallback UTxO set.
               initialUtxos <- pick[InitialDisputeUtxos](
@@ -241,10 +232,10 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
               nPeers = env.headConfig.nHeadPeers.convert
 
               // TODO: these buckets probably need refinement. TBD
+              // The "collateral" sentinel goes away because it gets spent to pay for fees in some transactions.
               expectedBuckets: Map[RBRPlaceId, Int] = Map(
                 TreasuryRefPlaceId -> 1,
                 DisputeRefPlaceId -> 1,
-                CollateralPlaceId -> env.nHeadPeers,
                 EvacuationOutputPlaceId -> nEvacs,
                 ResolvedTreasuryPlaceId -> 1,
                 AmbientPlaceId -> env.nHeadPeers

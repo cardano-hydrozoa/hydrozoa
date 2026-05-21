@@ -509,5 +509,9 @@ object DisputeActor {
                           )
                     )
             }
+
+            _ <- EitherT.liftF(
+              Tracer.debug(s"Found treasury utxo with ${treasuryUtxo.treasuryOutput.value}")
+            )
         } yield treasuryUtxo
 }
