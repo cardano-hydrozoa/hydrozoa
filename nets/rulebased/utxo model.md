@@ -33,14 +33,10 @@ assertions when necessary.
 ## Petri Net Model
 
 Petri nets come with many different extensions which affect the expressiveness of the models. Generally, more expressive
-models are less tractable to analyze, with certain combinations of extensions allowing for turing completeness.
+models are less tractable to analyze, with certain combinations of extensions allowing for Turing completeness.
+For the library's design goals and full API reference, see [`docs/petri-net-library.md`](../../docs/petri-net-library.md).
 
-It is a design goal of the library to allow for extensible, well-typed nets to be built, composed, and analyzed in a
-principled way. Thus, we want to retain the _ability_ for developers to implement nets with varying syntax and 
-semantics, while provide validation tools and type-level guidance to aid in understanding the constraints that arise
-in analysis. 
-
-The _default_ set of capabilities we target are those of
+The _default_ set of capabilities targeted here are those of
 [YAPNE](https://github.com/chimenkamp/YAPNE-Yet-Another-Petri-Net-Editor), which in turn tries to be compliant with the
 semantics described in [Murata, 1989](https://people.disim.univaq.it/adimarco/teaching/bioinfo15/paper.pdf). 
 Choosing YAPNE as a compliance target gives us access to javascript-based simulation and visualization libraries, and
@@ -117,16 +113,9 @@ only means that the classifier treats _every token in the same place_ as fungibl
 
 ## Arcs
 
-YAPNE, and thus our library, currently supports 5 types of arcs:
-
-- `PT`: The standard weighted arc that remove tokens from a place
-- `TP`: The standard weighted arc that adds tokens from a place
-- `Inhibitor`: An arc that only allows the connected transition to fire if there are no tokens in the connected place
-- `Reset`: An arc that drains all tokens from the connected place
-- `Read`: A weighted arc that only allows the connected transition to fire if the connected place carries at least 
-  the requisite amount of tokens.
-
-This allows us to build the utxo model is semantically sound ways:
+YAPNE, and thus our library, supports 5 arc types (`PT`, `TP`, `Inhibitor`, `Reset`, `Read`) — see
+[`docs/petri-net-library.md`](../../docs/petri-net-library.md) for the full reference. This allows
+the UTxO model to be built in semantically sound ways:
 - Collateral and reference inputs can be modeled with `Read` arcs.
 - Resolution, which can only happen when there are no more unvoted utxos left, can be implemented with an `Inhibitor` 
   arc on the `Unvoted` place
