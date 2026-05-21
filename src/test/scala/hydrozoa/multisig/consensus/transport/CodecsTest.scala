@@ -5,7 +5,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.consensus.PeerLiaison
 import hydrozoa.multisig.consensus.PeerLiaison.Request.{GetMsgBatch, NewMsgBatch}
 import hydrozoa.multisig.consensus.ack.{AckId, HardAck, HardAckId, HardAckNumber, SoftAck}
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
 import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
@@ -22,6 +22,10 @@ class CodecsTest extends AnyFunSuite {
 
     given CardanoNetwork.Section = CardanoNetwork.Preprod
 
+    // A single-peer fixture suffices: `GetMsgBatch.initial` only needs a `HeadPeerId` to compute
+    // the sparse-lane initial cursors via the leader-schedule helpers.
+    private val testRemoteId: HeadPeerId = HeadPeerId(0, 1)
+
     private def roundTrip(frame: Frame): Frame = {
         val text = Frame.encode(frame)
         Frame.parse(text) match {
@@ -36,7 +40,7 @@ class CodecsTest extends AnyFunSuite {
     }
 
     test("Frame.Msg(GetMsgBatch.initial) round-trips") {
-        val frame = Frame.Msg(GetMsgBatch.initial)
+        val frame = Frame.Msg(GetMsgBatch.initial(testRemoteId))
         assert(roundTrip(frame) == frame)
     }
 
@@ -255,7 +259,7 @@ class CodecsTest extends AnyFunSuite {
     }
 
     test("Frame.fromWire accepts GetMsgBatch and NewMsgBatch, rejects others") {
-        val gmb = GetMsgBatch.initial
+        val gmb = GetMsgBatch.initial(testRemoteId)
         val nmb = NewMsgBatch(PeerLiaison.Batch.Number(0), None, None, None, None, Nil)
 
         assert(Frame.fromWire(gmb).contains(gmb))

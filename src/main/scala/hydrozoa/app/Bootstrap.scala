@@ -283,7 +283,6 @@ object Bootstrap:
                 fallbackTxStartTime = fallbackTxStartTime,
                 forcedMajorBlockWakeupTime = forcedMajorBlockWakeupTime,
                 mDepositDecisionWakeupTime = None,
-                kzgCommitment = evacMap.kzgCommitment
               )
             ),
             effects = BlockEffects.HardConfirmed.Initial(

@@ -20,7 +20,7 @@ object BlockEffects {
         }
 
         final case class Minor(
-            override val headerSerialized: BlockHeader.Minor.Onchain.Serialized,
+            override val headerSerialized: BlockHeader.SignedDigest.Serialized,
             override val postDatedRefundTxs: List[RefundTx.PostDated],
         ) extends BlockEffects.Unsigned,
               BlockType.Minor,
@@ -68,7 +68,7 @@ object BlockEffects {
             deriveEncoder[BlockEffects.HardConfirmed.Initial]
 
         final case class Minor(
-            override val headerSerialized: BlockHeader.Minor.Onchain.Serialized,
+            override val headerSerialized: BlockHeader.SignedDigest.Serialized,
             override val headerMultiSigned: List[BlockHeader.Minor.HeaderSignature],
             override val postDatedRefundTxs: List[RefundTx.PostDated],
         ) extends BlockEffects.HardConfirmed,
@@ -139,7 +139,7 @@ object BlockEffects {
     }
 
     object Minor {
-        trait Section extends BlockEffects.Section, BlockHeader.Minor.Onchain.Serialized.Section
+        trait Section extends BlockEffects.Section, BlockHeader.SignedDigest.Serialized.Section
     }
 
     object Major {

@@ -61,8 +61,16 @@ final class HeadPeerWallet(
         }
     }
 
+    /** Sign arbitrary canonical bytes as a `HeaderSignature`. Used for two distinct sign targets:
+      *
+      *   - Soft-ack over the fast-cycle brief identity ([[BlockHeader.SignedDigest.Serialized]]).
+      *   - Hard-ack over the slow-cycle dispute datum
+      *     ([[hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment.Onchain.Serialized]]).
+      *
+      * Both opaque types provide an implicit conversion to `IArray[Byte]`, so callers pass either.
+      */
     def mkHeaderSignature(
-        headerSerialized: BlockHeader.Minor.Onchain.Serialized
+        headerSerialized: IArray[Byte]
     ): BlockHeader.HeaderSignature =
         BlockHeader.Minor.HeaderSignature(walletModule.signMsg(headerSerialized, signingKey))
 

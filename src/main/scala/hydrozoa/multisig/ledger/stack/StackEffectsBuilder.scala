@@ -2,6 +2,9 @@ package hydrozoa.multisig.ledger.stack
 
 import cats.data.NonEmptyList
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockResult, BlockType}
+import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
+import hydrozoa.multisig.ledger.joint.EvacuationMap
+import hydrozoa.multisig.ledger.joint.EvacuationMap.applyDiffs
 import hydrozoa.multisig.ledger.l1.L1LedgerM
 import hydrozoa.multisig.ledger.l1.tx.RefundTx
 
@@ -46,8 +49,9 @@ object StackEffectsBuilder {
       * the shared unlock-selection function (not chosen here).
       */
     def deriveRegular(
-        partitions: NonEmptyList[StackPartition]
-    ): L1LedgerM[StackEffects.Unsigned.Regular] = {
+        partitions: NonEmptyList[StackPartition],
+        initialEvacuationMap: EvacuationMap,
+    ): L1LedgerM[(StackEffects.Unsigned.Regular, EvacuationMap)] = {
         type SettlementTxSeqOut = hydrozoa.multisig.ledger.l1.txseq.SettlementTxSeq
         type FinalizationTxSeqOut = hydrozoa.multisig.ledger.l1.txseq.FinalizationTxSeq
 
@@ -61,74 +65,110 @@ object StackEffectsBuilder {
         def minorRefunds(bs: List[BlockResult]): List[RefundTx] =
             bs.flatMap(b => if isMinor(b) then b.postDatedRefundTxs else Nil)
 
-        // SEC over a (minor) block — self-contained: carries the minor header signing bytes so
-        // the signer/verifier need no BlockResult lookup (see StandaloneEvacuationCommitment).
-        def secOf(b: BlockResult): StandaloneEvacuationCommitment = {
+        // SEC over a (minor) block — self-contained: carries the dispute-datum bytes so the
+        // signer/verifier need no BlockResult lookup (see StandaloneEvacuationCommitment). The
+        // SEC's `header` is the on-chain dispute-script-facing datum (with KZG), built directly
+        // from `SEC.Onchain` rather than via the fast-cycle `signingBytes` path, so the soft-ack
+        // signing shape (no KZG) and the SEC dispute shape (with KZG) stay independent.
+        //
+        // `kzg` is the KZG commitment of the evacuation map at the END of the block being
+        // committed (computed slow-side by folding diffs over the running map).
+        def secOf(b: BlockResult, kzg: KzgCommitment): StandaloneEvacuationCommitment = {
             val h = b.brief.header
             StandaloneEvacuationCommitment(
               blockNum = b.brief.blockNum,
               blockVersion = h.blockVersion,
-              kzgCommitment = h.kzgCommitment,
-              header = h.signingBytes
+              kzgCommitment = kzg,
+              header = StandaloneEvacuationCommitment.Onchain.Serialized(
+                StandaloneEvacuationCommitment.Onchain(h, kzg)
+              )
             )
         }
 
-        val perPartition
-            : L1LedgerM[NonEmptyList[PartitionEffects[StandaloneEvacuationCommitment]]] =
-            partitions.traverse { p =>
+        // Walk partitions in stack order, threading the cumulative evacuation map. KZG is
+        // computed lazily (via `EvacuationMap.kzgCommitment`) only at the blocks that need it:
+        // each Major (for its settlement's `nextKzg`) and each last-of-partition minor (for its
+        // SEC). Other minors in a run only get their diffs applied; no KZG paid.
+        type Acc = (List[PartitionEffects[StandaloneEvacuationCommitment]], EvacuationMap)
+
+        val seedAcc: L1LedgerM[Acc] =
+            L1LedgerM.pure[Acc]((Nil, initialEvacuationMap))
+
+        val foldedAcc: L1LedgerM[Acc] = partitions.toList.foldLeft(seedAcc) { (accM, p) =>
+            accM.flatMap { case (effectsAcc, runningMap) =>
                 p.kind match {
                     case StackPartition.Kind.Major =>
                         val major = p.blocks.head
                         val trailingMinors = p.blocks.tail
+                        val mapAfterMajor = applyDiffs(runningMap, major.evacuationMapDiff)
+                        // Apply trailing minors' diffs cumulatively; the LAST minor's
+                        // post-map provides the SEC's KZG (if any trailing minor exists).
+                        val mapAfterPartition =
+                            trailingMinors.foldLeft(mapAfterMajor)((m, b) =>
+                                applyDiffs(m, b.evacuationMapDiff)
+                            )
                         major.brief match {
                             case mb: BlockBrief.Major =>
                                 L1LedgerM
                                     .mkSettlementTxSeq(
-                                      nextKzg = mb.header.kzgCommitment,
+                                      nextKzg = mapAfterMajor.kzgCommitment,
                                       absorbedDeposits = major.absorbedDeposits,
                                       payoutObligations = major.payoutObligations.toVector,
                                       blockCreationEndTime = mb.header.endTime,
                                       competingFallbackValidityStart = major.competingFallbackTxTime
                                     )
                                     .map { (seq: SettlementTxSeqOut) =>
-                                        PartitionEffects.Major(
+                                        val sec = trailingMinors.lastOption
+                                            .map(b => secOf(b, mapAfterPartition.kzgCommitment))
+                                        val pe = PartitionEffects.Major(
                                           settlement = seq.settlementTx,
                                           fallback = seq.fallbackTx,
                                           rollouts = seq.rolloutTxs,
                                           refunds = minorRefunds(trailingMinors),
-                                          sec = trailingMinors.lastOption.map(secOf)
+                                          sec = sec
                                         ): PartitionEffects[StandaloneEvacuationCommitment]
+                                        (pe :: effectsAcc, mapAfterPartition)
                                     }
                             case _ =>
                                 L1LedgerM
-                                    .pure[PartitionEffects[StandaloneEvacuationCommitment]](
+                                    .pure[Acc](
                                       throw new IllegalStateException(
                                         "Major partition's opener is not a Major block"
                                       )
                                     )
                         }
                     case StackPartition.Kind.Final =>
+                        // Final block drains the entire evac map. JointLedger no longer
+                        // emits a `delete-all` diff / cumulative `payoutObligations` for
+                        // Final blocks (it no longer maintains the cumulative map); we
+                        // recover both from the slow-side running map here:
+                        // payoutObligations = the map's values; the map is reset to empty
+                        // for any subsequent partition / stack.
                         val fin = p.blocks.head
+                        val payoutObligationsRemaining = runningMap.outputs.toVector
                         L1LedgerM
                             .finalizeLedger(
-                              payoutObligationsRemaining = fin.payoutObligations.toVector,
+                              payoutObligationsRemaining = payoutObligationsRemaining,
                               competingFallbackValidityStart = fin.competingFallbackTxTime
                             )
                             .map { (seq: FinalizationTxSeqOut) =>
-                                PartitionEffects.Final(
+                                val pe = PartitionEffects.Final(
                                   finalization = seq.finalizationTx,
                                   rollouts = seq.rolloutTxs
                                 ): PartitionEffects[StandaloneEvacuationCommitment]
+                                (pe :: effectsAcc, EvacuationMap.empty)
                             }
                     case StackPartition.Kind.Minor =>
-                        L1LedgerM.pure[PartitionEffects[StandaloneEvacuationCommitment]](
-                          PartitionEffects.Minor(
-                            sec = secOf(p.blocks.last),
-                            refunds = minorRefunds(p.blocks.toList)
-                          )
+                        val mapAfterRun = p.blocks.toList.foldLeft(runningMap)((m, b) =>
+                            applyDiffs(m, b.evacuationMapDiff)
                         )
+                        val pe = PartitionEffects.Minor(
+                          sec = secOf(p.blocks.last, mapAfterRun.kzgCommitment),
+                          refunds = minorRefunds(p.blocks.toList)
+                        ): PartitionEffects[StandaloneEvacuationCommitment]
+                        L1LedgerM.pure[Acc]((pe :: effectsAcc, mapAfterRun))
                     case StackPartition.Kind.Initial =>
-                        L1LedgerM.pure[PartitionEffects[StandaloneEvacuationCommitment]](
+                        L1LedgerM.pure[Acc](
                           throw new IllegalStateException(
                             "deriveRegular received an Initial partition (stack 0 uses the " +
                                 "separate Initial path)"
@@ -136,8 +176,16 @@ object StackEffectsBuilder {
                         )
                 }
             }
+        }
 
-        perPartition.map(StackEffects.Unsigned.Regular.apply)
+        foldedAcc.map { case (effectsReversed, finalMap) =>
+            val nel = NonEmptyList
+                .fromList(effectsReversed.reverse)
+                .getOrElse(
+                  throw new IllegalStateException("Empty partition list — impossible")
+                )
+            (StackEffects.Unsigned.Regular(nel), finalMap)
+        }
     }
 
     /** Build the initial-stack (stack 0) effect bundle. The init tx is exogenous (head config); the

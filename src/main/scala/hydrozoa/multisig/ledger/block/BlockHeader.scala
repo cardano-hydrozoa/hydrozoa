@@ -5,15 +5,11 @@ import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.given
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime, DepositDecisionWakeupTime, FallbackTxStartTime, ForcedMajorBlockWakeupTime}
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.DepositAbsorptionStartTime
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.logging.{Level, LogEvent, Traced}
-import hydrozoa.multisig.ledger.commitment.KzgCommitment
 import io.circe.*
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
-
-import KzgCommitment.KzgCommitment
 
 sealed trait BlockHeader extends BlockHeader.Section {
     def asUnsigned: this.type & BlockStatus.Unsigned =
@@ -33,7 +29,6 @@ object BlockHeader {
         override val fallbackTxStartTime: FallbackTxStartTime,
         override val forcedMajorBlockWakeupTime: ForcedMajorBlockWakeupTime,
         override val mDepositDecisionWakeupTime: Option[DepositDecisionWakeupTime],
-        override val kzgCommitment: KzgCommitment
     ) extends BlockHeader,
           BlockType.Initial,
           NonFinal.Section {
@@ -52,15 +47,10 @@ object BlockHeader {
         override val fallbackTxStartTime: FallbackTxStartTime,
         override val forcedMajorBlockWakeupTime: ForcedMajorBlockWakeupTime,
         override val mDepositDecisionWakeupTime: Option[DepositDecisionWakeupTime],
-        override val kzgCommitment: KzgCommitment
     ) extends BlockHeader,
           BlockType.Minor,
           NonFinal.Section {
         override transparent inline def header: BlockHeader.Minor = this
-
-        inline transparent def onchain: Minor.Onchain = Minor.Onchain(this)
-        inline transparent def onchainMsg: Minor.Onchain.Serialized =
-            Minor.Onchain.Serialized(onchain)
     }
 
     given (using CardanoNetwork.Section): Codec[BlockHeader.Major] = deriveCodec[BlockHeader.Major]
@@ -73,7 +63,6 @@ object BlockHeader {
         override val fallbackTxStartTime: FallbackTxStartTime,
         override val forcedMajorBlockWakeupTime: ForcedMajorBlockWakeupTime,
         override val mDepositDecisionWakeupTime: Option[DepositDecisionWakeupTime],
-        override val kzgCommitment: KzgCommitment
     ) extends BlockHeader,
           BlockType.Major,
           NonFinal.Section {
@@ -89,8 +78,6 @@ object BlockHeader {
     ) extends BlockHeader,
           BlockType.Final {
         override transparent inline def header: BlockHeader.Final = this
-        override transparent inline def kzgCommitment: KzgCommitment = Final.kzgCommitment
-
     }
 
     type Next = BlockHeader & BlockType.Next
@@ -121,22 +108,6 @@ object BlockHeader {
             def endTime: BlockCreationEndTime
         }
 
-        // TRANSITIONAL — fast/slow consensus split. KZG commitments are conceptually
-        // slow-side effect data: the settlement tx that pins L2 state to L1 is a
-        // slow-cycle effect, not a fast-cycle brief artifact. Long-term intent is to
-        // move `kzgCommitment` out of `BlockHeader` entirely and derive it slow-side
-        // alongside the other L1 effects, so the brief stays a pure L2-state
-        // description with no L1-effect material.
-        //
-        // Cannot remove yet: `BlockHeader.Section.signingBytes` feeds
-        // `Minor.Onchain` PlutusData, and the rule-based dispute mechanism's on-chain
-        // code currently expects `commitment` to be present in the signed bytes.
-        // Removal requires a coordinated change to the rule-based on-chain script
-        // and the dispute protocol.
-        trait HasKzgCommitment {
-            def kzgCommitment: KzgCommitment
-        }
-
         trait NonFinal {
             def fallbackTxStartTime: FallbackTxStartTime
             def forcedMajorBlockWakeupTime: ForcedMajorBlockWakeupTime
@@ -146,13 +117,7 @@ object BlockHeader {
 
     import Fields.*
 
-    trait Section
-        extends BlockType,
-          HasBlockNum,
-          HasBlockVersion,
-          HasBlockStart,
-          HasBlockEnd,
-          HasKzgCommitment {
+    trait Section extends BlockType, HasBlockNum, HasBlockVersion, HasBlockStart, HasBlockEnd {
         def header: BlockHeader
 
         final def nextHeaderFinal(
@@ -166,21 +131,12 @@ object BlockHeader {
         )
 
         /** Canonical byte representation used as the input for a head peer's soft acknowledgment
-          * (Ed25519 signature). Shared shape across Minor, Major, and Final block types — the same
-          * `Minor.Onchain` PlutusData layout the L1 dispute mechanism already accepts for Minor
-          * blocks. Final blocks pass `KzgCommitment.empty`; their kzg field is always empty.
+          * (Ed25519 signature). Authenticates brief identity (block number, version, timing) —
+          * deliberately KZG-free. The slow cycle's dispute-script-facing bytes live separately on
+          * [[hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment.Onchain.Serialized]].
           */
-        final def signingBytes: BlockHeader.Minor.Onchain.Serialized = {
-            import scalus.cardano.onchain.plutus.v3.PosixTime
-            val onchain = Minor.Onchain(
-              blockNum = BigInt(blockNum.convert),
-              startTime = startTime.instant.toEpochMilli: PosixTime,
-              versionMajor = BigInt(blockVersion.major.convert),
-              versionMinor = BigInt(blockVersion.minor.convert),
-              commitment = kzgCommitment
-            )
-            Minor.Onchain.Serialized(onchain)
-        }
+        final def signingBytes: BlockHeader.SignedDigest.Serialized =
+            BlockHeader.SignedDigest.Serialized(BlockHeader.SignedDigest.Onchain(this))
     }
 
     object NonFinal {
@@ -190,7 +146,6 @@ object BlockHeader {
                 newStartTime: BlockCreationStartTime,
                 newEndTime: BlockCreationEndTime,
                 mAbsorptionStartTime: Option[DepositAbsorptionStartTime],
-                newKzgCommitment: KzgCommitment
             ): Traced[BlockHeader.Intermediate] = {
                 val (canStayMinor, timingEvents) =
                     txTiming.blockCanStayMinor(newEndTime, fallbackTxStartTime)
@@ -200,7 +155,6 @@ object BlockHeader {
                           newStartTime,
                           newEndTime,
                           mAbsorptionStartTime,
-                          newKzgCommitment
                         )
                     (header, timingEvents ++ headerEvents)
                 } else {
@@ -210,7 +164,6 @@ object BlockHeader {
                           newStartTime,
                           newEndTime,
                           mAbsorptionStartTime,
-                          newKzgCommitment
                         )
                     (header, timingEvents ++ headerEvents)
                 }
@@ -220,7 +173,6 @@ object BlockHeader {
                 newStartTime: BlockCreationStartTime,
                 newEndTime: BlockCreationEndTime,
                 mAbsorptionStartTime: Option[DepositAbsorptionStartTime],
-                newKzgCommitment: KzgCommitment
             ): Traced[BlockHeader.Minor] = {
                 val newDepositDecisionWakeupTime =
                     mAbsorptionStartTime.map(t => DepositDecisionWakeupTime(t.convert))
@@ -232,7 +184,6 @@ object BlockHeader {
                   fallbackTxStartTime = fallbackTxStartTime,
                   forcedMajorBlockWakeupTime = forcedMajorBlockWakeupTime,
                   mDepositDecisionWakeupTime = newDepositDecisionWakeupTime,
-                  kzgCommitment = newKzgCommitment
                 )
                 (
                   header,
@@ -251,7 +202,6 @@ object BlockHeader {
                 newStartTime: BlockCreationStartTime,
                 newEndTime: BlockCreationEndTime,
                 mAbsorptionStartTime: Option[DepositAbsorptionStartTime],
-                newKzgCommitment: KzgCommitment
             ): Traced[BlockHeader.Major] = {
                 val newFallbackStartTime = txTiming.newFallbackStartTime(newEndTime)
                 val newForcedMajorBlockWakeupTime =
@@ -266,7 +216,6 @@ object BlockHeader {
                   fallbackTxStartTime = newFallbackStartTime,
                   forcedMajorBlockWakeupTime = newForcedMajorBlockWakeupTime,
                   mDepositDecisionWakeupTime = newDepositDecisionWakeupTime,
-                  kzgCommitment = newKzgCommitment
                 )
                 (
                   header,
@@ -278,6 +227,61 @@ object BlockHeader {
                     )
                   )
                 )
+            }
+        }
+    }
+
+    /** The canonical bytes a head peer's soft acknowledgment signs over. Authenticates the brief's
+      * identity (block number, version, timing) — fast-cycle only; no L1 effect material (KZG and
+      * any other slow-cycle artifact live in the slow side's effects, e.g.
+      * [[hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment.Onchain]]).
+      *
+      * No on-chain consumer reads this — Hydrozoa's L1 scripts speak the SEC's `Onchain` datum, not
+      * the soft-ack bytes. We still derive `Serialized` via scalus' `serialiseData` for canonical
+      * byte determinism and toolchain consistency with the SEC.
+      */
+    object SignedDigest {
+        import scalus.cardano.onchain.plutus.v3.PosixTime
+        import scalus.uplc.builtin.{ByteString, FromData, ToData}
+        import scalus.uplc.builtin.Builtins.serialiseData
+        import scalus.uplc.builtin.Data.toData
+
+        final case class Onchain(
+            blockNum: BigInt,
+            startTime: PosixTime,
+            versionMajor: BigInt,
+            versionMinor: BigInt,
+        ) derives FromData,
+              ToData
+
+        object Onchain {
+            def apply(offchainHeader: BlockHeader.Section): Onchain =
+                new Onchain(
+                  blockNum = BigInt(offchainHeader.blockNum.convert),
+                  startTime = offchainHeader.startTime.instant.toEpochMilli,
+                  versionMajor = BigInt(offchainHeader.blockVersion.major.convert),
+                  versionMinor = BigInt(offchainHeader.blockVersion.minor.convert),
+                )
+        }
+
+        type Serialized = Serialized.Serialized
+
+        object Serialized {
+            opaque type Serialized = IArray[Byte]
+
+            def apply(onchain: Onchain): Serialized =
+                IArray.from(serialiseData(onchain.toData).bytes)
+
+            given Conversion[Serialized, IArray[Byte]] = identity
+
+            given Conversion[Serialized, Array[Byte]] = msg => IArray.genericWrapArray(msg).toArray
+
+            given Conversion[Serialized, ByteString] = msg => ByteString.fromArray(msg)
+
+            extension (msg: Serialized) def untagged: IArray[Byte] = identity(msg)
+
+            trait Section {
+                def headerSerialized: BlockHeader.SignedDigest.Serialized
             }
         }
     }
@@ -303,7 +307,6 @@ object BlockHeader {
                   "depositDecisionWakeupTime" -> initBH.mDepositDecisionWakeupTime.fold(Json.Null)(
                     t => t.convert.instant.toEpochMilli.asJson
                   ),
-                  "kzgCommitment" -> initBH.kzgCommitment.asJson
                 )
             }
         }
@@ -333,69 +336,18 @@ object BlockHeader {
                     mDdwt <- c
                         .downField("depositDecisionWakeupTime")
                         .as[Option[DepositDecisionWakeupTime]]
-                    kzg <- c.downField("kzgCommitment").as[KzgCommitment]
                 } yield BlockHeader.Initial(
                   BlockCreationStartTime(startTime),
                   BlockCreationEndTime(endTime),
                   FallbackTxStartTime(fbtx),
                   fmbt,
                   mDdwt,
-                  kzg
                 )
             }
     }
 
     object Minor {
-        import hydrozoa.rulebased.ledger.l1.state.VoteState
-        import scalus.uplc.builtin.{FromData, ToData}
-        import scalus.cardano.onchain.plutus.v3.PosixTime
         import scalus.uplc.builtin.ByteString
-
-        final case class Onchain(
-            blockNum: BigInt,
-            startTime: PosixTime,
-            versionMajor: BigInt,
-            versionMinor: BigInt,
-            commitment: VoteState.KzgCommitment
-        ) derives FromData,
-              ToData
-
-        object Onchain {
-            import scalus.uplc.builtin.Data.toData
-            import scalus.uplc.builtin.Builtins.serialiseData
-
-            def apply(offchainHeader: BlockHeader.Intermediate): Onchain =
-                import offchainHeader.*
-                new Onchain(
-                  blockNum = BigInt(blockNum.convert),
-                  startTime = startTime.instant.toEpochMilli,
-                  versionMajor = BigInt(blockVersion.major.convert),
-                  versionMinor = BigInt(blockVersion.minor.convert),
-                  commitment = kzgCommitment
-                )
-
-            type Serialized = Serialized.Serialized
-
-            object Serialized {
-                opaque type Serialized = IArray[Byte]
-
-                def apply(onchainHeader: Onchain): Serialized =
-                    IArray.from(serialiseData(onchainHeader.toData).bytes)
-
-                given Conversion[Serialized, IArray[Byte]] = identity
-
-                given Conversion[Serialized, Array[Byte]] = msg =>
-                    IArray.genericWrapArray(msg).toArray
-
-                given Conversion[Serialized, ByteString] = msg => ByteString.fromArray(msg)
-
-                extension (msg: Serialized) def untagged: IArray[Byte] = identity(msg)
-
-                trait Section {
-                    def headerSerialized: BlockHeader.Minor.Onchain.Serialized
-                }
-            }
-        }
 
         type HeaderSignature = HeaderSignature.HeaderSignature
 
@@ -420,7 +372,4 @@ object BlockHeader {
         }
     }
 
-    object Final {
-        lazy val kzgCommitment: KzgCommitment = KzgCommitment.empty
-    }
 }

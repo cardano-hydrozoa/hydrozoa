@@ -1,7 +1,6 @@
 package hydrozoa.config.head.initialization
 
 import hydrozoa.multisig.ledger.block.Block
-import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, InitializationTx}
 import hydrozoa.multisig.ledger.l1.utxo.MultisigRegimeUtxo
 
@@ -16,8 +15,6 @@ object InitialBlock {
     trait Section {
         def initialBlockSection: InitialBlock
         def initialBlock: Block.HardConfirmed.Initial = initialBlockSection.initialBlock
-
-        def initialKzgCommitment: KzgCommitment = initialBlock.kzgCommitment
 
         def initializationTx: InitializationTx = initialBlock.initializationTx
         def initialFallbackTx: FallbackTx = initialBlock.fallbackTx

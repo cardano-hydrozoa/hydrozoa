@@ -65,7 +65,6 @@ object BlockBrief {
 
     trait Section extends BlockType, BlockHeader.Section, BlockBody.Section {
         import hydrozoa.multisig.ledger.event.RequestId
-        import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
         import RequestId.ValidityFlag
 
         def blockBrief: BlockBrief
@@ -74,7 +73,6 @@ object BlockBrief {
         override transparent inline def blockVersion: BlockVersion.Full = header.blockVersion
         override transparent inline def startTime: BlockCreationStartTime = header.startTime
         override transparent inline def endTime: BlockCreationEndTime = header.endTime
-        override transparent inline def kzgCommitment: KzgCommitment = header.kzgCommitment
 
         override transparent inline def events: List[(RequestId, ValidityFlag)] = body.events
         override transparent inline def depositsAbsorbed: List[RequestId] =

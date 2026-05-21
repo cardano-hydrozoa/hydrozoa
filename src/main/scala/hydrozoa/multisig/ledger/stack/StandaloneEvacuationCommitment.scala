@@ -2,6 +2,11 @@ package hydrozoa.multisig.ledger.stack
 
 import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
+import hydrozoa.rulebased.ledger.l1.state.VoteState
+import scalus.cardano.onchain.plutus.v3.PosixTime
+import scalus.uplc.builtin.Builtins.serialiseData
+import scalus.uplc.builtin.Data.toData
+import scalus.uplc.builtin.{ByteString, FromData, ToData}
 
 /** A standalone evacuation commitment — the per-spec record a **minor** block carries (see
   * `replicated-state-machine/effects#standalone-evacuation-commitment`).
@@ -42,7 +47,7 @@ final case class StandaloneEvacuationCommitment(
     blockNum: BlockNumber,
     blockVersion: BlockVersion.Full,
     kzgCommitment: KzgCommitment,
-    header: BlockHeader.Minor.Onchain.Serialized
+    header: StandaloneEvacuationCommitment.Onchain.Serialized
 )
 
 object StandaloneEvacuationCommitment {
@@ -60,4 +65,75 @@ object StandaloneEvacuationCommitment {
         commitment: StandaloneEvacuationCommitment,
         headerMultiSigned: List[BlockHeader.Minor.HeaderSignature]
     )
+
+    /** The PlutusData shape the rule-based dispute-resolution script consumes as the vote
+      * redeemer's `blockHeader` field. This is the off-chain ⇄ on-chain interface for the SEC: an
+      * SEC effect produced off-chain is serialized into [[Onchain.Serialized]] for signing, and on
+      * dispute presentation the same shape (with the multisig) is fed to
+      * [[hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator]] as a
+      * `VoteRedeemer.blockHeader`.
+      *
+      * @param blockNum
+      *   committed minor block's number
+      * @param startTime
+      *   committed minor block's start time. Currently NOT read by the dispute script — kept here
+      *   because it is part of the committed minor block's identity and may be useful for future
+      *   script extensions (e.g. time-window-bounded disputes). Drop only after spec confirms it is
+      *   no longer load-bearing.
+      * @param versionMajor
+      *   committed minor block's major version (dispute script reads via `versionMinor` neighbor
+      *   for treasury matching)
+      * @param versionMinor
+      *   committed minor block's minor version — read by the dispute script to check the
+      *   per-version vote tally.
+      * @param commitment
+      *   the SEC's KZG commitment (spec content) — read by the dispute script as the value to vote
+      *   on.
+      */
+    final case class Onchain(
+        blockNum: BigInt,
+        startTime: PosixTime,
+        versionMajor: BigInt,
+        versionMinor: BigInt,
+        commitment: VoteState.KzgCommitment
+    ) derives FromData,
+          ToData
+
+    object Onchain {
+
+        /** Build the on-chain SEC datum from a minor block header + the KZG commitment of the
+          * evacuation map at that block. KZG is passed explicitly (not read from the header)
+          * because as of step 4 it's a slow-cycle concern, computed in [[StackEffectsBuilder]] from
+          * the cumulative evacuation map state — the header itself no longer carries it.
+          */
+        def apply(offchainHeader: BlockHeader.Section, kzgCommitment: KzgCommitment): Onchain =
+            new Onchain(
+              blockNum = BigInt(offchainHeader.blockNum.convert),
+              startTime = offchainHeader.startTime.instant.toEpochMilli,
+              versionMajor = BigInt(offchainHeader.blockVersion.major.convert),
+              versionMinor = BigInt(offchainHeader.blockVersion.minor.convert),
+              commitment = kzgCommitment
+            )
+
+        type Serialized = Serialized.Serialized
+
+        object Serialized {
+            opaque type Serialized = IArray[Byte]
+
+            def apply(onchainHeader: Onchain): Serialized =
+                IArray.from(serialiseData(onchainHeader.toData).bytes)
+
+            given Conversion[Serialized, IArray[Byte]] = identity
+
+            given Conversion[Serialized, Array[Byte]] = msg => IArray.genericWrapArray(msg).toArray
+
+            given Conversion[Serialized, ByteString] = msg => ByteString.fromArray(msg)
+
+            extension (msg: Serialized) def untagged: IArray[Byte] = identity(msg)
+
+            trait Section {
+                def headerSerialized: Onchain.Serialized
+            }
+        }
+    }
 }

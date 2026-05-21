@@ -45,7 +45,6 @@ def generateInitialBlock(
             fallbackTxStartTime = initTxSeq.fallbackTx.fallbackTxStartTime,
             forcedMajorBlockWakeupTime = forcedMajorBlockWakeupTime,
             mDepositDecisionWakeupTime = None,
-            kzgCommitment = config.initializationParameters.initialEvacuationMap.kzgCommitment
           )
         ),
         effects = BlockEffects.HardConfirmed.Initial(

@@ -47,7 +47,7 @@ object Block {
             override transparent inline def header: BlockHeader.Minor = blockBrief.header
             override transparent inline def body: BlockBody.Minor = blockBrief.body
 
-            override transparent inline def headerSerialized: BlockHeader.Minor.Onchain.Serialized =
+            override transparent inline def headerSerialized: BlockHeader.SignedDigest.Serialized =
                 effects.headerSerialized
             override transparent inline def postDatedRefundTxs: List[RefundTx.PostDated] =
                 effects.postDatedRefundTxs
@@ -137,7 +137,7 @@ object Block {
             override transparent inline def header: BlockHeader.Minor = blockBrief.header
             override transparent inline def body: BlockBody.Minor = blockBrief.body
 
-            override transparent inline def headerSerialized: BlockHeader.Minor.Onchain.Serialized =
+            override transparent inline def headerSerialized: BlockHeader.SignedDigest.Serialized =
                 effects.headerSerialized
             override transparent inline def headerMultiSigned: List[HeaderSignature] =
                 effects.headerMultiSigned

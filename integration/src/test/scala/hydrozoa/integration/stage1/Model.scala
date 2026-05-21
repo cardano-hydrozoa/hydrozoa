@@ -586,7 +586,6 @@ object Model:
                     blockVersion = blockVersion,
                     startTime = blockStartTime,
                     endTime = blockEndTime,
-                    kzgCommitment = newEvacuationMap.kzgCommitment,
                     fallbackTxStartTime = newFallbackTxStartTime,
                     forcedMajorBlockWakeupTime = newForcedMajorBlockWakeupTime,
                     mDepositDecisionWakeupTime = newDepositDecisionWakeupTime
@@ -633,7 +632,6 @@ object Model:
                 blockVersion = blockVersion,
                 startTime = blockStartTime,
                 endTime = blockEndTime,
-                kzgCommitment = newEvacuationMap.kzgCommitment,
                 fallbackTxStartTime = state.competingFallbackStartTime,
                 forcedMajorBlockWakeupTime = forcedMajorBlockWakeupTime,
                 mDepositDecisionWakeupTime = mDepositDecisionWakeupTime

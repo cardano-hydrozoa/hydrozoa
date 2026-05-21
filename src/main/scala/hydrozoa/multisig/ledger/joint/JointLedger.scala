@@ -20,7 +20,6 @@ import hydrozoa.multisig.ledger.block.*
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag.{Invalid, Valid}
-import hydrozoa.multisig.ledger.joint.EvacuationMap.applyDiffs
 import hydrozoa.multisig.ledger.joint.JointLedger.*
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.*
 import hydrozoa.multisig.ledger.l1.L1LedgerM
@@ -491,32 +490,27 @@ final case class JointLedger(
                 )
 
             // Block header
-            headerRes <-
+            headerRes: (JointLedger.Producing, BlockHeader.Intermediate, Seq[EvacuationDiff]) <-
                 if decisions.absorbed.isEmpty && blockWithdrawnUtxos.isEmpty
                 then
                     val evacDiffs = p.l2LedgerState.diffs
-                    val newEvacuationMap = applyDiffs(p.evacuationMap, evacDiffs)
                     for {
                         newL2State <-
                             if decisions.refunded.isEmpty then IO.pure(p.l2LedgerState)
                             else executeL2Command(p, depositEventDecisions)
-                        _ <- Tracer.trace(s"New evacuation map: ${newEvacuationMap.evacuationMap}")
 
-                        // Update the state with the new evacuation map
-                        newJLState = p
-                            .setL2LedgerState(newL2State)
-                            .focus(_.evacuationMap)
-                            .replace(newEvacuationMap)
+                        // KZG no longer stamped on the header — slow side (StackComposer +
+                        // StackEffectsBuilder) folds these `evacDiffs` over its running
+                        // evacuation map and computes KZG only at the blocks that need it
+                        // (each Major's settlement and each last-of-partition minor's SEC).
+                        newJLState = p.setL2LedgerState(newL2State)
 
-                        // TODO: We want this to be done in a separate actor in the future
-                        // this doesn't include genesis
                         headerIntermediate <- previousHeader
                             .nextHeaderIntermediate(
                               txTiming,
                               blockCreationStartTime,
                               blockCreationEndTime,
                               decisions.mNextAbsorptionStartTime,
-                              newEvacuationMap.kzgCommitment
                             )
                             .logWith
                     } yield (newJLState, headerIntermediate, evacDiffs)
@@ -524,22 +518,14 @@ final case class JointLedger(
                     for {
                         newL2State <- executeL2Command(p, depositEventDecisions)
                         evacDiffs = newL2State.diffs
-                        newEvacuationMap = applyDiffs(p.evacuationMap, evacDiffs)
-                        _ <- Tracer.trace(s"New evacuation map: ${newEvacuationMap.evacuationMap}")
-                        newJLState = p
-                            .setL2LedgerState(newL2State)
-                            .focus(_.evacuationMap)
-                            .replace(newEvacuationMap)
+                        newJLState = p.setL2LedgerState(newL2State)
 
-                        // TODO: We want this to be done in a separate actor in the future - keeping there for now not to ruin RBR
-                        kzgCommitment = newEvacuationMap.kzgCommitment
                         headerIntermediate <- previousHeader
                             .nextHeaderMajor(
                               txTiming,
                               blockCreationStartTime,
                               blockCreationEndTime,
                               decisions.mNextAbsorptionStartTime,
-                              kzgCommitment
                             )
                             .logWith
                     } yield (newJLState, headerIntermediate, evacDiffs)
@@ -611,16 +597,18 @@ final case class JointLedger(
                     _ <- state.set(p.done(blockBrief.header))
 
                     // Slow side: on Final, the evac map drains entirely and all remaining
-                    // payouts are realized via the finalization tx. We surface the cumulative
-                    // payout obligations and a "delete-all" diff for the prior evac map so
-                    // StackComposer / StackEffectsBuilder see the full picture. No post-dated
-                    // refund txs on Final (any pending refunds get realized via finalization),
-                    // and no absorbed deposits (a Final block doesn't absorb).
+                    // payouts are realized via the finalization tx. JointLedger no longer
+                    // maintains the cumulative evacuation map (that's StackComposer's job after
+                    // the step-4 KZG move), so it cannot enumerate the keys to "delete-all"
+                    // here. StackEffectsBuilder.deriveRegular handles the Final partition by
+                    // draining its own running map for `payoutObligations` and clearing it for
+                    // the next stack. Final's `evacuationMapDiff` / `payoutObligations` are
+                    // therefore intentionally empty in the BlockResult — the slow side fills
+                    // them from cumulative state.
                     blockResult = BlockResult(
                       brief = blockBrief,
-                      evacuationMapDiff = p.evacuationMap.evacuationMap.keys.toList
-                          .map(EvacuationDiff.Delete.apply),
-                      payoutObligations = p.evacuationMap.evacuationMap.values.toList,
+                      evacuationMapDiff = Nil,
+                      payoutObligations = Nil,
                       postDatedRefundTxs = Nil,
                       absorbedDeposits = Nil,
                       competingFallbackTxTime = p.competingFallbackTxTime
@@ -802,7 +790,6 @@ object JointLedger {
     sealed trait State {
         def previousBlockHeader: BlockHeader
         def l1LedgerState: L1LedgerM.State
-        def evacuationMap: EvacuationMap
     }
 
     object State {
@@ -810,14 +797,12 @@ object JointLedger {
           previousBlockHeader = config.initialBlock.header,
           l1LedgerState =
               L1LedgerM.State(config.initializationTx.treasuryProduced, DepositsMap.empty),
-          evacuationMap = config.initialEvacuationMap
         )
     }
 
     final case class Done private[JointLedger] (
         override val previousBlockHeader: BlockHeader,
         override val l1LedgerState: L1LedgerM.State,
-        override val evacuationMap: EvacuationMap
     ) extends State {
         def setL1LedgerState(newL1State: L1LedgerM.State): Done =
             this.focus(_.l1LedgerState).replace(newL1State)
@@ -831,7 +816,6 @@ object JointLedger {
                 Producing(
                   b,
                   l1LedgerState,
-                  evacuationMap,
                   l2LedgerState,
                   startTime,
                   userRequestState
@@ -847,7 +831,6 @@ object JointLedger {
     final case class Producing private[JointLedger] (
         override val previousBlockHeader: BlockHeader.NonFinal,
         override val l1LedgerState: L1LedgerM.State,
-        override val evacuationMap: EvacuationMap,
         l2LedgerState: L2LedgerState,
         BlockCreationStartTime: BlockCreationStartTime,
         userRequestState: UserRequestState
@@ -878,6 +861,6 @@ object JointLedger {
             this.focus(_.l2LedgerState).replace(newL2State)
 
         def done(newBlockHeader: BlockHeader): Done =
-            Done(newBlockHeader, l1LedgerState, evacuationMap)
+            Done(newBlockHeader, l1LedgerState)
     }
 }

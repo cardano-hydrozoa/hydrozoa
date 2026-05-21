@@ -11,7 +11,7 @@ import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
 import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockResult}
-import hydrozoa.multisig.ledger.joint.JointLedger
+import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.L1LedgerM
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.stack.*
@@ -69,6 +69,18 @@ final case class StackComposer(
             deposits = DepositsMap.empty
           )
         )
+
+    /** Cumulative slow-side L2 evacuation-map state — owns the KZG. As of step 4 (KZG removed from
+      * `BlockHeader`), JointLedger no longer maintains this state; StackComposer accumulates
+      * per-block `evacuationMapDiff`s from `BlockResult` as it composes stacks, and
+      * [[StackEffectsBuilder.deriveRegular]] folds the diffs over this running map to compute KZG
+      * only at the blocks that need it (each Major's settlement `nextKzg` and each
+      * last-of-partition minor's SEC).
+      *
+      * Initialized from the head config's `initialEvacuationMap` — the genesis map for stack 1.
+      */
+    private val evacuationMapState: Ref[IO, EvacuationMap] =
+        Ref.unsafe[IO, EvacuationMap](config.initialEvacuationMap)
 
     /** Run an [[L1LedgerM]] action against the slow-side ledger state, advancing the treasury
       * chain. Called from [[mkUnsigned]] when the partition algorithm produces settlement /
@@ -258,9 +270,12 @@ final case class StackComposer(
     private def mkUnsigned(brief: StackBrief, prefix: List[ReadyBlock]): IO[Stack.Unsigned] = {
         val results = NonEmptyList.fromListUnsafe(prefix.map(_.result))
         val partitions = StackPartition.partition(results)
-        runL1Action(StackEffectsBuilder.deriveRegular(partitions)).map { effects =>
-            Stack.Unsigned(brief, effects)
-        }
+        for {
+            currentMap <- evacuationMapState.get
+            res <- runL1Action(StackEffectsBuilder.deriveRegular(partitions, currentMap))
+            (effects, newMap) = res
+            _ <- evacuationMapState.set(newMap)
+        } yield Stack.Unsigned(brief, effects)
     }
 
     /** Sign this peer's own hard-acks for every round the stack will need, allocating monotonic

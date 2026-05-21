@@ -319,7 +319,7 @@ class ConsensusActor(
     private def verifyHeaderSig(
         vk: VerificationKey,
         sig: BlockHeader.HeaderSignature,
-        msg: BlockHeader.Minor.Onchain.Serialized
+        msg: ByteString
     ): IO[Unit] =
         IO.delay(platform.verifyEd25519Signature(vk, msg, sig))
             .handleErrorWith {

@@ -12,6 +12,7 @@ import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.Block.HardConfirmed
 import hydrozoa.multisig.ledger.block.BlockHeader
+import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
 import org.scalacheck.util.Pretty
 import org.scalacheck.{Gen, Prop, Properties, PropertyM}
 import scalus.cardano.address.ShelleyAddress
@@ -53,9 +54,9 @@ case class MultiNodeConfig private (
         )
 
     def multisignHeader(
-        blockHeader: BlockHeader.Minor.Onchain
+        blockHeader: StandaloneEvacuationCommitment.Onchain
     ): NonEmptyList[BlockHeader.Minor.HeaderSignature] =
-        val serialized = BlockHeader.Minor.Onchain.Serialized(blockHeader)
+        val serialized = StandaloneEvacuationCommitment.Onchain.Serialized(blockHeader)
         NonEmptyList.fromListUnsafe(
           nodePrivateConfigs.map(_._2.ownHeadWallet.mkHeaderSignature(serialized)).toList
         )

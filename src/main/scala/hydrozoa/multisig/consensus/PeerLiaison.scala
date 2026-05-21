@@ -213,7 +213,7 @@ trait PeerLiaison(
             _ <- initializeConnections
             conn <- getConnections
             _ <- mermaid("GetMsgBatch.initial")
-            _ <- conn.remotePeerLiaison ! GetMsgBatch.initial
+            _ <- conn.remotePeerLiaison ! GetMsgBatch.initial(remotePeerId)
             _ <- startResendTimer
         yield ()
 
@@ -233,7 +233,7 @@ trait PeerLiaison(
 
     private final class State {
         private val currentlyRequesting: Ref[IO, GetMsgBatch] =
-            Ref.unsafe[IO, GetMsgBatch](GetMsgBatch.initial)
+            Ref.unsafe[IO, GetMsgBatch](GetMsgBatch.initial(remotePeerId))
 
         /** Read-only access to the outstanding [[GetMsgBatch]]. Used by the retransmit timer (see
           * [[startResendTimer]]) and by the [[NewMsgBatch]] handler to detect duplicates.
@@ -375,38 +375,39 @@ trait PeerLiaison(
                 nHard <- this.nHardAck.get
                 nRequest <- this.nRequest.get
 
-                // OutOfBounds sanity guard, one per lane: the remote's cursor can
-                // never legitimately exceed what we've produced (`nX` = highest
-                // number ever appended to this outbox; monotonic, prune-independent).
-                //   - LAST-SEEN lanes (block, stackBrief — both sparse round-robin):
-                //     cursor = "highest seen", so cursor must be `<= nX`
-                //                            ⇒ error iff `nX < cursor`.
-                //   - NEXT-EXPECTED lanes (ack/hardAck/request): cursor = "next
-                //     number wanted", which may legitimately reach `nX + 1` (remote
-                //     got the latest, wants the next), so cursor must be `<= nX + 1`
-                //                            ⇒ error iff `nX.increment < cursor`.
-                // Never false-fires, including at startup where each cursor equals
-                // its initial value and `nX == 0` (e.g. ack: `1 <= 0.increment`).
+                // OutOfBounds sanity guard, one per lane. The remote's cursor can
+                // never legitimately exceed the next-expected number after what
+                // we've produced (`nX` = highest number ever appended to this
+                // outbox; monotonic, prune-independent). All lanes are
+                // next-expected; the "+1" successor function differs by lane:
+                //   - Contiguous lanes (ack, hardAck, request): successor =
+                //     `nX.increment` ⇒ error iff `nX.increment < cursor`.
+                //   - Sparse lanes (block, stackBrief): successor =
+                //     `ownId.nextLeader…(nX)` (our own leader schedule —
+                //     OUR outbox carries the items WE lead) ⇒
+                //     error iff `ownId.nextLeader…(nX) < cursor`.
+                // Never false-fires, including at startup where each cursor
+                // equals its initial value: contiguous lanes start at the lane's
+                // first emitted number; sparse lanes start at
+                // `remoteId.nextLeader…(0)` (the same value our `nextLeader…(nX)`
+                // returns when `nX == 0` — the leader-schedule formula is
+                // symmetric in `(peer, n) ↦ first leader ≥ next`).
                 _ <- IO.raiseWhen(
                   nAck.increment < batchReq.ackNum ||
-                      nBlock < batchReq.blockNum ||
-                      nStack < batchReq.stackBriefNum ||
+                      config.ownHeadPeerId.nextLeaderBlock(nBlock) < batchReq.blockNum ||
+                      config.ownHeadPeerId.nextSlowLeaderStack(nStack) <
+                      batchReq.stackBriefNum ||
                       nHard.increment < batchReq.hardAckNum ||
                       nRequest.increment < batchReq.requestNum
                 )(OutOfBoundsGetMsgBatch)
 
                 _ <- this.queuesAreEmpty.ifM(IO.raiseError(EmptyNewMsgBatch), IO.unit)
 
-                // Prune queues in place (read-and-shrink in one `modify`) per the
-                // GetMsgBatch cursor protocol (see the note on `GetMsgBatch`):
-                //   - ack / hardAck / request lanes are NEXT-EXPECTED: the cursor is
-                //     the next number the remote wants ⇒ drop `< cursor`, keep the
-                //     head (`>= cursor`). The head is retained until the remote's
-                //     cursor moves PAST it, so a dropped batch is simply re-sent on
-                //     the next request (retransmit-safe).
-                //   - block / stackBrief lanes are LAST-SEEN (sparse round-robin;
-                //     "I have N, send me the next one I lead after N") ⇒ drop
-                //     `<= cursor`.
+                // Prune queues in place (read-and-shrink in one `modify`). All five
+                // lanes are next-expected: cursor is the next number the remote
+                // wants ⇒ drop `< cursor`, keep the head (`>= cursor`). The head is
+                // retained until the remote's cursor moves PAST it, so a dropped
+                // batch is simply re-sent on the next request (retransmit-safe).
                 //
                 // Pruning per-remote on each incoming `GetMsgBatch` — NOT on local
                 // `BlockConfirmed` — is essential. Local consensus for block N
@@ -421,11 +422,11 @@ trait PeerLiaison(
                     (pruned, pruned.headOption)
                 }
                 mBlock <- this.qBlock.modify { q =>
-                    val pruned = q.dropWhile(_.blockNum <= batchReq.blockNum)
+                    val pruned = q.dropWhile(_.blockNum < batchReq.blockNum)
                     (pruned, pruned.headOption)
                 }
                 mStackBrief <- this.qStackBrief.modify { q =>
-                    val pruned = q.dropWhile(_.stackNum <= batchReq.stackBriefNum)
+                    val pruned = q.dropWhile(_.stackNum < batchReq.stackBriefNum)
                     (pruned, pruned.headOption)
                 }
                 mHardAck <- this.qHardAck.modify { q =>
@@ -508,29 +509,27 @@ trait PeerLiaison(
                     return Reject(Rejection.AckNumMismatch(current.ackNum, a.ackNum))
                 case _ => ()
 
-            // 3. If a block brief is present, its blockNum must be the next leader-block
-            //    of the remote peer after `current.blockNum`. The block lane stays
-            //    last-seen: per-peer block numbers are sparse (round-robin leadership,
-            //    `nextLeaderBlock`, not contiguous `+1`) and block 0 is distributed
-            //    out-of-band via the head config, so it cannot join the next-expected
-            //    scheme.
-            val nextBlockNum = remotePeerId.nextLeaderBlock(current.blockNum)
+            // 3. If a block brief is present, its blockNum must equal the
+            //    next-expected `current.blockNum`. Block/stack lanes are sparse but
+            //    still next-expected: the cursor is precomputed to the next block
+            //    this remote leads, so the verify check is the same exact-match
+            //    shape as ack/hardAck/request. Block 0 is the bootstrap block
+            //    distributed out-of-band via the head config — `nextLeaderBlock(0)`
+            //    is what advances the cursor past it (for the remote peer that
+            //    would otherwise lead it).
             received.blockBrief match
-                case Some(b) if b.blockNum != nextBlockNum =>
-                    return Reject(Rejection.BlockNumMismatch(nextBlockNum, b.blockNum))
+                case Some(b) if b.blockNum != current.blockNum =>
+                    return Reject(Rejection.BlockNumMismatch(current.blockNum, b.blockNum))
                 case _ => ()
 
-            // 3a. If a stack brief is present, its stackNum must be the next stack
-            //     this remote slow-leads after `current.stackBriefNum`. The
-            //     stackBrief lane mirrors the block lane: sparse per-link
-            //     (round-robin slow-leadership, `nextSlowLeaderStack`, not contiguous
-            //     `+1`) and stack 0 is the bootstrap stack distributed out-of-band,
-            //     so it stays last-seen.
-            val nextStackBriefNum = remotePeerId.nextSlowLeaderStack(current.stackBriefNum)
+            // 3a. If a stack brief is present, its stackNum must equal
+            //     `current.stackBriefNum` — same next-expected contract as the
+            //     block lane. Stack 0 is the bootstrap stack distributed
+            //     out-of-band and excluded by `nextSlowLeaderStack(0)`.
             received.stackBrief match
-                case Some(sb) if sb.stackNum != nextStackBriefNum =>
+                case Some(sb) if sb.stackNum != current.stackBriefNum =>
                     return Reject(
-                      Rejection.StackBriefNumMismatch(nextStackBriefNum, sb.stackNum)
+                      Rejection.StackBriefNumMismatch(current.stackBriefNum, sb.stackNum)
                     )
                 case _ => ()
 
@@ -565,12 +564,19 @@ trait PeerLiaison(
                 case None => ()
 
             // All checks passed: compute the next outstanding [[GetMsgBatch]].
+            // Every lane advances to its next-expected successor: `+1` for the
+            // contiguous lanes (ack, hardAck, request); the remote's leader
+            // schedule for the sparse lanes (block, stackBrief).
             Advance(
               GetMsgBatch(
                 batchNum = current.batchNum.increment,
                 ackNum = received.ack.fold(current.ackNum)(_.ackNum.increment),
-                blockNum = received.blockBrief.fold(current.blockNum)(_.blockNum),
-                stackBriefNum = received.stackBrief.fold(current.stackBriefNum)(_.stackNum),
+                blockNum = received.blockBrief.fold(current.blockNum)(b =>
+                    remotePeerId.nextLeaderBlock(b.blockNum)
+                ),
+                stackBriefNum = received.stackBrief.fold(current.stackBriefNum)(sb =>
+                    remotePeerId.nextSlowLeaderStack(sb.stackNum)
+                ),
                 hardAckNum = received.hardAck.fold(current.hardAckNum)(_.hardAckNum.increment),
                 requestNum = received.requests.lastOption.fold(current.requestNum)(
                   _.requestId.requestNum.increment
@@ -746,39 +752,32 @@ object PeerLiaison {
           *       round-2.
           *     - `ackNum` = 1 — `SoftAck.ackNum == blockNum`; block 0 is the config-bootstrapped
           *       block and is never acked over the wire, so the first soft-ack is for block 1.
+          *     - `blockNum` = `remotePeerId.nextLeaderBlock(0)` — the first block this remote
+          *       leads, skipping block 0 (config-bootstrap, never sent on the wire).
+          *     - `stackBriefNum` = `remotePeerId.nextSlowLeaderStack(0)` — the first stack this
+          *       remote slow-leads, skipping stack 0 (bootstrap stack, never sent on the wire).
           *   - The producer side (`appendToOutbox`) independently enforces gap-free monotonic
-          *     numbering on these three lanes, so the wire stream is always contiguous from the
-          *     initial cursor — the precondition for `received == current`.
-          *
-          * Last-seen sparse lanes (`blockNum`, `stackBriefNum`):
-          *
-          *   - "I have N, send me the next one I lead after N": prune `<= cursor`; verify
-          *     `received == remotePeerId.nextLeader…(current)` (where `nextLeader…` is
-          *     `nextLeaderBlock` for blocks and `nextSlowLeaderStack` for stack briefs); advance
-          *     `cursor = received` (last-seen).
-          *   - Why not next-expected: per-link sequences are SPARSE. A peer only broadcasts the
-          *     blocks it (fast-)leads and the stack briefs it slow-leads, both round-robin. So the
-          *     per-link stream is not contiguous `+1`; the "next-expected" number depends on the
-          *     remote's leader schedule, not a successor function in the cursor itself.
-          *   - Item 0 (block 0 / stack 0) is the config / bootstrap artefact distributed
-          *     out-of-band and never sent here; initial cursor = `0` is the "nothing seen yet"
-          *     sentinel, and `nextLeader…(0)` returns the remote's first wire-eligible item
-          *     (strictly-after semantics).
+          *     numbering: contiguous lanes use `+1` per emission; sparse lanes use
+          *     `ownHeadPeerId.nextLeader…(last)` (this peer only emits items it leads). The wire
+          *     stream is therefore always at the cursor's next-expected value — the precondition
+          *     for `received == current`.
           *
           * Every lane additionally carries an `OutOfBounds` sanity guard in `buildNewMsgBatch`: the
-          * remote's cursor may never exceed what we've produced (last-seen ⇒ `<= produced`;
-          * next-expected ⇒ `<= produced + 1`). It never false-fires in correct operation; tripping
-          * it means protocol desync/corruption and raises rather than silently stalling.
+          * remote's cursor may never exceed the next-expected number after what we've produced
+          * (contiguous ⇒ `<= produced + 1`; sparse ⇒ `<= ownId.nextLeader…(produced)`). It never
+          * false-fires in correct operation; tripping it means protocol desync/corruption and
+          * raises rather than silently stalling.
           *
           * @param batchNum
           *   Batch number that increases by one for every consecutive batch.
           * @param ackNum
           *   Next-expected soft-ack number (== block number) from the remote peer.
           * @param blockNum
-          *   Last-seen block from the remote peer (round-robin; see above).
+          *   Next-expected block number from the remote peer — the next leader block of this
+          *   remote, computed via `nextLeaderBlock`.
           * @param stackBriefNum
-          *   Last-seen stack-brief number (== stack number) from the remote peer (sparse
-          *   round-robin, see above).
+          *   Next-expected stack-brief number from the remote peer — the next slow-leader stack of
+          *   this remote, computed via `nextSlowLeaderStack`.
           * @param hardAckNum
           *   Next-expected hard-ack number from the remote peer.
           * @param requestNum
@@ -787,25 +786,28 @@ object PeerLiaison {
         // format: off
         // ===== Per-lane batch-protocol summary =====
         //
+        // All five lanes are NEXT-EXPECTED. The differences are only in:
+        //   1. who produces (every peer vs only the lane's leader), and
+        //   2. the successor function (contiguous `+1` vs leader-schedule `f`).
+        //
         // Symbols: nX  = highest number ever appended to this outbox (per-lane).
         //          cur = the remote's `GetMsgBatch.X` for this lane.
-        //          NE  = next-expected contract.   LS  = last-seen contract.
+        //          f   = the lane's leader-schedule function: `nextLeaderBlock` for `blockNum`,
+        //                `nextSlowLeaderStack` for `stackBriefNum`.
         //
-        //   lane           family  producer          first emitted #          init cur
-        //   ackNum         NE      every peer        1                        1
-        //   blockNum       LS      only fast-leader  nextLeaderBlock(0)       0
-        //   stackBriefNum  LS      only slow-leader  nextSlowLeaderStack(0)   0
-        //   hardAckNum     NE      every peer        0                        0
-        //   requestNum     NE      every peer        0                        0
+        //   lane           producer          first emitted #               init cur (per-remote)
+        //   ackNum         every peer        1                             1
+        //   blockNum       only fast-leader  ownId.nextLeaderBlock(0)      remote.nextLeaderBlock(0)
+        //   stackBriefNum  only slow-leader  ownId.nextSlowLeaderStack(0)  remote.nextSlowLeaderStack(0)
+        //   hardAckNum     every peer        0                             0
+        //   requestNum     every peer        0                             0
         //
-        //   family  append (raise iff)   prune      verify (reject iff)       advance  OOB iff
-        //   NE      nY != nX + 1 *       < cur      recv != cur               recv+1   nX+1 < cur
-        //   LS      nY != ownId.f(nX)    <= cur     recv != remote.f(cur)     recv     nX < cur
+        //   family       append (raise iff)   prune    verify (reject iff)  advance        OOB iff
+        //   contiguous   nY != nX + 1 *       < cur    recv != cur          recv+1         nX+1 < cur
+        //   sparse       nY != ownId.f(nX)    < cur    recv != cur          remote.f(recv) ownId.f(nX) < cur
         //
-        // * Bootstrap escape on NE: the very first append may carry the lane's initial
-        //   number unconditionally (`nY.convert != 0 && …`).
-        // f = the lane's leader-schedule function: `nextLeaderBlock` for `blockNum`;
-        //     `nextSlowLeaderStack` for `stackBriefNum`.
+        // * Bootstrap escape on contiguous lanes: the very first append may carry the lane's
+        //   initial number unconditionally (`nY.convert != 0 && …`).
         // format: on
         final case class GetMsgBatch(
             batchNum: Batch.Number,
@@ -817,18 +819,22 @@ object PeerLiaison {
         )
 
         object GetMsgBatch {
-            // Initial cursor values (see the cursor-protocol note above):
-            //   - next-expected lanes: each lane's FIRST emitted number — requests
-            //     and hard-acks are 0-based; soft-acks (== blockNum) are 1-based
+            // Initial cursor values (see the cursor-protocol note above). All lanes are
+            // next-expected:
+            //   - Contiguous lanes (ack, hardAck, request): each lane's FIRST emitted number —
+            //     requests and hard-acks are 0-based; soft-acks (== blockNum) are 1-based
             //     because block 0 is the config-bootstrap block never acked.
-            //   - last-seen sparse lanes (block, stackBrief): 0 = "nothing seen
-            //     yet"; `nextLeader…(0)` resolves to the remote's first wire-eligible
-            //     item (block 0 / stack 0 are out-of-band).
-            def initial: GetMsgBatch = GetMsgBatch(
+            //   - Sparse lanes (block, stackBrief): the remote's first wire-eligible item per its
+            //     leader schedule, since `remotePeerId.nextLeader…(0)` skips the out-of-band
+            //     bootstrap item 0.
+            //
+            // Per-remote because the sparse-lane initial cursor depends on which remote peer the
+            // liaison is talking to. Tests can use any [[HeadPeerId]] fixture.
+            def initial(remotePeerId: HeadPeerId): GetMsgBatch = GetMsgBatch(
               batchNum = Batch.Number(0),
               ackNum = AckNumber.zero.increment,
-              blockNum = BlockNumber.zero,
-              stackBriefNum = StackNumber.zero,
+              blockNum = remotePeerId.nextLeaderBlock(BlockNumber.zero),
+              stackBriefNum = remotePeerId.nextSlowLeaderStack(StackNumber.zero),
               hardAckNum = HardAckNumber.zero,
               requestNum = RequestNumber.zero
             )

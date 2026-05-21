@@ -20,7 +20,7 @@ import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects, St
 import scala.util.control.NonFatal
 import scalus.cardano.ledger.{Transaction, TransactionHash, VKeyWitness}
 import scalus.crypto.ed25519.VerificationKey
-import scalus.uplc.builtin.platform
+import scalus.uplc.builtin.{ByteString, platform}
 
 /** Slow-consensus actor (M6).
   *
@@ -627,7 +627,7 @@ final case class SlowConsensusActor(
 
     private def verifyHeader(
         vk: VerificationKey,
-        msg: BlockHeader.Minor.Onchain.Serialized,
+        msg: ByteString,
         sig: BlockHeader.HeaderSignature
     ): IO[Unit] =
         IO.delay(platform.verifyEd25519Signature(vk, msg, sig))

@@ -9,9 +9,9 @@ import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.{addrKeyHash, pubKeyHash}
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
-import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.commitment.TrustedSetup
 import hydrozoa.multisig.ledger.joint.EvacuationMap
+import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
 import hydrozoa.rulebased.DisputeActor
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
@@ -138,7 +138,7 @@ object DisputeActorTestHelpers {
             now <- lift(realTimeQuantizedInstant(env.slotConfig))
             currentSlot = now.toSlot
 
-            blockHeader = BlockHeader.Minor.Onchain(
+            blockHeader = StandaloneEvacuationCommitment.Onchain(
               blockNum = 1,
               startTime = now.toPosixTime,
               versionMajor = versionMajor,
