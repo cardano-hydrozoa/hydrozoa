@@ -175,7 +175,7 @@ object Generators {
         )(using config: CardanoNetwork.Section): Gen[Payout.Obligation] =
             for {
                 value <- genValue
-                res <- genKnownValuePayoutObligationWithMinAdaEnsured(value)
+                res <- genKnownValuePayoutObligationWithMinAdaEnsured(value, genDatum)
             } yield res
 
         def genKnownValuePayoutObligationWithMinAdaEnsured(

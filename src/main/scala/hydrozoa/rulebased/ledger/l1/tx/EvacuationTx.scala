@@ -22,7 +22,6 @@ import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTrea
 import monocle.*
 import scala.annotation.tailrec
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.TransactionException.{ExUnitsExceedMaxException, InvalidTransactionSizeException}
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.onchain.plutus.prelude.List as SList
 import scalus.cardano.txbuilder.*
@@ -88,7 +87,7 @@ private object EvacuationTxOps {
       *   Utxos to use to pay the fees
       */
     final case class Build(
-        treasuryUtxo: RuleBasedTreasuryUtxo,
+        inputTreasuryUtxo: RuleBasedTreasuryUtxo,
         evacuateesToTryNext: EvacuationMap,
         allRemainingEvacuatees: EvacuationMap,
         collateralUtxo: CollateralUtxo,
@@ -117,10 +116,10 @@ private object EvacuationTxOps {
               )
             )
 
-            treasuryDatum <- extractTreasuryDatum(treasuryUtxo)
+            inputTreasuryDatum <- extractTreasuryDatum(inputTreasuryUtxo)
 
             res <- {
-                given Resolved = treasuryDatum
+                given Resolved = inputTreasuryDatum
                 loop(evacuateesToTryNext)
             }
         } yield res
@@ -141,7 +140,7 @@ private object EvacuationTxOps {
                 // All subsequent computations (membership proof, outputs, residual) must use this
                 // same subset so that the on-chain value invariant holds:
                 //   treasuryInput = treasuryOutput + Σ evacuationOutput
-                evacuatingNow = EvacuationMap(evacuatees.evacuationMap.take(63))
+                evacuatingNow = EvacuationMap(evacuatees.evacuationMap.take(64))
 
                 membershipProof <- Membership
                     .mkMembershipProofValidated(
@@ -152,7 +151,7 @@ private object EvacuationTxOps {
                     .map(Build.Error.MembershipError(_))
 
                 // From this point we should choose and stick to a particular order of withdrawals, so
-                // to order of outputs in the tx (starting from index 1) and the order of utxo ids in
+                // the order of outputs in the tx (starting from index 1) and the order of utxo ids in
                 // the redeemer should be the same.
                 evacuationList = evacuatingNow.evacuationMap.toList
 
@@ -171,7 +170,7 @@ private object EvacuationTxOps {
                 evacuationOutputs = evacuationList.map(_._2.utxo.value)
 
                 residualValue <- calculateResidualTreasury(
-                  treasuryUtxo,
+                  inputTreasuryUtxo,
                   evacuatingNow
                 )
 
@@ -197,7 +196,7 @@ private object EvacuationTxOps {
                 context <- build(
                   List(
                     config.referenceTreasury,
-                    treasuryUtxo.spendAttached(evacuationRedeemer),
+                    inputTreasuryUtxo.spendAttached(evacuationRedeemer),
                     collateralUtxo.add,
                     sendChangeUtxo,
                     residualTreasury.send
@@ -214,15 +213,24 @@ private object EvacuationTxOps {
                     .left
                     .map(BuilderError(_))
 
-                finalized <- context
+                inputValue = inputTreasuryUtxo.treasuryOutput.value
+                outputValue = residualValue
+                evacValue = evacuationOutputs.head.value
+
+                finalize = context
                     .finalizeContext(
                       diffHandler = Change
                           .changeOutputDiffHandler(_, _, config.cardanoInfo.protocolParams, 0),
                       validators = Tx.Validators.nonSigningValidators
                     )
-                    .explainConst("Finalizing evacuation tx failed")
+                    .explainConst(
+                      "Finalizing evacuation tx failed. Failed context txid :" +
+                          s"\n\n${context.transaction.id}"
+                    )
                     .left
                     .map(BuilderError(_))
+
+                finalized <- finalize
 
                 newTreasuryUtxo = RuleBasedTreasuryUtxo(
                   utxoId = TransactionInput(
@@ -233,28 +241,30 @@ private object EvacuationTxOps {
                 )
 
                 evacuationTx = EvacuationTx(
-                  treasuryUtxo,
+                  inputTreasuryUtxo,
                   newTreasuryUtxo,
                   evacuationOutputs,
                   finalized.transaction
                 )
             } yield evacuationTx) match {
                 case Right(w) => Right(w)
-                case Left(
-                      BuilderError(
-                        SomeBuildError.ValidationError(e: InvalidTransactionSizeException, ctx),
-                        _
-                      )
-                    ) =>
-                    loop(halveEvacuation(evacuatees))
-                case Left(
-                      BuilderError(
-                        SomeBuildError.ValidationError(e: ExUnitsExceedMaxException, ctx),
-                        _
-                      )
-                    ) =>
-                    loop(halveEvacuation(evacuatees))
-                case Left(e) => Left(e)
+                // Temporary -- just to see if the bug is located here
+                case Left(_) => loop(halveEvacuation(evacuatees))
+//                case Left(
+//                      BuilderError(
+//                        SomeBuildError.ValidationError(e: InvalidTransactionSizeException, ctx),
+//                        _
+//                      )
+//                    ) =>
+//                    loop(halveEvacuation(evacuatees))
+//                case Left(
+//                      BuilderError(
+//                        SomeBuildError.ValidationError(e: ExUnitsExceedMaxException, ctx),
+//                        _
+//                      )
+//                    ) =>
+//                    loop(halveEvacuation(evacuatees))
+//                case Left(e) => Left(e)
             }
 
         // TODO: Make method on RuleBasedTreasuryUtxo

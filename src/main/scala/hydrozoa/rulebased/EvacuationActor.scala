@@ -27,6 +27,7 @@ import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.R
 import hydrozoa.rulebased.ledger.l1.tx.EvacuationTx
 import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import scala.util.{Failure, Success, Try}
+import scalus.builtin.ByteString
 import scalus.cardano.ledger.{TransactionHash, Utxo, Utxos}
 import scalus.uplc.builtin.Data
 import scalus.uplc.builtin.Data.fromData
@@ -231,7 +232,7 @@ case class EvacuationActor(
 
                 evacBuilder = EvacuationTx
                     .Build(
-                      treasuryUtxo = treasuryUtxoAndDatum._1,
+                      inputTreasuryUtxo = treasuryUtxoAndDatum._1,
                       evacuateesToTryNext = toEvacuate,
                       allRemainingEvacuatees = currentEvacuationMap,
                       feeUtxos = feeUtxos,
@@ -255,7 +256,8 @@ case class EvacuationActor(
                 _ <- (for {
                     _ <- EitherT.liftF(
                       Tracer.debug(
-                        s"submitting evacTx with ${evacTx.evacuatedOutputs.size} evacuated outputs"
+                        s"submitting evacTx with ${evacTx.evacuatedOutputs.size} evacuated outputs" +
+                            s"\n cbor:\n\n${ByteString.fromArray(evacTx.tx.toCbor).toHex}\n\n"
                       )
                     )
                     _ <- EitherT(cardanoBackend.submitTx(config.evacuationWallet.signTx(evacTx.tx)))

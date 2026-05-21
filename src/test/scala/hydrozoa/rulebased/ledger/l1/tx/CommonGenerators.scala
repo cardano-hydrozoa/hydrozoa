@@ -114,7 +114,7 @@ object CommonGenerators {
     )(using config: CardanoNetwork.Section & HeadPeers.Section): Gen[CollateralUtxo] =
         for {
             input <- arbitrary[TransactionInput]
-            coin <- arbitrary[Coin].map(_ + Coin.ada(100))
+            coin <- arbitrary[Coin].map(_ + Coin.ada(1000))
         } yield CollateralUtxo(
           input,
           CollateralOutput(

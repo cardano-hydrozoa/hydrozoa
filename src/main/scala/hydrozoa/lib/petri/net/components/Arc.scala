@@ -21,6 +21,8 @@ object Arc {
 
     // There does not appear to be any arc-specific syntax right now. In a more generic setup, there
     // might be logic or data needed here in the future.
+    /** Sometimes known as an "inscription" in the literature
+      */
     trait Syntax
 
     // YAPNE supports 4 "types" of arcs:

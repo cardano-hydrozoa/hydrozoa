@@ -220,13 +220,13 @@ object Tx {
 
             /** Like `explain`, but only taking a string */
             def explainConst(
-                string: String
+                string: => String
             )(implicit line: Line, file: File, enclosing: Enclosing): Either[(E, String), A] =
                 either.explain(const(string))
 
         extension [E, A](augmentedEither: Either[(E, String), A])
             def explainReplace(
-                string: String
+                string: => String
             )(implicit line: Line, file: File, enclosing: Enclosing): Either[(E, String), A] = {
                 val oldEither = augmentedEither.left.map(_._1)
                 oldEither.explainConst(string)
@@ -239,7 +239,7 @@ object Tx {
             }
 
             def explainAppendConst(
-                string: String
+                string: => String
             )(implicit line: Line, file: File, enclosing: Enclosing): Either[(E, String), A] = {
                 augmentedEither.explainModify(
                   _ + s";\n[${file.value}:${line.value} in ${enclosing.value}] $string"

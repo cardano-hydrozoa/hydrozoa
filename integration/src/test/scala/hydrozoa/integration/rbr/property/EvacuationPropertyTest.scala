@@ -10,6 +10,7 @@ import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.config.node.operation.evacuation.{NodeOperationEvacuationConfig, NodeOperationEvacuationConfigGen}
 import hydrozoa.integration.rbr.model.petri.net.RBRPlaceId
 import hydrozoa.integration.rbr.model.petri.net.RBRPlaceId.*
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.classification.Histogram
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.logging.{ContraTracer, LogEvent, Tracer}
@@ -27,6 +28,28 @@ import test.TestPeersSpec
 
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 
+/*
+CURRENT STATUS:
+- The test only tests "happy path" behavior, where every peer votes for the same commitment
+- We start with a mocked fallback tx
+- We go through dispute + resolution successfully
+- We go through evacuation up until the final recursive evacuation.
+  - EvacuationTx builder cannot balance in some cases because the minAda in the output treasury is too small
+    (say, 25 ADA vs the necessary 29).
+    - This causes the balancer to increases the treasury's ada, which breaks the value invariant
+        treasuryInput = treasuryOutput + evacuatedTotal
+    - This then causes a plutus script error, which crashes the evacuation actor (it is unrecoverable)
+  - The solution is _probably_ to increase the amount that the resolution transaction reserves for the treasury.
+- Next steps (in order):
+  - ensure full classification matches
+  - Instead of starting the actors individually, start them with the rule-based regime manager
+  - Add in a cardano backend proxy to drop transactions from certain peers and regain some determinism (rig the races)
+  - Vote for different commitments
+  - start with an actual fallback
+  - add deinit
+  - Domain-based logging (rather than stringly typed)
+  - Model based testing of intermediary states according to full classification
+ */
 object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
 
     given ppIDU: (InitialDisputeUtxos => Pretty) = _ =>
@@ -36,11 +59,12 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
         p: org.scalacheck.Test.Parameters
     ): org.scalacheck.Test.Parameters =
         p.withMinSuccessfulTests(3)
+//            .withInitialSeed(org.scalacheck.rng.Seed.fromBase64("4vIY0T61oMWbCS-0R8WCW6qUpqczPAZmtj97v75k0pL=").get)
 
     // These might need to be tuned. Basically we don't want to end up in a spin loop.
     //  TODO: How can we detect this in the actors themselves?
     val votingDuration: FiniteDuration = 5.seconds
-    val evacuationDuration: FiniteDuration = 100.minute
+    val evacuationDuration: FiniteDuration = 10.minute
     val actorRunDuration: FiniteDuration = votingDuration + evacuationDuration
 
     // 100ms polling period so actors poll on every ~1s cats-actors ping loop tick
@@ -59,29 +83,30 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
               fallbackTxId <- pick[TransactionHash](
                 Arbitrary.arbitrary[TransactionHash].label("FallbackTx id")
               )
-              mockFallback : Transaction = new Transaction(
-                 body = KeepRaw (TransactionBody(TaggedSortedSet.empty, IndexedSeq.empty, Coin.zero)),
-                 witnessSetRaw = KeepRaw(TransactionWitnessSet.empty),
-                 isValid = true,
-                 auxiliaryData = None
-                ) {
-                 override lazy val id = fallbackTxId
+              mockFallback: Transaction = new Transaction(
+                body = KeepRaw(TransactionBody(TaggedSortedSet.empty, IndexedSeq.empty, Coin.zero)),
+                witnessSetRaw = KeepRaw(TransactionWitnessSet.empty),
+                isValid = true,
+                auxiliaryData = None
+              ) {
+                  override lazy val id = fallbackTxId
               }
-              
+
               // Real wall-clock time is already in the valid Cardano era (post-2020).
               // No clock warmup is needed, unlike when using TestControl.
-              now <- lift(realTimeQuantizedInstant(env.headConfig.slotConfig))
+              now = QuantizedInstant.ofEpochSeconds(env.slotConfig, 20000000000L)
 
               nEvacs <- pick(Gen.choose(1, 1000).label("nEvacs"))
+//              nEvacs <- pick(Gen.const(50).label("nEvacs"))
 
-              // Generate the [SYNTHETIC] post-fallback UTxO set.
+              // Generate the synthetic post-fallback UTxO set.
               initialUtxos <- pick[InitialDisputeUtxos](
                 InitialDisputeUtxos
                     .gen(fallbackTxId, now, votingDuration, nEvacs)(using env)
                     .label("initial dispute utxos")
               )
 
-              // [SYNTHETIC] block header: all peers vote for the same commitment (happy path).
+              // block header: all peers vote for the same commitment (happy path).
               blockHeader = BlockHeader.Minor.Onchain(
                 blockNum = BigInt(1),
                 startTime = now.toPosixTime,
@@ -98,11 +123,13 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
                   MockState(
                     ledgerState = State(initialUtxos.allUtxos(using env)),
                     currentSlot = now.toSlot,
-                      knownTxs = Set(fallbackTxId),
-                      submittedTxs = List((Map.empty, mockFallback))
+                    knownTxs = Set(fallbackTxId),
+                    submittedTxs = List((Map.empty, mockFallback))
                   ),
                   mkContext = _ =>
                       // Needed so that the headConfig's network, slot config, etc. is used.
+                      // TODO: This should probably be factored out into a helper in CardanoBackedMock
+                      //   and used by default.
                       Context(
                         fee = Coin.zero,
                         env = UtxoEnv.apply(
@@ -126,20 +153,17 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
 
               // Single shared tracer that fans out to both signal completions.
               tracer <- lift {
+                  // TODO: domain-specific event types should be used here instead of brittle strings
                   val signalTracer: Tracer = ContraTracer.emit { (ev: LogEvent) =>
                       if ev.msg == "Treasury is Resolved" then resolvedSignal.complete(()).void
-                      else if ev.msg == "No more evacuations to be done. Staying alive in case of rollbacks" then
-                          evacuatedSignal.complete(()).void
+                      else if ev.msg == "No more evacuations to be done. Staying alive in case of rollbacks"
+                      then evacuatedSignal.complete(()).void
                       else IO.unit
                   }
                   Tracer.makeLocal.flatMap(local => local.update(_ |+| signalTracer).as(local))
               }
 
               terminalUtxos <- lift {
-                  // Mirrors ActorSystemFailFastSpec: raise from INSIDE the use block when
-                  // waitForTermination fires. Resource.onFinalize(terminate(None)) always runs
-                  // after the use block, so it cannot re-raise; we must raise here instead.
-
                   // Phase 1 — Dispute: run all peer dispute actors until "Treasury is Resolved".
                   val disputeSystems: List[IO[Unit]] =
                       env.nodePrivateConfigs.toList.map { (peerId, _) =>
@@ -155,7 +179,10 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
                                   )
                                   >> system.waitForTermination
 
-                              IO.race(resolvedSignal.get >> IO.println("!!! RESOLVED !!!"), disputeBot).void
+                              IO.race(
+                                resolvedSignal.get >> Tracer.info("!!! RESOLVED !!!")(using tracer),
+                                disputeBot
+                              ).void
                           }
                       }
 
@@ -173,7 +200,12 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
                                 )(using env.nodeConfigs(peerId))
                               ) >> system.waitForTermination
 
-                              IO.race(evacuatedSignal.get >> IO.println("!!! EVACUATION FINISHED !!!"), evacuationBot).void
+                              IO.race(
+                                evacuatedSignal.get >> Tracer.info("!!! EVACUATION FINISHED !!!")(
+                                  using tracer
+                                ),
+                                evacuationBot
+                              ).void
                           }
                       }
 
@@ -207,6 +239,7 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
 
               nPeers = env.headConfig.nHeadPeers.convert
 
+              // TODO: these buckets probably need refinement. TBD
               expectedBuckets: Map[RBRPlaceId, Int] = Map(
                 TreasuryRefPlaceId -> 1,
                 DisputeRefPlaceId -> 1,
