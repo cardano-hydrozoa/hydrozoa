@@ -267,7 +267,10 @@ final case class StackComposer(
       * structure but with empty settlement / fallback / rollout / finalization (TODOs in
       * [[StackEffectsBuilder]]).
       */
-    private def mkUnsigned(brief: StackBrief, prefix: List[ReadyBlock]): IO[Stack.Unsigned] = {
+    private def mkUnsigned(
+        brief: StackBrief,
+        prefix: List[ReadyBlock]
+    ): IO[Stack.Unsigned.Regular] = {
         val results = NonEmptyList.fromListUnsafe(prefix.map(_.result))
         val partitions = StackPartition.partition(results)
         for {
@@ -275,7 +278,7 @@ final case class StackComposer(
             res <- runL1Action(StackEffectsBuilder.deriveRegular(partitions, currentMap))
             (effects, newMap) = res
             _ <- evacuationMapState.set(newMap)
-        } yield Stack.Unsigned(brief, effects)
+        } yield Stack.Unsigned.Regular(brief, effects)
     }
 
     /** Sign this peer's own hard-acks for every round the stack will need, allocating monotonic
@@ -287,7 +290,9 @@ final case class StackComposer(
       * scheduling (round-1 / sole released immediately to PeerLiaisons; round-2 withheld until
       * local round-1 confirmation).
       */
-    private def buildHandoff(unsigned: Stack.Unsigned): IO[SlowConsensusActor.StackHandoff] =
+    private def buildHandoff(
+        unsigned: Stack.Unsigned.Regular
+    ): IO[SlowConsensusActor.StackHandoff] =
         state.modify { s =>
             val wallet = config.ownHeadWallet
             val stackNum = unsigned.brief.stackNum
@@ -364,115 +369,88 @@ final case class StackComposer(
                     }
             }
 
-            val (acks, newCounter) = unsigned.effects match {
-                case r: StackEffects.Unsigned.Regular =>
-                    PartitionEffects.unlock(r.partitions) match {
-                        case Some(u) =>
-                            val n1 = s.ownHardAckNum
-                            val n2 = n1.increment
-                            val slots = r.partitions.zipWithIndex.map { case (pe, i) =>
-                                slot(pe, i, u)
-                            }
-                            val regularPayload: HardAck.Round1Payload.Regular =
-                                slots.toList match {
-                                    // Case 3: [Partial]
-                                    case List(p: HardAck.Round1Payload.PartitionSigs.Partial) =>
-                                        HardAck.Round1Payload.Regular.OnlyPartial(p)
-                                    // Case 4: [MajorPartial, Complete+] — FinalPartial here is
-                                    // impossible (FinalPartial fires only when no Major exists,
-                                    // which means no trailing completes either).
-                                    case (p: HardAck.Round1Payload.PartitionSigs.MajorPartial) :: rest
-                                        if rest.nonEmpty =>
-                                        val cs = NonEmptyList.fromListUnsafe(
-                                          rest.collect {
-                                              case c: HardAck.Round1Payload.PartitionSigs.Complete =>
-                                                  c
-                                          }
-                                        )
-                                        HardAck.Round1Payload.Regular.PartialThenCompletes(p, cs)
-                                    // Case 1: [Minor, Partial]
-                                    case List(
-                                          m: HardAck.Round1Payload.PartitionSigs.Minor,
-                                          p: HardAck.Round1Payload.PartitionSigs.Partial
-                                        ) =>
-                                        HardAck.Round1Payload.Regular.MinorThenPartial(m, p)
-                                    // Case 2: [Minor, MajorPartial, Complete+] — FinalPartial
-                                    // here is impossible for the same reason as case 4.
-                                    case (m: HardAck.Round1Payload.PartitionSigs.Minor) ::
-                                        (p: HardAck.Round1Payload.PartitionSigs.MajorPartial) :: rest
-                                        if rest.nonEmpty =>
-                                        val cs = NonEmptyList.fromListUnsafe(
-                                          rest.collect {
-                                              case c: HardAck.Round1Payload.PartitionSigs.Complete =>
-                                                  c
-                                          }
-                                        )
-                                        HardAck.Round1Payload.Regular
-                                            .MinorThenPartialThenCompletes(m, p, cs)
-                                    case other =>
-                                        throw new IllegalStateException(
-                                          "unexpected Regular slot layout: " +
-                                              other.map(_.getClass.getSimpleName).mkString(", ")
-                                        )
-                                }
-                            val round1 = HardAck(
-                              HardAckId(peer, n1),
-                              stackNum,
-                              regularPayload
-                            )
-                            val round2 = HardAck(
-                              HardAckId(peer, n2),
-                              stackNum,
-                              HardAck.Round2Payload.Regular(unlockSig(u, r.partitions))
-                            )
-                            (List(round1, round2), n2.increment)
-                        case None =>
-                            // Sole / 1-phase: exactly one Minor partition.
-                            val n = s.ownHardAckNum
-                            val sole = r.partitions.head match {
-                                case PartitionEffects.Minor(sec, refunds) =>
-                                    HardAck(
-                                      HardAckId(peer, n),
-                                      stackNum,
-                                      HardAck.SolePayload(
-                                        sec = wallet.mkHeaderSignature(sec.header),
-                                        refunds = refunds.map(rt => wallet.mkTxSignature(rt.tx))
-                                      )
+            val r = unsigned.effects
+            val (acks, newCounter) =
+                PartitionEffects.unlock(r.partitions) match {
+                    case Some(u) =>
+                        val n1 = s.ownHardAckNum
+                        val n2 = n1.increment
+                        val slots = r.partitions.zipWithIndex.map { case (pe, i) =>
+                            slot(pe, i, u)
+                        }
+                        val regularPayload: HardAck.Round1Payload.Regular =
+                            slots.toList match {
+                                // Case 3: [Partial]
+                                case List(p: HardAck.Round1Payload.PartitionSigs.Partial) =>
+                                    HardAck.Round1Payload.Regular.OnlyPartial(p)
+                                // Case 4: [MajorPartial, Complete+] — FinalPartial here is
+                                // impossible (FinalPartial fires only when no Major exists,
+                                // which means no trailing completes either).
+                                case (p: HardAck.Round1Payload.PartitionSigs.MajorPartial) :: rest
+                                    if rest.nonEmpty =>
+                                    val cs = NonEmptyList.fromListUnsafe(
+                                      rest.collect {
+                                          case c: HardAck.Round1Payload.PartitionSigs.Complete =>
+                                              c
+                                      }
                                     )
-                                case _ =>
+                                    HardAck.Round1Payload.Regular.PartialThenCompletes(p, cs)
+                                // Case 1: [Minor, Partial]
+                                case List(
+                                      m: HardAck.Round1Payload.PartitionSigs.Minor,
+                                      p: HardAck.Round1Payload.PartitionSigs.Partial
+                                    ) =>
+                                    HardAck.Round1Payload.Regular.MinorThenPartial(m, p)
+                                // Case 2: [Minor, MajorPartial, Complete+] — FinalPartial
+                                // here is impossible for the same reason as case 4.
+                                case (m: HardAck.Round1Payload.PartitionSigs.Minor) ::
+                                    (p: HardAck.Round1Payload.PartitionSigs.MajorPartial) :: rest
+                                    if rest.nonEmpty =>
+                                    val cs = NonEmptyList.fromListUnsafe(
+                                      rest.collect {
+                                          case c: HardAck.Round1Payload.PartitionSigs.Complete =>
+                                              c
+                                      }
+                                    )
+                                    HardAck.Round1Payload.Regular
+                                        .MinorThenPartialThenCompletes(m, p, cs)
+                                case other =>
                                     throw new IllegalStateException(
-                                      "sole stack's single partition is not Minor"
+                                      "unexpected Regular slot layout: " +
+                                          other.map(_.getClass.getSimpleName).mkString(", ")
                                     )
                             }
-                            (List(sole), n.increment)
-                    }
-                case i: StackEffects.Unsigned.Initial =>
-                    // Stack 0: structurally 2-phase, exogenous unlock (the init tx).
-                    val n1 = s.ownHardAckNum
-                    val n2 = n1.increment
-                    val round1 = HardAck(
-                      HardAckId(peer, n1),
-                      stackNum,
-                      HardAck.Round1Payload.Initial(
-                        fallbackSig = wallet.mkTxSignature(i.fallbackTx.tx)
-                      )
-                    )
-                    val round2 = HardAck(
-                      HardAckId(peer, n2),
-                      stackNum,
-                      HardAck.Round2Payload.Initial(
-                        initTxSig = wallet.mkTxSignature(i.initializationTx.tx),
-                        individualWitnesses =
-                            if StackEffects.spendsFromIndividualAddress(
-                                  i.initializationTx,
-                                  wallet.exportVerificationKey
+                        val round1 = HardAck(
+                          HardAckId(peer, n1),
+                          stackNum,
+                          regularPayload
+                        )
+                        val round2 = HardAck(
+                          HardAckId(peer, n2),
+                          stackNum,
+                          HardAck.Round2Payload.Regular(unlockSig(u, r.partitions))
+                        )
+                        (List(round1, round2), n2.increment)
+                    case None =>
+                        // Sole / 1-phase: exactly one Minor partition.
+                        val n = s.ownHardAckNum
+                        val sole = r.partitions.head match {
+                            case PartitionEffects.Minor(sec, refunds) =>
+                                HardAck(
+                                  HardAckId(peer, n),
+                                  stackNum,
+                                  HardAck.SolePayload(
+                                    sec = wallet.mkHeaderSignature(sec.header),
+                                    refunds = refunds.map(rt => wallet.mkTxSignature(rt.tx))
+                                  )
                                 )
-                            then List(wallet.mkVKeyWitness(i.initializationTx.tx))
-                            else Nil
-                      )
-                    )
-                    (List(round1, round2), n2.increment)
-            }
+                            case _ =>
+                                throw new IllegalStateException(
+                                  "sole stack's single partition is not Minor"
+                                )
+                        }
+                        (List(sole), n.increment)
+                }
 
             val handoff = SlowConsensusActor.StackHandoff(unsigned, acks)
             (s.copy(ownHardAckNum = newCounter), handoff)

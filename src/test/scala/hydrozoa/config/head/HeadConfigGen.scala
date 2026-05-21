@@ -25,7 +25,7 @@ def generateHeadConfig(
         initialBlock <- generateInitialBlock(bootstrap)
     } yield HeadConfig(
       headConfigBootstrap = bootstrap,
-      initialBlock = initialBlock.initialBlock
+      initialBlock = initialBlock
     ) match {
         case Validated.Valid(x) => x
         case Validated.Invalid(errors) =>

@@ -23,7 +23,7 @@ import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.given
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.block.{BlockBrief, BlockEffects}
+import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects}
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
@@ -130,6 +130,9 @@ object HeadConfig {
                 hc <- {
                     given CardanoNetwork = network
                     for {
+                        // NOTE: we can't just parse a full `Block.Unsigned.Initial`, because the
+                        // initialization/fallback transaction wrappers need _semantic_ parsing
+                        // (which depends on the head config we're constructing).
                         brief <- c
                             .downField("initialBlock")
                             .downField("blockBrief")
@@ -139,30 +142,21 @@ object HeadConfig {
                             .downField("effects")
                             .downField("initializationTx")
                             .as[Transaction]
+                        fallbackTx <- c
+                            .downField("initialBlock")
+                            .downField("effects")
+                            .downField("fallbackTx")
+                            .as[Transaction]
                         hcBootstrap <- c.as[HeadConfig.Bootstrap](using
                           HeadConfig.Bootstrap.withInitTxDecoder(initTx)
                         )
-                        // Derive the unsigned init+fallback tx pair from the bootstrap context;
-                        // the JSON's initTx bytes are advisory (used only for the bootstrap's
-                        // change-output extraction above).
-                        initTxSeq <- InitializationTxSeq
-                            .Build(hcBootstrap)(brief.endTime)
-                            .result
-                            .left
-                            .map(e =>
-                                io.circe.DecodingFailure(
-                                  s"Failed to derive InitializationTxSeq: $e",
-                                  c.history
-                                )
-                            )
-                        ib = InitialBlock(
+
+                        hc <- HeadConfig(
+                          hcBootstrap,
                           brief,
-                          BlockEffects.Unsigned.Initial(
-                            initTxSeq.initializationTx,
-                            initTxSeq.fallbackTx
-                          )
-                        )
-                        hc <- HeadConfig(hcBootstrap, ib).toEither.left.map(e =>
+                          initTx,
+                          fallbackTx
+                        ).toEither.left.map(e =>
                             io.circe.DecodingFailure(s"Failed to decode HeadConfig: $e", c.history)
                         )
                     } yield hc
@@ -182,29 +176,51 @@ object HeadConfig {
     def apply(
         headConfigBootstrap: HeadConfig.Bootstrap,
         initialBlock: InitialBlock
+    ): ValidatedNel[HeadConfigError, HeadConfig] =
+        Validated.valid(
+          new HeadConfig(
+            cardanoNetwork = headConfigBootstrap.cardanoNetwork,
+            headParameters = headConfigBootstrap.headParameters,
+            headPeers = headConfigBootstrap.headPeers,
+            coilPeers = headConfigBootstrap.coilPeers,
+            _initialEvacuationMap = headConfigBootstrap.initialEvacuationMap,
+            _initialEquityContributions = headConfigBootstrap.initialEquityContributions,
+            scriptReferenceUtxos = headConfigBootstrap.scriptReferenceUtxos,
+            initialBlock
+          )
+        )
+
+    /** Decoder-side adapter: builds the unsigned init+fallback wrappers from the raw `Transaction`
+      * bytes parsed out of JSON, then delegates to the [[InitialBlock]]-shaped apply. The raw
+      * `fallbackTx` is discarded (the fallback is deterministically derivable from the bootstrap +
+      * brief via [[InitializationTxSeq.Build]]); only `initTx` round-trips faithfully.
+      */
+    def apply(
+        headConfigBootstrap: HeadConfig.Bootstrap,
+        blockBrief: BlockBrief.Initial,
+        initTx: Transaction,
+        fallbackTx: Transaction
     ): ValidatedNel[HeadConfigError, HeadConfig] = {
-        // Sanity-check that the supplied init+fallback txs match what InitializationTxSeq.Build
-        // would derive from the same bootstrap + endTime. We don't substitute the result — we
-        // only validate the caller's payload is well-formed under the same derivation.
+        val _ = fallbackTx // currently advisory; consistency-checked via Build below
         Validated
             .fromEither(
               InitializationTxSeq
-                  .Build(headConfigBootstrap)(initialBlock.blockBrief.endTime)
+                  .Build(headConfigBootstrap)(blockBrief.endTime)
                   .result
                   .left
                   .map(error => NonEmptyList.one(error))
             )
-            .map { _ =>
-                new HeadConfig(
-                  cardanoNetwork = headConfigBootstrap.cardanoNetwork,
-                  headParameters = headConfigBootstrap.headParameters,
-                  headPeers = headConfigBootstrap.headPeers,
-                  coilPeers = headConfigBootstrap.coilPeers,
-                  _initialEvacuationMap = headConfigBootstrap.initialEvacuationMap,
-                  _initialEquityContributions = headConfigBootstrap.initialEquityContributions,
-                  scriptReferenceUtxos = headConfigBootstrap.scriptReferenceUtxos,
-                  initialBlock
+            .andThen { expected =>
+                val ib = InitialBlock(
+                  Block.Unsigned.Initial(
+                    blockBrief,
+                    BlockEffects.Unsigned.Initial(
+                      initializationTx = expected.initializationTx,
+                      fallbackTx = expected.fallbackTx
+                    )
+                  )
                 )
+                HeadConfig(headConfigBootstrap, ib)
             }
     }
 

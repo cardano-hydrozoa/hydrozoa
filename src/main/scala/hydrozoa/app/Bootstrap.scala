@@ -27,7 +27,7 @@ import hydrozoa.lib.logging.Logging
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost}
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, HeadPeerWallet}
-import hydrozoa.multisig.ledger.block.{BlockBrief, BlockEffects, BlockHeader}
+import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap, evacuationKeyOrdering}
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
@@ -275,19 +275,21 @@ object Bootstrap:
         )
 
         initialBlock = InitialBlock(
-          blockBrief = BlockBrief.Initial(
-            BlockHeader.Initial(
-              startTime = blockCreationStartTime,
-              endTime = blockCreationEndTime,
-              fallbackTxStartTime = fallbackTxStartTime,
-              forcedMajorBlockWakeupTime = forcedMajorBlockWakeupTime,
-              mDepositDecisionWakeupTime = None,
+          Block.Unsigned.Initial(
+            blockBrief = BlockBrief.Initial(
+              BlockHeader.Initial(
+                startTime = blockCreationStartTime,
+                endTime = blockCreationEndTime,
+                fallbackTxStartTime = fallbackTxStartTime,
+                forcedMajorBlockWakeupTime = forcedMajorBlockWakeupTime,
+                mDepositDecisionWakeupTime = None,
+              )
+            ),
+            // Unsigned init+fallback — slow consensus's stack-0 hard-ack flow signs them at boot.
+            effects = BlockEffects.Unsigned.Initial(
+              initializationTx = initTxSeq.initializationTx,
+              fallbackTx = initTxSeq.fallbackTx
             )
-          ),
-          // Unsigned init+fallback — slow consensus's stack-0 hard-ack flow signs them at boot.
-          effects = BlockEffects.Unsigned.Initial(
-            initializationTx = initTxSeq.initializationTx,
-            fallbackTx = initTxSeq.fallbackTx
           )
         )
 

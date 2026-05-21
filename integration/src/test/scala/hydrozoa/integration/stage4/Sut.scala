@@ -90,16 +90,19 @@ private[stage4] class StackObserver(
     private val logger = Logging.loggerIO(s"Stage4.StackObserver.${peerNum: Int}")
     override def receive: Receive[IO, CardanoLiaison.Request] = {
         case s: Stack.HardConfirmed =>
-            val brief = s.unsigned.brief
+            val descr = s match {
+                case _: Stack.HardConfirmed.Initial =>
+                    s"stack=${s.stackNum} (Initial)"
+                case r: Stack.HardConfirmed.Regular =>
+                    s"stack=${r.stackNum} blocks=${r.brief.firstBlockNum}..${r.brief.lastBlockNum}"
+            }
             logger.debug(
-              s"received Stack.HardConfirmed stack=${brief.stackNum} " +
-                  s"blocks=${brief.firstBlockNum}..${brief.lastBlockNum}, " +
-                  "capturing and forwarding"
+              s"received Stack.HardConfirmed $descr, capturing and forwarding"
             ) >>
                 stacks.update(_ :+ s) >>
                 (real ! s) >>
                 logger.debug(
-                  s"forwarded Stack.HardConfirmed stack=${brief.stackNum} to real CardanoLiaison"
+                  s"forwarded Stack.HardConfirmed $descr to real CardanoLiaison"
                 )
         case msg =>
             logger.debug(s"received non-stack msg=${msg.getClass.getSimpleName}, forwarding") >>

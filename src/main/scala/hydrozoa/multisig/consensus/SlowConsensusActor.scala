@@ -106,8 +106,8 @@ final case class SlowConsensusActor(
       *   - `Regular` with no unlock (all-`Minor`) ⇒ sole / 1-phase.
       */
     private def handleStackHandoff(h: StackHandoff): IO[Unit] =
-        Tracer.scopedCtx("stackNum" -> h.unsigned.brief.stackNum.toString) {
-            val stackNum = h.unsigned.brief.stackNum
+        Tracer.scopedCtx("stackNum" -> h.unsigned.stackNum.toString) {
+            val stackNum = h.unsigned.stackNum
             val ownPeer = config.ownHeadPeerNum
 
             def own2Phase(r1Label: String, r2Label: String): IO[Unit] = for {
@@ -305,7 +305,16 @@ final case class SlowConsensusActor(
           s"stack $stackNum HARD-CONFIRMED — aggregated witnesses onto ${wmap.size} " +
               "effect tx(s); emitting downstream"
         )
-        hardConfirmed = Stack.HardConfirmed(cell.unsigned, signed)
+        hardConfirmed = (cell.unsigned, signed) match {
+            case (_: Stack.Unsigned.Initial, e: StackEffects.HardConfirmed.Initial) =>
+                Stack.HardConfirmed.Initial(e)
+            case (r: Stack.Unsigned.Regular, e: StackEffects.HardConfirmed.Regular) =>
+                Stack.HardConfirmed.Regular(r.brief, e)
+            case _ =>
+                throw new IllegalStateException(
+                  s"completeStack: unsigned/hard-confirmed shape mismatch for stack $stackNum"
+                )
+        }
         _ <- conn.cardanoLiaison ! hardConfirmed
         _ <- conn.stackComposer ! PreviousStackHardConfirmation(stackNum)
         _ <- stateRef.update(_.dropCell(stackNum))

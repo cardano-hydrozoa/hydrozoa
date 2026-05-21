@@ -5,7 +5,7 @@ import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.currentTimeBl
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
 import hydrozoa.config.head.{HeadConfig, generateHeadConfigBootstrap}
-import hydrozoa.multisig.ledger.block.{BlockBrief, BlockEffects, BlockHeader}
+import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import monocle.Focus.focus
 import org.scalacheck.Test.Parameters
@@ -37,19 +37,21 @@ def generateInitialBlock(
         )
 
     } yield InitialBlock(
-      blockBrief = BlockBrief.Initial(
-        BlockHeader.Initial(
-          startTime = BlockCreationStartTime(blockCreationEndTime - 10.seconds),
-          endTime = blockCreationEndTime,
-          fallbackTxStartTime = initTxSeq.fallbackTx.fallbackTxStartTime,
-          forcedMajorBlockWakeupTime = forcedMajorBlockWakeupTime,
-          mDepositDecisionWakeupTime = None,
+      Block.Unsigned.Initial(
+        blockBrief = BlockBrief.Initial(
+          BlockHeader.Initial(
+            startTime = BlockCreationStartTime(blockCreationEndTime - 10.seconds),
+            endTime = blockCreationEndTime,
+            fallbackTxStartTime = initTxSeq.fallbackTx.fallbackTxStartTime,
+            forcedMajorBlockWakeupTime = forcedMajorBlockWakeupTime,
+            mDepositDecisionWakeupTime = None,
+          )
+        ),
+        // Unsigned — slow consensus stack-0 signs them at startup.
+        effects = BlockEffects.Unsigned.Initial(
+          initializationTx = initTxSeq.initializationTx,
+          fallbackTx = initTxSeq.fallbackTx
         )
-      ),
-      // Unsigned — slow consensus stack-0 signs them at startup.
-      effects = BlockEffects.Unsigned.Initial(
-        initializationTx = initTxSeq.initializationTx,
-        fallbackTx = initTxSeq.fallbackTx
       )
     )
 }

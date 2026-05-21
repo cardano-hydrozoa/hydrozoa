@@ -661,12 +661,10 @@ case class Stage4Suite(
         canonicalStacks: Vector[Stack.HardConfirmed]
     ): Prop = {
         // A stack covers the inclusive block range [firstBlockNum, lastBlockNum] from its
-        // brief (the stack no longer carries its BlockResults — PR #446 review dropped
-        // Stack.Unsigned.results; the brief range is the authoritative span).
+        // brief. Initial stacks have no brief (no blocks), so they contribute no range.
         val coveredRanges: Vector[(Int, Int)] =
-            canonicalStacks.map { s =>
-                val b = s.unsigned.brief
-                ((b.firstBlockNum: Int), (b.lastBlockNum: Int))
+            canonicalStacks.collect { case r: Stack.HardConfirmed.Regular =>
+                ((r.brief.firstBlockNum: Int), (r.brief.lastBlockNum: Int))
             }
         def covered(n: BlockNumber): Boolean =
             coveredRanges.exists { case (lo, hi) => lo <= (n: Int) && (n: Int) <= hi }
@@ -770,33 +768,31 @@ case class Stage4Suite(
         println(divider)
 
         canonicalStacks.foreach { stack =>
-            val brief = stack.unsigned.brief
-            val sNum = brief.stackNum: Int
-            val first = brief.firstBlockNum: Int
-            val last = brief.lastBlockNum: Int
-            val nBlks = last - first + 1
+            val sNum = stack.stackNum: Int
             // Slow-consensus leadership schedule is round-robin by stack number, mirroring
             // fast-consensus block-number round-robin.
             val leader = sNum % nPeers
-            val (kindStr, partsStr) = stack.effects match {
-                case _: StackEffects.HardConfirmed.Initial =>
-                    ("Init", "init+fallback")
-                case r: StackEffects.HardConfirmed.Regular =>
-                    val parts = r.partitions.toList.map {
+            val label = stack match {
+                case _: Stack.HardConfirmed.Initial =>
+                    s"#$sNum Init lead=p$leader | init+fallback"
+                case r: Stack.HardConfirmed.Regular =>
+                    val first = r.brief.firstBlockNum: Int
+                    val last = r.brief.lastBlockNum: Int
+                    val nBlks = last - first + 1
+                    val blkLabel = if nBlks == 1 then "blk" else "blks"
+                    val parts = r.effects.partitions.toList.map {
                         case _: PartitionEffects.Minor[?] => "Min"
                         case _: PartitionEffects.Major[?] => "Maj"
                         case _: PartitionEffects.Final    => "Fin"
                     }
-                    val unlockStr = PartitionEffects.unlock(r.partitions) match {
+                    val unlockStr = PartitionEffects.unlock(r.effects.partitions) match {
                         case Some(PartitionEffects.Unlock.Settlement(i))   => s"sttlmnt@$i"
                         case Some(PartitionEffects.Unlock.Finalization(i)) => s"fin@$i"
                         case None                                          => "sole"
                     }
-                    ("Reg", s"[${parts.mkString(",")}] u=$unlockStr")
+                    s"#$sNum [$first..$last] ($nBlks $blkLabel) Reg lead=p$leader | " +
+                        s"[${parts.mkString(",")}] u=$unlockStr"
             }
-            val blkLabel = if nBlks == 1 then "blk" else "blks"
-            val label =
-                s"#$sNum [$first..$last] ($nBlks $blkLabel) $kindStr lead=p$leader | $partsStr"
             println(s"| ${label.take(colWidth).padTo(colWidth, ' ')} |")
         }
 
