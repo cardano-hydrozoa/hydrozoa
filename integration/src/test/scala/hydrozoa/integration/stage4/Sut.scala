@@ -90,7 +90,7 @@ private[stage4] class StackObserver(
     private val logger = Logging.loggerIO(s"Stage4.StackObserver.${peerNum: Int}")
     override def receive: Receive[IO, CardanoLiaison.Request] = {
         case s: Stack.HardConfirmed =>
-            val brief = s.unsigned.brief
+            val brief = s.brief
             logger.debug(
               s"received Stack.HardConfirmed stack=${brief.stackNum} " +
                   s"blocks=${brief.firstBlockNum}..${brief.lastBlockNum}, " +

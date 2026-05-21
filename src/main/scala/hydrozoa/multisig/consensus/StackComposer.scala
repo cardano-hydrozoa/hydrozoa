@@ -6,7 +6,9 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
 import hydrozoa.config.head.HeadConfig
+import hydrozoa.config.head.multisig.timing.TxTiming.StackTimes.StackCreationEndTime
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
@@ -25,12 +27,12 @@ import hydrozoa.multisig.ledger.stack.*
   * This actor combines Leader and Follower behaviour in a single flat receive (state-shared across
   * modes — pairing happens in both; only stack-close trigger differs):
   *
-  *   - **Leader** (when `isSlowLeader(nextStackNum)`): on `PreviousStackHardConfirmation` OR after
-  *     pairing a new block, attempts to close the next stack from the longest contiguous prefix.
-  *     Closing means: build [[StackBrief]] + [[StackEffects]] (via [[StackEffectsBuilder]] —
-  *     minor-only stacks fully derive; Major / Final fall through to TODOs in the next slice), wrap
-  *     into [[Stack.Unsigned]], hand off to [[SlowConsensusActor]], and broadcast the brief
-  *     directly to PeerLiaisons.
+  *   - **Leader** (when `isSlowLeader(nextStackNum)`): on `Stack.HardConfirmed` OR after pairing a
+  *     new block, attempts to close the next stack from the longest contiguous prefix. Closing
+  *     means: build [[StackBrief]] + [[StackEffects]] (via [[StackEffectsBuilder]] — minor-only
+  *     stacks fully derive; Major / Final fall through to TODOs in the next slice), wrap into
+  *     [[Stack.Unsigned]], hand off to [[SlowConsensusActor]], and broadcast the brief directly to
+  *     PeerLiaisons.
   *   - **Follower**: on an inbound `StackBrief` for `lastClosedStackNum + 1`, classify it three
   *     ways — structural divergence (→ rule-based fallback, TODO); not-yet-covered (benign: paired
   *     blocks don't yet span the brief's range — wait silently, re-fires on the next event);
@@ -104,8 +106,8 @@ final case class StackComposer(
             handleSoftConfirmed(b)
         case b: StackBrief =>
             handleIncomingStackBrief(b)
-        case p: PreviousStackHardConfirmation =>
-            handlePreviousStackHardConfirmation(p)
+        case s: Stack.HardConfirmed =>
+            handlePreviousStackHardConfirmed(s)
     }
 
     private def handleBlockResult(r: BlockResult): IO[Unit] = for {
@@ -128,13 +130,16 @@ final case class StackComposer(
         _ <- tryProgress
     } yield ()
 
-    private def handlePreviousStackHardConfirmation(
-        p: PreviousStackHardConfirmation
-    ): IO[Unit] = for {
-        _ <- Tracer.debug(s"PreviousStackHardConfirmation received for stack ${p.stackNum}")
-        _ <- state.update(_.withPreviousStackHardConfirmed(p.stackNum))
-        _ <- tryProgress
-    } yield ()
+    private def handlePreviousStackHardConfirmed(
+        s: Stack.HardConfirmed
+    ): IO[Unit] = {
+        val stackNum = s.brief.stackNum
+        for {
+            _ <- Tracer.debug(s"Stack.HardConfirmed received for stack $stackNum")
+            _ <- state.update(_.withPreviousStackHardConfirmed(stackNum))
+            _ <- tryProgress
+        } yield ()
+    }
 
     /** Run leader / follower close-stack attempts based on current state and slow-leadership for
       * the next stack. Both paths are gated on `previousStackHardConfirmed` (single-flight
@@ -155,8 +160,9 @@ final case class StackComposer(
         s.longestReadyPrefix match {
             case Nil => IO.unit
             case prefix =>
-                val brief = mkStackBrief(nextStackNum, prefix)
                 for {
+                    now <- realTimeQuantizedInstant(config.slotConfig)
+                    brief = mkStackBrief(nextStackNum, prefix, StackCreationEndTime(now))
                     _ <- Tracer.info(
                       s"Leader closing stack $nextStackNum with blocks " +
                           s"${prefix.head.result.brief.blockNum}..${prefix.last.result.brief.blockNum}"
@@ -239,11 +245,16 @@ final case class StackComposer(
                     }
         }
 
-    private def mkStackBrief(stackNum: StackNumber, prefix: List[ReadyBlock]): StackBrief =
+    private def mkStackBrief(
+        stackNum: StackNumber,
+        prefix: List[ReadyBlock],
+        creationEndTime: StackCreationEndTime
+    ): StackBrief =
         StackBrief(
           stackNum = stackNum,
           firstBlockNum = prefix.head.result.brief.blockNum,
-          lastBlockNum = prefix.last.result.brief.blockNum
+          lastBlockNum = prefix.last.result.brief.blockNum,
+          creationEndTime = creationEndTime
         )
 
     /** Build a [[Stack.Unsigned]] from the prefix. Runs the necessary-effects partition algorithm
@@ -503,15 +514,17 @@ object StackComposer {
         peerLiaisons: List[PeerLiaison.Handle]
     )
 
+    /** [[Stack.HardConfirmed]] is sent by [[SlowConsensusActor]] when stack reaches
+      * hard-confirmation; signals the StackComposer that it may close the next stack (single-flight
+      * serialization). The same message also travels to CardanoLiaison for L1 submission; the
+      * [[hydrozoa.multisig.consensus.limiter.Limiter]] sitting on the SlowConsensusActor →
+      * StackComposer lane reads the underlying [[StackBrief.creationEndTime]] to throttle stack
+      * production rate.
+      */
     type Request = PreStart.type | BlockResult | Block.SoftConfirmed | StackBrief |
-        PreviousStackHardConfirmation
+        Stack.HardConfirmed
 
     case object PreStart
-
-    /** Sent by [[SlowConsensusActor]] when stack `stackNum` reaches hard-confirmation; signals the
-      * StackComposer that it may close the next stack (single-flight serialization).
-      */
-    final case class PreviousStackHardConfirmation(stackNum: StackNumber)
 
     /** Per-block bag held while waiting for the other half of the (BlockResult, SoftConfirmed) pair
       * to arrive.
@@ -608,7 +621,7 @@ object StackComposer {
         }
 
         /** Apply the result of closing a stack: drain the prefix, advance counters, gate the next
-          * close on the upcoming PreviousStackHardConfirmation.
+          * close on the upcoming `Stack.HardConfirmed` of this stack.
           */
         def afterClose(closedStackNum: StackNumber, drained: List[ReadyBlock]): State = {
             val newReady = drained.foldLeft(ready)((m, rb) => m - rb.result.brief.blockNum)

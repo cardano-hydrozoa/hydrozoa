@@ -24,6 +24,7 @@ import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
 import hydrozoa.multisig.consensus.transport.{PeerWsTransport, RemotePeerProxy}
+import hydrozoa.multisig.consensus.limiter.Limiter
 import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, ConsensusActor, EventSequencer, PeerLiaison, SlowConsensusActor, StackComposer}
 import org.http4s.Uri
 import com.comcast.ip4s.{Host, Port, host}
@@ -312,25 +313,43 @@ case class Stage4Suite(
             // Complete each peer's deferred with its full wiring.
             _ <- peers.traverse { peerNum =>
                 val stack = peerStackMap(peerNum)
+                val nodeConfig = multiNodeConfig.nodeConfigs(peerNum)
                 val localLiaisons = peerLiaisonMap(peerNum).values.toList
-                pendingConnsMap(peerNum)
-                    .complete(
-                      MultisigRegimeManager.Connections(
-                        blockWeaver = stack.blockWeaver,
-                        // Route the slow cycle's Stack.HardConfirmed through StackObserver
-                        // (forwards to the real CardanoLiaison) so the test can assert
-                        // coverage; mirrors observerMap on consensusActor.
-                        cardanoLiaison = stackObserverMap(peerNum),
-                        consensusActor = observerMap(peerNum),
-                        eventSequencer = stack.eventSequencer,
-                        jointLedger = stack.jointLedger,
-                        stackComposer = stack.stackComposer,
-                        slowConsensusActor = stack.slowConsensusActor,
-                        peerLiaisons = localLiaisons,
-                        remotePeerLiaisons = remoteLiaisonsByPeer(peerNum),
+                for {
+                    // Per-peer rate limiters wrapping BlockWeaver and StackComposer. With the
+                    // default RateLimits config (zero periods) these are no-ops; non-zero
+                    // periods enable throttling for the corresponding lane.
+                    blockWeaverLimiter <- system.actorOf(
+                      Limiter[BlockWeaver.Request](stack.blockWeaver, nodeConfig, tracerLocal)
+                    )
+                    stackComposerLimiter <- system.actorOf(
+                      Limiter[StackComposer.Request](
+                        stack.stackComposer,
+                        nodeConfig,
+                        tracerLocal
                       )
                     )
-                    .void
+                    _ <- pendingConnsMap(peerNum)
+                        .complete(
+                          MultisigRegimeManager.Connections(
+                            blockWeaver = stack.blockWeaver,
+                            blockWeaverLimiter = blockWeaverLimiter,
+                            // Route the slow cycle's Stack.HardConfirmed through StackObserver
+                            // (forwards to the real CardanoLiaison) so the test can assert
+                            // coverage; mirrors observerMap on consensusActor.
+                            cardanoLiaison = stackObserverMap(peerNum),
+                            consensusActor = observerMap(peerNum),
+                            eventSequencer = stack.eventSequencer,
+                            jointLedger = stack.jointLedger,
+                            stackComposer = stack.stackComposer,
+                            stackComposerLimiter = stackComposerLimiter,
+                            slowConsensusActor = stack.slowConsensusActor,
+                            peerLiaisons = localLiaisons,
+                            remotePeerLiaisons = remoteLiaisonsByPeer(peerNum),
+                          )
+                        )
+                        .void
+                } yield ()
             }
 
             sutErrors <- Ref[IO].of(List.empty[String])
@@ -676,7 +695,7 @@ case class Stage4Suite(
         // Stack.Unsigned.results; the brief range is the authoritative span).
         val coveredRanges: Vector[(Int, Int)] =
             canonicalStacks.map { s =>
-                val b = s.unsigned.brief
+                val b = s.brief
                 ((b.firstBlockNum: Int), (b.lastBlockNum: Int))
             }
         def covered(n: BlockNumber): Boolean =
@@ -772,7 +791,7 @@ case class Stage4Suite(
         val header = s"| ${"Stack".padTo(colWidth, ' ')} |"
 
         val rows = canonicalStacks.map { stack =>
-            val brief = stack.unsigned.brief
+            val brief = stack.brief
             val sNum = brief.stackNum: Int
             val first = brief.firstBlockNum: Int
             val last = brief.lastBlockNum: Int

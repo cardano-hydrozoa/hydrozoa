@@ -1,10 +1,14 @@
 package hydrozoa.multisig.ledger.block
 
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.node.operation.multisig.RateLimits
+import hydrozoa.multisig.consensus.limiter.LimiterTimestamp
 import hydrozoa.multisig.ledger.block.BlockHeader.Minor.HeaderSignature
 import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, FinalizationTx, InitializationTx, RefundTx, RolloutTx, SettlementTx}
 import io.circe.*
 import io.circe.generic.semiauto.*
+import java.time.Instant
+import scala.concurrent.duration.FiniteDuration
 
 sealed trait Block extends Block.Section
 
@@ -202,8 +206,14 @@ object Block {
     sealed trait SoftConfirmed
         extends BlockBrief.Section,
           BlockStatus.SoftConfirmed,
-          Fields.HasFinalizationRequested {
+          Fields.HasFinalizationRequested,
+          LimiterTimestamp {
         def headerMultiSigned: List[BlockHeader.HeaderSignature]
+
+        override def limiterTimestamp: Instant = blockBrief.endTime.instant
+
+        override def minPeriod(using cfg: RateLimits.Section): FiniteDuration =
+            cfg.softBlockMinPeriod
     }
 
     object SoftConfirmed {

@@ -1,5 +1,10 @@
 package hydrozoa.multisig.ledger.stack
 
+import hydrozoa.config.node.operation.multisig.RateLimits
+import hydrozoa.multisig.consensus.limiter.LimiterTimestamp
+import java.time.Instant
+import scala.concurrent.duration.FiniteDuration
+
 /** A closed slow-consensus stack at one of two signing stages.
   *
   *   - [[Stack.Unsigned]] — composed locally (leader) or validated against the leader's brief
@@ -27,13 +32,28 @@ object Stack:
         effects: StackEffects.Unsigned
     ) extends Stack
 
-    /** @param effects
+    /** @param brief
+      *   the stack-composition announcement; carries `creationEndTime` consulted by the rate
+      *   limiter (see below). The unsigned-side effects ([[Stack.Unsigned.effects]]) are NOT
+      *   retained — once hard-confirmed, all needed effect data is on the multisigned `effects`.
+      * @param effects
       *   the partition-indexed effects with every head peer's signature aggregated in: tx bodies
       *   carry the multisig `VKeyWitness`es; each partition's standalone evac commitment is a
       *   [[StandaloneEvacuationCommitment.MultiSigned]] (the dormant record + all peers' header
       *   signatures). Tx bodies are L1-submittable as is; the SEC is dispute-usable.
+      *
+      * Also the signal sent by [[hydrozoa.multisig.consensus.SlowConsensusActor]] to
+      * [[hydrozoa.multisig.consensus.StackComposer]] to unblock the next stack close. The
+      * [[hydrozoa.multisig.consensus.limiter.Limiter]] sitting on that lane reads the brief's
+      * [[StackBrief.creationEndTime]] to throttle stack-production rate.
       */
     final case class HardConfirmed(
-        unsigned: Unsigned,
+        brief: StackBrief,
         effects: StackEffects.HardConfirmed
-    ) extends Stack
+    ) extends Stack,
+          LimiterTimestamp {
+        override def limiterTimestamp: Instant = brief.creationEndTime.instant
+
+        override def minPeriod(using cfg: RateLimits.Section): FiniteDuration =
+            cfg.hardStackMinPeriod
+    }

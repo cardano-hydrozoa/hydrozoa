@@ -179,7 +179,10 @@ class ConsensusActor(
                 _ <- connections.set(
                   Some(
                     ConsensusActor.Connections(
-                      blockWeaver = _connections.blockWeaver,
+                      // Soft-block fan-out goes via the rate limiter on the
+                      // ConsensusActor → BlockWeaver lane (see
+                      // hydrozoa.multisig.consensus.limiter.Limiter).
+                      blockWeaver = _connections.blockWeaverLimiter,
                       cardanoLiaison = _connections.cardanoLiaison,
                       eventSequencer = _connections.eventSequencer,
                       peerLiaisons = _connections.peerLiaisons,

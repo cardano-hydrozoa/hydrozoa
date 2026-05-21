@@ -1,14 +1,22 @@
 package hydrozoa.multisig.ledger.stack
 
+import hydrozoa.config.head.multisig.timing.TxTiming.StackTimes.StackCreationEndTime
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.ledger.block.BlockNumber
 import io.circe.*
 import io.circe.generic.semiauto.*
 
-/** Slow leader's stack-composition announcement: just the block range `[firstBlockNum,
-  * lastBlockNum]` the leader chose for this stack.
+/** Slow leader's stack-composition announcement: the block range `[firstBlockNum, lastBlockNum]`
+  * the leader chose for this stack, plus the wall-clock time at which the leader finished composing
+  * the brief (`creationEndTime`).
   *
   * Wire payload: per spec, only the brief (not the derived effects) is broadcast. Other peers
   * re-derive effects locally from their own [[BlockResult]] streams.
+  *
+  * `creationEndTime` is used by the [[hydrozoa.multisig.consensus.limiter.Limiter]] sitting on the
+  * SlowConsensusActor → StackComposer lane to bound the rate at which the next stack can be closed:
+  * hard-confirmation for stack `N` is held until `N.creationEndTime + hardStackMinPeriod` has
+  * elapsed wall-clock.
   *
   * No `firstMajorBlockNum`: the partition-by-major structure is fully deterministic from the block
   * *types* every peer already has (head peers via their own BlockResult stream; coil peers, when
@@ -18,9 +26,10 @@ import io.circe.generic.semiauto.*
 final case class StackBrief(
     stackNum: StackNumber,
     firstBlockNum: BlockNumber,
-    lastBlockNum: BlockNumber
+    lastBlockNum: BlockNumber,
+    creationEndTime: StackCreationEndTime
 )
 
 object StackBrief {
-    given Codec[StackBrief] = deriveCodec[StackBrief]
+    given (using CardanoNetwork.Section): Codec[StackBrief] = deriveCodec[StackBrief]
 }

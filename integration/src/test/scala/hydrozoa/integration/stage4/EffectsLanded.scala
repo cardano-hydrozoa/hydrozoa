@@ -70,7 +70,7 @@ object EffectsLanded {
       */
     def expectations(stacks: Seq[Stack.HardConfirmed]): List[BlockExpectation] =
         stacks.toList.flatMap { stack =>
-            val stackNum = stack.unsigned.brief.stackNum: Int
+            val stackNum = stack.brief.stackNum: Int
             stack.effects match {
                 case i: StackEffects.HardConfirmed.Initial =>
                     List(

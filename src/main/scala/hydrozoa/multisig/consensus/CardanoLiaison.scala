@@ -286,7 +286,7 @@ trait CardanoLiaison(
             case stack: Stack.HardConfirmed =>
                 Tracer.scopedCtx(
                   "cardanoLiaisonMode" -> "Stack.HardConfirmed",
-                  "stackNum" -> s"${stack.unsigned.brief.stackNum: Int}"
+                  "stackNum" -> s"${stack.brief.stackNum: Int}"
                 ) {
                     // The MULTISIGNED effects: SlowConsensusActor has aggregated every head
                     // peer's hard-ack signature into VKeyWitnesses and attached them onto
@@ -295,7 +295,7 @@ trait CardanoLiaison(
                     val effects = stack.effects
                     Tracer.info(
                       "received Stack.HardConfirmed for stack " +
-                          s"${stack.unsigned.brief.stackNum}"
+                          s"${stack.brief.stackNum}"
                     ) >> (effects match {
                         case reg: StackEffects.HardConfirmed.Regular =>
                             // Learn the stack's effects, then run the submission state
