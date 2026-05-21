@@ -142,21 +142,33 @@ object HeadConfig {
                             .downField("effects")
                             .downField("initializationTx")
                             .as[Transaction]
-                        fallbackTx <- c
-                            .downField("initialBlock")
-                            .downField("effects")
-                            .downField("fallbackTx")
-                            .as[Transaction]
                         hcBootstrap <- c.as[HeadConfig.Bootstrap](using
                           HeadConfig.Bootstrap.withInitTxDecoder(initTx)
                         )
-
-                        hc <- HeadConfig(
-                          hcBootstrap,
-                          brief,
-                          initTx,
-                          fallbackTx
-                        ).toEither.left.map(e =>
+                        // The init+fallback tx wrappers can't be decoded directly from the JSON
+                        // bytes — they need semantic parsing against the head config. Re-derive
+                        // the unsigned pair deterministically from the bootstrap + brief instead;
+                        // the persisted `initTx` only feeds `withInitTxDecoder` above.
+                        initTxSeq <- InitializationTxSeq
+                            .Build(hcBootstrap)(brief.endTime)
+                            .result
+                            .left
+                            .map(e =>
+                                io.circe.DecodingFailure(
+                                  s"Failed to derive InitializationTxSeq: $e",
+                                  c.history
+                                )
+                            )
+                        ib = InitialBlock(
+                          Block.Unsigned.Initial(
+                            brief,
+                            BlockEffects.Unsigned.Initial(
+                              initTxSeq.initializationTx,
+                              initTxSeq.fallbackTx
+                            )
+                          )
+                        )
+                        hc <- HeadConfig(hcBootstrap, ib).toEither.left.map(e =>
                             io.circe.DecodingFailure(s"Failed to decode HeadConfig: $e", c.history)
                         )
                     } yield hc
@@ -189,40 +201,6 @@ object HeadConfig {
             initialBlock
           )
         )
-
-    /** Decoder-side adapter: builds the unsigned init+fallback wrappers from the raw `Transaction`
-      * bytes parsed out of JSON, then delegates to the [[InitialBlock]]-shaped apply. The raw
-      * `fallbackTx` is discarded (the fallback is deterministically derivable from the bootstrap +
-      * brief via [[InitializationTxSeq.Build]]); only `initTx` round-trips faithfully.
-      */
-    def apply(
-        headConfigBootstrap: HeadConfig.Bootstrap,
-        blockBrief: BlockBrief.Initial,
-        initTx: Transaction,
-        fallbackTx: Transaction
-    ): ValidatedNel[HeadConfigError, HeadConfig] = {
-        val _ = fallbackTx // currently advisory; consistency-checked via Build below
-        Validated
-            .fromEither(
-              InitializationTxSeq
-                  .Build(headConfigBootstrap)(blockBrief.endTime)
-                  .result
-                  .left
-                  .map(error => NonEmptyList.one(error))
-            )
-            .andThen { expected =>
-                val ib = InitialBlock(
-                  Block.Unsigned.Initial(
-                    blockBrief,
-                    BlockEffects.Unsigned.Initial(
-                      initializationTx = expected.initializationTx,
-                      fallbackTx = expected.fallbackTx
-                    )
-                  )
-                )
-                HeadConfig(headConfigBootstrap, ib)
-            }
-    }
 
     def apply(
         cardanoNetwork: CardanoNetwork,
