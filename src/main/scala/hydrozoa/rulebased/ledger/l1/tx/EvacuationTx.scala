@@ -22,6 +22,7 @@ import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTrea
 import monocle.*
 import scala.annotation.tailrec
 import scalus.cardano.ledger.*
+import scalus.cardano.ledger.TransactionException.{ExUnitsExceedMaxException, InvalidTransactionSizeException}
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.onchain.plutus.prelude.List as SList
 import scalus.cardano.txbuilder.*
@@ -248,23 +249,26 @@ private object EvacuationTxOps {
                 )
             } yield evacuationTx) match {
                 case Right(w) => Right(w)
-                // Temporary -- just to see if the bug is located here
-                case Left(_) => loop(halveEvacuation(evacuatees))
-//                case Left(
-//                      BuilderError(
-//                        SomeBuildError.ValidationError(e: InvalidTransactionSizeException, ctx),
-//                        _
-//                      )
-//                    ) =>
-//                    loop(halveEvacuation(evacuatees))
-//                case Left(
-//                      BuilderError(
-//                        SomeBuildError.ValidationError(e: ExUnitsExceedMaxException, ctx),
-//                        _
-//                      )
-//                    ) =>
-//                    loop(halveEvacuation(evacuatees))
-//                case Left(e) => Left(e)
+                // When the tx is too large or exceeds ex-unit limits, retry with a smaller batch.
+                // TODO: non-size errors (e.g. value conservation failures from the balancer adding
+                //   ADA when minAda in the residual treasury is too small) also end up here and
+                //   cause infinite halving down to a batch of 1. Root cause: the resolution tx does
+                //   not reserve enough ADA in the treasury output. Fix there and restore Left(e).
+                case Left(
+                      BuilderError(
+                        SomeBuildError.ValidationError(_: InvalidTransactionSizeException, _),
+                        _
+                      )
+                    ) =>
+                    loop(halveEvacuation(evacuatees))
+                case Left(
+                      BuilderError(
+                        SomeBuildError.ValidationError(_: ExUnitsExceedMaxException, _),
+                        _
+                      )
+                    ) =>
+                    loop(halveEvacuation(evacuatees))
+                case Left(e) => Left(e)
             }
 
         // TODO: Make method on RuleBasedTreasuryUtxo

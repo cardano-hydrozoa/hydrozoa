@@ -27,7 +27,7 @@ type RBRHistogram = Histogram[RBRPlaceId, Utxo]
   *   - Collateral UTxOs carry the datum sentinel `"collateral"`
   *   - Evacuation outputs carry the datum sentinel `"evacuation"`
   *   - Script reference UTxOs are identified by their known [[scalus.cardano.ledger.TransactionInput]] keys
-  *   - Everything else falls into the [[hydrozoa.lib.classification.ClassificationResult.NoMatch]] bucket
+  *   - Everything else falls into the [[AmbientPlaceId]] default bucket
   *
   * Usage: `Histogram.empty(RBRClassifier(using env)).addAll(utxos.map(Utxo(_, _)))`
   */

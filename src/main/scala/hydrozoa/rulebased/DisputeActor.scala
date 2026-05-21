@@ -454,8 +454,6 @@ object DisputeActor {
             }
 
             object Treasury {
-                case class MultipleTreasuryTokensFound(utxos: Utxos) extends Unrecoverable
-
                 case class WrappedTreasuryParseError(wrapped: RuleBasedTreasuryOutput.ParseError)
                     extends Unrecoverable
 
@@ -470,38 +468,46 @@ object DisputeActor {
 
     }
 
+    // TODO: replace brittle string sentinels with domain-specific typed log events
+    object LogMessages:
+        val TreasuryIsResolved = "Treasury is Resolved"
+        val TreasuryIsUnresolved = "Treasury is Unresolved"
+
     // Parsing. Its in EitherT over IO because we have some recoverable failures (Lefts) and some unrecoverable failures
     // thrown as exceptions.
     // - If we get more than one treasury token or a parsing failure, thats an exception
     // - if we get zero treasury tokens, it may mean that the deinit has succeeded. But we keep trying, in case
     //   of rollbacks.
-    // TODO: Factor out. Its shared between this and the li
-    // obtained from the parameters to this class
     def parseRBTreasury(
         utxos: Utxos
     )(using
         config: Config,
         tracer: IOLocal[Tracer]
     ): EitherT[IO, Error.RecoverableErrors, RuleBasedTreasuryUtxo] =
+        import RuleBasedTreasuryUtxo.LookupError
         for {
             _ <- EitherT.liftF(Tracer.debug("parsing RuleBased Treasury"))
-            utxo <- utxos.size match {
-                // May happen due to rollback, ignore and try again
-                case 0 => EitherT.left(IO.pure(Error.ParseError.Treasury.TreasuryMissing))
-                case 1 => EitherT.right(IO.pure(Utxo(utxos.head)))
-                case _ =>
-                    EitherT.liftF(
-                      IO.raiseError(Error.ParseError.Treasury.MultipleTreasuryTokensFound(utxos))
+            treasuryUtxo <- EitherT(
+              IO.pure(RuleBasedTreasuryUtxo.parseOrMissing(utxos)).map {
+                  case Right(u) => Right(u)
+                  case Left(LookupError.Missing) =>
+                      Left(Error.ParseError.Treasury.TreasuryMissing: Error.RecoverableErrors)
+                  case Left(e) => throw e
+              }
+            )
+            _ <- treasuryUtxo.treasuryOutput.datum match {
+                case _: RuleBasedTreasuryDatum.Unresolved =>
+                    EitherT.liftF[IO, Error.RecoverableErrors, Unit](
+                      Tracer.info(LogMessages.TreasuryIsUnresolved)
+                    )
+                case _: RuleBasedTreasuryDatum.Resolved =>
+                    EitherT.left[Unit](
+                      Tracer
+                          .info(LogMessages.TreasuryIsResolved)
+                          .as(
+                            TreasuryResolved: Error.RecoverableErrors
+                          )
                     )
             }
-
-            rbTreasuryOut <- EitherT.right(IO.fromEither(RuleBasedTreasuryOutput(utxo.output)))
-            unresolvedRbt <- rbTreasuryOut.datum match {
-                case _: RuleBasedTreasuryDatum.Unresolved =>
-                    EitherT.right(Tracer.info("Treasury is Unresolved") >> IO.pure(rbTreasuryOut))
-                case _: RuleBasedTreasuryDatum.Resolved =>
-                    EitherT.left(Tracer.info("Treasury is Resolved") >> IO.pure(TreasuryResolved))
-
-            }
-        } yield RuleBasedTreasuryUtxo(utxo.input, unresolvedRbt)
+        } yield treasuryUtxo
 }

@@ -84,7 +84,7 @@ object InitialDisputeUtxos:
 
         // [SYNTHETIC] KZG G2 setup (reuses the same approach as the existing DisputeActorTest)
         val setup = TrustedSetup
-            .takeSrsG2(64)
+            .takeSrsG2(65)
             .map(p2 => G2Element(p2).toCompressedByteString)
 
         // Evacuation UTxOs carry a fixed sentinel datum ("evacuation") rather than real

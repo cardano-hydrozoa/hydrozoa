@@ -153,10 +153,11 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
 
               // Single shared tracer that fans out to both signal completions.
               tracer <- lift {
-                  // TODO: domain-specific event types should be used here instead of brittle strings
+                  // TODO: replace string sentinel matching with domain-specific typed log events
                   val signalTracer: Tracer = ContraTracer.emit { (ev: LogEvent) =>
-                      if ev.msg == "Treasury is Resolved" then resolvedSignal.complete(()).void
-                      else if ev.msg == "No more evacuations to be done. Staying alive in case of rollbacks"
+                      if ev.msg == DisputeActor.LogMessages.TreasuryIsResolved
+                      then resolvedSignal.complete(()).void
+                      else if ev.msg == EvacuationActor.LogMessages.NoMoreEvacuations
                       then evacuatedSignal.complete(()).void
                       else IO.unit
                   }

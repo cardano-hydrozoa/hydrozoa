@@ -25,7 +25,7 @@ import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.{Ev
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Resolved
 import hydrozoa.rulebased.ledger.l1.tx.EvacuationTx
-import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
+import hydrozoa.rulebased.ledger.l1.utxo.RuleBasedTreasuryUtxo
 import scala.util.{Failure, Success, Try}
 import scalus.builtin.ByteString
 import scalus.cardano.ledger.{TransactionHash, Utxo, Utxos}
@@ -175,10 +175,7 @@ case class EvacuationActor(
 
                 _ <- EitherT.liftF(
                   if toEvacuate.isEmpty
-                  then
-                      Tracer.info(
-                        "No more evacuations to be done. Staying alive in case of rollbacks"
-                      )
+                  then Tracer.info(LogMessages.NoMoreEvacuations)
                   else Tracer.info(s"${toEvacuate.size} payout obligations left")
                 )
                 /////////////////////////////////
@@ -277,6 +274,10 @@ object EvacuationActor {
     type Config = NodeOperationEvacuationConfig.Section & CardanoNetwork.Section &
         HeadPeers.Section & HasTokenNames & ScriptReferenceUtxos.Section & OwnHeadPeerPublic.Section
 
+    // TODO: replace brittle string sentinels with domain-specific typed log events
+    object LogMessages:
+        val NoMoreEvacuations = "No more evacuations to be done. Staying alive in case of rollbacks"
+
     type Handle = ActorRef[IO, Requests.Request]
 
     object Requests {
@@ -300,8 +301,6 @@ object EvacuationActor {
         }
 
         object ParseError {
-            case class MultipleTreasuryTokensFound(utxoSetL1: Utxos) extends Unrecoverable
-
             case object TreasuryMissing extends Recoverable
 
             case object TreasuryDeinitialized extends Recoverable
@@ -312,9 +311,6 @@ object EvacuationActor {
                 extends Unrecoverable {
                 override def getMessage: String = wrapped.getMessage
             }
-
-            case class RulesBasedTreasuryParseError(wrapped: RuleBasedTreasuryOutput.ParseError)
-                extends Unrecoverable
         }
 
         object BuildError {
@@ -327,33 +323,21 @@ object EvacuationActor {
 
     }
 
-    // NOTE: some duplication with the same function in DisputeActor
     def parseRBTreasury(
         utxos: Utxos
     )(using
         config: Config
     ): EitherT[IO, Error.RecoverableErrors, (RuleBasedTreasuryUtxo, Resolved)] =
+        import RuleBasedTreasuryUtxo.LookupError
         for {
-            utxo <- utxos.size match {
-                // May happen due to rollback, ignore and try again
-                case 0 => EitherT.left(IO.pure(Error.ParseError.TreasuryMissing))
-                case 1 => EitherT.right(IO.pure(Utxo(utxos.head)))
-                case _ =>
-                    EitherT.liftF(
-                      IO.raiseError(Error.ParseError.MultipleTreasuryTokensFound(utxos))
-                    )
-            }
-
-            treasuryUtxo <- RuleBasedTreasuryUtxo
-                .parse(utxo) match {
-                case Left(e) =>
-                    EitherT.liftF(
-                      IO.raiseError(
-                        EvacuationActor.Error.ParseError.RulesBasedTreasuryParseError(e)
-                      )
-                    )
-                case Right(rbt) => EitherT.right(IO.pure(rbt))
-            }
+            treasuryUtxo <- EitherT(
+              IO.pure(RuleBasedTreasuryUtxo.parseOrMissing(utxos)).map {
+                  case Right(u) => Right(u)
+                  case Left(LookupError.Missing) =>
+                      Left(Error.ParseError.TreasuryMissing: Error.RecoverableErrors)
+                  case Left(e) => throw e
+              }
+            )
             resolvedDatum <- treasuryUtxo.treasuryOutput.datum match {
                 case datum: RuleBasedTreasuryDatum.Resolved =>
                     EitherT.right(IO.pure(datum))

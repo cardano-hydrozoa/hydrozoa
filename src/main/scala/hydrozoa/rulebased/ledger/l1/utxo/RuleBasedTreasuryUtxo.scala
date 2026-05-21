@@ -12,7 +12,7 @@ import scalus.*
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{AssetName, MultiAsset, PolicyId, Slot, TransactionInput, TransactionOutput, Utxo, Value}
+import scalus.cardano.ledger.{AssetName, MultiAsset, PolicyId, Slot, TransactionInput, TransactionOutput, Utxo, Utxos, Value}
 import scalus.cardano.txbuilder.Datum.DatumInlined
 import scalus.cardano.txbuilder.ScriptSource.PlutusScriptAttached
 import scalus.cardano.txbuilder.ThreeArgumentPlutusScriptWitness
@@ -62,6 +62,37 @@ object RuleBasedTreasuryUtxo {
           treasuryOutput = output
         )
     }
+
+    /** Retrieves and parses the single treasury UTxO from `utxos`.
+      *
+      *   - 0 matching UTxOs → `Left(LookupError.Missing)`
+      *   - 1 matching UTxO → parsed via [[parse]]; parse failures become
+      *     `Left(LookupError.ParseFailed)`
+      *   - >1 matching UTxOs → `Left(LookupError.MultipleFound)`
+      *
+      * All `LookupError` variants extend `Throwable` so callers can raise unrecoverable cases with
+      * `IO.raiseError` without wrapping.
+      */
+    def parseOrMissing(
+        utxos: Utxos
+    )(using config: Config): Either[LookupError, RuleBasedTreasuryUtxo] =
+        utxos.size match
+            case 0 => Left(LookupError.Missing)
+            case 1 => parse(Utxo(utxos.head)).left.map(LookupError.ParseFailed(_))
+            case _ => Left(LookupError.MultipleFound(utxos))
+
+    sealed trait LookupError extends Throwable
+    object LookupError:
+        case object Missing extends LookupError:
+            override def getMessage: String =
+                "Treasury UTxO not found (may be missing due to rollback)"
+
+        final case class MultipleFound(utxos: Utxos) extends LookupError:
+            override def getMessage: String =
+                s"Multiple treasury UTxOs found (${utxos.size}); this is an unrecoverable error"
+
+        final case class ParseFailed(cause: ParseError) extends LookupError:
+            override def getMessage: String = cause.getMessage
 
     trait Produced {
         def treasuryProduced: RuleBasedTreasuryUtxo
