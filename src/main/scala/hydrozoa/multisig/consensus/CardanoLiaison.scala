@@ -15,8 +15,8 @@ import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.pollresults.PollResults
+import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.block.BlockVersion.Major.increment
-import hydrozoa.multisig.ledger.block.{BlockEffects, BlockHeader, BlockVersion}
 import hydrozoa.multisig.ledger.l1.tx.*
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects}
 import scala.collection.immutable.{Seq, TreeMap}
@@ -176,58 +176,10 @@ object CardanoLiaison:
     // ===================================
     object Timeout
 
-    object BlockConfirmed {
-        type Major = BlockHeader.Fields.HasBlockNum & BlockHeader.Fields.HasBlockVersion &
-            BlockEffects.HardConfirmed.Major.Section
-        type Final = BlockHeader.Fields.HasBlockNum & BlockHeader.Fields.HasBlockVersion &
-            BlockEffects.HardConfirmed.Final.Section
-
-        /** For testing purposes, where we may not want to construct a whole Block.HardConfirmed. */
-        sealed trait Minimal extends BlockHeader.Fields.HasBlockVersion
-
-        object Minimal {
-
-            /** For testing purposes, where we may not want to construct a whole
-              * Block.HardConfirmed.
-              */
-            final case class Major(
-                override val blockVersion: BlockVersion.Full,
-                override val settlementTx: SettlementTx,
-                override val fallbackTx: FallbackTx,
-                override val rolloutTxs: List[RolloutTx],
-                override val postDatedRefundTxs: List[RefundTx.PostDated],
-            ) extends Minimal,
-                  BlockEffects.HardConfirmed.Major.Section {
-                override def effects: BlockEffects.HardConfirmed.Major = BlockEffects.HardConfirmed
-                    .Major(settlementTx, rolloutTxs, fallbackTx, postDatedRefundTxs)
-            }
-
-            /** For testing purposes, where we may not want to construct a whole
-              * Block.HardConfirmed.
-              */
-            final case class Final(
-                override val blockVersion: BlockVersion.Full,
-                override val finalizationTx: FinalizationTx,
-                override val rolloutTxs: List[RolloutTx],
-            ) extends Minimal,
-                  BlockEffects.HardConfirmed.Final.Section {
-                override def effects: BlockEffects.HardConfirmed.Final =
-                    BlockEffects.HardConfirmed.Final(finalizationTx, rolloutTxs)
-            }
-        }
-
-    }
-
     // Post fast/slow split, L1 effects are produced per *stack* by the slow cycle, so the
-    // only effect-bearing inbound is `Stack.HardConfirmed`. M9-full (this commit) wires it:
-    // `handleStackL1Effects` translates the stack's `StackEffects.HardConfirmed.Regular` into the same
-    // effect-submission state machine the pre-split per-block path used
-    // (`mkHappyPathEffectInputsAndEffects` / `runEffects` /
-    // `effectInputs`/`happyPathEffects`/`fallbackEffects`). The legacy per-block
-    // `BlockConfirmed.{Major,Final}` types + `handleMajorBlockL1Effects` /
-    // `handleFinalBlockL1Effects` are no longer on any path (the stack path supersedes
-    // them); they are kept `@unused` purely as reference / for the (currently commented)
-    // `CardanoLiaisonTest` revival.
+    // only effect-bearing inbound is `Stack.HardConfirmed`.
+    // `handleStackL1Effects` translates the stack's `StackEffects.HardConfirmed.Regular` into the
+    // effect-submission state machine.
     type Request =
         PreStart.type | Timeout.type | Stack.HardConfirmed
     type Handle = ActorRef[IO, Request]
@@ -330,82 +282,7 @@ trait CardanoLiaison(
     // Inbox handlers
     // ===================================
 
-    /** Handle a per-block major effect bundle: saves the effects in the actor's state.
-      *
-      * Legacy pre-split entry point — no longer reachable from `receive` (effects are per-stack
-      * now). Retained as a building block for M9-full, which will call into the same state machine
-      * (`runEffects` etc.) with the stack's `StackEffects.HardConfirmed.Regular`.
-      */
-    @scala.annotation.unused
-    protected[consensus] def handleMajorBlockL1Effects(block: BlockConfirmed.Major): IO[Unit] =
-        for {
-            _ <- Tracer.info(s"entering handleMajorBlockL1Effects for block ${block.blockVersion}")
-            _ <- IO.whenA(block.blockVersion.major != block.settlementTx.majorVersionProduced) {
-                val msg =
-                    s"Block major version (${block.blockVersion.major}) doesn't match" +
-                        s" settlement tx major version produced (${block.settlementTx.majorVersionProduced})"
-                Tracer.error(msg) >> IO.raiseError(RuntimeException(msg))
-            }
-
-            _ <- Tracer.trace(s"settlementTx hash: ${block.settlementTx.tx.id}")
-            _ <- Tracer.trace(s"settlementTx ttl: ${block.settlementTx.tx.body.value.ttl}")
-            _ <- Tracer.trace(
-              "settlementTx treasuryProduced: " +
-                  s"${block.settlementTx.treasuryProduced.utxoId}"
-            )
-            _ <- Tracer.trace(
-              "settlementTx majorVersionProduced: " +
-                  s"${block.settlementTx.majorVersionProduced}"
-            )
-            _ <- Tracer.trace(
-              s"fallback tx validity start: ${block.fallbackTx.fallbackTxStartTime}"
-            )
-
-            newState <- stateRef.updateAndGet(s => {
-                val (blockEffectInputs, blockEffects) =
-                    mkHappyPathEffectInputsAndEffects(block.settlementTx, block.rolloutTxs)
-                State(
-                  targetState = TargetState.Active(
-                    block.settlementTx.treasuryProduced.utxoId
-                  ),
-                  effectInputs = s.effectInputs ++ blockEffectInputs,
-                  happyPathEffects = s.happyPathEffects ++ blockEffects,
-                  fallbackEffects =
-                      s.fallbackEffects + (block.blockVersion.major -> block.fallbackTx)
-                )
-            })
-            _ <- Tracer.trace(s"state after update: ${newState.prettyDump}")
-        } yield ()
-
-    /** Handle a per-block final effect bundle: saves the effects in the actor's state.
-      *
-      * Legacy pre-split entry point — no longer reachable from `receive` (effects are per-stack
-      * now). Retained as a building block for M9-full (see [[handleMajorBlockL1Effects]]).
-      */
-    @scala.annotation.unused
-    protected[consensus] def handleFinalBlockL1Effects(block: BlockConfirmed.Final): IO[Unit] =
-        for {
-            _ <- Tracer.info(s"entering handleFinalBlockL1Effects for block ${block.blockVersion}")
-
-            _ <- Tracer.trace(s"finalizationTx hash: ${block.finalizationTx.tx.id}")
-            _ <- Tracer.trace(s"rolloutTxs count: ${block.rolloutTxs.size}")
-
-            newState <- stateRef.updateAndGet(s => {
-                val (blockEffectInputs, blockEffects) =
-                    mkHappyPathEffectInputsAndEffects(
-                      block.finalizationTx,
-                      block.rolloutTxs
-                    )
-                s.copy(
-                  targetState = TargetState.Finalized(block.finalizationTx.tx.id),
-                  effectInputs = s.effectInputs ++ blockEffectInputs,
-                  happyPathEffects = s.happyPathEffects ++ blockEffects
-                )
-            })
-            _ <- Tracer.trace(s"state after update: ${newState.prettyDump}")
-        } yield ()
-
-    /** M9-full: learn a hard-confirmed stack's L1 effects into the submission state machine.
+    /** Learn a hard-confirmed stack's L1 effects into the submission state machine.
       *
       * Translates [[StackEffects.HardConfirmed.Regular]] into the same `(effectInputs,
       * happyPathEffects, fallbackEffects, targetState)` shape the pre-split per-block handlers

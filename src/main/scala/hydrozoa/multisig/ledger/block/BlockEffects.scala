@@ -1,161 +1,33 @@
 package hydrozoa.multisig.ledger.block
 
-import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, FinalizationTx, InitializationTx, RefundTx, RolloutTx, SettlementTx}
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, InitializationTx}
 import io.circe.*
 import io.circe.generic.semiauto.*
 
-sealed trait BlockEffects extends BlockEffects.Section
+/** Effects for the **initial** block only — the unsigned init + fallback txs the head will sign via
+  * the slow consensus's stack-0 hard-ack flow at startup.
+  *
+  * The Minor / Major / Final variants used to live here; after the fast/slow consensus split those
+  * effects (settlement, fallback, rollouts, refunds, finalization) are owned slow-side as
+  * `StackEffects.HardConfirmed.Regular` partitions and are no longer block-shaped on the fast
+  * cycle. Only the genesis init+fallback pair is retained, paired with `BlockBrief.Initial` via
+  * [[hydrozoa.config.head.initialization.InitialBlock]].
+  */
+sealed trait BlockEffects
 
 object BlockEffects {
-    sealed trait Unsigned extends BlockEffects, BlockStatus.Unsigned
+    sealed trait Unsigned extends BlockEffects
 
     object Unsigned {
         final case class Initial(
-            override val initializationTx: InitializationTx,
-            override val fallbackTx: FallbackTx,
-        ) extends BlockEffects.Unsigned,
-              BlockType.Initial,
-              BlockEffects.Initial.Section {
-            override transparent inline def effects: BlockEffects.Unsigned.Initial = this
-        }
+            initializationTx: InitializationTx,
+            fallbackTx: FallbackTx,
+        ) extends BlockEffects.Unsigned
 
-        final case class Minor(
-            override val headerSerialized: BlockHeader.SignedDigest.Serialized,
-            override val postDatedRefundTxs: List[RefundTx.PostDated],
-        ) extends BlockEffects.Unsigned,
-              BlockType.Minor,
-              BlockEffects.Minor.Section {
-            override transparent inline def effects: BlockEffects.Unsigned.Minor = this
-        }
-
-        final case class Major(
-            override val settlementTx: SettlementTx,
-            override val rolloutTxs: List[RolloutTx],
-            override val fallbackTx: FallbackTx,
-            override val postDatedRefundTxs: List[RefundTx.PostDated],
-        ) extends BlockEffects.Unsigned,
-              BlockType.Major,
-              BlockEffects.Major.Section {
-            override transparent inline def effects: BlockEffects.Unsigned.Major = this
-        }
-
-        final case class Final(
-            override val finalizationTx: FinalizationTx,
-            override val rolloutTxs: List[RolloutTx]
-        ) extends BlockEffects.Unsigned,
-              BlockType.Final,
-              BlockEffects.Final.Section {
-            override transparent inline def effects: BlockEffects.Unsigned.Final = this
-        }
-
-        type Next = BlockEffects.Unsigned & BlockType.Next
-        type Intermediate = BlockEffects.Unsigned & BlockType.Intermediate
-    }
-
-    sealed trait HardConfirmed extends BlockEffects, BlockStatus.HardConfirmed
-
-    object HardConfirmed {
-        final case class Initial(
-            override val initializationTx: InitializationTx,
-            override val fallbackTx: FallbackTx,
-        ) extends BlockEffects.HardConfirmed,
-              BlockType.Initial,
-              BlockEffects.HardConfirmed.Initial.Section {
-            override transparent inline def effects: BlockEffects.HardConfirmed.Initial = this
-        }
-
-        given blockEffectsMultiSignedInitialEncoder: Encoder[BlockEffects.HardConfirmed.Initial] =
-            deriveEncoder[BlockEffects.HardConfirmed.Initial]
-
-        final case class Minor(
-            override val headerSerialized: BlockHeader.SignedDigest.Serialized,
-            override val headerMultiSigned: List[BlockHeader.Minor.HeaderSignature],
-            override val postDatedRefundTxs: List[RefundTx.PostDated],
-        ) extends BlockEffects.HardConfirmed,
-              BlockType.Minor,
-              BlockEffects.HardConfirmed.Minor.Section {
-            override transparent inline def effects: BlockEffects.HardConfirmed.Minor = this
-        }
-
-        final case class Major(
-            override val settlementTx: SettlementTx,
-            override val rolloutTxs: List[RolloutTx],
-            override val fallbackTx: FallbackTx,
-            override val postDatedRefundTxs: List[RefundTx.PostDated],
-        ) extends BlockEffects.HardConfirmed,
-              BlockType.Major,
-              BlockEffects.HardConfirmed.Major.Section {
-            override transparent inline def effects: BlockEffects.HardConfirmed.Major = this
-        }
-
-        final case class Final(
-            override val finalizationTx: FinalizationTx,
-            override val rolloutTxs: List[RolloutTx]
-        ) extends BlockEffects.HardConfirmed,
-              BlockType.Final,
-              BlockEffects.HardConfirmed.Final.Section {
-            override transparent inline def effects: BlockEffects.HardConfirmed.Final = this
-        }
-
-        type Next = BlockEffects.HardConfirmed & BlockType.Next
-        type Intermediate = BlockEffects.HardConfirmed & BlockType.Intermediate
-
-        object Initial {
-            type Section = BlockEffects.Initial.Section
-        }
-
-        object Minor {
-            trait Section extends BlockEffects.Minor.Section, BlockHeader.Minor.MultiSigned.Section
-        }
-
-        object Major {
-            type Section = BlockEffects.Major.Section
-        }
-
-        object Final {
-            type Section = BlockEffects.Final.Section
-        }
-    }
-
-    object Fields {
-        trait HasPostDatedRefundTxs {
-            def postDatedRefundTxs: List[RefundTx.PostDated]
-        }
-    }
-
-    import Fields.*
-
-    trait Section extends HasPostDatedRefundTxs {
-        def effects: BlockEffects
-    }
-
-    object Initial {
-        trait Section extends BlockEffects.Section {
-            def initializationTx: InitializationTx
-            def fallbackTx: FallbackTx
-
-            override transparent inline def postDatedRefundTxs: List[RefundTx.PostDated] = List()
-        }
-    }
-
-    object Minor {
-        trait Section extends BlockEffects.Section, BlockHeader.SignedDigest.Serialized.Section
-    }
-
-    object Major {
-        trait Section extends BlockEffects.Section {
-            def settlementTx: SettlementTx
-            def rolloutTxs: List[RolloutTx]
-            def fallbackTx: FallbackTx
-        }
-    }
-
-    object Final {
-        trait Section extends BlockEffects.Section {
-            def finalizationTx: FinalizationTx
-            def rolloutTxs: List[RolloutTx]
-
-            override transparent inline def postDatedRefundTxs: List[RefundTx.PostDated] = List()
-        }
+        // Encoder only — InitializationTx / FallbackTx have CBOR-hex encoders but no decoders
+        // (they require semantic reconstruction from a raw `Transaction` plus bootstrap context,
+        // done in `HeadConfig.headConfigDecoder`).
+        given (using CardanoNetwork.Section): Encoder[Initial] = deriveEncoder[Initial]
     }
 }

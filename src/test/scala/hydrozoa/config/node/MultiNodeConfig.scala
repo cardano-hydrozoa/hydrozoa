@@ -10,7 +10,6 @@ import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.block.Block.HardConfirmed
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
 import org.scalacheck.util.Pretty
@@ -43,7 +42,6 @@ case class MultiNodeConfig private (
         )
 
     override def headConfigBootstrap: HeadConfig.Bootstrap = headConfig.headConfigBootstrap
-    override def initialBlock: HardConfirmed.Initial = headConfig.initialBlock
 
     def multisignTx(tx: Transaction): Transaction =
         tx.attachVKeyWitnesses(mkVKeyWitnesses(tx).toList)
@@ -174,6 +172,8 @@ object MultiNodeConfigTest extends Properties("Multi-node config") {
     val _ = property("generates") = Prop.forAll(
       TestPeersSpec.generate().flatMap(MultiNodeConfig.generate(_)())
     )(mnc =>
-        mnc.initialBlock.effects.initializationTx.tx.witnessSetRaw.value.vkeyWitnesses.toSet.nonEmpty
+        // InitialBlock now carries the UNSIGNED init+fallback txs (slow consensus signs them at
+        // startup), so we just verify the init tx is present.
+        mnc.initialBlock.effects.initializationTx.tx.body.value.outputs.nonEmpty
     )
 }

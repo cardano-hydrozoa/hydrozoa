@@ -52,7 +52,8 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
 
             // Collect all the props in a mutable buffer, and then combine them at the end
             val props = mutable.Buffer.empty[Prop]
-            val res = InitializationTxSeq.Build(config)(config.initialBlock.endTime).result
+            val res =
+                InitializationTxSeq.Build(config)(config.initialBlock.blockBrief.endTime).result
             props.append(s"Expected successful build, but got $res" |: res.isRight)
 
             // ===================================
@@ -517,7 +518,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
 
                 val parseRes = InitializationTxSeq
                     .Parse(config)(
-                      blockCreationEndTime = config.initialBlock.endTime,
+                      blockCreationEndTime = config.initialBlock.blockBrief.endTime,
                       transactionSequence = txSeq,
                       resolvedUtxos = iTx.resolvedUtxos,
                     )

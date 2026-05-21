@@ -794,7 +794,7 @@ object JointLedger {
 
     object State {
         def initialize(config: Config): Done = Done(
-          previousBlockHeader = config.initialBlock.header,
+          previousBlockHeader = config.initialBlock.blockBrief.header,
           l1LedgerState =
               L1LedgerM.State(config.initializationTx.treasuryProduced, DepositsMap.empty),
         )

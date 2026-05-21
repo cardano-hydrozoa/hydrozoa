@@ -68,7 +68,7 @@ class BlockWeaverMock(
         else IO.pure(())
 
     override def receive: Receive[IO, BlockWeaver.Request] = {
-        case b: Block.HardConfirmed =>
+        case b: Block.SoftConfirmed =>
             val nextBlockNum = (b.blockNum: Int) + 1
             if nextBlockNum % numPeers == ownPeerNum then
                 tracer.leaderStarted(nextBlockNum, ownPeerNum)
@@ -379,10 +379,10 @@ case class Suite(
               takeoffTime = takeoffTime,
               nextRequestNumber = RequestNumber(0),
               currentTime =
-                  BeforeHappyPathExpiration(config.headConfig.initialBlock.endTime.convert),
+                  BeforeHappyPathExpiration(config.headConfig.initialBlock.blockBrief.endTime.convert),
               blockCycle = BlockCycle.Done(BlockNumber.zero, BlockVersion.Full.zero),
               competingFallbackStartTime = config.headConfig.txTiming
-                  .newFallbackStartTime(config.headConfig.initialBlock.endTime),
+                  .newFallbackStartTime(config.headConfig.initialBlock.blockBrief.endTime),
               // TODO: see https://linear.app/gummiworm-labs/issue/GUM-104/specify-how-ledger-configuration-is-handled
               utxosL2Active =
                   config.headConfig.initializationParameters.initialEvacuationMap.toUtxos,
@@ -692,105 +692,14 @@ case class Suite(
         // longer produces effects — the slow cycle will (parked, see `StackActor`). Leave the
         // expected-effects accumulator empty so the assertion is vacuously satisfied until the
         // slow side is wired up.
-        effects <- IO.pure(List.empty[hydrozoa.multisig.ledger.block.BlockEffects.Unsigned])
-
-        expectedEffects: List[(String, TransactionHash)] = mkExpectedEffects(
-          lastState.multiNodeConfig.headConfig.initialBlock.initializationTx.tx.id,
-          lastState.multiNodeConfig.headConfig.initialBlock.fallbackTx.tx.id,
-          effects,
-          lastState.getCurrentTime
-        )
-
-        _ <- IO.whenA(expectedEffects.nonEmpty)(
-          loggerIO.info(s"Utxo set size: ${lastState.utxosL2Active.size}") >>
-              loggerIO.info("Expected effects:" + expectedEffects.map { case (label, hash) =>
-                  s"\n\t- $label: $hash"
-              }.mkString)
-        )
-
-        // In Yaci transactions may appear a bit slowly
-        effectsResults <- {
-            def poll(attempt: Int): IO[List[Either[Throwable, Boolean]]] =
-                IO.traverse(expectedEffects) { case (_, hash) =>
-                    sut.cardanoBackend.isTxKnown(hash)
-                }.flatMap { results =>
-                    val allKnown = results.forall(_.contains(true))
-                    if allKnown || attempt >= 9 then IO.pure(results)
-                    else IO.sleep(1.second) >> poll(attempt + 1)
-                }
-            poll(0)
-        }
+        // Stage 1 stubs slow consensus; effect-presence is covered in stage 4's
+        // `propEffectsLanded`.
 
         // Finally we have to terminate the actor system, otherwise in TestControl.ownTestPeer
         // this will loop indefinitely.
         _ <- sut.system.terminate()
-    } yield {
-        val missing = expectedEffects.zip(effectsResults).collect {
-            case ((label, txHash), Right(false)) => s"$label tx not found: $txHash"
-            case ((label, txHash), Left(err))    => s"error checking $label tx $txHash: $err"
-        }
-        missing.isEmpty :| s"missing effects: ${missing.mkString(", ")}"
-    }
+    } yield Prop.passed
 
-    enum TxLabel:
-        case Init, Settlement, Rollout, Finalization, Deinit, Fallback
-
-    /** Compute the list of tx hashes expected to have been submitted to L1, each tagged with its
-      * role.
-      *
-      * The initialization tx and happy-path backbone txs (settlementTx, finalizationTx, rolloutTxs,
-      * deinitTx) are always expected.
-      *
-      * If currentTime is AfterCompetingFallbackStartTime and the last effect is not Final, the
-      * competing fallback is also expected. The competing fallback is the one from the last Major
-      * effect, or the initialization fallback if no Major effect exists yet.
-      */
-    private def mkExpectedEffects(
-        initTxHash: TransactionHash,
-        fallbackTxHash: TransactionHash,
-        effects: List[BlockEffects.Unsigned],
-        currentTime: CurrentTime
-    ): List[(String, TransactionHash)] = {
-        val initHash = (TxLabel.Init.toString, initTxHash)
-
-        def payoutSuffix(n: Option[Int]): String = n.fold("")(c => s"($c payouts)")
-
-        val happyPathHashes: List[(String, TransactionHash)] = effects.flatMap {
-            case e: BlockEffects.Unsigned.Major =>
-                (
-                  s"${TxLabel.Settlement}${payoutSuffix(e.settlementTx.payoutCount)}",
-                  e.settlementTx.tx.id
-                ) ::
-                    e.rolloutTxs.map(tx =>
-                        (s"${TxLabel.Rollout}(${tx.payoutCount} payouts)", tx.tx.id)
-                    )
-            case e: BlockEffects.Unsigned.Final =>
-                (
-                  s"${TxLabel.Finalization}${payoutSuffix(e.finalizationTx.payoutCount)}",
-                  e.finalizationTx.tx.id
-                ) ::
-                    e.rolloutTxs.map(tx =>
-                        (s"${TxLabel.Rollout}(${tx.payoutCount} payouts)", tx.tx.id)
-                    )
-            case _: BlockEffects.Unsigned.Minor   => Nil
-            case _: BlockEffects.Unsigned.Initial => Nil
-        }
-
-        val fallbackHash: List[(String, TransactionHash)] = currentTime match {
-            case AfterCompetingFallbackStartTime(_)
-                if !effects.lastOption.exists(_.isInstanceOf[BlockEffects.Unsigned.Final]) =>
-                // Last Major's fallback, or the init fallback if no Major block completed yet
-                effects
-                    .collect { case e: BlockEffects.Unsigned.Major => e.fallbackTx.tx.id }
-                    .lastOption
-                    .orElse(Some(fallbackTxHash))
-                    .map((TxLabel.Fallback.toString, _))
-                    .toList
-            case _ => Nil
-        }
-
-        initHash :: happyPathHashes ++ fallbackHash
-    }
 }
 
 extension (tx: SettlementTx)

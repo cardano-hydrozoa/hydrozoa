@@ -25,7 +25,7 @@ import hydrozoa.multisig.consensus.{ConsensusActor, StackComposer, UserRequest, 
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.*
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Requests.*
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Scenarios.*
-import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockNumber}
+import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
 import hydrozoa.multisig.ledger.eutxol2.tx.GenesisObligation
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag.{Invalid, Valid}
@@ -99,7 +99,7 @@ object JointLedgerTestHelpers {
         private val blocks = Ref.unsafe[IO, ConsensusAgent.State](Vector.empty)
 
         override def receive: Receive[IO, ConsensusAgent.Request] = {
-            case block: Block.Unsigned.Next => blocks.update(_ :+ block)
+            case block: BlockBrief.Next => blocks.update(_ :+ block)
             case m: ConsensusAgent.GetState.Sync =>
                 for {
                     response <- blocks.get
@@ -115,7 +115,7 @@ object JointLedgerTestHelpers {
     }
 
     object ConsensusAgent {
-        type State = Vector[Block.Unsigned.Next]
+        type State = Vector[BlockBrief.Next]
 
         case object GetState extends SyncRequest[IO, GetState.type, ConsensusAgent.State] {
             type Sync = SyncRequest.Envelope[IO, GetState.type, ConsensusAgent.State]
@@ -732,7 +732,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
                   _ <- assertWith(
                     msg = "First block should be minor -- no deposits/withdrawals.",
-                    condition = block.isInstanceOf[Block.Unsigned.Minor]
+                    condition = block.isInstanceOf[BlockBrief.Minor]
                   )
 
                   _ <- assertWith(
@@ -740,13 +740,8 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                     condition = block.body.depositsRefunded.isEmpty
                         && block.body.depositsAbsorbed.isEmpty
                   )
-                  _ <- assertWith(
-                    msg = "Post-dated refund should appear",
-                    condition = block.effects.postDatedRefundTxs
-                        .map(_.focus(_.tx).modify(_.stripVKeyWitnesses)) == List(
-                      depositRefundTxSeq.refundTx
-                    )
-                  )
+                  // Post-split: post-dated refund txs are slow-cycle (`StackEffects`) and are
+                  // no longer block-attached, so they're not checked here.
               } yield ()
 
           // Complete another block, assume the deposit shows up in the poll results -- but it's not mature yet
@@ -778,7 +773,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
               _ <- assertWith(
                 msg = "Second block should be minor -- no deposits were absorbed.",
-                condition = block.isInstanceOf[Block.Unsigned.Minor]
+                condition = block.isInstanceOf[BlockBrief.Minor]
               )
           } yield ()
 
@@ -806,10 +801,10 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
               _ <- assertWith(
                 msg = "Third block should be major.",
-                condition = block.isInstanceOf[Block.Unsigned.Major]
+                condition = block.isInstanceOf[BlockBrief.Major]
               )
 
-              majorBlock = block.asInstanceOf[Block.Unsigned.Major]
+              majorBlock = block.asInstanceOf[BlockBrief.Major]
 
               _ <- assertWith(
                 msg = "Deposits should be correct with absorbed deposit",

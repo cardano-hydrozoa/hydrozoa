@@ -906,7 +906,7 @@ object Stage4Suite:
                 pn -> (survived ++ newOutputs)
             }.toMap
 
-            startTime = config.headConfig.initialBlock.endTime.convert
+            startTime = config.headConfig.initialBlock.blockBrief.endTime.convert
         yield ModelState(
           params = Params(
             config,
