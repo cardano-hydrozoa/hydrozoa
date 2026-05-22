@@ -44,8 +44,8 @@ object RateLimits {
     }
 
     lazy val default: RateLimits = RateLimits(
-      softBlockMinPeriod = 1.second,
-      hardStackMinPeriod = 1.second
+      softBlockMinPeriod = 20.seconds,
+      hardStackMinPeriod = 3.minutes
     )
 
     given Encoder[RateLimits] = deriveEncoder[RateLimits]

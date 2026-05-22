@@ -17,24 +17,35 @@ import scala.concurrent.duration.{DurationInt, FiniteDuration}
   * under `stage4` rather than a shared util because stage1 doesn't produce stacks (it stubs the
   * slow side); the surface area is currently stage4-only.
   *
-  * == Per-block happy-or-fallback disjunction ==
+  * == Per-transition happy-or-fallback disjunction ==
   *
-  * Walks the observed [[Stack.HardConfirmed]] sequence and splits it into per-block expectations.
-  * Each block has two mutually-exclusive completion paths and the assertion accepts either:
+  * Walks the observed [[Stack.HardConfirmed]] sequence into ordered backbone steps and checks
+  * each *treasury transition*. Each transition has two mutually-exclusive completion paths and
+  * the assertion accepts either:
   *
-  *   - **Happy** — settlement / finalization + every rollout landed on L1
-  *   - **Fallback** — the competing fallback tx landed on L1 (only for Major blocks and the
-  *     initial bootstrap; finals have no fallback partner)
+  *   - **Happy** — this step's settlement / finalization + every rollout landed on L1
+  *   - **Fallback** — the PREVIOUS step's competing fallback landed on L1
+  *
+  * The off-by-one is the crux: the competing fallback bundled with major block N spends N's
+  * treasury *output*, so it races settlement N+1 (which spends the same utxo), not settlement N.
+  * When settlement N+1 misses its window the liaison submits fallback N. So the disjunction for
+  * the transition into step k is `settlement(k)` OR `fallback(k-1)` — see [[expectations]]. The
+  * genesis init step has no predecessor and therefore no competing fallback.
   *
   * The poll loop retries until every block has completed via one of the two paths or the attempt
   * budget runs out. The disjunction means the assertion does NOT require model-time knowledge of
   * whether the happy or fallback path "should" have fired — it accepts whichever the protocol
   * actually took. That sidesteps stage4's lack of an `AfterCompetingFallbackStartTime` analogue.
   *
-  * Stage4 mock backend resolves instantly and never triggers the fallback path in current
-  * scenarios, so in practice every block completes via the happy path on the first attempt. The
-  * fallback branch is exercised the moment we add happy-path-expiration commands or swap in a
-  * real-clock backend.
+  * == Fallback is terminal ==
+  *
+  * At most one fallback is ever submitted: it moves the head into the rule-based dispute regime,
+  * after which no further happy-path effects are produced. So a block that sits *after* the first
+  * observed fallback is **Moot**, not a failure — its happy-path txs were never meant to land.
+  * The property therefore only requires that every block up to and including the first fallback
+  * completed (Happy, or the fallback itself); everything past it is ignored. Throttling the slow
+  * cycle (rate limiter) can push effects past their L1 validity windows and legitimately trigger
+  * this fallback, so the Moot tail is expected, not a bug.
   *
   * == Out of scope ==
   *
@@ -56,7 +67,9 @@ object EffectsLanded {
       *   every dependent rollout); EVERY one must be `isTxKnown` for the happy path to be
       *   considered complete
       * @param fallback
-      *   the alternate completion tx if the happy path doesn't fire; `None` for Final partitions
+      *   the competing fallback for this transition — the PREVIOUS backbone step's fallback,
+      *   which races this step's happy tx for the same treasury utxo. `None` for the genesis
+      *   init step (no predecessor).
       */
     final case class BlockExpectation(
         label: String,
@@ -64,40 +77,48 @@ object EffectsLanded {
         fallback: Option[TransactionHash],
     )
 
-    /** Walks observed stacks, projecting each `Major` / `Final` partition (and the `Initial`
-      * stack) into one [[BlockExpectation]]. `Minor` partitions are skipped — they carry no main
-      * L1 tx (sec is a header commitment, refunds are user-submitted).
+    /** One backbone step (init / settlement / finalization) with its own happy txs and the
+      * competing fallback it *produces*. That fallback spends this step's treasury output, so it
+      * races the NEXT step's happy tx — it is attributed to the next [[BlockExpectation]], not
+      * this one (see [[expectations]]).
       */
-    def expectations(stacks: Seq[Stack.HardConfirmed]): List[BlockExpectation] =
+    private final case class Backbone(
+        label: String,
+        happyTxs: List[TransactionHash],
+        ownFallback: Option[TransactionHash],
+    )
+
+    /** Walks observed stacks into the ordered backbone steps. `Minor` partitions are skipped —
+      * they carry no main L1 tx (sec is a header commitment, refunds are user-submitted).
+      */
+    private def backboneSteps(stacks: Seq[Stack.HardConfirmed]): List[Backbone] =
         stacks.toList.flatMap { stack =>
             val stackNum = stack.brief.stackNum: Int
             stack.effects match {
                 case i: StackEffects.HardConfirmed.Initial =>
                     List(
-                      BlockExpectation(
+                      Backbone(
                         label = s"stack#$stackNum init",
                         happyTxs = List(i.initializationTx.tx.id),
-                        fallback = Some(i.fallbackTx.tx.id),
+                        ownFallback = Some(i.fallbackTx.tx.id),
                       )
                     )
                 case r: StackEffects.HardConfirmed.Regular =>
                     r.partitions.toList.zipWithIndex.flatMap {
                         case (m: PartitionEffects.Major[?], partIdx) =>
                             List(
-                              BlockExpectation(
+                              Backbone(
                                 label = s"stack#$stackNum,p$partIdx major",
-                                happyTxs =
-                                    m.settlement.tx.id :: m.rollouts.map(_.tx.id),
-                                fallback = Some(m.fallback.tx.id),
+                                happyTxs = m.settlement.tx.id :: m.rollouts.map(_.tx.id),
+                                ownFallback = Some(m.fallback.tx.id),
                               )
                             )
                         case (f: PartitionEffects.Final, partIdx) =>
                             List(
-                              BlockExpectation(
+                              Backbone(
                                 label = s"stack#$stackNum,p$partIdx final",
-                                happyTxs =
-                                    f.finalization.tx.id :: f.rollouts.map(_.tx.id),
-                                fallback = None,
+                                happyTxs = f.finalization.tx.id :: f.rollouts.map(_.tx.id),
+                                ownFallback = None,
                               )
                             )
                         case (_: PartitionEffects.Minor[?], _) => Nil
@@ -105,11 +126,36 @@ object EffectsLanded {
             }
         }
 
-    /** Outcome of one block expectation after polling. */
+    /** Project the observed backbone into per-transition expectations.
+      *
+      * The transition *into* step `k` is resolved by EITHER step `k`'s own happy tx (settlement /
+      * finalization landed) OR the PREVIOUS step's competing fallback (`step k-1`'s fallback,
+      * which spends the same treasury input step `k`'s settlement would). So each expectation
+      * pairs `step(k).happyTxs` with `step(k-1).ownFallback` — the fallback is offset one step
+      * behind the settlement it races. The first step (genesis init) has no predecessor, hence no
+      * competing fallback.
+      */
+    def expectations(stacks: Seq[Stack.HardConfirmed]): List[BlockExpectation] = {
+        val steps = backboneSteps(stacks)
+        steps.zipWithIndex.map { case (step, k) =>
+            val competingFallback = if k == 0 then None else steps(k - 1).ownFallback
+            BlockExpectation(step.label, step.happyTxs, competingFallback)
+        }
+    }
+
+    /** Outcome of one block expectation after polling.
+      *
+      *   - `Happy` / `Fallback` — one of the two completion paths landed on L1.
+      *   - `Pending` — neither landed; a genuine miss (only meaningful before any fallback).
+      *   - `Moot` — this block sits *after* the first fallback. A fallback is terminal: the head
+      *     has exited to the rule-based regime, so no further happy-path effects are submitted and
+      *     these blocks are irrelevant, not failures.
+      */
     enum BlockOutcome:
         case Happy
         case Fallback
         case Pending
+        case Moot
 
     /** Per-block result enriched with the raw landed counts (for stats output / diagnostics). */
     final case class BlockResult(
@@ -141,8 +187,20 @@ object EffectsLanded {
             } yield BlockResult(e, outcome, happyKnown, happyTotal, fallbackKnown)
         }
 
-    /** Poll the backend until every expectation has reached `Happy` or `Fallback`, or the attempt
-      * budget is exhausted. Sleep between attempts is virtual under TestControl, wall-clock
+    /** The block expectations that still matter for pass/fail: everything up to and including the
+      * first observed fallback. A fallback is terminal (the head exits to the rule-based regime),
+      * so blocks after it are irrelevant. With no fallback, all results are relevant.
+      */
+    private def relevantPrefix(results: List[BlockResult]): List[BlockResult] =
+        results.indexWhere(_.outcome == BlockOutcome.Fallback) match {
+            case -1 => results
+            case k  => results.take(k + 1)
+        }
+
+    /** Poll the backend until every *relevant* expectation has reached `Happy` or `Fallback`, or
+      * the attempt budget is exhausted. "Relevant" stops at the first fallback (see
+      * [[relevantPrefix]]) — blocks past it never land happy-path effects, so they must not keep
+      * the poll spinning. Sleep between attempts is virtual under TestControl, wall-clock
       * otherwise — caller picks the budget appropriate to the backend.
       */
     def poll(
@@ -153,12 +211,26 @@ object EffectsLanded {
     ): IO[List[BlockResult]] = {
         def loop(attempt: Int): IO[List[BlockResult]] =
             evaluateOnce(backend, exps).flatMap { results =>
-                val allSettled = results.forall(_.outcome != BlockOutcome.Pending)
+                val allSettled = relevantPrefix(results).forall(_.outcome != BlockOutcome.Pending)
                 if allSettled || attempt + 1 >= attempts then IO.pure(results)
                 else IO.sleep(sleep) >> loop(attempt + 1)
             }
         loop(0)
     }
+
+    /** Relabel every block after the first fallback as `Moot` — a fallback is terminal, so those
+      * blocks' (un)landed happy-path effects are irrelevant. Leaves results unchanged if no
+      * fallback was observed.
+      */
+    private def mootAfterFallback(results: List[BlockResult]): List[BlockResult] =
+        results.indexWhere(_.outcome == BlockOutcome.Fallback) match {
+            case -1 => results
+            case k =>
+                results.zipWithIndex.map {
+                    case (r, i) if i > k => r.copy(outcome = BlockOutcome.Moot)
+                    case (r, _)          => r
+                }
+        }
 
     /** Aggregate stats across every per-block result. */
     final case class EffectsStats(
@@ -166,6 +238,7 @@ object EffectsLanded {
         happyBlocks: Int,
         fallbackBlocks: Int,
         pendingBlocks: Int,
+        mootBlocks: Int,
         happyTxsKnown: Int,
         happyTxsTotal: Int,
         fallbackTxsKnown: Int,
@@ -177,6 +250,7 @@ object EffectsLanded {
             val happyBlocks = results.count(_.outcome == BlockOutcome.Happy)
             val fallbackBlocks = results.count(_.outcome == BlockOutcome.Fallback)
             val pendingBlocks = results.count(_.outcome == BlockOutcome.Pending)
+            val mootBlocks = results.count(_.outcome == BlockOutcome.Moot)
             val happyTxsKnown = results.map(_.happyKnown).sum
             val happyTxsTotal = results.map(_.happyTotal).sum
             val fallbackTxsKnown = results.count(_.fallbackKnown.contains(true))
@@ -186,6 +260,7 @@ object EffectsLanded {
               happyBlocks = happyBlocks,
               fallbackBlocks = fallbackBlocks,
               pendingBlocks = pendingBlocks,
+              mootBlocks = mootBlocks,
               happyTxsKnown = happyTxsKnown,
               happyTxsTotal = happyTxsTotal,
               fallbackTxsKnown = fallbackTxsKnown,
@@ -208,6 +283,7 @@ object EffectsLanded {
                 case BlockOutcome.Happy    => "Happy"
                 case BlockOutcome.Fallback => "Fallback"
                 case BlockOutcome.Pending  => "Pending"
+                case BlockOutcome.Moot     => "Moot"
             }
             val happyStr = s"happy=${r.happyKnown}/${r.happyTotal}"
             val fbStr = r.fallbackKnown match {
@@ -221,12 +297,13 @@ object EffectsLanded {
 
         val s = EffectsStats.of(results)
         val totals = s"Blocks: ${s.blocks}  Happy=${s.happyBlocks}  " +
-            s"Fallback=${s.fallbackBlocks}  Pending=${s.pendingBlocks}"
+            s"Fallback=${s.fallbackBlocks}  Pending=${s.pendingBlocks}  Moot=${s.mootBlocks}"
         val txCounts = s"Happy txs landed: ${s.happyTxsKnown}/${s.happyTxsTotal}  " +
             s"Fallback txs landed: ${s.fallbackTxsKnown}/${s.fallbackTxsTotal}"
         val legend =
-            "Legend: Happy=all happy-path txs on L1; Fallback=competing fallback on L1; " +
-                "Pending=neither completed within budget; fb=n/a means Final (no fallback partner)"
+            "Legend: Happy=all happy-path txs on L1; Fallback=competing fallback on L1 (terminal); " +
+                "Pending=neither completed within budget; Moot=after a fallback (rule-based " +
+                "regime, irrelevant); fb=n/a means Final (no fallback partner)"
 
         (divider :: header :: divider :: rows ::: divider :: totals :: txCounts :: legend :: Nil)
             .mkString("\n", "\n", "")
@@ -255,7 +332,9 @@ object EffectsLanded {
         if exps.isEmpty then IO.pure(Prop.passed)
         else
             for {
-                results <- poll(backend, exps, attempts, sleep)
+                polled <- poll(backend, exps, attempts, sleep)
+                // A fallback is terminal: blocks after it are Moot, not failures.
+                results = mootAfterFallback(polled)
                 _ <- traceEffectsTable(results)
                 pending = results.filter(_.outcome == BlockOutcome.Pending)
                 diag = pending.map(r =>
@@ -268,7 +347,7 @@ object EffectsLanded {
                         })
                 )
             } yield Prop(pending.isEmpty) :|
-                s"effects landed: ${pending.size} of ${exps.size} block(s) " +
-                s"with neither happy nor fallback completion:\n" + diag.mkString("\n")
+                s"effects landed: ${pending.size} of ${exps.size} block(s) before any fallback " +
+                s"completed via neither happy nor fallback path:\n" + diag.mkString("\n")
     }
 }

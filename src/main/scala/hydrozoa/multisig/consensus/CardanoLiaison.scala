@@ -122,12 +122,18 @@ object CardanoLiaison:
 
     object State:
         def initialState(config: Config): State = {
+            // The submittable init + fallback effects are NOT seeded from config: those bodies are
+            // the UNSIGNED genesis placeholders, never submittable. CardanoLiaison learns the real
+            // (multisigned) init + fallback only from the hard-confirmed stack 0, via
+            // `handleInitialStackL1Effects`. We only seed the target treasury utxo id, which is
+            // identified by the init tx id (a body hash, witness-independent) and so is exact even
+            // from the unsigned body — it tells the liaison what to look for on L1 before stack 0
+            // hard-confirms (until then `happyPathEffects` is empty, so nothing is submitted).
             State(
               targetState = TargetState.Active(config.initializationTx.treasuryProduced.utxoId),
               effectInputs = Map.empty,
-              happyPathEffects =
-                  TreeMap(EffectId.initializationEffectId -> config.initializationTx),
-              fallbackEffects = Map(BlockVersion.Major.zero -> config.initialFallbackTx)
+              happyPathEffects = TreeMap.empty,
+              fallbackEffects = Map.empty
             )
         }
 

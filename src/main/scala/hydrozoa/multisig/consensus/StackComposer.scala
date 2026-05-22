@@ -98,6 +98,7 @@ final case class StackComposer(
             for {
                 _ <- Tracer.routeLocal(s"StackComposer.${config.ownHeadPeerNum}")
                 _ <- initializeConnections
+                _ <- bootstrapInitialStack
                 _ <- Tracer.info("StackComposer started.")
             } yield ()
         case r: BlockResult =>
@@ -152,6 +153,35 @@ final case class StackComposer(
             tryCloseAsLeader(s, nextStackNum)
         else tryCloseAsFollower(s, nextStackNum)
     }
+
+    /** Compose and hand off stack 0 (the genesis init + fallback) at startup.
+      *
+      * Stack 0 is exogenous — its effects come from the shared head config, not from any
+      * BlockResult stream — so EVERY peer derives it locally and runs the Initial 2-phase hard-ack
+      * flow over it (round-1 = fallback sig, round-2 = init-tx sig + individual funding witnesses).
+      * No `StackBrief` is broadcast: there's nothing a leader could tell followers that they can't
+      * derive from config. The init + fallback bodies are the UNSIGNED config placeholders; the
+      * hard-ack aggregation in [[SlowConsensusActor]] is what multisigns them. On hard-confirmation
+      * the resulting [[Stack.HardConfirmed]] flows to CardanoLiaison (submittable init + fallback)
+      * and back to this composer as the `PreviousStackHardConfirmation` that unblocks stack 1.
+      */
+    private def bootstrapInitialStack: IO[Unit] = for {
+        now <- realTimeQuantizedInstant(config.slotConfig)
+        brief = StackBrief(
+          stackNum = StackNumber.zero,
+          firstBlockNum = BlockNumber.zero,
+          lastBlockNum = BlockNumber.zero,
+          creationEndTime = StackCreationEndTime(now)
+        )
+        unsigned = Stack.Unsigned(
+          brief,
+          StackEffects.Unsigned.Initial(config.initializationTx, config.initialFallbackTx)
+        )
+        handoff <- buildHandoff(unsigned)
+        conn <- getConnections
+        _ <- Tracer.info("Bootstrapping initial stack 0 (init + fallback)")
+        _ <- conn.slowConsensusActor ! handoff
+    } yield ()
 
     /** Leader close-attempt: drain the longest contiguous prefix of `ready` starting at
       * `lastClosedBlockNum + 1` into a new stack.
@@ -645,9 +675,10 @@ object StackComposer {
           inboundLeaderBrief = Map.empty,
           lastClosedStackNum = StackNumber.zero,
           lastClosedBlockNum = BlockNumber.zero,
-          // Initial stack 0 boots with the trigger pre-armed (per spec: stack-0
-          // hard-confirmation bootstraps the trigger chain).
-          previousStackHardConfirmed = true,
+          // Stack 0 is composed + handed off at PreStart (`bootstrapInitialStack`) and must
+          // actually hard-confirm before stack 1 may close. So the trigger starts DISARMED; the
+          // stack-0 `Stack.HardConfirmed` arriving back from SlowConsensusActor arms it.
+          previousStackHardConfirmed = false,
           // Next hard-ack number to assign. 0-based: the PeerLiaison hard-ack
           // lane is next-expected with an initial cursor of 0 (see the
           // GetMsgBatch cursor protocol in PeerLiaison), so the first hard-ack

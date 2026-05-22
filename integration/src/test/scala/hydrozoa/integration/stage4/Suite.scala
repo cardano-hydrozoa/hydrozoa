@@ -487,10 +487,13 @@ case class Stage4Suite(
             // BlockWeaver's `sleepSendWakeup` runs in a separate fiber, so between wakeups the
             // actor's mailbox is empty and `isIdle` is true.
             //
-            // `maxTimeout` is virtual under TestControl and elapses fast in real time; the
-            // default (30s virtual) is enough to drive a pending fallback or deposit-decision
-            // wakeup that seals the in-progress block. Under real-clock backends it would be
-            // wall-clock; stage4 currently uses only the mock backend so we keep the default.
+            // `maxTimeout` is virtual under TestControl and elapses fast in real time. The
+            // rate limiter throttles the slow cycle, so the post-command tail can take several
+            // hard-stack periods to drain — under WS real-clock that's wall-clock seconds, far
+            // beyond the framework default (30s). Size the timeout to the throttle: each stack
+            // close sweeps the longest ready prefix, so the remaining blocks fold into the next
+            // stack(s); two hard-stack periods cover the close + cross-peer hard-confirm
+            // round-trip. Floored at 30s so zero rate limits don't yield a 0 (instant) timeout.
             //
             // Order matters: `waitForIdle` BEFORE cancelling liaison tick fibers. Cancelling
             // ticks first stops the leader's CardanoLiaison from observing L1 settlement,
@@ -502,7 +505,10 @@ case class Stage4Suite(
             // Letting ticks run during `waitForIdle` keeps the L1-polling-driven seal path
             // alive long enough for the tail to land in confirmed blocks. `waitForIdle` can
             // still return because the periods between ticks are mailbox-empty.
-            _ <- sut.system.waitForIdle()
+            stackDrainTimeout =
+                (lastState.params.multiNodeConfig.nodeConfigs.values.head.hardStackMinPeriod * 3)
+                    .max(30.seconds)
+            _ <- sut.system.waitForIdle(maxTimeout = stackDrainTimeout)
 
             // Slow-cycle tail drain. `waitForIdle` returns when mailboxes are empty + child
             // set stable + deadLetters drained — but it does NOT wait for scheduled future
@@ -515,12 +521,18 @@ case class Stage4Suite(
             // saturate every peer's `SlowConsensusActor`. `terminate()` immediately after
             // `waitForIdle` drops the last stack from `StackObserver`'s record, causing a
             // spurious `propStackCoverage` failure on whatever block(s) sit in that final
-            // stack. Sleeping ≥ 2 × `peerLiaisonResendInterval` guarantees at least one
-            // full resend cycle fires across every link so the tail acks land. The fast
-            // cycle has its own analogous tail-drain (the L1-polling tick path described
-            // just above); this is its slow-cycle counterpart.
-            slowTailDrain = lastState.params.multiNodeConfig.nodeConfigs.values.head
-                .peerLiaisonResendInterval * 2
+            // stack. Two effects must be covered: (a) ≥ 2 × `peerLiaisonResendInterval` so a
+            // full resend cycle fires across every link and the tail acks land; (b) ≥
+            // `hardStackMinPeriod`, because the rate limiter on the SlowConsensusActor →
+            // StackComposer lane HOLDS the prior stack's `Stack.HardConfirmed` for that long
+            // before it arms StackComposer to close the final stack over the last block(s).
+            // Without (b) the throttled final-stack trigger never arrives before `terminate()`
+            // and the last block is left uncovered. The fast cycle has its own analogous
+            // tail-drain (the L1-polling tick path described just above); this is its
+            // slow-cycle counterpart.
+            nodeConfig = lastState.params.multiNodeConfig.nodeConfigs.values.head
+            slowTailDrain =
+                (nodeConfig.peerLiaisonResendInterval * 2) + nodeConfig.hardStackMinPeriod
             _ <- IO.sleep(slowTailDrain)
 
             _ <- sut.liaisonTickFibers.traverse_(_.cancel)

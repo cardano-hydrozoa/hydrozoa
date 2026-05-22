@@ -15,7 +15,9 @@ import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
 import io.circe.*
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
+import scalus.cardano.ledger.VKeyWitness
 import scalus.crypto.ed25519.VerificationKey
+import scalus.uplc.builtin.ByteString
 import scodec.bits.ByteVector
 
 /** JSON codecs for the wire-eligible subset of [[PeerLiaison.Request]].
@@ -352,11 +354,28 @@ object Codecs {
         io.circe.Codec.from(dec, enc)
     }
 
-    /** Real `Codec[HardAck]` (M6). Discriminated by a `kind` tag. Regular / Sole / Round1Initial
-      * round-trip fully; `Round2Initial` (init-tx sig + per-peer `VKeyWitness` list) is the only
-      * variant left unsupported on the wire — the initial-stack boot path (StackComposer
-      * `Bootstrap`) is not wired yet, so a Round2Initial never reaches transport. It fails loudly
-      * if one ever does, rather than silently mis-round-tripping.
+    /** Full `VKeyWitness` (vkey + signature, 32+64 bytes) as two hex strings. Needed for the
+      * initial stack's round-2 `individualWitnesses` (a peer's funding witnesses for the init tx),
+      * which carry the vkey too — unlike [[TxSignature]], which is signature bytes only.
+      */
+    private given Codec[VKeyWitness] =
+        io.circe.Codec.from(
+          Decoder.instance(c =>
+              for {
+                  vkey <- c.downField("vkey").as[String]
+                  signature <- c.downField("signature").as[String]
+              } yield VKeyWitness(ByteString.fromHex(vkey), ByteString.fromHex(signature))
+          ),
+          Encoder.instance((w: VKeyWitness) =>
+              Json.obj(
+                "vkey" -> w.vkey.toHex.asJson,
+                "signature" -> w.signature.toHex.asJson
+              )
+          )
+        )
+
+    /** Real `Codec[HardAck]` (M6). Discriminated by a `kind` tag. All variants — Regular / Sole /
+      * Round1Initial / Round2Initial — round-trip fully.
       */
     private given Codec[HardAck.Payload] = {
         import HardAck.{Round1Payload, Round2Payload, SolePayload}
@@ -373,10 +392,11 @@ object Codecs {
                   "kind" -> "round2Regular".asJson,
                   "firstUnlockSig" -> p.firstUnlockSig.asJson
                 )
-            case _: Round2Payload.Initial =>
-                throw new IllegalStateException(
-                  "HardAck.Round2Payload.Initial is not wire-supported " +
-                      "(initial-stack boot path not wired)"
+            case p: Round2Payload.Initial =>
+                Json.obj(
+                  "kind" -> "round2Initial".asJson,
+                  "initTxSig" -> p.initTxSig.asJson,
+                  "individualWitnesses" -> p.individualWitnesses.asJson
                 )
             case p: SolePayload =>
                 Json.obj(
@@ -398,13 +418,12 @@ object Codecs {
                         .as[TxSignature]
                         .map(Round2Payload.Regular.apply)
                 case "round2Initial" =>
-                    Left(
-                      DecodingFailure(
-                        "HardAck.Round2Payload.Initial is not wire-supported " +
-                            "(initial-stack boot path not wired)",
-                        c.history
-                      )
-                    )
+                    for {
+                        initTxSig <- c.downField("initTxSig").as[TxSignature]
+                        individualWitnesses <- c
+                            .downField("individualWitnesses")
+                            .as[List[VKeyWitness]]
+                    } yield Round2Payload.Initial(initTxSig, individualWitnesses)
                 case "sole" =>
                     for {
                         sec <- c.downField("sec").as[BlockHeader.HeaderSignature]

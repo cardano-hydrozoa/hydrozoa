@@ -122,10 +122,10 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
 
     override def overrideParameters(p: Test.Parameters): Test.Parameters =
         p
-            .withPropFilter(Some("Two-peers head works"))
+            //.withPropFilter(Some("Two-peers head works"))
             // .withPropFilter(Some("Three-peers head works"))
             // .withPropFilter(Some("Twenty-peers head works"))
-            // .withPropFilter(Some("Two-peers head works WS"))
+             .withPropFilter(Some("Two-peers head works WS"))
             //.withPropFilter(Some("Ten-peers head works WS"))
             // .withInitialSeed(Seed.fromBase64("uOllVn-lTcPloHDUuC3_x8oVjOgUbTR7vUoBi3T71gF=").get)
             // .withInitialSeed(Seed.fromBase64("wZ2FQc_Iv2duN06RHMXFg7014XeEirS_K2-wY0RN38O=").get)
