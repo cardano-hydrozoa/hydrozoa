@@ -38,8 +38,9 @@ import hydrozoa.multisig.ledger.stack.*
   *     closed earlier than this follower could — re-derive effects locally, sign, hand to
   *     SlowConsensusActor).
   *
-  * Effect derivation, wallet signing, and own-ack bundling are live; the [[SlowConsensusActor]]
-  * still auto-confirms (M6 next slice will replace it with real ack aggregation across head peers).
+  * Effect derivation, wallet signing, and own-ack bundling are live; [[SlowConsensusActor]]
+  * aggregates the per-peer hard-acks across head peers into the multisigned [[Stack.HardConfirmed]]
+  * (no longer an auto-confirm stub).
   */
 final case class StackComposer(
     config: StackComposer.Config,
