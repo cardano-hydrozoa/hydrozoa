@@ -13,7 +13,6 @@ import hydrozoa.lib.tracing.ProtocolTracer
 import hydrozoa.multisig.MultisigRegimeManager.*
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
-import hydrozoa.multisig.consensus.ack.AckBlock
 import hydrozoa.multisig.consensus.peer.HeadPeerId
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l2.L2Ledger
@@ -62,6 +61,10 @@ trait MultisigRegimeManager(
                     Tracer.warn("Terminated peer liaison actor")
                 case Actors.EventSequencer =>
                     Tracer.warn("Terminated event sequencer actor")
+                case Actors.StackComposer =>
+                    Tracer.warn("Terminated stack composer actor")
+                case Actors.SlowConsensus =>
+                    Tracer.warn("Terminated slow consensus actor")
             }
         case TerminatedDependency(dependencyType, _) =>
             dependencyType match {
@@ -102,6 +105,14 @@ trait MultisigRegimeManager(
               JointLedger(config, pendingConnections, l2Ledger, tracer, tracerLocal)
             )
 
+            stackComposer <- context.actorOf(
+              StackComposer(config, pendingConnections, tracerLocal)
+            )
+
+            slowConsensusActor <- context.actorOf(
+              SlowConsensusActor(config, pendingConnections, tracerLocal)
+            )
+
             localPeerLiaisons <-
                 config.headPeerIds
                     .filterNot(_ == config.ownHeadPeerId)
@@ -118,6 +129,8 @@ trait MultisigRegimeManager(
               consensusActor = consensusActor,
               eventSequencer = eventSequencer,
               jointLedger = jointLedger,
+              stackComposer = stackComposer,
+              slowConsensusActor = slowConsensusActor,
               peerLiaisons = localPeerLiaisons,
               remotePeerLiaisons = Map.empty,
               tracer = tracer,
@@ -140,6 +153,14 @@ trait MultisigRegimeManager(
               eventSequencer,
               TerminatedChild(Actors.EventSequencer, eventSequencer)
             )
+            _ <- context.watch(
+              stackComposer,
+              TerminatedChild(Actors.StackComposer, stackComposer)
+            )
+            _ <- context.watch(
+              slowConsensusActor,
+              TerminatedChild(Actors.SlowConsensus, slowConsensusActor)
+            )
         } yield ()
 }
 
@@ -152,6 +173,8 @@ object MultisigRegimeManager {
         consensusActor: ConsensusActor.Handle,
         eventSequencer: EventSequencer.Handle,
         jointLedger: JointLedger.Handle,
+        stackComposer: StackComposer.Handle,
+        slowConsensusActor: SlowConsensusActor.Handle,
         peerLiaisons: List[PeerLiaison.Handle],
         remotePeerLiaisons: Map[HeadPeerId, PeerLiaison.Handle],
         tracer: ProtocolTracer = ProtocolTracer.noop,
@@ -171,7 +194,8 @@ object MultisigRegimeManager {
       * [[https://app.excalidraw.com/s/9N3iw9j24UW/9eRJ7Dwu42X]]
       */
     enum Actors:
-        case BlockWeaver, CardanoLiaison, Consensus, JointLedger, PeerLiaison, EventSequencer
+        case BlockWeaver, CardanoLiaison, Consensus, JointLedger, PeerLiaison, EventSequencer,
+            StackComposer, SlowConsensus
 
     /** Requests received by the multisig regime manager. */
     type Request = PreStart.type | TerminatedChild | TerminatedDependency

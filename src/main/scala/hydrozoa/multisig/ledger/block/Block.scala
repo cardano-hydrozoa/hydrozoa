@@ -1,191 +1,92 @@
 package hydrozoa.multisig.ledger.block
 
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.multisig.ledger.block.BlockHeader.Minor.HeaderSignature
-import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, FinalizationTx, InitializationTx, RefundTx, RolloutTx, SettlementTx}
 import io.circe.*
 import io.circe.generic.semiauto.*
 
-sealed trait Block extends Block.Section
-
+/** Namespace for block-shape types still in use on the fast consensus cycle.
+  *
+  * Only [[Block.SoftConfirmed]] (live fast-cycle output) and [[Block.Unsigned.Initial]] (genesis
+  * payload carried by [[hydrozoa.config.head.initialization.InitialBlock]]) survive the fast/slow
+  * split. The Minor/Major/Final `Unsigned` and the entire `HardConfirmed` hierarchy that used to
+  * carry L1 effect transactions were dead — those effects are now slow-side as
+  * `StackEffects.HardConfirmed.Regular`.
+  */
 object Block {
 
-    sealed trait Unsigned extends Block, BlockStatus.Unsigned {
-        def toContext: Seq[(String, String)] =
-            Seq(
-              "blockType" -> this.blockTypeString,
-              "blockVersion" -> this.blockVersion.toString,
-              "blockNumber" -> this.blockNum.toString
-            )
-    }
+    /** Locally-derived, pre-multisig block view. After the fast/slow split, only the `Initial`
+      * variant is alive: the genesis init+fallback pair stored in `HeadConfig`. The slow side's
+      * stack-0 hard-ack flow signs them at startup.
+      */
+    sealed trait Unsigned
 
     object Unsigned {
         final case class Initial(
-            override val blockBrief: BlockBrief.Initial,
-            override val effects: BlockEffects.Unsigned.Initial,
-        ) extends Block.Unsigned,
-              BlockType.Initial,
-              BlockEffects.Initial.Section {
-            override transparent inline def block: Block.Unsigned.Initial = this
-
-            override transparent inline def header: BlockHeader.Initial = blockBrief.header
-            override transparent inline def body: BlockBody.Initial.type = blockBrief.body
-
-            override transparent inline def initializationTx: InitializationTx =
+            blockBrief: BlockBrief.Initial,
+            effects: BlockEffects.Unsigned.Initial
+        ) extends Block.Unsigned {
+            transparent inline def initializationTx
+                : hydrozoa.multisig.ledger.l1.tx.InitializationTx =
                 effects.initializationTx
-            override transparent inline def fallbackTx: FallbackTx = effects.fallbackTx
+            transparent inline def fallbackTx: hydrozoa.multisig.ledger.l1.tx.FallbackTx =
+                effects.fallbackTx
         }
 
-        final case class Minor(
-            override val blockBrief: BlockBrief.Minor,
-            override val effects: BlockEffects.Unsigned.Minor,
-        ) extends Block.Unsigned,
-              BlockType.Minor,
-              BlockEffects.Minor.Section {
-            override transparent inline def block: Block.Unsigned.Minor = this
-
-            override transparent inline def header: BlockHeader.Minor = blockBrief.header
-            override transparent inline def body: BlockBody.Minor = blockBrief.body
-
-            override transparent inline def headerSerialized: BlockHeader.Minor.Onchain.Serialized =
-                effects.headerSerialized
-            override transparent inline def postDatedRefundTxs: List[RefundTx.PostDated] =
-                effects.postDatedRefundTxs
-        }
-
-        final case class Major(
-            override val blockBrief: BlockBrief.Major,
-            override val effects: BlockEffects.Unsigned.Major,
-        ) extends Block.Unsigned,
-              BlockType.Major,
-              BlockEffects.Major.Section {
-            override transparent inline def block: Block.Unsigned.Major = this
-
-            override transparent inline def header: BlockHeader.Major = blockBrief.header
-            override transparent inline def body: BlockBody.Major = blockBrief.body
-
-            override transparent inline def settlementTx: SettlementTx = effects.settlementTx
-            override transparent inline def rolloutTxs: List[RolloutTx] = effects.rolloutTxs
-            override transparent inline def fallbackTx: FallbackTx = effects.fallbackTx
-            override transparent inline def postDatedRefundTxs: List[RefundTx.PostDated] =
-                effects.postDatedRefundTxs
-        }
-
-        final case class Final(
-            override val blockBrief: BlockBrief.Final,
-            override val effects: BlockEffects.Unsigned.Final,
-        ) extends Block.Unsigned,
-              BlockType.Final,
-              BlockEffects.Final.Section {
-
-            override transparent inline def block: Block.Unsigned.Final = this
-
-            override transparent inline def header: BlockHeader.Final = blockBrief.header
-            override transparent inline def body: BlockBody.Final = blockBrief.body
-
-            override transparent inline def finalizationTx: FinalizationTx = effects.finalizationTx
-            override transparent inline def rolloutTxs: List[RolloutTx] = effects.rolloutTxs
-        }
-
-        type Next = Block.Unsigned & BlockType.Next
-        type Intermediate = Block.Unsigned & BlockType.Intermediate
-        type NonFinal = Block.MultiSigned & BlockType.NonFinal
-
-        extension (self: Next)
-            transparent inline def blockBriefNext: BlockBrief.Next =
-                self.blockBrief.asInstanceOf[BlockBrief.Next]
+        // Encoder only — `BlockEffects.Unsigned.Initial` has CBOR-hex tx encoders but no
+        // decoders; the JSON shape round-trips by re-deriving the unsigned tx pair at decode
+        // time in `HeadConfig.headConfigDecoder` from the bootstrap context.
+        given (using CardanoNetwork.Section): Encoder[Initial] = deriveEncoder[Initial]
     }
 
-    sealed trait MultiSigned extends Block, BlockStatus.MultiSigned, Fields.HasFinalizationRequested
+    /** Result of fast consensus: block brief plus every head peer's soft-ack signature over the
+      * brief's [[BlockHeader.Section.signingBytes]]. Carries no L1 effect signatures — those belong
+      * to the slow consensus cycle (see [[hydrozoa.multisig.consensus.SlowConsensusActor]]).
+      */
+    sealed trait SoftConfirmed
+        extends BlockBrief.Section,
+          BlockStatus.SoftConfirmed,
+          Fields.HasFinalizationRequested {
+        def headerMultiSigned: List[BlockHeader.HeaderSignature]
+    }
 
-    object MultiSigned {
-        final case class Initial(
-            override val blockBrief: BlockBrief.Initial,
-            override val effects: BlockEffects.MultiSigned.Initial,
-        ) extends Block.MultiSigned,
-              BlockType.Initial,
-              BlockEffects.MultiSigned.Initial.Section {
-            override transparent inline def block: Block.MultiSigned.Initial = this
-
-            override transparent inline def header: BlockHeader.Initial = blockBrief.header
-            override transparent inline def body: BlockBody.Initial.type = blockBrief.body
-
-            override transparent inline def initializationTx: InitializationTx =
-                effects.initializationTx
-            override transparent inline def fallbackTx: FallbackTx = effects.fallbackTx
-
-            override transparent inline def finalizationRequested: Boolean = false
-        }
-
-        given blockMultisignedInitialEncoder(using
-            CardanoNetwork.Section
-        ): Encoder[Block.MultiSigned.Initial] =
-            deriveEncoder[Block.MultiSigned.Initial]
-
+    object SoftConfirmed {
         final case class Minor(
             override val blockBrief: BlockBrief.Minor,
-            override val effects: BlockEffects.MultiSigned.Minor,
-            override val finalizationRequested: Boolean,
-        ) extends Block.MultiSigned,
-              BlockType.Minor,
-              BlockEffects.MultiSigned.Minor.Section {
-            override transparent inline def block: Block.MultiSigned.Minor = this
-
+            override val headerMultiSigned: List[BlockHeader.HeaderSignature],
+            override val finalizationRequested: Boolean
+        ) extends Block.SoftConfirmed,
+              BlockType.Minor {
             override transparent inline def header: BlockHeader.Minor = blockBrief.header
             override transparent inline def body: BlockBody.Minor = blockBrief.body
-
-            override transparent inline def headerSerialized: BlockHeader.Minor.Onchain.Serialized =
-                effects.headerSerialized
-            override transparent inline def headerMultiSigned: List[HeaderSignature] =
-                effects.headerMultiSigned
-            override transparent inline def postDatedRefundTxs: List[RefundTx.PostDated] =
-                effects.postDatedRefundTxs
         }
 
         final case class Major(
             override val blockBrief: BlockBrief.Major,
-            override val effects: BlockEffects.MultiSigned.Major,
-            override val finalizationRequested: Boolean,
-        ) extends Block.MultiSigned,
-              BlockType.Major,
-              BlockEffects.MultiSigned.Major.Section {
-            override transparent inline def block: Block.MultiSigned.Major = this
-
+            override val headerMultiSigned: List[BlockHeader.HeaderSignature],
+            override val finalizationRequested: Boolean
+        ) extends Block.SoftConfirmed,
+              BlockType.Major {
             override transparent inline def header: BlockHeader.Major = blockBrief.header
             override transparent inline def body: BlockBody.Major = blockBrief.body
-
-            override transparent inline def settlementTx: SettlementTx = effects.settlementTx
-            override transparent inline def rolloutTxs: List[RolloutTx] = effects.rolloutTxs
-            override transparent inline def fallbackTx: FallbackTx = effects.fallbackTx
-            override transparent inline def postDatedRefundTxs: List[RefundTx.PostDated] =
-                effects.postDatedRefundTxs
         }
 
         final case class Final(
             override val blockBrief: BlockBrief.Final,
-            override val effects: BlockEffects.MultiSigned.Final,
-        ) extends Block.MultiSigned,
-              BlockType.Final,
-              BlockEffects.MultiSigned.Final.Section {
-            override transparent inline def block: Block.MultiSigned.Final = this
-
+            override val headerMultiSigned: List[BlockHeader.HeaderSignature]
+        ) extends Block.SoftConfirmed,
+              BlockType.Final {
             override transparent inline def header: BlockHeader.Final = blockBrief.header
             override transparent inline def body: BlockBody.Final = blockBrief.body
-
-            override transparent inline def finalizationTx: FinalizationTx = effects.finalizationTx
-            override transparent inline def rolloutTxs: List[RolloutTx] = effects.rolloutTxs
-
             override transparent inline def finalizationRequested: Boolean = false
         }
 
-        type Next = Block.MultiSigned & BlockType.Next
-        type Intermediate = Block.MultiSigned & BlockType.Intermediate
-        type NonFinal = Block.MultiSigned & BlockType.NonFinal
+        type Next = Block.SoftConfirmed & BlockType.Next
+        type Intermediate = Block.SoftConfirmed & BlockType.Intermediate
+        type NonFinal = Block.SoftConfirmed & BlockType.NonFinal
 
-        extension (nonFinal: Block.MultiSigned.NonFinal)
+        extension (nonFinal: Block.SoftConfirmed.NonFinal)
             def headerNonFinal: BlockHeader.NonFinal =
                 nonFinal.header.asInstanceOf[BlockHeader.NonFinal]
-
     }
 
     object Fields {
@@ -193,9 +94,4 @@ object Block {
             def finalizationRequested: Boolean
         }
     }
-
-    trait Section extends BlockType, BlockBrief.Section, BlockEffects.Section {
-        def block: Block
-    }
-
 }

@@ -16,6 +16,7 @@ import hydrozoa.multisig.ledger.block.BlockHeader.Minor.HeaderSignature
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.multisig.ledger.l1.tx.Tx
 import hydrozoa.multisig.ledger.l1.tx.Tx.Validators.nonSigningValidators
+import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.{DisputeRedeemer, VoteRedeemer}
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.*
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
@@ -73,7 +74,7 @@ private object VoteTxOps {
         uncastVoteUtxo: VoteUtxo[VoteStatus.AwaitingVote],
         treasuryUtxo: RuleBasedTreasuryUtxo,
         collateralUtxo: CollateralUtxo,
-        blockHeader: BlockHeader.Minor.Onchain,
+        blockHeader: StandaloneEvacuationCommitment.Onchain,
         signatures: List[BlockHeader.Minor.HeaderSignature],
     ) {
 

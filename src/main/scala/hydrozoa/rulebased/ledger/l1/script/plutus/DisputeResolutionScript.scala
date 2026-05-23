@@ -4,7 +4,7 @@ import hydrozoa.*
 import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.ByteStringExtension.take
 import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.TxOutExtension.inlineDatumOfType
 import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.ValueExtension.*
-import hydrozoa.multisig.ledger.block.BlockHeader
+import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.TallyRedeemer.{Continuing, Removed}
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatumOnchain
@@ -38,7 +38,7 @@ object DisputeResolutionValidator extends Validator {
     given ToData[DisputeRedeemer] = ToData.derived
 
     case class VoteRedeemer(
-        blockHeader: BlockHeader.Minor.Onchain,
+        blockHeader: StandaloneEvacuationCommitment.Onchain,
         multisig: List[Signature]
     )
 

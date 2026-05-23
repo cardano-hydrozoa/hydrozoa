@@ -275,7 +275,7 @@ object Bootstrap:
         )
 
         initialBlock = InitialBlock(
-          Block.MultiSigned.Initial(
+          Block.Unsigned.Initial(
             blockBrief = BlockBrief.Initial(
               BlockHeader.Initial(
                 startTime = blockCreationStartTime,
@@ -283,19 +283,19 @@ object Bootstrap:
                 fallbackTxStartTime = fallbackTxStartTime,
                 forcedMajorBlockWakeupTime = forcedMajorBlockWakeupTime,
                 mDepositDecisionWakeupTime = None,
-                kzgCommitment = evacMap.kzgCommitment
               )
             ),
-            effects = BlockEffects.MultiSigned.Initial(
-              initializationTx = ownHeadWallet.signTx(initTxSeq.initializationTx),
-              fallbackTx = ownHeadWallet.signTx(initTxSeq.fallbackTx)
+            // Unsigned init+fallback — slow consensus's stack-0 hard-ack flow signs them at boot.
+            effects = BlockEffects.Unsigned.Initial(
+              initializationTx = initTxSeq.initializationTx,
+              fallbackTx = initTxSeq.fallbackTx
             )
           )
         )
 
         headConfig <- HeadConfig(
           headConfigBootstrap = bootstrap,
-          initialBlock = initialBlock.initialBlock
+          initialBlock = initialBlock
         ) match {
             case Validated.Valid(hc) => IO.pure(hc)
             case Validated.Invalid(_) =>

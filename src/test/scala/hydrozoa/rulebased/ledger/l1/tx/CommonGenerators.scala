@@ -7,10 +7,10 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.cardano.scalus.ledger.{CollateralOutput, CollateralUtxo}
-import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.commitment.TrustedSetup
 import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
+import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import org.scalacheck.Arbitrary.arbitrary
@@ -121,13 +121,13 @@ object CommonGenerators {
           CollateralOutput(addrKeyHash, ShelleyDelegationPart.Null, coin, None, None)
         )
 
-    def genOnchainBlockHeader(versionMajor: BigInt): Gen[BlockHeader.Minor.Onchain] =
+    def genOnchainBlockHeader(versionMajor: BigInt): Gen[StandaloneEvacuationCommitment.Onchain] =
         for {
             blockNum <- Gen.choose(10L, 20L).map(BigInt(_))
             timeCreation <- Gen.choose(1591566491L, 1760000000L).map(BigInt(_))
             versionMinor <- Gen.choose(0L, 100L).map(BigInt(_))
             commitment <- genByteStringOfN(48) // KZG commitment (G1 compressed point)
-        } yield BlockHeader.Minor.Onchain(
+        } yield StandaloneEvacuationCommitment.Onchain(
           blockNum = blockNum,
           startTime = timeCreation,
           versionMajor = versionMajor,

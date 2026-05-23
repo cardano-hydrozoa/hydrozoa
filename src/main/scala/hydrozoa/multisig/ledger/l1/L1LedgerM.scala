@@ -32,9 +32,9 @@ case class L1LedgerM[A] private (private val unL1LedgerM: RT[A]) {
 
     import L1LedgerM.*
 
-    private def map[B](f: A => B): L1LedgerM[B] = L1LedgerM(this.unL1LedgerM.map(f))
+    def map[B](f: A => B): L1LedgerM[B] = L1LedgerM(this.unL1LedgerM.map(f))
 
-    private def flatMap[B](f: A => L1LedgerM[B]): L1LedgerM[B] =
+    def flatMap[B](f: A => L1LedgerM[B]): L1LedgerM[B] =
         L1LedgerM(this.unL1LedgerM.flatMap(a => f(a).unL1LedgerM))
 
     /** Use [[runL1LedgerM()]] instead
@@ -71,6 +71,25 @@ object L1LedgerM {
       */
     private def lift[A](e: Either[L1LedgerM.Error, A]): L1LedgerM[A] =
         L1LedgerM(Kleisli.liftF(StateT.liftF(e)))
+
+    /** Inject a pure value into [[L1LedgerM]]. Useful when an effect-derivation path produces a
+      * value without needing to read or mutate the L1 state (e.g. minor-only stacks whose only
+      * effect is a list of pre-built refund txs).
+      */
+    def pure[A](a: A): L1LedgerM[A] = lift(Right(a))
+
+    /** Cats Monad instance enabling `traverse` and friends. Implements `tailRecM` via the
+      * StateT/ReaderT stack already used internally.
+      */
+    given cats.Monad[L1LedgerM] with {
+        override def pure[A](a: A): L1LedgerM[A] = L1LedgerM.pure(a)
+
+        override def flatMap[A, B](fa: L1LedgerM[A])(f: A => L1LedgerM[B]): L1LedgerM[B] =
+            fa.flatMap(f)
+
+        override def tailRecM[A, B](a: A)(f: A => L1LedgerM[Either[A, B]]): L1LedgerM[B] =
+            L1LedgerM(cats.Monad[RT].tailRecM(a)(a0 => f(a0).unL1LedgerM))
+    }
 
     /** Check that a deposit tx parses correctly and add the deposit utxo it produces to the
       * ledger's state.
@@ -169,6 +188,14 @@ object L1LedgerM {
         } yield settlementTxSeq
 
     }
+
+    // NOTE: there is intentionally NO `mkStandaloneEvacCommitTx` here. A standalone
+    // evacuation commitment is NOT a transaction and does NOT touch the L1 ledger / treasury:
+    // it is a contingent, dormant record `(headId, blockVersion, kzgCommitment)` presented to
+    // the L1 dispute-resolution scripts in the rules-based regime (only after a fallback
+    // executes). The treasury's KZG advances on L1 only via settlement (major) / finalization
+    // (final). The slow side builds the record purely in `StackEffectsBuilder` — see
+    // `hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment`.
 
     /** Remove the absorbed/refunded deposits and update the treasury in the ledger state. Called
       * when the block weaver sends the single to close the block in leader mode.

@@ -1,15 +1,17 @@
 package hydrozoa.multisig.consensus.transport
 
+import cats.data.NonEmptyList
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.multisig.consensus.PeerLiaison.Request.{GetMsgBatch, NewMsgBatch}
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
-import hydrozoa.multisig.consensus.ack.{AckBlock, AckId, AckNumber}
+import hydrozoa.multisig.consensus.ack.{AckId, AckNumber, HardAck, HardAckId, HardAckNumber, SoftAck}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{PeerLiaison, UserRequest, UserRequestBody, UserRequestHeader, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeader, BlockNumber}
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
+import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
 import io.circe.*
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
@@ -76,6 +78,54 @@ object Codecs {
           )
         )
 
+    private given Codec[BlockHeader.HeaderSignature] =
+        io.circe.Codec.from(
+          Decoder.decodeString.emap(s =>
+              ByteVector
+                  .fromHex(s)
+                  .toRight(s"Invalid hex for HeaderSignature: $s")
+                  .map(bv => BlockHeader.Minor.HeaderSignature(IArray.from(bv.toArray)))
+          ),
+          Encoder.encodeString.contramap((sig: BlockHeader.HeaderSignature) =>
+              ByteVector(IArray.genericWrapArray(sig).toArray).toHex
+          )
+        )
+
+    // ---- SoftAck ----
+
+    given Codec[SoftAck] = deriveCodec[SoftAck]
+
+    // ---- StackNumber / HardAckNumber / HardAckId / HardAck ----
+    //
+    // StackBrief has its own derived Codec; here we add the opaque-type primitives and the
+    // real discriminated HardAck wire codec (M6 — slow-side ack collection is live, so
+    // hard-acks now traverse the wire between peers).
+
+    given Codec[StackNumber] =
+        io.circe.Codec.from(
+          Decoder.decodeInt.map(StackNumber.apply),
+          Encoder.encodeInt.contramap((s: StackNumber) => s.convert)
+        )
+
+    given Codec[HardAckNumber] =
+        io.circe.Codec.from(
+          Decoder.decodeInt.map(HardAckNumber.apply),
+          Encoder.encodeInt.contramap((h: HardAckNumber) => h.convert)
+        )
+
+    given Codec[HardAckId] =
+        io.circe.Codec.from(
+          Decoder.instance(c =>
+              for {
+                  pn <- c.downField("peerNum").as[HeadPeerNumber]
+                  hn <- c.downField("hardAckNum").as[HardAckNumber]
+              } yield HardAckId(pn, hn)
+          ),
+          Encoder.instance((id: HardAckId) =>
+              Json.obj("peerNum" -> id.peerNum.asJson, "hardAckNum" -> id.hardAckNum.asJson)
+          )
+        )
+
     private given Codec[TxSignature] =
         io.circe.Codec.from(
           Decoder.decodeString.emap(s =>
@@ -85,51 +135,305 @@ object Codecs {
                   .map(bv => TxSignature(IArray.from(bv.toArray)))
           ),
           Encoder.encodeString.contramap((sig: TxSignature) =>
-              ByteVector(IArray.genericWrapArray(sig).toArray).toHex
+              ByteVector(IArray.genericWrapArray(sig.untagged).toArray).toHex
           )
         )
 
-    private given Codec[BlockHeader.Minor.HeaderSignature] =
-        io.circe.Codec.from(
-          Decoder.decodeString.emap(s =>
-              ByteVector
-                  .fromHex(s)
-                  .toRight(s"Invalid hex for HeaderSignature: $s")
-                  .map(bv => BlockHeader.Minor.HeaderSignature(IArray.from(bv.toArray)))
-          ),
-          Encoder.encodeString.contramap((sig: BlockHeader.Minor.HeaderSignature) =>
-              ByteVector(IArray.genericWrapArray(sig).toArray).toHex
-          )
-        )
-
-    // ---- AckBlock ADT ----
-
-    private given Codec[AckBlock.Minor] = deriveCodec[AckBlock.Minor]
-    private given Codec[AckBlock.Major1] = deriveCodec[AckBlock.Major1]
-    private given Codec[AckBlock.Major2] = deriveCodec[AckBlock.Major2]
-    private given Codec[AckBlock.Final1] = deriveCodec[AckBlock.Final1]
-    private given Codec[AckBlock.Final2] = deriveCodec[AckBlock.Final2]
-
-    given Codec[AckBlock] = {
-        val enc: Encoder[AckBlock] = Encoder.instance {
-            case x: AckBlock.Minor  => Json.obj("kind" -> "Minor".asJson, "v" -> x.asJson)
-            case x: AckBlock.Major1 => Json.obj("kind" -> "Major1".asJson, "v" -> x.asJson)
-            case x: AckBlock.Major2 => Json.obj("kind" -> "Major2".asJson, "v" -> x.asJson)
-            case x: AckBlock.Final1 => Json.obj("kind" -> "Final1".asJson, "v" -> x.asJson)
-            case x: AckBlock.Final2 => Json.obj("kind" -> "Final2".asJson, "v" -> x.asJson)
+    /** Per-partition round-1 slot — discriminated by `kind`. Five variants because the slot shape
+      * varies by both partition kind (Major/Final/Minor — mirrors
+      * [[hydrozoa.multisig.ledger.stack.PartitionEffects]]) AND by whether the partition is the
+      * round-1 unlock partition for its stack (Major/MajorUnlock and Final/FinalUnlock; Minor is
+      * never the unlock).
+      */
+    private given Codec[HardAck.Round1Payload.PartitionSigs] = {
+        import HardAck.Round1Payload.PartitionSigs
+        val enc = Encoder.instance[PartitionSigs] {
+            case p: PartitionSigs.MajorComplete =>
+                Json.obj(
+                  "kind" -> "majorComplete".asJson,
+                  "settlement" -> p.settlement.asJson,
+                  "fallback" -> p.fallback.asJson,
+                  "rollouts" -> p.rollouts.asJson,
+                  "refunds" -> p.refunds.asJson,
+                  "sec" -> p.sec.asJson
+                )
+            case p: PartitionSigs.MajorPartial =>
+                Json.obj(
+                  "kind" -> "majorPartial".asJson,
+                  "fallback" -> p.fallback.asJson,
+                  "rollouts" -> p.rollouts.asJson,
+                  "refunds" -> p.refunds.asJson,
+                  "sec" -> p.sec.asJson
+                )
+            case p: PartitionSigs.FinalComplete =>
+                Json.obj(
+                  "kind" -> "finalComplete".asJson,
+                  "finalization" -> p.finalization.asJson,
+                  "rollouts" -> p.rollouts.asJson
+                )
+            case p: PartitionSigs.FinalPartial =>
+                Json.obj(
+                  "kind" -> "finalPartial".asJson,
+                  "rollouts" -> p.rollouts.asJson
+                )
+            case p: PartitionSigs.Minor =>
+                Json.obj(
+                  "kind" -> "minor".asJson,
+                  "sec" -> p.sec.asJson,
+                  "refunds" -> p.refunds.asJson
+                )
         }
-        val dec: Decoder[AckBlock] = Decoder.instance(c =>
+        val dec = Decoder.instance[PartitionSigs] { c =>
             c.downField("kind").as[String].flatMap {
-                case "Minor"  => c.downField("v").as[AckBlock.Minor]
-                case "Major1" => c.downField("v").as[AckBlock.Major1]
-                case "Major2" => c.downField("v").as[AckBlock.Major2]
-                case "Final1" => c.downField("v").as[AckBlock.Final1]
-                case "Final2" => c.downField("v").as[AckBlock.Final2]
-                case other    => Left(DecodingFailure(s"Unknown AckBlock kind: $other", c.history))
+                case "majorComplete" =>
+                    for {
+                        settlement <- c.downField("settlement").as[TxSignature]
+                        fallback <- c.downField("fallback").as[TxSignature]
+                        rollouts <- c.downField("rollouts").as[List[TxSignature]]
+                        refunds <- c.downField("refunds").as[List[TxSignature]]
+                        sec <- c.downField("sec").as[Option[BlockHeader.HeaderSignature]]
+                    } yield PartitionSigs.MajorComplete(
+                      settlement,
+                      fallback,
+                      rollouts,
+                      refunds,
+                      sec
+                    )
+                case "majorPartial" =>
+                    for {
+                        fallback <- c.downField("fallback").as[TxSignature]
+                        rollouts <- c.downField("rollouts").as[List[TxSignature]]
+                        refunds <- c.downField("refunds").as[List[TxSignature]]
+                        sec <- c.downField("sec").as[Option[BlockHeader.HeaderSignature]]
+                    } yield PartitionSigs.MajorPartial(fallback, rollouts, refunds, sec)
+                case "finalComplete" =>
+                    for {
+                        finalization <- c.downField("finalization").as[TxSignature]
+                        rollouts <- c.downField("rollouts").as[List[TxSignature]]
+                    } yield PartitionSigs.FinalComplete(finalization, rollouts)
+                case "finalPartial" =>
+                    for {
+                        rollouts <- c.downField("rollouts").as[List[TxSignature]]
+                    } yield PartitionSigs.FinalPartial(rollouts)
+                case "minor" =>
+                    for {
+                        sec <- c.downField("sec").as[BlockHeader.HeaderSignature]
+                        refunds <- c.downField("refunds").as[List[TxSignature]]
+                    } yield PartitionSigs.Minor(sec, refunds)
+                case other =>
+                    Left(
+                      DecodingFailure(
+                        s"Unknown HardAck.Round1Payload.PartitionSigs kind: $other",
+                        c.history
+                      )
+                    )
             }
-        )
+        }
         io.circe.Codec.from(dec, enc)
     }
+
+    // ---- PartitionSigs subtype codecs (Partial / Complete / Minor) ----
+    //
+    // The PartitionSigs codec above already round-trips any concrete variant; these subtype codecs are
+    // narrowing adapters used by `Round1Payload.Regular`'s field types (Partial / Complete /
+    // Minor). At decode time they re-tag a successfully-decoded PartitionSigs as the expected subtype
+    // and fail if the wire variant doesn't belong to that subtype family.
+
+    private given Codec[HardAck.Round1Payload.PartitionSigs.Partial] = io.circe.Codec.from(
+      summon[Decoder[HardAck.Round1Payload.PartitionSigs]].emap {
+          case p: HardAck.Round1Payload.PartitionSigs.Partial => Right(p)
+          case other =>
+              Left(s"Expected PartitionSigs.Partial, got ${other.getClass.getSimpleName}")
+      },
+      summon[Encoder[HardAck.Round1Payload.PartitionSigs]].contramap(identity)
+    )
+
+    private given Codec[HardAck.Round1Payload.PartitionSigs.Complete] = io.circe.Codec.from(
+      summon[Decoder[HardAck.Round1Payload.PartitionSigs]].emap {
+          case c: HardAck.Round1Payload.PartitionSigs.Complete => Right(c)
+          case other =>
+              Left(s"Expected PartitionSigs.Complete, got ${other.getClass.getSimpleName}")
+      },
+      summon[Encoder[HardAck.Round1Payload.PartitionSigs]].contramap(identity)
+    )
+
+    private given Codec[HardAck.Round1Payload.PartitionSigs.Minor] = io.circe.Codec.from(
+      summon[Decoder[HardAck.Round1Payload.PartitionSigs]].emap {
+          case m: HardAck.Round1Payload.PartitionSigs.Minor => Right(m)
+          case other =>
+              Left(s"Expected PartitionSigs.Minor, got ${other.getClass.getSimpleName}")
+      },
+      summon[Encoder[HardAck.Round1Payload.PartitionSigs]].contramap(identity)
+    )
+
+    private given Codec[HardAck.Round1Payload.PartitionSigs.MajorPartial] = io.circe.Codec.from(
+      summon[Decoder[HardAck.Round1Payload.PartitionSigs]].emap {
+          case mp: HardAck.Round1Payload.PartitionSigs.MajorPartial => Right(mp)
+          case other =>
+              Left(s"Expected PartitionSigs.MajorPartial, got ${other.getClass.getSimpleName}")
+      },
+      summon[Encoder[HardAck.Round1Payload.PartitionSigs]].contramap(identity)
+    )
+
+    /** Round-1 regular payload — 4-way discriminated by `subKind` (one variant per partition-list
+      * layout; see [[HardAck.Round1Payload.Regular]]).
+      */
+    private given Codec[HardAck.Round1Payload.Regular] = {
+        import HardAck.Round1Payload.Regular as R
+        val enc = Encoder.instance[R] {
+            case r: R.OnlyPartial =>
+                Json.obj(
+                  "subKind" -> "onlyPartial".asJson,
+                  "partial" -> r.partial.asJson
+                )
+            case r: R.PartialThenCompletes =>
+                Json.obj(
+                  "subKind" -> "partialThenCompletes".asJson,
+                  "partial" -> r.partial.asJson,
+                  "completes" -> r.completes.asJson
+                )
+            case r: R.MinorThenPartial =>
+                Json.obj(
+                  "subKind" -> "minorThenPartial".asJson,
+                  "minor" -> r.minor.asJson,
+                  "partial" -> r.partial.asJson
+                )
+            case r: R.MinorThenPartialThenCompletes =>
+                Json.obj(
+                  "subKind" -> "minorThenPartialThenCompletes".asJson,
+                  "minor" -> r.minor.asJson,
+                  "partial" -> r.partial.asJson,
+                  "completes" -> r.completes.asJson
+                )
+        }
+        val dec = Decoder.instance[R] { c =>
+            c.downField("subKind").as[String].flatMap {
+                case "onlyPartial" =>
+                    for {
+                        partial <- c
+                            .downField("partial")
+                            .as[HardAck.Round1Payload.PartitionSigs.Partial]
+                    } yield R.OnlyPartial(partial)
+                case "partialThenCompletes" =>
+                    for {
+                        partial <- c
+                            .downField("partial")
+                            .as[HardAck.Round1Payload.PartitionSigs.MajorPartial]
+                        completes <- c
+                            .downField("completes")
+                            .as[NonEmptyList[HardAck.Round1Payload.PartitionSigs.Complete]]
+                    } yield R.PartialThenCompletes(partial, completes)
+                case "minorThenPartial" =>
+                    for {
+                        minor <- c.downField("minor").as[HardAck.Round1Payload.PartitionSigs.Minor]
+                        partial <- c
+                            .downField("partial")
+                            .as[HardAck.Round1Payload.PartitionSigs.Partial]
+                    } yield R.MinorThenPartial(minor, partial)
+                case "minorThenPartialThenCompletes" =>
+                    for {
+                        minor <- c.downField("minor").as[HardAck.Round1Payload.PartitionSigs.Minor]
+                        partial <- c
+                            .downField("partial")
+                            .as[HardAck.Round1Payload.PartitionSigs.MajorPartial]
+                        completes <- c
+                            .downField("completes")
+                            .as[NonEmptyList[HardAck.Round1Payload.PartitionSigs.Complete]]
+                    } yield R.MinorThenPartialThenCompletes(minor, partial, completes)
+                case other =>
+                    Left(
+                      DecodingFailure(
+                        s"Unknown HardAck.Round1Payload.Regular subKind: $other",
+                        c.history
+                      )
+                    )
+            }
+        }
+        io.circe.Codec.from(dec, enc)
+    }
+
+    /** Real `Codec[HardAck]` (M6). Discriminated by a `kind` tag. Regular / Sole / Round1Initial
+      * round-trip fully; `Round2Initial` (init-tx sig + per-peer `VKeyWitness` list) is the only
+      * variant left unsupported on the wire — the initial-stack boot path (StackComposer
+      * `Bootstrap`) is not wired yet, so a Round2Initial never reaches transport. It fails loudly
+      * if one ever does, rather than silently mis-round-tripping.
+      */
+    private given Codec[HardAck.Payload] = {
+        import HardAck.{Round1Payload, Round2Payload, SolePayload}
+        val enc = Encoder.instance[HardAck.Payload] {
+            case p: Round1Payload.Regular =>
+                Json.obj(
+                  "kind" -> "round1Regular".asJson,
+                  "regular" -> p.asJson
+                )
+            case p: Round1Payload.Initial =>
+                Json.obj("kind" -> "round1Initial".asJson, "fallbackSig" -> p.fallbackSig.asJson)
+            case p: Round2Payload.Regular =>
+                Json.obj(
+                  "kind" -> "round2Regular".asJson,
+                  "firstUnlockSig" -> p.firstUnlockSig.asJson
+                )
+            case _: Round2Payload.Initial =>
+                throw new IllegalStateException(
+                  "HardAck.Round2Payload.Initial is not wire-supported " +
+                      "(initial-stack boot path not wired)"
+                )
+            case p: SolePayload =>
+                Json.obj(
+                  "kind" -> "sole".asJson,
+                  "sec" -> p.sec.asJson,
+                  "refunds" -> p.refunds.asJson
+                )
+        }
+        val dec = Decoder.instance[HardAck.Payload] { c =>
+            c.downField("kind").as[String].flatMap {
+                case "round1Regular" =>
+                    c.downField("regular").as[Round1Payload.Regular]
+                case "round1Initial" =>
+                    c.downField("fallbackSig")
+                        .as[TxSignature]
+                        .map(Round1Payload.Initial.apply)
+                case "round2Regular" =>
+                    c.downField("firstUnlockSig")
+                        .as[TxSignature]
+                        .map(Round2Payload.Regular.apply)
+                case "round2Initial" =>
+                    Left(
+                      DecodingFailure(
+                        "HardAck.Round2Payload.Initial is not wire-supported " +
+                            "(initial-stack boot path not wired)",
+                        c.history
+                      )
+                    )
+                case "sole" =>
+                    for {
+                        sec <- c.downField("sec").as[BlockHeader.HeaderSignature]
+                        refunds <- c.downField("refunds").as[List[TxSignature]]
+                    } yield SolePayload(sec, refunds)
+                case other =>
+                    Left(DecodingFailure(s"Unknown HardAck.Payload kind: $other", c.history))
+            }
+        }
+        io.circe.Codec.from(dec, enc)
+    }
+
+    given Codec[HardAck] =
+        io.circe.Codec.from(
+          Decoder.instance(c =>
+              for {
+                  ackId <- c.downField("ackId").as[HardAckId]
+                  stackNum <- c.downField("stackNum").as[StackNumber]
+                  payload <- c.downField("payload").as[HardAck.Payload]
+              } yield HardAck(ackId, stackNum, payload)
+          ),
+          Encoder.instance((a: HardAck) =>
+              Json.obj(
+                "ackId" -> a.ackId.asJson,
+                "stackNum" -> a.stackNum.asJson,
+                "payload" -> a.payload.asJson
+              )
+          )
+        )
 
     // ---- UserRequestWithId ----
     //

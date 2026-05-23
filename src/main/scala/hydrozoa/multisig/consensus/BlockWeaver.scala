@@ -92,7 +92,7 @@ object BlockWeaver {
 
     type Handle = ActorRef[IO, Request]
 
-    type Request = PreStart.type | UserRequestWithId | BlockBrief.Next | Block.MultiSigned |
+    type Request = PreStart.type | UserRequestWithId | BlockBrief.Next | Block.SoftConfirmed |
         PollResults | LocalFinalizationTrigger.Triggered.type | Wakeup
 
     case object PreStart
@@ -343,9 +343,9 @@ object BlockWeaver {
                             ) >>
                                 pure(this)
 
-                        case bc: Block.MultiSigned =>
+                        case bc: Block.SoftConfirmed =>
                             logger.trace(
-                              s"Ignoring confirmed block ${bc.blockNum}."
+                              s"Ignoring soft block confirmation ${bc.blockNum}"
                             ) >> pure(this)
 
                         case unexpected: Unexpected =>
@@ -529,9 +529,9 @@ object BlockWeaver {
                             ) >>
                                 pure(this)
 
-                        case bc: Block.MultiSigned =>
+                        case bc: Block.SoftConfirmed =>
                             logger.trace(
-                              s"Ignoring confirmed block ${bc.blockNum}."
+                              s"Ignoring soft block confirmation ${bc.blockNum}"
                             ) >> pure(this)
 
                         case unexpected: Unexpected =>
@@ -694,7 +694,7 @@ object BlockWeaver {
                                     else pure(this.copy(isBlockStarted = Started))
                             } yield res
 
-                        case bc: Block.MultiSigned.NonFinal =>
+                        case bc: Block.SoftConfirmed.NonFinal =>
                             def completeBlockRegular =
                                 sendCompleteRegularBlockAsLeader(config) >>
                                     DecidingRole(
@@ -774,7 +774,7 @@ object BlockWeaver {
 
                 private def scheduleWakeupFiber(
                     config: Config,
-                    bc: Block.MultiSigned.NonFinal
+                    bc: Block.SoftConfirmed.NonFinal
                 ): IO[Unit] =
                     for {
                         now <- realTimeQuantizedInstant(config.slotConfig)
@@ -840,7 +840,7 @@ object BlockWeaver {
                     Leader.AwaitingConfirmation | Leader.AwaitingRequest
 
                 type Unexpected = PreStart.type | BlockBrief.Next |
-                    (Block.MultiSigned & BlockType.Final)
+                    (Block.SoftConfirmed & BlockType.Final)
 
                 private[State] def apply(
                     state: State,
@@ -866,7 +866,7 @@ object BlockWeaver {
                 override val logger: Logger[IO],
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
-                previousBlockConfirmed: Block.MultiSigned.NonFinal,
+                previousBlockConfirmed: Block.SoftConfirmed.NonFinal,
                 // wakeupFiber: Fiber[IO, Throwable, Unit]
             ) extends Reactive {
                 override transparent inline def stateName: String = "Leader.AwaitingRequest"
@@ -939,11 +939,11 @@ object BlockWeaver {
             private object AwaitingRequest {
                 type NextReactiveState = DecidingRole.NextReactiveState | Leader.AwaitingRequest
 
-                type Unexpected = PreStart.type | BlockBrief.Next | Block.MultiSigned
+                type Unexpected = PreStart.type | BlockBrief.Next | Block.SoftConfirmed
 
                 private[State] def apply(
                     state: State,
-                    previousBlockConfirmed: Block.MultiSigned.NonFinal,
+                    previousBlockConfirmed: Block.SoftConfirmed.NonFinal,
                     // wakeupFiber: Fiber[IO, Throwable, Unit]
                 ): Leader.AwaitingRequest =
                     import state.*

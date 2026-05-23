@@ -42,10 +42,13 @@ object HeadPeerNumber {
 
     val zero: HeadPeerNumber = 0
 
-    /** The given block will be confirmed when AckBlocks with this AckBlock.Number are received from
-      * all peers. It is equal to the block number plus the major version number because:
+    /** The given block is soft-confirmed when soft-acks with this (soft-)ack number are received
+      * from all head peers. Equal to the block number plus the major version number because:
       *   - Minor blocks each need only one ack and don't increment the major version.
       *   - Major and final blocks each need two acks and do increment the major version.
+      *
+      * (TODO(rename): the soft-cycle "AckNumber" type should become "SoftAckNumber" to parallel
+      * "HardAckNumber" — see the note in AckNumber.scala.)
       */
     def neededToConfirm(header: BlockHeader): HeadPeerNumber =
         header.blockNum + header.blockVersion.major
