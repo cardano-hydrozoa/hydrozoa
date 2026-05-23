@@ -11,7 +11,6 @@ import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.MultisigRegimeManager
-import hydrozoa.multisig.consensus.StackComposer.PreviousStackHardConfirmation
 import hydrozoa.multisig.consensus.ack.HardAck
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockHeader
@@ -28,7 +27,8 @@ import scalus.uplc.builtin.{ByteString, platform}
   * signature against the locally-derived, **partition-indexed** effect bodies
   * ([[Stack.Unsigned.effects]] — the canonical structure both StackComposer signs and this actor
   * verifies against; determinism makes the sigs comparable), and on saturation emits
-  * `Stack.HardConfirmed` to CardanoLiaison + `PreviousStackHardConfirmation` to StackComposer.
+  * `Stack.HardConfirmed` to CardanoLiaison + StackComposer (the latter signals the next stack may
+  * close; see [[hydrozoa.multisig.consensus.limiter.Limiter]] for rate-limiting).
   *
   * It owns no wallet: StackComposer signs all of this peer's hard-acks upfront and bundles them
   * into a [[SlowConsensusActor.StackHandoff]] as two explicit acks (round-1 + round-2) or one sole
@@ -288,9 +288,9 @@ final case class SlowConsensusActor(
 
     /** A round saturated. Aggregate every collected per-peer hard-ack signature into
       * `VKeyWitness`es / per-partition SEC header-sig sets, attach them onto the matching effects,
-      * and emit the now-multisigned [[Stack.HardConfirmed]] + the `PreviousStackHardConfirmation`
-      * that unblocks the next stack. The raw acks have served their purpose (verified + aggregated)
-      * and are dropped with the cell.
+      * and emit the now-multisigned [[Stack.HardConfirmed]] to CardanoLiaison (for L1 submission)
+      * and StackComposer (to unblock the next stack). The raw acks have served their purpose
+      * (verified + aggregated) and are dropped with the cell.
       */
     private def completeStack(
         stackNum: StackNumber,
@@ -305,18 +305,9 @@ final case class SlowConsensusActor(
           s"stack $stackNum HARD-CONFIRMED — aggregated witnesses onto ${wmap.size} " +
               "effect tx(s); emitting downstream"
         )
-        hardConfirmed = (cell.unsigned, signed) match {
-            case (_: Stack.Unsigned.Initial, e: StackEffects.HardConfirmed.Initial) =>
-                Stack.HardConfirmed.Initial(e)
-            case (r: Stack.Unsigned.Regular, e: StackEffects.HardConfirmed.Regular) =>
-                Stack.HardConfirmed.Regular(r.brief, e)
-            case _ =>
-                throw new IllegalStateException(
-                  s"completeStack: unsigned/hard-confirmed shape mismatch for stack $stackNum"
-                )
-        }
+        hardConfirmed = Stack.HardConfirmed(cell.unsigned.brief, signed)
         _ <- conn.cardanoLiaison ! hardConfirmed
-        _ <- conn.stackComposer ! PreviousStackHardConfirmation(stackNum)
+        _ <- conn.stackComposer ! hardConfirmed
         _ <- stateRef.update(_.dropCell(stackNum))
     } yield ()
 
@@ -931,7 +922,9 @@ final case class SlowConsensusActor(
                 _ <- connections.set(
                   Some(
                     Connections(
-                      stackComposer = c.stackComposer,
+                      // Stack.HardConfirmed fan-out to StackComposer goes via the rate limiter
+                      // on the SlowConsensusActor → StackComposer lane.
+                      stackComposer = c.stackComposerLimiter,
                       cardanoLiaison = c.cardanoLiaison,
                       peerLiaisons = c.peerLiaisons
                     )

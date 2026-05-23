@@ -1,8 +1,12 @@
 package hydrozoa.multisig.ledger.block
 
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.node.operation.multisig.RateLimits
+import hydrozoa.multisig.consensus.limiter.LimiterTimestamp
 import io.circe.*
 import io.circe.generic.semiauto.*
+import java.time.Instant
+import scala.concurrent.duration.FiniteDuration
 
 /** Namespace for block-shape types still in use on the fast consensus cycle.
   *
@@ -45,8 +49,14 @@ object Block {
     sealed trait SoftConfirmed
         extends BlockBrief.Section,
           BlockStatus.SoftConfirmed,
-          Fields.HasFinalizationRequested {
+          Fields.HasFinalizationRequested,
+          LimiterTimestamp {
         def headerMultiSigned: List[BlockHeader.HeaderSignature]
+
+        override def limiterTimestamp: Instant = blockBrief.endTime.instant
+
+        override def minPeriod(using cfg: RateLimits.Section): FiniteDuration =
+            cfg.softBlockMinPeriod
     }
 
     object SoftConfirmed {

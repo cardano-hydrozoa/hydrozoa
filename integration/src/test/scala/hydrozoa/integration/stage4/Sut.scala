@@ -36,8 +36,8 @@ private[stage4] case class PeerStack(
 // ===================================
 
 /** Proxy actor wrapping ConsensusActor. Intercepts intermediate `BlockBrief`s (Minor / Major) to
-  * record the per-peer brief sequence; forwards everything else unchanged. Both leader-produced
-  * and follower-reproduced briefs flow through JointLedger.handleBlock → ConsensusActor, so this
+  * record the per-peer brief sequence; forwards everything else unchanged. Both leader-produced and
+  * follower-reproduced briefs flow through JointLedger.handleBlock → ConsensusActor, so this
   * captures the complete ordered sequence seen by the peer.
   */
 private[stage4] class BlockBriefObserver(
@@ -78,8 +78,8 @@ private[stage4] class BlockBriefObserver(
 // ===================================
 
 /** Proxy actor wrapping CardanoLiaison. Intercepts every `Stack.HardConfirmed` the peer's
-  * SlowConsensusActor emits (the slow cycle's terminal artifact) to record the per-peer sequence
-  * of hard-confirmed stacks; forwards everything else (and the stack itself) unchanged so the real
+  * SlowConsensusActor emits (the slow cycle's terminal artifact) to record the per-peer sequence of
+  * hard-confirmed stacks; forwards everything else (and the stack itself) unchanged so the real
   * CardanoLiaison still drives L1 submission. Parallels [[BlockBriefObserver]] on the slow side.
   */
 private[stage4] class StackObserver(
@@ -90,19 +90,16 @@ private[stage4] class StackObserver(
     private val logger = Logging.loggerIO(s"Stage4.StackObserver.${peerNum: Int}")
     override def receive: Receive[IO, CardanoLiaison.Request] = {
         case s: Stack.HardConfirmed =>
-            val descr = s match {
-                case _: Stack.HardConfirmed.Initial =>
-                    s"stack=${s.stackNum} (Initial)"
-                case r: Stack.HardConfirmed.Regular =>
-                    s"stack=${r.stackNum} blocks=${r.brief.firstBlockNum}..${r.brief.lastBlockNum}"
-            }
+            val brief = s.brief
             logger.debug(
-              s"received Stack.HardConfirmed $descr, capturing and forwarding"
+              s"received Stack.HardConfirmed stack=${brief.stackNum} " +
+                  s"blocks=${brief.firstBlockNum}..${brief.lastBlockNum}, " +
+                  "capturing and forwarding"
             ) >>
                 stacks.update(_ :+ s) >>
                 (real ! s) >>
                 logger.debug(
-                  s"forwarded Stack.HardConfirmed $descr to real CardanoLiaison"
+                  s"forwarded Stack.HardConfirmed stack=${brief.stackNum} to real CardanoLiaison"
                 )
         case msg =>
             logger.debug(s"received non-stack msg=${msg.getClass.getSimpleName}, forwarding") >>
@@ -150,11 +147,11 @@ case class Stage4Sut(
 
 /** Selects how a [[Stage4Sut]] wires its peer liaisons to remote peers.
   *
-  *   - [[Direct]] (default) — every peer's [[PeerLiaison]] gets the actual remote handle from
-  *     the corresponding peer's actor system. In-process, no network. Compatible with
+  *   - [[Direct]] (default) — every peer's [[PeerLiaison]] gets the actual remote handle from the
+  *     corresponding peer's actor system. In-process, no network. Compatible with
   *     [[ModelBasedSuite#useTestControl]] = `true`.
-  *   - [[WebSocket]] — every peer runs its own [[PeerWsTransport]] bound to localhost on a
-  *     distinct port. Cross-peer communication happens over real WebSocket connections. Forces
+  *   - [[WebSocket]] — every peer runs its own [[PeerWsTransport]] bound to localhost on a distinct
+  *     port. Cross-peer communication happens over real WebSocket connections. Forces
   *     [[ModelBasedSuite#useTestControl]] = `false` since real sockets don't speak virtual time.
   *     Ports start at [[basePort]] and increase by `peerNum`.
   */

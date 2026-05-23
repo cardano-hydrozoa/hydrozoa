@@ -1,5 +1,10 @@
 package hydrozoa.multisig.ledger.stack
 
+import hydrozoa.config.node.operation.multisig.RateLimits
+import hydrozoa.multisig.consensus.limiter.LimiterTimestamp
+import java.time.Instant
+import scala.concurrent.duration.FiniteDuration
+
 /** A closed slow-consensus stack at one of two signing stages.
   *
   *   - [[Stack.Unsigned]] — composed locally; per-effect bodies are derived but no hard-acks are
@@ -11,77 +16,62 @@ package hydrozoa.multisig.ledger.stack
   *     raw acks have served their purpose at this point — they are verified and aggregated by
   *     [[hydrozoa.multisig.consensus.SlowConsensusActor]], not carried further.
   *
-  * Two structural variants:
+  * The structural split (genesis init+fallback vs regular partition-indexed effects) is carried by
+  * the wrapped [[StackEffects]], not by the `Stack` wrapper itself:
   *
-  *   - `Initial` (stack 0, exogenous from `HeadConfig`): the genesis init+fallback pair. No
-  *     [[StackBrief]] — every peer derives this stack locally from shared `HeadConfig`; nothing
-  *     needs to be wire-broadcast from the leader. Only the hard-acks flow across peers (via
-  *     PeerLiaison's hard-ack lane).
-  *   - `Regular` (stack 1+): driven by a wire-broadcast [[StackBrief]] (block range + creation
-  *     end-time) so followers know which `BlockResult`s to fold into their local effect derivation.
+  *   - stack 0 wraps [[StackEffects.Unsigned.Initial]] / [[StackEffects.HardConfirmed.Initial]] —
+  *     exogenous from `HeadConfig`; every peer derives it locally at boot, so nothing is
+  *     wire-broadcast. Only the hard-acks flow across peers (via PeerLiaison's hard-ack lane). It
+  *     still carries a (synthetic) [[StackBrief]] — zero block range, `creationEndTime` set to boot
+  *     time — so the rate limiter has a uniform `creationEndTime` to consult on every stack.
+  *   - stack 1+ wraps [[StackEffects.Unsigned.Regular]] / [[StackEffects.HardConfirmed.Regular]],
+  *     driven by the leader's wire-broadcast [[StackBrief]] (block range + creation end-time) so
+  *     followers know which `BlockResult`s to fold into their local effect derivation.
   */
 sealed trait Stack {
     def stackNum: StackNumber
 }
 
 object Stack:
-    sealed trait Unsigned extends Stack {
-        def effects: StackEffects.Unsigned
+    /** @param brief
+      *   the stack's composition (the only thing wire-broadcast)
+      * @param effects
+      *   the locally-derived, partition-indexed effects. `BlockResult`s are a construction-only
+      *   input (consumed by partitioning + derivation in `StackComposer.mkUnsigned`) and are NOT
+      *   retained — every datum the slow side still needs (incl. each SEC's minor header bytes) is
+      *   carried on `effects` itself (PR #446 review).
+      */
+    final case class Unsigned(
+        brief: StackBrief,
+        effects: StackEffects.Unsigned
+    ) extends Stack {
+        override def stackNum: StackNumber = brief.stackNum
     }
 
-    object Unsigned:
-        /** Stack 0. Built by each peer locally at boot from `HeadConfig.initialBlock.effects`; not
-          * wire-broadcast. The slow side runs its hard-ack flow over these unsigned txs to produce
-          * a [[HardConfirmed.Initial]].
-          */
-        final case class Initial(
-            effects: StackEffects.Unsigned.Initial
-        ) extends Unsigned {
-            override val stackNum: StackNumber = StackNumber.zero
-        }
+    /** @param brief
+      *   the stack-composition announcement; carries `creationEndTime` consulted by the rate
+      *   limiter (see below). The unsigned-side effects ([[Stack.Unsigned.effects]]) are NOT
+      *   retained — once hard-confirmed, all needed effect data is on the multisigned `effects`.
+      * @param effects
+      *   the partition-indexed effects with every head peer's signature aggregated in: tx bodies
+      *   carry the multisig `VKeyWitness`es; each partition's standalone evac commitment is a
+      *   [[StandaloneEvacuationCommitment.MultiSigned]] (the dormant record + all peers' header
+      *   signatures). Tx bodies are L1-submittable as is; the SEC is dispute-usable.
+      *
+      * Also the signal sent by [[hydrozoa.multisig.consensus.SlowConsensusActor]] to
+      * [[hydrozoa.multisig.consensus.StackComposer]] to unblock the next stack close. The
+      * [[hydrozoa.multisig.consensus.limiter.Limiter]] sitting on that lane reads the brief's
+      * [[StackBrief.creationEndTime]] to throttle stack-production rate.
+      */
+    final case class HardConfirmed(
+        brief: StackBrief,
+        effects: StackEffects.HardConfirmed
+    ) extends Stack,
+          LimiterTimestamp {
+        override def stackNum: StackNumber = brief.stackNum
 
-        /** Stack 1+. The leader's [[StackBrief]] is the wire-broadcast announcement.
-          *
-          * @param brief
-          *   the stack's wire-broadcast announcement (block range + creation end-time).
-          * @param effects
-          *   the locally-derived, partition-indexed effects. `BlockResult`s are a construction-only
-          *   input (consumed by partitioning + derivation in `StackComposer.mkUnsigned`) and are
-          *   NOT retained — every datum the slow side still needs (incl. each SEC's minor header
-          *   bytes) is carried on `effects` itself (PR #446 review).
-          */
-        final case class Regular(
-            brief: StackBrief,
-            effects: StackEffects.Unsigned.Regular
-        ) extends Unsigned {
-            override def stackNum: StackNumber = brief.stackNum
-        }
+        override def limiterTimestamp: Instant = brief.creationEndTime.instant
 
-    sealed trait HardConfirmed extends Stack {
-        def effects: StackEffects.HardConfirmed
+        override def minPeriod(using cfg: RateLimits.Section): FiniteDuration =
+            cfg.hardStackMinPeriod
     }
-
-    object HardConfirmed:
-        /** Stack 0, hard-confirmed. */
-        final case class Initial(
-            effects: StackEffects.HardConfirmed.Initial
-        ) extends HardConfirmed {
-            override val stackNum: StackNumber = StackNumber.zero
-        }
-
-        /** Stack 1+, hard-confirmed.
-          *
-          * @param brief
-          *   the stack's brief (carried from the unsigned form).
-          * @param effects
-          *   the partition-indexed effects with every head peer's signature aggregated in: tx
-          *   bodies carry the multisig `VKeyWitness`es; each partition's standalone evac commitment
-          *   is a [[StandaloneEvacuationCommitment.MultiSigned]] (the dormant record + all peers'
-          *   header signatures). Tx bodies are L1-submittable as is; the SEC is dispute-usable.
-          */
-        final case class Regular(
-            brief: StackBrief,
-            effects: StackEffects.HardConfirmed.Regular
-        ) extends HardConfirmed {
-            override def stackNum: StackNumber = brief.stackNum
-        }

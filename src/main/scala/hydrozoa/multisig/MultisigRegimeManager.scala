@@ -13,6 +13,7 @@ import hydrozoa.lib.tracing.ProtocolTracer
 import hydrozoa.multisig.MultisigRegimeManager.*
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
+import hydrozoa.multisig.consensus.limiter.Limiter
 import hydrozoa.multisig.consensus.peer.HeadPeerId
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l2.L2Ledger
@@ -90,6 +91,14 @@ trait MultisigRegimeManager(
 
             blockWeaver <- context.actorOf(BlockWeaver(config, pendingConnections, tracerLocal))
 
+            // Throttles the ConsensusActor → BlockWeaver soft-block-confirmation lane (see
+            // hydrozoa.multisig.consensus.limiter.Limiter). Only the consensus actor's reference
+            // to BlockWeaver is routed through this limiter; other senders (JointLedger,
+            // PeerLiaison, …) keep direct refs.
+            blockWeaverLimiter <- context.actorOf(
+              Limiter[BlockWeaver.Request](blockWeaver, config, tracerLocal)
+            )
+
             cardanoLiaison <-
                 context.actorOf(
                   CardanoLiaison(config, cardanoBackend, pendingConnections, tracerLocal)
@@ -109,6 +118,11 @@ trait MultisigRegimeManager(
               StackComposer(config, pendingConnections, tracerLocal)
             )
 
+            // Throttles the SlowConsensusActor → StackComposer hard-stack-confirmation lane.
+            stackComposerLimiter <- context.actorOf(
+              Limiter[StackComposer.Request](stackComposer, config, tracerLocal)
+            )
+
             slowConsensusActor <- context.actorOf(
               SlowConsensusActor(config, pendingConnections, tracerLocal)
             )
@@ -125,11 +139,13 @@ trait MultisigRegimeManager(
 
             connections = MultisigRegimeManager.Connections(
               blockWeaver = blockWeaver,
+              blockWeaverLimiter = blockWeaverLimiter,
               cardanoLiaison = cardanoLiaison,
               consensusActor = consensusActor,
               eventSequencer = eventSequencer,
               jointLedger = jointLedger,
               stackComposer = stackComposer,
+              stackComposerLimiter = stackComposerLimiter,
               slowConsensusActor = slowConsensusActor,
               peerLiaisons = localPeerLiaisons,
               remotePeerLiaisons = Map.empty,
@@ -169,11 +185,17 @@ trait MultisigRegimeManager(
 object MultisigRegimeManager {
     final case class Connections(
         blockWeaver: BlockWeaver.Handle,
+        /** Throttled-write handle for the ConsensusActor → BlockWeaver lane. Other senders use
+          * `blockWeaver` directly.
+          */
+        blockWeaverLimiter: BlockWeaver.Handle,
         cardanoLiaison: CardanoLiaison.Handle,
         consensusActor: ConsensusActor.Handle,
         eventSequencer: EventSequencer.Handle,
         jointLedger: JointLedger.Handle,
         stackComposer: StackComposer.Handle,
+        /** Throttled-write handle for the SlowConsensusActor → StackComposer lane. */
+        stackComposerLimiter: StackComposer.Handle,
         slowConsensusActor: SlowConsensusActor.Handle,
         peerLiaisons: List[PeerLiaison.Handle],
         remotePeerLiaisons: Map[HeadPeerId, PeerLiaison.Handle],

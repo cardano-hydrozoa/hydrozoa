@@ -122,12 +122,18 @@ object CardanoLiaison:
 
     object State:
         def initialState(config: Config): State = {
+            // The submittable init + fallback effects are NOT seeded from config: those bodies are
+            // the UNSIGNED genesis placeholders, never submittable. CardanoLiaison learns the real
+            // (multisigned) init + fallback only from the hard-confirmed stack 0, via
+            // `handleInitialStackL1Effects`. We only seed the target treasury utxo id, which is
+            // identified by the init tx id (a body hash, witness-independent) and so is exact even
+            // from the unsigned body — it tells the liaison what to look for on L1 before stack 0
+            // hard-confirms (until then `happyPathEffects` is empty, so nothing is submitted).
             State(
               targetState = TargetState.Active(config.initializationTx.treasuryProduced.utxoId),
               effectInputs = Map.empty,
-              happyPathEffects =
-                  TreeMap(EffectId.initializationEffectId -> config.initializationTx),
-              fallbackEffects = Map(BlockVersion.Major.zero -> config.initialFallbackTx)
+              happyPathEffects = TreeMap.empty,
+              fallbackEffects = Map.empty
             )
         }
 
@@ -238,7 +244,7 @@ trait CardanoLiaison(
             case stack: Stack.HardConfirmed =>
                 Tracer.scopedCtx(
                   "cardanoLiaisonMode" -> "Stack.HardConfirmed",
-                  "stackNum" -> s"${stack.stackNum: Int}"
+                  "stackNum" -> s"${stack.brief.stackNum: Int}"
                 ) {
                     // The MULTISIGNED effects: SlowConsensusActor has aggregated every head
                     // peer's hard-ack signature into VKeyWitnesses and attached them onto
@@ -247,7 +253,7 @@ trait CardanoLiaison(
                     val effects = stack.effects
                     Tracer.info(
                       "received Stack.HardConfirmed for stack " +
-                          s"${stack.stackNum}"
+                          s"${stack.brief.stackNum}"
                     ) >> (effects match {
                         case reg: StackEffects.HardConfirmed.Regular =>
                             // Learn the stack's effects, then run the submission state

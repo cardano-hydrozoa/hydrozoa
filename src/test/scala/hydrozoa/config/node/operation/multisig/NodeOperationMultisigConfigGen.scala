@@ -20,5 +20,6 @@ def generateNodeOperationMultisigConfig(
     } yield NodeOperationMultisigConfig(
       cardanoLiaisonPollingPeriod = millis.millis,
       peerLiaisonMaxRequestsPerBatch = PositiveInt(maxRequestsPerBatch).get,
-      peerLiaisonResendInterval = 5.seconds
+      peerLiaisonResendInterval = 5.seconds,
+      rateLimits = RateLimits.default
     )

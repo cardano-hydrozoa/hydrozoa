@@ -35,13 +35,16 @@ import scalus.utils.Pretty
 
 case class Stage1Sut(
     headAddress: ShelleyAddress,
+    // The shared L1 backend handle. Retained even though L1 effect-presence assertions moved to
+    // stage4 ([[hydrozoa.integration.stage4.EffectsLanded]]), because the real `CardanoLiaison`
+    // actor needs it: liaison.runEffects polls the backend on each tick and feeds the results to
+    // `JointLedger` via `PollResults`, which is how the head observes deposits maturing and L1
+    // settlements landing. Also used directly by SUT commands to query head UTxOs and to submit
+    // signed deposit txs straight to L1 (mirroring stage4's `RegisterAndSubmitDepositCommand`).
     system: ActorSystem[IO],
     cardanoBackend: CardanoBackend[IO],
     agent: AgentActor.Handle,
     tracerLocal: IOLocal[Tracer],
-    // Effect accumulator dropped with the fast/slow consensus split: the fast cycle no longer
-    // builds settlement / fallback / rollout / refund / finalization txs. The slow cycle (see
-    // `hydrozoa.multisig.consensus.StackActor`) will own them once it's wired up.
     runId: String = "",
     traceRef: Ref[IO, List[String]] = Ref.unsafe(List.empty)
 )

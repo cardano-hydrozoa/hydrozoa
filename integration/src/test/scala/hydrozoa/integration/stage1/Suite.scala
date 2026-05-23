@@ -14,7 +14,7 @@ import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.config.node.operation.evacuation.generateNodeOperationEvacuationConfig
 import hydrozoa.config.node.operation.multisig.generateNodeOperationMultisigConfig
-import hydrozoa.integration.stage1.Model.CurrentTime.{AfterCompetingFallbackStartTime, BeforeHappyPathExpiration}
+import hydrozoa.integration.stage1.Model.CurrentTime.BeforeHappyPathExpiration
 import hydrozoa.integration.stage1.Model.{BlockCycle, CurrentTime}
 import hydrozoa.integration.stage1.SuiteCardano.*
 import hydrozoa.integration.stage1.model.Deposits
@@ -27,18 +27,16 @@ import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost.URL
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendMock, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, ConsensusActor, EventSequencer, StackComposer}
-import hydrozoa.multisig.ledger.block.{Block, BlockEffects, BlockNumber, BlockVersion}
+import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toUtxos}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.joint.JointLedger
-import hydrozoa.multisig.ledger.l1.tx.{FinalizationTx, SettlementTx}
-import org.scalacheck.Prop.propBoolean
 import org.scalacheck.commands.{ModelBasedSuite, ScenarioGen}
 import org.scalacheck.{Gen, Prop}
 import org.typelevel.log4cats.Logger
 import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.rules.{Context, UtxoEnv}
-import scalus.cardano.ledger.{CardanoInfo, CertState, Coin, EvaluatorMode, PlutusScriptEvaluator, ProtocolParams, SlotConfig, Transaction, TransactionHash, TransactionOutput, Utxo, Utxos, Value}
+import scalus.cardano.ledger.{CardanoInfo, CertState, Coin, EvaluatorMode, PlutusScriptEvaluator, ProtocolParams, SlotConfig, Transaction, TransactionOutput, Utxo, Utxos, Value}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Send, Spend}
 import scalus.cardano.txbuilder.{Change, TransactionBuilder}
 import test.TestPeerName.Alice
@@ -687,27 +685,12 @@ case class Suite(
           */
         _ <- sut.system.waitForIdle(maxTimeout = 5.minutes)
 
-        // Next part of the property is to check that expected effects were submitted and are
-        // known to the Cardano backend. With the fast/slow consensus split, the fast cycle no
-        // longer produces effects — the slow cycle will (parked, see `StackActor`). Leave the
-        // expected-effects accumulator empty so the assertion is vacuously satisfied until the
-        // slow side is wired up.
-        // Stage 1 stubs slow consensus; effect-presence is covered in stage 4's
-        // `propEffectsLanded`.
-
-        // Finally we have to terminate the actor system, otherwise in TestControl.ownTestPeer
-        // this will loop indefinitely.
+        // L1 effect-presence assertion lives in stage4 ([[Stage4Suite.propEffectsLanded]]).
+        // Stage1 deliberately stubs the slow side (no `SlowConsensusActor`, no `StackComposer`)
+        // and won't grow one — stage4 already covers happy/fallback per-block disjunction over
+        // observed `Stack.HardConfirmed`. Stage1's job is now bounded to driving the fast cycle
+        // end-to-end through real Yaci/Blockfrost L1 backends to catch L1-side breakage; effect
+        // semantics are tested in stage4.
         _ <- sut.system.terminate()
     } yield Prop.passed
-
 }
-
-extension (tx: SettlementTx)
-    def payoutCount: Option[Int] = tx match
-        case t: SettlementTx.WithPayouts => Some(t.payoutCount)
-        case _: SettlementTx.NoPayouts   => None
-
-extension (tx: FinalizationTx)
-    def payoutCount: Option[Int] = tx match
-        case t: FinalizationTx.WithPayouts => Some(t.payoutCount)
-        case _: FinalizationTx.NoPayouts   => None
