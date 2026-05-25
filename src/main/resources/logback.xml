@@ -30,5 +30,4 @@
     <logger name="scalus" level="trace"/>
     <logger name="TracerDemo" level="info"/>
     <logger name="LoggerDemo" level="info"/>
-    <logger name="Stage4.StackObserver" level="warn"/>
 </configuration>
