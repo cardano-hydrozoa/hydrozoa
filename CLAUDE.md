@@ -103,6 +103,13 @@ nix develop
   describe slow-side KZG/SEC/settlement mechanics). State only what's locally true; that detail
   belongs where the work lives.
 
+### Logging
+
+- When you add a new named logger / tracer route, add a matching `<logger name="…">` line to
+  **every** `logback.xml` in the same subproject — keep them in sync. Configs by subproject:
+  - root: `src/main/resources/logback.xml` **and** `src/test/resources/logback.xml`
+  - `integration`: `integration/src/test/resources/logback.xml`
+
 ## Testing
 
 - **Unit tests**: Located in `src/test/scala/hydrozoa/`
