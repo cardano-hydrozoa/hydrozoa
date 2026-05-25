@@ -20,26 +20,29 @@ final case class HeadPeerId(peerNum: HeadPeerNumber, nHeadPeers: PositiveInt) {
     def isSlowLeader(stackNum: StackNumber): Boolean =
         stackNum.convert % nHeadPeers == peerNum.convert
 
-    /** After the given block number, for which block number will the peer next be leader? */
+    /** After the given block number, for which block number will the peer next be leader? Uses
+      * strictly-after semantics: returned value >= blockNum.
+      */
     def nextLeaderBlock(blockNum: BlockNumber): BlockNumber = {
         val roundNumber = blockNum.convert / nHeadPeers
         val leaderBlockThisRound = roundNumber * nHeadPeers + peerNum.convert
 
+        // Enforce strictly-after semantics
         val result =
             if blockNum.convert < leaderBlockThisRound then leaderBlockThisRound
             else leaderBlockThisRound + nHeadPeers
         BlockNumber(result)
     }
 
-    /** After the given stack number, for which stack number will the peer next be slow-leader?
-      * Mirrors [[nextLeaderBlock]] for the slow cycle: strictly-after semantics, so
-      * `nextSlowLeaderStack(StackNumber.zero)` deliberately steps past stack 0 (the bootstrap
-      * stack, never broadcast as a brief).
+    /** After the given stack number, for which stack number will the peer next be slow-leader? Uses
+      * * strictly-after semantics: returned value >= stackNum. Mirrors [[nextLeaderBlock]] for the
+      * slow cycle:
       */
     def nextSlowLeaderStack(stackNum: StackNumber): StackNumber = {
         val roundNumber = stackNum.convert / nHeadPeers
         val leaderStackThisRound = roundNumber * nHeadPeers + peerNum.convert
 
+        // Enforce strictly-after semantics
         val result =
             if stackNum.convert < leaderStackThisRound then leaderStackThisRound
             else leaderStackThisRound + nHeadPeers
