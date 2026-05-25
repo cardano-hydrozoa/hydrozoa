@@ -458,7 +458,7 @@ final case class SlowConsensusActor(
                                     val txId = i.initializationTx.tx.id
                                     afterR1
                                         .add(txId, witnessOf(vk, r.initTxSig))
-                                        .addAll(txId, r.individualWitnesses)
+                                        .addOpt(txId, vk, r.individualSig)
                                 case _ => afterR1
                             }
                         case _ => afterR1
@@ -779,9 +779,11 @@ final case class SlowConsensusActor(
     }
 
     /** Initial stack round 2. `initTxSig` is this peer's head-multisig contribution over the init
-      * tx body (always required). `individualWitnesses` must satisfy the iff / no-extra-witness
-      * rule via the SAME shared deterministic predicate the signer used
-      * ([[StackEffects.spendsFromIndividualAddress]]).
+      * tx body (always required). `individualSig` must satisfy the iff rule via the SAME shared
+      * deterministic predicate the signer used ([[StackEffects.spendsFromIndividualAddress]]):
+      * present iff the peer funds an init input. The signature is verified against the peer's known
+      * head key `vk` (which is also its individual-funding key), so a peer can only ever contribute
+      * a witness under its own key — there is no foreign-key witness to reject.
       */
     private def verifyRound2Initial(
         i: StackEffects.Unsigned.Initial,
@@ -792,37 +794,26 @@ final case class SlowConsensusActor(
         initTx = i.initializationTx
         _ <- verifyTx(vk, initTx.tx, p.initTxSig)
         expected = StackEffects.spendsFromIndividualAddress(initTx, vk)
-        _ <- (expected, p.individualWitnesses) match {
-            case (false, Nil) => IO.unit
-            case (false, extra) =>
+        _ <- (expected, p.individualSig) match {
+            case (false, None) => IO.unit
+            case (false, Some(_)) =>
                 IO.raiseError(
                   CellError.KeysetMismatch(
-                    "round2Initial.individualWitnesses (peer funds no init input)",
-                    "0",
-                    extra.size.toString
+                    "round2Initial.individualSig (peer funds no init input)",
+                    "absent",
+                    "present"
                   )
                 )
-            case (true, Nil) =>
+            case (true, None) =>
                 IO.raiseError(
                   CellError.KeysetMismatch(
-                    "round2Initial.individualWitnesses (peer funds an init input)",
-                    ">=1",
-                    "0"
+                    "round2Initial.individualSig (peer funds an init input)",
+                    "present",
+                    "absent"
                   )
                 )
-            case (true, ws) =>
-                ws.traverse_(w =>
-                    IO.delay(
-                      platform.verifyEd25519Signature(w.vkey, initTx.tx.id, w.signature)
-                    ).handleErrorWith {
-                        case NonFatal(_) => IO.pure(false)
-                        case e           => IO.raiseError(e)
-                    }.flatMap(ok =>
-                        IO.raiseUnless(ok)(
-                          CellError.BadSignature("round2Initial individual witness")
-                        )
-                    )
-                )
+            case (true, Some(sig)) =>
+                verifyTx(vk, initTx.tx, sig)
         }
     } yield ()
 

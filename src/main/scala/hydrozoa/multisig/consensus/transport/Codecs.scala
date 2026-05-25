@@ -15,9 +15,7 @@ import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
 import io.circe.*
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
-import scalus.cardano.ledger.VKeyWitness
 import scalus.crypto.ed25519.VerificationKey
-import scalus.uplc.builtin.ByteString
 import scodec.bits.ByteVector
 
 /** JSON codecs for the wire-eligible subset of [[PeerLiaison.Request]].
@@ -59,7 +57,7 @@ object Codecs {
           )
         )
 
-    // TODO: unify RequestId JSON shape with the codec in
+    // TODO(GUM-131): unify RequestId JSON shape with the codec in
     //   `hydrozoa.multisig.ledger.event.RequestId` (which uses `headPeerNumber` /
     //   `requestNumber`). Both codecs are in scope at different derivation sites, so the same
     //   RequestId is serialized two different ways within a single NewMsgBatch:
@@ -67,6 +65,7 @@ object Codecs {
     //     - NewMsgBatch.blockBrief.body.events[i][0]  → `{ "headPeerNumber", "requestNumber" }`
     //   It currently round-trips correctly because each subtree uses a matching encoder/decoder
     //   pair, but it's confusing and brittle. Pick one shape and align both call sites.
+    //   https://linear.app/gummiworm-labs/issue/GUM-131
     given Codec[RequestId] =
         io.circe.Codec.from(
           Decoder.instance(c =>
@@ -354,26 +353,6 @@ object Codecs {
         io.circe.Codec.from(dec, enc)
     }
 
-    /** Full `VKeyWitness` (vkey + signature, 32+64 bytes) as two hex strings. Needed for the
-      * initial stack's round-2 `individualWitnesses` (a peer's funding witnesses for the init tx),
-      * which carry the vkey too — unlike [[TxSignature]], which is signature bytes only.
-      */
-    private given Codec[VKeyWitness] =
-        io.circe.Codec.from(
-          Decoder.instance(c =>
-              for {
-                  vkey <- c.downField("vkey").as[String]
-                  signature <- c.downField("signature").as[String]
-              } yield VKeyWitness(ByteString.fromHex(vkey), ByteString.fromHex(signature))
-          ),
-          Encoder.instance((w: VKeyWitness) =>
-              Json.obj(
-                "vkey" -> w.vkey.toHex.asJson,
-                "signature" -> w.signature.toHex.asJson
-              )
-          )
-        )
-
     /** Real `Codec[HardAck]` (M6). Discriminated by a `kind` tag. All variants — Regular / Sole /
       * Round1Initial / Round2Initial — round-trip fully.
       */
@@ -396,7 +375,7 @@ object Codecs {
                 Json.obj(
                   "kind" -> "round2Initial".asJson,
                   "initTxSig" -> p.initTxSig.asJson,
-                  "individualWitnesses" -> p.individualWitnesses.asJson
+                  "individualSig" -> p.individualSig.asJson
                 )
             case p: SolePayload =>
                 Json.obj(
@@ -420,10 +399,8 @@ object Codecs {
                 case "round2Initial" =>
                     for {
                         initTxSig <- c.downField("initTxSig").as[TxSignature]
-                        individualWitnesses <- c
-                            .downField("individualWitnesses")
-                            .as[List[VKeyWitness]]
-                    } yield Round2Payload.Initial(initTxSig, individualWitnesses)
+                        individualSig <- c.downField("individualSig").as[Option[TxSignature]]
+                    } yield Round2Payload.Initial(initTxSig, individualSig)
                 case "sole" =>
                     for {
                         sec <- c.downField("sec").as[BlockHeader.HeaderSignature]

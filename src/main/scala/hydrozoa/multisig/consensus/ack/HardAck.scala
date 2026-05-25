@@ -5,7 +5,6 @@ import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.StackNumber
-import scalus.cardano.ledger.VKeyWitness
 
 /** A head peer's hard acknowledgment of a closed stack — see `consensus/slow-consensus` in the
   * spec.
@@ -17,8 +16,8 @@ import scalus.cardano.ledger.VKeyWitness
   *   - **Initial** (2-phase, stack 0 only):
   *     1. [[HardAck.Round1Payload.Initial]] — signature over the locally derived fallback tx.
   *     2. [[HardAck.Round2Payload.Initial]] — head-multisig signature over the exogenous init tx
-  *        body + this peer's individual `VKeyWitness`es for utxos it funds from its individual
-  *        address.
+  *        body + this peer's individual-address signature for utxos it funds from its individual
+  *        address (signature only; the verification key is this peer's known head key).
   *   - **Sole** (1-phase, minor-only Regular stack):
   *     3. [[HardAck.SolePayload]] — mandatory SEC header signature + every refund tx signature for
   *        the leading minor run. Single ack per peer per stack.
@@ -261,23 +260,25 @@ object HardAck {
       * Concretely:
       *   - [[Regular]]: one sig over the unlock tx (settlement OR finalization — exactly one, per
       *     [[hydrozoa.multisig.ledger.stack.PartitionEffects.unlock]]).
-      *   - [[Initial]]: BOTH fields ([[Initial.initTxSig]] and [[Initial.individualWitnesses]]) are
+      *   - [[Initial]]: BOTH fields ([[Initial.initTxSig]] and [[Initial.individualSig]]) are
       *     signatures over the SAME initialization transaction — head-multisig contribution + this
-      *     peer's individual-address witnesses for utxos it funds from its individual address. One
+      *     peer's individual-address signature for utxos it funds from its individual address. One
       *     tx, two witness kinds, one round-2 commit point.
       */
     object Round2Payload {
 
-        /** Stack 0 round 2 — all signatures here are over the SAME initialization tx (one tx, two
+        /** Stack 0 round 2 — both signatures here are over the SAME initialization tx (one tx, two
           * witness kinds; see the round-2 atomicity invariant above):
           *   - [[initTxSig]]: this peer's head-multisig signature over the init tx body.
-          *   - [[individualWitnesses]]: this peer's individual-address `VKeyWitness`es for any
-          *     utxos it funds from its individual address (operator-supplied funding) — also over
-          *     the same init tx.
+          *   - [[individualSig]]: this peer's individual-address signature for any utxos it funds
+          *     from its individual address (operator-supplied funding) — `Some` iff it funds such
+          *     an input, also over the same init tx. Signature only: the verification key is this
+          *     peer's known head key (the aggregator rebuilds the `VKeyWitness` from `peerNum`), so
+          *     a peer can only ever contribute a witness under its own key.
           */
         final case class Initial(
             initTxSig: TxSignature,
-            individualWitnesses: List[VKeyWitness]
+            individualSig: Option[TxSignature]
         ) extends Payload.Round2
 
         /** Round-2 in a regular stack: signature over the FIRST settlement / finalization (the

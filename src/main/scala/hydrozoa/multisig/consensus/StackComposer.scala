@@ -498,13 +498,13 @@ final case class StackComposer(
                       stackNum,
                       HardAck.Round2Payload.Initial(
                         initTxSig = wallet.mkTxSignature(i.initializationTx.tx),
-                        individualWitnesses =
+                        individualSig =
                             if StackEffects.spendsFromIndividualAddress(
                                   i.initializationTx,
                                   wallet.exportVerificationKey
                                 )
-                            then List(wallet.mkVKeyWitness(i.initializationTx.tx))
-                            else Nil
+                            then Some(wallet.mkTxSignature(i.initializationTx.tx))
+                            else None
                       )
                     )
                     (List(round1, round2), n2.increment)
