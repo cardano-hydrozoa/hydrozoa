@@ -214,13 +214,13 @@ object StackEffectsBuilder {
                                 )
                         }
                     case StackPartition.Kind.Final =>
-                        // Final block drains the entire evac map. JointLedger no longer
-                        // emits a `delete-all` diff / cumulative `payoutObligations` for
-                        // Final blocks (it no longer maintains the cumulative map); we
-                        // recover both from the slow-side running map here:
-                        // payoutObligations = the map's values; the map is reset to empty
-                        // for any subsequent partition / stack. The treasury is drained by
-                        // finalization, so it is left unchanged (chain ends here).
+                        // Final block drains the entire evac map. JointLedger emits no
+                        // `delete-all` diff / cumulative `payoutObligations` for Final blocks
+                        // (it does not maintain the cumulative map); we recover both from the
+                        // slow-side running map here: payoutObligations = the map's values; the
+                        // map is reset to empty for any subsequent partition / stack. The
+                        // treasury is drained by finalization, so it is left unchanged (chain
+                        // ends here).
                         val fin = p.blocks.head
                         val payoutObligationsRemaining = runningMap.outputs.toVector
                         finalizeLedger(

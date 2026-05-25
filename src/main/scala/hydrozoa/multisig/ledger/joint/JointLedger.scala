@@ -221,12 +221,12 @@ final case class JointLedger(
             _ <- executeL2ProxyCommand(l2Command)
         } yield ()
 
-    /** Pure deposit-ledger op (no ledger monad): parse the deposit tx, check its
+    /** Pure deposit-ledger op (plain function, no ledger monad): parse the deposit tx, check its
       * submission-deadline TTL, and append the produced deposit utxo to the L1 deposits map. The
-      * slow side owns the treasury chain; the fast side (this actor) owns only the deposits map, so
-      * this is the whole of JointLedger's former `L1LedgerM` surface. Returns the new map + the
-      * produced deposit utxo and its post-dated refund tx, or a [[DepositLedgerError]] (rejected
-      * via `rejectEvent`, never raised).
+      * slow side owns the treasury chain; the fast side (this actor) owns only the deposits map,
+      * which is the whole of its L1-ledger surface. Returns the new map + the produced deposit utxo
+      * and its post-dated refund tx, or a [[DepositLedgerError]] (rejected via `rejectEvent`, never
+      * raised).
       *
       * NOTE: checks SOME time bounds — specifically that the deposit's submission deadline matches
       * the one expected from its validity-end.
@@ -520,10 +520,7 @@ final case class JointLedger(
                             if decisions.refunded.isEmpty then IO.pure(p.l2LedgerState)
                             else executeL2Command(p, depositEventDecisions)
 
-                        // KZG no longer stamped on the header — slow side (StackComposer +
-                        // StackEffectsBuilder) folds these `evacDiffs` over its running
-                        // evacuation map and computes KZG only at the blocks that need it
-                        // (each Major's settlement and each last-of-partition minor's SEC).
+                        // `evacDiffs` are surfaced to the slow side via `BlockResult`.
                         newJLState = p.setL2LedgerState(newL2State)
 
                         headerIntermediate <- previousHeader
@@ -578,11 +575,9 @@ final case class JointLedger(
         } yield (newJlState, blockBrief, evacDiffs)
     }
 
-    // `mkBlockEffectsIntermediate` (and the Final-branch effect construction inlined in
-    // `completeBlockFinal`) used to build settlement / fallback / rollout / refund / finalization
-    // transactions here. That work is slow-cycle responsibility and lives in
-    // [[hydrozoa.multisig.consensus.StackComposer]]. The fast cycle only handles briefs + header
-    // signatures.
+    // Settlement / fallback / rollout / refund / finalization transactions are slow-cycle
+    // responsibility and live in [[hydrozoa.multisig.consensus.StackComposer]]. The fast cycle
+    // only handles briefs + header signatures.
 
     // Block completion Signal is provided to the joint ledger when the block weaver says it's time.
     // If it's a final block, we don't pass poll results from the cardano liaison. Otherwise, we do.
@@ -618,14 +613,13 @@ final case class JointLedger(
                     _ <- state.set(p.done(blockBrief.header))
 
                     // Slow side: on Final, the evac map drains entirely and all remaining
-                    // payouts are realized via the finalization tx. JointLedger no longer
-                    // maintains the cumulative evacuation map (that's StackComposer's job after
-                    // the step-4 KZG move), so it cannot enumerate the keys to "delete-all"
-                    // here. StackEffectsBuilder.deriveRegular handles the Final partition by
-                    // draining its own running map for `payoutObligations` and clearing it for
-                    // the next stack. Final's `evacuationMapDiff` / `payoutObligations` are
-                    // therefore intentionally empty in the BlockResult — the slow side fills
-                    // them from cumulative state.
+                    // payouts are realized via the finalization tx. The cumulative evacuation
+                    // map lives in StackComposer, not here, so the fast side cannot enumerate
+                    // its keys to "delete-all". StackEffectsBuilder.deriveRegular handles the
+                    // Final partition by draining its own running map for `payoutObligations`
+                    // and clearing it for the next stack. Final's `evacuationMapDiff` /
+                    // `payoutObligations` are therefore empty in the BlockResult — the slow side
+                    // fills them from cumulative state.
                     blockResult = BlockResult(
                       brief = blockBrief,
                       evacuationMapDiff = Nil,
@@ -766,8 +760,7 @@ object JointLedger {
     /** Failure registering a deposit into the fast-side L1 deposits map — either the deposit tx
       * fails to parse, or its submission deadline doesn't match the one expected from its
       * validity-end. Rejected via `rejectEvent` (stringified into the L2 proxy error), never
-      * raised, so it need not extend `Throwable`. (Formerly
-      * `L1LedgerM.Error.RegisterDepositError`.)
+      * raised, so it need not extend `Throwable`.
       */
     sealed trait DepositLedgerError
     object DepositLedgerError {
@@ -834,10 +827,7 @@ object JointLedger {
     sealed trait State {
         def previousBlockHeader: BlockHeader
 
-        /** The fast side's L1 deposits map. The treasury chain lives on the slow side
-          * ([[hydrozoa.multisig.consensus.StackComposer]]) after the consensus split — JointLedger
-          * never touches it.
-          */
+        /** The fast side's L1 deposits map. */
         def deposits: DepositsMap
     }
 

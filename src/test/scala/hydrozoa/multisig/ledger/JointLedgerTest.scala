@@ -700,8 +700,8 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                 msg = "Correct deposit(s) in state",
                 condition = dlState.deposits.depositUtxos.head == depositProduced
               )
-              // Treasury is no longer JointLedger's concern — it moved to the slow side
-              // (StackComposer) in the consensus split; JointLedger.State owns only the deposits map.
+              // JointLedger.State owns only the deposits map; the treasury lives on the slow
+              // side (StackComposer).
               _ <- assertWith(
                 msg = "Correct refund in state",
                 condition =
@@ -738,8 +738,8 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                     condition = block.body.depositsRefunded.isEmpty
                         && block.body.depositsAbsorbed.isEmpty
                   )
-                  // Post-split: post-dated refund txs are slow-cycle (`StackEffects`) and are
-                  // no longer block-attached, so they're not checked here.
+                  // Post-dated refund txs are slow-cycle (`StackEffects`), not block-attached,
+                  // so they're not checked here.
               } yield ()
 
           // Complete another block, assume the deposit shows up in the poll results -- but it's not mature yet
@@ -810,10 +810,10 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                     majorBlock.body.depositsRefunded == List.empty
               )
 
-              // Evacuation-map / KZG assertions removed (step 4 of the slow-consensus
-              // refactor moved that state out of JointLedger to StackComposer; KZG no longer
-              // lives on `BlockHeader`). The cumulative evac-map + KZG correctness is now a
-              // StackComposer-level invariant covered by stage4's `propEffectsLanded`.
+              // No evacuation-map / KZG assertions here: that state lives in StackComposer, not
+              // JointLedger, and KZG does not live on `BlockHeader`. Cumulative evac-map + KZG
+              // correctness is a StackComposer-level invariant covered by stage4's
+              // `propEffectsLanded`.
 
           } yield ()
 

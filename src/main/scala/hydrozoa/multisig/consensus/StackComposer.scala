@@ -40,8 +40,8 @@ import hydrozoa.multisig.ledger.stack.*
   *     SlowConsensusActor).
   *
   * Effect derivation, wallet signing, and own-ack bundling are live; [[SlowConsensusActor]]
-  * aggregates the per-peer hard-acks across head peers into the multisigned [[Stack.HardConfirmed]]
-  * (no longer an auto-confirm stub).
+  * aggregates the per-peer hard-acks across head peers into the multisigned
+  * [[Stack.HardConfirmed]].
   */
 final case class StackComposer(
     config: StackComposer.Config,
@@ -57,9 +57,9 @@ final case class StackComposer(
     val state: Ref[IO, State] = Ref.unsafe[IO, State](State.empty)
 
     /** Slow-side treasury chain. The slow side advances it on every settlement / finalization tx it
-      * produces; the fast side ([[JointLedger]]) never touches the treasury after the consensus
-      * split — it owns only the deposits map. [[StackEffectsBuilder.deriveRegular]] rotates this
-      * and returns the new treasury, which we persist here for the next stack.
+      * produces; the fast side ([[JointLedger]]) never touches the treasury — it owns only the
+      * deposits map. [[StackEffectsBuilder.deriveRegular]] rotates this and returns the new
+      * treasury, which we persist here for the next stack.
       *
       * Initialized from the head config's initialization tx (treasury produced by the init tx is
       * the genesis treasury for stack 1's settlement).
@@ -67,8 +67,7 @@ final case class StackComposer(
     private val treasuryState: Ref[IO, MultisigTreasuryUtxo] =
         Ref.unsafe[IO, MultisigTreasuryUtxo](config.initializationTx.treasuryProduced)
 
-    /** Cumulative slow-side L2 evacuation-map state — owns the KZG. As of step 4 (KZG removed from
-      * `BlockHeader`), JointLedger no longer maintains this state; StackComposer accumulates
+    /** Cumulative slow-side L2 evacuation-map state — owns the KZG. StackComposer accumulates
       * per-block `evacuationMapDiff`s from `BlockResult` as it composes stacks, and
       * [[StackEffectsBuilder.deriveRegular]] folds the diffs over this running map to compute KZG
       * only at the blocks that need it (each Major's settlement `nextKzg` and each
