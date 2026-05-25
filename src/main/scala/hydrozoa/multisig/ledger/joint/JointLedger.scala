@@ -10,6 +10,7 @@ import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEn
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.actor.*
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.logging.{Tracer, logWith}
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger
@@ -22,10 +23,9 @@ import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag.{Invalid, Valid}
 import hydrozoa.multisig.ledger.joint.JointLedger.*
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.*
-import hydrozoa.multisig.ledger.l1.L1LedgerM
-import hydrozoa.multisig.ledger.l1.L1LedgerM.*
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.tx.RefundTx
+import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerCommand, L2LedgerError, L2LedgerState}
 import monocle.Focus.focus
@@ -51,18 +51,6 @@ final case class JointLedger(
     val state: Ref[IO, JointLedger.State] =
         Ref.unsafe[IO, JointLedger.State](JointLedger.State.initialize(config))
 
-    private def executeL1Action[T](
-        state: JointLedger.Producing,
-        action: L1LedgerM[T]
-    ): IO[(L1LedgerM.State, T)] = for {
-        either <- IO.pure(runL1Action[T](state, action))
-        ret <- either match {
-            case Left(err) =>
-                Tracer.error(s"L1 action failed: $err") *> IO.raiseError(err)
-            case Right(ret) => IO.pure(ret)
-        }
-    } yield ret
-
     private def executeL2Command(
         state: JointLedger.Producing,
         command: L2LedgerCommand.Real
@@ -82,12 +70,6 @@ final case class JointLedger(
         .handleErrorWith { err =>
             Tracer.error(s"L2 proxy command failed: $err") *> IO.raiseError(err)
         }
-
-    private def runL1Action[T](
-        state: JointLedger.Producing,
-        action: L1LedgerM[T]
-    ): Either[L1LedgerM.Error, (L1LedgerM.State, T)] =
-        state.runL1Action[T](config, action)
 
     private def runL2Command(
         state: JointLedger.Producing,
@@ -216,7 +198,7 @@ final case class JointLedger(
 
     private def rejectEvent(
         requestId: RequestId,
-        e: JointLedger.UserRequestError | L1LedgerM.Error | L2LedgerError
+        e: JointLedger.UserRequestError | JointLedger.DepositLedgerError | L2LedgerError
     ): IO[Unit] =
         for {
             oldState <- unsafeGetProducing
@@ -238,6 +220,51 @@ final case class JointLedger(
             // FIXME: Should we retry?
             _ <- executeL2ProxyCommand(l2Command)
         } yield ()
+
+    /** Pure deposit-ledger op (no ledger monad): parse the deposit tx, check its
+      * submission-deadline TTL, and append the produced deposit utxo to the L1 deposits map. The
+      * slow side owns the treasury chain; the fast side (this actor) owns only the deposits map, so
+      * this is the whole of JointLedger's former `L1LedgerM` surface. Returns the new map + the
+      * produced deposit utxo and its post-dated refund tx, or a [[DepositLedgerError]] (rejected
+      * via `rejectEvent`, never raised).
+      *
+      * NOTE: checks SOME time bounds — specifically that the deposit's submission deadline matches
+      * the one expected from its validity-end.
+      */
+    private def registerDepositInMap(
+        deposits: DepositsMap,
+        requestWithId: UserRequestWithId.DepositRequest
+    ): Either[DepositLedgerError, (DepositsMap, (DepositUtxo, RefundTx.PostDated))] = {
+        import requestWithId.*
+        import request.*
+        val validityEndTime = RequestValidityEndTime(header.validityEnd)
+        for {
+            depositRefundTxSeq <- DepositRefundTxSeq
+                .Parse(config)(
+                  depositTxBytes = body.l1Payload,
+                  l2Payload = body.l2Payload,
+                  requestId = requestWithId.requestId,
+                  requestValidityEndTime = validityEndTime
+                )
+                .result
+                .left
+                .map(DepositLedgerError.ParseError(_))
+            expectedSubmissionDeadline = config.txTiming.depositSubmissionDeadline(validityEndTime)
+            depositProduced <-
+                if depositRefundTxSeq.depositTx.submissionDeadline == expectedSubmissionDeadline
+                then Right(depositRefundTxSeq.depositTx.depositProduced)
+                else
+                    Left(
+                      DepositLedgerError.DepositTxInvalidTTL(
+                        expectedSubmissionDeadline,
+                        depositRefundTxSeq.depositTx.submissionDeadline
+                      )
+                    )
+        } yield (
+          deposits.append(DepositsMap.Entry(requestId, depositProduced)),
+          (depositProduced, depositRefundTxSeq.refundTx)
+        )
+    }
 
     /** Update the JointLedger's state -- the work-in-progress block -- to accept or reject deposits
       * depending on whether the [[dappLedger]] Actor can successfully register the deposit,
@@ -265,10 +292,10 @@ final case class JointLedger(
                       )
                     )
                 else {
-                    val l1Res = L1LedgerM.registerDeposit(req).run(config, p.l1LedgerState)
+                    val l1Res = registerDepositInMap(p.deposits, req)
                     l1Res match {
                         case Left(error) => rejectEvent(requestId, error)
-                        case Right(newL1State, (depositProduced, refundTx)) => {
+                        case Right((newDeposits, (depositProduced, refundTx))) => {
                             val l2Command = L2LedgerCommand.RegisterDeposit(
                               requestId = requestId,
                               userVKey = req.request.userVk,
@@ -289,7 +316,7 @@ final case class JointLedger(
                                     case Right(newL2State) =>
                                         for {
                                             _ <- state.set(
-                                              p.setL1LedgerState(newL1State)
+                                              p.setDeposits(newDeposits)
                                                   .setL2LedgerState(newL2State)
                                                   .focus(_.userRequestState.requests)
                                                   .modify(_.appended((requestId, Valid)))
@@ -409,7 +436,7 @@ final case class JointLedger(
                     _ <- Tracer.trace(s"blockCreationEndTime=$blockCreationEndTime")
                     _ <- Tracer.trace(s"competingFallbackTxTime=${p.competingFallbackTxTime}")
 
-                    partition = p.l1LedgerState.deposits.partition(
+                    partition = p.deposits.partition(
                       blockCreationEndTime = blockCreationEndTime,
                       settlementTxEndTime =
                           config.txTiming.newSettlementEndTime(p.competingFallbackTxTime),
@@ -431,13 +458,7 @@ final case class JointLedger(
                     _ <- panicOnMismatchWithExpectedBrief(referenceBlockBrief, blockBrief)
 
                     // Drop the deposits we just absorbed/refunded from the L1 deposits map.
-                    res <- executeL1Action(
-                      pBlockBrief,
-                      L1LedgerM.handleBlockBrief(split.surviving)
-                    )
-                    (newL1State, ()) = res
-
-                    newJlState = pBlockBrief.setL1LedgerState(newL1State)
+                    newJlState = pBlockBrief.setDeposits(split.surviving)
 
                     _ <- state.set(newJlState.done(blockBrief.header))
 
@@ -587,7 +608,7 @@ final case class JointLedger(
                         val blockBody = BlockBody.Final(
                           events = requests,
                           // Final block should reject all the deposits known.
-                          depositsRefunded = p.l1LedgerState.deposits.requestIds
+                          depositsRefunded = p.deposits.requestIds
                         )
                         BlockBrief.Final(blockHeader, blockBody)
                     }
@@ -742,6 +763,29 @@ object JointLedger {
             requestValidityEnd: RequestValidityEndTime
         ) extends UserRequestError
 
+    /** Failure registering a deposit into the fast-side L1 deposits map — either the deposit tx
+      * fails to parse, or its submission deadline doesn't match the one expected from its
+      * validity-end. Rejected via `rejectEvent` (stringified into the L2 proxy error), never
+      * raised, so it need not extend `Throwable`. (Formerly
+      * `L1LedgerM.Error.RegisterDepositError`.)
+      */
+    sealed trait DepositLedgerError
+    object DepositLedgerError {
+        final case class ParseError(wrapped: DepositRefundTxSeq.Parse.Error)
+            extends DepositLedgerError {
+            override def toString: String = s"ParseError: $wrapped"
+        }
+
+        final case class DepositTxInvalidTTL(
+            expectedSubmissionDeadline: QuantizedInstant,
+            actualSubmissionDeadline: QuantizedInstant
+        ) extends DepositLedgerError {
+            override def toString: String =
+                "DepositTxInvalidTTL: expected submission deadline " +
+                    s"$expectedSubmissionDeadline, but got $actualSubmissionDeadline"
+        }
+    }
+
     object Requests {
         type Request =
             PreStart.type | UserRequestWithId | StartBlock | CompleteBlockRegular |
@@ -789,23 +833,27 @@ object JointLedger {
 
     sealed trait State {
         def previousBlockHeader: BlockHeader
-        def l1LedgerState: L1LedgerM.State
+
+        /** The fast side's L1 deposits map. The treasury chain lives on the slow side
+          * ([[hydrozoa.multisig.consensus.StackComposer]]) after the consensus split — JointLedger
+          * never touches it.
+          */
+        def deposits: DepositsMap
     }
 
     object State {
         def initialize(config: Config): Done = Done(
           previousBlockHeader = config.initialBlock.blockBrief.header,
-          l1LedgerState =
-              L1LedgerM.State(config.initializationTx.treasuryProduced, DepositsMap.empty),
+          deposits = DepositsMap.empty,
         )
     }
 
     final case class Done private[JointLedger] (
         override val previousBlockHeader: BlockHeader,
-        override val l1LedgerState: L1LedgerM.State,
+        override val deposits: DepositsMap,
     ) extends State {
-        def setL1LedgerState(newL1State: L1LedgerM.State): Done =
-            this.focus(_.l1LedgerState).replace(newL1State)
+        def setDeposits(newDeposits: DepositsMap): Done =
+            this.focus(_.deposits).replace(newDeposits)
 
         def producing(
             l2LedgerState: L2LedgerState,
@@ -815,7 +863,7 @@ object JointLedger {
             case b: BlockHeader.NonFinal =>
                 Producing(
                   b,
-                  l1LedgerState,
+                  deposits,
                   l2LedgerState,
                   startTime,
                   userRequestState
@@ -830,7 +878,7 @@ object JointLedger {
 
     final case class Producing private[JointLedger] (
         override val previousBlockHeader: BlockHeader.NonFinal,
-        override val l1LedgerState: L1LedgerM.State,
+        override val deposits: DepositsMap,
         l2LedgerState: L2LedgerState,
         BlockCreationStartTime: BlockCreationStartTime,
         userRequestState: UserRequestState
@@ -840,12 +888,6 @@ object JointLedger {
         transparent inline def competingFallbackTxTime: FallbackTxStartTime =
             previousBlockHeader.fallbackTxStartTime
 
-        def runL1Action[T](
-            config: Config,
-            action: L1LedgerM[T]
-        ): Either[L1LedgerM.Error, (L1LedgerM.State, T)] =
-            action.run(config, l1LedgerState)
-
         def runL2CommandReal[F[_], T](
             l2Ledger: L2Ledger[F],
             command: L2LedgerCommand.Real
@@ -854,13 +896,13 @@ object JointLedger {
             action.run(l2LedgerState)
         }
 
-        def setL1LedgerState(newL1State: L1LedgerM.State): Producing =
-            this.focus(_.l1LedgerState).replace(newL1State)
+        def setDeposits(newDeposits: DepositsMap): Producing =
+            this.focus(_.deposits).replace(newDeposits)
 
         def setL2LedgerState(newL2State: L2LedgerState): Producing =
             this.focus(_.l2LedgerState).replace(newL2State)
 
         def done(newBlockHeader: BlockHeader): Done =
-            Done(newBlockHeader, l1LedgerState)
+            Done(newBlockHeader, deposits)
     }
 }

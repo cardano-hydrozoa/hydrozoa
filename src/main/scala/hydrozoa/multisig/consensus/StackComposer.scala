@@ -14,8 +14,7 @@ import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
 import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockResult}
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
-import hydrozoa.multisig.ledger.l1.L1LedgerM
-import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
+import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
 import hydrozoa.multisig.ledger.stack.*
 
 /** Slow-consensus stack composer (M5).
@@ -57,21 +56,16 @@ final case class StackComposer(
 
     val state: Ref[IO, State] = Ref.unsafe[IO, State](State.empty)
 
-    /** Slow-side L1 ledger state — owns the treasury chain. The slow side advances treasury on
-      * every settlement / finalization tx it produces; the fast side never touches it after the
-      * consensus split. The `deposits` field stays empty here: deposits absorption is a fast-side
-      * concern handled in [[JointLedger]]'s own [[L1LedgerM]] instance.
+    /** Slow-side treasury chain. The slow side advances it on every settlement / finalization tx it
+      * produces; the fast side ([[JointLedger]]) never touches the treasury after the consensus
+      * split — it owns only the deposits map. [[StackEffectsBuilder.deriveRegular]] rotates this
+      * and returns the new treasury, which we persist here for the next stack.
       *
       * Initialized from the head config's initialization tx (treasury produced by the init tx is
       * the genesis treasury for stack 1's settlement).
       */
-    private val l1State: Ref[IO, L1LedgerM.State] =
-        Ref.unsafe[IO, L1LedgerM.State](
-          L1LedgerM.State(
-            treasury = config.initializationTx.treasuryProduced,
-            deposits = DepositsMap.empty
-          )
-        )
+    private val treasuryState: Ref[IO, MultisigTreasuryUtxo] =
+        Ref.unsafe[IO, MultisigTreasuryUtxo](config.initializationTx.treasuryProduced)
 
     /** Cumulative slow-side L2 evacuation-map state — owns the KZG. As of step 4 (KZG removed from
       * `BlockHeader`), JointLedger no longer maintains this state; StackComposer accumulates
@@ -84,22 +78,6 @@ final case class StackComposer(
       */
     private val evacuationMapState: Ref[IO, EvacuationMap] =
         Ref.unsafe[IO, EvacuationMap](config.initialEvacuationMap)
-
-    /** Run an [[L1LedgerM]] action against the slow-side ledger state, advancing the treasury
-      * chain. Called from [[mkUnsigned]] when the partition algorithm produces settlement /
-      * finalization txs (currently no-ops for minor-only stacks; full impl pending the next slice).
-      */
-    private def runL1Action[A](action: L1LedgerM[A]): IO[A] =
-        l1State.modify { st =>
-            action.run(config, st) match {
-                case Right((newSt, a)) => (newSt, IO.pure(a))
-                case Left(err) =>
-                    (
-                      st,
-                      Tracer.error(s"slow-side L1 action failed: $err") *> IO.raiseError(err)
-                    )
-            }
-        }.flatten
 
     override def preStart: IO[Unit] = for {
         _ <- context.self ! PreStart
@@ -317,8 +295,20 @@ final case class StackComposer(
         val partitions = StackPartition.partition(results)
         for {
             currentMap <- evacuationMapState.get
-            res <- runL1Action(StackEffectsBuilder.deriveRegular(partitions, currentMap))
-            (effects, newMap) = res
+            treasury <- treasuryState.get
+            res <- StackEffectsBuilder.deriveRegular(
+              config,
+              treasury,
+              partitions,
+              currentMap
+            ) match {
+                case Right(r) => IO.pure(r)
+                case Left(err) =>
+                    Tracer.error(s"slow-side effect derivation failed: $err") *>
+                        IO.raiseError(err)
+            }
+            (effects, newTreasury, newMap) = res
+            _ <- treasuryState.set(newTreasury)
             _ <- evacuationMapState.set(newMap)
         } yield Stack.Unsigned(brief, effects)
     }

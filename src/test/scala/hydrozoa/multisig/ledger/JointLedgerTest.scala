@@ -606,7 +606,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                       DepositsMap.Entry(event.requestId, txSeq.depositTx.depositProduced)
               }
 
-              depositsMap <- getJointLedgerState.map(_.l1LedgerState.deposits)
+              depositsMap <- getJointLedgerState.map(_.deposits)
 
               // Test statistic:  make sure that ties are actually occurring in some samples
               _ <- lift(PropertyM.monitor[IO](Prop.collect {
@@ -689,7 +689,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
           _ <- for {
               jlState <- getJointLedgerState
-              dlState = jlState.l1LedgerState
+              dlState = jlState
 
               _ <- assertWith(
                 msg =
@@ -700,10 +700,8 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                 msg = "Correct deposit(s) in state",
                 condition = dlState.deposits.depositUtxos.head == depositProduced
               )
-              _ <- assertWith(
-                msg = "Correct treasury in state",
-                condition = dlState.treasury == env.config.initializationTx.treasuryProduced
-              )
+              // Treasury is no longer JointLedger's concern — it moved to the slow side
+              // (StackComposer) in the consensus split; JointLedger.State owns only the deposits map.
               _ <- assertWith(
                 msg = "Correct refund in state",
                 condition =
@@ -854,7 +852,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
               _ <- assertWith(
                 msg = "Deposit should be in dapp ledger state",
-                condition = jlState.l1LedgerState.deposits == DepositsMap.empty.append(
+                condition = jlState.deposits == DepositsMap.empty.append(
                   DepositsMap.Entry(
                     depositReq.requestId,
                     depositRefundTxSeq.depositTx.depositProduced
@@ -899,7 +897,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
               _ <- assertWith(
                 msg = "Deposit should not be in dapp ledger state",
-                condition = jlState.l1LedgerState.deposits.isEmpty
+                condition = jlState.deposits.isEmpty
               )
 
               _ <- assertWith(
