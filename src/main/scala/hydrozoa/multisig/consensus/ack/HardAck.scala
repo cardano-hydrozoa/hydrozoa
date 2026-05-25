@@ -12,8 +12,7 @@ import scalus.cardano.ledger.VKeyWitness
   *
   * Hard-acks are emitted by [[hydrozoa.multisig.consensus.SlowConsensusActor]] in the wire shapes
   * listed below by `(stack kind, round, partition layout)`. The two top groups — Initial and Sole —
-  * are single-shape; the third (Regular) splits into four cases by partition layout, ordered by
-  * structural complexity (fewest slots first):
+  * are single-shape; the third (Regular) splits into four cases by partition layout:
   *
   *   - **Initial** (2-phase, stack 0 only):
   *     1. [[HardAck.Round1Payload.Initial]] — signature over the locally derived fallback tx.
@@ -89,12 +88,15 @@ object HardAck {
             fallbackSig: TxSignature
         ) extends Payload.Round1
 
-        /** Round-1 sigs for a regular stack. Four structurally exclusive cases, one per shape the
-          * partition list can take given the `[Minor?] [Major]* [Final?]` layout produced by
+        /** Round-1 sigs for a regular stack. The key observation here is that depending on the
+          * position the same partition may require either complete or partial set of signatures.
+          * Four structurally exclusive cases, one per shape the partition list can take given the
+          * `[Minor?] [Major]* [Final?]` layout produced by
           * [[hydrozoa.multisig.ledger.stack.StackPartition]] and the unlock rule from
           * [[hydrozoa.multisig.ledger.stack.PartitionEffects.unlock]] (first Major's settlement;
-          * else — when no Major — the Final's finalization). Cases listed in order of growing
-          * structural complexity (fewest slots first):
+          * else — when no Major — the Final's finalization).
+          *
+          * Cases listed in order of growing structural complexity (fewest slots first):
           *
           *   1. [[OnlyPartial]] — `[Major]` or `[Final]`
           *   2. [[PartialThenCompletes]] — `[Major, Major* (Major | Final)]`

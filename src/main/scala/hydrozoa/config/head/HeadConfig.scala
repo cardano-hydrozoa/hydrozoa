@@ -130,9 +130,7 @@ object HeadConfig {
                 hc <- {
                     given CardanoNetwork = network
                     for {
-                        // NOTE: we can't just parse a full `Block.Unsigned.Initial`, because the
-                        // initialization/fallback transaction wrappers need _semantic_ parsing
-                        // (which depends on the head config we're constructing).
+                        // TODO: parse not re-create, see https://linear.app/gummiworm-labs/issue/GUM-129/enrich-init-tx-metadata-implement-init-tx-parsing
                         brief <- c
                             .downField("initialBlock")
                             .downField("blockBrief")
@@ -145,10 +143,7 @@ object HeadConfig {
                         hcBootstrap <- c.as[HeadConfig.Bootstrap](using
                           HeadConfig.Bootstrap.withInitTxDecoder(initTx)
                         )
-                        // The init+fallback tx wrappers can't be decoded directly from the JSON
-                        // bytes — they need semantic parsing against the head config. Re-derive
-                        // the unsigned pair deterministically from the bootstrap + brief instead;
-                        // the persisted `initTx` only feeds `withInitTxDecoder` above.
+
                         initTxSeq <- InitializationTxSeq
                             .Build(hcBootstrap)(brief.endTime)
                             .result
