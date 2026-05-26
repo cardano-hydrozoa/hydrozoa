@@ -114,7 +114,7 @@ When `previousStackHardConfirmed && readyPrefix.nonEmpty`:
    "Partition model" below).
 4. `StackEffectsBuilder.deriveRegular(partitions)` → `StackEffects.Unsigned.Regular`.
 5. `buildHandoff` signs all own hard-acks upfront: for 2-phase, both round-1 and round-2;
-   for 1-phase (all-Minor sole), just the sole ack. `ownHardAckNum` is the per-peer
+   for 1-phase (all-Minor sole), just the sole ack. `nextOwnHardAckNum` is the per-peer
    counter; the unlock partition is chosen by `PartitionEffects.unlock`.
 6. Broadcasts `StackBrief` direct to all `PeerLiaisons`.
 7. Hands `StackHandoff(unsigned, acks)` to `SlowConsensusActor`.

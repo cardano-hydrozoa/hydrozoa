@@ -17,7 +17,7 @@ import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
 import hydrozoa.multisig.ledger.stack.*
 
-/** Slow-consensus stack composer.
+/** Stack composer.
   *
   * Pairs [[BlockResult]] (from JointLedger) with [[Block.SoftConfirmed]] (from FastConsensusActor)
   * by `blockNum`. Once a block's pair is in the `ready` map, it becomes eligible for inclusion in
@@ -28,20 +28,15 @@ import hydrozoa.multisig.ledger.stack.*
   *
   *   - **Leader** (when `isSlowLeader(nextStackNum)`): on `Stack.HardConfirmed` OR after pairing a
   *     new block, attempts to close the next stack from the longest contiguous prefix. Closing
-  *     means: build [[StackBrief]] + [[StackEffects]] (via [[StackEffectsBuilder]] — minor-only
-  *     stacks fully derive; Major / Final fall through to TODOs in the next slice), wrap into
+  *     means: build [[StackBrief]] + [[StackEffects]] (via [[StackEffectsBuilder]]), wrap into
   *     [[Stack.Unsigned]], hand off to [[SlowConsensusActor]], and broadcast the brief directly to
   *     PeerLiaisons.
   *   - **Follower**: on an inbound `StackBrief` for `lastClosedStackNum + 1`, classify it three
-  *     ways — structural divergence (→ rule-based fallback, TODO); not-yet-covered (benign: paired
-  *     blocks don't yet span the brief's range — wait silently, re-fires on the next event);
-  *     covered (build [[Stack.Unsigned]] from EXACTLY the brief's range — the leader may have
-  *     closed earlier than this follower could — re-derive effects locally, sign, hand to
+  *     ways — structural divergence (→ rule-based fallback); not-yet-covered (benign: paired blocks
+  *     don't yet span the brief's range — wait silently, re-fires on the next event); covered
+  *     (build [[Stack.Unsigned]] from EXACTLY the brief's range — the leader may have closed
+  *     earlier than this follower could — re-derive effects locally, sign, hand to
   *     SlowConsensusActor).
-  *
-  * Effect derivation, wallet signing, and own-ack bundling are live; [[SlowConsensusActor]]
-  * aggregates the per-peer hard-acks across head peers into the multisigned
-  * [[Stack.HardConfirmed]].
   */
 final case class StackComposer(
     config: StackComposer.Config,
@@ -54,29 +49,7 @@ final case class StackComposer(
 
     private val connections = Ref.unsafe[IO, Option[Connections]](None)
 
-    val state: Ref[IO, State] = Ref.unsafe[IO, State](State.empty)
-
-    /** Slow-side treasury chain. The slow side advances it on every settlement / finalization tx it
-      * produces; the fast side ([[JointLedger]]) never touches the treasury — it owns only the
-      * deposits map. [[StackEffectsBuilder.deriveRegular]] rotates this and returns the new
-      * treasury, which we persist here for the next stack.
-      *
-      * Initialized from the head config's initialization tx (treasury produced by the init tx is
-      * the genesis treasury for stack 1's settlement).
-      */
-    private val treasuryState: Ref[IO, MultisigTreasuryUtxo] =
-        Ref.unsafe[IO, MultisigTreasuryUtxo](config.initializationTx.treasuryProduced)
-
-    /** Cumulative slow-side L2 evacuation-map state — owns the KZG. StackComposer accumulates
-      * per-block `evacuationMapDiff`s from `BlockResult` as it composes stacks, and
-      * [[StackEffectsBuilder.deriveRegular]] folds the diffs over this running map to compute KZG
-      * only at the blocks that need it (each Major's settlement `nextKzg` and each
-      * last-of-partition minor's SEC).
-      *
-      * Initialized from the head config's `initialEvacuationMap` — the genesis map for stack 1.
-      */
-    private val evacuationMapState: Ref[IO, EvacuationMap] =
-        Ref.unsafe[IO, EvacuationMap](config.initialEvacuationMap)
+    val state: Ref[IO, State] = Ref.unsafe[IO, State](State.initial(config))
 
     override def preStart: IO[Unit] = for {
         _ <- context.self ! PreStart
@@ -103,14 +76,14 @@ final case class StackComposer(
 
     private def handleBlockResult(r: BlockResult): IO[Unit] = for {
         _ <- Tracer.debug(s"BlockResult received for block ${r.brief.blockNum}")
-        _ <- state.update(_.withBlockResult(r))
+        _ <- state.update(_.recordBlockResult(r))
         _ <- state.update(_.tryPair(r.brief.blockNum))
         _ <- tryProgress
     } yield ()
 
     private def handleSoftConfirmed(b: Block.SoftConfirmed): IO[Unit] = for {
         _ <- Tracer.debug(s"Block.SoftConfirmed received for block ${b.blockNum}")
-        _ <- state.update(_.withSoftConfirmed(b))
+        _ <- state.update(_.recordSoftConfirmed(b))
         _ <- state.update(_.tryPair(b.blockNum))
         _ <- tryProgress
     } yield ()
@@ -148,12 +121,13 @@ final case class StackComposer(
       *
       * Stack 0 is exogenous — its effects come from the shared head config, not from any
       * BlockResult stream — so EVERY peer derives it locally and runs the Initial 2-phase hard-ack
-      * flow over it (round-1 = fallback sig, round-2 = init-tx sig + individual funding witnesses).
-      * No `StackBrief` is broadcast: there's nothing a leader could tell followers that they can't
-      * derive from config. The init + fallback bodies are the UNSIGNED config placeholders; the
-      * hard-ack aggregation in [[SlowConsensusActor]] is what multisigns them. On hard-confirmation
-      * the resulting [[Stack.HardConfirmed]] flows to CardanoLiaison (submittable init + fallback)
-      * and back to this composer as the `PreviousStackHardConfirmation` that unblocks stack 1.
+      * flow over it (round-1 = fallback sig, round-2 = init-tx sig + individual funding
+      * signatures). No `StackBrief` is broadcast: there's nothing a leader could tell followers
+      * that they can't derive from config. The init + fallback bodies are the UNSIGNED config
+      * placeholders; the hard-ack aggregation in [[SlowConsensusActor]] is what multisigns them. On
+      * hard-confirmation the resulting [[Stack.HardConfirmed]] flows to CardanoLiaison (submittable
+      * init + fallback) and back to this composer as the `PreviousStackHardConfirmation` that
+      * unblocks stack 1.
       */
     private def bootstrapInitialStack: IO[Unit] = for {
         now <- realTimeQuantizedInstant(config.slotConfig)
@@ -187,7 +161,8 @@ final case class StackComposer(
                       s"Leader closing stack $nextStackNum with blocks " +
                           s"${prefix.head.result.brief.blockNum}..${prefix.last.result.brief.blockNum}"
                     )
-                    unsigned <- mkUnsigned(brief, prefix)
+                    res <- mkUnsigned(brief, prefix, s.treasury, s.evacuationMap)
+                    (unsigned, newTreasury, newMap) = res
                     handoff <- buildHandoff(unsigned)
                     conn <- getConnections
                     // Broadcast brief directly to PeerLiaisons (briefs go DIRECT, not via
@@ -197,7 +172,7 @@ final case class StackComposer(
                     // (which manages broadcast scheduling: round-1 / sole immediately, round-2
                     // withheld until local round-1 confirmation).
                     _ <- conn.slowConsensusActor ! handoff
-                    _ <- state.update(_.afterClose(nextStackNum, prefix))
+                    _ <- state.update(_.afterClose(nextStackNum, prefix, newTreasury, newMap))
                 } yield ()
         }
 
@@ -205,11 +180,9 @@ final case class StackComposer(
       * local paired-block view into exactly three outcomes:
       *
       *   1. **Structural divergence** — `firstBlockNum != lastClosedBlockNum + 1` (the leader is
-      *      composing from a different single-flight position) or `last < first`. This is a genuine
-      *      consensus break: per the plan it triggers fallback into the rule-based regime. (TODO:
-      *      wire the fallback; for now warn — the brief never actually arrives over the wire yet
-      *      since SlowConsensusActor auto-confirms and there is no real multi-peer StackBrief
-      *      delivery.)
+      *      composing from a different single-flight position) or `last < first`. This is an
+      *      unrecoverable consensus break: warn and panic to halt the node, so the
+      *      [[MultisigRegimeManager]] hands over to the rule-based regime.
       *   2. **Not yet covered** — structurally fine, but this follower hasn't paired every block in
       *      `[first, last]` yet (a constituent block's `BlockResult` or its `Block.SoftConfirmed`
       *      is still in flight). This is the common, benign case — NOT a divergence. Do nothing and
@@ -230,13 +203,15 @@ final case class StackComposer(
 
                 if !structurallyConsistent then
                     // (1) genuine divergence — leader's composition is inconsistent with our
-                    // single-flight position. TODO: fall back to the rule-based regime.
+                    // single-flight position. Unrecoverable: warn, then panic to halt the node so
+                    // the MultisigRegimeManager hands over to the rule-based regime.
                     Tracer.warn(
                       s"Follower stack $nextStackNum structural divergence: leader brief " +
                           s"[${brief.firstBlockNum}..${brief.lastBlockNum}] but expected to " +
-                          s"start at $expectedFirst (lastClosedBlockNum=" +
-                          s"${s.lastClosedBlockNum}). TODO: rule-based fallback."
-                    )
+                          s"start at $expectedFirst (lastClosedBlockNum=${s.lastClosedBlockNum})."
+                    ) >> panic(
+                      s"Stack $nextStackNum structural divergence; consensus is broken."
+                    ) >> context.self.stop
                 else
                     s.readySlice(brief.firstBlockNum, brief.lastBlockNum) match {
                         case None =>
@@ -255,11 +230,14 @@ final case class StackComposer(
                                       s"leader; blocks ${brief.firstBlockNum}.." +
                                       s"${brief.lastBlockNum}"
                                 )
-                                unsigned <- mkUnsigned(brief, slice)
+                                res <- mkUnsigned(brief, slice, s.treasury, s.evacuationMap)
+                                (unsigned, newTreasury, newMap) = res
                                 handoff <- buildHandoff(unsigned)
                                 conn <- getConnections
                                 _ <- conn.slowConsensusActor ! handoff
-                                _ <- state.update(_.afterClose(nextStackNum, slice))
+                                _ <- state.update(
+                                  _.afterClose(nextStackNum, slice, newTreasury, newMap)
+                                )
                             } yield ()
                     }
         }
@@ -277,48 +255,83 @@ final case class StackComposer(
         )
 
     /** Build a [[Stack.Unsigned]] from the prefix. Runs the necessary-effects partition algorithm
-      * and the per-block effect derivation, threading the slow-side L1 ledger state through
-      * (treasury rotates on settlement / finalization).
-      *
-      * Current scope: minor-only stacks fully derive — refund txs from each Minor's
-      * `postDatedRefundTxs`. Stacks containing Major or Final blocks build the same structure but
-      * with empty settlement / fallback / rollout / finalization (TODOs in
-      * [[StackEffectsBuilder]]).
+      * and the per-block effect derivation, threading the slow-side treasury through (it rotates on
+      * settlement / finalization). All partition kinds derive fully — Minor (SEC + post-dated
+      * refunds), Major (settlement + fallback + rollouts, + SEC for a trailing minor), Final
+      * (finalization + rollouts); see [[StackEffectsBuilder.deriveRegular]].
       */
     private def mkUnsigned(
         brief: StackBrief,
-        prefix: List[ReadyBlock]
-    ): IO[Stack.Unsigned] = {
+        prefix: List[ReadyBlock],
+        treasury: MultisigTreasuryUtxo,
+        evacuationMap: EvacuationMap
+    ): IO[(Stack.Unsigned, MultisigTreasuryUtxo, EvacuationMap)] = {
         val results = NonEmptyList.fromListUnsafe(prefix.map(_.result))
         val partitions = StackPartition.partition(results)
-        for {
-            currentMap <- evacuationMapState.get
-            treasury <- treasuryState.get
-            res <- StackEffectsBuilder.deriveRegular(
-              config,
-              treasury,
-              partitions,
-              currentMap
-            ) match {
-                case Right(r) => IO.pure(r)
-                case Left(err) =>
-                    Tracer.error(s"slow-side effect derivation failed: $err") *>
-                        IO.raiseError(err)
-            }
-            (effects, newTreasury, newMap) = res
-            _ <- treasuryState.set(newTreasury)
-            _ <- evacuationMapState.set(newMap)
-        } yield Stack.Unsigned(brief, effects)
+        StackEffectsBuilder.deriveRegular(config, treasury, partitions, evacuationMap) match {
+            case Right((effects, newTreasury, newMap)) =>
+                IO.pure((Stack.Unsigned(brief, effects), newTreasury, newMap))
+            case Left(err) =>
+                Tracer.error(s"slow-side effect derivation failed: $err") *> IO.raiseError(err)
+        }
+    }
+
+    /** Assemble this peer's round-1 hard-ack for a regular stack: combine the per-partition
+      * signature payloads into the discriminated [[HardAck.Round1Payload.Regular]] by partition
+      * layout (the inverse of [[HardAck.Round1Payload.Regular.asSlots]]), then wrap it in a
+      * [[HardAck]].
+      */
+    private def assembleRound1Ack(
+        ackId: HardAckId,
+        stackNum: StackNumber,
+        partitionSigs: NonEmptyList[HardAck.Round1Payload.PartitionSigs]
+    ): HardAck = {
+        val payload: HardAck.Round1Payload.Regular = partitionSigs.toList match {
+            // Case 3: [Partial]
+            case List(p: HardAck.Round1Payload.PartitionSigs.Partial) =>
+                HardAck.Round1Payload.Regular.OnlyPartial(p)
+            // Case 4: [MajorPartial, Complete+] — FinalPartial here is impossible (FinalPartial
+            // fires only when no Major exists, which means no trailing completes either).
+            case (p: HardAck.Round1Payload.PartitionSigs.MajorPartial) :: rest if rest.nonEmpty =>
+                val cs = NonEmptyList.fromListUnsafe(
+                  rest.collect { case c: HardAck.Round1Payload.PartitionSigs.Complete => c }
+                )
+                HardAck.Round1Payload.Regular.PartialThenCompletes(p, cs)
+            // Case 1: [Minor, Partial]
+            case List(
+                  m: HardAck.Round1Payload.PartitionSigs.Minor,
+                  p: HardAck.Round1Payload.PartitionSigs.Partial
+                ) =>
+                HardAck.Round1Payload.Regular.MinorThenPartial(m, p)
+            // Case 2: [Minor, MajorPartial, Complete+] — FinalPartial here is impossible for the
+            // same reason as case 4.
+            case (m: HardAck.Round1Payload.PartitionSigs.Minor) ::
+                (p: HardAck.Round1Payload.PartitionSigs.MajorPartial) :: rest if rest.nonEmpty =>
+                val cs = NonEmptyList.fromListUnsafe(
+                  rest.collect { case c: HardAck.Round1Payload.PartitionSigs.Complete => c }
+                )
+                HardAck.Round1Payload.Regular.MinorThenPartialThenCompletes(m, p, cs)
+            case other =>
+                throw new IllegalStateException(
+                  "unexpected Regular round-1 layout: " +
+                      other.map(_.getClass.getSimpleName).mkString(", ")
+                )
+        }
+        HardAck(ackId, stackNum, payload)
     }
 
     /** Sign this peer's own hard-acks for every round the stack will need, allocating monotonic
       * `HardAckNumber`s from the local counter. Bundles `(unsigned, ownAcks)` into a
       * [[SlowConsensusActor.StackHandoff]] for the slow consensus actor.
       *
-      * Per the plan, signing happens upfront at stack close (round-2's sig domain is the unlock tx
-      * body, which is fully known at this point). SlowConsensusActor manages outbound broadcast
-      * scheduling (round-1 / sole released immediately to PeerLiaisons; round-2 withheld until
-      * local round-1 confirmation).
+      * Signing happens upfront at stack close (round-2's sig domain is the unlock tx body, which is
+      * fully known at this point). SlowConsensusActor manages outbound broadcast scheduling
+      * (round-1 / sole released immediately to PeerLiaisons; round-2 withheld until local round-1
+      * confirmation).
+      *
+      * The composer walks the partition-indexed StackEffects and applies the shared
+      * PartitionEffects.unlock rule to pack this peer's sigs into two explicit acks (round-1 =
+      * everything except the unlock; round-2 = the unlock) or one sole ack.
       */
     private def buildHandoff(
         unsigned: Stack.Unsigned
@@ -328,23 +341,42 @@ final case class StackComposer(
             val stackNum = unsigned.brief.stackNum
             val peer = config.ownHeadPeerNum
 
-            // The composer walks the partition-indexed StackEffects and applies the shared
-            // PartitionEffects.unlock rule to pack this peer's sigs into two explicit acks
-            // (round-1 = everything except the unlock; round-2 = the unlock) or one sole ack.
-            // No StackEffectsSigningInputs / HardAckRoundPlan indirection — the effects ARE the
-            // canonical structure; SlowConsensusActor verifies/aggregates against the same.
+            // Round-1 / round-2 payloads for the initial stack (stack 0): round 1 signs the
+            // locally-derived fallback tx; round 2 signs the exogenous init tx plus this peer's
+            // individual-address signature iff it funds an init input.
+            def mkInitialRound1Signatures(
+                i: StackEffects.Unsigned.Initial
+            ): HardAck.Round1Payload.Initial =
+                HardAck.Round1Payload.Initial(fallbackSig = wallet.mkTxSignature(i.fallbackTx.tx))
 
-            def slot(
+            def mkInitialRound2Signatures(
+                i: StackEffects.Unsigned.Initial
+            ): HardAck.Round2Payload.Initial =
+                HardAck.Round2Payload.Initial(
+                  initTxSig = wallet.mkTxSignature(i.initializationTx.tx),
+                  individualSig =
+                      if StackEffects.spendsFromIndividualAddress(
+                            i.initializationTx,
+                            wallet.exportVerificationKey
+                          )
+                      then Some(wallet.mkTxSignature(i.initializationTx.tx))
+                      else None
+                )
+
+            // Round-1 signatures for one partition. `isUnlock` marks the partition whose
+            // settlement / finalization is withheld for round 2 (a `Partial` slot); every other
+            // partition contributes its full set (a `Complete` slot). Minor partitions are never
+            // the unlock.
+            def mkRound1Signatures(
                 pe: PartitionEffects[StandaloneEvacuationCommitment],
-                idx: Int,
-                unlock: PartitionEffects.Unlock
+                isUnlock: Boolean
             ): HardAck.Round1Payload.PartitionSigs = pe match {
                 case PartitionEffects.Major(settlement, fallback, rollouts, refunds, sec) =>
                     val fallbackSig = wallet.mkTxSignature(fallback.tx)
                     val rolloutSigs = rollouts.map(r => wallet.mkTxSignature(r.tx))
                     val refundSigs = refunds.map(r => wallet.mkTxSignature(r.tx))
                     val secSig = sec.map(s => wallet.mkHeaderSignature(s.header))
-                    if unlock == PartitionEffects.Unlock.Settlement(idx) then
+                    if isUnlock then
                         HardAck.Round1Payload.PartitionSigs.MajorPartial(
                           fallback = fallbackSig,
                           rollouts = rolloutSigs,
@@ -361,7 +393,7 @@ final case class StackComposer(
                         )
                 case PartitionEffects.Final(finalization, rollouts) =>
                     val rolloutSigs = rollouts.map(r => wallet.mkTxSignature(r.tx))
-                    if unlock == PartitionEffects.Unlock.Finalization(idx) then
+                    if isUnlock then
                         HardAck.Round1Payload.PartitionSigs.FinalPartial(rollouts = rolloutSigs)
                     else
                         HardAck.Round1Payload.PartitionSigs.FinalComplete(
@@ -375,95 +407,61 @@ final case class StackComposer(
                     )
             }
 
-            def unlockSig(
-                u: PartitionEffects.Unlock,
-                parts: NonEmptyList[PartitionEffects[StandaloneEvacuationCommitment]]
-            ) = u match {
-                case PartitionEffects.Unlock.Settlement(i) =>
-                    parts.toList(i) match {
-                        case PartitionEffects.Major(settlement, _, _, _, _) =>
-                            wallet.mkTxSignature(settlement.tx)
-                        case _ =>
-                            throw new IllegalStateException(
-                              s"unlock Settlement($i) is not a Major partition"
-                            )
-                    }
-                case PartitionEffects.Unlock.Finalization(i) =>
-                    parts.toList(i) match {
-                        case PartitionEffects.Final(finalization, _) =>
-                            wallet.mkTxSignature(finalization.tx)
-                        case _ =>
-                            throw new IllegalStateException(
-                              s"unlock Finalization($i) is not a Final partition"
-                            )
-                    }
+            // Round-2 payload for the unlock partition: its settlement / finalization signature —
+            // the one effect withheld from round 1. Mirrors `mkRound1Signatures` (a payload, not
+            // a bare signature); the caller wraps it in a `HardAck` as it does the round-1 payload.
+            def mkRound2Signatures(
+                unlockPartition: PartitionEffects[StandaloneEvacuationCommitment]
+            ): HardAck.Round2Payload.Regular = {
+                val sig = unlockPartition match {
+                    case PartitionEffects.Major(settlement, _, _, _, _) =>
+                        wallet.mkTxSignature(settlement.tx)
+                    case PartitionEffects.Final(finalization, _) =>
+                        wallet.mkTxSignature(finalization.tx)
+                    case _ =>
+                        throw new IllegalStateException(
+                          "round-2 unlock partition is neither Major nor Final"
+                        )
+                }
+                HardAck.Round2Payload.Regular(sig)
             }
 
-            val (acks, newCounter) = unsigned.effects match {
+            //
+            val (acks, newNextOwnHardAckNum) = unsigned.effects match {
+                case i: StackEffects.Unsigned.Initial =>
+                    // Stack 0: structurally 2-phase, exogenous unlock (the init tx).
+                    val n1 = s.nextOwnHardAckNum
+                    val n2 = n1.increment
+                    val round1 =
+                        HardAck(HardAckId(peer, n1), stackNum, mkInitialRound1Signatures(i))
+                    val round2 =
+                        HardAck(HardAckId(peer, n2), stackNum, mkInitialRound2Signatures(i))
+                    (List(round1, round2), n2.increment)
+
                 case r: StackEffects.Unsigned.Regular =>
                     PartitionEffects.unlock(r.partitions) match {
                         case Some(u) =>
-                            val n1 = s.ownHardAckNum
+                            // Regular stack, 2-phase
+                            val n1 = s.nextOwnHardAckNum
                             val n2 = n1.increment
-                            val slots = r.partitions.zipWithIndex.map { case (pe, i) =>
-                                slot(pe, i, u)
+                            val unlockIndex = u match {
+                                case PartitionEffects.Unlock.Settlement(i)   => i
+                                case PartitionEffects.Unlock.Finalization(i) => i
                             }
-                            val regularPayload: HardAck.Round1Payload.Regular =
-                                slots.toList match {
-                                    // Case 3: [Partial]
-                                    case List(p: HardAck.Round1Payload.PartitionSigs.Partial) =>
-                                        HardAck.Round1Payload.Regular.OnlyPartial(p)
-                                    // Case 4: [MajorPartial, Complete+] — FinalPartial here is
-                                    // impossible (FinalPartial fires only when no Major exists,
-                                    // which means no trailing completes either).
-                                    case (p: HardAck.Round1Payload.PartitionSigs.MajorPartial) :: rest
-                                        if rest.nonEmpty =>
-                                        val cs = NonEmptyList.fromListUnsafe(
-                                          rest.collect {
-                                              case c: HardAck.Round1Payload.PartitionSigs.Complete =>
-                                                  c
-                                          }
-                                        )
-                                        HardAck.Round1Payload.Regular.PartialThenCompletes(p, cs)
-                                    // Case 1: [Minor, Partial]
-                                    case List(
-                                          m: HardAck.Round1Payload.PartitionSigs.Minor,
-                                          p: HardAck.Round1Payload.PartitionSigs.Partial
-                                        ) =>
-                                        HardAck.Round1Payload.Regular.MinorThenPartial(m, p)
-                                    // Case 2: [Minor, MajorPartial, Complete+] — FinalPartial
-                                    // here is impossible for the same reason as case 4.
-                                    case (m: HardAck.Round1Payload.PartitionSigs.Minor) ::
-                                        (p: HardAck.Round1Payload.PartitionSigs.MajorPartial) :: rest
-                                        if rest.nonEmpty =>
-                                        val cs = NonEmptyList.fromListUnsafe(
-                                          rest.collect {
-                                              case c: HardAck.Round1Payload.PartitionSigs.Complete =>
-                                                  c
-                                          }
-                                        )
-                                        HardAck.Round1Payload.Regular
-                                            .MinorThenPartialThenCompletes(m, p, cs)
-                                    case other =>
-                                        throw new IllegalStateException(
-                                          "unexpected Regular slot layout: " +
-                                              other.map(_.getClass.getSimpleName).mkString(", ")
-                                        )
-                                }
-                            val round1 = HardAck(
-                              HardAckId(peer, n1),
-                              stackNum,
-                              regularPayload
-                            )
+                            val round1AckPayloads = r.partitions.zipWithIndex.map { case (pe, i) =>
+                                mkRound1Signatures(pe, isUnlock = i == unlockIndex)
+                            }
+                            val round1 =
+                                assembleRound1Ack(HardAckId(peer, n1), stackNum, round1AckPayloads)
                             val round2 = HardAck(
                               HardAckId(peer, n2),
                               stackNum,
-                              HardAck.Round2Payload.Regular(unlockSig(u, r.partitions))
+                              mkRound2Signatures(r.partitions.toList(unlockIndex))
                             )
                             (List(round1, round2), n2.increment)
                         case None =>
                             // Sole / 1-phase: exactly one Minor partition.
-                            val n = s.ownHardAckNum
+                            val n = s.nextOwnHardAckNum
                             val sole = r.partitions.head match {
                                 case PartitionEffects.Minor(sec, refunds) =>
                                     HardAck(
@@ -481,36 +479,10 @@ final case class StackComposer(
                             }
                             (List(sole), n.increment)
                     }
-                case i: StackEffects.Unsigned.Initial =>
-                    // Stack 0: structurally 2-phase, exogenous unlock (the init tx).
-                    val n1 = s.ownHardAckNum
-                    val n2 = n1.increment
-                    val round1 = HardAck(
-                      HardAckId(peer, n1),
-                      stackNum,
-                      HardAck.Round1Payload.Initial(
-                        fallbackSig = wallet.mkTxSignature(i.fallbackTx.tx)
-                      )
-                    )
-                    val round2 = HardAck(
-                      HardAckId(peer, n2),
-                      stackNum,
-                      HardAck.Round2Payload.Initial(
-                        initTxSig = wallet.mkTxSignature(i.initializationTx.tx),
-                        individualSig =
-                            if StackEffects.spendsFromIndividualAddress(
-                                  i.initializationTx,
-                                  wallet.exportVerificationKey
-                                )
-                            then Some(wallet.mkTxSignature(i.initializationTx.tx))
-                            else None
-                      )
-                    )
-                    (List(round1, round2), n2.increment)
             }
 
             val handoff = SlowConsensusActor.StackHandoff(unsigned, acks)
-            (s.copy(ownHardAckNum = newCounter), handoff)
+            (s.copy(nextOwnHardAckNum = newNextOwnHardAckNum), handoff)
         }
 
     private def getConnections: IO[Connections] = for {
@@ -521,6 +493,10 @@ final case class StackComposer(
           )
         )(IO.pure)
     } yield conn
+
+    // Halt the node by failing the actor, so the MultisigRegimeManager (which watches this child)
+    // can hand over to the rule-based regime. Mirrors `JointLedger.panic`.
+    private def panic(msg: String): IO[Unit] = throw new RuntimeException(msg)
 
     private def initializeConnections: IO[Unit] = pendingConnections match {
         case x: MultisigRegimeManager.PendingConnections =>
@@ -600,14 +576,26 @@ object StackComposer {
           * HardAck this peer produces (round-1 + round-2 for 2-phase stacks; sole for 1-phase).
           * Wire ordering invariant: round-1 always precedes round-2 for the same stackNum.
           */
-        ownHardAckNum: HardAckNumber
+        nextOwnHardAckNum: HardAckNumber,
+        /** The treasury chain. Advanced on every settlement / finalization tx the composer
+          * produces; [[JointLedger]] never touches the treasury — it owns only the deposits map.
+          * [[StackEffectsBuilder.deriveRegular]] rotates it on each close (see [[afterClose]]).
+          */
+        treasury: MultisigTreasuryUtxo,
+        /** Cumulative L2 evacuation map; the KZG commitment is computed from it. Accumulates the
+          * per-block `evacuationMapDiff`s from `BlockResult` as stacks are composed, and
+          * [[StackEffectsBuilder.deriveRegular]] folds the diffs over this running map to compute
+          * KZG only at the blocks that need it (each Major's settlement `nextKzg` and each
+          * last-of-partition minor's SEC).
+          */
+        evacuationMap: EvacuationMap
     ) {
-        def withBlockResult(r: BlockResult): State = {
+        def recordBlockResult(r: BlockResult): State = {
             val pb = pending.getOrElse(r.brief.blockNum, PendingBlock.empty).withResult(r)
             copy(pending = pending.updated(r.brief.blockNum, pb))
         }
 
-        def withSoftConfirmed(b: Block.SoftConfirmed): State = {
+        def recordSoftConfirmed(b: Block.SoftConfirmed): State = {
             val pb = pending.getOrElse(b.blockNum, PendingBlock.empty).withSoftConfirmed(b)
             copy(pending = pending.updated(b.blockNum, pb))
         }
@@ -659,10 +647,16 @@ object StackComposer {
             loop(first, Nil)
         }
 
-        /** Apply the result of closing a stack: drain the prefix, advance counters, gate the next
-          * close on the upcoming `Stack.HardConfirmed` of this stack.
+        /** Apply the result of closing a stack: drain the prefix, advance counters, rotate the
+          * treasury + evacuation map to the values the close derived, and gate the next close on
+          * the upcoming `Stack.HardConfirmed` of this stack.
           */
-        def afterClose(closedStackNum: StackNumber, drained: List[ReadyBlock]): State = {
+        def afterClose(
+            closedStackNum: StackNumber,
+            drained: List[ReadyBlock],
+            newTreasury: MultisigTreasuryUtxo,
+            newEvacuationMap: EvacuationMap
+        ): State = {
             val newReady = drained.foldLeft(ready)((m, rb) => m - rb.result.brief.blockNum)
             val newLastBlock = drained.lastOption
                 .map(_.result.brief.blockNum)
@@ -672,13 +666,15 @@ object StackComposer {
               inboundLeaderBrief = inboundLeaderBrief - closedStackNum,
               lastClosedStackNum = closedStackNum,
               lastClosedBlockNum = newLastBlock,
-              previousStackHardConfirmed = false
+              previousStackHardConfirmed = false,
+              treasury = newTreasury,
+              evacuationMap = newEvacuationMap
             )
         }
     }
 
     object State {
-        val empty: State = State(
+        def initial(config: Config): State = State(
           pending = Map.empty,
           ready = Map.empty,
           inboundLeaderBrief = Map.empty,
@@ -693,7 +689,11 @@ object StackComposer {
           // GetMsgBatch cursor protocol in PeerLiaison), so the first hard-ack
           // is number 0. The initial stack, once injected, takes 0 = round-1,
           // 1 = round-2.
-          ownHardAckNum = HardAckNumber.zero
+          nextOwnHardAckNum = HardAckNumber.zero,
+          // Genesis treasury + evacuation map for stack 1: the treasury produced by the head
+          // config's initialization tx, and the config's initial evacuation map.
+          treasury = config.initializationTx.treasuryProduced,
+          evacuationMap = config.initialEvacuationMap
         )
     }
 }
