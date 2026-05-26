@@ -612,14 +612,11 @@ final case class JointLedger(
 
                     _ <- state.set(p.done(blockBrief.header))
 
-                    // Slow side: on Final, the evac map drains entirely and all remaining
-                    // payouts are realized via the finalization tx. The cumulative evacuation
-                    // map lives in StackComposer, not here, so the fast side cannot enumerate
-                    // its keys to "delete-all". StackEffectsBuilder.deriveRegular handles the
-                    // Final partition by draining its own running map for `payoutObligations`
-                    // and clearing it for the next stack. Final's `evacuationMapDiff` /
-                    // `payoutObligations` are therefore empty in the BlockResult — the slow side
-                    // fills them from cumulative state.
+                    // Final block: the fast side does not maintain the cumulative evacuation
+                    // map, so it cannot enumerate the drain. evacuationMapDiff / payoutObligations
+                    // are empty here; the slow side fills them from its own cumulative state (see
+                    // StackEffectsBuilder).
+                    // TODO: verify - don't we get the diff to drain everything from L2?
                     blockResult = BlockResult(
                       brief = blockBrief,
                       evacuationMapDiff = Nil,

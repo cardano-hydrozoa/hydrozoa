@@ -1,20 +1,25 @@
-package hydrozoa.multisig.ledger.stack
+package hydrozoa.multisig.consensus
 
 import cats.data.NonEmptyList
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, FallbackTxStartTime}
-import hydrozoa.multisig.ledger.block.{BlockBrief, BlockResult, BlockType, BlockVersion}
+import hydrozoa.multisig.ledger.block.{BlockBrief, BlockResult, BlockVersion}
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.joint.EvacuationMap.applyDiffs
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import hydrozoa.multisig.ledger.l1.tx.RefundTx
+import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, InitializationTx, RefundTx}
 import hydrozoa.multisig.ledger.l1.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.l1.utxo.{DepositUtxo, MultisigTreasuryUtxo}
+import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackEffects, StackPartition, StandaloneEvacuationCommitment}
 
-/** Slow-side effect derivation: from the head-based [[StackPartition]]s of a regular stack, produce
-  * **one [[PartitionEffects]] per partition** (PR #446 review — the partition is the effects
-  * spine). An L1 effect is NOT always a transaction:
+/** Effect derivation for a closed stack. Two entry points:
+  *
+  *   - [[mkEffectsInitial]] — the stack-0 bundle: the init + fallback bodies, no partitions.
+  *   - [[mkEffectsRegular]] — stacks 1+: from the [[StackPartition]]s, **one [[PartitionEffects]]
+  *     per partition** (the partition is the effects spine).
+  *
+  * An L1 effect is NOT always a transaction:
   *
   *   - **Transactions** — settlement / fallback / rollout / refund / finalization. Built via the
   *     treasury helpers below (`mkSettlementTxSeq`, `finalizeLedger`).
@@ -27,85 +32,19 @@ import hydrozoa.multisig.ledger.l1.utxo.{DepositUtxo, MultisigTreasuryUtxo}
   *       trailing minor (NOT redundant with the settlement: its L1 execution is not guaranteed, and
   *       the post-settlement minors advance KZG past the settlement snapshot).
   *     - **Final** partition → none (Final is alone, no minors).
-  *
-  * Treasury rotation across stacks happens only via settlement / finalization (in partition order),
-  * never via an SEC. The treasury is threaded explicitly through the partition fold — no ledger
-  * monad — and the rotated treasury is returned alongside the effects so the caller
-  * ([[hydrozoa.multisig.consensus.StackComposer]]) can persist it for the next stack.
-  *
-  * Pure function of `(config, treasury at stack open, NonEmptyList[StackPartition], evac map)` — no
-  * JointLedger lookup; all required state (incl. each SEC's minor header bytes) threaded through
-  * inputs / carried on the effect itself.
   */
 object StackEffectsBuilder {
 
-    type Config = HeadConfig.Section
-
-    /** Failure building the treasury-spending effects of a regular stack. Raised by the caller. */
-    sealed trait Error extends Throwable
-    object Error {
-        final case class SettlementTxSeqBuilderError(wrapped: SettlementTxSeq.Build.Error)
-            extends Error {
-            override def toString: String = "Settlement tx-seq error:\n" + wrapped.toString
-        }
-
-        final case class FinalizationTxSeqBuilderError(wrapped: FinalizationTxSeq.Build.Error)
-            extends Error {
-            override def toString: String = "Finalization tx-seq error:\n" + wrapped.toString
-        }
-    }
-
-    /** Construct a settlement tx seq and return the treasury it produces. The collective value of
-      * the payouts must '''not''' exceed the treasury value.
+    /** Bundle the (exogenous) initialization tx and the locally-derived fallback tx — both unsigned
+      * bodies — into the stack-0 effect set. Stack 0 precedes any treasury rotation, so — unlike
+      * [[mkEffectsRegular]] — there is no treasury to thread or return; the bundle is multisigned
+      * later via the Initial two-phase hard-ack flow.
       */
-    private def mkSettlementTxSeq(
-        config: Config,
-        treasury: MultisigTreasuryUtxo,
-        nextKzg: KzgCommitment,
-        absorbedDeposits: List[DepositUtxo],
-        payoutObligations: Vector[Payout.Obligation],
-        blockCreationEndTime: BlockCreationEndTime,
-        competingFallbackValidityStart: FallbackTxStartTime,
-    ): Either[Error, (MultisigTreasuryUtxo, SettlementTxSeq)] = {
-        val majorVersionProduced = BlockVersion.Major(treasury.datum.versionMajor.toInt + 1)
-        SettlementTxSeq
-            .Build(config)(
-              kzgCommitment = nextKzg,
-              majorVersionProduced = majorVersionProduced,
-              treasuryToSpend = treasury,
-              depositsToSpend = absorbedDeposits,
-              payoutObligationsRemaining = payoutObligations,
-              competingFallbackValidityStart = competingFallbackValidityStart,
-              blockCreationEndTime = blockCreationEndTime
-            )
-            .result
-            .left
-            .map(Error.SettlementTxSeqBuilderError.apply)
-            .map(seq => (seq.settlementTx.treasuryProduced, seq))
-    }
-
-    /** Construct a finalization tx seq for the lone Final block. The treasury is fully drained by
-      * finalization, so it is NOT returned (the slow-side treasury chain ends here). The collective
-      * value of the payouts must '''not''' exceed the treasury value.
-      */
-    // TODO (fund14): add Refund.Immediates to the return type
-    private def finalizeLedger(
-        config: Config,
-        treasury: MultisigTreasuryUtxo,
-        payoutObligationsRemaining: Vector[Payout.Obligation],
-        competingFallbackValidityStart: FallbackTxStartTime,
-    ): Either[Error, FinalizationTxSeq] =
-        FinalizationTxSeq
-            .Build(config)(
-              majorVersionProduced =
-                  BlockVersion.Major(treasury.datum.versionMajor.toInt).increment,
-              treasuryToSpend = treasury,
-              payoutObligationsRemaining = payoutObligationsRemaining,
-              competingFallbackValidityStart = competingFallbackValidityStart
-            )
-            .result
-            .left
-            .map(Error.FinalizationTxSeqBuilderError.apply)
+    def mkEffectsInitial(
+        initializationTx: InitializationTx,
+        fallbackTx: FallbackTx
+    ): StackEffects.Unsigned.Initial =
+        StackEffects.Unsigned.Initial(initializationTx, fallbackTx)
 
     /** Build the regular-stack effect bundle: one [[PartitionEffects]] per [[StackPartition]], in
       * stack order, classified by partition kind:
@@ -122,28 +61,23 @@ object StackEffectsBuilder {
       * rotated treasury is returned. The round-2 *unlock* is selected structurally over the
       * partition list by the shared unlock-selection function (not chosen here).
       */
-    def deriveRegular(
-        config: Config,
+    def mkEffectsRegular(
+        config: Config, // TODO: narrow?
         treasury: MultisigTreasuryUtxo,
         partitions: NonEmptyList[StackPartition],
         initialEvacuationMap: EvacuationMap,
     ): Either[Error, (StackEffects.Unsigned.Regular, MultisigTreasuryUtxo, EvacuationMap)] = {
 
-        def isMinor(b: BlockResult): Boolean = b.brief match {
-            case _: BlockType.Minor => true
-            case _                  => false
-        }
+        // Post-dated refund txs the partition's blocks carry — one per deposit REGISTERED in a
+        // block, of ANY kind (minor or major).
+        def partitionRefunds(bs: List[BlockResult]): List[RefundTx] =
+            bs.flatMap(_.postDatedRefundTxs)
 
-        // Only minor blocks carry post-dated refund txs (Major/Final drain refunds via
-        // settlement / finalization).
-        def minorRefunds(bs: List[BlockResult]): List[RefundTx] =
-            bs.flatMap(b => if isMinor(b) then b.postDatedRefundTxs else Nil)
-
-        // SEC over a (minor) block — self-contained: carries the dispute-datum bytes so the
-        // signer/verifier need no BlockResult lookup (see StandaloneEvacuationCommitment). The
-        // SEC's `header` is the on-chain dispute-script-facing datum (with KZG), built directly
-        // from `SEC.Onchain` rather than via the fast-cycle `signingBytes` path, so the soft-ack
-        // signing shape (no KZG) and the SEC dispute shape (with KZG) stay independent.
+        // SEC over a (minor) block — self-contained: carries the serialized on-chain commitment
+        // bytes so the signer/verifier need no BlockResult lookup (see StandaloneEvacuationCommitment).
+        // The SEC's `header` is the on-chain commitment record (with KZG), built directly from
+        // `SEC.Onchain` rather than via the fast-cycle `signingBytes` path, so the soft-ack signing
+        // shape (no KZG) and the on-chain SEC shape (with KZG) stay independent.
         //
         // `kzg` is the KZG commitment of the evacuation map at the END of the block being
         // committed (computed slow-side by folding diffs over the running map).
@@ -203,7 +137,7 @@ object StackEffectsBuilder {
                                       settlement = seq.settlementTx,
                                       fallback = seq.fallbackTx,
                                       rollouts = seq.rolloutTxs,
-                                      refunds = minorRefunds(trailingMinors),
+                                      refunds = partitionRefunds(p.blocks.toList),
                                       sec = sec
                                     ): PartitionEffects[StandaloneEvacuationCommitment]
                                     (pe :: effectsAcc, newTreasury, mapAfterPartition)
@@ -241,13 +175,13 @@ object StackEffectsBuilder {
                         )
                         val pe = PartitionEffects.Minor(
                           sec = secOf(p.blocks.last, mapAfterRun.kzgCommitment),
-                          refunds = minorRefunds(p.blocks.toList)
+                          refunds = partitionRefunds(p.blocks.toList)
                         ): PartitionEffects[StandaloneEvacuationCommitment]
                         Right((pe :: effectsAcc, tre, mapAfterRun))
                     case StackPartition.Kind.Initial =>
                         throw new IllegalStateException(
-                          "deriveRegular received an Initial partition (stack 0 uses the " +
-                              "separate Initial path)"
+                          "mkEffectsRegular received an Initial partition " +
+                              "(stack 0 uses mkEffectsInitial)"
                         )
                 }
             }
@@ -263,13 +197,72 @@ object StackEffectsBuilder {
         }
     }
 
-    /** Build the initial-stack (stack 0) effect bundle. The init tx is exogenous (head config); the
-      * fallback tx is derived locally from `(initTx + headParams)`.
-      *
-      * TODO(slow-consensus): implement. Inputs come from the head config / bootstrap data; this
-      * function should be callable without any treasury action since stack 0 happens before any
-      * treasury rotation. Likely signature change once StackComposer's `Bootstrap` is in.
+    /** Construct a settlement tx seq and return the treasury it produces. The collective value of
+      * the payouts must '''not''' exceed the treasury value.
       */
-    def deriveInitial: StackEffects.Unsigned.Initial =
-        ??? // PR2: implement initialization-stack effect construction
+    private def mkSettlementTxSeq(
+        config: Config, // TODO: narrow?
+        treasury: MultisigTreasuryUtxo,
+        nextKzg: KzgCommitment,
+        absorbedDeposits: List[DepositUtxo],
+        payoutObligations: Vector[Payout.Obligation],
+        blockCreationEndTime: BlockCreationEndTime,
+        competingFallbackValidityStart: FallbackTxStartTime,
+    ): Either[Error, (MultisigTreasuryUtxo, SettlementTxSeq)] = {
+        val majorVersionProduced = BlockVersion.Major(treasury.datum.versionMajor.toInt + 1)
+        SettlementTxSeq
+            .Build(config)(
+              kzgCommitment = nextKzg,
+              majorVersionProduced = majorVersionProduced,
+              treasuryToSpend = treasury,
+              depositsToSpend = absorbedDeposits,
+              payoutObligationsRemaining = payoutObligations,
+              competingFallbackValidityStart = competingFallbackValidityStart,
+              blockCreationEndTime = blockCreationEndTime
+            )
+            .result
+            .left
+            .map(Error.SettlementTxSeqBuilderError.apply)
+            .map(seq => (seq.settlementTx.treasuryProduced, seq))
+    }
+
+    /** Construct a finalization tx seq for the lone Final block. The treasury is fully drained by
+      * finalization, so it is NOT returned (the slow-side treasury chain ends here). The collective
+      * value of the payouts must '''not''' exceed the treasury value.
+      */
+    // TODO (fund14): add Refund.Immediates to the return type
+    private def finalizeLedger(
+        config: Config, // TODO: narrow?
+        treasury: MultisigTreasuryUtxo,
+        payoutObligationsRemaining: Vector[Payout.Obligation],
+        competingFallbackValidityStart: FallbackTxStartTime,
+    ): Either[Error, FinalizationTxSeq] =
+        FinalizationTxSeq
+            .Build(config)(
+              majorVersionProduced =
+                  BlockVersion.Major(treasury.datum.versionMajor.toInt).increment,
+              treasuryToSpend = treasury,
+              payoutObligationsRemaining = payoutObligationsRemaining,
+              competingFallbackValidityStart = competingFallbackValidityStart
+            )
+            .result
+            .left
+            .map(Error.FinalizationTxSeqBuilderError.apply)
+
+    type Config = HeadConfig.Section
+
+    /** Failure building the treasury-spending effects of a regular stack. Raised by the caller. */
+    sealed trait Error extends Throwable
+
+    object Error {
+        final case class SettlementTxSeqBuilderError(wrapped: SettlementTxSeq.Build.Error)
+            extends Error {
+            override def toString: String = "Settlement tx-seq error:\n" + wrapped.toString
+        }
+
+        final case class FinalizationTxSeqBuilderError(wrapped: FinalizationTxSeq.Build.Error)
+            extends Error {
+            override def toString: String = "Finalization tx-seq error:\n" + wrapped.toString
+        }
+    }
 }

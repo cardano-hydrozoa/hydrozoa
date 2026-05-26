@@ -7,6 +7,9 @@ import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, FinalizationTx, RefundTx, Rol
   * review). Exactly one [[PartitionEffects]] per [[StackPartition]], same order; the kind mirrors
   * [[StackPartition.Kind]] (regular stacks: `Minor` / `Major` / `Final` only).
   *
+  * Treasury rotation across stacks happens only via a `Major`'s settlement or the `Final`'s
+  * finalization, in partition order — never via a `Minor` (an SEC is not a treasury mutation).
+  *
   * Generic in the standalone-evac-commitment representation `S`: the bare
   * [[StandaloneEvacuationCommitment]] while unsigned,
   * [[StandaloneEvacuationCommitment.MultiSigned]] once hard-confirmed. The tx wrappers are
