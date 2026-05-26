@@ -129,6 +129,7 @@ object CardanoLiaison:
             // identified by the init tx id (a body hash, witness-independent) and so is exact even
             // from the unsigned body — it tells the liaison what to look for on L1 before stack 0
             // hard-confirms (until then `happyPathEffects` is empty, so nothing is submitted).
+            // TODO: I guess we don't need to set target state here, deferring to the persistent-recovery.
             State(
               targetState = TargetState.Active(config.initializationTx.treasuryProduced.utxoId),
               effectInputs = Map.empty,
@@ -182,10 +183,6 @@ object CardanoLiaison:
     // ===================================
     object Timeout
 
-    // Post fast/slow split, L1 effects are produced per *stack* by the slow cycle, so the
-    // only effect-bearing inbound is `Stack.HardConfirmed`.
-    // `handleStackL1Effects` translates the stack's `StackEffects.HardConfirmed.Regular` into the
-    // effect-submission state machine.
     type Request =
         PreStart.type | Timeout.type | Stack.HardConfirmed
     type Handle = ActorRef[IO, Request]
@@ -255,19 +252,15 @@ trait CardanoLiaison(
                       "received Stack.HardConfirmed for stack " +
                           s"${stack.brief.stackNum}"
                     ) >> (effects match {
+                        case ini: StackEffects.HardConfirmed.Initial =>
+                            // Stack 0 (initial). We MUST submit the initialization tx from the
+                            // hard-confirmed initial stack — NOT `config.initializationTx`,
+                            // which is the UNSIGNED body from head config.
+                            handleInitialStackL1Effects(ini) >> runEffects
                         case reg: StackEffects.HardConfirmed.Regular =>
                             // Learn the stack's effects, then run the submission state
-                            // machine immediately (mirrors the pre-split
-                            // `handle*BlockL1Effects >> runEffects`).
+                            // machine immediately.
                             handleStackL1Effects(reg) >> runEffects
-                        case ini: StackEffects.HardConfirmed.Initial =>
-                            // Stack 0. We MUST submit the initialization tx from the
-                            // hard-confirmed initial stack — NOT `config.initializationTx`,
-                            // which is the UNSIGNED body from head config. The config copy
-                            // is only a pre-confirmation placeholder seeded by
-                            // `State.initialState`; this overrides it (init effect +
-                            // initial fallback) with the slow-consensus-ratified ones.
-                            handleInitialStackL1Effects(ini) >> runEffects
                     })
                 }
         }
@@ -288,113 +281,7 @@ trait CardanoLiaison(
     // Inbox handlers
     // ===================================
 
-    /** Learn a hard-confirmed stack's L1 effects into the submission state machine.
-      *
-      * Translates [[StackEffects.HardConfirmed.Regular]] into the same `(effectInputs,
-      * happyPathEffects, fallbackEffects, targetState)` shape the pre-split per-block handlers
-      * produced, so the existing `runEffects` / `mkDirectActions` machinery submits them in
-      * dependency order (backbone first via `EffectId (major, 0)`, then its rollouts
-      * `(major, 1..n)`; competing fallback resolved by `fallbackEffects.get(major.decrement)`).
-      *
-      * Backbones (settlements, then the optional finalization) are walked in stack/major order;
-      * each contributes one `EffectId` family keyed by its `majorVersionProduced`. Fallbacks are
-      * keyed by their settlement's `majorVersionProduced` (so the NEXT settlement finds its
-      * competing fallback via `major.decrement`), matching the legacy major-block path.
-      *
-      * NOT submitted here (intentional, matches pre-split behaviour + spec):
-      *   - `evacCommit` — a dormant dispute-only record, never an immediate L1 tx (presented to the
-      *     rules-based dispute scripts only after a fallback; the consensus artifact is the header
-      *     signature in the hard-ack, persisted by the future storage layer).
-      *   - `refunds` — the pre-split CardanoLiaison never submitted post-dated refund txs either;
-      *     refund-tx L1 submission is deferred (see `L1LedgerM.finalizeLedger` TODO fund14).
-      *
-      * Minor-only stacks (no settlement, no finalization) carry no backbone — nothing reaches L1;
-      * `targetState` is left unchanged.
-      *
-      * The effect bodies in `eff` are already MULTISIGNED: SlowConsensusActor aggregates every head
-      * peer's verified hard-ack signature into `VKeyWitness`es and attaches them onto each effect
-      * tx before emitting `Stack.HardConfirmed.effects` (same for the Initial path, see
-      * [[handleInitialStackL1Effects]]). So they are submittable on L1 as is — no
-      * witness-attachment step remains here.
-      */
-    private def handleStackL1Effects(eff: StackEffects.HardConfirmed.Regular): IO[Unit] = {
-        // Flatten the partition-indexed effects into the (settlements, fallbacks, rollouts,
-        // finalization) the submission state machine consumes. Each Major partition carries its
-        // own settlement+fallback together (so `settlements.zip(fallbacks)` aligns exactly);
-        // rollouts come from every Major / Final partition; refunds + SEC are NOT submitted.
-        val parts = eff.partitions.toList
-        val settlements: List[SettlementTx] =
-            parts.collect { case PartitionEffects.Major(s, _, _, _, _) => s }
-        val fallbacks: List[FallbackTx] =
-            parts.collect { case PartitionEffects.Major(_, f, _, _, _) => f }
-        val finalization: Option[FinalizationTx] =
-            parts.collectFirst { case PartitionEffects.Final(f, _) => f }
-        val allRollouts: List[RolloutTx] = parts.flatMap {
-            case PartitionEffects.Major(_, _, ro, _, _) => ro
-            case PartitionEffects.Final(_, ro)          => ro
-            case PartitionEffects.Minor(_, _)           => Nil
-        }
-        val refundCount = parts.map {
-            case PartitionEffects.Major(_, _, _, rf, _) => rf.size
-            case PartitionEffects.Minor(_, rf)          => rf.size
-            case PartitionEffects.Final(_, _)           => 0
-        }.sum
-        val evacCount = parts.count {
-            case PartitionEffects.Major(_, _, _, _, sec) => sec.isDefined
-            case PartitionEffects.Minor(_, _)            => true
-            case PartitionEffects.Final(_, _)            => false
-        }
-        val backbones: List[SettlementTx | FinalizationTx] =
-            settlements ++ finalization.toList
-        for {
-            _ <- Tracer.info(
-              s"entering handleStackL1Effects: ${settlements.size} settlement(s), " +
-                  s"${fallbacks.size} fallback(s), ${allRollouts.size} rollout(s), " +
-                  s"finalization=${finalization.isDefined}; NOT submitted: " +
-                  s"refunds=$refundCount (fund14), " +
-                  s"evacCommit(s)=$evacCount (dormant dispute record)"
-            )
-            _ <- IO.whenA(backbones.isEmpty)(
-              Tracer.info(
-                "minor-only stack: no backbone L1 effects to submit; targetState unchanged"
-              )
-            )
-            newState <- stateRef.updateAndGet { s =>
-                val withBackbones = backbones.foldLeft(s) { (acc, backbone) =>
-                    val (bInputs, bEffects) =
-                        mkHappyPathEffectInputsAndEffects(
-                          backbone,
-                          rolloutsFor(backbone, allRollouts)
-                        )
-                    acc.copy(
-                      effectInputs = acc.effectInputs ++ bInputs,
-                      happyPathEffects = acc.happyPathEffects ++ bEffects
-                    )
-                }
-                val withFallbacks =
-                    settlements.zip(fallbacks).foldLeft(withBackbones) {
-                        case (acc, (settlement, fallback)) =>
-                            acc.copy(fallbackEffects =
-                                acc.fallbackEffects +
-                                    (settlement.majorVersionProduced -> fallback)
-                            )
-                    }
-                val newTarget: TargetState = finalization match {
-                    case Some(fin) => TargetState.Finalized(fin.tx.id)
-                    case None =>
-                        settlements.lastOption match {
-                            case Some(lastS) =>
-                                TargetState.Active(lastS.treasuryProduced.utxoId)
-                            case None => withFallbacks.targetState
-                        }
-                }
-                withFallbacks.copy(targetState = newTarget)
-            }
-            _ <- Tracer.trace(s"state after stack effects: ${newState.prettyDump}")
-        } yield ()
-    }
-
-    /** M9 — learn the hard-confirmed *initial* stack's L1 effects (stack 0).
+    /** Learn the hard-confirmed *initial* stack's L1 effects (stack 0).
       *
       * `State.initialState` seeds `EffectId.initializationEffectId` from `config.initializationTx`
       * and `fallbackEffects(Major.zero)` from `config.initialFallbackTx`. That config init tx is
@@ -427,6 +314,106 @@ trait CardanoLiaison(
             }
             _ <- Tracer.trace(s"state after initial-stack effects: ${newState.prettyDump}")
         } yield ()
+
+    /** Learn a hard-confirmed stack's L1 effects into the submission state machine.
+      *
+      * Translates [[StackEffects.HardConfirmed.Regular]] into the `(effectInputs, happyPathEffects,
+      * fallbackEffects, targetState)` shape the `runEffects` / `mkDirectActions` machinery
+      * consumes, so effects submit in dependency order (backbone first via `EffectId (major, 0)`,
+      * then its rollouts `(major, 1..n)`; competing fallback resolved by
+      * `fallbackEffects.get(major.decrement)`).
+      *
+      * Backbones (settlements, then the optional finalization) are walked in stack/major order;
+      * each contributes one `EffectId` family keyed by its `majorVersionProduced`. Fallbacks are
+      * keyed by their settlement's `majorVersionProduced`, so the NEXT settlement finds its
+      * competing fallback via `major.decrement`.
+      *
+      * NOT submitted here (intentional, per spec):
+      *   - `evacCommit` — a dormant dispute-only record, never an immediate L1 tx (presented to the
+      *     rules-based dispute scripts only after a fallback; the consensus artifact is the header
+      *     signature in the hard-ack, persisted by the future storage layer).
+      *   - `refunds` — post-dated refund txs are not submitted here; refund-tx L1 submission is
+      *     deferred (see `StackEffectsBuilder.finalizeLedger` TODO fund14).
+      *
+      * Minor-only stacks (no settlement, no finalization) carry no backbone — nothing reaches L1;
+      * `targetState` is left unchanged.
+      *
+      * The effect bodies in `eff` are already MULTISIGNED: SlowConsensusActor aggregates every head
+      * peer's verified hard-ack signature into `VKeyWitness`es and attaches them onto each effect
+      * tx before emitting `Stack.HardConfirmed.effects` (same for the Initial path, see
+      * [[handleInitialStackL1Effects]]). So they are submittable on L1 as is — no
+      * witness-attachment step remains here.
+      */
+    private def handleStackL1Effects(eff: StackEffects.HardConfirmed.Regular): IO[Unit] = {
+        val parts = eff.partitions.toList
+        // A minor-only stack (only Minor partitions) produces no L1 backbone effect — nothing to
+        // learn or submit — so short-circuit before deriving anything or touching the state.
+        // TODO: teach SlowConsensusActor not to emit minor-only stacks at all, so CardanoLiaison
+        //   never has to receive (and skip) them.
+        val hasBackbone = parts.exists {
+            case _: PartitionEffects.Major[?] => true
+            case _: PartitionEffects.Final    => true
+            case _: PartitionEffects.Minor[?] => false
+        }
+        if !hasBackbone then
+            Tracer.info("minor-only stack: no backbone L1 effects to submit; nothing to do")
+        else {
+            // Flatten the partition-indexed effects into the (settlements, fallbacks, rollouts,
+            // finalization) the submission state machine consumes. Each Major partition carries
+            // its own settlement+fallback together (so `settlements.zip(fallbacks)` aligns
+            // exactly); rollouts come from every Major / Final partition; refunds + SEC are NOT
+            // submitted.
+            val settlements: List[SettlementTx] =
+                parts.collect { case PartitionEffects.Major(s, _, _, _, _) => s }
+            val fallbacks: List[FallbackTx] =
+                parts.collect { case PartitionEffects.Major(_, f, _, _, _) => f }
+            val finalization: Option[FinalizationTx] =
+                parts.collectFirst { case PartitionEffects.Final(f, _) => f }
+            val allRollouts: List[RolloutTx] = parts.flatMap {
+                case PartitionEffects.Major(_, _, ro, _, _) => ro
+                case PartitionEffects.Final(_, ro)          => ro
+                case PartitionEffects.Minor(_, _)           => Nil
+            }
+            val backbones: List[SettlementTx | FinalizationTx] =
+                settlements ++ finalization.toList
+
+            // Accumulate every state delta up front — each is a pure function of the flattened
+            // effects, independent of the current state — then apply them all in a single `copy`
+            // below.
+            val perBackbone =
+                backbones.map(b =>
+                    mkHappyPathEffectInputsAndEffects(b, rolloutsFor(b, allRollouts))
+                )
+            val newEffectInputs: Seq[(TransactionInput, EffectId)] = perBackbone.flatMap(_._1)
+            val newHappyPathEffects: Seq[(EffectId, HappyPathEffect)] = perBackbone.flatMap(_._2)
+            val newFallbackEffects: Seq[(BlockVersion.Major, FallbackTx)] =
+                settlements.zip(fallbacks).map((s, f) => s.majorVersionProduced -> f)
+            // Always `Some` here (a backbone exists): finalization → Finalized, else the last
+            // settlement's treasury → Active.
+            val newTarget: Option[TargetState] = finalization match {
+                case Some(fin) => Some(TargetState.Finalized(fin.tx.id))
+                case None =>
+                    settlements.lastOption.map(s => TargetState.Active(s.treasuryProduced.utxoId))
+            }
+
+            for {
+                _ <- Tracer.info(
+                  s"entering handleStackL1Effects: ${settlements.size} settlement(s), " +
+                      s"${fallbacks.size} fallback(s), ${allRollouts.size} rollout(s), " +
+                      s"finalization=${finalization.isDefined}"
+                )
+                newState <- stateRef.updateAndGet { s =>
+                    s.copy(
+                      effectInputs = s.effectInputs ++ newEffectInputs,
+                      happyPathEffects = s.happyPathEffects ++ newHappyPathEffects,
+                      fallbackEffects = s.fallbackEffects ++ newFallbackEffects,
+                      targetState = newTarget.getOrElse(s.targetState)
+                    )
+                }
+                _ <- Tracer.trace(s"state after stack effects: ${newState.prettyDump}")
+            } yield ()
+        }
+    }
 
     /** The rollout txs belonging to one backbone (settlement / finalization), in chain order.
       *
