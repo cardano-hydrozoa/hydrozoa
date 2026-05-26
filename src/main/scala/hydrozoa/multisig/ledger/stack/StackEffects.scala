@@ -57,7 +57,7 @@ object StackEffects:
           *   the stack's partitions' effects, in order; head-based kinds (`Minor` / `Major` /
           *   `Final`). The round-2 *unlock* is selected structurally over this list (first Major
           *   partition's settlement; else the Final partition's finalization) — see the shared
-          *   unlock-selection function, not a separate plan.
+          *   unlock-selection function ([[PartitionEffects.unlock]]).
           */
         final case class Regular(
             partitions: NonEmptyList[PartitionEffects[StandaloneEvacuationCommitment]]

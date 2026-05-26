@@ -2,6 +2,7 @@ package hydrozoa.multisig.ledger.stack
 
 import cats.data.NonEmptyList
 import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, FinalizationTx, RefundTx, RolloutTx, SettlementTx}
+import scalus.cardano.ledger.Transaction
 
 /** Per-partition L1 effects — the partition is the spine of a regular stack's effects (PR #446
   * review). Exactly one [[PartitionEffects]] per [[StackPartition]], same order; the kind mirrors
@@ -59,7 +60,7 @@ object PartitionEffects:
     /** The round-2 *unlock* selector — the single shared rule (PR #446 review): the **first**
       * `Major` partition's settlement; else (no `Major`) the `Final` partition's finalization; else
       * `None` (all-`Minor` ⇒ 1-phase / sole, no unlock). Called by the signer to pack round-1 vs
-      * round-2 and by the verifier to know round-2's target — one function, not a re-derived plan.
+      * round-2 and by the verifier to know round-2's target — one shared function for both.
       * `partitionIndex` is the position in the partition list.
       */
     enum Unlock:
@@ -72,3 +73,26 @@ object PartitionEffects:
             .collectFirst { case (_: Major[?], i) => Unlock.Settlement(i) }
             .orElse(indexed.collectFirst { case (_: Final, i) => Unlock.Finalization(i) })
     }
+
+    /** The L1 transaction the round-2 unlock signs — the [[Unlock]]'s partition's settlement
+      * (Major) or finalization (Final). Pairs with [[unlock]].
+      */
+    def unlockTxOf[S](parts: NonEmptyList[PartitionEffects[S]], u: Unlock): Transaction =
+        u match {
+            case Unlock.Settlement(i) =>
+                parts.toList(i) match {
+                    case Major(settlement, _, _, _, _) => settlement.tx
+                    case _ =>
+                        throw new IllegalStateException(
+                          s"unlock Settlement($i) not a Major partition"
+                        )
+                }
+            case Unlock.Finalization(i) =>
+                parts.toList(i) match {
+                    case Final(finalization, _) => finalization.tx
+                    case _ =>
+                        throw new IllegalStateException(
+                          s"unlock Finalization($i) not a Final partition"
+                        )
+                }
+        }

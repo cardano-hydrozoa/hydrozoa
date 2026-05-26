@@ -1,7 +1,5 @@
 package hydrozoa.multisig.consensus
 
-import cats.data.NonEmptyList
-import cats.data.Validated.{Invalid, Valid}
 import cats.effect.{IO, IOLocal, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
@@ -13,13 +11,7 @@ import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.HardAck
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.block.BlockHeader
-import hydrozoa.multisig.ledger.l1.tx.{RefundTx, Tx, TxSignature}
-import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects, StackNumber, StandaloneEvacuationCommitment}
-import scala.util.control.NonFatal
-import scalus.cardano.ledger.{Transaction, TransactionHash, VKeyWitness}
-import scalus.crypto.ed25519.VerificationKey
-import scalus.uplc.builtin.{ByteString, platform}
+import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects, StackNumber}
 
 /** Slow-consensus actor.
   *
@@ -36,11 +28,6 @@ import scalus.uplc.builtin.{ByteString, platform}
   * *schedule* (round-1 / sole broadcast immediately, round-2 withheld until local round-1
   * confirmation — mirrors the fast-side FastConsensusActor's "scheduled own ack" pattern).
   *
-  * There is no `HardAckRoundPlan` / `StackEffectsSigningInputs` indirection: the partition-indexed
-  * [[StackEffects]] IS the canonical structure. The only shared rule is [[PartitionEffects.unlock]]
-  * — which partition's settlement / finalization is the round-2 unlock — used identically by the
-  * signer (to pack) and here (to know round-2's target + which round-1 slot is excised).
-  *
   * ==Phases==
   *
   *   - 2-phase (a settlement / finalization is present, or the initial stack): round 1 collects
@@ -50,7 +37,7 @@ import scalus.uplc.builtin.{ByteString, platform}
   *     round over the refund sigs + the minor's evac-commitment header sig.
   *
   * Saturation = a verified ack from every head peer (the local peer's own included). When coil
-  * peers join (future PR) this additionally requires a coil quorum.
+  * peers join, this additionally requires a coil quorum.
   *
   * ==Orphan acks==
   *
@@ -78,6 +65,9 @@ final case class SlowConsensusActor(
     private lazy val allPeers: Set[HeadPeerNumber] =
         config.headPeerNums.toList.toSet
 
+    private val ackVerifier = HardAckVerifier(config)
+    private val ackAggregator = HardAckAggregator(config)
+
     override def preStart: IO[Unit] = for {
         _ <- context.self ! PreStart
         _ <- context.become(receive)
@@ -100,7 +90,7 @@ final case class SlowConsensusActor(
     // Handoff (own acks) — create the cell, broadcast round-1 / sole, replay orphans
     // ===================================
 
-    /** Dispatch on the (locally-derived) effects shape — NOT a re-derived plan:
+    /** Dispatch on the (locally-derived) effects shape:
       *   - `Initial` ⇒ 2-phase (init flow).
       *   - `Regular` with an unlock ([[PartitionEffects.unlock]] `Some`) ⇒ 2-phase.
       *   - `Regular` with no unlock (all-`Minor`) ⇒ sole / 1-phase.
@@ -110,50 +100,50 @@ final case class SlowConsensusActor(
             val stackNum = h.unsigned.stackNum
             val ownPeer = config.ownHeadPeerNum
 
-            def own2Phase(r1Label: String, r2Label: String): IO[Unit] = for {
-                ownR1 <- h.ownAcks
-                    .collectFirst { case a @ HardAck(_, _, p: HardAck.Payload.Round1) =>
-                        (a, p)
-                    }
-                    .liftTo[IO](HandoffError.MissingOwnAck(r1Label))
-                ownR2 <- h.ownAcks
-                    .collectFirst { case a @ HardAck(_, _, _: HardAck.Payload.Round2) => a }
-                    .liftTo[IO](HandoffError.MissingOwnAck(r2Label))
-                _ <- start2Phase(stackNum, ownPeer, h.unsigned, ownR1, ownR2)
-            } yield ()
-
             h.unsigned.effects match {
                 case _: StackEffects.Unsigned.Initial =>
-                    own2Phase("own round-1 (Initial)", "own round-2 (Initial)")
+                    parseOwn2PhaseAcks(h, "own round-1 (Initial)", "own round-2 (Initial)")
+                        .flatMap { (ownR1, ownR2) =>
+                            start2Phase(stackNum, ownPeer, h.unsigned, ownR1, ownR2)
+                        }
                 case r: StackEffects.Unsigned.Regular =>
                     PartitionEffects.unlock(r.partitions) match {
                         case Some(_) =>
-                            own2Phase("own round-1 (Regular)", "own round-2 (Regular)")
+                            parseOwn2PhaseAcks(h, "own round-1 (Regular)", "own round-2 (Regular)")
+                                .flatMap { (ownR1, ownR2) =>
+                                    start2Phase(stackNum, ownPeer, h.unsigned, ownR1, ownR2)
+                                }
                         case None =>
-                            for {
-                                ownSole <- h.ownAcks
-                                    .collectFirst {
-                                        case a @ HardAck(_, _, p: HardAck.SolePayload) =>
-                                            (a, p)
-                                    }
-                                    .liftTo[IO](HandoffError.MissingOwnAck("own sole"))
-                                _ <- verifySole(h.unsigned, ownPeer, ownSole._2)
-                                cell = Cell.WaitingSole(
-                                  unsigned = h.unsigned,
-                                  sole = Map(ownPeer -> ownSole._2)
-                                )
-                                _ <- putCell(stackNum, cell)
-                                _ <- Tracer.info(
-                                  s"stack $stackNum handed off (sole); broadcasting own " +
-                                      "sole ack"
-                                )
-                                _ <- broadcast(ownSole._1)
-                                _ <- replayOrphans(stackNum)
-                                _ <- tryAdvance(stackNum)
-                            } yield ()
+                            parseOwnSoleAck(h).flatMap { ownSole =>
+                                startSolePhase(stackNum, ownPeer, h.unsigned, ownSole)
+                            }
                     }
             }
         }
+
+    /** Extract this peer's own round-1 + round-2 acks from the handoff (2-phase: Regular or
+      * Initial), or fail with [[HandoffError.MissingOwnAck]].
+      */
+    private def parseOwn2PhaseAcks(
+        h: StackHandoff,
+        r1Label: String,
+        r2Label: String
+    ): IO[((HardAck, HardAck.Payload.Round1), HardAck)] = for {
+        ownR1 <- h.ownAcks
+            .collectFirst { case a @ HardAck(_, _, p: HardAck.Payload.Round1) => (a, p) }
+            .liftTo[IO](HandoffError.MissingOwnAck(r1Label))
+        ownR2 <- h.ownAcks
+            .collectFirst { case a @ HardAck(_, _, _: HardAck.Payload.Round2) => a }
+            .liftTo[IO](HandoffError.MissingOwnAck(r2Label))
+    } yield (ownR1, ownR2)
+
+    /** Extract this peer's own sole ack from the handoff (1-phase / minor-only stack), or fail with
+      * [[HandoffError.MissingOwnAck]].
+      */
+    private def parseOwnSoleAck(h: StackHandoff): IO[(HardAck, HardAck.SolePayload)] =
+        h.ownAcks
+            .collectFirst { case a @ HardAck(_, _, p: HardAck.SolePayload) => (a, p) }
+            .liftTo[IO](HandoffError.MissingOwnAck("own sole"))
 
     /** Shared 2-phase cell creation (Regular + Initial): verify own acks against the locally
       * derived effects, create WaitingRound1, broadcast own round-1, replay orphans, advance.
@@ -165,9 +155,9 @@ final case class SlowConsensusActor(
         ownR1: (HardAck, HardAck.Payload.Round1),
         ownR2: HardAck
     ): IO[Unit] = for {
-        _ <- verify2PhaseRound1(unsigned, ownPeer, ownR1._2)
+        _ <- ackVerifier.verify2PhaseRound1(unsigned, ownPeer, ownR1._2)
         ownR2p <- round2PayloadOf(ownR2)
-        _ <- verify2PhaseRound2(unsigned, ownPeer, ownR2p)
+        _ <- ackVerifier.verify2PhaseRound2(unsigned, ownPeer, ownR2p)
         _ <- putCell(
           stackNum,
           Cell.WaitingRound1(
@@ -181,6 +171,26 @@ final case class SlowConsensusActor(
           s"stack $stackNum handed off (2-phase); broadcasting own round-1"
         )
         _ <- broadcast(ownR1._1)
+        _ <- replayOrphans(stackNum)
+        _ <- tryAdvance(stackNum)
+    } yield ()
+
+    /** Sole (1-phase) counterpart of [[start2Phase]]: verify the own sole ack against the locally
+      * derived effects, create WaitingSole, broadcast the own sole ack, replay orphans, advance.
+      */
+    private def startSolePhase(
+        stackNum: StackNumber,
+        ownPeer: HeadPeerNumber,
+        unsigned: Stack.Unsigned,
+        ownSole: (HardAck, HardAck.SolePayload)
+    ): IO[Unit] = for {
+        _ <- ackVerifier.verifySole(unsigned, ownPeer, ownSole._2)
+        _ <- putCell(
+          stackNum,
+          Cell.WaitingSole(unsigned = unsigned, sole = Map(ownPeer -> ownSole._2))
+        )
+        _ <- Tracer.info(s"stack $stackNum handed off (sole); broadcasting own sole ack")
+        _ <- broadcast(ownSole._1)
         _ <- replayOrphans(stackNum)
         _ <- tryAdvance(stackNum)
     } yield ()
@@ -216,35 +226,40 @@ final case class SlowConsensusActor(
             case c: Cell.WaitingRound1 =>
                 h.payload match {
                     case p: HardAck.Payload.Round1 =>
-                        verify2PhaseRound1(c.unsigned, peer, p).as(
-                          c.copy(round1 = c.round1.updated(peer, p))
-                        )
+                        ackVerifier
+                            .verify2PhaseRound1(c.unsigned, peer, p)
+                            .as(
+                              c.copy(round1 = c.round1.updated(peer, p))
+                            )
                     case p: HardAck.Payload.Round2 =>
-                        verify2PhaseRound2(c.unsigned, peer, p).as(
-                          c.copy(round2Stash = c.round2Stash.updated(peer, p))
-                        )
+                        ackVerifier
+                            .verify2PhaseRound2(c.unsigned, peer, p)
+                            .as(
+                              c.copy(round2Stash = c.round2Stash.updated(peer, p))
+                            )
                     case other =>
                         IO.raiseError(CellError.UnexpectedPayload(h.stackNum, other.roundLabel))
                 }
             case c: Cell.WaitingRound2 =>
+                // Round-1 is already saturated and the peer-liaison lane delivers each hard-ack
+                // exactly once (next-expected cursors, no resends), so only round-2 is expected
+                // now; any other payload — including a second round-1 — is a protocol violation.
                 h.payload match {
                     case p: HardAck.Payload.Round2 =>
-                        verify2PhaseRound2(c.unsigned, peer, p).as(
-                          c.copy(round2 = c.round2.updated(peer, p))
-                        )
-                    case _: HardAck.Payload.Round1 =>
-                        Tracer
-                            .debug(
-                              s"ignoring late round-1 ack for stack ${h.stackNum} from $peer"
+                        ackVerifier
+                            .verify2PhaseRound2(c.unsigned, peer, p)
+                            .as(
+                              c.copy(round2 = c.round2.updated(peer, p))
                             )
-                            .as(c)
                     case other =>
                         IO.raiseError(CellError.UnexpectedPayload(h.stackNum, other.roundLabel))
                 }
             case c: Cell.WaitingSole =>
                 h.payload match {
                     case p: HardAck.SolePayload =>
-                        verifySole(c.unsigned, peer, p).as(c.copy(sole = c.sole.updated(peer, p)))
+                        ackVerifier
+                            .verifySole(c.unsigned, peer, p)
+                            .as(c.copy(sole = c.sole.updated(peer, p)))
                     case other =>
                         IO.raiseError(CellError.UnexpectedPayload(h.stackNum, other.roundLabel))
                 }
@@ -297,12 +312,14 @@ final case class SlowConsensusActor(
         cell: Cell.WaitingRound2 | Cell.WaitingSole
     ): IO[Unit] = for {
         conn <- getConnections
-        vkeys <- allPeers.toList.traverse(p => peerVKey(p).map(p -> _)).map(_.toMap)
-        wmap = witnessMap(cell, vkeys)
-        evac = evacByPartition(cell)
-        signed <- attachWitnesses(cell.unsigned, wmap, evac)
+        vkeys <- allPeers.toList
+            .traverse(p => ackVerifier.resolvePeerVKey(p).map(p -> _))
+            .map(_.toMap)
+        wmap = ackAggregator.aggregateTxSignatures(cell, vkeys)
+        evac = ackAggregator.collectSecSignatures(cell)
+        signed <- ackAggregator.attachWitnesses(cell.unsigned, wmap, evac)
         _ <- Tracer.info(
-          s"stack $stackNum HARD-CONFIRMED — aggregated witnesses onto ${wmap.size} " +
+          s"stack $stackNum HARD-CONFIRMED — aggregated ackAggregator onto ${wmap.size} " +
               "effect tx(s); emitting downstream"
         )
         hardConfirmed = Stack.HardConfirmed(cell.unsigned.brief, signed)
@@ -310,567 +327,6 @@ final case class SlowConsensusActor(
         _ <- conn.stackComposer ! hardConfirmed
         _ <- stateRef.update(_.dropCell(stackNum))
     } yield ()
-
-    // ===================================
-    // Witness aggregation — per-peer hard-ack sigs → VKeyWitnesses keyed by effect tx hash;
-    // SEC header sigs collected per partition.
-    // ===================================
-
-    private type WitnessMap = Map[TransactionHash, Set[VKeyWitness]]
-
-    private def witnessOf(vk: VerificationKey, sig: TxSignature): VKeyWitness =
-        VKeyWitness(vk, sig)
-
-    extension (m: WitnessMap)
-        private def add(h: TransactionHash, w: VKeyWitness): WitnessMap =
-            m.updated(h, m.getOrElse(h, Set.empty) + w)
-        private def addAll(h: TransactionHash, ws: Iterable[VKeyWitness]): WitnessMap =
-            m.updated(h, m.getOrElse(h, Set.empty) ++ ws)
-        private def addOpt(
-            h: TransactionHash,
-            vk: VerificationKey,
-            s: Option[TxSignature]
-        ): WitnessMap = s.fold(m)(sg => m.add(h, witnessOf(vk, sg)))
-        private def addZip(
-            txs: List[Transaction],
-            vk: VerificationKey,
-            sigs: List[TxSignature]
-        ): WitnessMap =
-            txs.zip(sigs).foldLeft(m) { case (acc, (tx, sg)) =>
-                acc.add(tx.id, witnessOf(vk, sg))
-            }
-
-    private def regularPartitions(
-        u: Stack.Unsigned
-    ): Option[NonEmptyList[PartitionEffects[StandaloneEvacuationCommitment]]] =
-        u.effects match {
-            case r: StackEffects.Unsigned.Regular => Some(r.partitions)
-            case _: StackEffects.Unsigned.Initial => None
-        }
-
-    private def unlockTxOf(
-        parts: NonEmptyList[PartitionEffects[StandaloneEvacuationCommitment]],
-        u: PartitionEffects.Unlock
-    ): Transaction = u match {
-        case PartitionEffects.Unlock.Settlement(i) =>
-            parts.toList(i) match {
-                case PartitionEffects.Major(settlement, _, _, _, _) => settlement.tx
-                case _ =>
-                    throw new IllegalStateException(s"unlock Settlement($i) not a Major partition")
-            }
-        case PartitionEffects.Unlock.Finalization(i) =>
-            parts.toList(i) match {
-                case PartitionEffects.Final(finalization, _) => finalization.tx
-                case _ =>
-                    throw new IllegalStateException(
-                      s"unlock Finalization($i) not a Final partition"
-                    )
-            }
-    }
-
-    /** Fold one partition's tx-body sigs into the witness map (SEC header sigs are handled
-      * separately by [[evacByPartition]] — not tx witnesses).
-      */
-    private def partitionWitnesses(
-        m: WitnessMap,
-        vk: VerificationKey,
-        e: PartitionEffects[StandaloneEvacuationCommitment],
-        s: HardAck.Round1Payload.PartitionSigs
-    ): WitnessMap = (e, s) match {
-        case (
-              PartitionEffects.Major(settlement, fallback, rollouts, refunds, _),
-              HardAck.Round1Payload.PartitionSigs.MajorComplete(
-                sSettlement,
-                sFallback,
-                sRollouts,
-                sRefunds,
-                _
-              )
-            ) =>
-            m.add(settlement.tx.id, witnessOf(vk, sSettlement))
-                .add(fallback.tx.id, witnessOf(vk, sFallback))
-                .addZip(rollouts.map(_.tx), vk, sRollouts)
-                .addZip(refunds.map(_.tx), vk, sRefunds)
-        case (
-              PartitionEffects.Major(_, fallback, rollouts, refunds, _),
-              HardAck.Round1Payload.PartitionSigs.MajorPartial(sFallback, sRollouts, sRefunds, _)
-            ) =>
-            // Settlement sig is deferred to Round2Payload.Regular.firstUnlockSig — not here.
-            m.add(fallback.tx.id, witnessOf(vk, sFallback))
-                .addZip(rollouts.map(_.tx), vk, sRollouts)
-                .addZip(refunds.map(_.tx), vk, sRefunds)
-        case (
-              PartitionEffects.Final(finalization, rollouts),
-              HardAck.Round1Payload.PartitionSigs.FinalComplete(sFinalization, sRollouts)
-            ) =>
-            m.add(finalization.tx.id, witnessOf(vk, sFinalization))
-                .addZip(rollouts.map(_.tx), vk, sRollouts)
-        case (
-              PartitionEffects.Final(_, rollouts),
-              HardAck.Round1Payload.PartitionSigs.FinalPartial(sRollouts)
-            ) =>
-            // Finalization sig is deferred to Round2Payload.Regular.firstUnlockSig — not here.
-            m.addZip(rollouts.map(_.tx), vk, sRollouts)
-        case (
-              PartitionEffects.Minor(_, refunds),
-              HardAck.Round1Payload.PartitionSigs.Minor(_, sRefunds)
-            ) =>
-            m.addZip(refunds.map(_.tx), vk, sRefunds)
-        case _ => m // verification already rejected kind mismatches
-    }
-
-    private def witnessMap(
-        cell: Cell.WaitingRound2 | Cell.WaitingSole,
-        vkeys: Map[HeadPeerNumber, VerificationKey]
-    ): WitnessMap =
-        cell match {
-            case c: Cell.WaitingRound2 =>
-                allPeers.foldLeft(Map.empty: WitnessMap) { (m, peer) =>
-                    val vk = vkeys(peer)
-                    val afterR1 = (regularPartitions(c.unsigned), c.round1.get(peer)) match {
-                        case (Some(parts), Some(r: HardAck.Round1Payload.Regular)) =>
-                            parts.toList
-                                .zip(HardAck.Round1Payload.Regular.asSlots(r).toList)
-                                .foldLeft(m) { case (acc, (e, sg)) =>
-                                    partitionWitnesses(acc, vk, e, sg)
-                                }
-                        case (None, Some(r: HardAck.Round1Payload.Initial)) =>
-                            c.unsigned.effects match {
-                                case i: StackEffects.Unsigned.Initial =>
-                                    m.add(i.fallbackTx.tx.id, witnessOf(vk, r.fallbackSig))
-                                case _ => m
-                            }
-                        case _ => m
-                    }
-                    (regularPartitions(c.unsigned), c.round2.get(peer)) match {
-                        case (Some(parts), Some(r: HardAck.Round2Payload.Regular)) =>
-                            PartitionEffects.unlock(parts) match {
-                                case Some(u) =>
-                                    afterR1.add(
-                                      unlockTxOf(parts, u).id,
-                                      witnessOf(vk, r.firstUnlockSig)
-                                    )
-                                case None => afterR1
-                            }
-                        case (None, Some(r: HardAck.Round2Payload.Initial)) =>
-                            c.unsigned.effects match {
-                                case i: StackEffects.Unsigned.Initial =>
-                                    val txId = i.initializationTx.tx.id
-                                    afterR1
-                                        .add(txId, witnessOf(vk, r.initTxSig))
-                                        .addOpt(txId, vk, r.individualSig)
-                                case _ => afterR1
-                            }
-                        case _ => afterR1
-                    }
-                }
-            case c: Cell.WaitingSole =>
-                allPeers.foldLeft(Map.empty: WitnessMap) { (m, peer) =>
-                    (regularPartitions(c.unsigned), c.sole.get(peer)) match {
-                        case (Some(parts), Some(p)) =>
-                            parts.head match {
-                                case PartitionEffects.Minor(_, refunds) =>
-                                    m.addZip(refunds.map(_.tx), vkeys(peer), p.refunds)
-                                case _ => m
-                            }
-                        case _ => m
-                    }
-                }
-        }
-
-    /** Per-partition SEC header signatures across all peers, in [[allPeers]] order, aligned to the
-      * effects' partition list. A partition with no SEC contributes an empty list; a present SEC
-      * has one header sig per peer (verification already enforced presence + count). Empty list
-      * overall for an Initial stack (no partitions).
-      */
-    private def evacByPartition(
-        cell: Cell.WaitingRound2 | Cell.WaitingSole
-    ): List[List[BlockHeader.HeaderSignature]] =
-        regularPartitions(cell.unsigned) match {
-            case None => Nil
-            case Some(parts) =>
-                val peerSigParts: List[Option[NonEmptyList[HardAck.Round1Payload.PartitionSigs]]] =
-                    allPeers.toList.map { peer =>
-                        cell match {
-                            case c: Cell.WaitingRound2 =>
-                                c.round1.get(peer).collect {
-                                    case r: HardAck.Round1Payload.Regular =>
-                                        HardAck.Round1Payload.Regular.asSlots(r)
-                                }
-                            case c: Cell.WaitingSole =>
-                                c.sole
-                                    .get(peer)
-                                    .map(p =>
-                                        NonEmptyList.one(
-                                          HardAck.Round1Payload.PartitionSigs
-                                              .Minor(p.sec, p.refunds)
-                                        )
-                                    )
-                        }
-                    }
-                parts.toList.indices.toList.map { i =>
-                    peerSigParts.flatMap {
-                        case Some(sps) =>
-                            sps.toList.lift(i).flatMap {
-                                case HardAck.Round1Payload.PartitionSigs.MajorComplete(
-                                      _,
-                                      _,
-                                      _,
-                                      _,
-                                      sec
-                                    ) =>
-                                    sec
-                                case HardAck.Round1Payload.PartitionSigs.MajorPartial(
-                                      _,
-                                      _,
-                                      _,
-                                      sec
-                                    ) =>
-                                    sec
-                                case HardAck.Round1Payload.PartitionSigs.Minor(sec, _) => Some(sec)
-                                case _: HardAck.Round1Payload.PartitionSigs.FinalComplete => None
-                                case _: HardAck.Round1Payload.PartitionSigs.FinalPartial  => None
-                            }
-                        case None => None
-                    }
-                }
-        }
-
-    private def attachWitnesses(
-        unsigned: Stack.Unsigned,
-        wmap: WitnessMap,
-        evac: List[List[BlockHeader.HeaderSignature]]
-    ): IO[StackEffects.HardConfirmed] = unsigned.effects match {
-        case r: StackEffects.Unsigned.Regular =>
-            r.partitions.toList
-                .zip(evac)
-                .traverse { (pe, secSigs) =>
-                    pe match {
-                        case PartitionEffects.Major(
-                              settlement,
-                              fallback,
-                              rollouts,
-                              refunds,
-                              sec
-                            ) =>
-                            for {
-                                st <- signOne(settlement, wmap)
-                                fb <- signOne(fallback, wmap)
-                                ro <- rollouts.traverse(signOne(_, wmap))
-                                rf <- refunds.traverse { case pd: RefundTx.PostDated =>
-                                    signOne(pd, wmap).widen[RefundTx]
-                                }
-                            } yield PartitionEffects.Major(
-                              st,
-                              fb,
-                              ro,
-                              rf,
-                              sec.map(StandaloneEvacuationCommitment.MultiSigned(_, secSigs))
-                            ): PartitionEffects[StandaloneEvacuationCommitment.MultiSigned]
-                        case PartitionEffects.Final(finalization, rollouts) =>
-                            for {
-                                fi <- signOne(finalization, wmap)
-                                ro <- rollouts.traverse(signOne(_, wmap))
-                            } yield PartitionEffects.Final(fi, ro): PartitionEffects[
-                              StandaloneEvacuationCommitment.MultiSigned
-                            ]
-                        case PartitionEffects.Minor(sec, refunds) =>
-                            refunds
-                                .traverse { case pd: RefundTx.PostDated =>
-                                    signOne(pd, wmap).widen[RefundTx]
-                                }
-                                .map(rf =>
-                                    PartitionEffects.Minor(
-                                      StandaloneEvacuationCommitment.MultiSigned(sec, secSigs),
-                                      rf
-                                    ): PartitionEffects[
-                                      StandaloneEvacuationCommitment.MultiSigned
-                                    ]
-                                )
-                    }
-                }
-                .map(list => StackEffects.HardConfirmed.Regular(NonEmptyList.fromListUnsafe(list)))
-        case i: StackEffects.Unsigned.Initial =>
-            for {
-                it <- signOne(i.initializationTx, wmap)
-                fb <- signOne(i.fallbackTx, wmap)
-            } yield StackEffects.HardConfirmed.Initial(
-              initializationTx = it,
-              fallbackTx = fb
-            )
-    }
-
-    private def signOne[A <: Tx[A]](a: A, wmap: WitnessMap): IO[A] =
-        wmap.get(a.tx.id).filter(_.nonEmpty) match {
-            case None => IO.pure(a)
-            case Some(ws) =>
-                a.addSignatures(ws) match {
-                    case Valid(signed) => IO.pure(signed)
-                    case Invalid(e)    => IO.raiseError(e.head)
-                }
-        }
-
-    // ===================================
-    // Verification (against the locally-derived effects + the signer's vkey)
-    // ===================================
-
-    private def peerVKey(peer: HeadPeerNumber): IO[VerificationKey] =
-        config.headPeerVKey(peer).liftTo[IO](CellError.UnknownPeer(peer))
-
-    private def verifyTx(vk: VerificationKey, t: Transaction, sig: TxSignature): IO[Unit] =
-        IO.delay(platform.verifyEd25519Signature(vk, t.id, sig))
-            .handleErrorWith {
-                case NonFatal(_) => IO.pure(false)
-                case e           => IO.raiseError(e)
-            }
-            .flatMap(ok => IO.raiseUnless(ok)(CellError.BadSignature(s"tx ${t.id}")))
-
-    private def verifyHeader(
-        vk: VerificationKey,
-        msg: ByteString,
-        sig: BlockHeader.HeaderSignature
-    ): IO[Unit] =
-        IO.delay(platform.verifyEd25519Signature(vk, msg, sig))
-            .handleErrorWith {
-                case NonFatal(_) => IO.pure(false)
-                case e           => IO.raiseError(e)
-            }
-            .flatMap(ok => IO.raiseUnless(ok)(CellError.BadSignature("evac-commit header")))
-
-    private def verifyTxList(
-        vk: VerificationKey,
-        label: String,
-        txs: List[Transaction],
-        sigs: List[TxSignature]
-    ): IO[Unit] =
-        IO.raiseUnless(txs.length == sigs.length)(
-          CellError.KeysetMismatch(label, txs.length.toString, sigs.length.toString)
-        ) >> txs.zip(sigs).traverse_ { case (tx, sg) => verifyTx(vk, tx, sg) }
-
-    private def verifySecOpt(
-        vk: VerificationKey,
-        eSec: Option[StandaloneEvacuationCommitment],
-        sSec: Option[BlockHeader.HeaderSignature]
-    ): IO[Unit] = (eSec, sSec) match {
-        case (None, None)            => IO.unit
-        case (Some(sec), Some(hsig)) => verifyHeader(vk, sec.header, hsig)
-        case (e, s) =>
-            IO.raiseError(
-              CellError.KeysetMismatch(
-                "partition.sec presence",
-                e.isDefined.toString,
-                s.isDefined.toString
-              )
-            )
-    }
-
-    private def verifyPartition(
-        vk: VerificationKey,
-        e: PartitionEffects[StandaloneEvacuationCommitment],
-        s: HardAck.Round1Payload.PartitionSigs,
-        isSettlementUnlock: Boolean,
-        isFinalizationUnlock: Boolean
-    ): IO[Unit] = (e, s) match {
-        case (
-              PartitionEffects.Major(settlement, fallback, rollouts, refunds, sec),
-              HardAck.Round1Payload.PartitionSigs.MajorComplete(
-                sSettlement,
-                sFallback,
-                sRollouts,
-                sRefunds,
-                sSec
-              )
-            ) =>
-            for {
-                _ <- IO.raiseWhen(isSettlementUnlock)(
-                  CellError.KeysetMismatch(
-                    "partition.settlement (unlock ⇒ MajorUnlock slot)",
-                    "MajorUnlock",
-                    "Major"
-                  )
-                )
-                _ <- verifyTx(vk, settlement.tx, sSettlement)
-                _ <- verifyTx(vk, fallback.tx, sFallback)
-                _ <- verifyTxList(vk, "partition.rollouts", rollouts.map(_.tx), sRollouts)
-                _ <- verifyTxList(vk, "partition.refunds", refunds.map(_.tx), sRefunds)
-                _ <- verifySecOpt(vk, sec, sSec)
-            } yield ()
-        case (
-              PartitionEffects.Major(_, fallback, rollouts, refunds, sec),
-              HardAck.Round1Payload.PartitionSigs.MajorPartial(sFallback, sRollouts, sRefunds, sSec)
-            ) =>
-            for {
-                _ <- IO.raiseUnless(isSettlementUnlock)(
-                  CellError.KeysetMismatch(
-                    "partition.settlement (non-unlock ⇒ Major slot)",
-                    "Major",
-                    "MajorUnlock"
-                  )
-                )
-                _ <- verifyTx(vk, fallback.tx, sFallback)
-                _ <- verifyTxList(vk, "partition.rollouts", rollouts.map(_.tx), sRollouts)
-                _ <- verifyTxList(vk, "partition.refunds", refunds.map(_.tx), sRefunds)
-                _ <- verifySecOpt(vk, sec, sSec)
-            } yield ()
-        case (
-              PartitionEffects.Final(finalization, rollouts),
-              HardAck.Round1Payload.PartitionSigs.FinalComplete(sFinalization, sRollouts)
-            ) =>
-            for {
-                _ <- IO.raiseWhen(isFinalizationUnlock)(
-                  CellError.KeysetMismatch(
-                    "partition.finalization (unlock ⇒ FinalUnlock slot)",
-                    "FinalUnlock",
-                    "Final"
-                  )
-                )
-                _ <- verifyTx(vk, finalization.tx, sFinalization)
-                _ <- verifyTxList(vk, "partition.rollouts", rollouts.map(_.tx), sRollouts)
-            } yield ()
-        case (
-              PartitionEffects.Final(_, rollouts),
-              HardAck.Round1Payload.PartitionSigs.FinalPartial(sRollouts)
-            ) =>
-            for {
-                _ <- IO.raiseUnless(isFinalizationUnlock)(
-                  CellError.KeysetMismatch(
-                    "partition.finalization (non-unlock ⇒ Final slot)",
-                    "Final",
-                    "FinalUnlock"
-                  )
-                )
-                _ <- verifyTxList(vk, "partition.rollouts", rollouts.map(_.tx), sRollouts)
-            } yield ()
-        case (
-              PartitionEffects.Minor(sec, refunds),
-              HardAck.Round1Payload.PartitionSigs.Minor(sSec, sRefunds)
-            ) =>
-            verifyHeader(vk, sec.header, sSec) >>
-                verifyTxList(vk, "partition.refunds", refunds.map(_.tx), sRefunds)
-        case _ =>
-            IO.raiseError(
-              CellError.KeysetMismatch(
-                "partition kind",
-                e.getClass.getSimpleName,
-                s.getClass.getSimpleName
-              )
-            )
-    }
-
-    private def verifyRound1Regular(
-        vk: VerificationKey,
-        r: StackEffects.Unsigned.Regular,
-        p: HardAck.Round1Payload.Regular
-    ): IO[Unit] = {
-        val unlock = PartitionEffects.unlock(r.partitions)
-        val es = r.partitions.toList
-        val ss = HardAck.Round1Payload.Regular.asSlots(p).toList
-        IO.raiseUnless(es.length == ss.length)(
-          CellError.KeysetMismatch("round1.partitions", es.length.toString, ss.length.toString)
-        ) >> es.zip(ss).zipWithIndex.traverse_ { case ((e, sg), i) =>
-            verifyPartition(
-              vk,
-              e,
-              sg,
-              isSettlementUnlock = unlock.contains(PartitionEffects.Unlock.Settlement(i)),
-              isFinalizationUnlock = unlock.contains(PartitionEffects.Unlock.Finalization(i))
-            )
-        }
-    }
-
-    /** Initial stack round 2. `initTxSig` is this peer's head-multisig contribution over the init
-      * tx body (always required). `individualSig` must satisfy the iff rule via the SAME shared
-      * deterministic predicate the signer used ([[StackEffects.spendsFromIndividualAddress]]):
-      * present iff the peer funds an init input. The signature is verified against the peer's known
-      * head key `vk` (which is also its individual-funding key), so a peer can only ever contribute
-      * a witness under its own key — there is no foreign-key witness to reject.
-      */
-    private def verifyRound2Initial(
-        i: StackEffects.Unsigned.Initial,
-        peer: HeadPeerNumber,
-        p: HardAck.Round2Payload.Initial
-    ): IO[Unit] = for {
-        vk <- peerVKey(peer)
-        initTx = i.initializationTx
-        _ <- verifyTx(vk, initTx.tx, p.initTxSig)
-        expected = StackEffects.spendsFromIndividualAddress(initTx, vk)
-        _ <- (expected, p.individualSig) match {
-            case (false, None) => IO.unit
-            case (false, Some(_)) =>
-                IO.raiseError(
-                  CellError.KeysetMismatch(
-                    "round2Initial.individualSig (peer funds no init input)",
-                    "absent",
-                    "present"
-                  )
-                )
-            case (true, None) =>
-                IO.raiseError(
-                  CellError.KeysetMismatch(
-                    "round2Initial.individualSig (peer funds an init input)",
-                    "present",
-                    "absent"
-                  )
-                )
-            case (true, Some(sig)) =>
-                verifyTx(vk, initTx.tx, sig)
-        }
-    } yield ()
-
-    private def verify2PhaseRound1(
-        unsigned: Stack.Unsigned,
-        peer: HeadPeerNumber,
-        p: HardAck.Payload.Round1
-    ): IO[Unit] = (unsigned.effects, p) match {
-        case (r: StackEffects.Unsigned.Regular, pr: HardAck.Round1Payload.Regular) =>
-            peerVKey(peer).flatMap(vk => verifyRound1Regular(vk, r, pr))
-        case (i: StackEffects.Unsigned.Initial, pi: HardAck.Round1Payload.Initial) =>
-            peerVKey(peer).flatMap(vk => verifyTx(vk, i.fallbackTx.tx, pi.fallbackSig))
-        case _ =>
-            IO.raiseError(CellError.PlanPayloadMismatch("round-1", p.roundLabel))
-    }
-
-    private def verify2PhaseRound2(
-        unsigned: Stack.Unsigned,
-        peer: HeadPeerNumber,
-        p: HardAck.Payload.Round2
-    ): IO[Unit] = (unsigned.effects, p) match {
-        case (r: StackEffects.Unsigned.Regular, pr: HardAck.Round2Payload.Regular) =>
-            peerVKey(peer).flatMap { vk =>
-                PartitionEffects.unlock(r.partitions) match {
-                    case Some(u) => verifyTx(vk, unlockTxOf(r.partitions, u), pr.firstUnlockSig)
-                    case None =>
-                        IO.raiseError(
-                          CellError.KeysetMismatch("round-2 unlock", "present", "absent")
-                        )
-                }
-            }
-        case (i: StackEffects.Unsigned.Initial, pi: HardAck.Round2Payload.Initial) =>
-            verifyRound2Initial(i, peer, pi)
-        case _ =>
-            IO.raiseError(CellError.PlanPayloadMismatch("round-2", p.roundLabel))
-    }
-
-    private def verifySole(
-        unsigned: Stack.Unsigned,
-        peer: HeadPeerNumber,
-        p: HardAck.SolePayload
-    ): IO[Unit] = unsigned.effects match {
-        case r: StackEffects.Unsigned.Regular =>
-            r.partitions.head match {
-                case PartitionEffects.Minor(sec, refunds) if r.partitions.tail.isEmpty =>
-                    peerVKey(peer).flatMap(vk =>
-                        verifyHeader(vk, sec.header, p.sec) >>
-                            verifyTxList(vk, "sole.refunds", refunds.map(_.tx), p.refunds)
-                    )
-                case _ =>
-                    IO.raiseError(
-                      CellError.KeysetMismatch("sole shape", "single Minor partition", "other")
-                    )
-            }
-        case _: StackEffects.Unsigned.Initial =>
-            IO.raiseError(CellError.PlanPayloadMismatch("sole", p.roundLabel))
-    }
 
     // ===================================
     // Plumbing
@@ -965,7 +421,7 @@ object SlowConsensusActor {
         final case class WaitingRound2(
             unsigned: Stack.Unsigned,
             // Carried through from round 1: needed at hard-confirmation to aggregate the
-            // non-unlock per-effect signatures into witnesses (round 2 only signs the unlock).
+            // non-unlock per-effect signatures into ackAggregator (round 2 only signs the unlock).
             round1: Map[HeadPeerNumber, HardAck.Payload.Round1],
             round2: Map[HeadPeerNumber, HardAck.Payload.Round2]
         ) extends Cell
@@ -1001,7 +457,7 @@ object SlowConsensusActor {
         case NoCell(stackNum: StackNumber)
         case UnknownPeer(peer: HeadPeerNumber)
         case UnexpectedPayload(stackNum: StackNumber, roundLabel: String)
-        case PlanPayloadMismatch(round: String, payloadRound: String)
+        case EffectsPayloadMismatch(round: String, payloadRound: String)
         case BadSignature(what: String)
         case KeysetMismatch(label: String, expected: String, actual: String)
         override def getMessage: String = this match
@@ -1009,7 +465,7 @@ object SlowConsensusActor {
             case UnknownPeer(p) => s"Unknown head peer $p"
             case UnexpectedPayload(s, r) =>
                 s"Unexpected $r payload for stack $s in current phase"
-            case PlanPayloadMismatch(r, pr) =>
+            case EffectsPayloadMismatch(r, pr) =>
                 s"Effects/payload variant mismatch at $r: payload round=$pr"
             case BadSignature(w) => s"Hard-ack signature verification failed for $w"
             case KeysetMismatch(l, e, a) =>
