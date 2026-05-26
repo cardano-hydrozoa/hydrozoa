@@ -86,23 +86,26 @@ final case class StackComposer(
       * init + fallback) and back to this composer as the `PreviousStackHardConfirmation` that
       * unblocks stack 1.
       */
-    private def bootstrapInitialStack: IO[Unit] = for {
-        now <- realTimeQuantizedInstant(config.slotConfig)
-        brief = StackBrief(
+    private def bootstrapInitialStack: IO[Unit] = {
+        val brief = StackBrief(
           stackNum = StackNumber.zero,
           firstBlockNum = BlockNumber.zero,
           lastBlockNum = BlockNumber.zero,
-          creationEndTime = StackCreationEndTime(now)
+          // Stack 0 spans exactly the initial block (block 0), so its creation end-time IS that
+          // block's end-time — deterministic, from config (not wall-clock boot time).
+          creationEndTime = StackCreationEndTime(config.initialBlock.blockBrief.endTime)
         )
-        unsigned = Stack.Unsigned(
+        val unsigned = Stack.Unsigned(
           brief,
           StackEffectsBuilder.mkEffectsInitial(config.initializationTx, config.initialFallbackTx)
         )
-        handoff <- buildHandoff(unsigned)
-        conn <- getConnections
-        _ <- Tracer.info("Bootstrapping initial stack 0 (init + fallback)")
-        _ <- conn.slowConsensusActor ! handoff
-    } yield ()
+        for {
+            handoff <- buildHandoff(unsigned)
+            conn <- getConnections
+            _ <- Tracer.info("Bootstrapping initial stack 0 (init + fallback)")
+            _ <- conn.slowConsensusActor ! handoff
+        } yield ()
+    }
 
     private def handleBlockResult(r: BlockResult): IO[Unit] = for {
         _ <- Tracer.debug(s"BlockResult received for block ${r.brief.blockNum}")
