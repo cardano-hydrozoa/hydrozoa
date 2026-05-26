@@ -6,8 +6,8 @@ import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import io.circe.*
 import scala.annotation.targetName
 
-/** Per-peer identifier for a single hard-ack. Mirrors [[AckId]] but uses [[HardAckNumber]] for the
-  * per-peer slow-cycle cursor.
+/** Per-peer identifier for a single hard-ack. Mirrors [[SoftAckId]] but uses [[HardAckNumber]] for
+  * the per-peer slow-cycle cursor.
   */
 type HardAckId = HardAckId.HardAckId
 

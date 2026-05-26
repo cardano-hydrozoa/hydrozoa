@@ -21,7 +21,7 @@ import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.pollresults.PollResults
-import hydrozoa.multisig.consensus.{ConsensusActor, StackComposer, UserRequest, UserRequestBody, UserRequestHeader, UserRequestWithId}
+import hydrozoa.multisig.consensus.{FastConsensusActor, StackComposer, UserRequest, UserRequestBody, UserRequestHeader, UserRequestWithId}
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.*
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Requests.*
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Scenarios.*
@@ -46,12 +46,12 @@ import scala.collection.immutable.Queue
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.TransactionOutput.valueLens
-import scalus.cardano.ledger.{Block as _, BlockHeader as _, Coin, *}
+import scalus.cardano.ledger.{Block as _, BlockHeader as _, *}
 import scalus.crypto.ed25519.Signature
 import scalus.uplc.builtin.ByteString
+import test.*
 import test.Generators.Hydrozoa.*
 import test.given
-import test.{TestMFixedEnv, *}
 
 // Pretty Printers for more manageable scalacheck logs
 given ppMultiNodeConfig: (MultiNodeConfig => Pretty) = nodeConfig =>
@@ -94,7 +94,7 @@ object JointLedgerTestHelpers {
     val jlTest = TestMFixedEnv[TestR]()
     import jlTest.*
 
-    /** An agent of this test, pretending to be a [[ConsensusActor]] for [[JointLedger]]. */
+    /** An agent of this test, pretending to be a [[FastConsensusActor]] for [[JointLedger]]. */
     final case class ConsensusAgent() extends Actor[IO, ConsensusAgent.Request] {
         private val blocks = Ref.unsafe[IO, ConsensusAgent.State](Vector.empty)
 
@@ -123,7 +123,7 @@ object JointLedgerTestHelpers {
             def ?: : this.Send = SyncRequest.send(_, this)
         }
 
-        type Request = ConsensusActor.Request | GetState.Sync
+        type Request = FastConsensusActor.Request | GetState.Sync
     }
 
     val defaultInitializer: PropertyM[IO, TestR] = {
@@ -156,7 +156,7 @@ object JointLedgerTestHelpers {
                 JointLedger(
                   config,
                   JointLedger.Connections(
-                    consensusActor = consensusAgent.narrowRequest[ConsensusActor.Request],
+                    consensusActor = consensusAgent.narrowRequest[FastConsensusActor.Request],
                     stackComposer = stackComposerSink.narrowRequest[StackComposer.Request],
                     peerLiaisons = List()
                   ),

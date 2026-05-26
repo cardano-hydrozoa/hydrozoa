@@ -9,7 +9,7 @@ import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
 import hydrozoa.lib.logging.*
 import hydrozoa.multisig.MultisigRegimeManager
-import hydrozoa.multisig.consensus.ack.{AckId, SoftAck}
+import hydrozoa.multisig.consensus.ack.{SoftAck, SoftAckId}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockHeader, BlockNumber}
 import hydrozoa.multisig.ledger.joint.JointLedger
@@ -25,9 +25,8 @@ import scalus.uplc.builtin.{ByteString, platform}
   * signatures over the brief's [[BlockHeader.Section.signingBytes]] (see `consensus/fast-consensus`
   * in the whitepaper).
   *
-  * Per the fast/slow split, this actor produces soft-confirmations only. L1 effect signatures
-  * (settlement, fallback, rollouts, refunds, finalization) belong to the slow cycle and live in
-  * [[SlowConsensusActor]], which is currently parked.
+  * This actor produces soft-confirmations only. L1 effect signatures (settlement, fallback,
+  * rollouts, refunds, finalization) are handled by [[SlowConsensusActor]], not here.
   *
   * ==State==
   *
@@ -35,7 +34,7 @@ import scalus.uplc.builtin.{ByteString, platform}
   * brief (received from the local joint ledger once produced or reproduced) and the soft acks from
   * each head peer (received from peer liaisons; the local peer's own ack is also fed in by the
   * joint ledger). When a cell becomes saturated (brief present, every peer's ack collected), it
-  * produces a [[Block.SoftConfirmed.Next]] and broadcasts it.
+  * produces a [[Block.SoftConfirmed.Next]] and fans it out to the downstream actors.
   *
   * ==Postponed acks==
   *
@@ -46,7 +45,7 @@ import scalus.uplc.builtin.{ByteString, platform}
   * peer's own block-N+1 ack is broadcast strictly after the same peer has seen block N
   * soft-confirmed.
   */
-object ConsensusActor:
+object FastConsensusActor:
     type Config = OwnHeadPeerPublic.Section & HeadPeers.Section
 
     final case class Connections(
@@ -69,30 +68,21 @@ object ConsensusActor:
         acks: Map[VerificationKey, SoftAck],
         postponedNextBlockOwnAck: Option[SoftAck]
     ):
-        def withBrief(b: BlockBrief.Next): IO[ConsensusCell] = for {
-            _ <- IO.raiseWhen(b.blockNum != blockNum)(
-              CollectingError.UnexpectedBlockNumber(blockNum, b.blockNum)
-            )
-            _ <- IO.raiseWhen(brief.isDefined)(CollectingError.UnexpectedBlock(blockNum))
-        } yield copy(brief = Some(b))
+        // The block number is not re-checked here: `withCell` already selects this cell by the
+        // message's block number, so the cell's `blockNum` always matches.
+        def acceptBrief(b: BlockBrief.Next): Either[CollectingError, ConsensusCell] =
+            if brief.isDefined then Left(CollectingError.UnexpectedBlock(blockNum))
+            else Right(copy(brief = Some(b)))
 
-        def withAck(ack: SoftAck, vk: VerificationKey): IO[ConsensusCell] = for {
-            _ <- IO.raiseWhen(ack.blockNum != blockNum)(
-              CollectingError.UnexpectedBlockNumber(blockNum, ack.blockNum)
-            )
-            _ <- IO.raiseWhen(acks.contains(vk))(
-              CollectingError.UnexpectedAck(blockNum, ack.peerNum)
-            )
-        } yield copy(acks = acks + (vk -> ack))
+        def acceptAck(ack: SoftAck, vk: VerificationKey): Either[CollectingError, ConsensusCell] =
+            if acks.contains(vk) then Left(CollectingError.UnexpectedAck(blockNum, ack.peerNum))
+            else Right(copy(acks = acks + (vk -> ack)))
 
-        def withPostponed(ack: SoftAck): IO[ConsensusCell] = for {
-            _ <- IO.raiseWhen(postponedNextBlockOwnAck.isDefined)(
-              CollectingError.PostponedAckAlreadySet
-            )
-            _ <- IO.raiseWhen(ack.blockNum != blockNum.increment)(
-              CollectingError.UnexpectedPostponedAck
-            )
-        } yield copy(postponedNextBlockOwnAck = Some(ack))
+        def acceptPostponedAck(ack: SoftAck): Either[CollectingError, ConsensusCell] =
+            if postponedNextBlockOwnAck.isDefined then Left(CollectingError.PostponedAckAlreadySet)
+            else if ack.blockNum != blockNum.increment then
+                Left(CollectingError.UnexpectedPostponedAck)
+            else Right(copy(postponedNextBlockOwnAck = Some(ack)))
 
         def isSaturated(allVKeys: Set[VerificationKey]): Boolean =
             brief.isDefined && acks.keySet == allVKeys
@@ -113,12 +103,13 @@ object ConsensusActor:
 
     def apply(
         config: Config,
-        pendingConnections: MultisigRegimeManager.PendingConnections | ConsensusActor.Connections,
+        pendingConnections: MultisigRegimeManager.PendingConnections |
+            FastConsensusActor.Connections,
         tracerLocal: IOLocal[Tracer]
-    ): IO[ConsensusActor] =
+    ): IO[FastConsensusActor] =
         for {
             stateRef <- Ref[IO].of(State.initial)
-        } yield new ConsensusActor(
+        } yield new FastConsensusActor(
           config = config,
           pendingConnections = pendingConnections,
           stateRef = stateRef,
@@ -130,7 +121,6 @@ object ConsensusActor:
         case UnexpectedPreviousBlockCell
 
     enum CollectingError extends Throwable:
-        case UnexpectedBlockNumber(cellBlockNum: BlockNumber, msgBlockNum: BlockNumber)
         case UnexpectedAck(blockNum: BlockNumber, peerNum: HeadPeerNumber)
         case UnexpectedBlock(blockNum: BlockNumber)
         case UnexpectedPeer(peer: HeadPeerNumber)
@@ -138,8 +128,6 @@ object ConsensusActor:
         case UnexpectedPostponedAck
 
         override def getMessage: String = this match
-            case UnexpectedBlockNumber(c, m) =>
-                s"Block-number mismatch: cell=$c, message=$m"
             case UnexpectedAck(b, p)    => s"Duplicate ack for block $b from peer $p"
             case UnexpectedBlock(b)     => s"Duplicate brief for block $b"
             case UnexpectedPeer(p)      => s"Unknown peer number: $p"
@@ -149,19 +137,19 @@ object ConsensusActor:
     enum CompletionError extends Throwable:
         case WrongHeaderSignature(vkey: ByteString)
 
-end ConsensusActor
+end FastConsensusActor
 
-class ConsensusActor(
-    config: ConsensusActor.Config,
-    pendingConnections: MultisigRegimeManager.PendingConnections | ConsensusActor.Connections,
-    stateRef: Ref[IO, ConsensusActor.State],
+class FastConsensusActor(
+    config: FastConsensusActor.Config,
+    pendingConnections: MultisigRegimeManager.PendingConnections | FastConsensusActor.Connections,
+    stateRef: Ref[IO, FastConsensusActor.State],
     tracerLocal: IOLocal[Tracer]
-) extends Actor[IO, ConsensusActor.Request]:
-    import ConsensusActor.*
+) extends Actor[IO, FastConsensusActor.Request]:
+    import FastConsensusActor.*
 
     given IOLocal[Tracer] = tracerLocal
 
-    private val connections = Ref.unsafe[IO, Option[ConsensusActor.Connections]](None)
+    private val connections = Ref.unsafe[IO, Option[FastConsensusActor.Connections]](None)
 
     private def getConnections: IO[Connections] =
         connections.get.flatMap(
@@ -178,7 +166,7 @@ class ConsensusActor(
                 _connections <- x.get
                 _ <- connections.set(
                   Some(
-                    ConsensusActor.Connections(
+                    FastConsensusActor.Connections(
                       // Soft-block fan-out goes via the rate limiter on the
                       // ConsensusActor → BlockWeaver lane (see
                       // hydrozoa.multisig.consensus.limiter.Limiter).
@@ -193,17 +181,17 @@ class ConsensusActor(
                   )
                 )
             } yield ()
-        case x: ConsensusActor.Connections => connections.set(Some(x))
+        case x: FastConsensusActor.Connections => connections.set(Some(x))
     }
 
-    override def preStart: IO[Unit] = context.self ! ConsensusActor.PreStart
+    override def preStart: IO[Unit] = context.self ! FastConsensusActor.PreStart
 
     override def receive: Receive[IO, Request] = PartialFunction.fromFunction(receiveTotal)
 
     private def receiveTotal(req: Request): IO[Unit] = req match {
-        case ConsensusActor.PreStart => preStartLocal
-        case brief: BlockBrief.Next  => handleBrief(brief)
-        case ack: SoftAck            => handleAck(ack)
+        case FastConsensusActor.PreStart => preStartLocal
+        case brief: BlockBrief.Next      => handleBrief(brief)
+        case ack: SoftAck                => handleAck(ack)
     }
 
     private def preStartLocal: IO[Unit] = for {
@@ -215,7 +203,7 @@ class ConsensusActor(
         Tracer.scopedCtx(
           "blockNumber" -> brief.blockNum.toString,
           "blockType" -> brief.getClass.getSimpleName
-        )(withCell(brief.blockNum)(_.withBrief(brief)))
+        )(withCell(brief.blockNum)(_.acceptBrief(brief)))
 
     private def handleAck(ack: SoftAck): IO[Unit] =
         Tracer.scopedCtx(ack.toContext*)(for {
@@ -229,14 +217,14 @@ class ConsensusActor(
             vk <- config
                 .headPeerVKey(ack.peerNum)
                 .liftTo[IO](CollectingError.UnexpectedPeer(ack.peerNum))
-            _ <- withCell(ack.blockNum)(_.withAck(ack, vk))
+            _ <- withCell(ack.blockNum)(_.acceptAck(ack, vk))
             // Own ack scheduling: if this is the local peer's own ack, broadcast it (or postpone
             // if the previous block's cell still exists, to maintain the spec ordering).
             _ <- IO.whenA(ack.peerNum == config.ownHeadPeerNum)(scheduleOwnAck(ack))
         } yield ())
 
     /** Decide whether to broadcast a fresh own ack immediately or postpone it onto the previous
-      * block's cell. See the [[ConsensusActor]] class-level doc for postponed-ack semantics.
+      * block's cell. See the [[FastConsensusActor]] class-level doc for postponed-ack semantics.
       */
     private def scheduleOwnAck(ack: SoftAck): IO[Unit] = for {
         _ <- IO.raiseWhen(ack.peerNum != config.ownHeadPeerNum)(Error.AlienAckAnnouncement)
@@ -252,7 +240,7 @@ class ConsensusActor(
                     case Some(prevCell) =>
                         // Previous cell still in flight: postpone this ack until it completes.
                         for {
-                            updated <- prevCell.withPostponed(ack)
+                            updated <- IO.fromEither(prevCell.acceptPostponedAck(ack))
                             _ <- stateRef.update(s =>
                                 s.copy(cells = s.cells.updated(updated.blockNum, updated))
                             )
@@ -267,11 +255,11 @@ class ConsensusActor(
       * [[Block.SoftConfirmed.Next]] downstream.
       */
     private def withCell(blockNum: BlockNumber)(
-        f: ConsensusCell => IO[ConsensusCell]
+        f: ConsensusCell => Either[CollectingError, ConsensusCell]
     ): IO[Unit] = for {
         state <- stateRef.get
         cell = state.cells.getOrElse(blockNum, ConsensusCell.fresh(blockNum))
-        updated <- f(cell)
+        updated <- IO.fromEither(f(cell))
         _ <- stateRef.update(s => s.copy(cells = s.cells.updated(blockNum, updated)))
         _ <- IO.whenA(updated.isSaturated(config.headPeerVKeys.iterator.toSet))(
           completeCell(updated)
@@ -355,4 +343,4 @@ class ConsensusActor(
                 Block.SoftConfirmed.Final(b, sigsByPeer)
         }
     }
-end ConsensusActor
+end FastConsensusActor

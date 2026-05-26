@@ -10,7 +10,7 @@ import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.PeerLiaison.*
 import hydrozoa.multisig.consensus.PeerLiaison.Request.*
-import hydrozoa.multisig.consensus.ack.{AckId, AckNumber, HardAck, HardAckNumber, SoftAck}
+import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, SoftAck, SoftAckId, SoftAckNumber}
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber, BlockStatus, BlockType}
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
@@ -239,7 +239,7 @@ trait PeerLiaison(
           * [[startResendTimer]]) and by the [[NewMsgBatch]] handler to detect duplicates.
           */
         def getCurrentlyRequesting: IO[GetMsgBatch] = this.currentlyRequesting.get
-        private val nAck = Ref.unsafe[IO, AckNumber](AckNumber.zero)
+        private val nAck = Ref.unsafe[IO, SoftAckNumber](SoftAckNumber.zero)
         private val nBlock = Ref.unsafe[IO, BlockNumber](BlockNumber.zero)
         private val nRequest = Ref.unsafe[IO, RequestNumber](RequestNumber.zero)
         private val nStackBrief = Ref.unsafe[IO, StackNumber](StackNumber.zero)
@@ -604,7 +604,7 @@ object PeerLiaison {
 
     final case class Connections(
         blockWeaver: BlockWeaver.Handle,
-        consensusActor: ConsensusActor.Handle,
+        consensusActor: FastConsensusActor.Handle,
         stackComposer: StackComposer.Handle,
         slowConsensusActor: SlowConsensusActor.Handle,
         remotePeerLiaison: PeerLiaison.Handle
@@ -652,7 +652,7 @@ object PeerLiaison {
         enum Rejection:
             case BatchNumMismatch(expected: Batch.Number, received: Batch.Number)
             case AckPeerMismatch(expected: HeadPeerNumber, received: HeadPeerNumber)
-            case AckNumMismatch(expected: AckNumber, received: AckNumber)
+            case AckNumMismatch(expected: SoftAckNumber, received: SoftAckNumber)
             case BlockNumMismatch(expected: BlockNumber, received: BlockNumber)
             case StackBriefNumMismatch(expected: StackNumber, received: StackNumber)
             case HardAckPeerMismatch(expected: HeadPeerNumber, received: HeadPeerNumber)
@@ -811,7 +811,7 @@ object PeerLiaison {
         // format: on
         final case class GetMsgBatch(
             batchNum: Batch.Number,
-            ackNum: AckNumber,
+            ackNum: SoftAckNumber,
             blockNum: BlockNumber,
             stackBriefNum: StackNumber,
             hardAckNum: HardAckNumber,
@@ -832,7 +832,7 @@ object PeerLiaison {
             // liaison is talking to. Tests can use any [[HeadPeerId]] fixture.
             def initial(remotePeerId: HeadPeerId): GetMsgBatch = GetMsgBatch(
               batchNum = Batch.Number(0),
-              ackNum = AckNumber.zero.increment,
+              ackNum = SoftAckNumber.zero.increment,
               blockNum = remotePeerId.nextLeaderBlock(BlockNumber.zero),
               stackBriefNum = remotePeerId.nextSlowLeaderStack(StackNumber.zero),
               hardAckNum = HardAckNumber.zero,

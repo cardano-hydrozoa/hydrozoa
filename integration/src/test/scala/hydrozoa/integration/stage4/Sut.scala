@@ -7,7 +7,7 @@ import com.suprnation.actor.ActorSystem
 import hydrozoa.integration.stage4.Commands.*
 import hydrozoa.lib.logging.{Logging, Tracer}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
-import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, ConsensusActor, EventSequencer, PeerLiaison, SlowConsensusActor, StackComposer, UserRequest, UserRequestWithId}
+import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, FastConsensusActor, EventSequencer, PeerLiaison, SlowConsensusActor, StackComposer, UserRequest, UserRequestWithId}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockBrief
 import BlockBrief.{Minor as BMinor, Major as BMajor}
@@ -26,7 +26,7 @@ private[stage4] case class PeerStack(
     cardanoLiaison: CardanoLiaison.Handle,
     eventSequencer: EventSequencer.Handle,
     jointLedger: JointLedger.Handle,
-    consensusActor: ConsensusActor.Handle,
+    consensusActor: FastConsensusActor.Handle,
     stackComposer: StackComposer.Handle,
     slowConsensusActor: SlowConsensusActor.Handle,
 )
@@ -42,11 +42,11 @@ private[stage4] case class PeerStack(
   */
 private[stage4] class BlockBriefObserver(
     peerNum: HeadPeerNumber,
-    real: ConsensusActor.Handle,
+    real: FastConsensusActor.Handle,
     briefs: Ref[IO, Vector[BlockBrief.Intermediate]],
-) extends Actor[IO, ConsensusActor.Request]:
+) extends Actor[IO, FastConsensusActor.Request]:
     private val logger = Logging.loggerIO(s"Stage4.BlockBriefObserver.${peerNum: Int}")
-    override def receive: Receive[IO, ConsensusActor.Request] = {
+    override def receive: Receive[IO, FastConsensusActor.Request] = {
         case brief: BMinor =>
             logger.debug(
               s"received BlockBrief.Minor block=${brief.blockNum}, capturing and forwarding"

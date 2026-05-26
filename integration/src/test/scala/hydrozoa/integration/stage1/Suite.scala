@@ -26,7 +26,7 @@ import hydrozoa.lib.tracing.ProtocolTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost.URL
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendMock, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, ConsensusActor, EventSequencer, StackComposer}
+import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, FastConsensusActor, EventSequencer, StackComposer}
 import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toUtxos}
 import hydrozoa.multisig.ledger.event.RequestNumber
@@ -46,7 +46,7 @@ import java.util.concurrent.TimeUnit
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 
 /** Integration Stage 1 (the simplest).
-  *   - Only three real actors are involved: [[JointLedger]], [[ConsensusActor]], and
+  *   - Only three real actors are involved: [[JointLedger]], [[FastConsensusActor]], and
   *     [[CardanoLiaison]]
   *
   * Notes:
@@ -522,7 +522,7 @@ case class Suite(
 
             // Agent actor
             jointLedgerD <- IO.deferred[JointLedger.Handle]
-            consensusActorD <- IO.deferred[ConsensusActor.Handle]
+            consensusActorD <- IO.deferred[FastConsensusActor.Handle]
 
             agent <- system.actorOf(AgentActor(jointLedgerD, consensusActorD, cardanoLiaison))
 
@@ -551,7 +551,7 @@ case class Suite(
             _ <- jointLedgerD.complete(jointLedger)
 
             // Consensus actor
-            consensusConnections = ConsensusActor.Connections(
+            consensusConnections = FastConsensusActor.Connections(
               blockWeaver = blockWeaver,
               cardanoLiaison = cardanoLiaison,
               eventSequencer = eventSequencerStub,
@@ -562,7 +562,7 @@ case class Suite(
             )
 
             consensusActor <- system.actorOf(
-              ConsensusActor(nodeConfig, consensusConnections, tracerLocal)
+              FastConsensusActor(nodeConfig, consensusConnections, tracerLocal)
             )
 
             _ <- consensusActorD.complete(consensusActor)

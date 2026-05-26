@@ -105,7 +105,7 @@ trait MultisigRegimeManager(
                 )
 
             consensusActor <- context.actorOf(
-              ConsensusActor(config, pendingConnections, tracerLocal)
+              FastConsensusActor(config, pendingConnections, tracerLocal)
             )
 
             eventSequencer <- context.actorOf(EventSequencer(config, pendingConnections))
@@ -190,7 +190,7 @@ object MultisigRegimeManager {
           */
         blockWeaverLimiter: BlockWeaver.Handle,
         cardanoLiaison: CardanoLiaison.Handle,
-        consensusActor: ConsensusActor.Handle,
+        consensusActor: FastConsensusActor.Handle,
         eventSequencer: EventSequencer.Handle,
         jointLedger: JointLedger.Handle,
         stackComposer: StackComposer.Handle,

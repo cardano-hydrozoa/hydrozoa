@@ -17,12 +17,12 @@ import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber}
   * acks to decide the next block's type.
   */
 final case class SoftAck(
-    ackId: AckId,
+    ackId: SoftAckId,
     blockNum: BlockNumber,
     headerSignature: BlockHeader.HeaderSignature,
     finalizationRequested: Boolean
 ) {
-    final transparent inline def ackNum: AckNumber = ackId.ackNum
+    final transparent inline def ackNum: SoftAckNumber = ackId.ackNum
     final transparent inline def peerNum: HeadPeerNumber = ackId.peerNum
 
     val toContext: Seq[(String, String)] =
@@ -40,7 +40,7 @@ object SoftAck {
         header: BlockHeader.HeaderSignature,
         finalizationRequested: Boolean
     ): SoftAck = SoftAck(
-      ackId = AckId(peerNum, AckNumber(blockNum: Int)),
+      ackId = SoftAckId(peerNum, SoftAckNumber(blockNum: Int)),
       blockNum = blockNum,
       headerSignature = header,
       finalizationRequested = finalizationRequested

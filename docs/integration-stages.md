@@ -17,7 +17,7 @@ The two stages exist because they exercise **different slices** of the protocol 
 |-------------------------|----------------------------------------------------------|---------------------------------------------------------------|
 | Peers                   | Single (`Alice`)                                         | Multi-peer (default 2; runners up to 20)                      |
 | Driver                  | Command-driven (explicit `StartBlock` / `CompleteBlock`) | Timer-driven (`BlockWeaver` fires blocks autonomously)        |
-| Fast cycle              | Real `JointLedger` + `ConsensusActor` via `AgentActor`   | Real `JointLedger` + `ConsensusActor` + `BlockWeaver` per peer |
+| Fast cycle              | Real `JointLedger` + `FastConsensusActor` via `AgentActor`   | Real `JointLedger` + `FastConsensusActor` + `BlockWeaver` per peer |
 | Slow cycle              | **Stubbed** (`StackComposerStub`, no `SlowConsensusActor`) | Real `StackComposer` + `SlowConsensusActor` per peer          |
 | L1 backend              | Mock / Yaci DevKit / Blockfrost (public Preview)         | Mock                                                          |
 | Clock                   | Virtual (`TestControl`) for Mock; real for Yaci/Blockfrost | Virtual (`TestControl`) in Direct transport; real in WebSocket |
@@ -48,7 +48,7 @@ Because real L1 backends are slow and the test exists primarily to catch L1-side
 Stage 1 runs **three real actors** for the single peer `Alice` and stubs everything else:
 
 - **`JointLedger`** — real, produces `BlockBrief.Intermediate` synchronously when a block is completed.
-- **`ConsensusActor`** — real, collects soft-acks (single-peer ⇒ self-saturates immediately).
+- **`FastConsensusActor`** — real, collects soft-acks (single-peer ⇒ self-saturates immediately).
 - **`CardanoLiaison`** — real, polls the L1 backend on each tick and submits any due L1 effects (init / fallback) discovered by the protocol.
 
 These three are wrapped by an **`AgentActor`** (`Sut.scala:80`) which handles the synchronous `StartBlock` / `CompleteBlock` commands. The agent is what makes stage 1 command-driven: commands send messages to the agent, which orchestrates the three real actors in the right order.
@@ -145,7 +145,7 @@ Per peer, stage 4 starts **seven real actors** wired together by `MultisigRegime
 
 - `BlockWeaver` — leader role + autonomous block firing via dead-man wakeups and deposit-decision wakeups.
 - `JointLedger` — block construction, leader/follower symmetric.
-- `ConsensusActor` — soft-ack collector (fast cycle).
+- `FastConsensusActor` — soft-ack collector (fast cycle).
 - `StackComposer` — pairs `BlockResult`s with soft-confirmations into closed stacks.
 - `SlowConsensusActor` — hard-ack collector (slow cycle).
 - `EventSequencer` — request ingress.

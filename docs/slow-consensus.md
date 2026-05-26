@@ -58,7 +58,7 @@ ConsensusActor ── Block.SoftConfirmed.N  ─▶  StackComposer
 A stack's life:
 
 1. **Inputs accumulate.** Each peer's `JointLedger` emits `BlockResult.N` on local block
-   completion; `ConsensusActor` emits `Block.SoftConfirmed.N` when all peers acked. The
+   completion; `FastConsensusActor` emits `Block.SoftConfirmed.N` when all peers acked. The
    slow leader's `StackComposer` pairs them by `blockNum`.
 2. **Leader closes.** When (a) the previous stack is hard-confirmed and (b) the ready
    queue has a non-empty longest-contiguous-from-`lastClosedBlockNum+1` prefix, the

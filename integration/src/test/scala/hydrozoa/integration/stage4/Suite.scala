@@ -25,7 +25,7 @@ import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState, yaciTes
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
 import hydrozoa.multisig.consensus.transport.{PeerWsTransport, RemotePeerProxy}
 import hydrozoa.multisig.consensus.limiter.Limiter
-import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, ConsensusActor, EventSequencer, PeerLiaison, SlowConsensusActor, StackComposer}
+import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, FastConsensusActor, EventSequencer, PeerLiaison, SlowConsensusActor, StackComposer}
 import org.http4s.Uri
 import com.comcast.ip4s.{Host, Port, host}
 import hydrozoa.multisig.ledger.block.BlockBrief
@@ -191,7 +191,7 @@ case class Stage4Suite(
                               )
                             )
                             consensusActor <- system.actorOf(
-                              ConsensusActor(nodeConfig, pending, tracerLocal)
+                              FastConsensusActor(nodeConfig, pending, tracerLocal)
                             )
                             stackComposer <- system.actorOf(
                               StackComposer(nodeConfig, pending, tracerLocal)

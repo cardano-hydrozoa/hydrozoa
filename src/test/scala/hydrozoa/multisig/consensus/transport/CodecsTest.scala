@@ -4,7 +4,7 @@ import cats.data.NonEmptyList
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.consensus.PeerLiaison
 import hydrozoa.multisig.consensus.PeerLiaison.Request.{GetMsgBatch, NewMsgBatch}
-import hydrozoa.multisig.consensus.ack.{AckId, HardAck, HardAckId, HardAckNumber, SoftAck}
+import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, SoftAck, SoftAckId}
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
 import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
@@ -47,7 +47,7 @@ class CodecsTest extends AnyFunSuite {
     test("Frame.Msg(GetMsgBatch with non-zero fields) round-trips") {
         val gmb = GetMsgBatch(
           batchNum = PeerLiaison.Batch.Number(42),
-          ackNum = hydrozoa.multisig.consensus.ack.AckNumber(13),
+          ackNum = hydrozoa.multisig.consensus.ack.SoftAckNumber(13),
           blockNum = BlockNumber(99),
           stackBriefNum = StackNumber(4),
           hardAckNum = HardAckNumber(8),
@@ -90,7 +90,7 @@ class CodecsTest extends AnyFunSuite {
 
     test("Frame.Msg(NewMsgBatch with SoftAck) round-trips") {
         val ack = SoftAck(
-          ackId = AckId(HeadPeerNumber(2), hydrozoa.multisig.consensus.ack.AckNumber(5)),
+          ackId = SoftAckId(HeadPeerNumber(2), hydrozoa.multisig.consensus.ack.SoftAckNumber(5)),
           blockNum = BlockNumber(11),
           headerSignature = BlockHeader.Minor.HeaderSignature(
             IArray[Byte](1.toByte, 2.toByte, 3.toByte, 4.toByte, 5.toByte)

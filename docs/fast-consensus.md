@@ -13,7 +13,7 @@ Soft-confirmation requires soft-acks from **every** head peer, including the lea
 ## Terminology
 
 - **ack** (soft) — one peer's Ed25519 signature over `BlockHeader.Section.signingBytes`.
-  Per-peer event, transported by `PeerLiaison`, collected by `ConsensusActor`.
+  Per-peer event, transported by `PeerLiaison`, collected by `FastConsensusActor`.
 - **confirmation** (soft) — the saturated set of acks, emitted as `Block.SoftConfirmed`.
   Aggregated event, consumed by `BlockWeaver` and by the slow side's `StackComposer`.
 
@@ -77,9 +77,9 @@ Block producer (leader role) and L2 executor (every peer). On local block comple
 (`completeBlockRegular` / `completeBlockFinal`) it:
 
 1. Broadcasts `BlockBrief.Next` directly to `PeerLiaisons` (leader only) — briefs are not
-   routed through `ConsensusActor`.
-2. Signs the brief and sends its own `SoftAck` to the local `ConsensusActor`.
-3. Forwards `BlockBrief.Next` to the local `ConsensusActor` (so verification has the
+   routed through `FastConsensusActor`.
+2. Signs the brief and sends its own `SoftAck` to the local `FastConsensusActor`.
+3. Forwards `BlockBrief.Next` to the local `FastConsensusActor` (so verification has the
    header bytes).
 4. Emits `BlockResult` to `StackComposer` (slow side; independent of the soft-ack round).
 
@@ -87,7 +87,7 @@ Block producer (leader role) and L2 executor (every peer). On local block comple
 obligations + post-dated refund txs. The fast cycle proceeds in parallel; the slow side
 only needs the soft-confirmation later.
 
-### `ConsensusActor` (`multisig/consensus/ConsensusActor.scala`)
+### `FastConsensusActor` (`multisig/consensus/ConsensusActor.scala`)
 
 Soft-ack aggregator. Inputs:
 - own `SoftAck` from `JointLedger` (leader's path), or own `SoftAck` from local signing
@@ -148,12 +148,12 @@ advance per-lane invariants.
    transactions, builds `BlockBrief.Next` with header + diff + obligations, then:
    - broadcasts `BlockBrief.Next` to all `PeerLiaisons` (their outboxes' block lane);
    - signs the header (`HeadPeerWallet.mkSoftAck`) and hands the own `SoftAck` to local
-     `ConsensusActor`;
+     `FastConsensusActor`;
    - emits `BlockResult.N` to local `StackComposer`.
 3. **Followers receive the brief** from their peer-link inbox, reproduce the same brief
-   locally, sign it, and route their own `SoftAck` through their local `ConsensusActor`
+   locally, sign it, and route their own `SoftAck` through their local `FastConsensusActor`
    (which also broadcasts it out to other `PeerLiaisons`).
-4. **`ConsensusActor` aggregates** soft-acks per `blockNum`. When all peers' acks are in
+4. **`FastConsensusActor` aggregates** soft-acks per `blockNum`. When all peers' acks are in
    (including local), emits `Block.SoftConfirmed.N` to `BlockWeaver` and `StackComposer`.
 5. **Slow-side pairing.** `StackComposer` waits on `(BlockResult.N, Block.SoftConfirmed.N)`
    to coincide; the block becomes a candidate for stack closure (see slow-consensus doc).
@@ -189,7 +189,7 @@ fallback tx multisig); the fast cycle has nothing to do for it.
 The fast cycle is the *gate* for the slow cycle:
 
 - `BlockResult.N` (data) is emitted by `JointLedger` independent of soft-ack.
-- `Block.SoftConfirmed.N` (proof) is emitted by `ConsensusActor` once all peers acked.
+- `Block.SoftConfirmed.N` (proof) is emitted by `FastConsensusActor` once all peers acked.
 - `StackComposer` pairs `(BlockResult.N, Block.SoftConfirmed.N)` and only then treats `N`
   as stackable; the slow leader closes a stack containing the longest contiguous
   soft-confirmed prefix since the previous stack.

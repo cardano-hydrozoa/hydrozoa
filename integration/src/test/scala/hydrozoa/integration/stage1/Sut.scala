@@ -17,7 +17,7 @@ import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger
 import hydrozoa.multisig.consensus.CardanoLiaison.Timeout
 import hydrozoa.multisig.consensus.ack.SoftAck
 import hydrozoa.multisig.consensus.pollresults.PollResults
-import hydrozoa.multisig.consensus.{CardanoLiaison, ConsensusActor, UserRequestWithId}
+import hydrozoa.multisig.consensus.{CardanoLiaison, FastConsensusActor, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.joint
 import hydrozoa.multisig.ledger.joint.JointLedger
@@ -75,14 +75,14 @@ object AgentActor:
         type Sync = SyncRequest.Envelope[IO, CompleteBlock, BlockBrief.Next]
 
     type Request =
-        UserRequestWithId | StartBlock | CompleteBlock.Sync | ConsensusActor.Request |
+        UserRequestWithId | StartBlock | CompleteBlock.Sync | FastConsensusActor.Request |
             CardanoLiaison.Timeout.type | Unit | joint.JointLedger.Requests.GetState.Sync
 
     type Handle = ActorRef[IO, Request]
 
 case class AgentActor(
     jointLedgerD: Deferred[IO, JointLedger.Handle],
-    consensusActorD: Deferred[IO, ConsensusActor.Handle],
+    consensusActorD: Deferred[IO, FastConsensusActor.Handle],
     cardanoLiaison: CardanoLiaison.Handle
 ) extends Actor[IO, AgentActor.Request]:
 
@@ -90,9 +90,9 @@ case class AgentActor(
 
     private def jointLedger: IO[JointLedger.Handle] = jointLedgerRef.get.map(_.get)
 
-    private val consensusActorRef = Ref.unsafe[IO, Option[ConsensusActor.Handle]](None)
+    private val consensusActorRef = Ref.unsafe[IO, Option[FastConsensusActor.Handle]](None)
 
-    private val consensusActor: IO[ConsensusActor.Handle] = consensusActorRef.get.map(_.get)
+    private val consensusActor: IO[FastConsensusActor.Handle] = consensusActorRef.get.map(_.get)
 
     override def preStart: IO[Unit] = for {
         // Message to itself to get the jointLedger actor

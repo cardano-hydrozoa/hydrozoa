@@ -30,7 +30,7 @@ object RateLimits {
 
         /** Minimum wall-clock gap between consecutive
           * [[hydrozoa.multisig.ledger.block.Block.SoftConfirmed]] forwards from
-          * [[hydrozoa.multisig.consensus.ConsensusActor]] to
+          * [[hydrozoa.multisig.consensus.FastConsensusActor]] to
           * [[hydrozoa.multisig.consensus.BlockWeaver]].
           */
         def softBlockMinPeriod: FiniteDuration = rateLimits.softBlockMinPeriod

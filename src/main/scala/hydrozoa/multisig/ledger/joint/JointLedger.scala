@@ -16,7 +16,7 @@ import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger.NotTriggered
 import hydrozoa.multisig.consensus.pollresults.PollResults
-import hydrozoa.multisig.consensus.{ConsensusActor, PeerLiaison, StackComposer, UserRequestWithId, pollresults}
+import hydrozoa.multisig.consensus.{FastConsensusActor, PeerLiaison, StackComposer, UserRequestWithId, pollresults}
 import hydrozoa.multisig.ledger.block.*
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
@@ -737,7 +737,7 @@ object JointLedger {
     type Config = HeadConfig.Section & OwnHeadPeerPrivate.Section
 
     final case class Connections(
-        consensusActor: ConsensusActor.Handle,
+        consensusActor: FastConsensusActor.Handle,
         stackComposer: StackComposer.Handle,
         peerLiaisons: List[PeerLiaison.Handle]
     )

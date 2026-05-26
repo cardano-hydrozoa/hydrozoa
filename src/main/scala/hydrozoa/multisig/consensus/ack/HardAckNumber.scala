@@ -5,7 +5,7 @@ import io.circe.*
 /** Monotonic per-peer cursor for hard-ack delivery in the slow-consensus stream.
   *
   * Increments once per `(stackNum, round)` pair the peer emits — round 1 / round 2 / sole-round.
-  * Independent of [[AckNumber]] (which paces fast-cycle soft-acks).
+  * Independent of [[SoftAckNumber]] (which paces fast-cycle soft-acks).
   *
   * Wire ordering invariant: for any given `stackNum`, the same peer's round-1 hard-ack is sent with
   * a strictly smaller `HardAckNumber` than its round-2 hard-ack.

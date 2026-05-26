@@ -5,7 +5,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.multisig.consensus.PeerLiaison.Request.{GetMsgBatch, NewMsgBatch}
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
-import hydrozoa.multisig.consensus.ack.{AckId, AckNumber, HardAck, HardAckId, HardAckNumber, SoftAck}
+import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, SoftAck, SoftAckId, SoftAckNumber}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{PeerLiaison, UserRequest, UserRequestBody, UserRequestHeader, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeader, BlockNumber}
@@ -32,10 +32,10 @@ object Codecs {
 
     // ---- Opaque-type primitives ----
 
-    given Codec[AckNumber] =
+    given Codec[SoftAckNumber] =
         io.circe.Codec.from(
-          Decoder.decodeInt.map(AckNumber.apply),
-          Encoder.encodeInt.contramap((a: AckNumber) => a.convert)
+          Decoder.decodeInt.map(SoftAckNumber.apply),
+          Encoder.encodeInt.contramap((a: SoftAckNumber) => a.convert)
         )
 
     given Codec[PeerLiaison.Batch.Number] =
@@ -44,15 +44,15 @@ object Codecs {
           Encoder.encodeInt.contramap((n: PeerLiaison.Batch.Number) => n: Int)
         )
 
-    given Codec[AckId] =
+    given Codec[SoftAckId] =
         io.circe.Codec.from(
           Decoder.instance(c =>
               for {
                   pn <- c.downField("peerNum").as[HeadPeerNumber]
-                  an <- c.downField("ackNum").as[AckNumber]
-              } yield AckId(pn, an)
+                  an <- c.downField("ackNum").as[SoftAckNumber]
+              } yield SoftAckId(pn, an)
           ),
-          Encoder.instance((id: AckId) =>
+          Encoder.instance((id: SoftAckId) =>
               Json.obj("peerNum" -> id.peerNum.asJson, "ackNum" -> id.ackNum.asJson)
           )
         )

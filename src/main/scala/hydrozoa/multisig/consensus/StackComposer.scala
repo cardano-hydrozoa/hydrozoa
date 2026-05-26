@@ -530,7 +530,7 @@ final case class StackComposer(
                   Some(
                     Connections(
                       jointLedger = c.jointLedger,
-                      consensusActor = c.consensusActor,
+                      fastConsensusActor = c.consensusActor,
                       slowConsensusActor = c.slowConsensusActor,
                       peerLiaisons = c.peerLiaisons
                     )
@@ -548,7 +548,7 @@ object StackComposer {
 
     final case class Connections(
         jointLedger: JointLedger.Handle,
-        consensusActor: ConsensusActor.Handle,
+        fastConsensusActor: FastConsensusActor.Handle,
         slowConsensusActor: SlowConsensusActor.Handle,
         peerLiaisons: List[PeerLiaison.Handle]
     )
