@@ -17,7 +17,7 @@ import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
 import hydrozoa.multisig.ledger.stack.*
 
-/** Slow-consensus stack composer (M5).
+/** Slow-consensus stack composer.
   *
   * Pairs [[BlockResult]] (from JointLedger) with [[Block.SoftConfirmed]] (from ConsensusActor) by
   * `blockNum`. Once a block's pair is in the `ready` map, it becomes eligible for inclusion in the
@@ -190,9 +190,8 @@ final case class StackComposer(
                     unsigned <- mkUnsigned(brief, prefix)
                     handoff <- buildHandoff(unsigned)
                     conn <- getConnections
-                    // Broadcast brief directly to PeerLiaisons (per plan: briefs go DIRECT,
-                    // not via SlowConsensusActor). Each peer's outbox now has a stackBrief
-                    // lane (M7).
+                    // Broadcast brief directly to PeerLiaisons (briefs go DIRECT, not via
+                    // SlowConsensusActor). Each peer's outbox has a stackBrief lane.
                     _ <- (conn.peerLiaisons ! brief).parallel
                     // Hand the unsigned stack + own pre-signed hard-acks to SlowConsensusActor
                     // (which manages broadcast scheduling: round-1 / sole immediately, round-2
@@ -231,7 +230,7 @@ final case class StackComposer(
 
                 if !structurallyConsistent then
                     // (1) genuine divergence — leader's composition is inconsistent with our
-                    // single-flight position. TODO(M5/M6): fall back to the rule-based regime.
+                    // single-flight position. TODO: fall back to the rule-based regime.
                     Tracer.warn(
                       s"Follower stack $nextStackNum structural divergence: leader brief " +
                           s"[${brief.firstBlockNum}..${brief.lastBlockNum}] but expected to " +
@@ -281,9 +280,9 @@ final case class StackComposer(
       * and the per-block effect derivation, threading the slow-side L1 ledger state through
       * (treasury rotates on settlement / finalization).
       *
-      * Current scope (M1 first slice): minor-only stacks fully derive — refund txs from each
-      * Minor's `postDatedRefundTxs`. Stacks containing Major or Final blocks build the same
-      * structure but with empty settlement / fallback / rollout / finalization (TODOs in
+      * Current scope: minor-only stacks fully derive — refund txs from each Minor's
+      * `postDatedRefundTxs`. Stacks containing Major or Final blocks build the same structure but
+      * with empty settlement / fallback / rollout / finalization (TODOs in
       * [[StackEffectsBuilder]]).
       */
     private def mkUnsigned(

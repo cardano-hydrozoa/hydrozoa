@@ -99,8 +99,8 @@ object Codecs {
     // ---- StackNumber / HardAckNumber / HardAckId / HardAck ----
     //
     // StackBrief has its own derived Codec; here we add the opaque-type primitives and the
-    // real discriminated HardAck wire codec (M6 — slow-side ack collection is live, so
-    // hard-acks now traverse the wire between peers).
+    // real discriminated HardAck wire codec — slow-side ack collection is live, so hard-acks
+    // traverse the wire between peers.
 
     given Codec[StackNumber] =
         io.circe.Codec.from(
@@ -353,7 +353,7 @@ object Codecs {
         io.circe.Codec.from(dec, enc)
     }
 
-    /** Real `Codec[HardAck]` (M6). Discriminated by a `kind` tag. All variants — Regular / Sole /
+    /** Real `Codec[HardAck]`. Discriminated by a `kind` tag. All variants — Regular / Sole /
       * Round1Initial / Round2Initial — round-trip fully.
       */
     private given Codec[HardAck.Payload] = {

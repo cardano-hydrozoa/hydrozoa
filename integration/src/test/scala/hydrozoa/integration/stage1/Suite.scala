@@ -376,8 +376,9 @@ case class Suite(
               multiNodeConfig = config,
               takeoffTime = takeoffTime,
               nextRequestNumber = RequestNumber(0),
-              currentTime =
-                  BeforeHappyPathExpiration(config.headConfig.initialBlock.blockBrief.endTime.convert),
+              currentTime = BeforeHappyPathExpiration(
+                config.headConfig.initialBlock.blockBrief.endTime.convert
+              ),
               blockCycle = BlockCycle.Done(BlockNumber.zero, BlockVersion.Full.zero),
               competingFallbackStartTime = config.headConfig.txTiming
                   .newFallbackStartTime(config.headConfig.initialBlock.blockBrief.endTime),
@@ -525,7 +526,7 @@ case class Suite(
 
             agent <- system.actorOf(AgentActor(jointLedgerD, consensusActorD, cardanoLiaison))
 
-            // StackComposer stub — stage1 does not exercise slow consensus (that is M11).
+            // StackComposer stub — stage1 does not exercise slow consensus.
             stackComposerStub <- system.actorOf(new Actor[IO, StackComposer.Request] {
                 override def receive: Receive[IO, StackComposer.Request] = _ => IO.pure(())
             })
@@ -560,7 +561,9 @@ case class Suite(
               tracer = tracer
             )
 
-            consensusActor <- system.actorOf(ConsensusActor(nodeConfig, consensusConnections, tracerLocal))
+            consensusActor <- system.actorOf(
+              ConsensusActor(nodeConfig, consensusConnections, tracerLocal)
+            )
 
             _ <- consensusActorD.complete(consensusActor)
 

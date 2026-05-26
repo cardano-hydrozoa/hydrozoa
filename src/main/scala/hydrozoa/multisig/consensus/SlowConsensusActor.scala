@@ -21,7 +21,7 @@ import scalus.cardano.ledger.{Transaction, TransactionHash, VKeyWitness}
 import scalus.crypto.ed25519.VerificationKey
 import scalus.uplc.builtin.{ByteString, platform}
 
-/** Slow-consensus actor (M6).
+/** Slow-consensus actor.
   *
   * Aggregates per-effect hard-acks from all head peers for each closed stack, verifies every
   * signature against the locally-derived, **partition-indexed** effect bodies
