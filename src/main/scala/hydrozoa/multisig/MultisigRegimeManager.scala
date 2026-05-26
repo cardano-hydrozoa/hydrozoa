@@ -91,7 +91,7 @@ trait MultisigRegimeManager(
 
             blockWeaver <- context.actorOf(BlockWeaver(config, pendingConnections, tracerLocal))
 
-            // Throttles the ConsensusActor → BlockWeaver soft-block-confirmation lane (see
+            // Throttles the FastConsensusActor → BlockWeaver soft-block-confirmation lane (see
             // hydrozoa.multisig.consensus.limiter.Limiter). Only the consensus actor's reference
             // to BlockWeaver is routed through this limiter; other senders (JointLedger,
             // PeerLiaison, …) keep direct refs.
@@ -185,7 +185,7 @@ trait MultisigRegimeManager(
 object MultisigRegimeManager {
     final case class Connections(
         blockWeaver: BlockWeaver.Handle,
-        /** Throttled-write handle for the ConsensusActor → BlockWeaver lane. Other senders use
+        /** Throttled-write handle for the FastConsensusActor → BlockWeaver lane. Other senders use
           * `blockWeaver` directly.
           */
         blockWeaverLimiter: BlockWeaver.Handle,

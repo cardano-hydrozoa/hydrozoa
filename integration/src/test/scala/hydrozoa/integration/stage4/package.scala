@@ -15,15 +15,15 @@ package hydrozoa.integration
   * ==SUT architecture==
   *
   *   - For each peer: `BlockWeaver`, `CardanoLiaison`, `EventSequencer`, `JointLedger`,
-  *     `ConsensusActor`, plus one `PeerLiaison` per (local, remote) pair, all wired in-process.
+  *     `FastConsensusActor`, plus one `PeerLiaison` per (local, remote) pair, all wired in-process.
   *     There is no real network transport.
   *   - One shared [[hydrozoa.multisig.backend.cardano.CardanoBackendMock]] for all peers (shared L1
   *     state).
   *   - Factory pattern: build all actors against a `Deferred[IO,
   *     MultisigRegimeManager.Connections]`, then complete each peer's deferred after all actors
   *     exist so the cross-peer `PeerLiaison` graph can be wired.
-  *   - A [[Sut.BlockBriefObserver]] proxy actor wraps each peer's `ConsensusActor` to capture both
-  *     leader-produced and follower-reproduced block briefs into per-peer
+  *   - A [[Sut.BlockBriefObserver]] proxy actor wraps each peer's `FastConsensusActor` to capture
+  *     both leader-produced and follower-reproduced block briefs into per-peer
   *     `Ref[IO, Vector[BlockBrief.Intermediate]]`.
   *   - One side fiber per peer in `Stage4Sut.liaisonTickFibers` periodically delivers
   *     `CardanoLiaison.Timeout` to drive polling — see "Polling cadence" below.
@@ -52,85 +52,81 @@ package hydrozoa.integration
   *
   * ==TestControl: preferred for Direct, but not required==
   *
-  * Stage 4 supports both `useTestControl = true` and `useTestControl = false`. TestControl is
-  * the recommended default for `Direct` [[Sut.TransportMode]] runs and is set as the default
-  * on `Stage4Suite`; non-TestControl is a fully-wired alternative and the only option once
-  * `WebSocket` lands (real sockets do not speak virtual time). Two reasons to prefer
-  * TestControl when you can:
+  * Stage 4 supports both `useTestControl = true` and `useTestControl = false`. TestControl is the
+  * recommended default for `Direct` [[Sut.TransportMode]] runs and is set as the default on
+  * `Stage4Suite`; non-TestControl is a fully-wired alternative and the only option once `WebSocket`
+  * lands (real sockets do not speak virtual time). Two reasons to prefer TestControl when you can:
   *
-  * '''Speed.''' TestControl jumps the virtual clock past `IO.sleep` rather than waiting,
-  * which is exactly why stage 1 can simulate years of head lifetime in a fraction of an hour.
-  * Stage 4 is far less dramatic: the 20-peer scenario only covers ~40 minutes of simulated
-  * time in ~20 minutes of wall time — roughly a 2× speedup, because the actor stack for 20
-  * peers is heavy enough that wall time spent in CPU starts catching up to wall time spent
-  * in `IO.sleep`. After stage 1's spectacular speedups the disappointing 2× ratio tempts you
-  * to conclude "barely paying for itself, just turn it off" — especially when chasing some
-  * unrelated TestControl-side bug. The 2× still matters, but it is a convenience, not a
-  * correctness argument.
+  * '''Speed.''' TestControl jumps the virtual clock past `IO.sleep` rather than waiting, which is
+  * exactly why stage 1 can simulate years of head lifetime in a fraction of an hour. Stage 4 is far
+  * less dramatic: the 20-peer scenario only covers ~40 minutes of simulated time in ~20 minutes of
+  * wall time — roughly a 2× speedup, because the actor stack for 20 peers is heavy enough that wall
+  * time spent in CPU starts catching up to wall time spent in `IO.sleep`. After stage 1's
+  * spectacular speedups the disappointing 2× ratio tempts you to conclude "barely paying for
+  * itself, just turn it off" — especially when chasing some unrelated TestControl-side bug. The 2×
+  * still matters, but it is a convenience, not a correctness argument.
   *
-  * '''Soundness under load.''' The design requires the model clock and SUT clock to coincide
-  * at every command boundary: the model advances by `cmd.interArrivalDelay` in `runState`,
-  * the framework does `IO.sleep(cmd.interArrivalDelay)` before submission, and validity
-  * windows are computed from the model clock. Under TestControl the SUT clock '''only'''
-  * advances during `IO.sleep` (and other timer-aware effects) — not during command
-  * processing — so the two stay equal by construction.
+  * '''Soundness under load.''' The design requires the model clock and SUT clock to coincide at
+  * every command boundary: the model advances by `cmd.interArrivalDelay` in `runState`, the
+  * framework does `IO.sleep(cmd.interArrivalDelay)` before submission, and validity windows are
+  * computed from the model clock. Under TestControl the SUT clock '''only''' advances during
+  * `IO.sleep` (and other timer-aware effects) — not during command processing — so the two stay
+  * equal by construction.
   *
-  * Without TestControl the model clock and the harness submission wall-clock still stay in
-  * lockstep at every command boundary — the harness sleeps `interArrivalDelay` real
-  * milliseconds and the model advances by the same `interArrivalDelay` in `runState`, so
-  * the value the model assigns to a request's submission time matches the wall time when
-  * `EventSequencer` accepts the `?:`. The subtler concern is one level deeper: the `?:`
-  * returns as soon as the EventSequencer enqueues the request, '''not''' when the leader
-  * actually folds it into a block. Block production, cross-peer consensus, peer round-trips,
-  * and L1 polling all happen asynchronously on real wall-clock time when TestControl is off.
-  * The leader evaluates the event at its block's `blockCreationStartTime`, and the validity
-  * check compares that timestamp against the window the model assigned at submission —
-  * `[submission - 5s, submission + 2min]`.
+  * Without TestControl the model clock and the harness submission wall-clock still stay in lockstep
+  * at every command boundary — the harness sleeps `interArrivalDelay` real milliseconds and the
+  * model advances by the same `interArrivalDelay` in `runState`, so the value the model assigns to
+  * a request's submission time matches the wall time when `EventSequencer` accepts the `?:`. The
+  * subtler concern is one level deeper: the `?:` returns as soon as the EventSequencer enqueues the
+  * request, '''not''' when the leader actually folds it into a block. Block production, cross-peer
+  * consensus, peer round-trips, and L1 polling all happen asynchronously on real wall-clock time
+  * when TestControl is off. The leader evaluates the event at its block's `blockCreationStartTime`,
+  * and the validity check compares that timestamp against the window the model assigned at
+  * submission — `[submission - 5s, submission + 2min]`.
   *
   * As long as the leader can drain its mailbox fast enough that the wall-clock gap between
-  * submission and block evaluation stays under the 2-minute upper margin, the test works
-  * fine. The failure mode is saturation: if commands arrive faster than the leader (hosting
-  * 20 peers' worth of actor traffic in one JVM) can produce blocks, the mailbox grows, and
-  * the gap between submission and evaluation grows without bound. Once it exceeds 2 minutes,
-  * the leader rejects every subsequent event with `BlockOutOfRequestValidityInterval` — the
-  * same failure shape as stage 1's pre-fix design, but the mechanism is queue saturation
-  * rather than constant per-command drift.
+  * submission and block evaluation stays under the 2-minute upper margin, the test works fine. The
+  * failure mode is saturation: if commands arrive faster than the leader (hosting 20 peers' worth
+  * of actor traffic in one JVM) can produce blocks, the mailbox grows, and the gap between
+  * submission and evaluation grows without bound. Once it exceeds 2 minutes, the leader rejects
+  * every subsequent event with `BlockOutOfRequestValidityInterval` — the same failure shape as
+  * stage 1's pre-fix design, but the mechanism is queue saturation rather than constant per-command
+  * drift.
   *
   * Comparison with the stage-1 case:
   *   - '''Stage 1''' had a real Yaci DevKit clock and a model with no virtual clock; the
   *     unaccounted real time was the '''test-harness setup''' (Yaci spin-up, init tx, etc.)
-  *     elapsing before the model thought the head had started. One-shot drift at the
-  *     boundary of the test. Fix: anchor `takeoffTime = now + 60s` in `genInitialState` and
-  *     have `startupSut` sleep until that anchor, so all setup fits inside a pre-takeoff
-  *     window the model never observes.
-  *   - '''Stage 4 without TestControl''' has unaccounted real time accumulate '''only when
-  *     the SUT cannot keep up with the request rate'''. No constant per-command drift;
-  *     saturation triggers it. Mitigation when running TestControl-off: keep
-  *     `meanInterArrivalTime` comfortably above the leader's per-block service time, and
-  *     watch for `BlockOutOfRequestValidityInterval` rejections as the saturation signal.
-  *     Future work (relaxed validity windows / padded inter-arrival floors) would buy more
-  *     headroom for `WebSocket` mode.
+  *     elapsing before the model thought the head had started. One-shot drift at the boundary of
+  *     the test. Fix: anchor `takeoffTime = now + 60s` in `genInitialState` and have `startupSut`
+  *     sleep until that anchor, so all setup fits inside a pre-takeoff window the model never
+  *     observes.
+  *   - '''Stage 4 without TestControl''' has unaccounted real time accumulate '''only when the SUT
+  *     cannot keep up with the request rate'''. No constant per-command drift; saturation triggers
+  *     it. Mitigation when running TestControl-off: keep `meanInterArrivalTime` comfortably above
+  *     the leader's per-block service time, and watch for `BlockOutOfRequestValidityInterval`
+  *     rejections as the saturation signal. Future work (relaxed validity windows / padded
+  *     inter-arrival floors) would buy more headroom for `WebSocket` mode.
   *
-  * '''Startup-time handling for both modes.''' `Stage4Suite.startupSut` advances the SUT clock
-  * to the head's start epoch '''before''' creating the actor system, but the way it does so
-  * depends on `useTestControl`:
+  * '''Startup-time handling for both modes.''' `Stage4Suite.startupSut` advances the SUT clock to
+  * the head's start epoch '''before''' creating the actor system, but the way it does so depends on
+  * `useTestControl`:
   *
   *   - '''TestControl on''' (default `Direct` mode): `IO.sleep(state.currentModelTime.toEpochMs)`
-  *     jumps the virtual clock from 0 to the head's start epoch instantly. The start epoch is
-  *     the absolute Unix-epoch milliseconds (~1.77e12 today, roughly 56 years), drawn from a
+  *     jumps the virtual clock from 0 to the head's start epoch instantly. The start epoch is the
+  *     absolute Unix-epoch milliseconds (~1.77e12 today, roughly 56 years), drawn from a
   *     deterministic 100-day-window distribution starting Jan 1 2026.
   *   - '''TestControl off''' (e.g. `WebSocket`): `genInitialState` computes
-  *     `takeoffTime = Instant.now() + 60s` and pins the head's initial `BlockCreationEndTime`
-  *     to it; `startupSut` sleeps wall-clock time until `takeoffTime`, or aborts with a
-  *     `RuntimeException` if setup overran the 60s budget. Same shape as stage 1's
-  *     `takeoffTime` anchor; the budget value matches stage 1 today and may need raising for
-  *     the heavier 20-peer JVM warmup.
+  *     `takeoffTime = Instant.now() + 60s` and pins the head's initial `BlockCreationEndTime` to
+  *     it; `startupSut` sleeps wall-clock time until `takeoffTime`, or aborts with a
+  *     `RuntimeException` if setup overran the 60s budget. Same shape as stage 1's `takeoffTime`
+  *     anchor; the budget value matches stage 1 today and may need raising for the heavier 20-peer
+  *     JVM warmup.
   *
   * `Model.ModelState.takeoffTime: Option[java.time.Instant]` carries the wall-clock anchor
   * (`Some(t)` for non-TestControl mode, `None` otherwise). Stage 4 deliberately allows the
-  * `(Direct, useTestControl = false)` combination — unlike stage 1, where `Mock` is hardcoded
-  * to TestControl. The flag is set manually on `Stage4Suite` for now; once the WebSocket
-  * branch lands, it will be derived from `TransportMode`.
+  * `(Direct, useTestControl = false)` combination — unlike stage 1, where `Mock` is hardcoded to
+  * TestControl. The flag is set manually on `Stage4Suite` for now; once the WebSocket branch lands,
+  * it will be derived from `TransportMode`.
   *
   * ==Three-phase test flow==
   *
@@ -165,8 +161,8 @@ package hydrozoa.integration
   *
   * [[Model.ModelState]] carries:
   *   - `currentModelTime` — single global clock,
-  *   - `takeoffTime: Option[java.time.Instant]` — wall-clock anchor for non-TestControl runs
-  *     (see "Why TestControl is mandatory" above); `None` under TestControl,
+  *   - `takeoffTime: Option[java.time.Instant]` — wall-clock anchor for non-TestControl runs (see
+  *     "Why TestControl is mandatory" above); `None` under TestControl,
   *   - per-peer L1 funding UTxOs `peerUtxosL1` and shared L2 UTxOs `utxosL2Active`,
   *   - per-peer `pendingDeposits: List[PendingDeposit]` (deposits not yet absorbed into
   *     `utxosL2Active`); the global `absorbDeposits` helper checks all peers' lists when
@@ -245,12 +241,12 @@ package hydrozoa.integration
   * `generateNodeOperationMultisigConfig` to sample `cardanoLiaisonPollingPeriod` uniformly from
   * `[1ms, maxCardanoLiaisonPollingPeriod / 2]` rather than the full `[1ms, max]` range. Reason:
   * with 20 peers polling on independent cadences, longer polling periods can produce mismatched
-  * block briefs at major-block consensus when peer A has observed a new deposit but peer B has
-  * not; halving the upper bound keeps inter-peer L1-observation skew tighter. The
+  * block briefs at major-block consensus when peer A has observed a new deposit but peer B has not;
+  * halving the upper bound keeps inter-peer L1-observation skew tighter. The
   * `pollingPeriod * 5 <= depositMaturityDuration` invariant still holds with extra headroom
-  * (effectively `pollingPeriod * 10 <= depositMaturityDuration`). Treat as a debugging knob —
-  * if brief mismatches go away with the halving in place, that confirms the polling-skew
-  * hypothesis and the bound can be tuned more deliberately.
+  * (effectively `pollingPeriod * 10 <= depositMaturityDuration`). Treat as a debugging knob — if
+  * brief mismatches go away with the halving in place, that confirms the polling-skew hypothesis
+  * and the bound can be tuned more deliberately.
   *
   * '''Driving polling under TestControl.''' Production `CardanoLiaison` uses `setReceiveTimeout` to
   * schedule periodic `Timeout` self-messages; but cats-actors `setReceiveTimeout` is unusable under

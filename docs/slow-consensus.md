@@ -26,7 +26,7 @@ See `docs/fast-consensus.md` for the fast cycle that gates this one.
   consumed by `CardanoLiaison` (L1 submission) and by `StackComposer`
   (next-stack release).
 
-`ack` ≠ `confirmation`; same distinction as the fast side.
+`softAck` ≠ `confirmation`; same distinction as the fast side.
 
 ## Stack lifecycle
 

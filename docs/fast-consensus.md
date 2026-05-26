@@ -17,7 +17,7 @@ Soft-confirmation requires soft-acks from **every** head peer, including the lea
 - **confirmation** (soft) — the saturated set of acks, emitted as `Block.SoftConfirmed`.
   Aggregated event, consumed by `BlockWeaver` and by the slow side's `StackComposer`.
 
-`ack` ≠ `confirmation` — one is a per-peer signature, the other is the all-peers
+`softAck` ≠ `confirmation` — one is a per-peer signature, the other is the all-peers
 collection. The same distinction appears on the slow side (hard-ack vs hard-confirmation).
 
 ## Block types

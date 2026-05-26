@@ -17,7 +17,7 @@ import org.typelevel.log4cats.slf4j.Slf4jLogger
   *
   * Usage for IO-based code (actors, effects):
   * {{{
-  *   val logger = Logging.loggerIO("ConsensusActor")
+  *   val logger = Logging.loggerIO("FastConsensusActor")
   *   logger.info("actor started")   // IO[Unit]
   * }}}
   */

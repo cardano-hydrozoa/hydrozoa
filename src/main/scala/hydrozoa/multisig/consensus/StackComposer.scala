@@ -19,9 +19,9 @@ import hydrozoa.multisig.ledger.stack.*
 
 /** Slow-consensus stack composer.
   *
-  * Pairs [[BlockResult]] (from JointLedger) with [[Block.SoftConfirmed]] (from ConsensusActor) by
-  * `blockNum`. Once a block's pair is in the `ready` map, it becomes eligible for inclusion in the
-  * next stack subject to the **longest-contiguous-prefix** gate.
+  * Pairs [[BlockResult]] (from JointLedger) with [[Block.SoftConfirmed]] (from FastConsensusActor)
+  * by `blockNum`. Once a block's pair is in the `ready` map, it becomes eligible for inclusion in
+  * the next stack subject to the **longest-contiguous-prefix** gate.
   *
   * This actor combines Leader and Follower behaviour in a single flat receive (state-shared across
   * modes — pairing happens in both; only stack-close trigger differs):

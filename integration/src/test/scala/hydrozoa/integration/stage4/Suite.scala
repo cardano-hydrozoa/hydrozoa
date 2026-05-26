@@ -212,7 +212,7 @@ case class Stage4Suite(
                 }
                 .map(_.toMap)
 
-            // Create brief-collecting observers wrapping each peer's ConsensusActor.
+            // Create brief-collecting observers wrapping each peer's FastConsensusActor.
             // Injected via Connections so JointLedger is unaware; captures both leader-produced
             // and follower-reproduced blocks (both go through JointLedger.handleBlock).
             blockBriefsMap <- peers

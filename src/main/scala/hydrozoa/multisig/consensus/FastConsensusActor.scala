@@ -168,7 +168,7 @@ class FastConsensusActor(
                   Some(
                     FastConsensusActor.Connections(
                       // Soft-block fan-out goes via the rate limiter on the
-                      // ConsensusActor → BlockWeaver lane (see
+                      // FastConsensusActor → BlockWeaver lane (see
                       // hydrozoa.multisig.consensus.limiter.Limiter).
                       blockWeaver = _connections.blockWeaverLimiter,
                       cardanoLiaison = _connections.cardanoLiaison,
@@ -195,7 +195,7 @@ class FastConsensusActor(
     }
 
     private def preStartLocal: IO[Unit] = for {
-        _ <- Tracer.routeLocal(s"ConsensusActor.${config.ownHeadPeerNum}")
+        _ <- Tracer.routeLocal(s"FastConsensusActor.${config.ownHeadPeerNum}")
         _ <- initializeConnections
     } yield ()
 

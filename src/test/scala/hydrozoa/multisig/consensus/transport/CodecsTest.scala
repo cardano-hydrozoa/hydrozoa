@@ -47,9 +47,9 @@ class CodecsTest extends AnyFunSuite {
     test("Frame.Msg(GetMsgBatch with non-zero fields) round-trips") {
         val gmb = GetMsgBatch(
           batchNum = PeerLiaison.Batch.Number(42),
-          ackNum = hydrozoa.multisig.consensus.ack.SoftAckNumber(13),
+          softAckNumber = hydrozoa.multisig.consensus.ack.SoftAckNumber(13),
           blockNum = BlockNumber(99),
-          stackBriefNum = StackNumber(4),
+          stackNum = StackNumber(4),
           hardAckNum = HardAckNumber(8),
           requestNum = RequestNumber(7),
         )
@@ -57,9 +57,9 @@ class CodecsTest extends AnyFunSuite {
         roundTrip(frame) match {
             case Frame.Msg(decoded: GetMsgBatch) =>
                 assert(decoded.batchNum == gmb.batchNum)
-                assert(decoded.ackNum == gmb.ackNum)
+                assert(decoded.softAckNumber == gmb.softAckNumber)
                 assert(decoded.blockNum == gmb.blockNum)
-                assert(decoded.stackBriefNum == gmb.stackBriefNum)
+                assert(decoded.stackNum == gmb.stackNum)
                 assert(decoded.hardAckNum == gmb.hardAckNum)
                 assert(decoded.requestNum == gmb.requestNum)
             case other => fail(s"Expected Msg(GetMsgBatch), got: $other")
@@ -69,7 +69,7 @@ class CodecsTest extends AnyFunSuite {
     test("Frame.Msg(empty NewMsgBatch) round-trips") {
         val nmb = NewMsgBatch(
           batchNum = PeerLiaison.Batch.Number(1),
-          ack = None,
+          softAck = None,
           blockBrief = None,
           stackBrief = None,
           hardAck = None,
@@ -79,7 +79,7 @@ class CodecsTest extends AnyFunSuite {
         roundTrip(frame) match {
             case Frame.Msg(decoded: NewMsgBatch) =>
                 assert(decoded.batchNum == nmb.batchNum)
-                assert(decoded.ack.isEmpty)
+                assert(decoded.softAck.isEmpty)
                 assert(decoded.blockBrief.isEmpty)
                 assert(decoded.stackBrief.isEmpty)
                 assert(decoded.hardAck.isEmpty)
@@ -99,7 +99,7 @@ class CodecsTest extends AnyFunSuite {
         )
         val nmb = NewMsgBatch(
           batchNum = PeerLiaison.Batch.Number(3),
-          ack = Some(ack),
+          softAck = Some(ack),
           blockBrief = None,
           stackBrief = None,
           hardAck = None,
@@ -109,7 +109,7 @@ class CodecsTest extends AnyFunSuite {
         roundTrip(frame) match {
             case Frame.Msg(decoded: NewMsgBatch) =>
                 assert(decoded.batchNum == nmb.batchNum)
-                decoded.ack match {
+                decoded.softAck match {
                     case Some(decodedAck: SoftAck) =>
                         assert(decodedAck.ackId == ack.ackId)
                         assert(decodedAck.blockNum == ack.blockNum)
@@ -145,7 +145,7 @@ class CodecsTest extends AnyFunSuite {
         Frame.Msg(
           NewMsgBatch(
             batchNum = PeerLiaison.Batch.Number(5),
-            ack = None,
+            softAck = None,
             blockBrief = None,
             stackBrief = None,
             hardAck = Some(

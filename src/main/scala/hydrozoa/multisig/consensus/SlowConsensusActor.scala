@@ -34,7 +34,7 @@ import scalus.uplc.builtin.{ByteString, platform}
   * into a [[SlowConsensusActor.StackHandoff]] as two explicit acks (round-1 + round-2) or one sole
   * ack. This actor never splits anything — own acks arrive pre-split; it manages only the outbound
   * *schedule* (round-1 / sole broadcast immediately, round-2 withheld until local round-1
-  * confirmation — mirrors the fast-side ConsensusActor's "scheduled own ack" pattern).
+  * confirmation — mirrors the fast-side FastConsensusActor's "scheduled own ack" pattern).
   *
   * There is no `HardAckRoundPlan` / `StackEffectsSigningInputs` indirection: the partition-indexed
   * [[StackEffects]] IS the canonical structure. The only shared rule is [[PartitionEffects.unlock]]

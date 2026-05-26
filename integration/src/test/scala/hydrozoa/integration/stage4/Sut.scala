@@ -35,10 +35,10 @@ private[stage4] case class PeerStack(
 // Block brief observer
 // ===================================
 
-/** Proxy actor wrapping ConsensusActor. Intercepts intermediate `BlockBrief`s (Minor / Major) to
-  * record the per-peer brief sequence; forwards everything else unchanged. Both leader-produced and
-  * follower-reproduced briefs flow through JointLedger.handleBlock → ConsensusActor, so this
-  * captures the complete ordered sequence seen by the peer.
+/** Proxy actor wrapping FastConsensusActor. Intercepts intermediate `BlockBrief`s (Minor / Major)
+  * to record the per-peer brief sequence; forwards everything else unchanged. Both leader-produced
+  * and follower-reproduced briefs flow through JointLedger.handleBlock → FastConsensusActor, so
+  * this captures the complete ordered sequence seen by the peer.
   */
 private[stage4] class BlockBriefObserver(
     peerNum: HeadPeerNumber,
@@ -54,7 +54,7 @@ private[stage4] class BlockBriefObserver(
                 briefs.update(_ :+ brief) >>
                 (real ! brief) >>
                 logger.debug(
-                  s"forwarded BlockBrief.Minor block=${brief.blockNum} to real ConsensusActor"
+                  s"forwarded BlockBrief.Minor block=${brief.blockNum} to real FastConsensusActor"
                 )
         case brief: BMajor =>
             logger.debug(
@@ -63,13 +63,13 @@ private[stage4] class BlockBriefObserver(
                 briefs.update(_ :+ brief) >>
                 (real ! brief) >>
                 logger.debug(
-                  s"forwarded BlockBrief.Major block=${brief.blockNum} to real ConsensusActor"
+                  s"forwarded BlockBrief.Major block=${brief.blockNum} to real FastConsensusActor"
                 )
         case msg =>
             logger.debug(s"received non-brief msg=${msg.getClass.getSimpleName}, forwarding") >>
                 (real ! msg) >>
                 logger.debug(
-                  s"forwarded non-brief msg=${msg.getClass.getSimpleName} to real ConsensusActor"
+                  s"forwarded non-brief msg=${msg.getClass.getSimpleName} to real FastConsensusActor"
                 )
     }
 

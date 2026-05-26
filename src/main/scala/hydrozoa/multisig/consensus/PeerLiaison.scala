@@ -77,8 +77,8 @@ trait PeerLiaison(
         for {
             current <- state.getCurrentlyRequesting
             _ <- logger.debug(
-              s"resend tick: GetMsgBatch batch=${current.batchNum}, ack=${current.ackNum}, " +
-                  s"block=${current.blockNum}, stackBrief=${current.stackBriefNum}, " +
+              s"resend tick: GetMsgBatch batch=${current.batchNum}, ack=${current.softAckNumber}, " +
+                  s"block=${current.blockNum}, stackBrief=${current.stackNum}, " +
                   s"hardAck=${current.hardAckNum}, req=${current.requestNum}"
             )
             _ <- conn.remotePeerLiaison ! current
@@ -125,8 +125,8 @@ trait PeerLiaison(
             case x: GetMsgBatch =>
                 for {
                     _ <- logger.debug(
-                      s"Got GetMsgBatch: batch=${x.batchNum}, ack=${x.ackNum}, " +
-                          s"block=${x.blockNum}, stackBrief=${x.stackBriefNum}, " +
+                      s"Got GetMsgBatch: batch=${x.batchNum}, ack=${x.softAckNumber}, " +
+                          s"block=${x.blockNum}, stackBrief=${x.stackNum}, " +
                           s"hardAck=${x.hardAckNum}, req=${x.requestNum}"
                     )
                     eNewBatch <- state.buildNewMsgBatch(x, config.peerLiaisonMaxRequestsPerBatch)
@@ -135,7 +135,7 @@ trait PeerLiaison(
                             for {
                                 msg <- IO.pure(
                                   s"NewMsgBatch: batch=${newBatch.batchNum}, " +
-                                      s"ack=${newBatch.ack.map(_.ackNum)}, " +
+                                      s"ack=${newBatch.softAck.map(_.ackNum)}, " +
                                       s"block=${newBatch.blockBrief.map(_.blockNum)}, " +
                                       s"stackBrief=${newBatch.stackBrief.map(_.stackNum)}, " +
                                       s"hardAck=${newBatch.hardAck
@@ -157,7 +157,7 @@ trait PeerLiaison(
                 for {
                     _ <- logger.debug(
                       s"got NewMsgBatch: batch=${x.batchNum}, " +
-                          s"ack=${x.ack.map(_.ackNum)}, " +
+                          s"ack=${x.softAck.map(_.ackNum)}, " +
                           s"block=${x.blockBrief.map(_.blockNum)}, " +
                           s"stackBrief=${x.stackBrief.map(_.stackNum)}, " +
                           s"hardAck=${x.hardAck.map(h => s"${h.stackNum}/${h.payload.round}")}, " +
@@ -169,14 +169,14 @@ trait PeerLiaison(
                             for {
                                 _ <- state.advanceTo(next)
                                 msg <- IO.pure(
-                                  s"GetMsgBatch: batch=${next.batchNum}, ack=${next.ackNum}, " +
+                                  s"GetMsgBatch: batch=${next.batchNum}, ack=${next.softAckNumber}, " +
                                       s"block=${next.blockNum}, " +
-                                      s"stackBrief=${next.stackBriefNum}, " +
+                                      s"stackBrief=${next.stackNum}, " +
                                       s"hardAck=${next.hardAckNum}, req=${next.requestNum}"
                                 )
                                 _ <- mermaid(msg)
                                 _ <- conn.remotePeerLiaison ! next
-                                _ <- x.ack.traverse_(conn.consensusActor ! _)
+                                _ <- x.softAck.traverse_(conn.consensusActor ! _)
                                 _ <- x.blockBrief.traverse_(conn.blockWeaver ! _)
                                 _ <- x.stackBrief.traverse_(conn.stackComposer ! _)
                                 _ <- x.hardAck.traverse_(conn.slowConsensusActor ! _)
@@ -393,10 +393,10 @@ trait PeerLiaison(
                 // returns when `nX == 0` — the leader-schedule formula is
                 // symmetric in `(peer, n) ↦ first leader ≥ next`).
                 _ <- IO.raiseWhen(
-                  nAck.increment < batchReq.ackNum ||
+                  nAck.increment < batchReq.softAckNumber ||
                       config.ownHeadPeerId.nextLeaderBlock(nBlock) < batchReq.blockNum ||
                       config.ownHeadPeerId.nextSlowLeaderStack(nStack) <
-                      batchReq.stackBriefNum ||
+                      batchReq.stackNum ||
                       nHard.increment < batchReq.hardAckNum ||
                       nRequest.increment < batchReq.requestNum
                 )(OutOfBoundsGetMsgBatch)
@@ -418,7 +418,7 @@ trait PeerLiaison(
                 // GetMsgBatch positions are the authoritative per-remote receipt
                 // signal.
                 mAck <- this.qAck.modify { q =>
-                    val pruned = q.dropWhile(_.ackNum < batchReq.ackNum)
+                    val pruned = q.dropWhile(_.ackNum < batchReq.softAckNumber)
                     (pruned, pruned.headOption)
                 }
                 mBlock <- this.qBlock.modify { q =>
@@ -426,7 +426,7 @@ trait PeerLiaison(
                     (pruned, pruned.headOption)
                 }
                 mStackBrief <- this.qStackBrief.modify { q =>
-                    val pruned = q.dropWhile(_.stackNum < batchReq.stackBriefNum)
+                    val pruned = q.dropWhile(_.stackNum < batchReq.stackNum)
                     (pruned, pruned.headOption)
                 }
                 mHardAck <- this.qHardAck.modify { q =>
@@ -444,7 +444,7 @@ trait PeerLiaison(
                 )(EmptyNewMsgBatch)
             } yield NewMsgBatch(
               batchNum = batchReq.batchNum,
-              ack = mAck,
+              softAck = mAck,
               blockBrief = mBlock,
               stackBrief = mStackBrief,
               hardAck = mHardAck,
@@ -502,11 +502,11 @@ trait PeerLiaison(
             // 2. If an ack is present, its peer must be the remote peer and its
             //    number must equal the next-expected `current.ackNum` (next-expected
             //    cursor — same pattern as requestNum below).
-            received.ack match
+            received.softAck match
                 case Some(a) if a.ackId.peerNum != remotePeerId.peerNum =>
                     return Reject(Rejection.AckPeerMismatch(remotePeerId.peerNum, a.ackId.peerNum))
-                case Some(a) if a.ackNum != current.ackNum =>
-                    return Reject(Rejection.AckNumMismatch(current.ackNum, a.ackNum))
+                case Some(a) if a.ackNum != current.softAckNumber =>
+                    return Reject(Rejection.AckNumMismatch(current.softAckNumber, a.ackNum))
                 case _ => ()
 
             // 3. If a block brief is present, its blockNum must equal the
@@ -527,9 +527,9 @@ trait PeerLiaison(
             //     block lane. Stack 0 is the bootstrap stack distributed
             //     out-of-band and excluded by `nextSlowLeaderStack(0)`.
             received.stackBrief match
-                case Some(sb) if sb.stackNum != current.stackBriefNum =>
+                case Some(sb) if sb.stackNum != current.stackNum =>
                     return Reject(
-                      Rejection.StackBriefNumMismatch(current.stackBriefNum, sb.stackNum)
+                      Rejection.StackBriefNumMismatch(current.stackNum, sb.stackNum)
                     )
                 case _ => ()
 
@@ -570,11 +570,11 @@ trait PeerLiaison(
             Advance(
               GetMsgBatch(
                 batchNum = current.batchNum.increment,
-                ackNum = received.ack.fold(current.ackNum)(_.ackNum.increment),
+                softAckNumber = received.softAck.fold(current.softAckNumber)(_.ackNum.increment),
                 blockNum = received.blockBrief.fold(current.blockNum)(b =>
                     remotePeerId.nextLeaderBlock(b.blockNum)
                 ),
-                stackBriefNum = received.stackBrief.fold(current.stackBriefNum)(sb =>
+                stackNum = received.stackBrief.fold(current.stackNum)(sb =>
                     remotePeerId.nextSlowLeaderStack(sb.stackNum)
                 ),
                 hardAckNum = received.hardAck.fold(current.hardAckNum)(_.hardAckNum.increment),
@@ -770,12 +770,12 @@ object PeerLiaison {
           *
           * @param batchNum
           *   Batch number that increases by one for every consecutive batch.
-          * @param ackNum
+          * @param softAckNumber
           *   Next-expected soft-ack number (== block number) from the remote peer.
           * @param blockNum
           *   Next-expected block number from the remote peer — the next leader block of this
           *   remote, computed via `nextLeaderBlock`.
-          * @param stackBriefNum
+          * @param stackNum
           *   Next-expected stack-brief number from the remote peer — the next slow-leader stack of
           *   this remote, computed via `nextSlowLeaderStack`.
           * @param hardAckNum
@@ -811,9 +811,9 @@ object PeerLiaison {
         // format: on
         final case class GetMsgBatch(
             batchNum: Batch.Number,
-            ackNum: SoftAckNumber,
+            softAckNumber: SoftAckNumber,
             blockNum: BlockNumber,
-            stackBriefNum: StackNumber,
+            stackNum: StackNumber,
             hardAckNum: HardAckNumber,
             requestNum: RequestNumber
         )
@@ -832,9 +832,9 @@ object PeerLiaison {
             // liaison is talking to. Tests can use any [[HeadPeerId]] fixture.
             def initial(remotePeerId: HeadPeerId): GetMsgBatch = GetMsgBatch(
               batchNum = Batch.Number(0),
-              ackNum = SoftAckNumber.zero.increment,
+              softAckNumber = SoftAckNumber.zero.increment,
               blockNum = remotePeerId.nextLeaderBlock(BlockNumber.zero),
-              stackBriefNum = remotePeerId.nextSlowLeaderStack(StackNumber.zero),
+              stackNum = remotePeerId.nextSlowLeaderStack(StackNumber.zero),
               hardAckNum = HardAckNumber.zero,
               requestNum = RequestNumber.zero
             )
@@ -844,20 +844,26 @@ object PeerLiaison {
           *
           * @param batchNum
           *   Batch number matching the one from the request.
-          * @param ack
-          *   If provided, a block acknowledgment originating from the responder after the requested
-          *   [[AckNum]].
+          * @param softAck
+          *   If provided, a soft block acknowledgment originating from the responder after the
+          *   requested [[SoftAckNumber]].
           * @param blockBrief
-          *   If provided, a block originating from the responder after the requested [[Number]].
-          *   The initial block is never sent in a message batch because it's already pre-confirmed
-          *   in the head config, which every peer already has locally.
+          *   If provided, a block originating from the responder after the requested
+          *   [[BlockNumber]]. The initial block is never sent in a message batch, instead it's
+          *   derived from the head config locally.
+          * @stackBrief
+          *   If provided, the next stack after requested [[StackNumber]]. The initial stack (#0) is
+          *   never sent in a message batch, instead it's derived f rom the head config locally.
+          * @param hardAck
+          *   If provided, a hard stack acknowledgment originating from the responder after the
+          *   requested * [[HardAckNum]].
           * @param requests
           *   A possibly empty list of events originating from the responder after the requested
-          *   [[LedgerEventNum]].
+          *   [[RequestNumber]].
           */
         final case class NewMsgBatch(
             batchNum: Batch.Number,
-            ack: Option[SoftAck],
+            softAck: Option[SoftAck],
             blockBrief: Option[BlockBrief.Next],
             stackBrief: Option[StackBrief],
             hardAck: Option[HardAck],

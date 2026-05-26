@@ -71,7 +71,7 @@
     <!-- default: warn -->
     <logger name="BlockWeaver" level="info"/>
     <logger name="StackComposer" level="debug"/>
-    <logger name="ConsensusActor" level="debug"/>
+    <logger name="FastConsensusActor" level="debug"/>
     <logger name="SlowConsensusActor" level="debug"/>
     <logger name="EventSequencer" level="info"/>
     <logger name="CardanoLiaison" level="warn"/>
