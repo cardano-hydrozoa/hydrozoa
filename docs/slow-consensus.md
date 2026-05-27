@@ -31,8 +31,8 @@ See `docs/fast-consensus.md` for the fast cycle that gates this one.
 ## Stack lifecycle
 
 ```
-JointLedger  ── BlockResult.N            ─▶  StackComposer
-ConsensusActor ── Block.SoftConfirmed.N  ─▶  StackComposer
+JointLedger        ── BlockResult.N          ─▶  StackComposer
+FastConsensusActor ── Block.SoftConfirmed.N  ─▶  StackComposer
                                               │ pair by blockNum; close on the longest
                                               │ contiguous prefix once previous stack is
                                               │ hard-confirmed.
@@ -87,15 +87,17 @@ One per peer. Per-block-result + per-soft-confirmed pairing, stack-close decisio
 or stack-close validation (follower), partition + effect derivation, own-ack signing,
 brief broadcast.
 
-State (`State.empty` is the boot value):
+State (`State.initial` is the boot value):
 - `pending: Map[BlockNumber, PendingBlock]` — `(BlockResult, Block.SoftConfirmed)`
   half-pairs awaiting their counterpart.
 - `ready: Map[BlockNumber, ReadyBlock]` — paired, stack-eligible.
 - `inboundLeaderBrief: Map[StackNumber, StackBrief]` — follower-side incoming briefs.
 - `lastClosedStackNum`, `lastClosedBlockNum` — cursors.
-- `previousStackHardConfirmed: Boolean` — single-flight gate; bootstrapped to `true` so
-  stack-0 logic can fire (currently stack-0 injection is deferred — see "Bootstrap").
-- `ownHardAckNum: HardAckNumber` — next per-peer hard-ack number to assign (0-based; see
+- `previousStackHardConfirmed: Boolean` — single-flight gate; boots to `false`. Stack 0 is
+  composed and handed off at `PreStart` (`bootstrapInitialStack`); its hard-confirmation is
+  what first arms this gate (for stack 1), and each subsequent `PreviousStackHardConfirmation`
+  re-arms it.
+- `nextOwnHardAckNum: HardAckNumber` — next per-peer hard-ack number to assign (0-based; see
   the cursor protocol table at the top of `PeerLiaison.scala`).
 
 Mode is implicit: every paired-state change calls `tryProgress`, which decides leader vs
@@ -105,21 +107,28 @@ matches an incoming brief against the same queue).
 
 #### Leader's close-stack flow
 
-When `previousStackHardConfirmed && readyPrefix.nonEmpty`:
+Gated on `previousStackHardConfirmed` (single-flight) and `isSlowLeader(nextStackNum)`;
+`tryCloseAsLeader` runs when `longestReadyPrefix` is non-empty:
 
 1. Drain the longest contiguous prefix of `ready` starting at `lastClosedBlockNum + 1`
-   (gap-free).
-2. Build `StackBrief(stackNum, firstBlockNum, lastBlockNum)`.
-3. `StackPartition.partition(results)` → `NonEmptyList[StackPartition]` (head-based; see
-   "Partition model" below).
-4. `StackEffectsBuilder.deriveRegular(partitions)` → `StackEffects.Unsigned.Regular`.
-5. `buildHandoff` signs all own hard-acks upfront: for 2-phase, both round-1 and round-2;
-   for 1-phase (all-Minor sole), just the sole ack. `nextOwnHardAckNum` is the per-peer
-   counter; the unlock partition is chosen by `PartitionEffects.unlock`.
-6. Broadcasts `StackBrief` direct to all `PeerLiaisons`.
-7. Hands `StackHandoff(unsigned, acks)` to `SlowConsensusActor`.
-8. `previousStackHardConfirmed := false` until the next `PreviousStackHardConfirmation`
-   event fires.
+   (gap-free) — `State.longestReadyPrefix`.
+2. `mkStackBrief` → `StackBrief(stackNum, firstBlockNum, lastBlockNum, creationEndTime)`.
+3. `mkStackUnsigned(brief, prefix, treasury, evacuationMap)` derives the whole stack and
+   returns `(Stack.Unsigned, rotated treasury, rotated evacuation map)`. Internally it:
+   - `StackPartition.partition(results)` → `NonEmptyList[StackPartition]` (head-based; see
+     "Partition model" below);
+   - `StackEffectsBuilder.mkEffectsRegular(config, treasury, partitions, evacuationMap)` →
+     `(StackEffects.Unsigned.Regular, treasury, evacuationMap)` — threads and rotates the
+     slow-side treasury and the cumulative evacuation map.
+4. `buildHandoff(unsigned)` signs all own hard-acks upfront via `EffectSigner`: for 2-phase,
+   both round-1 and round-2; for 1-phase (all-Minor sole), just the sole ack.
+   `nextOwnHardAckNum` is the per-peer counter; the unlock partition is chosen by
+   `PartitionEffects.unlock`.
+5. Broadcasts `StackBrief` direct to all `PeerLiaisons` (the `stackBrief` lane).
+6. Hands `StackHandoff(unsigned, acks)` to `SlowConsensusActor`.
+7. `afterClose` advances `lastClosedStackNum` / `lastClosedBlockNum`, stores the rotated
+   treasury + evacuation map, and sets `previousStackHardConfirmed := false` until the next
+   `PreviousStackHardConfirmation` event re-arms it.
 
 #### Follower's close-stack flow
 
@@ -161,9 +170,11 @@ Responsibilities:
    verification mismatch is a deterministic divergence, not a transient issue).
 3. **On round-1 saturation** — release the held own round-2 to `PeerLiaisons` and
    transition `WaitingRound1 → WaitingRound2`.
-4. **On round-2 (or sole) saturation** — aggregate verified `TxSignature`s into
-   `VKeyWitness`es keyed by effect `tx.id`, attach them via `Tx.addSignatures` onto each
-   effect's tx wrapper, hoist the SEC to its `MultiSigned` variant, and emit:
+4. **On round-2 (or sole) saturation** — via `HardAckAggregator`: aggregate verified
+   `TxSignature`s into `VKeyWitness`es keyed by effect `tx.id` (`aggregateTxSignatures`),
+   collect the SEC header signatures (`collectSecSignatures`), then attach everything onto the
+   effect tx wrappers and hoist the SEC to its `MultiSigned` variant (`attachWitnesses`), and
+   emit:
    - `Stack.HardConfirmed` → `CardanoLiaison`
    - `PreviousStackHardConfirmation(stackNum)` → `StackComposer`
 
@@ -184,7 +195,7 @@ Two slow-side lanes on top of the fast-side ones (see `docs/fast-consensus.md`):
 
 | lane | family | producer |
 |---|---|---|
-| `stackBrief` | last-seen, sparse round-robin | only `isSlowLeader(stackNum)` |
+| `stackBrief` | next-expected, sparse round-robin | only `isSlowLeader(stackNum)` |
 | `hardAck` | next-expected, contiguous per peer | every peer (every stack) |
 
 Both share `PeerLiaison`'s batch-cursor machinery; the per-lane invariants and cursor
@@ -193,20 +204,15 @@ initial values live in the comment table just above `final case class GetMsgBatc
 of a stack broadcasts the brief); `hardAck` is 0-based contiguous (initial stack, once
 injected, takes hardAck 0 = round-1, 1 = round-2).
 
-> **TODO (merge `feature/migrate-kzg`):** that branch unified ALL lanes to **next-expected**,
-> so `stackBrief` becomes "sparse but next-expected" (cursor precomputed to the next slow-leader
-> stack via `nextSlowLeaderStack`) rather than last-seen. Update the `stackBrief` row above when
-> that change lands here (mirrors the `blockBrief` TODO in `fast-consensus.md`).
-
 ## Data types
 
 `multisig/ledger/stack/`:
 
-- **`BlockResult`** — per-block input from `JointLedger`: brief + `EvacuationMapDiff` +
-  `payoutObligations` + `postDatedRefundTxs` + `absorbedDeposits` + `competingFallbackTxTime`.
-  Construction-time input to partition + effect derivation; not retained on the closed
-  stack.
-- **`StackBrief`** — wire-broadcast composition record: `(stackNum, firstBlockNum, lastBlockNum)`.
+- **`BlockResult`** (`multisig/ledger/block/`) — per-block input from `JointLedger`: brief +
+  `evacuationMapDiff` + `payoutObligations` + `postDatedRefundTxs` + `absorbedDeposits` +
+  `competingFallbackTxTime`. Construction-time input to partition + effect derivation; not
+  retained on the closed stack.
+- **`StackBrief`** — wire-broadcast composition record: `(stackNum, firstBlockNum, lastBlockNum, creationEndTime)`.
   The leader sends this; followers reproduce effects from their local block streams.
 - **`StackPartition`** — `(blocks: NonEmptyList[BlockResult], majorVersion: BlockVersion.Major, kind: Kind)`
   where `Kind = Initial | Major | Final | Minor`. See "Partition model" below.
@@ -229,8 +235,9 @@ injected, takes hardAck 0 = round-1, 1 = round-2).
 - **`HardAckId = (HeadPeerNumber, HardAckNumber)`**.
 - **`HardAck(ackId, stackNum, payload)`** — wire payload. Round is implicit in
   `payload`'s variant:
-  - `Round1Payload.Regular(partitions: NonEmptyList[PartitionSig])` — per-partition
-    signature bundle; the unlock partition's settlement/finalization slot is `None`.
+  - `Round1Payload.Regular` — a discriminated set of variants (by partition layout) carrying
+    each partition's `PartitionSigs`; the unlock partition is the single `Partial` slot (its
+    settlement/finalization sig withheld for round 2).
   - `Round1Payload.Initial(fallbackSig)` — stack 0's round 1.
   - `Round2Payload.Regular(firstUnlockSig)` — the single unlock signature.
   - `Round2Payload.Initial(initTxSig, individualWitnesses)` — stack 0's round 2.
@@ -243,7 +250,7 @@ kind, and a Major partition owns the same-major-version minors that **follow** i
 
 | Kind | Shape | Effects derived |
 |---|---|---|
-| **Initial** | stack 0 alone (single partition) | `StackEffects.Initial(initTx, fallbackTx)` (separate variant, not in the partition list) |
+| **Initial** | stack 0 alone (single partition) | `StackEffects.Unsigned.Initial(initTx, fallbackTx)` (separate variant, not in the partition list) |
 | **Major** | `Major + (trailing same-major-version minors)*` | settlement + fallback + rollouts + trailing minors' refunds + **SEC for the partition's last minor — optional, iff ≥ 1 trailing minor** |
 | **Final** | `Final` alone | finalization + rollouts |
 | **Minor** | leading minor run; stops at next Major/Final or stack end | **SEC for the latest minor — mandatory** + those minors' refunds |
@@ -317,8 +324,8 @@ Structurally 2-phase, but its content is exogenous:
   individual `VKeyWitness`es for utxos spent from their individual addresses (operator-
   supplied funding).
 
-Stack 0 is deferred — the `Bootstrap` constructor injection of stack 0's synthetic inputs
-is not yet wired (see "Bootstrap" below).
+Stack 0 is composed and handed off at `PreStart` by `bootstrapInitialStack` — every peer
+derives it from the head config and runs this Initial 2-phase flow (see "Bootstrap" below).
 
 ## Stack closure policy
 
@@ -339,21 +346,24 @@ different paces.
 
 ## Bootstrap
 
-Stack 0 covers the initial block and the head's L1 init / fallback multisig. Per spec it
-runs through the slow cycle; per current code the bootstrap injection is **deferred**.
+Stack 0 covers the initial block and the head's L1 init / fallback multisig, and runs
+through the slow cycle like any other stack. It is **exogenous**: its effects come from the
+shared head config, not from any `BlockResult` stream, so every peer derives it identically
+and no `StackBrief` is broadcast (there is nothing a leader could tell followers that they
+cannot derive from config).
 
-The plan:
-- `StackComposer.Bootstrap(initialBrief, initialBlockResult, syntheticSoftConfirmed0,
-  initializationTx)` constructor parameter, processed during `PreStart`. Injects the
-  initial brief + result + synthetic soft-confirmation 0 + the head config's init tx.
-- `previousStackHardConfirmed = true` synthetically at boot so stack 0 can close
-  immediately. Stack 0's hard-confirmation is what arms the chain for stack 1.
+`StackComposer.bootstrapInitialStack` runs at `PreStart`:
+- Builds `StackBrief(stackNum = 0, firstBlockNum = 0, lastBlockNum = 0, creationEndTime =
+  initialBlock.endTime)` and `Stack.Unsigned(brief, StackEffectsBuilder.mkEffectsInitial(
+  initializationTx, initialFallbackTx))`.
+- `buildHandoff` signs the Initial 2-phase acks (round-1 = fallback sig; round-2 = init-tx
+  sig + per-peer individual funding witnesses) and hands the `StackHandoff` to
+  `SlowConsensusActor`. No brief is broadcast.
 
-Until that is wired, `State.empty` sets `previousStackHardConfirmed = true` and the slow
-cycle starts from stack 1 directly. The Initial code paths
-(`StackEffects.Unsigned.Initial`, `Round1Payload.Initial`, `Round2Payload.Initial`) exist
-but are not exercised at runtime; `Round2Payload.Initial` is intentionally
-wire-unsupported in `Codecs.scala` until the boot path lands.
+`State.initial` boots `previousStackHardConfirmed = false`; stack 0's hard-confirmation is
+what arms the gate for stack 1. The Initial code paths (`StackEffects.Unsigned.Initial`,
+`Round1Payload.Initial`, `Round2Payload.Initial`) are exercised at boot, and both Initial
+payloads round-trip through `Codecs.scala`.
 
 ## L1 submission order
 
@@ -389,7 +399,9 @@ the response (rule-based fallback / dead-man's-switch) is the system-level handl
 - **Refund-tx L1 submission** — `CardanoLiaison` consumes refund txs but the post-dated
   submission timing is queued; user-visible refund-confirmed events are part of the
   `RequestSequencer` follow-up.
-- **L2 refund release** — the L2 ledger books refund obligations at minor-block
-  soft-confirmation time; no slow-side `JointLedger` callback is needed.
+- **L2 refund release** — surfacing refund-tx CBORs to L2 clients via the soft-confirmation
+  proxy is currently incomplete (GUM-133): post-dated refunds moved slow-side (submitted by
+  `CardanoLiaison`), so the fast-path proxy no longer carries them. Needs a joint design with
+  the SugarRush team.
 - **Follower divergence fallback** — `tryCloseAsFollower` currently logs and stalls on
   structural divergence; the rule-based fallback wiring is a TODO.
