@@ -8,13 +8,14 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.joint.EvacuationMap
+import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
 import scalus.cardano.ledger.TransactionHash
 
 /** This doesn't actually do much of anything right now. It just starts the dispute and liquidation
   * actors, and those proceed autonomously. I don't think we need actors for these.
   */
 case class RuleBasedRegimeManager(
-    blockHeader: BlockHeader.Minor.Onchain,
+    sec: StandaloneEvacuationCommitment.Onchain,
     signatures: List[BlockHeader.Minor.HeaderSignature],
     cardanoBackend: CardanoBackend[IO],
     votingDeadline: QuantizedInstant,
@@ -30,7 +31,7 @@ case class RuleBasedRegimeManager(
         for {
             _ <- context.actorOf(
               DisputeActor(
-                blockHeader = blockHeader,
+                sec = sec,
                 signatures = signatures,
                 cardanoBackend = cardanoBackend,
               )

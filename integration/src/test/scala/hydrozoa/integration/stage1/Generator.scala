@@ -697,7 +697,7 @@ object ScenarioGenerators:
                             CommandGenerators
                                 .genCompleteBlock(
                                   blockNumber,
-                                  state.multiNodeConfig.initialBlock.endTime,
+                                  state.multiNodeConfig.initialBlock.blockBrief.endTime,
                                   state.competingFallbackStartTime,
                                   state.multiNodeConfig,
                                   state.reservedSubmissionDuration
@@ -759,7 +759,7 @@ object ScenarioGenerators:
                             CommandGenerators
                                 .genCompleteBlock(
                                   blockNumber,
-                                  state.multiNodeConfig.initialBlock.endTime,
+                                  state.multiNodeConfig.initialBlock.blockBrief.endTime,
                                   state.competingFallbackStartTime,
                                   state.multiNodeConfig,
                                   state.reservedSubmissionDuration
@@ -844,7 +844,7 @@ object ScenarioGenerators:
                             CommandGenerators
                                 .genCompleteBlock(
                                   blockNumber,
-                                  state.multiNodeConfig.initialBlock.endTime,
+                                  state.multiNodeConfig.initialBlock.blockBrief.endTime,
                                   state.competingFallbackStartTime,
                                   state.multiNodeConfig,
                                   state.reservedSubmissionDuration

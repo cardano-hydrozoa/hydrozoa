@@ -24,7 +24,8 @@ import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
 import hydrozoa.multisig.consensus.transport.{PeerWsTransport, RemotePeerProxy}
-import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, ConsensusActor, EventSequencer, PeerLiaison}
+import hydrozoa.multisig.consensus.limiter.Limiter
+import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, FastConsensusActor, EventSequencer, PeerLiaison, SlowConsensusActor, StackComposer}
 import org.http4s.Uri
 import com.comcast.ip4s.{Host, Port, host}
 import hydrozoa.multisig.ledger.block.BlockBrief
@@ -32,6 +33,7 @@ import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toUtxos}
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.joint.JointLedger
+import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects}
 import org.scalacheck.commands.{AnyCommand, ModelBasedSuite, ScenarioGen}
 import org.scalacheck.{Gen, Prop}
 import scalus.cardano.address.ShelleyAddress
@@ -58,9 +60,8 @@ case class Stage4Suite(
 
     private val logger = Logging.loggerIO("Stage4.Suite")
 
-    /** TestControl is incompatible with real sockets — virtual time doesn't drive the OS
-      * scheduler that owns the WS connection. Direct mode keeps virtual time; WS mode runs on
-      * the real clock.
+    /** TestControl is incompatible with real sockets — virtual time doesn't drive the OS scheduler
+      * that owns the WS connection. Direct mode keeps virtual time; WS mode runs on the real clock.
       */
     override def useTestControl: Boolean = transportMode match {
         case TransportMode.Direct       => true
@@ -189,19 +190,29 @@ case class Stage4Suite(
                                 tracerLocal
                               )
                             )
-                            consensusActor <- system.actorOf(ConsensusActor(nodeConfig, pending, tracerLocal))
+                            consensusActor <- system.actorOf(
+                              FastConsensusActor(nodeConfig, pending, tracerLocal)
+                            )
+                            stackComposer <- system.actorOf(
+                              StackComposer(nodeConfig, pending, tracerLocal)
+                            )
+                            slowConsensusActor <- system.actorOf(
+                              SlowConsensusActor(nodeConfig, pending, tracerLocal)
+                            )
                         yield peerNum -> PeerStack(
                           blockWeaver,
                           cardanoLiaison,
                           eventSequencer,
                           jointLedger,
-                          consensusActor
+                          consensusActor,
+                          stackComposer,
+                          slowConsensusActor
                         )
                     }
                 }
                 .map(_.toMap)
 
-            // Create brief-collecting observers wrapping each peer's ConsensusActor.
+            // Create brief-collecting observers wrapping each peer's FastConsensusActor.
             // Injected via Connections so JointLedger is unaware; captures both leader-produced
             // and follower-reproduced blocks (both go through JointLedger.handleBlock).
             blockBriefsMap <- peers
@@ -218,6 +229,30 @@ case class Stage4Suite(
                             peerNum,
                             peerStackMap(peerNum).consensusActor,
                             blockBriefsMap(peerNum)
+                          )
+                        )
+                        .map(peerNum -> _)
+                }
+                .map(_.toMap)
+
+            // Create stack-collecting observers wrapping each peer's CardanoLiaison.
+            // Injected via Connections so SlowConsensusActor is unaware; captures every
+            // hard-confirmed stack the slow cycle emits (parallel to BlockBriefObserver
+            // on the fast side).
+            stacksMap <- peers
+                .traverse { peerNum =>
+                    Ref[IO].of(Vector.empty[Stack.HardConfirmed]).map(peerNum -> _)
+                }
+                .map(_.toMap)
+
+            stackObserverMap <- peers
+                .traverse { peerNum =>
+                    system
+                        .actorOf(
+                          StackObserver(
+                            peerNum,
+                            peerStackMap(peerNum).cardanoLiaison,
+                            stacksMap(peerNum)
                           )
                         )
                         .map(peerNum -> _)
@@ -251,7 +286,8 @@ case class Stage4Suite(
             // reach B's PeerLiaison(B->A).
             transportSetup <- transportMode match {
                 case TransportMode.Direct =>
-                    val remoteLiaisonsByPeer: Map[HeadPeerNumber, Map[HeadPeerId, PeerLiaison.Handle]] =
+                    val remoteLiaisonsByPeer
+                        : Map[HeadPeerNumber, Map[HeadPeerId, PeerLiaison.Handle]] =
                         peers.map { peerNum =>
                             val ownPeerId = multiNodeConfig.nodeConfigs(peerNum).ownHeadPeerId
                             peerNum -> peers
@@ -279,20 +315,43 @@ case class Stage4Suite(
             // Complete each peer's deferred with its full wiring.
             _ <- peers.traverse { peerNum =>
                 val stack = peerStackMap(peerNum)
+                val nodeConfig = multiNodeConfig.nodeConfigs(peerNum)
                 val localLiaisons = peerLiaisonMap(peerNum).values.toList
-                pendingConnsMap(peerNum)
-                    .complete(
-                      MultisigRegimeManager.Connections(
-                        blockWeaver = stack.blockWeaver,
-                        cardanoLiaison = stack.cardanoLiaison,
-                        consensusActor = observerMap(peerNum),
-                        eventSequencer = stack.eventSequencer,
-                        jointLedger = stack.jointLedger,
-                        peerLiaisons = localLiaisons,
-                        remotePeerLiaisons = remoteLiaisonsByPeer(peerNum),
+                for {
+                    // Per-peer rate limiters wrapping BlockWeaver and StackComposer. With the
+                    // default RateLimits config (zero periods) these are no-ops; non-zero
+                    // periods enable throttling for the corresponding lane.
+                    blockWeaverLimiter <- system.actorOf(
+                      Limiter[BlockWeaver.Request](stack.blockWeaver, nodeConfig, tracerLocal)
+                    )
+                    stackComposerLimiter <- system.actorOf(
+                      Limiter[StackComposer.Request](
+                        stack.stackComposer,
+                        nodeConfig,
+                        tracerLocal
                       )
                     )
-                    .void
+                    _ <- pendingConnsMap(peerNum)
+                        .complete(
+                          MultisigRegimeManager.Connections(
+                            blockWeaver = stack.blockWeaver,
+                            blockWeaverLimiter = blockWeaverLimiter,
+                            // Route the slow cycle's Stack.HardConfirmed through StackObserver
+                            // (forwards to the real CardanoLiaison) so the test can assert
+                            // coverage; mirrors observerMap on consensusActor.
+                            cardanoLiaison = stackObserverMap(peerNum),
+                            consensusActor = observerMap(peerNum),
+                            eventSequencer = stack.eventSequencer,
+                            jointLedger = stack.jointLedger,
+                            stackComposer = stack.stackComposer,
+                            stackComposerLimiter = stackComposerLimiter,
+                            slowConsensusActor = stack.slowConsensusActor,
+                            peerLiaisons = localLiaisons,
+                            remotePeerLiaisons = remoteLiaisonsByPeer(peerNum),
+                          )
+                        )
+                        .void
+                } yield ()
             }
 
             sutErrors <- Ref[IO].of(List.empty[String])
@@ -331,15 +390,16 @@ case class Stage4Suite(
           errorDrainer = errorDrainer,
           liaisonTickFibers = liaisonTickFibers.toList,
           blockBriefs = blockBriefsMap,
+          stacks = stacksMap,
           submittedRequestIds = submittedRequestIds,
           tracerLocal = tracerLocal,
           transportCleanup = transportCleanup,
         )
     }
 
-    /** WS-mode helper: builds one [[PeerWsTransport]] per peer (each bound to a distinct
-      * localhost port), spawns one [[RemotePeerProxy]] per (local, remote) pair, registers each
-      * local [[PeerLiaison]] with its peer's transport, and returns:
+    /** WS-mode helper: builds one [[PeerWsTransport]] per peer (each bound to a distinct localhost
+      * port), spawns one [[RemotePeerProxy]] per (local, remote) pair, registers each local
+      * [[PeerLiaison]] with its peer's transport, and returns:
       *
       *   - the remote-handle map (proxy actors keyed by remote peer id), per peer
       *   - a cleanup IO that releases all transports on shutdown
@@ -350,7 +410,9 @@ case class Stage4Suite(
         basePort: Int,
         system: ActorSystem[IO],
         peerLiaisonMap: Map[HeadPeerNumber, Map[HeadPeerId, PeerLiaison.Handle]],
-    )(using CardanoNetwork.Section): IO[
+    )(using
+        CardanoNetwork.Section
+    ): IO[
       (Map[HeadPeerNumber, Map[HeadPeerId, PeerLiaison.Handle]], IO[Unit])
     ] = {
         // Map each peer to a localhost address. Bind on 127.0.0.1 (avoids firewall prompts on
@@ -429,10 +491,13 @@ case class Stage4Suite(
             // BlockWeaver's `sleepSendWakeup` runs in a separate fiber, so between wakeups the
             // actor's mailbox is empty and `isIdle` is true.
             //
-            // `maxTimeout` is virtual under TestControl and elapses fast in real time; the
-            // default (30s virtual) is enough to drive a pending fallback or deposit-decision
-            // wakeup that seals the in-progress block. Under real-clock backends it would be
-            // wall-clock; stage4 currently uses only the mock backend so we keep the default.
+            // `maxTimeout` is virtual under TestControl and elapses fast in real time. The
+            // rate limiter throttles the slow cycle, so the post-command tail can take several
+            // hard-stack periods to drain — under WS real-clock that's wall-clock seconds, far
+            // beyond the framework default (30s). Size the timeout to the throttle: each stack
+            // close sweeps the longest ready prefix, so the remaining blocks fold into the next
+            // stack(s); two hard-stack periods cover the close + cross-peer hard-confirm
+            // round-trip. Floored at 30s so zero rate limits don't yield a 0 (instant) timeout.
             //
             // Order matters: `waitForIdle` BEFORE cancelling liaison tick fibers. Cancelling
             // ticks first stops the leader's CardanoLiaison from observing L1 settlement,
@@ -444,7 +509,36 @@ case class Stage4Suite(
             // Letting ticks run during `waitForIdle` keeps the L1-polling-driven seal path
             // alive long enough for the tail to land in confirmed blocks. `waitForIdle` can
             // still return because the periods between ticks are mailbox-empty.
-            _ <- sut.system.waitForIdle()
+            stackDrainTimeout =
+                (lastState.params.multiNodeConfig.nodeConfigs.values.head.hardStackMinPeriod * 3)
+                    .max(30.seconds)
+            _ <- sut.system.waitForIdle(maxTimeout = stackDrainTimeout)
+
+            // Slow-cycle tail drain. `waitForIdle` returns when mailboxes are empty + child
+            // set stable + deadLetters drained — but it does NOT wait for scheduled future
+            // sleeps. The `PeerLiaison` resend timer (`startResendTimer`) ticks in its own
+            // fiber via `IO.sleep(peerLiaisonResendInterval) >> ResendCurrent`; between
+            // ticks every actor's mailbox is empty and the system reports idle. Under
+            // `TransportMode.WebSocket` that interval is real wall-clock, so when the very
+            // last stack is closed only milliseconds before `waitForIdle` is called, its
+            // hard-acks have not yet completed the cross-peer round-trip needed to
+            // saturate every peer's `SlowConsensusActor`. `terminate()` immediately after
+            // `waitForIdle` drops the last stack from `StackObserver`'s record, causing a
+            // spurious `propStackCoverage` failure on whatever block(s) sit in that final
+            // stack. Two effects must be covered: (a) ≥ 2 × `peerLiaisonResendInterval` so a
+            // full resend cycle fires across every link and the tail acks land; (b) ≥
+            // `hardStackMinPeriod`, because the rate limiter on the SlowConsensusActor →
+            // StackComposer lane HOLDS the prior stack's `Stack.HardConfirmed` for that long
+            // before it arms StackComposer to close the final stack over the last block(s).
+            // Without (b) the throttled final-stack trigger never arrives before `terminate()`
+            // and the last block is left uncovered. The fast cycle has its own analogous
+            // tail-drain (the L1-polling tick path described just above); this is its
+            // slow-cycle counterpart.
+            nodeConfig = lastState.params.multiNodeConfig.nodeConfigs.values.head
+            slowTailDrain =
+                (nodeConfig.peerLiaisonResendInterval * 2) + nodeConfig.hardStackMinPeriod
+            _ <- IO.sleep(slowTailDrain)
+
             _ <- sut.liaisonTickFibers.traverse_(_.cancel)
             _ <- sut.system.terminate()
             _ <- logger.warn("shutdownSut: system was terminated")
@@ -459,29 +553,54 @@ case class Stage4Suite(
                 Prop.exception(RuntimeException(s"SUT actor errors:\n${errors.mkString("\n")}"))
             else analysisProp
 
-    private def analyzeBlockBriefs(lastState: ModelState, sut: Stage4Sut): IO[Prop] = for
-        briefsByPeer <- sut.blockBriefs.toList
-            .traverse { case (p, ref) => ref.get.map(p -> _) }
-            .map(_.toMap)
+    private def analyzeBlockBriefs(lastState: ModelState, sut: Stage4Sut): IO[Prop] = {
+        given IOLocal[Tracer] = sut.tracerLocal
+        for
+            briefsByPeer <- sut.blockBriefs.toList
+                .traverse { case (p, ref) => ref.get.map(p -> _) }
+                .map(_.toMap)
 
-        sortedPeers = briefsByPeer.keys.toSeq.sortBy(p => p: Int)
-        nPeers = sortedPeers.length
-        canonicalBriefs = briefsByPeer(sortedPeers.head)
-        submittedIds <- sut.submittedRequestIds.get
+            sortedPeers = briefsByPeer.keys.toSeq.sortBy(p => p: Int)
+            nPeers = sortedPeers.length
+            canonicalBriefs = briefsByPeer(sortedPeers.head)
+            submittedIds <- sut.submittedRequestIds.get
 
-        _ <- IO(
-          printBlockTable(
-            canonicalBriefs,
-            sortedPeers,
-            briefsByPeer,
-            nPeers,
-            submittedIds,
-            lastState
-          )
-        )
-    yield propLiveness(submittedIds, canonicalBriefs) &&
-        propDepositTiming(lastState.registeredDeposits, canonicalBriefs) &&
-        propValidRatio(lastState, canonicalBriefs)
+            stacksByPeer <- sut.stacks.toList
+                .traverse { case (p, ref) => ref.get.map(p -> _) }
+                .map(_.toMap)
+            canonicalStacks = stacksByPeer(sortedPeers.head)
+            _ <- logger.info(
+              "hard-confirmed stacks per peer: " +
+                  sortedPeers
+                      .map(p => s"peer${p: Int}=${stacksByPeer.getOrElse(p, Vector.empty).size}")
+                      .mkString(", ")
+            )
+
+            _ <- traceBlockTable(
+              canonicalBriefs,
+              sortedPeers,
+              briefsByPeer,
+              nPeers,
+              submittedIds,
+              lastState,
+            )
+
+            _ <- traceStackTable(canonicalStacks, sortedPeers, stacksByPeer, nPeers)
+
+            // Mock backend resolves instantly; one attempt is enough. Kept the (attempts, sleep)
+            // knob so a Yaci / Blockfrost-backed stage4 future swap just bumps these.
+            effectsLandedProp <- EffectsLanded.propEffectsLanded(
+              canonicalStacks,
+              sut.cardanoBackend,
+              attempts = 1,
+              sleep = 0.seconds,
+            )
+        yield propLiveness(submittedIds, canonicalBriefs) &&
+            propDepositTiming(lastState.registeredDeposits, canonicalBriefs) &&
+            propValidRatio(lastState, canonicalBriefs) &&
+            propStackCoverage(canonicalBriefs, canonicalStacks) &&
+            effectsLandedProp
+    }
 
     // TODO: side-channel validity-error tracking + propNoStaleRejections
     //
@@ -577,23 +696,48 @@ case class Stage4Suite(
             s"(SUT is more permissive than the model)"
     }
 
-    private def printBlockTable(
+    /** Property: the slow cycle made progress and kept up — it hard-confirmed at least one stack
+      * and, by shutdown idle, every block the fast cycle produced (observed via
+      * [[BlockBriefObserver]]) is contained in some hard-confirmed stack (observed via
+      * [[StackObserver]]). Catches a slow side that stalls, never closes a stack, or fails to
+      * aggregate hard-acks into [[Stack.HardConfirmed]]. Both observers read the canonical peer.
+      */
+    private def propStackCoverage(
+        canonicalBriefs: Vector[BlockBrief.Intermediate],
+        canonicalStacks: Vector[Stack.HardConfirmed]
+    ): Prop = {
+        // A stack covers the inclusive block range [firstBlockNum, lastBlockNum] from its
+        // brief. The Initial stack carries a synthetic zero-range brief ([0..0]), so it
+        // contributes no real block coverage.
+        val coveredRanges: Vector[(Int, Int)] =
+            canonicalStacks.map { s =>
+                val b = s.brief
+                ((b.firstBlockNum: Int), (b.lastBlockNum: Int))
+            }
+        def covered(n: BlockNumber): Boolean =
+            coveredRanges.exists { case (lo, hi) => lo <= (n: Int) && (n: Int) <= hi }
+        val observedBlocks: Set[BlockNumber] = canonicalBriefs.map(_.blockNum).toSet
+        val uncovered = observedBlocks.filterNot(covered)
+        (Prop(canonicalStacks.nonEmpty) :|
+            "stack coverage: slow cycle hard-confirmed no stacks") &&
+        (Prop(uncovered.isEmpty) :|
+            s"stack coverage: ${uncovered.size} observed block(s) never in any " +
+            s"hard-confirmed stack: ${uncovered.toSeq.sorted.mkString(", ")}")
+    }
+
+    private def traceBlockTable(
         canonicalBriefs: Vector[BlockBrief.Intermediate],
         sortedPeers: Seq[HeadPeerNumber],
         briefsByPeer: Map[HeadPeerNumber, Vector[BlockBrief.Intermediate]],
         nPeers: Int,
         submittedIds: Vector[RequestId],
-        lastState: ModelState
-    ): Unit = {
+        lastState: ModelState,
+    )(using IOLocal[Tracer]): IO[Unit] = {
         val colWidth = 72
         val divider = s"+${"-" * (colWidth + 2)}+"
         val header = s"| ${"Block".padTo(colWidth, ' ')} |"
 
-        println(divider)
-        println(header)
-        println(divider)
-
-        canonicalBriefs.foreach { brief =>
+        val rows = canonicalBriefs.map { brief =>
             val blockType = brief match {
                 case _: BlockBrief.Minor => "Min"; case _: BlockBrief.Major => "Maj"
             }
@@ -613,10 +757,8 @@ case class Stage4Suite(
             val events = (evs ++ abs ++ ref).mkString(" ")
             val label =
                 s"#${brief.blockNum: Int} $blockType v$vMaj.$vMin lead=p$leader | $events"
-            println(s"| ${label.take(colWidth).padTo(colWidth, ' ')} |")
+            s"| ${label.take(colWidth).padTo(colWidth, ' ')} |"
         }
-
-        println(divider)
 
         // SUT processing order — each block contributes its absorbed deposits, then its events.
         val sutOrder: Vector[RequestId] =
@@ -633,18 +775,77 @@ case class Stage4Suite(
         val sutValid = sutL2Events.count(_._2 == ValidityFlag.Valid)
         val sutTotal = sutL2Events.size
 
-        println(
-          s"Peers: ${sortedPeers.map(p => s"p${p: Int}=${briefsByPeer(p).length}blks").mkString("  ")}"
-        )
-        println(
-          s"Common prefix: $commonPrefixLen / ${submittedIds.length} (submission order vs SUT block order)"
-        )
-        println(
-          s"Valid/total (L2 txs) — model: $modelValid/$modelTotal  SUT: $sutValid/$sutTotal"
-        )
-        println(
-          "Legend: Min=Minor Maj=Major v=version lead=leader p=peer r=requestNum V=valid I=invalid abs=deposit-absorbed ref=refunded"
-        )
+        val peersLine =
+            s"Peers: ${sortedPeers.map(p => s"p${p: Int}=${briefsByPeer(p).length}blks").mkString("  ")}"
+        val prefixLine =
+            s"Common prefix: $commonPrefixLen / ${submittedIds.length} (submission order vs SUT block order)"
+        val ratioLine =
+            s"Valid/total (L2 txs) — model: $modelValid/$modelTotal  SUT: $sutValid/$sutTotal"
+        val legend =
+            "Legend: Min=Minor Maj=Major v=version lead=leader p=peer r=requestNum V=valid I=invalid abs=deposit-absorbed ref=refunded"
+
+        val text = (divider :: header :: divider :: rows.toList ++
+            (divider :: peersLine :: prefixLine :: ratioLine :: legend :: Nil))
+            .mkString("\n", "\n", "")
+        Tracer.info(text)
+    }
+
+    /** Mirror of [[traceBlockTable]] for the slow cycle: one row per hard-confirmed stack on the
+      * canonical peer, showing the stack number, covered block range, partition spine (Min/Maj/Fin
+      * kinds, in stack order), and the round-2 unlock selection (settlement-at-i,
+      * finalization-at-i, or sole-acknowledgment / no unlock). Stack-0 renders as `Init`. Followed
+      * by a per-peer stack-count line for cross-peer convergence at a glance.
+      */
+    private def traceStackTable(
+        canonicalStacks: Vector[Stack.HardConfirmed],
+        sortedPeers: Seq[HeadPeerNumber],
+        stacksByPeer: Map[HeadPeerNumber, Vector[Stack.HardConfirmed]],
+        nPeers: Int,
+    )(using IOLocal[Tracer]): IO[Unit] = {
+        val colWidth = 72
+        val divider = s"+${"-" * (colWidth + 2)}+"
+        val header = s"| ${"Stack".padTo(colWidth, ' ')} |"
+
+        val rows = canonicalStacks.map { stack =>
+            val brief = stack.brief
+            val sNum = brief.stackNum: Int
+            val first = brief.firstBlockNum: Int
+            val last = brief.lastBlockNum: Int
+            val nBlks = last - first + 1
+            // Slow-consensus leadership schedule is round-robin by stack number, mirroring
+            // fast-consensus block-number round-robin.
+            val leader = sNum % nPeers
+            val label = stack.effects match {
+                case _: StackEffects.HardConfirmed.Initial =>
+                    s"#$sNum Init lead=p$leader | init+fallback"
+                case r: StackEffects.HardConfirmed.Regular =>
+                    val blkLabel = if nBlks == 1 then "blk" else "blks"
+                    val parts = r.partitions.toList.map {
+                        case _: PartitionEffects.Minor[?] => "Min"
+                        case _: PartitionEffects.Major[?] => "Maj"
+                        case _: PartitionEffects.Final    => "Fin"
+                    }
+                    val unlockStr = PartitionEffects.unlock(r.partitions) match {
+                        case Some(PartitionEffects.Unlock.Settlement(i))   => s"sttlmnt@$i"
+                        case Some(PartitionEffects.Unlock.Finalization(i)) => s"fin@$i"
+                        case None                                          => "sole"
+                    }
+                    s"#$sNum [$first..$last] ($nBlks $blkLabel) Reg lead=p$leader | " +
+                        s"[${parts.mkString(",")}] u=$unlockStr"
+            }
+            s"| ${label.take(colWidth).padTo(colWidth, ' ')} |"
+        }
+
+        val peersLine =
+            s"Peers: ${sortedPeers.map(p => s"p${p: Int}=${stacksByPeer(p).length}stk").mkString("  ")}"
+        val legend =
+            "Legend: Init=initial stack Reg=regular Min/Maj/Fin=partition kinds " +
+                "u=unlock (set=settlement, fin=finalization, sole=no unlock) @i=partition index"
+
+        val text = (divider :: header :: divider :: rows.toList ++
+            (divider :: peersLine :: legend :: Nil))
+            .mkString("\n", "\n", "")
+        Tracer.info(text)
     }
 
 // ===================================
@@ -742,7 +943,7 @@ object Stage4Suite:
                 pn -> (survived ++ newOutputs)
             }.toMap
 
-            startTime = config.headConfig.initialBlock.endTime.convert
+            startTime = config.headConfig.initialBlock.blockBrief.endTime.convert
         yield ModelState(
           params = Params(
             config,

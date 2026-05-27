@@ -64,18 +64,22 @@
     <logger name="Stage4.Sut" level="info"/>
     <logger name="Stage4.Suite" level="info"/>
     <logger name="Stage4.BlockBriefObserver" level="info"/>
+    <logger name="Stage4.StackObserver" level="debug"/>
 
 
     <!-- hydrozoa -->
     <!-- default: warn -->
     <logger name="BlockWeaver" level="info"/>
-    <logger name="ConsensusActor" level="info"/>
+    <logger name="StackComposer" level="debug"/>
+    <logger name="FastConsensusActor" level="debug"/>
+    <logger name="SlowConsensusActor" level="debug"/>
     <logger name="EventSequencer" level="info"/>
     <logger name="CardanoLiaison" level="warn"/>
     <logger name="JointLedger" level="info"/>
-    <logger name="PeerLiaison" level="info"/>
+    <logger name="Limiter" level="debug"/>
+    <logger name="PeerLiaison" level="debug"/>
     <logger name="PeerLiaisonMermaid" level="info"/>
-    <logger name="PeerWsTransport" level="info"/>
+    <logger name="PeerWsTransport" level="debug"/>
     <logger name="TxTiming" level="info"/>
     <logger name="DepositsMap" level="info"/>
 

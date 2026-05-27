@@ -16,6 +16,7 @@ import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.backend.cardano.CardanoBackend.Error.*
 import hydrozoa.multisig.ledger.block.BlockHeader
+import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
 import hydrozoa.rulebased.DisputeActor.Error.NoSuitableCollateralUtxosFound
 import hydrozoa.rulebased.DisputeActor.Error.ParseError.Treasury.TreasuryResolved
 import hydrozoa.rulebased.DisputeActor.{Error, *}
@@ -57,7 +58,7 @@ extension (tx: Transaction) {
   *   - It throws an exception if multiple utxos with the treasury token are found.
   */
 final case class DisputeActor(
-    blockHeader: BlockHeader.Minor.Onchain,
+    sec: StandaloneEvacuationCommitment.Onchain,
     cardanoBackend: CardanoBackend[IO],
     signatures: List[BlockHeader.Minor.HeaderSignature],
 )(using config: Config)
@@ -145,7 +146,7 @@ final case class DisputeActor(
                       uncastVoteUtxo = ownVoteUtxo,
                       treasuryUtxo = treasuryUtxo,
                       collateralUtxo = collateralUtxo,
-                      blockHeader = blockHeader,
+                      sec = sec,
                       signatures = signatures,
                     )
                     for {

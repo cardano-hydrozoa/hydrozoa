@@ -19,6 +19,8 @@ object RequestNumber {
         n
     }
 
+    val zero: RequestNumber = apply(0)
+
     given Conversion[RequestNumber, Long] = identity
 
     given Ordering[RequestNumber] with {

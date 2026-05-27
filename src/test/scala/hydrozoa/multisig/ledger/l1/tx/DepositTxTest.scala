@@ -42,7 +42,7 @@ def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = 
             .posNum[Long]
             .map(sec =>
                 RequestValidityEndTime(
-                  config.initialBlock.endTime + FiniteDuration(sec, TimeUnit.SECONDS)
+                  config.initialBlock.blockBrief.endTime + FiniteDuration(sec, TimeUnit.SECONDS)
                 )
             )
 

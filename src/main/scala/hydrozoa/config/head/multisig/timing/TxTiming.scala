@@ -386,6 +386,19 @@ object TxTiming {
             quantizedInstantCodec
     }
 
+    object StackTimes {
+
+        /** Wall-clock instant (quantized) at which the slow leader finished composing the
+          * [[hydrozoa.multisig.ledger.stack.StackBrief]] for its stack. Used by the
+          * [[hydrozoa.multisig.consensus.limiter.Limiter]] on the SlowConsensusActor →
+          * StackComposer lane to bound stack-production rate.
+          */
+        opaque type StackCreationEndTime = QuantizedInstant
+        def StackCreationEndTime(x: QuantizedInstant): StackCreationEndTime = x
+        given Conversion[StackCreationEndTime, QuantizedInstant] = identity
+        given (using CardanoNetwork.Section): Codec[StackCreationEndTime] = quantizedInstantCodec
+    }
+
     object RequestTimes {
         opaque type RequestValidityStartTime = QuantizedInstant
         def RequestValidityStartTime(x: QuantizedInstant): RequestValidityStartTime = x

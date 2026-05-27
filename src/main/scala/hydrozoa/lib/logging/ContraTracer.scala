@@ -16,7 +16,7 @@ import hydrozoa.lib.logging.TracerA.Squelching
   * The primary issue I was running into when trying to integrate the original `Tracer` is getting
   * messages like:
   *
-  * 09:24:00.520 INFO ConsensusActor.1 [ackId=(0,56) argumentType=AckBlock peer=1 ackType=minor
+  * 09:24:00.520 INFO FastConsensusActor.1 [ackId=(0,56) argumentType=AckBlock peer=1 ackType=minor
   * ack={"minor":{"ackId":[0,56]},"blockNum":47} blockNumber=47] block confirmed: block=47
   * type=minor v9.1
   *

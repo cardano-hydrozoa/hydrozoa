@@ -7,13 +7,14 @@ import com.suprnation.actor.ActorSystem
 import hydrozoa.integration.stage4.Commands.*
 import hydrozoa.lib.logging.{Logging, Tracer}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
-import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, ConsensusActor, EventSequencer, PeerLiaison, UserRequest, UserRequestWithId}
+import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, FastConsensusActor, EventSequencer, PeerLiaison, SlowConsensusActor, StackComposer, UserRequest, UserRequestWithId}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.block.{Block, BlockBrief}
-import Block.Unsigned.{Minor as UMinor, Major as UMajor}
+import hydrozoa.multisig.ledger.block.BlockBrief
+import BlockBrief.{Minor as BMinor, Major as BMajor}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.joint.JointLedger
+import hydrozoa.multisig.ledger.stack.Stack
 import org.scalacheck.commands.SutCommand
 
 // ===================================
@@ -25,50 +26,86 @@ private[stage4] case class PeerStack(
     cardanoLiaison: CardanoLiaison.Handle,
     eventSequencer: EventSequencer.Handle,
     jointLedger: JointLedger.Handle,
-    consensusActor: ConsensusActor.Handle,
+    consensusActor: FastConsensusActor.Handle,
+    stackComposer: StackComposer.Handle,
+    slowConsensusActor: SlowConsensusActor.Handle,
 )
 
 // ===================================
 // Block brief observer
 // ===================================
 
-/** Proxy actor wrapping ConsensusActor. Intercepts Block.Unsigned.{Minor,Major} to record block
-  * briefs; forwards everything else unchanged. Both leader-produced and follower-reproduced blocks
-  * flow through JointLedger.handleBlock → ConsensusActor, so this captures the complete ordered
-  * sequence seen by the peer.
+/** Proxy actor wrapping FastConsensusActor. Intercepts intermediate `BlockBrief`s (Minor / Major)
+  * to record the per-peer brief sequence; forwards everything else unchanged. Both leader-produced
+  * and follower-reproduced briefs flow through JointLedger.handleBlock → FastConsensusActor, so
+  * this captures the complete ordered sequence seen by the peer.
   */
 private[stage4] class BlockBriefObserver(
     peerNum: HeadPeerNumber,
-    real: ConsensusActor.Handle,
+    real: FastConsensusActor.Handle,
     briefs: Ref[IO, Vector[BlockBrief.Intermediate]],
-) extends Actor[IO, ConsensusActor.Request]:
+) extends Actor[IO, FastConsensusActor.Request]:
     private val logger = Logging.loggerIO(s"Stage4.BlockBriefObserver.${peerNum: Int}")
-    override def receive: Receive[IO, ConsensusActor.Request] = {
-        case block: UMinor =>
+    override def receive: Receive[IO, FastConsensusActor.Request] = {
+        case brief: BMinor =>
             logger.debug(
-              s"received UMinor block=${block.blockNum}, capturing brief and forwarding"
+              s"received BlockBrief.Minor block=${brief.blockNum}, capturing and forwarding"
             ) >>
-                briefs.update(_ :+ block.blockBrief) >>
+                briefs.update(_ :+ brief) >>
+                (real ! brief) >>
                 logger.debug(
-                  s"brief captured for block=${block.blockNum}, forwarding to real ConsensusActor"
-                ) >>
-                (real ! block) >>
-                logger.debug(s"forwarded UMinor block=${block.blockNum} to real ConsensusActor")
-        case block: UMajor =>
+                  s"forwarded BlockBrief.Minor block=${brief.blockNum} to real FastConsensusActor"
+                )
+        case brief: BMajor =>
             logger.debug(
-              s"received UMajor block=${block.blockNum}, capturing brief and forwarding"
+              s"received BlockBrief.Major block=${brief.blockNum}, capturing and forwarding"
             ) >>
-                briefs.update(_ :+ block.blockBrief) >>
+                briefs.update(_ :+ brief) >>
+                (real ! brief) >>
                 logger.debug(
-                  s"brief captured for block=${block.blockNum}, forwarding to real ConsensusActor"
-                ) >>
-                (real ! block) >>
-                logger.debug(s"forwarded UMajor block=${block.blockNum} to real ConsensusActor")
+                  s"forwarded BlockBrief.Major block=${brief.blockNum} to real FastConsensusActor"
+                )
         case msg =>
-            logger.debug(s"received non-block msg=${msg.getClass.getSimpleName}, forwarding") >>
+            logger.debug(s"received non-brief msg=${msg.getClass.getSimpleName}, forwarding") >>
                 (real ! msg) >>
                 logger.debug(
-                  s"forwarded non-block msg=${msg.getClass.getSimpleName} to real ConsensusActor"
+                  s"forwarded non-brief msg=${msg.getClass.getSimpleName} to real FastConsensusActor"
+                )
+    }
+
+// ===================================
+// Stack observer
+// ===================================
+
+/** Proxy actor wrapping CardanoLiaison. Intercepts every `Stack.HardConfirmed` the peer's
+  * SlowConsensusActor emits (the slow cycle's terminal artifact) to record the per-peer sequence of
+  * hard-confirmed stacks; forwards everything else (and the stack itself) unchanged so the real
+  * CardanoLiaison still drives L1 submission. Parallels [[BlockBriefObserver]] on the slow side.
+  */
+private[stage4] class StackObserver(
+    peerNum: HeadPeerNumber,
+    real: CardanoLiaison.Handle,
+    stacks: Ref[IO, Vector[Stack.HardConfirmed]],
+) extends Actor[IO, CardanoLiaison.Request]:
+    private val logger = Logging.loggerIO(s"Stage4.StackObserver.${peerNum: Int}")
+    override def receive: Receive[IO, CardanoLiaison.Request] = {
+        case s: Stack.HardConfirmed =>
+            val brief = s.brief
+            logger.debug(
+              s"received Stack.HardConfirmed stack=${brief.stackNum} " +
+                  s"blocks=${brief.firstBlockNum}..${brief.lastBlockNum}, " +
+                  "capturing and forwarding"
+            ) >>
+                stacks.update(_ :+ s) >>
+                (real ! s) >>
+                logger.debug(
+                  s"forwarded Stack.HardConfirmed stack=${brief.stackNum} to real CardanoLiaison"
+                )
+        case msg =>
+            logger.debug(s"received non-stack msg=${msg.getClass.getSimpleName}, forwarding") >>
+                (real ! msg) >>
+                logger.debug(
+                  s"forwarded non-stack msg=${msg.getClass.getSimpleName} to real CardanoLiaison"
                 )
     }
 
@@ -96,6 +133,10 @@ case class Stage4Sut(
     // (poll L1 + push `PollResults` to BlockWeaver).
     liaisonTickFibers: List[Fiber[IO, Throwable, Nothing]],
     blockBriefs: Map[HeadPeerNumber, Ref[IO, Vector[BlockBrief.Intermediate]]],
+    // Per-peer hard-confirmed stacks captured by [[StackObserver]] (the slow cycle's
+    // terminal artifact), parallel to `blockBriefs` on the fast side. Used by
+    // `analyzeBlockBriefs` to assert the slow side covered every observed block.
+    stacks: Map[HeadPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]],
     submittedRequestIds: Ref[IO, Vector[RequestId]],
     tracerLocal: IOLocal[Tracer],
     // Cleanup hooks for resources allocated outside the actor system (currently the
@@ -106,11 +147,11 @@ case class Stage4Sut(
 
 /** Selects how a [[Stage4Sut]] wires its peer liaisons to remote peers.
   *
-  *   - [[Direct]] (default) — every peer's [[PeerLiaison]] gets the actual remote handle from
-  *     the corresponding peer's actor system. In-process, no network. Compatible with
+  *   - [[Direct]] (default) — every peer's [[PeerLiaison]] gets the actual remote handle from the
+  *     corresponding peer's actor system. In-process, no network. Compatible with
   *     [[ModelBasedSuite#useTestControl]] = `true`.
-  *   - [[WebSocket]] — every peer runs its own [[PeerWsTransport]] bound to localhost on a
-  *     distinct port. Cross-peer communication happens over real WebSocket connections. Forces
+  *   - [[WebSocket]] — every peer runs its own [[PeerWsTransport]] bound to localhost on a distinct
+  *     port. Cross-peer communication happens over real WebSocket connections. Forces
   *     [[ModelBasedSuite#useTestControl]] = `false` since real sockets don't speak virtual time.
   *     Ports start at [[basePort]] and increase by `peerNum`.
   */

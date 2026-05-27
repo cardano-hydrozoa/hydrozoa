@@ -18,7 +18,6 @@ import hydrozoa.multisig.consensus.UserRequest.TransactionRequest
 import hydrozoa.multisig.consensus.UserRequestBody.TransactionRequestBody
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
-import hydrozoa.multisig.ledger.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
@@ -117,7 +116,6 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
                 blockVersion = BlockVersion.Full(0, 0),
                 startTime = blockCreationStartTime,
                 endTime = blockCreationEndTime,
-                kzgCommitment = KzgCommitment.empty,
                 fallbackTxStartTime = fallbackTxStartTime,
                 forcedMajorBlockWakeupTime = forcedMajorBlockWakeupTime,
                 mDepositDecisionWakeupTime = None

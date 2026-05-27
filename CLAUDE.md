@@ -90,6 +90,26 @@ nix develop
 - **Import sorting**: scalastyle format
 - **Scalafix rules**: ExplicitResultTypes, OrganizeImports, RemoveUnused, etc.
 
+### Comments
+
+- Comments describe the code **as it is now** — no historical perspective. When you change
+  something, do not leave notes about what it used to be, what moved where, when, or why it
+  changed (no "formerly X", "moved to the slow side", "as of step N", "no longer a stub",
+  "renamed from", etc.). State only the present behavior.
+- The history belongs in Git and in memory — not in the code, where it accumulates and makes
+  reading harder.
+- Keep a comment **scoped to the local code's concern**. Don't explain downstream or other-actor
+  internals in a method that doesn't do that work (e.g. a fast-side `JointLedger` path should not
+  describe slow-side KZG/SEC/settlement mechanics). State only what's locally true; that detail
+  belongs where the work lives.
+
+### Logging
+
+- When you add a new named logger / tracer route, add a matching `<logger name="…">` line to
+  **every** `logback.xml` in the same subproject — keep them in sync. Configs by subproject:
+  - root: `src/main/resources/logback.xml` **and** `src/test/resources/logback.xml`
+  - `integration`: `integration/src/test/resources/logback.xml`
+
 ## Testing
 
 - **Unit tests**: Located in `src/test/scala/hydrozoa/`
