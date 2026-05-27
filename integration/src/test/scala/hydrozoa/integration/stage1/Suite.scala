@@ -532,7 +532,7 @@ case class Suite(
             })
 
             jointLedgerConnections = JointLedger.Connections(
-              consensusActor = agent,
+              fastConsensusActor = agent,
               stackComposer = stackComposerStub,
               peerLiaisons = List(),
             )

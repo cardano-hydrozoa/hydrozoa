@@ -156,7 +156,7 @@ object JointLedgerTestHelpers {
                 JointLedger(
                   config,
                   JointLedger.Connections(
-                    consensusActor = consensusAgent.narrowRequest[FastConsensusActor.Request],
+                    fastConsensusActor = consensusAgent.narrowRequest[FastConsensusActor.Request],
                     stackComposer = stackComposerSink.narrowRequest[StackComposer.Request],
                     peerLiaisons = List()
                   ),

@@ -95,7 +95,7 @@ final case class JointLedger(
                 _ <- connections.set(
                   Some(
                     Connections(
-                      consensusActor = _connections.consensusActor,
+                      fastConsensusActor = _connections.consensusActor,
                       stackComposer = _connections.stackComposer,
                       peerLiaisons = _connections.peerLiaisons
                     )
@@ -157,9 +157,15 @@ final case class JointLedger(
             case p: Block.SoftConfirmed.Next => proxyConfirmation(p)
         }
 
-    /** Notify the L2 ledger that the brief was soft-confirmed. Refund-tx CBORs (slow-side artifact)
-      * are not available on the fast-only path; pass an empty list. The slow consensus actor will
-      * be responsible for surfacing refund tx bytes once wired up.
+    /** Notify the L2 ledger that the brief was soft-confirmed, recording the block's refund-tx
+      * CBORs in the L2 ledger's per-block `confirmations` map for L2 clients (SugarRush) to
+      * retrieve.
+      *
+      * TODO(GUM-133): incomplete — passes an empty refund-tx list. Post-dated refunds now live on
+      * the slow side (`BlockResult.postDatedRefundTxs` → slow consensus → L1), so this fast path
+      * has no refund CBORs to hand the L2 ledger, and a client querying `confirmations` sees none.
+      * The proxy was a temporary measure; simply relocating it to slow consensus is not the answer
+      * — the refund-surfacing contract needs a joint design with the SugarRush team.
       */
     private def proxyConfirmation(next: Block.SoftConfirmed.Next): IO[Unit] = {
         val l2Command = L2LedgerCommand.ProxyBlockConfirmation(
@@ -221,12 +227,10 @@ final case class JointLedger(
             _ <- executeL2ProxyCommand(l2Command)
         } yield ()
 
-    /** Pure deposit-ledger op (plain function, no ledger monad): parse the deposit tx, check its
-      * submission-deadline TTL, and append the produced deposit utxo to the L1 deposits map. The
-      * slow side owns the treasury chain; the fast side (this actor) owns only the deposits map,
-      * which is the whole of its L1-ledger surface. Returns the new map + the produced deposit utxo
-      * and its post-dated refund tx, or a [[DepositLedgerError]] (rejected via `rejectEvent`, never
-      * raised).
+    /** Pure deposit-ledger op: parse the deposit tx, check its submission-deadline TTL, and append
+      * the produced deposit utxo to the L1 deposits map — this actor's only L1-ledger surface.
+      * Returns the new map + the produced deposit utxo and its post-dated refund tx, or a
+      * [[DepositLedgerError]] (rejected via `rejectEvent`, never raised).
       *
       * NOTE: checks SOME time bounds — specifically that the deposit's submission deadline matches
       * the one expected from its validity-end.
@@ -266,8 +270,8 @@ final case class JointLedger(
         )
     }
 
-    /** Update the JointLedger's state -- the work-in-progress block -- to accept or reject deposits
-      * depending on whether the [[dappLedger]] Actor can successfully register the deposit,
+    /** Update the work-in-progress block to accept or reject the deposit, depending on whether the
+      * L2 ledger can register it.
       */
     private def registerDeposit(req: UserRequestWithId.DepositRequest): IO[Unit] = {
         import req.*
@@ -338,8 +342,8 @@ final case class JointLedger(
         } yield ()
     }
 
-    /** Update the current block with the result of passing the tx to the virtual ledger, as well as
-      * updating ledgerEventsRequired
+    /** Apply a transaction request to the L2 ledger and record its outcome (valid / invalid) on the
+      * work-in-progress block.
       */
     private def applyTransaction(
         req: UserRequestWithId.TransactionRequest
@@ -398,9 +402,8 @@ final case class JointLedger(
         } yield ()
     }
 
-    /** Moves the state of the JointLedger from "Done" to "Producing", setting the time and
-      * ledgerEventsRequired appropriately, while initializing all other fields.
-      * @return
+    /** Move the JointLedger from `Done` to `Producing` for the next block: set the creation start
+      * time and re-initialize the per-block transient fields (L2 ledger state, user-request state).
       */
     private def startBlock(args: StartBlock): IO[Unit] = {
         import args.*
@@ -422,9 +425,7 @@ final case class JointLedger(
         }
     }
 
-    /** Complete a Minor or Major block If
-      * @return
-      */
+    /** Complete a Minor or Major block. */
     private def completeBlockRegular(
         args: CompleteBlockRegular
     ): IO[Unit] = {
@@ -480,7 +481,11 @@ final case class JointLedger(
         }
     }
 
-    /** KZG commitment + block brief (which is a bit strange)
+    /** Build the next block's header and intermediate brief from the current `Producing` state and
+      * the deposit decisions. Returns the updated `Producing`, the brief, and the block's
+      * evacuation-map diffs.
+      *
+      * TODO: I don't like definitions like that - too many things in one place.
       */
     def mkBlockBriefIntermediate(
         p: JointLedger.Producing,
@@ -690,8 +695,8 @@ final case class JointLedger(
             )
             // 2. Sign the brief and ship brief + own soft-ack to the consensus actor.
             softAck = ownHeadWallet.mkSoftAck(brief, localFinalization.asBoolean)
-            _ <- conn.consensusActor ! brief
-            _ <- conn.consensusActor ! softAck
+            _ <- conn.fastConsensusActor ! brief
+            _ <- conn.fastConsensusActor ! softAck
             // 3. Slow side: hand the block result to the stack composer (independent of fast
             //    cycle).
             _ <- conn.stackComposer ! blockResult
@@ -734,7 +739,7 @@ object JointLedger {
     type Config = HeadConfig.Section & OwnHeadPeerPrivate.Section
 
     final case class Connections(
-        consensusActor: FastConsensusActor.Handle,
+        fastConsensusActor: FastConsensusActor.Handle,
         stackComposer: StackComposer.Handle,
         peerLiaisons: List[PeerLiaison.Handle]
     )
