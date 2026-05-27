@@ -74,7 +74,7 @@ private object VoteTxOps {
         uncastVoteUtxo: VoteUtxo[VoteStatus.AwaitingVote],
         treasuryUtxo: RuleBasedTreasuryUtxo,
         collateralUtxo: CollateralUtxo,
-        blockHeader: StandaloneEvacuationCommitment.Onchain,
+        sec: StandaloneEvacuationCommitment.Onchain,
         signatures: List[BlockHeader.Minor.HeaderSignature],
     ) {
 
@@ -88,8 +88,8 @@ private object VoteTxOps {
                                 case AwaitingVote(_) =>
                                     Right(
                                       uncastVoteUtxo.voteOutput.castVote(
-                                        blockHeader.commitment,
-                                        blockHeader.versionMinor
+                                        sec.commitment,
+                                        sec.versionMinor
                                       )
                                     )
                                 case _ => Left(VoteAlreadyCast)
@@ -129,7 +129,7 @@ private object VoteTxOps {
             // Create redeemer for dispute resolution script
             val redeemer = DisputeRedeemer.Vote(
               VoteRedeemer(
-                blockHeader,
+                sec,
                 SList.from(
                   signatures.map(sig => ByteString.fromArray(IArray.genericWrapArray(sig).toArray))
                 )

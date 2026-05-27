@@ -58,7 +58,7 @@ extension (tx: Transaction) {
   *   - It throws an exception if multiple utxos with the treasury token are found.
   */
 final case class DisputeActor(
-    blockHeader: StandaloneEvacuationCommitment.Onchain,
+    sec: StandaloneEvacuationCommitment.Onchain,
     cardanoBackend: CardanoBackend[IO],
     signatures: List[BlockHeader.Minor.HeaderSignature],
 )(using config: Config)
@@ -146,7 +146,7 @@ final case class DisputeActor(
                       uncastVoteUtxo = ownVoteUtxo,
                       treasuryUtxo = treasuryUtxo,
                       collateralUtxo = collateralUtxo,
-                      blockHeader = blockHeader,
+                      sec = sec,
                       signatures = signatures,
                     )
                     for {

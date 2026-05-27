@@ -176,7 +176,7 @@ object DisputeActorTestHelpers {
               )
             )
             disputeActor = DisputeActor(
-              blockHeader = blockHeader,
+              sec = blockHeader,
               cardanoBackend = cardanoBackend,
               signatures = env.multisignHeader(blockHeader).toList
             )(using env.nodeConfigs.head._2)

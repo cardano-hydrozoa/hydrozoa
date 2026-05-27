@@ -15,7 +15,7 @@ import scalus.cardano.ledger.TransactionHash
   * actors, and those proceed autonomously. I don't think we need actors for these.
   */
 case class RuleBasedRegimeManager(
-    blockHeader: StandaloneEvacuationCommitment.Onchain,
+    sec: StandaloneEvacuationCommitment.Onchain,
     signatures: List[BlockHeader.Minor.HeaderSignature],
     cardanoBackend: CardanoBackend[IO],
     votingDeadline: QuantizedInstant,
@@ -31,7 +31,7 @@ case class RuleBasedRegimeManager(
         for {
             _ <- context.actorOf(
               DisputeActor(
-                blockHeader = blockHeader,
+                sec = sec,
                 signatures = signatures,
                 cardanoBackend = cardanoBackend,
               )
