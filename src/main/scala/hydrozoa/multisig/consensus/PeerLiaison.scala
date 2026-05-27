@@ -270,7 +270,9 @@ trait PeerLiaison(
                         nEvent <- this.nRequest.get
                         nY = y.requestId.requestNum
                         _ <- IO.raiseWhen(nY.convert != 0L && nEvent.increment != nY)(
-                          Error(s"Bad LedgerEvent increment: last-seen: $nEvent, attempted: $nY")
+                          Error(
+                            s"Bad LedgerEvent increment: last-appended: $nEvent, attempted: $nY"
+                          )
                         )
                         _ <- this.nRequest.set(nY)
                         _ <- this.qRequest.update(_ :+ y)
@@ -280,7 +282,7 @@ trait PeerLiaison(
                         nAck <- this.nAck.get
                         nY = y.ackNum
                         _ <- IO.raiseWhen(nY.convert != 0L && nAck.increment != nY)(
-                          Error("Bad SoftAck increment: last-seen: $nRequest, attempted: $nY")
+                          Error(s"Bad SoftAck increment: last-appended: $nAck, attempted: $nY")
                         )
                         _ <- this.nAck.set(nY)
                         _ <- this.qAck.update(_ :+ y)
@@ -292,7 +294,7 @@ trait PeerLiaison(
                         nextOwnBlock = config.ownHeadPeerId.nextLeaderBlock(nBlock)
                         _ <- IO.raiseWhen(nextOwnBlock != nY)(
                           Error(
-                            s"Bad BlockBrief.Next increment: last-seen: ${nBlock}, " +
+                            s"Bad BlockBrief.Next increment: last-appended: ${nBlock}, " +
                                 s"expected next block: ${nextOwnBlock}, attempted: ${nY}"
                           )
                         )
@@ -311,7 +313,7 @@ trait PeerLiaison(
                         nextOwnStack = config.ownHeadPeerId.nextSlowLeaderStack(nStack)
                         _ <- IO.raiseWhen(nextOwnStack != nY)(
                           Error(
-                            s"Bad StackBrief increment: last-seen: $nStack, " +
+                            s"Bad StackBrief increment: last-appended: $nStack, " +
                                 s"expected next stack: $nextOwnStack, attempted: $nY"
                           )
                         )
@@ -327,7 +329,7 @@ trait PeerLiaison(
                         nY = y.hardAckNum
                         _ <- IO.raiseWhen(nY.convert != 0 && nHard.increment != nY)(
                           Error(
-                            s"Bad HardAck increment: last-seen: $nHard, attempted: $nY"
+                            s"Bad HardAck increment: last-appended: $nHard, attempted: $nY"
                           )
                         )
                         _ <- this.nHardAck.set(nY)
@@ -727,23 +729,25 @@ object PeerLiaison {
           * (See the per-lane summary table just above the `final case class GetMsgBatch` below for
           * a one-glance reference of all five lanes.)
           *
-          * The five lanes split by per-link sequence shape:
+          * All five lanes share ONE '''next-expected''' cursor contract. They differ only in
+          * per-link sequence SHAPE, which changes the successor function — not the contract:
           *
           *   - Three are CONTIGUOUS per-peer (every peer produces every element): `ackNum`,
-          *     `hardAckNum`, `requestNum`. They share one '''next-expected''' contract.
+          *     `hardAckNum`, `requestNum`. Successor is `+1`.
           *   - Two are SPARSE per-link (only the round-robin leader produces the element):
-          *     `blockNum` and `stackBriefNum`. They share one '''last-seen''' contract keyed on the
-          *     remote's leader schedule.
+          *     `blockNum` and `stackBriefNum`. Successor is the remote's leader schedule
+          *     (`nextLeaderBlock` / `nextSlowLeaderStack`); the cursor is precomputed to the next
+          *     leader item, so its verify check is the same exact match as the contiguous lanes.
           *
-          * Next-expected lanes (`ackNum`, `hardAckNum`, `requestNum`):
+          * The shared next-expected contract:
           *
           *   - The cursor names the NEXT number the requester wants. The responder
           *     (`buildNewMsgBatch`) prunes each queue with `dropWhile(_ < cursor)` and sends the
           *     head. It RETAINS the head until the requester's cursor moves PAST it, so a lost
           *     batch is just re-sent on the next request (retransmit-safe).
           *   - The verifier (`verifyAgainst`) requires the received element's number to equal the
-          *     cursor exactly (`received == current`), then advances the cursor to
-          *     `received.increment` (requests: to `last.increment`).
+          *     cursor exactly (`received == current`), then advances the cursor to its successor
+          *     (`+1` for contiguous lanes; the leader-schedule successor for sparse lanes).
           *   - The initial cursor is each lane's FIRST emitted number, so the very first element
           *     validates against `GetMsgBatch.initial`:
           *     - `requestNum` = 0 — user requests are 0-indexed per peer.
