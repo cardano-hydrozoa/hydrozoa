@@ -7,19 +7,20 @@ import hydrozoa.multisig.consensus.ack.{HardAckNumber, SoftAckNumber}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.stack.StackNumber
-import hydrozoa.multisig.persistence.rocksdb.RocksDbPersistence
+import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import java.nio.file.{Files, Path}
 import java.util.Comparator
 import org.scalatest.Assertion
 import org.scalatest.funsuite.AnyFunSuite
 
-/** Smoke tests for the RocksDB persistence skeleton (P1).
+/** Byte-level smoke tests for the RocksDB [[BackendStore]] implementation (P1).
   *
-  * Each test gets its own fresh temp directory so they don't share state. Tests focus on the
-  * skeleton's contract — open/close, put/get, atomic batch across CFs, range-scan, durability
-  * across reopen, and the version-mismatch refusal.
+  * Each test gets its own fresh temp directory. Tests focus on the backend contract — open/close,
+  * put/get, atomic `RawWriteBatch` across CFs, range-scan, `lastKey` / `lastKeyWithPrefix`,
+  * durability across reopen, and the version-mismatch refusal. The typed actor-facing API
+  * ([[Persistence]] + [[WriteBatch]]) is exercised in `PersistenceTest`.
   */
-class RocksDbPersistenceTest extends AnyFunSuite:
+class RocksDbBackendStoreTest extends AnyFunSuite:
 
     test("put then get returns the same bytes in the same CF") {
         withFreshStore { p =>
@@ -49,12 +50,12 @@ class RocksDbPersistenceTest extends AnyFunSuite:
         }
     }
 
-    test("WriteBatch lands atomically across multiple CFs") {
+    test("RawWriteBatch lands atomically across multiple CFs") {
         withFreshStore { p =>
             val blockKey = LaneKey.Block(BlockNumber(1)).encode
             val softKey = LaneKey.SoftAck(HeadPeerNumber(2), SoftAckNumber(1)).encode
             val batch =
-                WriteBatch.empty
+                RawWriteBatch.empty
                     .put(Cf.Block, blockKey, Array[Byte](0xaa.toByte))
                     .put(Cf.SoftAck, softKey, Array[Byte](0xbb.toByte))
                     .put(Cf.DepositMap, "snap-key".getBytes("UTF-8"), Array[Byte](0xcc.toByte))
@@ -78,20 +79,16 @@ class RocksDbPersistenceTest extends AnyFunSuite:
             val keys = nums.map(n => LaneKey.HardAck(peer, n))
             val seekFrom = LaneKey.HardAck(peer, HardAckNumber(1)).encode
             for
-                _ <- keys.traverse(k => p.put(k, Array[Byte](1)))
+                _ <- keys.traverse(k => p.put(Cf.HardAck, k.encode, Array[Byte](1)))
                 read <- p.cursor(Cf.HardAck, seekFrom).use { c =>
-                    val drainAll: IO[List[(Array[Byte], Array[Byte])]] =
-                        IO.unit.flatMap { _ =>
-                            def loop(
-                                acc: List[(Array[Byte], Array[Byte])]
-                            ): IO[List[(Array[Byte], Array[Byte])]] =
-                                c.next.flatMap {
-                                    case Some(kv) => loop(kv :: acc)
-                                    case None     => IO.pure(acc.reverse)
-                                }
-                            loop(Nil)
+                    def loop(
+                        acc: List[(Array[Byte], Array[Byte])]
+                    ): IO[List[(Array[Byte], Array[Byte])]] =
+                        c.next.flatMap {
+                            case Some(kv) => loop(kv :: acc)
+                            case None     => IO.pure(acc.reverse)
                         }
-                    drainAll
+                    loop(Nil)
                 }
                 got = read.map(kv => LaneKey.decode(Cf.HardAck, kv._1))
             yield
@@ -107,14 +104,14 @@ class RocksDbPersistenceTest extends AnyFunSuite:
             val k = LaneKey.Block(BlockNumber(99)).encode
             val value = "durable".getBytes("UTF-8")
             // First session: write.
-            RocksDbPersistence
+            RocksDbBackendStore
                 .open(tempDir)
                 .use { p =>
                     p.put(Cf.Block, k, value)
                 }
                 .unsafeRunSync()
             // Second session: read back.
-            val got = RocksDbPersistence
+            val got = RocksDbBackendStore
                 .open(tempDir)
                 .use { p =>
                     p.get(Cf.Block, k)
@@ -153,7 +150,7 @@ class RocksDbPersistenceTest extends AnyFunSuite:
               LaneKey.SoftAck(peer2, SoftAckNumber(5))
             )
             for
-                _ <- keys.traverse(k => p.put(k, Array[Byte](1)))
+                _ <- keys.traverse(k => p.put(Cf.SoftAck, k.encode, Array[Byte](1)))
                 got1 <- p.lastKeyWithPrefix(Cf.SoftAck, LaneKey.peerByte(peer1))
             yield
                 val expected = LaneKey.SoftAck(peer1, SoftAckNumber(99)).encode
@@ -171,7 +168,11 @@ class RocksDbPersistenceTest extends AnyFunSuite:
             for
                 // Populate only peer-0 entries.
                 _ <- List(1, 2, 3).traverse(n =>
-                    p.put(LaneKey.SoftAck(peer0, SoftAckNumber(n)), Array[Byte](1))
+                    p.put(
+                      Cf.SoftAck,
+                      LaneKey.SoftAck(peer0, SoftAckNumber(n)).encode,
+                      Array[Byte](1)
+                    )
                 )
                 missing <- p.lastKeyWithPrefix(Cf.SoftAck, LaneKey.peerByte(peer5))
             yield assert(missing.isEmpty, s"expected None, got $missing")
@@ -182,9 +183,9 @@ class RocksDbPersistenceTest extends AnyFunSuite:
         val tempDir = newTempDir()
         try
             // First open seeds the current version.
-            RocksDbPersistence.open(tempDir).use(_ => IO.unit).unsafeRunSync()
+            RocksDbBackendStore.open(tempDir).use(_ => IO.unit).unsafeRunSync()
             // Tamper: rewrite the version key with a bogus value.
-            RocksDbPersistence
+            RocksDbBackendStore
                 .open(tempDir)
                 .use { p =>
                     p.put(
@@ -196,7 +197,7 @@ class RocksDbPersistenceTest extends AnyFunSuite:
                 .unsafeRunSync()
             // Reopen — must fail.
             val outcome =
-                RocksDbPersistence.open(tempDir).use(_ => IO.unit).attempt.unsafeRunSync()
+                RocksDbBackendStore.open(tempDir).use(_ => IO.unit).attempt.unsafeRunSync()
             assert(
               outcome.left.toOption
                   .exists(_.getMessage.contains("schema version mismatch")),
@@ -207,10 +208,10 @@ class RocksDbPersistenceTest extends AnyFunSuite:
 
     // ---- helpers ----
 
-    /** Run `prog(persistence)` against a fresh temp-dir store; clean up afterward. */
-    private def withFreshStore(prog: Persistence[IO] => IO[Assertion]): Assertion =
+    /** Run `prog(backend)` against a fresh temp-dir store; clean up afterward. */
+    private def withFreshStore(prog: BackendStore[IO] => IO[Assertion]): Assertion =
         val tempDir = newTempDir()
-        try RocksDbPersistence.open(tempDir).use(prog).unsafeRunSync()
+        try RocksDbBackendStore.open(tempDir).use(prog).unsafeRunSync()
         finally recursivelyDelete(tempDir)
 
     private def newTempDir(): Path =

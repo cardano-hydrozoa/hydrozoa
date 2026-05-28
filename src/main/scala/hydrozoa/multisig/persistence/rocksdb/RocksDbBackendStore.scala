@@ -7,24 +7,27 @@ import java.util.ArrayList as JArrayList
 import org.rocksdb.{ColumnFamilyDescriptor, ColumnFamilyHandle, ColumnFamilyOptions, DBOptions, ReadOptions, RocksDB, WriteBatch as RWriteBatch, WriteOptions}
 import scala.jdk.CollectionConverters.*
 
-/** RocksDB-backed [[Persistence]] implementation.
+/** RocksDB-backed [[BackendStore]] implementation.
   *
   * Each [[Cf]] is opened as its own RocksDB column family; the default CF is opened too (RocksDB
   * requires it) but is not exposed. The on-disk CF name is the enum case name (UTF-8).
   *
-  * Lifecycle is owned by [[RocksDbPersistence.open]]: it returns a `Resource[IO, Persistence[IO]]`
-  * that loads the native library, opens the DB with all CFs, runs the schema-version check, and
-  * cleans up handles + the DB on release.
+  * Lifecycle is owned by [[RocksDbBackendStore.open]]: it returns a
+  * `Resource[IO, BackendStore[IO]]` that loads the native library, opens the DB with all CFs, runs
+  * the schema-version check, and cleans up handles + the DB on release.
+  *
+  * For the typed actor-facing API, wrap the returned `BackendStore` in
+  * `Persistence.fromBackend(...)`.
   *
   * Native calls are wrapped in `IO.blocking` (RocksJava is synchronous and may block on disk I/O
   * and compaction).
   */
-final class RocksDbPersistence private (
+final class RocksDbBackendStore private (
     db: RocksDB,
     handles: Map[Cf, ColumnFamilyHandle],
     writeOptions: WriteOptions,
     readOptions: ReadOptions
-) extends Persistence[IO]:
+) extends BackendStore[IO]:
 
     def get(cf: Cf, key: Array[Byte]): IO[Option[Array[Byte]]] =
         IO.blocking(Option(db.get(handles(cf), readOptions, key)))
@@ -35,18 +38,18 @@ final class RocksDbPersistence private (
     def delete(cf: Cf, key: Array[Byte]): IO[Unit] =
         IO.blocking(db.delete(handles(cf), writeOptions, key))
 
-    def write(batch: WriteBatch): IO[Unit] =
+    def write(batch: RawWriteBatch): IO[Unit] =
         if batch.isEmpty then IO.unit
         else
             IO.blocking {
                 val wb = new RWriteBatch()
                 try
                     batch.ops.foreach {
-                        case WriteBatch.Op.Put(cf, k, v) =>
+                        case RawWriteBatch.Op.Put(cf, k, v) =>
                             wb.put(handles(cf), k, v)
-                        case WriteBatch.Op.Delete(cf, k) =>
+                        case RawWriteBatch.Op.Delete(cf, k) =>
                             wb.delete(handles(cf), k)
-                        case WriteBatch.Op.DeleteRange(cf, from, to) =>
+                        case RawWriteBatch.Op.DeleteRange(cf, from, to) =>
                             wb.deleteRange(handles(cf), from, to)
                     }
                     db.write(writeOptions, wb)
@@ -56,7 +59,7 @@ final class RocksDbPersistence private (
     def cursor(
         cf: Cf,
         fromInclusive: Array[Byte]
-    ): Resource[IO, Persistence.Cursor[IO]] =
+    ): Resource[IO, BackendStore.Cursor[IO]] =
         Resource
             .fromAutoCloseable(IO.blocking {
                 val it = db.newIterator(handles(cf), readOptions)
@@ -64,7 +67,7 @@ final class RocksDbPersistence private (
                 it
             })
             .map(it =>
-                new Persistence.Cursor[IO]:
+                new BackendStore.Cursor[IO]:
                     def next: IO[Option[(Array[Byte], Array[Byte])]] = IO.blocking {
                         if it.isValid then
                             val k = it.key()
@@ -96,18 +99,18 @@ final class RocksDbPersistence private (
                 it.seekForPrev(upperBound)
                 if it.isValid then
                     val k = it.key()
-                    if RocksDbPersistence.startsWith(k, prefix) then Some(k) else None
+                    if RocksDbBackendStore.startsWith(k, prefix) then Some(k) else None
                 else None
             finally it.close()
         }
 
-object RocksDbPersistence:
+object RocksDbBackendStore:
     /** Open the RocksDB store at `path`, creating it (and parent directories) if it does not yet
       * exist. Runs the schema-version check ([[StoreVersion]]) and refuses to open an incompatible
       * store. Returns a `Resource` that closes the DB and releases all native resources on
       * use-completion.
       */
-    def open(path: Path): Resource[IO, Persistence[IO]] =
+    def open(path: Path): Resource[IO, BackendStore[IO]] =
         for
             _ <- Resource.eval(IO.blocking {
                 RocksDB.loadLibrary()
@@ -123,17 +126,17 @@ object RocksDbPersistence:
             readOptions <- autoCloseable(new ReadOptions())
             opened <- openDb(path, dbOpts, cfOpts)
             (db, handles) = opened
-            persistence = new RocksDbPersistence(db, handles, writeOptions, readOptions)
-            _ <- Resource.eval(versionCheck(persistence))
-        yield persistence
+            backend = new RocksDbBackendStore(db, handles, writeOptions, readOptions)
+            _ <- Resource.eval(versionCheck(backend))
+        yield backend
 
     /** Run the open-time schema-version check. Fresh stores get the current version stamped;
       * incompatible versions raise.
       */
-    private def versionCheck(persistence: Persistence[IO]): IO[Unit] =
-        persistence.get(Cf.Meta, StoreVersion.key).flatMap {
+    private def versionCheck(backend: BackendStore[IO]): IO[Unit] =
+        backend.get(Cf.Meta, StoreVersion.key).flatMap {
             case None =>
-                persistence.put(
+                backend.put(
                   Cf.Meta,
                   StoreVersion.key,
                   StoreVersion.encode(StoreVersion.current)
@@ -144,7 +147,7 @@ object RocksDbPersistence:
                 else
                     IO.raiseError(
                       new IllegalStateException(
-                        s"Persistence schema version mismatch at $persistence: " +
+                        s"Persistence schema version mismatch at $backend: " +
                             s"store reports $found, this build expects ${StoreVersion.current}"
                       )
                     )

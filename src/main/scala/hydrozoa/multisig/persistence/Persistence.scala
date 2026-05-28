@@ -1,80 +1,47 @@
 package hydrozoa.multisig.persistence
 
-import cats.effect.Resource
-
-/** The persistence capability: a sorted key-value store, divided into [[Cf column families]], with
-  * atomic batched writes and range-scan iterators.
+/** The **typed, actor-facing** persistence API.
   *
-  * The interface is intentionally backend-agnostic — RocksDB is the chosen implementation, but any
-  * sorted KV with multi-store atomic batching could sit behind it. Values are opaque bytes; callers
-  * handle their own encoding (lane payloads reuse the wire codecs per §7).
+  * Every operation is expressed in terms of [[StoreKey]] and the path-dependent `key.Value` type —
+  * no raw `Array[Byte]`s and no `Cf` references appear at the call site. A `Persistence` instance
+  * sits on top of a [[BackendStore]] and runs each key's `encodeValue` / `decodeValue` to bridge
+  * the two layers. Specialised modules (`Markers`, [[StoreDump]]) reach for the underlying
+  * `BackendStore` directly when their work is intrinsically byte-level.
+  *
+  * Atomic multi-key writes go through [[WriteBatch]] — the same typed key + typed value pattern,
+  * lowered to the backend's `RawWriteBatch` at `write` time.
   *
   * See `design/persistence-and-crash-recovery.md` §7.
   */
 trait Persistence[F[_]]:
-    /** Read the value at `(cf, key)`. `None` if the key is absent. */
-    def get(cf: Cf, key: Array[Byte]): F[Option[Array[Byte]]]
+    /** Read the typed value at `key`. `None` if absent. */
+    def get(key: StoreKey): F[Option[key.Value]]
 
-    /** Write `value` at `(cf, key)`. Overwrites any existing value. */
-    def put(cf: Cf, key: Array[Byte], value: Array[Byte]): F[Unit]
+    /** Write `value` at `key`. Overwrites any existing value. */
+    def put(key: StoreKey)(value: key.Value): F[Unit]
 
-    /** Delete the entry at `(cf, key)`. No-op if the key is absent. */
-    def delete(cf: Cf, key: Array[Byte]): F[Unit]
+    /** Delete the entry at `key`. No-op if absent. */
+    def delete(key: StoreKey): F[Unit]
 
-    /** Commit a [[WriteBatch]] atomically — all operations land or none, even across CFs. The
-      * underlying durability barrier (CR4/CR6/CR8 per the spec).
+    /** Commit a typed [[WriteBatch]] atomically — all operations land or none, even across CFs
+      * (CR4/CR6/CR8).
       */
     def write(batch: WriteBatch): F[Unit]
 
-    /** Open a range-scan cursor over `cf`, positioned at the first key `>= fromInclusive`. The
-      * cursor must be closed via the [[Resource]]; once closed, all references to it are invalid.
-      */
-    def cursor(cf: Cf, fromInclusive: Array[Byte]): Resource[F, Persistence.Cursor[F]]
-
-    /** The highest-keyed entry in `cf`, or `None` if the CF is empty.
-      *
-      * Backs the spine-shaped marker derivations (§5.2):
-      *   - `softConfirmed = lastKey(Cf.SoftConfirmation)`
-      *   - `hardConfirmed = lastKey(Cf.HardConfirmation)`
-      *
-      * Implementation note: RocksDB serves `seekToLast` in O(1) — the LSM index pinpoints the
-      * largest key across the MemTable + every SSTable level without a full scan.
-      */
-    def lastKey(cf: Cf): F[Option[Array[Byte]]]
-
-    /** The highest-keyed entry in `cf` whose encoded bytes start with `prefix`, or `None` if no
-      * such entry exists.
-      *
-      * Backs satellite-lane own-marker derivations (§5.2):
-      *   - `softAcked = lastKeyWithPrefix(Cf.SoftAck, [ownPeer:1])`
-      *   - `hardAcked = lastKeyWithPrefix(Cf.HardAck, [ownPeer:1])`
-      *
-      * Implementation note: backed by RocksDB `seekForPrev` over `prefix ++ 0xFF…`, which lands on
-      * the largest key `≤` that upper bound in O(log n); a single byte-prefix check confirms we're
-      * still inside the requested prefix.
-      */
-    def lastKeyWithPrefix(cf: Cf, prefix: Array[Byte]): F[Option[Array[Byte]]]
-
-    // ---- Typed convenience over LaneKey (for lane CFs only) ----
-
-    /** Read the value at the given lane key. `None` if absent. */
-    final def get(key: LaneKey): F[Option[Array[Byte]]] =
-        get(key.laneId.cf, key.encode)
-
-    /** Write `value` at the given lane key. */
-    final def put(key: LaneKey, value: Array[Byte]): F[Unit] =
-        put(key.laneId.cf, key.encode, value)
-
-    /** Delete the entry at the given lane key. */
-    final def delete(key: LaneKey): F[Unit] =
-        delete(key.laneId.cf, key.encode)
-
 object Persistence:
-    /** A range-scan cursor over one column family. Stateful; pull entries with [[next]] until
-      * `None`, then release via the owning [[Resource]].
+    /** The standard `Persistence` implementation — wraps a [[BackendStore]] and threads keys /
+      * values through each [[StoreKey]]'s codec on the way through.
       */
-    trait Cursor[F[_]]:
-        /** The current `(key, value)` if the cursor is positioned on a valid entry, then advance
-          * one step. `None` once the cursor has walked past the end.
-          */
-        def next: F[Option[(Array[Byte], Array[Byte])]]
+    def fromBackend[F[_]: cats.Functor](backend: BackendStore[F]): Persistence[F] =
+        new Persistence[F]:
+            def get(key: StoreKey): F[Option[key.Value]] =
+                cats.Functor[F].map(backend.get(key.cf, key.encode))(_.map(key.decodeValue))
+
+            def put(key: StoreKey)(value: key.Value): F[Unit] =
+                backend.put(key.cf, key.encode, key.encodeValue(value))
+
+            def delete(key: StoreKey): F[Unit] =
+                backend.delete(key.cf, key.encode)
+
+            def write(batch: WriteBatch): F[Unit] =
+                backend.write(batch.toRaw)

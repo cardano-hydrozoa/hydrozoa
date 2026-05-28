@@ -21,12 +21,19 @@ import java.nio.ByteBuffer
   *
   * The lane-type discriminant is the column family ([[Cf]]) — no tag byte in the key.
   */
-enum LaneKey:
+enum LaneKey extends StoreKey:
     case Block(num: BlockNumber)
     case Stack(num: StackNumber)
     case Request(peer: HeadPeerNumber, num: RequestNumber)
     case SoftAck(peer: HeadPeerNumber, num: SoftAckNumber)
     case HardAck(peer: HeadPeerNumber, num: HardAckNumber)
+
+    /** Lane payload — scaffolding placeholder. Real per-case Value types (e.g. `BlockBrief`,
+      * `SoftAck`, …) and wire-codec bodies land per CF as actors wire them; replacing this type
+      * member per case will require LaneKey to convert from enum to sealed-trait, which we'll do at
+      * that point. See [[StoreKey]] for the rationale.
+      */
+    type Value = Array[Byte]
 
     /** The lane this key belongs to (and therefore the column family — see [[LaneId.cf]]). */
     def laneId: LaneId = this match
@@ -36,6 +43,11 @@ enum LaneKey:
         case SoftAck(p, _) => LaneId.SoftAck(p)
         case HardAck(p, _) => LaneId.HardAck(p)
 
+    /** The column family this lane key lives in — delegates through [[LaneId.cf]]. Satisfies the
+      * [[StoreKey]] contract.
+      */
+    def cf: Cf = laneId.cf
+
     /** Encode this key into bytes for the lane's column family. */
     def encode: Array[Byte] = this match
         case Block(num)         => LaneKey.intBytes(num)
@@ -43,6 +55,12 @@ enum LaneKey:
         case Request(peer, num) => LaneKey.peerByte(peer) ++ LaneKey.longBytes(num)
         case SoftAck(peer, num) => LaneKey.peerByte(peer) ++ LaneKey.intBytes(num)
         case HardAck(peer, num) => LaneKey.peerByte(peer) ++ LaneKey.intBytes(num)
+
+    /** Passthrough value codec — replaced per case (with the real wire codec, including the 8-byte
+      * arrival-stamp prefix from §5.5) once a typed payload is wired.
+      */
+    def encodeValue(value: Value): Array[Byte] = value
+    def decodeValue(bytes: Array[Byte]): Value = bytes
 
 object LaneKey:
     /** Decode a key from its byte form, given the CF the bytes came from. Throws on a malformed

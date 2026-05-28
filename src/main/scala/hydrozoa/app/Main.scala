@@ -11,7 +11,8 @@ import hydrozoa.lib.logging.{Logging, Tracer}
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost
 import hydrozoa.multisig.ledger.remote.RemoteL2Ledger
-import hydrozoa.multisig.persistence.rocksdb.RocksDbPersistence
+import hydrozoa.multisig.persistence.Persistence
+import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import hydrozoa.multisig.server.HydrozoaServer
 import io.github.cdimascio.dotenv.Dotenv
 import java.nio.file.Path
@@ -202,10 +203,13 @@ object Main extends IOApp {
             )
 
             // Per-peer persistence store. Default path; later milestones will surface this
-            // through NodeConfig (P1 skeleton; see design §7).
-            persistence <- RocksDbPersistence.open(
+            // through NodeConfig (P1 skeleton; see design §7). Open the RocksDB-backed
+            // BackendStore (byte-level primitive), then wrap it in the typed Persistence the
+            // actor topology consumes.
+            backendStore <- RocksDbBackendStore.open(
               Path.of(s".hydrozoa-data/peer-${nodeConfig.ownHeadPeerNum: Int}/rocksdb")
             )
+            persistence = Persistence.fromBackend(backendStore)
 
             // Attach cleanup to ActorSystem resource - env, backend, nodeConfig are in scope here
             system <- ActorSystem[IO]("Hydrozoa Demo").onFinalize(

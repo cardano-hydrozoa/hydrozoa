@@ -1,39 +1,59 @@
 package hydrozoa.multisig.persistence
 
-/** A group of writes committed atomically as one transaction. The backend (e.g. RocksDB) lands all
-  * operations or none on a crash, regardless of how many column families they touch.
+/** The **typed, actor-facing** write batch — sibling of [[Persistence]]: a group of writes
+  * committed atomically as one transaction.
   *
-  * Build with [[WriteBatch.empty]] / the builder methods, e.g.:
+  * Build with [[WriteBatch.empty]] and the typed builder methods, e.g.:
   * {{{
   *   WriteBatch.empty
-  *       .put(Cf.Block, blockKey, briefBytes)
-  *       .put(Cf.SoftAck, ackKey, ackBytes)
-  *       .put(Cf.BlockResult, blockResultKey, resultBytes)
-  *       .put(Cf.DepositMap, depositsKey, depositsBytes)
+  *       .put(LaneKey.Block(blockNum))(brief)
+  *       .put(LaneKey.SoftAck(ownPeer, softAckNum))(softAck)
+  *       .put(StoreKey.BlockResult(blockNum))(blockResult)
+  *       .put(StoreKey.DepositMap)(depositMap)
   * }}}
+  *
+  * Internally the batch records each typed op (key + path-dependent value); at
+  * [[Persistence.write]] time each op runs its key's `encodeValue` and lowers to a
+  * [[RawWriteBatch]] op before reaching the backend. Actors never see bytes.
+  *
+  * `deleteRange` stays byte-level — see [[RawWriteBatch.deleteRange]] — until the typed shape for
+  * ack-pruning is settled (it spans peer-multiplexed keys, so the obvious typed range isn't
+  * obvious).
   */
-final case class WriteBatch private (ops: Vector[WriteBatch.Op]):
-    /** Add a put at `(cf, key)`. */
-    def put(cf: Cf, key: Array[Byte], value: Array[Byte]): WriteBatch =
-        copy(ops = ops :+ WriteBatch.Op.Put(cf, key, value))
+final case class WriteBatch private (private val ops: Vector[WriteBatch.Op]):
+    /** Add a put at the given typed key. The value is `key.Value` — path-dependent. */
+    def put(key: StoreKey)(value: key.Value): WriteBatch =
+        copy(ops = ops :+ WriteBatch.Op.Put(key, key.encodeValue(value)))
 
-    /** Add a delete at `(cf, key)`. */
-    def delete(cf: Cf, key: Array[Byte]): WriteBatch =
-        copy(ops = ops :+ WriteBatch.Op.Delete(cf, key))
-
-    /** Add a delete-range at `cf` over `[fromInclusive, toExclusive)`. Half-open, RocksDB-style. */
-    def deleteRange(cf: Cf, fromInclusive: Array[Byte], toExclusive: Array[Byte]): WriteBatch =
-        copy(ops = ops :+ WriteBatch.Op.DeleteRange(cf, fromInclusive, toExclusive))
+    /** Add a delete at the given typed key. */
+    def delete(key: StoreKey): WriteBatch =
+        copy(ops = ops :+ WriteBatch.Op.Delete(key))
 
     /** True iff this batch contains no operations. */
     def isEmpty: Boolean = ops.isEmpty
+
+    /** Lower the typed batch to its byte-level form for the backend.
+      *
+      * Each typed op runs the key's encoders here so the backend stays byte-level. Internal —
+      * called by `Persistence.write`.
+      */
+    private[persistence] def toRaw: RawWriteBatch =
+        ops.foldLeft(RawWriteBatch.empty) { (acc, op) =>
+            op match
+                case WriteBatch.Op.Put(key, valueBytes) =>
+                    acc.put(key.cf, key.encode, valueBytes)
+                case WriteBatch.Op.Delete(key) =>
+                    acc.delete(key.cf, key.encode)
+        }
 
 object WriteBatch:
     /** The empty batch — starting point for building. */
     val empty: WriteBatch = WriteBatch(Vector.empty)
 
-    /** One operation in a write batch. */
-    enum Op:
-        case Put(cf: Cf, key: Array[Byte], value: Array[Byte])
-        case Delete(cf: Cf, key: Array[Byte])
-        case DeleteRange(cf: Cf, fromInclusive: Array[Byte], toExclusive: Array[Byte])
+    /** One typed op in a write batch. Value bytes for `Put` are produced eagerly at construction
+      * time (via the key's `encodeValue`) so the batch can hold a homogeneous op vector instead of
+      * carrying path-dependent values through to write time.
+      */
+    private enum Op:
+        case Put(key: StoreKey, valueBytes: Array[Byte])
+        case Delete(key: StoreKey)
