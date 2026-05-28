@@ -693,7 +693,16 @@ better than a relational store:
   below the latest hard-confirmed block (the R10 evacuation floor; §5.2 note). The
   storage engine's own **native (SST) compaction** runs underneath and is a
   separate, internal matter.
-- **Column families** separate lanes / snapshots / markers / arrival-stamp index.
+- **Column families** carve the keyspace by concern. **Each lane type is its own
+  CF** (§7.1) — `Block`, `Stack`, `Request`, `SoftAck`, `HardAck` — plus metadata
+  CFs: `Markers` (`done` / `start` per side), `Snapshots` (deposits map, treasury +
+  evac), `Confirmations` (materialized soft / hard), `ArrivalStamps`. ~8–10 CFs
+  total. Per-lane-type CFs let us tune block size / Bloom-filter bits / compaction
+  queue independently (small entries in `SoftAck` / `HardAck`, larger in `Request`),
+  and isolate compaction work between lanes. **Atomicity across CFs is preserved**:
+  `WriteBatch` covers puts in multiple CFs as one WAL record, so the per-soft-ack
+  bundle `{brief, ack, results, deposits}` lands as one transaction even though its
+  pieces live in different CFs.
 - **Snapshots and markers** = plain keyed blobs.
 
 Notes / decisions:
@@ -741,31 +750,34 @@ enum LaneKey:
         case HardAck(p, _) => LaneId.HardAck(p)
 ```
 
-**Encoding** — a 1-byte type tag, then (satellites only) the 1-byte `HeadPeerNumber`,
-then the index **big-endian, fixed-width**, so the lexicographic byte order matches
-the numeric index order (what makes a range scan correct):
+**Each lane type is its own column family**, so the **CF is the discriminant** —
+the in-memory `LaneKey.laneId` maps to a CF handle and the encoded byte key drops
+the type tag. Within a CF the index is **big-endian, fixed-width**, so lexicographic
+byte order matches numeric index order (what makes a range scan correct):
 
-| Lane | tag | key bytes |
-|---|---|---|
-| Block (spine)   | `0x01` | `[tag][blockNum : 4]` |
-| Stack (spine)   | `0x02` | `[tag][stackNum : 4]` |
-| Request         | `0x03` | `[tag][peer : 1][requestNum : 8]` |
-| SoftAck         | `0x04` | `[tag][peer : 1][softAckNum : 4]` |
-| HardAck         | `0x05` | `[tag][peer : 1][hardAckNum : 4]` |
+| CF | key bytes |
+|---|---|
+| `Block` (spine) | `[blockNum : 4]` |
+| `Stack` (spine) | `[stackNum : 4]` |
+| `Request`       | `[peer : 1][requestNum : 8]` |
+| `SoftAck`       | `[peer : 1][softAckNum : 4]` |
+| `HardAck`       | `[peer : 1][hardAckNum : 4]` |
 
 Widths follow the value ranges: `HeadPeerNumber < 2⁸` (1 byte); `Block` / `Stack` /
 `SoftAck` / `HardAckNumber` are non-negative `Int` (4 bytes); `RequestNumber < 2⁴⁰`,
-carried as an 8-byte `Long`. Tag values are arbitrary but **stable** — cross-lane
-order never matters, since every scan is *within* a single lane.
+carried as an 8-byte `Long`. Peers stay **multiplexed inside a satellite CF** — the
+`[peer:1]` prefix gives per-peer range scans (`Seek([peer])`, iterate while peer
+matches); per-peer CFs would multiply file/MemTable count without buying anything.
 
-**Range scan / cursor.** A lane is a key prefix — spine `[tag]`, satellite
-`[tag][peer]`. To replay a lane from its cursor, seek to `[prefix][cursorBE]` and
-iterate while the prefix holds; entries come back in index order. Each of the
-`2 + 3N` replay cursors (§5.4) is a `LaneKey` (its `laneId` + the resume index).
+**Range scan / cursor.** Scans are scoped to the CF: spine scan = the whole CF in
+index order; satellite scan = prefix `[peer]`. To replay a lane from its cursor,
+position an iterator on the lane's CF at `[cursorBE]` (spine) / `[peer][cursorBE]`
+(satellite). Each of the `2 + 3N` replay cursors (§5.4) is a `LaneKey` — its
+`laneId` picks the CF, the index gives the seek key.
 
-**Values** reuse the wire codecs (above); **arrival stamps** (§5.5) live in a sidecar
-column family keyed by the same `LaneKey` → stamp, so an entry and its stamp share an
-address.
+**Values** reuse the wire codecs (above); **arrival stamps** (§5.5) live in a
+sidecar `ArrivalStamps` CF (one CF, since access is point-lookup) — the key is the
+lane's CF id + its index, the value is the stamp.
 
 ---
 
