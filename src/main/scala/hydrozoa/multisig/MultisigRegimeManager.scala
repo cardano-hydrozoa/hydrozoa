@@ -17,12 +17,15 @@ import hydrozoa.multisig.consensus.limiter.Limiter
 import hydrozoa.multisig.consensus.peer.HeadPeerId
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l2.L2Ledger
+import hydrozoa.multisig.persistence.Persistence
+import scala.annotation.unused
 import scala.concurrent.duration.DurationInt
 
 trait MultisigRegimeManager(
     config: NodeConfig,
     cardanoBackend: CardanoBackend[IO],
     l2Ledger: L2Ledger[IO],
+    @unused persistence: Persistence[IO],
     tracerLocal: IOLocal[Tracer]
 ) extends Actor[IO, Request] {
 
@@ -208,9 +211,18 @@ object MultisigRegimeManager {
         config: NodeConfig,
         cardanoBackend: CardanoBackend[IO],
         virtualLedger: L2Ledger[IO],
+        persistence: Persistence[IO],
         tracerLocal: IOLocal[Tracer]
     ): IO[MultisigRegimeManager] =
-        IO(new MultisigRegimeManager(config, cardanoBackend, virtualLedger, tracerLocal) {})
+        IO(
+          new MultisigRegimeManager(
+            config,
+            cardanoBackend,
+            virtualLedger,
+            persistence,
+            tracerLocal
+          ) {}
+        )
 
     /** Multisig regime's protocol for actor requests and responses. See diagram:
       * [[https://app.excalidraw.com/s/9N3iw9j24UW/9eRJ7Dwu42X]]
