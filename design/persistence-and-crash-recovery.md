@@ -754,9 +754,12 @@ first, then how we use it.
 **Primer — RocksDB in 101 terms** *(skip if familiar).*
 
 RocksDB is a C++ library you link into your process (no separate server), reached
-from the JVM via **RocksJava** (JNI). Keys and values are arbitrary bytes; records
-are sorted lexicographically by key, and that sort is the only "index" — there is
-no SQL, no secondary indexes, no joins.
+from the JVM via **RocksJava** (JNI). Only **one process** can open a given DB
+for writing — it takes an exclusive `LOCK` file in the DB directory; other
+processes can open the same DB `secondary` read-only. We are single-JVM-per-peer,
+so this fits naturally. Keys and values are arbitrary bytes; records are sorted
+lexicographically by key, and that sort is the only "index" — there is no SQL, no
+secondary indexes, no joins.
 
 What makes it fast is the **LSM (log-structured merge-tree)** shape of its
 storage. Every put becomes two cheap operations — a sequential append to a
@@ -847,6 +850,31 @@ RocksDB's own crash recovery is mechanical: on open it replays the WAL from wher
 the most recent SSTable flush stopped, reconstructing the MemTable. *Our*
 recovery (§5–§6) builds on top of that — once RocksDB hands us a consistent view
 of the committed bytes in our CFs, we rebuild actor state from there.
+
+**Three operational facts worth knowing.**
+
+- **Every RocksJava call can block.** Not just writes — a cache-missing `Get`
+  does synchronous disk I/O, and each iterator `Next` can cross an SSTable
+  boundary and block. Writes can block on the WAL `fsync` *and* on **write
+  stalls** — RocksDB throttles or pauses writes inside the `Write` call when L0
+  has too many SSTables or pending-compaction bytes are high. So an
+  `IO.blocking { db.put(...) }` can sit for a long, unbounded-ish time under
+  sustained write pressure. In our impl every call (including each
+  `Cursor.next`) goes through `IO.blocking`; when load forces tuning, the knobs
+  are `max_write_buffer_number`, the L0 stall / slowdown triggers, and the
+  parallel-compaction count.
+- **`RocksDB.Snapshot` is in-process only.** It's an in-memory, process-lifetime
+  construct — it does *not* survive a restart. Our recovery point is defined by
+  the durable **`*Acked` markers** (§5.2), never by a `RocksDB.Snapshot`. Keep
+  the distinction firm: "RocksDB snapshot" = a consistent live read view across
+  ongoing writes; "our base snapshot" = the persisted passive-state blob at the
+  ack mark.
+- **The blocking pool is unbounded by default.** Cats-effect's `IO.blocking`
+  shifts onto a *cached* (unbounded) executor by default — fine for moderate
+  throughput, but a flood of concurrent RocksDB calls can spawn many OS
+  threads. If throughput becomes the bottleneck we can route RocksDB calls
+  through a dedicated bounded executor via `IO.evalOn`, or front them with a
+  semaphore.
 
 **How we use it.**
 
@@ -1078,17 +1106,35 @@ observationally equivalent to the no-crash run.*
    needed** — `CardanoLiaison` cannot poll L1 until the connections barrier has
    opened (it must first learn which `BlockWeaver` to route poll results to). So
    **L1 reconciliation cannot precede the barrier open** (reflected in §8).
-5. ~~**fsync granularity**~~ — **resolved for the fast path, with a caveat:**
-   fast-consensus entries and request-ID assignment **need not be fsync'd**. Without
-   fsync a WAL write still lands in the **OS page cache**, which **survives a
-   process crash** (the kernel owns it), so a Hydrozoa crash with the host still
-   powered recovers fine — RocksDB replays the WAL on restart. The forfeit is
-   **power-loss / kernel-panic durability** for exactly those un-fsync'd records.
-   ⚠ For request-ID this trades against **CR1** (a power-loss after telling the user
-   an id but before the page flushes could re-assign) — accept only if power-loss is
-   outside the durability promise; **decide explicitly**. (RocksJava is
-   *embedded/in-process*, not a separate process — the safety comes from the OS page
-   cache, not from a separate writer surviving the crash.)
+5. ~~**fsync granularity**~~ — **resolved as a per-CF gradient.** Not one
+   global policy — `WriteOptions::sync` is chosen per `Write` call, so we set it
+   based on which CF (and what protocol promise) the write backs:
+   - **Always `sync=true` (R10-critical):** `HardAck` writes; the `hardConfirmed`
+     and `hardAcked` markers; slow-side `Snapshots` (treasury / evacuation map);
+     hard-`Confirmations`. Losing one of these to a power loss would let us
+     forget a hard ack — violating the protocol's external-effect safety
+     premise. Group-commit happens naturally (the slow-consensus pipeline
+     batches these), so the fsync cost amortizes across the batch.
+   - **`sync=true`, group-committed (soft-side protocol promises):** `SoftAck`
+     writes, the `softConfirmed` / `softAcked` markers, soft-`Confirmations`,
+     and the fast-side `Snapshots` (deposits map). Soft acks are protocol
+     promises too, but losing one to a power loss is **recoverable via
+     re-replication** (no external-effect violation), so we accept the fsync
+     cost but rely on group commit (concurrent soft-acks coalesce into one
+     fsync) to amortize.
+   - **`sync=false` (sync optional, page-cache durable):** `Request` and the
+     request-ID assignment. Without fsync the WAL write still lands in the
+     **OS page cache**, which survives a *process* crash (the kernel owns the
+     bytes), so a Hydrozoa crash with the host still powered recovers fine —
+     RocksDB replays the WAL on restart. The forfeit is power-loss /
+     kernel-panic durability for exactly those records. ⚠ For request-ID this
+     trades against **CR1** (a power loss after telling the user an id but
+     before the page flushes could re-assign) — accept only if power-loss is
+     outside the durability promise; **decide explicitly**.
+   (RocksJava is *embedded / in-process*, not a separate process — the
+   `sync=false` path's process-crash durability comes from the OS page cache
+   being kernel-owned and outliving the JVM, not from a separate writer
+   staying up.)
 6. ~~**Unify with `rulebased/persistence`**~~ — **resolved: one store, no second
    persistence.** The rule-based regime **persists nothing**; on entry it **reads
    the multisig store once**, then pursues its objective purely from that snapshot +
