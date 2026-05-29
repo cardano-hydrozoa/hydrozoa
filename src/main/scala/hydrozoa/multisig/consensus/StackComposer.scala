@@ -202,7 +202,7 @@ final case class StackComposer(
         newMap: EvacuationMap
     ): IO[Unit] =
         persistence.write(
-          WriteBatch.empty
+          WriteBatch.start
               .put(StoreKey.Treasury)(newTreasury)
               .put(StoreKey.EvacuationMap)(newMap)
         )

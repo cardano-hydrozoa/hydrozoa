@@ -52,7 +52,7 @@ class PersistenceTest extends AnyFunSuite:
             val blockNum = BlockNumber(1)
             val ownPeer = HeadPeerNumber(0)
             val softNum = SoftAckNumber(1)
-            val batch = WriteBatch.empty
+            val batch = WriteBatch.start
                 .put(LaneKey.Block(blockNum))(Array[Byte](0xaa.toByte))
                 .put(LaneKey.SoftAck(ownPeer, softNum))(Array[Byte](0xbb.toByte))
                 .put(StoreKey.BlockResult(blockNum))(Array[Byte](0xcc.toByte))
@@ -77,7 +77,7 @@ class PersistenceTest extends AnyFunSuite:
             val key = StoreKey.DepositMap
             for
                 _ <- p.put(key)(Array[Byte](1))
-                _ <- p.write(WriteBatch.empty.delete(key))
+                _ <- p.write(WriteBatch.start.delete(key))
                 got <- p.get(key)
             yield assert(got.isEmpty)
         }
@@ -91,7 +91,7 @@ class PersistenceTest extends AnyFunSuite:
             val hardNum = hydrozoa.multisig.consensus.ack.HardAckNumber(0)
             val emptyEvac = hydrozoa.multisig.ledger.joint.EvacuationMap.empty
             val treasury = hydrozoa.multisig.persistence.codec.TreasuryFixture.sampleTreasury
-            val batch = WriteBatch.empty
+            val batch = WriteBatch.start
                 .put(LaneKey.Stack(stackNum))(Array[Byte](1))
                 .put(LaneKey.HardAck(ownPeer, hardNum))(Array[Byte](2))
                 .put(StoreKey.Treasury)(treasury)

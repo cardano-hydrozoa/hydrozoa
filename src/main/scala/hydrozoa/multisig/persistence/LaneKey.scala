@@ -1,6 +1,5 @@
 package hydrozoa.multisig.persistence
 
-import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.consensus.ack.{HardAckNumber, SoftAckNumber}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockNumber
@@ -36,6 +35,11 @@ enum LaneKey extends StoreKey:
       */
     type Value = Array[Byte]
 
+    /** Passthrough codec inherited via [[StoreCodec.passthrough]]; switches per-case once a typed
+      * payload is wired (see the [[Value]] note).
+      */
+    given codec: StoreCodec[Value] = StoreCodec.passthrough
+
     /** The lane this key belongs to (and therefore the column family — see [[LaneId.cf]]). */
     def laneId: LaneId = this match
         case Block(_)      => LaneId.BlockSpine
@@ -56,12 +60,6 @@ enum LaneKey extends StoreKey:
         case Request(peer, num) => LaneKey.peerByte(peer) ++ LaneKey.longBytes(num)
         case SoftAck(peer, num) => LaneKey.peerByte(peer) ++ LaneKey.intBytes(num)
         case HardAck(peer, num) => LaneKey.peerByte(peer) ++ LaneKey.intBytes(num)
-
-    /** Passthrough value codec — replaced per case (with the real wire codec, including the 8-byte
-      * arrival-stamp prefix from §5.5) once a typed payload is wired.
-      */
-    def encodeValue(value: Value)(using CardanoNetwork.Section): Array[Byte] = value
-    def decodeValue(bytes: Array[Byte])(using CardanoNetwork.Section): Value = bytes
 
 object LaneKey:
     /** Decode a key from its byte form, given the CF the bytes came from. Throws on a malformed

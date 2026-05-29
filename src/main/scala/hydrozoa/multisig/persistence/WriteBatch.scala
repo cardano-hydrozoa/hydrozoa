@@ -5,9 +5,9 @@ import hydrozoa.config.head.network.CardanoNetwork
 /** The **typed, actor-facing** write batch — sibling of [[Persistence]]: a group of writes
   * committed atomically as one transaction.
   *
-  * Build with [[WriteBatch.empty]] and the typed builder methods, e.g.:
+  * Build with [[WriteBatch.start]] and the typed builder methods, e.g.:
   * {{{
-  *   WriteBatch.empty
+  *   WriteBatch.start
   *       .put(LaneKey.Block(blockNum))(brief)
   *       .put(LaneKey.SoftAck(ownPeer, softAckNum))(softAck)
   *       .put(StoreKey.BlockResult(blockNum))(blockResult)
@@ -56,8 +56,8 @@ final case class WriteBatch private (private val ops: Vector[WriteBatch.Op]):
         }
 
 object WriteBatch:
-    /** The empty batch — starting point for building. */
-    val empty: WriteBatch = WriteBatch(Vector.empty)
+    /** Starting point for building a typed batch — an empty batch ready for `put` / `delete`. */
+    val start: WriteBatch = WriteBatch(Vector.empty)
 
     /** One typed op in a write batch. Value bytes for `Put` are produced eagerly at construction
       * time (via the key's `encodeValue`) so the batch can hold a homogeneous op vector instead of

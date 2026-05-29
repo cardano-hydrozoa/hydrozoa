@@ -351,7 +351,7 @@ final case class SlowConsensusActor(
         signed: StackEffects.HardConfirmed
     ): IO[Unit] =
         persistence.write(
-          WriteBatch.empty.put(StoreKey.HardConfirmation(stackNum))(signed)
+          WriteBatch.start.put(StoreKey.HardConfirmation(stackNum))(signed)
         )
 
     // ===================================
