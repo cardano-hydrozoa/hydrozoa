@@ -110,7 +110,9 @@ trait MultisigRegimeManager(
               FastConsensusActor(config, pendingConnections, tracerLocal, persistence)
             )
 
-            eventSequencer <- context.actorOf(EventSequencer(config, pendingConnections))
+            eventSequencer <- context.actorOf(
+              EventSequencer(config, pendingConnections, persistence)
+            )
 
             jointLedger <- context.actorOf(
               JointLedger(config, pendingConnections, l2Ledger, tracer, tracerLocal, persistence)
@@ -135,7 +137,9 @@ trait MultisigRegimeManager(
                     .traverse(pid =>
                         for {
                             localPeerLiaison <-
-                                context.actorOf(PeerLiaison(config, pid, pendingConnections))
+                                context.actorOf(
+                                  PeerLiaison(config, pid, pendingConnections, persistence)
+                                )
                         } yield localPeerLiaison
                     )
 

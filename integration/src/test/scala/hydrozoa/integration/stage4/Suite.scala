@@ -190,24 +190,25 @@ case class Stage4Suite(
                     val pending = pendingConnsMap(peerNum)
                     Tracer.scopedCtx("peer" -> s"${peerNum: Int}") {
                         for
+                            // Per-peer persistence backend — InMemory by default; RocksDb when the
+                            // suite is constructed with `BackendMode.RocksDb(root)`. Built first so
+                            // every producer (EventSequencer/JL/FCA/SC/SCA/PeerLiaison) shares the
+                            // one per-peer store; `analyzePersistence` reads it back.
+                            backendStore <- openPeerBackend(peerNum).allocated.map(_._1)
+                            persistence = {
+                                given CardanoNetwork.Section = nodeConfig
+                                Persistence.fromBackend(backendStore)
+                            }
                             blockWeaver <- system.actorOf(
                               BlockWeaver(nodeConfig, pending, tracerLocal)
                             )
                             cardanoLiaison <- system.actorOf(
                               CardanoLiaison(nodeConfig, cardanoBackend, pending, tracerLocal)
                             )
-                            eventSequencer <- system.actorOf(EventSequencer(nodeConfig, pending))
+                            eventSequencer <- system.actorOf(
+                              EventSequencer(nodeConfig, pending, persistence)
+                            )
                             l2Ledger <- EutxoL2Ledger(nodeConfig)
-                            // Per-peer persistence backend — InMemory by default; RocksDb
-                            // when the suite is constructed with `BackendMode.RocksDb(root)`.
-                            // `analyzePersistence` reads this back to assert the producer-side
-                            // writes landed. Built before the actors so every producer
-                            // (JL/FCA/SC/SCA) shares the one per-peer store.
-                            backendStore <- openPeerBackend(peerNum).allocated.map(_._1)
-                            persistence = {
-                                given CardanoNetwork.Section = nodeConfig
-                                Persistence.fromBackend(backendStore)
-                            }
                             jointLedger <- system.actorOf(
                               JointLedger(
                                 nodeConfig,
@@ -294,13 +295,20 @@ case class Stage4Suite(
                 .traverse { peerNum =>
                     val nodeConfig = multiNodeConfig.nodeConfigs(peerNum)
                     val pending = pendingConnsMap(peerNum)
+                    // PeerLiaison shares this peer's persistence store (CR8 inbound writes).
+                    val persistence = {
+                        given CardanoNetwork.Section = nodeConfig
+                        Persistence.fromBackend(peerStackMap(peerNum).backendStore)
+                    }
                     peers
                         .filterNot(_ == peerNum)
                         .traverse { remotePeerNum =>
                             val remotePeerId =
                                 multiNodeConfig.nodeConfigs(remotePeerNum).ownHeadPeerId
                             system
-                                .actorOf(PeerLiaison(nodeConfig, remotePeerId, pending))
+                                .actorOf(
+                                  PeerLiaison(nodeConfig, remotePeerId, pending, persistence)
+                                )
                                 .map(remotePeerId -> _)
                         }
                         .map(liaisons => peerNum -> liaisons.toMap)
@@ -646,6 +654,8 @@ case class Stage4Suite(
       *     `Block` (leader) / `SoftAck` lane entries at each own soft ack; **FCA**
       *     (`FastConsensusActor`) writes `SoftConfirmation` at each soft-confirmation; **SC** also
       *     writes its own `Stack` (leader) / `HardAck` lane entries at stack-close.
+      *   - **EventSequencer** writes the assigned request to the `Request` lane (CR1);
+      *     **PeerLiaison** writes each inbound *remote* lane entry it receives (CR8).
       *
       * For each peer that observed at least one `Stack.HardConfirmed` during the scenario, this
       * property asserts:
@@ -660,9 +670,10 @@ case class Stage4Suite(
       *   4. The fast side wrote: `Cf.BlockResult` / `Cf.SoftConfirmation` non-empty and
       *      `Cf.DepositMap` a singleton — a peer that hard-confirmed necessarily produced and
       *      soft-confirmed blocks first (sanity lower bounds, not exact counts).
-      *   5. The own satellite lanes are non-empty: `Cf.SoftAck` (every block) and `Cf.HardAck`
-      *      (every confirmed stack). The `Block` / `Stack` spine lanes are leader-only (per-peer
-      *      variable), so they are logged but not asserted.
+      *   5. The satellite lanes are non-empty: `Cf.SoftAck` (every block) and `Cf.HardAck` (every
+      *      confirmed stack), and `Cf.Request` (own assignments + inbound). The `Block` / `Stack`
+      *      spine lanes get both own (leader) and inbound (follower) writes but are per-peer
+      *      variable, so they are logged but not asserted.
       *
       * Skip a peer entirely if it never reached a hard-confirmation (the typical `nPeers < 3`
       * cold-start scenarios). The property only fires once at least one hard-confirmation actually
@@ -707,12 +718,14 @@ case class Stage4Suite(
                     depositMaps <- countEntries(backend, Cf.DepositMap)
                     softAcks <- countEntries(backend, Cf.SoftAck)
                     hardAcks <- countEntries(backend, Cf.HardAck)
+                    requests <- countEntries(backend, Cf.Request)
                     _ <- logger.info(
                       s"peer${peerNum: Int} persistence: expectedHardConf=$expectedStacks " +
                           s"hardConfirmations=$hardConfirmations treasuries=$treasuries " +
                           s"evacuationMaps=$evacuationMaps (expected=$expectedEvac) " +
                           s"blockResults=$blockResults softConfirmations=$softConfirmations " +
-                          s"depositMaps=$depositMaps softAcks=$softAcks hardAcks=$hardAcks"
+                          s"depositMaps=$depositMaps softAcks=$softAcks hardAcks=$hardAcks " +
+                          s"requests=$requests"
                     )
                 } yield {
                     if expectedStacks == 0 then Prop.passed
@@ -725,9 +738,10 @@ case class Stage4Suite(
                         // `SoftConfirmation`), and the deposits snapshot is a singleton.
                         val fastOk =
                             blockResults >= 1 && softConfirmations >= 1 && depositMaps == 1
-                        // Own lane writes: every peer soft-acks every block (JL) and hard-acks
-                        // each stack it confirmed (SC), so both satellite lanes are non-empty.
-                        val laneOk = softAcks >= 1 && hardAcks >= 1
+                        // Lane writes (own + inbound): every peer soft-acks every block (JL) and
+                        // hard-acks each stack it confirmed (SC); requests flow into the Request
+                        // lane (EventSequencer own + PeerLiaison inbound, CR1/CR8). All non-empty.
+                        val laneOk = softAcks >= 1 && hardAcks >= 1 && requests >= 1
                         Prop(hardOk && treasuryOk && evacOk && fastOk && laneOk).label(
                           s"peer${peerNum: Int}: " +
                               s"hardConfirmations=$hardConfirmations expected=$expectedStacks, " +
@@ -735,7 +749,7 @@ case class Stage4Suite(
                               s"evacuationMaps=$evacuationMaps (expected $expectedEvac), " +
                               s"blockResults=$blockResults softConfirmations=$softConfirmations " +
                               s"depositMaps=$depositMaps softAcks=$softAcks hardAcks=$hardAcks " +
-                              s"(fast >=1/>=1/==1, lanes >=1/>=1)"
+                              s"requests=$requests (fast >=1/>=1/==1, lanes >=1/>=1/>=1)"
                         )
                     }
                 }

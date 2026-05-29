@@ -4,6 +4,7 @@ import cats.effect.{IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
 import hydrozoa.lib.logging.Logging
@@ -15,15 +16,22 @@ import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber, BlockStatus, BlockType}
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
+import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Persistence, WriteBatch}
 import scala.collection.immutable.Queue
 
 trait PeerLiaison(
     config: Config,
     remotePeerId: HeadPeerId,
     pendingConnections: MultisigRegimeManager.PendingConnections | PeerLiaison.Connections,
+    persistence: Persistence[IO]
 ) extends Actor[IO, Request] {
     private val connections = Ref.unsafe[IO, Option[Connections]](None)
     private val state = State()
+
+    /** `config` is a `CardanoNetwork.Section`; expose it as a given so the inbound-lane
+      * `WriteBatch.put`s in [[persistInbound]] pick it up.
+      */
+    private given CardanoNetwork.Section = config
 
     private val logger =
         Logging.loggerIO(s"PeerLiaison.${config.ownHeadPeerNum}->${remotePeerId.peerNum}")
@@ -83,6 +91,34 @@ trait PeerLiaison(
             )
             _ <- conn.remotePeerLiaison ! current
         } yield ()
+
+    /** Persist the inbound remote lane entries carried by a [[NewMsgBatch]] before the receive
+      * cursor advances past them (CR8 write-before-advance, §4). The one place this peer persists
+      * data it did not author. Each entry is **receipt**-stamped (local monotonic time) and keyed
+      * by its author: spine entries (`Block` / `Stack`) by their index; satellites (`SoftAck` /
+      * `HardAck` / `Request`) by the remote author + index. An empty batch is a no-op.
+      */
+    private def persistInbound(batch: NewMsgBatch): IO[Unit] =
+        IO.monotonic.map(_.toNanos).flatMap { stamp =>
+            val wb0 = WriteBatch.start
+            val wb1 =
+                batch.blockBrief
+                    .fold(wb0)(b => wb0.put(LaneKey.Block(b.blockNum))(LaneValue(stamp, b)))
+            val wb2 =
+                batch.stackBrief
+                    .fold(wb1)(b => wb1.put(LaneKey.Stack(b.stackNum))(LaneValue(stamp, b)))
+            val wb3 = batch.softAck
+                .fold(wb2)(a => wb2.put(LaneKey.SoftAck(a.peerNum, a.ackNum))(LaneValue(stamp, a)))
+            val wb4 = batch.hardAck.fold(wb3)(a =>
+                wb3.put(LaneKey.HardAck(a.peerNum, a.hardAckNum))(LaneValue(stamp, a))
+            )
+            val wb5 = batch.requests.foldLeft(wb4)((acc, r) =>
+                acc.put(LaneKey.Request(r.requestId.peerNum, r.requestId.requestNum))(
+                  LaneValue(stamp, r)
+                )
+            )
+            IO.whenA(wb5.size > 0)(persistence.write(wb5))
+        }
 
     private def receiveTotal(req: Request, conn: Connections): IO[Unit] =
         req match {
@@ -167,6 +203,9 @@ trait PeerLiaison(
                     _ <- outcome match {
                         case VerifyOutcome.Advance(next) =>
                             for {
+                                // CR8: persist the inbound remote lane entries BEFORE the receive
+                                // cursor advances past them (write-before-advance, §4).
+                                _ <- persistInbound(x)
                                 _ <- state.advanceTo(next)
                                 msg <- IO.pure(
                                   s"GetMsgBatch: batch=${next.batchNum}, ack=${next.softAckNumber}, " +
@@ -599,10 +638,14 @@ object PeerLiaison {
         config: Config,
         remotePeerId: HeadPeerId,
         pendingLocalConnections: MultisigRegimeManager.PendingConnections,
+        persistence: Persistence[IO]
     ): IO[PeerLiaison] =
-        IO(new PeerLiaison(config, remotePeerId, pendingLocalConnections) {})
+        IO(new PeerLiaison(config, remotePeerId, pendingLocalConnections, persistence) {})
 
-    type Config = OwnHeadPeerPublic.Section & NodeOperationMultisigConfig.Section
+    // `& CardanoNetwork.Section`: the inbound lane codecs are Section-dependent; the full configs
+    // passed in satisfy it.
+    type Config =
+        OwnHeadPeerPublic.Section & NodeOperationMultisigConfig.Section & CardanoNetwork.Section
 
     final case class Connections(
         blockWeaver: BlockWeaver.Handle,

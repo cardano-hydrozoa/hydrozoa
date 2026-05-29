@@ -5,6 +5,7 @@ import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
 import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.lib.logging.Logging
@@ -12,6 +13,7 @@ import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.EventSequencer.*
 import hydrozoa.multisig.consensus.PeerLiaison.Handle
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
+import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Persistence, WriteBatch}
 import org.typelevel.log4cats.Logger
 
 /** The first actor responsible for processing events from end-users, as received by the
@@ -25,12 +27,18 @@ import org.typelevel.log4cats.Logger
   */
 trait EventSequencer(
     config: Config,
-    pendingConnections: MultisigRegimeManager.PendingConnections | EventSequencer.Connections
+    pendingConnections: MultisigRegimeManager.PendingConnections | EventSequencer.Connections,
+    persistence: Persistence[IO]
 ) extends Actor[IO, Request] {
     private val connections = Ref.unsafe[IO, Option[EventSequencer.Connections]](None)
     private val state = State()
 
     private given logger: Logger[IO] = Logging.loggerIO(s"EventSequencer.${config.ownHeadPeerNum}")
+
+    /** `config` is a `CardanoNetwork.Section`; expose it as a given so the typed `Request`-lane
+      * `WriteBatch.put` (the CR1 persist) picks it up.
+      */
+    private given CardanoNetwork.Section = config
 
     private def getConnections: IO[Connections] = for {
         mConn <- this.connections.get
@@ -81,6 +89,15 @@ trait EventSequencer(
                       _ <- logger.debug(
                         s"Assigned request ID (${newId.peerNum}:${newId.requestNum})"
                       )
+                      // CR1: persist the assigned request to the Request lane BEFORE telling the
+                      // user the id (the id is durable before it is observable; §4 CR1/CR4).
+                      stamp <- IO.monotonic.map(_.toNanos)
+                      _ <- persistence.write(
+                        WriteBatch.start
+                            .put(LaneKey.Request(config.ownHeadPeerNum, newNum))(
+                              LaneValue(stamp, newRequestWithId)
+                            )
+                      )
                       _ <- req.dResponse.complete(newId)
                       _ <- conn.blockWeaver ! newRequestWithId
                       _ <- (conn.peerLiaisons ! newRequestWithId).parallel
@@ -104,11 +121,14 @@ trait EventSequencer(
 object EventSequencer {
     def apply(
         config: Config,
-        pendingConnections: MultisigRegimeManager.PendingConnections
+        pendingConnections: MultisigRegimeManager.PendingConnections,
+        persistence: Persistence[IO]
     ): IO[EventSequencer] =
-        IO(new EventSequencer(config, pendingConnections) {})
+        IO(new EventSequencer(config, pendingConnections, persistence) {})
 
-    type Config = OwnHeadPeerPublic.Section
+    // `& CardanoNetwork.Section`: the Request-lane codec (UserRequestWithId) is Section-dependent;
+    // the full configs passed in satisfy it.
+    type Config = OwnHeadPeerPublic.Section & CardanoNetwork.Section
 
     final case class Connections(
         blockWeaver: BlockWeaver.Handle,
