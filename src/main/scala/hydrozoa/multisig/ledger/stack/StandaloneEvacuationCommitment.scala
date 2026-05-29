@@ -118,6 +118,7 @@ object StandaloneEvacuationCommitment {
         type Serialized = Serialized.Serialized
 
         object Serialized {
+            // TODO: consider using ByteString instead of IArray[Byte]
             opaque type Serialized = IArray[Byte]
 
             def apply(onchainHeader: Onchain): Serialized =
