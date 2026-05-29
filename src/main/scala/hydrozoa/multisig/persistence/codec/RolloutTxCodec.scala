@@ -3,7 +3,7 @@ package hydrozoa.multisig.persistence.codec
 import cats.syntax.functor.*
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.{transactionDecoder, transactionEncoder}
 import hydrozoa.multisig.ledger.l1.tx.RolloutTx
-import RolloutUtxo
+import hydrozoa.multisig.ledger.l1.utxo.RolloutUtxo
 import hydrozoa.multisig.persistence.codec.FoundationCodecs.{
     resolvedUtxosDecoder,
     resolvedUtxosEncoder
