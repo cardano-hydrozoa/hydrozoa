@@ -185,28 +185,42 @@ final case class StackComposer(
                     // (which manages broadcast scheduling: round-1 / sole immediately, round-2
                     // withheld until local round-1 confirmation).
                     _ <- conn.slowConsensusActor ! handoff
+                    _ <- persistSlowSideSnapshots(s.evacuationMap, prefix, newTreasury)
                     _ <- state.update(_.afterClose(nextStackNum, prefix, newTreasury, newMap))
-                    _ <- persistSlowSideSnapshots(newTreasury, newMap)
                 } yield ()
         }
 
-    /** Persist the slow-side passive snapshots — `Treasury` + `EvacuationMap` — at each own
-      * hard-ack stack-close, matching the §6 StackComposer contract (the `Stack` brief lane and own
-      * `HardAck` lane writes join this batch once their typed `Value` types / wire codecs land —
-      * see §11 P2 / Tasks #16–#18).
+    /** Persist the slow-side passive snapshots at own hard-ack stack-close:
       *
-      * One atomic `WriteBatch` (CR4 / CR6 / CR8). Bundling keeps the snapshots aligned with the
-      * just-closed stack's `hardAcked` anchor and un-tearable from it.
+      *   - `Treasury` — the singleton cumulative treasury UTXO ref at `hardAcked` (overwritten in
+      *     place — there's no rule-based scenario that needs an older treasury).
+      *   - `EvacuationMap` — keyed **per block**: starting from `startMap` (the map at the prior
+      *     `hardAcked`), the closing stack's blocks' `evacuationMapDiff`s are folded one at a time
+      *     and the running map is persisted under each block's `blockNum`. The dispute can land
+      *     on any minor in the latest major's tail and evacuation needs the map *at that block*
+      *     — see [[StoreKey.EvacuationMap]].
+      *
+      * Single atomic `WriteBatch` (CR4 / CR6 / CR8) — every key in the stack lands together with
+      * the treasury and is un-tearable from the `hardAcked` anchor.
       */
     private def persistSlowSideSnapshots(
-        newTreasury: MultisigTreasuryUtxo,
-        newMap: EvacuationMap
-    ): IO[Unit] =
-        persistence.write(
-          WriteBatch.start
-              .put(StoreKey.Treasury)(newTreasury)
-              .put(StoreKey.EvacuationMap)(newMap)
-        )
+        startMap: EvacuationMap,
+        prefix: List[ReadyBlock],
+        newTreasury: MultisigTreasuryUtxo
+    ): IO[Unit] = {
+        // Fold each block's diffs onto the running map. `scanLeft` would also work, but `foldLeft`
+        // emitting a reversed-then-reversed builder keeps the per-block put order in time order
+        // without extra allocations.
+        val (_, perBlockBatch) =
+            prefix.foldLeft((startMap, WriteBatch.start.put(StoreKey.Treasury)(newTreasury))) {
+                case ((runMap, batch), block) =>
+                    val nextMap = EvacuationMap.applyDiffs(runMap, block.result.evacuationMapDiff)
+                    val nextBatch =
+                        batch.put(StoreKey.EvacuationMap(block.result.brief.blockNum))(nextMap)
+                    (nextMap, nextBatch)
+            }
+        persistence.write(perBlockBatch)
+    }
 
     private def mkStackBrief(
         stackNum: StackNumber,
@@ -279,10 +293,10 @@ final case class StackComposer(
                                 handoff <- buildHandoff(unsigned)
                                 conn <- getConnections
                                 _ <- conn.slowConsensusActor ! handoff
+                                _ <- persistSlowSideSnapshots(s.evacuationMap, slice, newTreasury)
                                 _ <- state.update(
                                   _.afterClose(nextStackNum, slice, newTreasury, newMap)
                                 )
-                                _ <- persistSlowSideSnapshots(newTreasury, newMap)
                             } yield ()
                     }
         }

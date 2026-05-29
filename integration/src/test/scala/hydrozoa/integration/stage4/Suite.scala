@@ -635,8 +635,8 @@ case class Stage4Suite(
     }
 
     /** Post-scenario verification of the §6 producer-side persistence writes:
-      *   - **SC** (`StackComposer`) writes `Treasury` + `EvacuationMap` at every own hard-ack
-      *     stack-close (#21).
+      *   - **SC** (`StackComposer`) writes `Treasury` once and one `EvacuationMap` per soft-
+      *     confirmed block at every own hard-ack stack-close (#21).
       *   - **SCA** (`SlowConsensusActor`) writes `HardConfirmation` at every hard-confirmation
       *     (#22).
       *
@@ -644,8 +644,10 @@ case class Stage4Suite(
       * property asserts:
       *   1. `Cf.HardConfirmation` holds an entry per hard-confirmed stack (= the captured stacks
       *      count, since both the observer and the persistence write happen on hard-confirmation).
-      *   2. `Cf.Treasury` and `Cf.EvacuationMap` each hold their single snapshot blob
-      *      (always exactly 1 — they're overwritten in place per close).
+      *   2. `Cf.Treasury` holds its single snapshot blob (always exactly 1 — overwritten per close).
+      *   3. `Cf.EvacuationMap` holds one entry per block contained in every Regular stack the
+      *      peer hard-confirmed. `Initial` (stack 0) contributes nothing since
+      *      `bootstrapInitialStack` doesn't go through the close paths.
       *
       * Skip a peer entirely if it never reached a hard-confirmation (the typical `nPeers < 3`
       * cold-start scenarios). The property only fires once at least one hard-confirmation actually
@@ -659,36 +661,38 @@ case class Stage4Suite(
         sortedPeers
             .traverse { peerNum =>
                 val backend = sut.backendStores(peerNum)
-                val expectedStacks = stacksByPeer.getOrElse(peerNum, Vector.empty).size
+                val captured = stacksByPeer.getOrElse(peerNum, Vector.empty)
+                val expectedStacks = captured.size
+                // Per-block evacuation map: one entry per soft-confirmed block in every Regular
+                // stack. `Initial` (stack 0) goes through `bootstrapInitialStack` which doesn't
+                // hit the close paths, so it contributes nothing.
+                val expectedEvac = captured.map { s =>
+                    s.effects match {
+                        case _: StackEffects.HardConfirmed.Initial => 0
+                        case _: StackEffects.HardConfirmed.Regular =>
+                            (s.brief.lastBlockNum: Int) - (s.brief.firstBlockNum: Int) + 1
+                    }
+                }.sum
                 for {
-                    hardConfirmations <- countEntries(
-                      backend,
-                      Cf.HardConfirmation
-                    )
-                    treasuries <- countEntries(
-                      backend,
-                      Cf.Treasury
-                    )
-                    evacuationMaps <- countEntries(
-                      backend,
-                      Cf.EvacuationMap
-                    )
+                    hardConfirmations <- countEntries(backend, Cf.HardConfirmation)
+                    treasuries <- countEntries(backend, Cf.Treasury)
+                    evacuationMaps <- countEntries(backend, Cf.EvacuationMap)
                     _ <- logger.info(
                       s"peer${peerNum: Int} persistence: expectedHardConf=$expectedStacks " +
                           s"hardConfirmations=$hardConfirmations treasuries=$treasuries " +
-                          s"evacuationMaps=$evacuationMaps"
+                          s"evacuationMaps=$evacuationMaps (expected=$expectedEvac)"
                     )
                 } yield {
                     if expectedStacks == 0 then Prop.passed
                     else {
                         val hardOk = hardConfirmations == expectedStacks
                         val treasuryOk = treasuries == 1
-                        val evacOk = evacuationMaps == 1
+                        val evacOk = evacuationMaps == expectedEvac
                         Prop(hardOk && treasuryOk && evacOk).label(
                           s"peer${peerNum: Int}: " +
                               s"hardConfirmations=$hardConfirmations expected=$expectedStacks, " +
                               s"treasuries=$treasuries (expected 1), " +
-                              s"evacuationMaps=$evacuationMaps (expected 1)"
+                              s"evacuationMaps=$evacuationMaps (expected $expectedEvac)"
                         )
                     }
                 }

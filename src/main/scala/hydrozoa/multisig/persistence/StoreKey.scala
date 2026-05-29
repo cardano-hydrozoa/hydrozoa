@@ -111,18 +111,26 @@ object StoreKey:
         val cf: Cf = Cf.Treasury
         def encode: Array[Byte] = singletonKey
 
-    /** Key for [[Cf.EvacuationMap]] — the single blob holding SC's evacuation map at `hardAcked`.
+    /** Key for [[Cf.EvacuationMap]] — the cumulative evacuation map at each block, keyed by
+      * `blockNum`. One entry per soft-confirmed block: SC folds the per-block
+      * `evacuationMapDiff`s from `BlockResult` onto the running map and persists the result.
+      *
+      * Why per-block, not a singleton snapshot: the rule-based dispute can land on **any** minor
+      * block in the latest major's tail, and evacuation needs the map exactly at that block. The
+      * simplest durable shape is to keep every map; pruning is bounded — anything strictly older
+      * than the last-hard-confirmed major can be dropped (those minors can never be disputed
+      * against, since the next major supersedes them).
       *
       * Value type = `hydrozoa.multisig.ledger.joint.EvacuationMap`. Codec routes through the
       * existing Circe instances declared on `EvacuationMap`'s companion (the decoder needs
       * `CardanoNetwork.Section` for `Payout.Obligation`, threaded via `StoreCodec.fromCirce`).
       */
-    case object EvacuationMap extends StoreKey:
+    final case class EvacuationMap(num: BlockNumber) extends StoreKey:
         type Value = JointEvacuationMap
         import JointEvacuationMap.given
         given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.EvacuationMap
-        def encode: Array[Byte] = singletonKey
+        def encode: Array[Byte] = LaneKey.intBytes(num)
 
     /** Key for [[Cf.Meta]] — store-level metadata, name-keyed (UTF-8). */
     final case class Meta(name: String) extends StoreKey:

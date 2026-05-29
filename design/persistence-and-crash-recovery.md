@@ -211,7 +211,7 @@ Structural facts:
 | **Hard confirmation** (`HardConfirmation` CF)                                     | SlowConsensusActor → CardanoLiaison | multisigned effects / SECs / fallbacks **in full**, written at confirmation time, keyed by `stackNum`. `hardConfirmed` **derives** as `max(HardConfirmation.key)` — no marker key. CardanoLiaison submits; evacuation reads. Prunes hard-acks. **R10 evacuation floor.** |
 | Deposits map (`DepositMap` CF)                                                    | JointLedger | **snapshotted** (one keyed blob, rewritten on every own soft ack — out-of-order subset, §5.3) |
 | Treasury (`Treasury` CF)                                                          | StackComposer | **snapshotted** (one keyed blob, rewritten on every own hard-ack stack-close — rotates per settlement / finalization) |
-| Evacuation map (`EvacuationMap` CF)                                               | StackComposer | **snapshotted** (one keyed blob, rewritten on every own hard-ack stack-close — cumulative; KZG commitment derives from it, not stored separately) |
+| Evacuation maps (`EvacuationMap` CF)                                              | StackComposer | **per-block** (one entry per soft-confirmed block, keyed by `blockNum`; SC folds each block's `evacuationMapDiff` onto the running map and persists the result at every own hard-ack stack-close). Per-block because rule-based dispute can land on any minor in the latest major's tail; KZG commitment derives from the map, not stored separately. |
 
 Monotonic counters (own `RequestNumber`, produced-brief block numbers, own
 `SoftAckNumber` / `HardAckNumber`, `lastClosedStackNum`) are not stored — they
@@ -364,7 +364,7 @@ marker key is stored:
 | Marker | Anchors | What that actor reads at boot |
 |---|---|---|
 | `softAcked` | **JointLedger** | the **`DepositMap`** CF (one keyed blob — the deposits map as of our last own soft ack). `previousBlockHeader` is reloaded from `BlockLane[softAcked].brief`. JL is at `Done(softAcked)`; SC's `pending` rebuild is **not** JL's burden — SC loads `BlockResult`s directly (next row). |
-| `hardAcked` | **StackComposer** | **`Treasury`** + **`EvacuationMap`** CFs (one keyed blob each — the cumulative slow-side state). Counters like `lastClosedStackNum` (= `hardAcked`), `lastClosedBlockNum` (from `StackLane[hardAcked].brief`), and `nextOwnHardAckNum` (= `max(own HardAckLane) + 1`) are derived. SC additionally reads `BlockResult` for `(StackLane[hardAcked].lastBlockNum, head]` to rebuild `pending`. |
+| `hardAcked` | **StackComposer** | **`Treasury`** (one blob — cumulative treasury UTXO ref) + **`EvacuationMap`** (per-block, keyed by `blockNum`; load `EvacuationMap[StackLane[hardAcked].lastBlockNum]` for the current map). Counters like `lastClosedStackNum` (= `hardAcked`), `lastClosedBlockNum` (from `StackLane[hardAcked].brief`), and `nextOwnHardAckNum` (= `max(own HardAckLane) + 1`) are derived. SC additionally reads `BlockResult` for `(StackLane[hardAcked].lastBlockNum, head]` to rebuild `pending`. |
 | `softConfirmed` | **FastConsensusActor** | **Nothing of its own.** Cells `≤ softConfirmed` were dropped the moment they produced their `SoftConfirmation` record; cells `> softConfirmed` are in-flight and rebuilt by replay. |
 | `hardConfirmed` | **SlowConsensusActor** | **Nothing of its own.** Same shape: cells dropped at confirmation; in-flight tail rebuilds from replay. |
 
@@ -433,10 +433,21 @@ Snapshots carry **only the non-derivable** passive state on each side:
   `softAcked`. JL is at `Done(softAcked)` after restore — `previousBlockHeader`
   reloads from `BlockLane[softAcked].brief`, deposits come from `DepositMap`,
   nothing else needed.
-- slow — **`Treasury`** + **`EvacuationMap`** CFs (StackComposer): one keyed
-  blob each, the cumulative treasury UTXO ref and the evacuation map at
-  `hardAcked`. SC's pairing maps (`pending` / `ready`) and counters rebuild from
-  lanes + `BlockResult` (§6 StackComposer).
+- slow — **`Treasury`** + **`EvacuationMap`** CFs (StackComposer):
+    - `Treasury` — one keyed blob, the cumulative treasury UTXO ref at
+      `hardAcked`. Overwritten in place — there's no rule-based scenario that
+      needs an older treasury, so a single snapshot suffices.
+    - `EvacuationMap` — **per-block**, keyed by `blockNum`. SC folds each
+      block's `evacuationMapDiff` onto the running map and persists the result
+      at each own hard-ack stack-close. Per-block because the rule-based
+      dispute can land on any minor in the latest major's tail and evacuation
+      needs the map at that exact block; storing all of them is the simplest
+      durable shape, and pruning is bounded (anything strictly older than the
+      last-hard-confirmed major can be dropped — those minors can never be
+      disputed against since the next major supersedes them).
+
+  SC's pairing maps (`pending` / `ready`) and counters rebuild from lanes +
+  `BlockResult` (§6 StackComposer).
 
 The snapshots do **not** carry per-lane cursors (those are derived, §5.3), do
 **not** carry the acked-but-unconfirmed band (those briefs / acks are still in
@@ -563,7 +574,7 @@ custody safety as the non-negotiable floor.
 
 | Restore through | Unlocks | Requirement |
 |---|---|---|
-| evacuation map + SECs (the standalone evacuation commitments) + their signatures + fallbacks | fallback, vote, **evacuate** | **R10** |
+| evacuation maps + SECs (the standalone evacuation commitments) + their signatures + fallbacks | fallback, vote, **evacuate** | **R10** |
 | + happy-path effects | follow the happy path (TTL permitting) | **R9** |
 | + stack briefs/results + soft/hard confirmation markers | realize fast-consensus decisions | **R8** |
 | + block briefs + deposit maps + user requests | process known requests — **follow or lead** | R8 |
@@ -755,8 +766,10 @@ the evacuation map for KZG), and **signs this peer's hard-acks** for the stack.
   cumulative L2 evacuation map; the KZG commitment is computed from it). These two are the
   slow-side analogue of JointLedger's deposits map.
 - **Recover:** load **`treasury`** from the `Treasury` CF and **`evacuationMap`**
-  from the `EvacuationMap` CF — the cumulative non-derivable slow-side state, as
-  of `hardAcked`. The counters are *derived*, not stored:
+  from `EvacuationMap[StackLane[hardAcked].lastBlockNum]` — the cumulative
+  non-derivable slow-side state, as of `hardAcked`. (Older `EvacuationMap`
+  entries stay on disk for evacuation read — not loaded into SC state.) The
+  counters are *derived*, not stored:
   `lastClosedStackNum = hardAcked`; `lastClosedBlockNum =
   StackLane[hardAcked].brief.lastBlockNum`; `nextOwnHardAckNum = max(own
   HardAckLane) + 1` (CR3); `previousStackHardConfirmed = (hardAcked ≤
@@ -784,8 +797,12 @@ the evacuation map for KZG), and **signs this peer's hard-acks** for the stack.
       → **`HardAck`** CF (HardAckLane author),
     - the rotated **`treasury`** as of that close → **`Treasury`** CF (single
       keyed blob; overwrites the previous),
-    - the cumulative **`evacuationMap`** as of that close → **`EvacuationMap`**
-      CF (single keyed blob; overwrites the previous).
+    - **one `EvacuationMap` entry per block in the closing stack's prefix**,
+      keyed by `blockNum` → **`EvacuationMap`** CF. SC walks the prefix from
+      the prior `hardAcked` map, folds each block's `evacuationMapDiff`
+      (`BlockResult.evacuationMapDiff`), and persists the running map at
+      every step. The dispute can land on any minor in the latest major's
+      tail, and evacuation needs the map *at that block* (see §5.2).
 
   Bundling the two snapshots with the acks keeps them aligned with the
   `hardAcked` anchor — exactly as deposits ride JointLedger's soft-ack write.
@@ -982,7 +999,8 @@ compaction style) can match its shape. Concretely:
 | `SoftConfirmation` | one entry per soft-confirmed block (FCA aggregate output), keyed by `blockNum`, low write rate (one per confirmation event); `softConfirmed = max(key)` | a single `SeekToLast` derives the marker for free; small + sparse — cheap to keep |
 | `HardConfirmation` | one entry per hard-confirmed stack (multisigned effects / SECs / fallbacks), keyed by `stackNum`, the R10 evacuation floor — physical deletion never descends here; folded sequentially at recovery (CardanoLiaison + rule-based regime, §6, §10 Q6) | scan-optimized; `hardConfirmed = max(key)` from `SeekToLast`; **never compacted past — physical-retention floor** |
 | `DepositMap` | one key (`Meta`-like — single keyed blob), medium-sized blob, **rewritten on every own soft ack** (high churn on a single key) | RocksDB-friendly single-key churn (large MemTable absorbs the overwrites; compaction collapses the chain quickly); isolated from ack-CF compaction |
-| `Treasury`, `EvacuationMap` | one key each, rewritten only at own hard-ack stack-close (slow cadence); `Treasury` is small (UTXO ref), `EvacuationMap` is cumulative-growing | low write rate ⇒ tiny compaction footprint; their own CFs make them trivially backupable / restorable as part of the R10 floor |
+| `Treasury` | one key, rewritten only at own hard-ack stack-close (slow cadence); small (UTXO ref) | low write rate ⇒ tiny compaction footprint; own CF makes it trivially backupable / restorable as part of the R10 floor |
+| `EvacuationMap` | keyed by `blockNum`; one entry per soft-confirmed block, written in batches at own hard-ack stack-close (the closing stack's whole prefix in one `WriteBatch`); each map is cumulative L2 state | scan-optimized profile (range-read for evacuation reconstruction); pruning is bounded — anything strictly older than the last-hard-confirmed major can be dropped, since those minors can never be disputed against once the next major supersedes them |
 | `Meta` | one key today (store version) | no tuning needed; one obvious place for store-level metadata |
 
 A few benefits worth calling out separately:
