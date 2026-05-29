@@ -91,19 +91,21 @@ class PersistenceTest extends AnyFunSuite:
             val stackNum = StackNumber(0)
             val ownPeer = HeadPeerNumber(1)
             val hardNum = HardAckNumber(0)
+            val blockNum = BlockNumber(0)
+            val evacKey = StoreKey.EvacuationMap(blockNum)
             val emptyEvac = EvacuationMap.empty
             val treasury = TreasuryFixture.sampleTreasury
             val batch = WriteBatch.start
                 .put(LaneKey.Stack(stackNum))(Array[Byte](1))
                 .put(LaneKey.HardAck(ownPeer, hardNum))(Array[Byte](2))
                 .put(StoreKey.Treasury)(treasury)
-                .put(StoreKey.EvacuationMap)(emptyEvac)
+                .put(evacKey)(emptyEvac)
             for
                 _ <- p.write(batch)
                 a <- p.get(LaneKey.Stack(stackNum))
                 b <- p.get(LaneKey.HardAck(ownPeer, hardNum))
                 c <- p.get(StoreKey.Treasury)
-                d <- p.get(StoreKey.EvacuationMap)
+                d <- p.get(evacKey)
             yield assert(
               a.map(_.head) == Some(1.toByte) &&
                   b.map(_.head) == Some(2.toByte) &&
