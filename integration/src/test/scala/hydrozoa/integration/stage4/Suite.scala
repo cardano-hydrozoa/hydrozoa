@@ -1,7 +1,7 @@
 package hydrozoa.integration.stage4
 
 import cats.data.ReaderT
-import cats.effect.{Deferred, IO, Ref}
+import cats.effect.{Deferred, IO, Ref, Resource}
 import cats.implicits.*
 import com.suprnation.actor.ActorSystem
 import com.suprnation.actor.event.Error as ActorError
@@ -34,6 +34,8 @@ import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects}
+import hydrozoa.multisig.persistence.{BackendStore, Cf, InMemoryBackendStore, Persistence}
+import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import org.scalacheck.commands.{AnyCommand, ModelBasedSuite, ScenarioGen}
 import org.scalacheck.{Gen, Prop}
 import scalus.cardano.address.ShelleyAddress
@@ -41,6 +43,7 @@ import scalus.cardano.ledger.rules.{Context, UtxoEnv}
 import scalus.cardano.ledger.{CertState, TransactionInput, Utxos}
 import test.{SeedPhrase, TestPeers, given}
 
+import java.nio.file.{Files, Path}
 import java.util.concurrent.TimeUnit
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 
@@ -48,10 +51,23 @@ import scala.concurrent.duration.{DurationInt, FiniteDuration}
 // Stage 4 suite
 // ===================================
 
+/** Selects the persistence backend for stage4 peers.
+  *
+  *   - [[InMemory]] (default) — per-peer [[InMemoryBackendStore]]. No disk I/O; test isolation is
+  *     automatic.
+  *   - [[RocksDb]] — per-peer RocksDB directory under `root`. Each peer gets `root/peer-N/`. The
+  *     suite creates and removes the root automatically. Use this when reproducing on-disk
+  *     compaction / batching behavior, or when you want to inspect a live store after a run.
+  */
+enum BackendMode:
+    case InMemory
+    case RocksDb(root: Path)
+
 case class Stage4Suite(
     label: String = "stage4",
     nPeers: Int = 2,
     transportMode: TransportMode = TransportMode.Direct,
+    backendMode: BackendMode = BackendMode.InMemory,
 ) extends ModelBasedSuite:
 
     override type Env = Unit
@@ -137,7 +153,7 @@ case class Stage4Suite(
             }
 
             tracerLocal <- Tracer.makeLocal
-            given cats.effect.IOLocal[Tracer] = tracerLocal
+            given IOLocal[Tracer] = tracerLocal
 
             system <- ActorSystem[IO](label).allocated.map(_._1)
 
@@ -193,14 +209,14 @@ case class Stage4Suite(
                             consensusActor <- system.actorOf(
                               FastConsensusActor(nodeConfig, pending, tracerLocal)
                             )
-                            // Per-peer in-memory persistence — test isolation, no disk I/O.
-                            // Stage4 verification (Task #24) will read this back to assert SC's
-                            // hard-ack-close writes land.
-                            backendStore <- hydrozoa.multisig.persistence.InMemoryBackendStore.open.allocated
-                                .map(_._1)
+                            // Per-peer persistence backend — InMemory by default; RocksDb
+                            // when the suite is constructed with `BackendMode.RocksDb(root)`.
+                            // `analyzePersistence` reads this back to assert SC's stack-close
+                            // writes landed.
+                            backendStore <- openPeerBackend(peerNum).allocated.map(_._1)
                             persistence = {
-                                given hydrozoa.config.head.network.CardanoNetwork.Section = nodeConfig
-                                hydrozoa.multisig.persistence.Persistence.fromBackend(backendStore)
+                                given CardanoNetwork.Section = nodeConfig
+                                Persistence.fromBackend(backendStore)
                             }
                             stackComposer <- system.actorOf(
                               StackComposer(nodeConfig, pending, tracerLocal, persistence)
@@ -646,15 +662,15 @@ case class Stage4Suite(
                 for {
                     hardConfirmations <- countEntries(
                       backend,
-                      hydrozoa.multisig.persistence.Cf.HardConfirmation
+                      Cf.HardConfirmation
                     )
                     treasuries <- countEntries(
                       backend,
-                      hydrozoa.multisig.persistence.Cf.Treasury
+                      Cf.Treasury
                     )
                     evacuationMaps <- countEntries(
                       backend,
-                      hydrozoa.multisig.persistence.Cf.EvacuationMap
+                      Cf.EvacuationMap
                     )
                     _ <- logger.info(
                       s"peer${peerNum: Int} persistence: expectedHardConf=$expectedStacks " +
@@ -679,9 +695,24 @@ case class Stage4Suite(
             .map(_.foldLeft(Prop.passed)(_ && _))
     }
 
+    /** Per-peer backend allocator chosen by [[backendMode]].
+      *
+      * `BackendMode.InMemory` returns a fresh `InMemoryBackendStore`. `BackendMode.RocksDb(root)`
+      * opens `root/peer-N/`, creating parent directories on demand. The returned `Resource`
+      * is allocated immediately in `startupSut`; cleanup currently leaks RocksDB handles until
+      * a stage4-level shutdown hook lands (parallel to `errorDrainer.cancel`).
+      */
+    private def openPeerBackend(peerNum: HeadPeerNumber): Resource[IO, BackendStore[IO]] =
+        backendMode match
+            case BackendMode.InMemory => InMemoryBackendStore.open
+            case BackendMode.RocksDb(root) =>
+                val dir = root.resolve(s"peer-${peerNum: Int}")
+                Resource.eval(IO.blocking(Files.createDirectories(dir))) >>
+                    RocksDbBackendStore.open(dir)
+
     private def countEntries(
-        backend: hydrozoa.multisig.persistence.BackendStore[IO],
-        cf: hydrozoa.multisig.persistence.Cf
+        backend: BackendStore[IO],
+        cf: Cf
     ): IO[Int] =
         backend.cursor(cf, Array.emptyByteArray).use { c =>
             def loop(n: Int): IO[Int] =
