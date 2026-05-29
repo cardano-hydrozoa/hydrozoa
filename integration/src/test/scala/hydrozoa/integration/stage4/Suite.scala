@@ -198,27 +198,29 @@ case class Stage4Suite(
                             )
                             eventSequencer <- system.actorOf(EventSequencer(nodeConfig, pending))
                             l2Ledger <- EutxoL2Ledger(nodeConfig)
+                            // Per-peer persistence backend — InMemory by default; RocksDb
+                            // when the suite is constructed with `BackendMode.RocksDb(root)`.
+                            // `analyzePersistence` reads this back to assert the producer-side
+                            // writes landed. Built before the actors so every producer
+                            // (JL/FCA/SC/SCA) shares the one per-peer store.
+                            backendStore <- openPeerBackend(peerNum).allocated.map(_._1)
+                            persistence = {
+                                given CardanoNetwork.Section = nodeConfig
+                                Persistence.fromBackend(backendStore)
+                            }
                             jointLedger <- system.actorOf(
                               JointLedger(
                                 nodeConfig,
                                 pending,
                                 l2Ledger,
                                 ProtocolTracer.noop,
-                                tracerLocal
+                                tracerLocal,
+                                persistence
                               )
                             )
                             consensusActor <- system.actorOf(
-                              FastConsensusActor(nodeConfig, pending, tracerLocal)
+                              FastConsensusActor(nodeConfig, pending, tracerLocal, persistence)
                             )
-                            // Per-peer persistence backend — InMemory by default; RocksDb
-                            // when the suite is constructed with `BackendMode.RocksDb(root)`.
-                            // `analyzePersistence` reads this back to assert SC's stack-close
-                            // writes landed.
-                            backendStore <- openPeerBackend(peerNum).allocated.map(_._1)
-                            persistence = {
-                                given CardanoNetwork.Section = nodeConfig
-                                Persistence.fromBackend(backendStore)
-                            }
                             stackComposer <- system.actorOf(
                               StackComposer(nodeConfig, pending, tracerLocal, persistence)
                             )
@@ -640,6 +642,9 @@ case class Stage4Suite(
       *     (#21).
       *   - **SCA** (`SlowConsensusActor`) writes `HardConfirmation` at every hard-confirmation
       *     (#22).
+      *   - **JL** (`JointLedger`) writes `BlockResult` + the `DepositMap` snapshot at each own
+      *     soft ack; **FCA** (`FastConsensusActor`) writes `SoftConfirmation` at each
+      *     soft-confirmation.
       *
       * For each peer that observed at least one `Stack.HardConfirmed` during the scenario, this
       * property asserts:
@@ -651,6 +656,9 @@ case class Stage4Suite(
       *      counted from each stack's partitions (mirroring `StackComposer.committedBlockNums`).
       *      `Initial` (stack 0) contributes nothing since `bootstrapInitialStack` doesn't go through
       *      the close paths.
+      *   4. The fast side wrote: `Cf.BlockResult` / `Cf.SoftConfirmation` non-empty and
+      *      `Cf.DepositMap` a singleton — a peer that hard-confirmed necessarily produced and
+      *      soft-confirmed blocks first (sanity lower bounds, not exact counts).
       *
       * Skip a peer entirely if it never reached a hard-confirmation (the typical `nPeers < 3`
       * cold-start scenarios). The property only fires once at least one hard-confirmation actually
@@ -690,10 +698,15 @@ case class Stage4Suite(
                     hardConfirmations <- countEntries(backend, Cf.HardConfirmation)
                     treasuries <- countEntries(backend, Cf.Treasury)
                     evacuationMaps <- countEntries(backend, Cf.EvacuationMap)
+                    blockResults <- countEntries(backend, Cf.BlockResult)
+                    softConfirmations <- countEntries(backend, Cf.SoftConfirmation)
+                    depositMaps <- countEntries(backend, Cf.DepositMap)
                     _ <- logger.info(
                       s"peer${peerNum: Int} persistence: expectedHardConf=$expectedStacks " +
                           s"hardConfirmations=$hardConfirmations treasuries=$treasuries " +
-                          s"evacuationMaps=$evacuationMaps (expected=$expectedEvac)"
+                          s"evacuationMaps=$evacuationMaps (expected=$expectedEvac) " +
+                          s"blockResults=$blockResults softConfirmations=$softConfirmations " +
+                          s"depositMaps=$depositMaps"
                     )
                 } yield {
                     if expectedStacks == 0 then Prop.passed
@@ -701,11 +714,18 @@ case class Stage4Suite(
                         val hardOk = hardConfirmations == expectedStacks
                         val treasuryOk = treasuries == 1
                         val evacOk = evacuationMaps == expectedEvac
-                        Prop(hardOk && treasuryOk && evacOk).label(
+                        // Fast-side producer writes: a peer that hard-confirmed has necessarily
+                        // produced blocks (JL's `BlockResult`) and soft-confirmed them (FCA's
+                        // `SoftConfirmation`), and the deposits snapshot is a singleton.
+                        val fastOk =
+                            blockResults >= 1 && softConfirmations >= 1 && depositMaps == 1
+                        Prop(hardOk && treasuryOk && evacOk && fastOk).label(
                           s"peer${peerNum: Int}: " +
                               s"hardConfirmations=$hardConfirmations expected=$expectedStacks, " +
                               s"treasuries=$treasuries (expected 1), " +
-                              s"evacuationMaps=$evacuationMaps (expected $expectedEvac)"
+                              s"evacuationMaps=$evacuationMaps (expected $expectedEvac), " +
+                              s"blockResults=$blockResults softConfirmations=$softConfirmations " +
+                              s"depositMaps=$depositMaps (expected >=1, >=1, ==1)"
                         )
                     }
                 }

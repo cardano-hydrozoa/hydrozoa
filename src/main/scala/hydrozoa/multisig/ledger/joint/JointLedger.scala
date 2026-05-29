@@ -8,6 +8,7 @@ import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime, FallbackTxStartTime}
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.actor.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
@@ -28,6 +29,7 @@ import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerCommand, L2LedgerError, L2LedgerState}
+import hydrozoa.multisig.persistence.{Persistence, StoreKey, WriteBatch}
 import monocle.Focus.focus
 
 private case class UserRequestState(
@@ -40,11 +42,17 @@ final case class JointLedger(
     pendingConnections: MultisigRegimeManager.PendingConnections | JointLedger.Connections,
     l2Ledger: L2Ledger[IO],
     tracer: hydrozoa.lib.tracing.ProtocolTracer,
-    tracerLocal: IOLocal[Tracer]
+    tracerLocal: IOLocal[Tracer],
+    persistence: Persistence[IO]
 ) extends Actor[IO, Requests.Request] {
     import config.*
 
     given IOLocal[Tracer] = tracerLocal
+
+    /** `config` is a `CardanoNetwork.Section` transitively (`HeadConfig.Section`); expose it as a
+      * given so the typed `WriteBatch.put` calls in [[persistOwnBlock]] pick it up.
+      */
+    private given CardanoNetwork.Section = config
 
     private val connections = Ref.unsafe[IO, Option[Connections]](None)
 
@@ -689,6 +697,9 @@ final case class JointLedger(
               vMin,
               evtCnt
             )
+            // 0. Persist the slow-side BlockResult + deposits snapshot before the soft-ack leaves
+            //    (CR4 write-before-send).
+            _ <- persistOwnBlock(brief, blockResult)
             // 1. Broadcast the brief to peer liaisons (leader only).
             _ <- IO.whenA(config.ownHeadPeerId.isLeader(brief.blockNum))(
               (conn.peerLiaisons ! brief).parallel
@@ -700,6 +711,21 @@ final case class JointLedger(
             // 3. Slow side: hand the block result to the stack composer (independent of fast
             //    cycle).
             _ <- conn.stackComposer ! blockResult
+        } yield ()
+
+    /** Persist this peer's per-block slow-side output (`BlockResult`) + the current deposits
+      * snapshot (`DepositMap`) in one atomic `WriteBatch` (CR4/CR6) at own soft-ack time. The own
+      * `Block` brief + `SoftAck` lane writes that complete this bundle (§6) land once lane values
+      * carry their arrival-stamp framing (§7.1).
+      */
+    private def persistOwnBlock(brief: BlockBrief.Next, blockResult: BlockResult): IO[Unit] =
+        for {
+            deposits <- state.get.map(_.deposits)
+            _ <- persistence.write(
+              WriteBatch.start
+                  .put(StoreKey.BlockResult(brief.blockNum))(blockResult)
+                  .put(StoreKey.DepositMap)(deposits)
+            )
         } yield ()
 
     // TODO: classify the mismatch instead of emitting a generic "consensus is broken" panic.

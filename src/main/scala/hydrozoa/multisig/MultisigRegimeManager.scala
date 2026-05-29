@@ -107,13 +107,13 @@ trait MultisigRegimeManager(
                 )
 
             consensusActor <- context.actorOf(
-              FastConsensusActor(config, pendingConnections, tracerLocal)
+              FastConsensusActor(config, pendingConnections, tracerLocal, persistence)
             )
 
             eventSequencer <- context.actorOf(EventSequencer(config, pendingConnections))
 
             jointLedger <- context.actorOf(
-              JointLedger(config, pendingConnections, l2Ledger, tracer, tracerLocal)
+              JointLedger(config, pendingConnections, l2Ledger, tracer, tracerLocal, persistence)
             )
 
             stackComposer <- context.actorOf(
