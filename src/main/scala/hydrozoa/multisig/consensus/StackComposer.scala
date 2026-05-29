@@ -175,7 +175,7 @@ final case class StackComposer(
                           s"${prefix.head.result.brief.blockNum}..${prefix.last.result.brief.blockNum}"
                     )
                     res <- mkStackUnsigned(brief, prefix, s.treasury, s.evacuationMap)
-                    (unsigned, newTreasury, newMap) = res
+                    ComposedStack(unsigned, newTreasury, newMap, partitions) = res
                     handoff <- buildHandoff(unsigned)
                     conn <- getConnections
                     // Broadcast brief directly to PeerLiaisons (briefs go DIRECT, not via
@@ -185,7 +185,7 @@ final case class StackComposer(
                     // (which manages broadcast scheduling: round-1 / sole immediately, round-2
                     // withheld until local round-1 confirmation).
                     _ <- conn.slowConsensusActor ! handoff
-                    _ <- persistSlowSideSnapshots(s.evacuationMap, prefix, newTreasury)
+                    _ <- persistSlowSideSnapshots(s.evacuationMap, partitions, newTreasury)
                     _ <- state.update(_.afterClose(nextStackNum, prefix, newTreasury, newMap))
                 } yield ()
         }
@@ -194,33 +194,65 @@ final case class StackComposer(
       *
       *   - `Treasury` — the singleton cumulative treasury UTXO ref at `hardAcked` (overwritten in
       *     place — there's no rule-based scenario that needs an older treasury).
-      *   - `EvacuationMap` — keyed **per block**: starting from `startMap` (the map at the prior
-      *     `hardAcked`), the closing stack's blocks' `evacuationMapDiff`s are folded one at a time
-      *     and the running map is persisted under each block's `blockNum`. The dispute can land
-      *     on any minor in the latest major's tail and evacuation needs the map *at that block*
-      *     — see [[StoreKey.EvacuationMap]].
+      *   - `EvacuationMap` — keyed **per block**, but only at the blocks whose map backs an
+      *     on-chain KZG commitment: every **major** block (its post-diff map is the settlement's
+      *     `nextKzg`) and every **last-of-partition minor** (the minor that gets a SEC). The maps
+      *     at the other minors commit to nothing on-chain, so the rule-based dispute can never need
+      *     them — persisting them would be dead weight (see [[StoreKey.EvacuationMap]]). Starting
+      *     from `startMap` (the map at the prior `hardAcked`), the closing stack's blocks'
+      *     `evacuationMapDiff`s are folded one at a time and the running map is persisted under a
+      *     block's `blockNum` only when that block is one of the committed ones.
       *
-      * Single atomic `WriteBatch` (CR4 / CR6 / CR8) — every key in the stack lands together with
-      * the treasury and is un-tearable from the `hardAcked` anchor.
+      * Single atomic `WriteBatch` (CR4 / CR6 / CR8) — every persisted map in the stack lands
+      * together with the treasury and is un-tearable from the `hardAcked` anchor.
+      *
+      * Takes the [[StackPartition]]s [[mkStackUnsigned]] already built (the prefix is partitioned
+      * once); the blocks fold back in stack order as `partitions.flatMap(_.blocks)`.
       */
     private def persistSlowSideSnapshots(
         startMap: EvacuationMap,
-        prefix: List[ReadyBlock],
+        partitions: NonEmptyList[StackPartition],
         newTreasury: MultisigTreasuryUtxo
     ): IO[Unit] = {
-        // Fold each block's diffs onto the running map. `scanLeft` would also work, but `foldLeft`
-        // emitting a reversed-then-reversed builder keeps the per-block put order in time order
-        // without extra allocations.
-        val (_, perBlockBatch) =
-            prefix.foldLeft((startMap, WriteBatch.start.put(StoreKey.Treasury)(newTreasury))) {
-                case ((runMap, batch), block) =>
-                    val nextMap = EvacuationMap.applyDiffs(runMap, block.result.evacuationMapDiff)
-                    val nextBatch =
-                        batch.put(StoreKey.EvacuationMap(block.result.brief.blockNum))(nextMap)
-                    (nextMap, nextBatch)
-            }
-        persistence.write(perBlockBatch)
+        val committed = committedBlockNums(partitions)
+        val orderedResults = partitions.toList.flatMap(_.blocks.toList)
+        persistence.write(
+          orderedResults
+              .foldLeft((startMap, WriteBatch.start.put(StoreKey.Treasury)(newTreasury))) {
+                  case ((runMap, batch), result) =>
+                      val nextMap =
+                          EvacuationMap.applyDiffs(runMap, result.evacuationMapDiff)
+                      val nextBatch =
+                          if committed.contains(result.brief.blockNum) then
+                              batch.put(StoreKey.EvacuationMap(result.brief.blockNum))(nextMap)
+                          else batch
+                      (nextMap, nextBatch)
+              }
+              ._2
+        )
     }
+
+    /** The blocks of a closed stack whose evacuation map backs an on-chain KZG commitment — the
+      * only maps the rule-based dispute can need, so the only ones [[persistSlowSideSnapshots]]
+      * keeps. Mirrors [[StackEffectsBuilder.mkEffectsRegular]]'s settlement / SEC logic over the
+      * same [[StackPartition]]s: each **major** block (its post-diff map is the settlement's
+      * `nextKzg`) and each **last-of-partition minor** (the minor that gets a SEC). Final blocks
+      * drain the map and commit nothing, so they contribute none.
+      */
+    private def committedBlockNums(
+        partitions: NonEmptyList[StackPartition]
+    ): Set[BlockNumber] =
+        partitions.toList.flatMap { p =>
+            p.kind match {
+                case StackPartition.Kind.Major =>
+                    p.blocks.head.brief.blockNum ::
+                        p.blocks.tail.lastOption.map(_.brief.blockNum).toList
+                case StackPartition.Kind.Minor =>
+                    List(p.blocks.last.brief.blockNum)
+                case StackPartition.Kind.Final | StackPartition.Kind.Initial =>
+                    Nil
+            }
+        }.toSet
 
     private def mkStackBrief(
         stackNum: StackNumber,
@@ -289,11 +321,15 @@ final case class StackComposer(
                                       s"${brief.lastBlockNum}"
                                 )
                                 res <- mkStackUnsigned(brief, slice, s.treasury, s.evacuationMap)
-                                (unsigned, newTreasury, newMap) = res
+                                ComposedStack(unsigned, newTreasury, newMap, partitions) = res
                                 handoff <- buildHandoff(unsigned)
                                 conn <- getConnections
                                 _ <- conn.slowConsensusActor ! handoff
-                                _ <- persistSlowSideSnapshots(s.evacuationMap, slice, newTreasury)
+                                _ <- persistSlowSideSnapshots(
+                                  s.evacuationMap,
+                                  partitions,
+                                  newTreasury
+                                )
                                 _ <- state.update(
                                   _.afterClose(nextStackNum, slice, newTreasury, newMap)
                                 )
@@ -306,18 +342,23 @@ final case class StackComposer(
       * settlement / finalization). All partition kinds derive fully — Minor (SEC + post-dated
       * refunds), Major (settlement + fallback + rollouts, + SEC for a trailing minor), Final
       * (finalization + rollouts); see [[StackEffectsBuilder.mkEffectsRegular]].
+      *
+      * Returns the [[StackPartition]]s alongside the unsigned stack so the prefix is partitioned
+      * **once** — [[persistSlowSideSnapshots]] reuses them rather than re-partitioning.
       */
     private def mkStackUnsigned(
         brief: StackBrief,
         prefix: List[ReadyBlock],
         treasury: MultisigTreasuryUtxo,
         evacuationMap: EvacuationMap
-    ): IO[(Stack.Unsigned, MultisigTreasuryUtxo, EvacuationMap)] = {
+    ): IO[ComposedStack] = {
         val results = NonEmptyList.fromListUnsafe(prefix.map(_.result))
         val partitions = StackPartition.partition(results)
         StackEffectsBuilder.mkEffectsRegular(config, treasury, partitions, evacuationMap) match {
             case Right((effects, newTreasury, newMap)) =>
-                IO.pure((Stack.Unsigned(brief, effects), newTreasury, newMap))
+                IO.pure(
+                  ComposedStack(Stack.Unsigned(brief, effects), newTreasury, newMap, partitions)
+                )
             case Left(err) =>
                 Tracer.error(s"slow-side effect derivation failed: $err") *> IO.raiseError(err)
         }
@@ -644,6 +685,18 @@ object StackComposer {
     final case class ReadyBlock(
         result: BlockResult,
         softConfirmed: Block.SoftConfirmed
+    )
+
+    /** The product of composing a stack from a prefix of paired blocks: the [[Stack.Unsigned]] to
+      * hand to consensus, the rotated treasury + evacuation map the close advanced to, and the
+      * [[StackPartition]] layout. The partitions are carried so the prefix is partitioned **once**
+      * — the effect derivation and `persistSlowSideSnapshots` both consume them.
+      */
+    final case class ComposedStack(
+        unsigned: Stack.Unsigned,
+        newTreasury: MultisigTreasuryUtxo,
+        newEvacuationMap: EvacuationMap,
+        partitions: NonEmptyList[StackPartition]
     )
 
     final case class State(

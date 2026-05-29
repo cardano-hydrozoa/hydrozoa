@@ -95,9 +95,12 @@ store, clock, and chain." Per resource:
 
 - **Network (peer wire) and chain (L1) — boundary-exclusive.** `PeerLiaison` is
   the only network touch, `CardanoLiaison` the only chain touch. These are the
-  only ways an effect *escapes the process*, which is what makes boundary-last
-  initialisation (§5) sound: during replay the consensus interior's outputs
-  queue in (created-but-unstarted) boundary mailboxes, never crossing the wire.
+  only ways an effect *escapes the process*, so duplicate-suppression during
+  replay is needed at exactly these two places — and it is the **same
+  cursor / equivocation filter the boundaries already run in steady state**: a
+  re-emitted output `≤` the boundary's cursor is dropped just as a live duplicate
+  would be (§5). That is why all actors can start **together** (§5) — the filter,
+  not a deferred boundary start, is what keeps replay re-emissions off the wire / chain.
 - **Durable store — written by both.** Boundaries persist what crosses them
   (`PeerLiaison`: inbound lane entries (CR8), each value carrying an 8-byte
   arrival-stamp prefix; `RequestSequencer`: assigned requests, CR1/CR4). Consensus
@@ -211,7 +214,7 @@ Structural facts:
 | **Hard confirmation** (`HardConfirmation` CF)                                     | SlowConsensusActor → CardanoLiaison | multisigned effects / SECs / fallbacks **in full**, written at confirmation time, keyed by `stackNum`. `hardConfirmed` **derives** as `max(HardConfirmation.key)` — no marker key. CardanoLiaison submits; evacuation reads. Prunes hard-acks. **R10 evacuation floor.** |
 | Deposits map (`DepositMap` CF)                                                    | JointLedger | **snapshotted** (one keyed blob, rewritten on every own soft ack — out-of-order subset, §5.3) |
 | Treasury (`Treasury` CF)                                                          | StackComposer | **snapshotted** (one keyed blob, rewritten on every own hard-ack stack-close — rotates per settlement / finalization) |
-| Evacuation maps (`EvacuationMap` CF)                                              | StackComposer | **per-block** (one entry per soft-confirmed block, keyed by `blockNum`; SC folds each block's `evacuationMapDiff` onto the running map and persists the result at every own hard-ack stack-close). Per-block because rule-based dispute can land on any minor in the latest major's tail; KZG commitment derives from the map, not stored separately. |
+| Evacuation maps (`EvacuationMap` CF)                                              | StackComposer | **per-block, but only at the blocks that back an on-chain KZG commitment** — every **major** block (its post-diff map is the settlement's `nextKzg`) and every **last-of-partition minor** (the minor that gets a SEC), keyed by `blockNum`. SC folds each block's `evacuationMapDiff` onto the running map and persists the result at those blocks on every own hard-ack stack-close. The maps at other minors commit to nothing on-chain, so the rule-based dispute can never need them. KZG commitment derives from the map, not stored separately. |
 
 Monotonic counters (own `RequestNumber`, produced-brief block numbers, own
 `SoftAckNumber` / `HardAckNumber`, `lastClosedStackNum`) are not stored — they
@@ -302,32 +305,39 @@ to the committed state after finitely many interruptions — exactly the
 observational-equivalence property of §9, with the crash placed *inside* the
 recovery window.
 
-The boot has two halves, mirroring §2 — **consensus first, boundaries last**:
+The boot **starts every actor together** — consensus and boundary alike — and
+lets them run. The §2 split is by *recovery mechanism* (replay vs restore), not by
+*start order*; the two mechanisms run concurrently:
 
 1. **Consensus actors: base-state seed, then replay.** Each is seeded with its
    base snapshot at the side's ack mark (`softAcked` on the fast side, `hardAcked`
    on the slow; §5.2; empty for the pure aggregators); a central **`ReplayActor`**
-   then re-runs the admitted input tail through them, rebuilding state *and* the
+   re-runs the admitted input tail through them, rebuilding state *and* the
    inter-actor signal cascade.
-2. **Boundary actors restore — last.** Once consensus replay has settled, the
-   boundary actors load their own state directly from the store — cursors,
-   counters — or re-observe the outside world (L1). No replay; everything they
-   need is on disk by this point.
+2. **Boundary actors restore in parallel.** Each loads its own state directly from
+   the store — cursors, counters — or re-observes the outside world (L1). No
+   replay; everything they need is on disk (or live on L1) at boot.
 
-**Why boundary-last.** During replay the consensus interior re-emits its
-outputs (acks, briefs, effects) deterministically. With boundary actors not
-yet started, those messages **queue in the (created-but-unstarted) boundary
-mailboxes** and never cross the wire / chain. When the boundary actually
-starts, it loads its cursor first, then drains the mailbox — and every queued
-message `≤ cursor` is filtered exactly like a live duplicate would be. No
-"recovery mode" anywhere, no replay-spill leaving the process, no special
-machinery: the cursor-filtered drain is the same one that runs in steady state.
+**Why start them together (and not boundary-last).** During replay the consensus
+interior re-emits its outputs (acks, briefs, effects) deterministically. The
+boundaries are *running* while this happens — but each boundary loads its cursor
+**before** it processes anything, and every re-emitted output `≤ cursor` is dropped
+by the **same cursor / equivocation filter the boundary runs in steady state**,
+exactly as a live duplicate would be. A replay re-emission of something already
+sent is therefore filtered; a genuinely new (`> cursor`) output is precisely what
+forward progress *should* emit. So there is nothing for a separate "boundary-last"
+phase to protect — the cursor filter is load-bearing either way, and deferring
+boundary start **buys nothing**. We start from the simpler all-together shape and
+observe; if a replay re-emission is ever found to leak past the cursor filter, we
+can reintroduce a deferral surgically (§10 Q4) — but only if measurement shows it
+is needed.
 
-> **Code note (current state, 2026-05).** The current actor topology requires
-> boundary actors to be in place before consensus starts (consensus actors
-> reference them via the `Connections` barrier), so today they would crash if
-> spawned later. The design above is the intended target; the code rearrangement
-> is folded into Pd / Pf in §11.
+> **Code note (current state, 2026-05).** All-together start is exactly what the
+> **existing** actor topology already does: consensus actors reference the
+> boundaries through the `Connections` barrier, so the boundaries are in place when
+> consensus starts. The design therefore needs **no** topology rearrangement — it
+> matches today's code (this is the simplification over the earlier boundary-last
+> sketch, which would have required deferring boundary start for no benefit).
 
 **Why replay, not just state-restore, for the interior.** Restoring an actor's
 state alone misses the *signals it would have emitted on receiving its inputs*.
@@ -364,7 +374,7 @@ marker key is stored:
 | Marker | Anchors | What that actor reads at boot |
 |---|---|---|
 | `softAcked` | **JointLedger** | the **`DepositMap`** CF (one keyed blob — the deposits map as of our last own soft ack). `previousBlockHeader` is reloaded from `BlockLane[softAcked].brief`. JL is at `Done(softAcked)`; SC's `pending` rebuild is **not** JL's burden — SC loads `BlockResult`s directly (next row). |
-| `hardAcked` | **StackComposer** | **`Treasury`** (one blob — cumulative treasury UTXO ref) + **`EvacuationMap`** (per-block, keyed by `blockNum`; load `EvacuationMap[StackLane[hardAcked].lastBlockNum]` for the current map). Counters like `lastClosedStackNum` (= `hardAcked`), `lastClosedBlockNum` (from `StackLane[hardAcked].brief`), and `nextOwnHardAckNum` (= `max(own HardAckLane) + 1`) are derived. SC additionally reads `BlockResult` for `(StackLane[hardAcked].lastBlockNum, head]` to rebuild `pending`. |
+| `hardAcked` | **StackComposer** | **`Treasury`** (one blob — cumulative treasury UTXO ref) + **`EvacuationMap`** (keyed by `blockNum`, written only at committed blocks — major / SEC minor; load `EvacuationMap[StackLane[hardAcked].lastBlockNum]` for the current map — that last block is always a committed one for a non-final stack, §5.2). Counters like `lastClosedStackNum` (= `hardAcked`), `lastClosedBlockNum` (from `StackLane[hardAcked].brief`), and `nextOwnHardAckNum` (= `max(own HardAckLane) + 1`) are derived. SC additionally reads `BlockResult` for `(StackLane[hardAcked].lastBlockNum, head]` to rebuild `pending`. |
 | `softConfirmed` | **FastConsensusActor** | **Nothing of its own.** Cells `≤ softConfirmed` were dropped the moment they produced their `SoftConfirmation` record; cells `> softConfirmed` are in-flight and rebuilt by replay. |
 | `hardConfirmed` | **SlowConsensusActor** | **Nothing of its own.** Same shape: cells dropped at confirmation; in-flight tail rebuilds from replay. |
 
@@ -437,14 +447,35 @@ Snapshots carry **only the non-derivable** passive state on each side:
     - `Treasury` — one keyed blob, the cumulative treasury UTXO ref at
       `hardAcked`. Overwritten in place — there's no rule-based scenario that
       needs an older treasury, so a single snapshot suffices.
-    - `EvacuationMap` — **per-block**, keyed by `blockNum`. SC folds each
-      block's `evacuationMapDiff` onto the running map and persists the result
-      at each own hard-ack stack-close. Per-block because the rule-based
-      dispute can land on any minor in the latest major's tail and evacuation
-      needs the map at that exact block; storing all of them is the simplest
-      durable shape, and pruning is bounded (anything strictly older than the
-      last-hard-confirmed major can be dropped — those minors can never be
-      disputed against since the next major supersedes them).
+    - `EvacuationMap` — keyed by `blockNum`, written at each own hard-ack
+      stack-close, but **only at the blocks whose map backs an on-chain KZG
+      commitment**. SC folds each block's `evacuationMapDiff` onto the running
+      map and persists the result at exactly those blocks:
+        - every **major** block — its post-diff map is the commitment the
+          settlement tx carries as `nextKzg`;
+        - every **last-of-partition minor** — the minor that gets a SEC
+          (the standalone evacuation commitment), whose KZG is the map after
+          that minor's diff.
+
+      No other map is persisted. The rule-based dispute resolves against one of
+      these on-chain commitments (a settlement's `nextKzg`, or a SEC), and
+      evacuation needs the map *behind that commitment* — so the only maps it can
+      ever need are the ones we keep. The maps at intermediate minors commit to
+      nothing on-chain, so they are dead weight (this corrects the earlier
+      "store every block" sketch — those extra maps were useless). Pruning is
+      still bounded: anything strictly older than the last-hard-confirmed major
+      can be dropped, since those minors can never be disputed against once the
+      next major supersedes them. The set of committed blocks mirrors
+      `StackEffectsBuilder.mkEffectsRegular`'s settlement / SEC logic exactly
+      (`StackComposer.committedBlockNums`).
+
+      **Load invariant:** the recovering SC reads the cumulative map at
+      `hardAcked` as `EvacuationMap[StackLane[hardAcked].lastBlockNum]`, and
+      that key is always present — the last block of any **non-final** stack is
+      necessarily a major or a last-of-partition minor (a leading minor run that
+      reaches stack end ends in its own SEC minor; any later partition is a major
+      or the final). A **final** stack drains the map to empty and has no
+      successor stack, so no cumulative map is loaded after it.
 
   SC's pairing maps (`pending` / `ready`) and counters rebuild from lanes +
   `BlockResult` (§6 StackComposer).
@@ -526,13 +557,32 @@ Consequence: the L1 boundary contributes **nothing** to the replay log — it is
 live source, not a recorded one. (A soft-confirmed-then-reorged deposit is caught
 by the hard side / fallback, not by re-verifying soft confirmations.)
 
+**The `ReplayActor` performs the initial L1 sample itself — it does not wait on
+CardanoLiaison.** BlockWeaver (and hence JointLedger's deposit decisions) needs a
+`PollResults` — the set of utxos at the head's multisig address — to make
+forward progress, and after a restart it has none. CardanoLiaison *will* poll and
+forward one on its own cadence (its poll tick / next-effect trigger), but there is
+**no guarantee it does so promptly**, and replay must not stall waiting on the
+boundary's timer. So the `ReplayActor` reads the L1 state **directly from
+`CardanoBackend`** (`utxosAt(config.initializationTx.treasuryProduced.address)` →
+the utxo ids) and sends a `PollResults` straight to BlockWeaver at replay start —
+byte-for-byte the same message CardanoLiaison emits in steady state
+(`CardanoLiaison.runEffects` → `blockWeaver ! PollResults(...)`), just sourced
+eagerly by recovery instead of on the poll timer. Subsequent live `PollResults`
+from CardanoLiaison flow normally once it is running. This is still the **live**
+L1 read of §5.5 ("re-sampled live, not replayed") — merely *initiated by* the
+`ReplayActor` rather than awaited from the boundary — so it carries the same
+above/below-the-confirmed-mark semantics.
+
 ### 5.6 The replay mechanism
 
 **Replay re-feeds lanes, and only lanes.** The replicated set's lane entries
 (§3.1) are the sole replay input; every *non-lane* input is reproduced, not
 replayed — inter-actor signals (`StartBlock`/`CompleteBlock`, the soft-confirm
 fan-out, `GetState`) regenerate from the interior cascade, and L1 poll results
-are re-sampled live (§5.5). So an actor whose inputs are *all* non-lane signals
+are re-sampled live (§5.5) — with the `ReplayActor` seeding the first
+`PollResults` into BlockWeaver straight from `CardanoBackend`, rather than waiting
+on CardanoLiaison's poll cadence. So an actor whose inputs are *all* non-lane signals
 gets base state but no tail — JointLedger, for one, reads no lane (BlockWeaver
 drives it), so the `ReplayActor` never feeds it (§6). This holds for either
 mechanism below.
@@ -548,10 +598,11 @@ keep **(2)** as a test oracle.
    reuses the existing `Deferred[Connections]` barrier (though a **separate
    suspend barrier** may be needed to hold actors during seeding — §8, §10 Q4),
    and unifies replay with normal operation (cold boot = the empty-seed case).
-   Boundary actors are started *after* this barrier opens (§5); during replay
-   the interior's external outputs queue in their mailboxes and get filtered on
-   drain when each boundary loads its cursor (§5). What is restored is the
-   **base snapshot + lane-entry tail in mailboxes**; everything else regenerates
+   Boundary actors start *together* with the consensus actors (§5); during replay
+   the interior's external re-emissions reach the running boundaries but are
+   dropped by the same cursor filter that suppresses live duplicates (each
+   boundary loads its cursor before processing anything; §5). What is restored is
+   the **base snapshot + lane-entry tail in mailboxes**; everything else regenerates
    as the tail is processed — you don't capture internal in-flight messages.
 2. **One-by-one + quiescence** *(test oracle, not for production)*. The `ReplayActor`
    sends one input, waits for the system to settle, then the next. A single
@@ -653,9 +704,14 @@ Each contract has four fields — **State**, **Recover** (how it is rebuilt),
   `BlockCreationStart/EndTime` already sit in the persisted brief headers), and a
   block left mid-`Producing` at the crash was never saved or acked, so BlockWeaver
   just **cuts a fresh block** under the current clock — a never-committed cut may
-  legitimately differ, and only committed state must match (§9).
+  legitimately differ, and only committed state must match (§9). The transient
+  `pollResults` is seeded **by the `ReplayActor`**, which reads L1 directly from
+  `CardanoBackend` and sends the first `PollResults` rather than waiting on
+  CardanoLiaison's poll cadence (§5.5) — so deposit decisions can proceed
+  immediately on replay.
 - **Inputs:** `UserRequestWithId`, `BlockBrief.Next`, `Block.SoftConfirmed`,
-  `PollResults`, `Wakeup`, finalization trigger.
+  `PollResults` (the first one from the `ReplayActor`'s direct `CardanoBackend`
+  read; later ones live from CardanoLiaison — §5.5), `Wakeup`, finalization trigger.
 - **Persists:** nothing — authors no lane; drives `JointLedger` via
   `StartBlock`/`CompleteBlock{Regular,Final}`, which authors the brief.
 
@@ -767,8 +823,10 @@ the evacuation map for KZG), and **signs this peer's hard-acks** for the stack.
   slow-side analogue of JointLedger's deposits map.
 - **Recover:** load **`treasury`** from the `Treasury` CF and **`evacuationMap`**
   from `EvacuationMap[StackLane[hardAcked].lastBlockNum]` — the cumulative
-  non-derivable slow-side state, as of `hardAcked`. (Older `EvacuationMap`
-  entries stay on disk for evacuation read — not loaded into SC state.) The
+  non-derivable slow-side state, as of `hardAcked`. That key is always present
+  for a non-final `hardAcked` stack (its last block is always a committed block
+  — §5.2 load invariant). (Older committed `EvacuationMap` entries stay on disk
+  for the rule-based evacuation read — not loaded into SC state.) The
   counters are *derived*, not stored:
   `lastClosedStackNum = hardAcked`; `lastClosedBlockNum =
   StackLane[hardAcked].brief.lastBlockNum`; `nextOwnHardAckNum = max(own
@@ -797,12 +855,15 @@ the evacuation map for KZG), and **signs this peer's hard-acks** for the stack.
       → **`HardAck`** CF (HardAckLane author),
     - the rotated **`treasury`** as of that close → **`Treasury`** CF (single
       keyed blob; overwrites the previous),
-    - **one `EvacuationMap` entry per block in the closing stack's prefix**,
-      keyed by `blockNum` → **`EvacuationMap`** CF. SC walks the prefix from
-      the prior `hardAcked` map, folds each block's `evacuationMapDiff`
-      (`BlockResult.evacuationMapDiff`), and persists the running map at
-      every step. The dispute can land on any minor in the latest major's
-      tail, and evacuation needs the map *at that block* (see §5.2).
+    - **one `EvacuationMap` entry per committed block** (each major + each
+      last-of-partition SEC minor) of the closing stack's prefix, keyed by
+      `blockNum` → **`EvacuationMap`** CF. SC walks the prefix from the prior
+      `hardAcked` map, folds each block's `evacuationMapDiff`
+      (`BlockResult.evacuationMapDiff`), and persists the running map only at
+      the committed blocks — the ones whose map backs an on-chain commitment
+      (`StackComposer.committedBlockNums`, mirroring
+      `StackEffectsBuilder.mkEffectsRegular`). The intermediate minors' maps
+      back nothing on-chain, so the dispute can never need them (see §5.2).
 
   Bundling the two snapshots with the acks keeps them aligned with the
   `hardAcked` anchor — exactly as deposits ride JointLedger's soft-ack write.
@@ -912,7 +973,7 @@ marker derives from a single-CF scan, §5.1):
    │     │BlockResult │ │SoftConfirmation │ │HardConfirmation │            │
    │     └────────────┘ └─────────────────┘ └─────────────────┘            │
    │                                                                       │
-   │   Per-side snapshots (one keyed blob each):                           │
+   │   Per-side snapshots:                                                 │
    │     ┌───────────┐ ┌────────┐ ┌─────────────┐                          │
    │     │DepositMap │ │Treasury│ │EvacuationMap│                          │
    │     └───────────┘ └────────┘ └─────────────┘                          │
@@ -975,15 +1036,18 @@ of the committed bytes in our CFs, we rebuild actor state from there.
   internal matter.
 - **Column families.** Twelve CFs — five lane (`Block`, `Stack`, `Request`,
   `SoftAck`, `HardAck`; §7.1), three spine-indexed working / confirmation
-  (`BlockResult`, `SoftConfirmation`, `HardConfirmation`), three single-blob
-  snapshots (`DepositMap`, `Treasury`, `EvacuationMap`), and one metadata
+  (`BlockResult`, `SoftConfirmation`, `HardConfirmation`), three snapshot CFs
+  (`DepositMap` + `Treasury` single keyed blobs; `EvacuationMap` keyed per
+  committed block), and one metadata
   (`Meta`, store version). The generic benefits of CF-per-concern (per-CF
   tuning, compaction isolation, scoped Bloom filters, tag-byte savings) are
   enumerated in the primer above. **Atomicity across CFs is preserved**:
   `WriteBatch` covers puts in multiple CFs as one WAL record, so the per-soft-ack
   bundle `{Block, SoftAck, BlockResult, DepositMap}` lands as one transaction
   even though its pieces live in four CFs.
-- **Snapshots** = single keyed blobs in their own CF, overwritten in place.
+- **Snapshots** = `DepositMap` / `Treasury` are single keyed blobs in their own
+  CF, overwritten in place; `EvacuationMap` is keyed by `blockNum`, one entry per
+  committed block (§3.2).
 
 **Per-CF profile — what CF-per-concern buys us.** The twelve CFs have very
 different workload shapes, and the win of splitting them is that each one's
@@ -1000,7 +1064,7 @@ compaction style) can match its shape. Concretely:
 | `HardConfirmation` | one entry per hard-confirmed stack (multisigned effects / SECs / fallbacks), keyed by `stackNum`, the R10 evacuation floor — physical deletion never descends here; folded sequentially at recovery (CardanoLiaison + rule-based regime, §6, §10 Q6) | scan-optimized; `hardConfirmed = max(key)` from `SeekToLast`; **never compacted past — physical-retention floor** |
 | `DepositMap` | one key (`Meta`-like — single keyed blob), medium-sized blob, **rewritten on every own soft ack** (high churn on a single key) | RocksDB-friendly single-key churn (large MemTable absorbs the overwrites; compaction collapses the chain quickly); isolated from ack-CF compaction |
 | `Treasury` | one key, rewritten only at own hard-ack stack-close (slow cadence); small (UTXO ref) | low write rate ⇒ tiny compaction footprint; own CF makes it trivially backupable / restorable as part of the R10 floor |
-| `EvacuationMap` | keyed by `blockNum`; one entry per soft-confirmed block, written in batches at own hard-ack stack-close (the closing stack's whole prefix in one `WriteBatch`); each map is cumulative L2 state | scan-optimized profile (range-read for evacuation reconstruction); pruning is bounded — anything strictly older than the last-hard-confirmed major can be dropped, since those minors can never be disputed against once the next major supersedes them |
+| `EvacuationMap` | keyed by `blockNum`; one entry per **committed** block (each major + each last-of-partition SEC minor — the only maps that back an on-chain commitment), written in batches at own hard-ack stack-close (the closing stack's committed blocks in one `WriteBatch`); each map is cumulative L2 state | scan-optimized profile (range-read for evacuation reconstruction); pruning is bounded — anything strictly older than the last-hard-confirmed major can be dropped, since those minors can never be disputed against once the next major supersedes them |
 | `Meta` | one key today (store version) | no tuning needed; one obvious place for store-level metadata |
 
 A few benefits worth calling out separately:
@@ -1116,7 +1180,8 @@ wire — there is no separate `ArrivalStamps` CF. Non-lane CFs (`BlockResult`,
 ## 8. Boot sequence
 
 Executed in/around `MultisigRegimeManager.preStartLocal`, before
-`pendingConnections.complete`. Consensus first, boundaries last (§5).
+`pendingConnections.complete`. **All actors start together**; the two recovery
+mechanisms (replay / restore) run concurrently (§5).
 
 1. Open the store; verify version. Absent → cold start (the degenerate replay:
    empty base, empty mailboxes).
@@ -1124,34 +1189,40 @@ Executed in/around `MultisigRegimeManager.preStartLocal`, before
    max(SoftConfirmation.key)`, `hardConfirmed = max(HardConfirmation.key)`,
    `softAcked = max(own SoftAck key)`, `hardAcked` from the last own `HardAck`.
    **Load base snapshots** for the consensus actors — `DepositMap` (JL),
-   `Treasury` + `EvacuationMap` (SC). Validate invariants (markers consistent
-   with the snapshot blobs being aligned to their anchors; counter monotonicity).
-   On violation → **fail safe**.
-3. **`ReplayActor` pre-populates** the suspended consensus actors' mailboxes with
-   the total-ordered lane-entry tail, **using per-actor resume cursors** (§5.1,
-   §10 Q9 option a): signers / ledger from `*Acked + 1` (fast: `softAcked + 1`;
-   slow: `hardAcked + 1` — no re-signing, CR2); aggregators from `*Confirmed + 1`
-   (fast: `softConfirmed + 1`; slow: `hardConfirmed + 1`), so the
-   acked-but-unconfirmed band is re-aggregated as peers' late acks arrive.
-   StackComposer also reads `BlockResult` for
-   `(StackLane[hardAcked].lastBlockNum, head]` to rebuild `pending` (§6
-   StackComposer). A **suspend barrier** may be needed to hold the actors until
-   seeding completes (§10 Q4).
-4. **Open the consensus barrier:** consensus actors run, rebuilding state +
-   cascades. Their external outputs (acks, briefs, effects) queue in the
-   (created-but-unstarted) boundary mailboxes.
-5. **Restore boundary actors — last** (§5): RequestSequencer's counter from
-   the store, PeerLiaison's per-remote cursors, CardanoLiaison's target. Each
-   boundary loads its cursor / counter **before** processing anything from its
-   mailbox; any queued replay output `≤ cursor` is dropped by the same
-   cursor filter that runs in steady state.
-6. **Reconcile L1:** `CardanoLiaison` polls `CardanoBackend`; the in-flight
+   `Treasury` + `EvacuationMap` (SC; the latter at
+   `EvacuationMap[StackLane[hardAcked].lastBlockNum]`, always present for a
+   non-final stack — §5.2). Validate invariants (markers consistent with the
+   snapshot blobs being aligned to their anchors; counter monotonicity). On
+   violation → **fail safe**.
+3. **`ReplayActor` seeds the consensus actors' mailboxes** with the total-ordered
+   lane-entry tail, **using per-actor resume cursors** (§5.1, §10 Q9 option a):
+   signers / ledger from `*Acked + 1` (fast: `softAcked + 1`; slow: `hardAcked + 1`
+   — no re-signing, CR2); aggregators from `*Confirmed + 1` (fast:
+   `softConfirmed + 1`; slow: `hardConfirmed + 1`), so the acked-but-unconfirmed
+   band is re-aggregated as peers' late acks arrive. StackComposer also reads
+   `BlockResult` for `(StackLane[hardAcked].lastBlockNum, head]` to rebuild
+   `pending` (§6 StackComposer). The `ReplayActor` also reads L1 **directly from
+   `CardanoBackend`** (`utxosAt(treasuryAddress)`) and seeds the first
+   `PollResults` into BlockWeaver, so deposit decisions proceed immediately rather
+   than waiting on CardanoLiaison's poll cadence (§5.5). A **suspend barrier** may
+   be needed to hold the consensus actors until seeding completes (§10 Q4).
+4. **Open the start barrier:** every actor — consensus *and* boundary — runs.
+   Consensus actors rebuild state + cascades from the seeded tail; their external
+   re-emissions (acks, briefs, effects) reach the already-running boundaries.
+5. **Boundaries restore + filter, concurrently.** RequestSequencer's counter from
+   the store, PeerLiaison's per-remote cursors, CardanoLiaison's target — each
+   loaded **before** the boundary processes anything. A replay re-emission
+   `≤ cursor` is dropped by the same cursor / equivocation filter that runs in
+   steady state; a `> cursor` output is genuine forward progress and goes out
+   normally (§5).
+6. **Reconcile L1:** `CardanoLiaison` polls `CardanoBackend` on its own cadence
+   (the `ReplayActor` already supplied the first sample in step 3); the in-flight
    tail re-verifies against live L1 (§5.5) and may diverge; detect whether the
    head moved to the rule-based regime while we were down (→ hand off to the
    rule-based path, which reads this store once then runs off L1 (§10 Q6) —
    not a multisig resume).
-7. Connect `PeerLiaison`s; resume `GetMsgBatch` from restored cursors; catch
-   up to current head height (ordinary liveness, not backfill).
+7. Resume `GetMsgBatch` over the connected `PeerLiaison`s from restored cursors;
+   catch up to current head height (ordinary liveness, not backfill).
 8. Resume normal participation.
 
 If step 7 can't complete within the timing budget (CR7), abort and signal the
@@ -1209,14 +1280,15 @@ observationally equivalent to the no-crash run.*
    state-restore; not per-actor self-load, not pure message-journaling (§5).
 4. **Replay mechanism** — **mostly settled:** pre-populate-mailboxes (§5.6
    mechanism 1) is the target and is *loosely expected to work* on the real
-   substrate (validate empirically). **Barriers:** under boundary-last
-   initialisation (§5) the sequencing is: a **suspend barrier** holds consensus
-   actors while the `ReplayActor` seeds their mailboxes; a **consensus barrier**
-   then releases them to replay; only afterwards are boundary actors started
-   and L1 polled. So L1 reconciliation comes **after** the boundary-start
-   step (reflected in §8). The two-barrier shape is what we expect to land; if
-   the existing `Connections` barrier alone suffices for the interior, we
-   collapse to one.
+   substrate (validate empirically). **Barriers:** all actors start **together**
+   (§5) — boundaries are *not* deferred, since the steady-state cursor filter
+   already suppresses replay re-emissions, so a boundary-last phase buys nothing.
+   The only barrier still in question is a **suspend barrier** to hold the
+   consensus actors while the `ReplayActor` seeds their mailboxes; the existing
+   `Connections` barrier may already suffice (then we add nothing). **Revisit
+   trigger:** if measurement ever shows a replay re-emission leaking past a
+   boundary's cursor filter onto the wire / chain, reintroduce a deferred
+   boundary start surgically — but start from the simpler all-together shape.
 5. ~~**fsync granularity**~~ — **resolved as a per-CF gradient.** Not one
    global policy — `WriteOptions::sync` is chosen per `Write` call, so we set it
    based on which CF (and what protocol promise) the write backs:
@@ -1287,7 +1359,7 @@ built **in any order**.
 | Pa | Boundary persistence: RequestSequencer write-before-tell-user (CR1/CR4); PeerLiaison inbound write-before-advance + cursors (CR8), with the 8-byte arrival-stamp prefix on each lane value (§5.4). |
 | Pb | Equivocation guard at the peer boundary (CR2) + counter recovery (CR3); unit tests. |
 | Pc | Fast-side per-block persistence (JointLedger): per-soft-ack `WriteBatch` over `Block` + `SoftAck` + `BlockResult` + `DepositMap` (§6 JointLedger); plus `FastConsensusActor`'s confirmation write to `SoftConfirmation` + soft-ack pruning. The `BlockResult` CF is what lets `StackComposer` rebuild `pending` from disk on restart (§5.2). |
-| Pd | `ReplayActor` + total-order merge (§5.4) + indices algorithm (§5.3); pre-populate-mailboxes mechanism + barrier (§5.6). |
+| Pd | `ReplayActor` + total-order merge (§5.4) + indices algorithm (§5.3); pre-populate-mailboxes mechanism + suspend barrier (§5.6); seeds the first `PollResults` straight from `CardanoBackend` so deposit decisions don't wait on CardanoLiaison's poll cadence (§5.5). |
 | Pe | L1 reconciliation + live re-sample in CardanoLiaison (§5.5, §8 step 6 — post-barrier). |
 | Pf | Boot sequence end-to-end (§8); fail-safe paths (CR6/CR7). |
 | Pg | Crash-restart integration action + one-by-one oracle + observational-equivalence property (§9). |
