@@ -6,6 +6,7 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
 import hydrozoa.config.head.HeadConfig
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.MultisigRegimeManager
@@ -65,7 +66,7 @@ final case class SlowConsensusActor(
       * `WriteBatch.put` / `Persistence.write` calls used by [[persistHardConfirmation]] pick it
       * up implicitly.
       */
-    private given hydrozoa.config.head.network.CardanoNetwork.Section = config
+    private given CardanoNetwork.Section = config
 
     private val connections = Ref.unsafe[IO, Option[Connections]](None)
     private val stateRef = Ref.unsafe[IO, State](State.initial)

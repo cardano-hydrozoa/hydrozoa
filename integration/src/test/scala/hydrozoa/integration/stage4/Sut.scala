@@ -15,6 +15,7 @@ import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.stack.Stack
+import hydrozoa.multisig.persistence.BackendStore
 import org.scalacheck.commands.SutCommand
 
 // ===================================
@@ -33,7 +34,7 @@ private[stage4] case class PeerStack(
       * SC's stack-close writes (Treasury + EvacuationMap) and SCA's hard-confirmation writes
       * (HardConfirmation) landed in the store. See `analyzePersistence` in `Suite.scala`.
       */
-    backendStore: hydrozoa.multisig.persistence.BackendStore[IO],
+    backendStore: BackendStore[IO],
 )
 
 // ===================================
@@ -145,7 +146,7 @@ case class Stage4Sut(
     /** Per-peer persistence backend store — used by `analyzePersistence` to assert SC + SCA
       * writes (Treasury + EvacuationMap + HardConfirmation) landed during the scenario.
       */
-    backendStores: Map[HeadPeerNumber, hydrozoa.multisig.persistence.BackendStore[IO]],
+    backendStores: Map[HeadPeerNumber, BackendStore[IO]],
     submittedRequestIds: Ref[IO, Vector[RequestId]],
     tracerLocal: IOLocal[Tracer],
     // Cleanup hooks for resources allocated outside the actor system (currently the

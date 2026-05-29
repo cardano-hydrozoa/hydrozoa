@@ -3,6 +3,7 @@ package hydrozoa.multisig.persistence.codec
 import cats.syntax.functor.*
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.{transactionDecoder, transactionEncoder}
 import hydrozoa.multisig.ledger.l1.tx.RolloutTx
+import RolloutUtxo
 import hydrozoa.multisig.persistence.codec.FoundationCodecs.{
     resolvedUtxosDecoder,
     resolvedUtxosEncoder
@@ -37,7 +38,7 @@ object RolloutTxCodec:
     given lastDecoder: Decoder[RolloutTx.Last] = Decoder.instance { c =>
         for
             tx <- c.downField("tx").as[Transaction]
-            rolloutSpent <- c.downField("rolloutSpent").as[hydrozoa.multisig.ledger.l1.utxo.RolloutUtxo]
+            rolloutSpent <- c.downField("rolloutSpent").as[RolloutUtxo]
             payoutCount <- c.downField("payoutCount").as[Int]
             resolvedUtxos <- c.downField("resolvedUtxos").as[ResolvedUtxos]
         yield RolloutTx.Last(
@@ -62,9 +63,9 @@ object RolloutTxCodec:
         for
             tx <- c.downField("tx").as[Transaction]
             rolloutSpent <- c.downField("rolloutSpent")
-                .as[hydrozoa.multisig.ledger.l1.utxo.RolloutUtxo]
+                .as[RolloutUtxo]
             rolloutProduced <- c.downField("rolloutProduced")
-                .as[hydrozoa.multisig.ledger.l1.utxo.RolloutUtxo]
+                .as[RolloutUtxo]
             payoutCount <- c.downField("payoutCount").as[Int]
             resolvedUtxos <- c.downField("resolvedUtxos").as[ResolvedUtxos]
         yield RolloutTx.NotLast(

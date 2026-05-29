@@ -2,7 +2,10 @@ package hydrozoa.multisig.persistence
 
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.ledger.block.BlockNumber
-import hydrozoa.multisig.ledger.stack.StackNumber
+import hydrozoa.multisig.ledger.joint.{EvacuationMap as JointEvacuationMap}
+import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
+import hydrozoa.multisig.ledger.stack.{StackEffects, StackNumber}
+import hydrozoa.multisig.persistence.codec.{StackEffectsCodec, TreasuryCodec}
 
 /** The typed key surface for the high-level persistence API.
   *
@@ -82,8 +85,8 @@ object StoreKey:
       * `StoreCodec.fromCirce`).
       */
     final case class HardConfirmation(num: StackNumber) extends StoreKey:
-        type Value = hydrozoa.multisig.ledger.stack.StackEffects.HardConfirmed
-        import hydrozoa.multisig.persistence.codec.StackEffectsCodec.given
+        type Value = StackEffects.HardConfirmed
+        import StackEffectsCodec.given
         given codec: StoreCodec[Value] = summon
         val cf: Cf = Cf.HardConfirmation
         def encode: Array[Byte] = LaneKey.intBytes(num)
@@ -102,8 +105,8 @@ object StoreKey:
       * `Datum` / `Equity`).
       */
     case object Treasury extends StoreKey:
-        type Value = hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
-        import hydrozoa.multisig.persistence.codec.TreasuryCodec.given
+        type Value = MultisigTreasuryUtxo
+        import TreasuryCodec.given
         given codec: StoreCodec[Value] = summon
         val cf: Cf = Cf.Treasury
         def encode: Array[Byte] = singletonKey
@@ -115,8 +118,8 @@ object StoreKey:
       * `CardanoNetwork.Section` for `Payout.Obligation`, threaded via `StoreCodec.fromCirce`).
       */
     case object EvacuationMap extends StoreKey:
-        type Value = hydrozoa.multisig.ledger.joint.EvacuationMap
-        import hydrozoa.multisig.ledger.joint.EvacuationMap.given
+        type Value = JointEvacuationMap
+        import JointEvacuationMap.given
         given codec: StoreCodec[Value] = summon
         val cf: Cf = Cf.EvacuationMap
         def encode: Array[Byte] = singletonKey

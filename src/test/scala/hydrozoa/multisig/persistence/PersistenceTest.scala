@@ -4,10 +4,12 @@ import cats.effect.{IO, IOLocal}
 import cats.effect.unsafe.implicits.global
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.Tracer
-import hydrozoa.multisig.consensus.ack.SoftAckNumber
+import hydrozoa.multisig.consensus.ack.{HardAckNumber, SoftAckNumber}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockNumber
+import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.stack.StackNumber
+import hydrozoa.multisig.persistence.codec.TreasuryFixture
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import java.nio.file.{Files, Path}
 import java.util.Comparator
@@ -88,9 +90,9 @@ class PersistenceTest extends AnyFunSuite:
         withTypedStore { p =>
             val stackNum = StackNumber(0)
             val ownPeer = HeadPeerNumber(1)
-            val hardNum = hydrozoa.multisig.consensus.ack.HardAckNumber(0)
-            val emptyEvac = hydrozoa.multisig.ledger.joint.EvacuationMap.empty
-            val treasury = hydrozoa.multisig.persistence.codec.TreasuryFixture.sampleTreasury
+            val hardNum = HardAckNumber(0)
+            val emptyEvac = EvacuationMap.empty
+            val treasury = TreasuryFixture.sampleTreasury
             val batch = WriteBatch.start
                 .put(LaneKey.Stack(stackNum))(Array[Byte](1))
                 .put(LaneKey.HardAck(ownPeer, hardNum))(Array[Byte](2))

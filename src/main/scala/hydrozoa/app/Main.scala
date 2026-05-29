@@ -1,6 +1,6 @@
 package hydrozoa.app
 
-import cats.effect.{ExitCode, IO, IOApp, Resource}
+import cats.effect.{ExitCode, IO, IOApp, IOLocal, Resource}
 import com.bloxbean.cardano.client.util.HexUtil
 import com.bloxbean.cardano.client.util.HexUtil.encodeHexString
 import com.comcast.ip4s.{host, port}
@@ -212,7 +212,7 @@ object Main extends IOApp {
             )
             tracerLocal <- Resource.eval(Tracer.makeLocal)
             persistence = {
-                given cats.effect.IOLocal[Tracer] = tracerLocal
+                given IOLocal[Tracer] = tracerLocal
                 Persistence.fromBackend(backendStore)
             }
 

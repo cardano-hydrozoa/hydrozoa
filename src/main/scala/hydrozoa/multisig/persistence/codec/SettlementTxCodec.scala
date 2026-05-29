@@ -30,6 +30,7 @@ import io.circe.syntax.*
 import io.circe.{Decoder, Encoder, Json}
 import scalus.cardano.ledger.Transaction
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
+import scalus.uplc.builtin.ByteString
 
 /** Persistence-layer JSON codec for [[SettlementTx]] — sealed trait with `NoPayouts`,
   * `WithOnlyDirectPayouts`, `WithRollouts` variants. Tag-discriminated.
@@ -42,7 +43,7 @@ object SettlementTxCodec:
               "settlementTxEndTime" -> t.settlementTxEndTime.asJson,
               "tx" -> t.tx.asJson,
               "majorVersionProduced" -> t.majorVersionProduced.asJson,
-              "kzgCommitment" -> (t.kzgCommitment: scalus.uplc.builtin.ByteString).asJson,
+              "kzgCommitment" -> (t.kzgCommitment: ByteString).asJson,
               "treasurySpent" -> t.treasurySpent.asJson,
               "treasuryProduced" -> t.treasuryProduced.asJson,
               "depositsSpent" -> t.depositsSpent.asJson,
@@ -56,7 +57,7 @@ object SettlementTxCodec:
                 set <- c.downField("settlementTxEndTime").as[SettlementTxEndTime]
                 tx <- c.downField("tx").as[Transaction]
                 mv <- c.downField("majorVersionProduced").as[BlockVersion.Major]
-                kzg <- c.downField("kzgCommitment").as[scalus.uplc.builtin.ByteString]
+                kzg <- c.downField("kzgCommitment").as[ByteString]
                 ts <- c.downField("treasurySpent").as[MultisigTreasuryUtxo]
                 tp <- c.downField("treasuryProduced").as[MultisigTreasuryUtxo]
                 ds <- c.downField("depositsSpent").as[List[DepositUtxo]]
@@ -80,7 +81,7 @@ object SettlementTxCodec:
           "settlementTxEndTime" -> t.settlementTxEndTime.asJson,
           "tx" -> t.tx.asJson,
           "majorVersionProduced" -> t.majorVersionProduced.asJson,
-          "kzgCommitment" -> (t.kzgCommitment: scalus.uplc.builtin.ByteString).asJson,
+          "kzgCommitment" -> (t.kzgCommitment: ByteString).asJson,
           "treasurySpent" -> t.treasurySpent.asJson,
           "treasuryProduced" -> t.treasuryProduced.asJson,
           "depositsSpent" -> t.depositsSpent.asJson,
@@ -96,7 +97,7 @@ object SettlementTxCodec:
             set <- c.downField("settlementTxEndTime").as[SettlementTxEndTime]
             tx <- c.downField("tx").as[Transaction]
             mv <- c.downField("majorVersionProduced").as[BlockVersion.Major]
-            kzg <- c.downField("kzgCommitment").as[scalus.uplc.builtin.ByteString]
+            kzg <- c.downField("kzgCommitment").as[ByteString]
             ts <- c.downField("treasurySpent").as[MultisigTreasuryUtxo]
             tp <- c.downField("treasuryProduced").as[MultisigTreasuryUtxo]
             ds <- c.downField("depositsSpent").as[List[DepositUtxo]]
@@ -121,7 +122,7 @@ object SettlementTxCodec:
               "settlementTxEndTime" -> t.settlementTxEndTime.asJson,
               "tx" -> t.tx.asJson,
               "majorVersionProduced" -> t.majorVersionProduced.asJson,
-              "kzgCommitment" -> (t.kzgCommitment: scalus.uplc.builtin.ByteString).asJson,
+              "kzgCommitment" -> (t.kzgCommitment: ByteString).asJson,
               "treasurySpent" -> t.treasurySpent.asJson,
               "treasuryProduced" -> t.treasuryProduced.asJson,
               "depositsSpent" -> t.depositsSpent.asJson,
@@ -137,7 +138,7 @@ object SettlementTxCodec:
                 set <- c.downField("settlementTxEndTime").as[SettlementTxEndTime]
                 tx <- c.downField("tx").as[Transaction]
                 mv <- c.downField("majorVersionProduced").as[BlockVersion.Major]
-                kzg <- c.downField("kzgCommitment").as[scalus.uplc.builtin.ByteString]
+                kzg <- c.downField("kzgCommitment").as[ByteString]
                 ts <- c.downField("treasurySpent").as[MultisigTreasuryUtxo]
                 tp <- c.downField("treasuryProduced").as[MultisigTreasuryUtxo]
                 ds <- c.downField("depositsSpent").as[List[DepositUtxo]]

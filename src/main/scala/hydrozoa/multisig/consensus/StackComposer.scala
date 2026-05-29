@@ -7,6 +7,7 @@ import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming.StackTimes.StackCreationEndTime
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.logging.Tracer
@@ -54,7 +55,7 @@ final case class StackComposer(
       * typed `WriteBatch.put` / `Persistence.write` calls used by [[persistSlowSideSnapshots]]
       * pick it up implicitly.
       */
-    private given hydrozoa.config.head.network.CardanoNetwork.Section = config
+    private given CardanoNetwork.Section = config
 
     private val connections = Ref.unsafe[IO, Option[Connections]](None)
 

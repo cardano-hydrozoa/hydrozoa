@@ -23,7 +23,9 @@ import io.bullet.borer.Cbor
 import io.circe.syntax.*
 import io.circe.{Decoder, Encoder, Json}
 import scala.util.Try
-import scalus.uplc.builtin.ByteString
+import scalus.cardano.address.ShelleyAddress
+import scalus.cardano.ledger.{Coin, TransactionInput, Value}
+import scalus.uplc.builtin.{ByteString, Data}
 import scalus.uplc.builtin.Data.{fromData, toData}
 
 /** Persistence-layer JSON codec for [[DepositUtxo]] and its nested [[DepositUtxo.Datum]].
@@ -45,7 +47,7 @@ object DepositUtxoCodec:
     given datumDecoder: Decoder[DepositUtxo.Datum] = Decoder.decodeString.emap { hexStr =>
         Try {
             val bytes = ByteString.fromHex(hexStr).bytes
-            val data = Cbor.decode(bytes).to[scalus.uplc.builtin.Data].value
+            val data = Cbor.decode(bytes).to[Data].value
             fromData[DepositUtxo.Datum](data)
         }.toEither.left.map(e => s"DepositUtxo.Datum decode failed: ${e.getMessage}")
     }
@@ -68,12 +70,12 @@ object DepositUtxoCodec:
     given depositUtxoDecoder(using CardanoNetwork.Section): Decoder[DepositUtxo] =
         Decoder.instance { c =>
             for
-                utxoId <- c.downField("utxoId").as[scalus.cardano.ledger.TransactionInput]
-                address <- c.downField("address").as[scalus.cardano.address.ShelleyAddress]
+                utxoId <- c.downField("utxoId").as[TransactionInput]
+                address <- c.downField("address").as[ShelleyAddress]
                 datum <- c.downField("datum").as[DepositUtxo.Datum]
-                value <- c.downField("value").as[scalus.cardano.ledger.Value]
+                value <- c.downField("value").as[Value]
                 l2Payload <- c.downField("l2Payload").as[ByteString]
-                depositFee <- c.downField("depositFee").as[scalus.cardano.ledger.Coin]
+                depositFee <- c.downField("depositFee").as[Coin]
                 rvet <- c.downField("requestValidityEndTime").as[RequestValidityEndTime]
                 ast <- c.downField("absorptionStartTime").as[DepositAbsorptionStartTime]
                 aet <- c.downField("absorptionEndTime").as[DepositAbsorptionEndTime]

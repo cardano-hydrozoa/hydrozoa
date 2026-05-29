@@ -11,9 +11,10 @@ import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{
 }
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
-import scalus.cardano.onchain.plutus.prelude.List as PList
 import io.circe.syntax.*
 import io.circe.{Decoder, Encoder, Json}
+import scalus.cardano.ledger.{TransactionInput, Value}
+import scalus.cardano.onchain.plutus.prelude.List as PList
 import scalus.uplc.builtin.ByteString
 
 /** Persistence-layer JSON codecs for the rule-based-regime types that appear inside
@@ -105,7 +106,7 @@ object RuleBasedCodecs:
         c =>
             for
                 datum <- c.downField("datum").as[RuleBasedTreasuryDatum]
-                value <- c.downField("value").as[scalus.cardano.ledger.Value]
+                value <- c.downField("value").as[Value]
             yield RuleBasedTreasuryOutput(datum, value)
     }
 
@@ -120,7 +121,7 @@ object RuleBasedCodecs:
 
     given ruleBasedTreasuryUtxoDecoder: Decoder[RuleBasedTreasuryUtxo] = Decoder.instance { c =>
         for
-            id <- c.downField("utxoId").as[scalus.cardano.ledger.TransactionInput]
+            id <- c.downField("utxoId").as[TransactionInput]
             out <- c.downField("treasuryOutput").as[RuleBasedTreasuryOutput]
         yield RuleBasedTreasuryUtxo(utxoId = id, treasuryOutput = out)
     }
