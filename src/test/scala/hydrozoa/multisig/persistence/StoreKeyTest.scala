@@ -22,7 +22,7 @@ class StoreKeyTest extends AnyFunSuite:
           StoreKey.HardConfirmation(StackNumber(0)) -> Cf.HardConfirmation,
           StoreKey.DepositMap -> Cf.DepositMap,
           StoreKey.Treasury -> Cf.Treasury,
-          StoreKey.EvacuationMap -> Cf.EvacuationMap,
+          StoreKey.EvacuationMap(BlockNumber(0)) -> Cf.EvacuationMap,
           StoreKey.Meta("schema-version") -> Cf.Meta
         )
         cases.foreach { case (k, expected) =>
@@ -34,7 +34,8 @@ class StoreKeyTest extends AnyFunSuite:
         val keys: List[StoreKey] = List(
           StoreKey.BlockResult(BlockNumber(7)),
           StoreKey.SoftConfirmation(BlockNumber(99)),
-          StoreKey.HardConfirmation(StackNumber(123))
+          StoreKey.HardConfirmation(StackNumber(123)),
+          StoreKey.EvacuationMap(BlockNumber(42))
         )
         keys.foreach { k =>
             assert(k.encode.length == 4, s"$k encoded to ${k.encode.length} bytes, expected 4")
@@ -42,7 +43,7 @@ class StoreKeyTest extends AnyFunSuite:
     }
 
     test("singleton snapshot keys all encode to the same empty key") {
-        val keys = List(StoreKey.DepositMap, StoreKey.Treasury, StoreKey.EvacuationMap)
+        val keys: List[StoreKey] = List(StoreKey.DepositMap, StoreKey.Treasury)
         keys.foreach { k =>
             assert(k.encode.isEmpty, s"$k encoded to ${k.encode.length} bytes, expected 0")
         }

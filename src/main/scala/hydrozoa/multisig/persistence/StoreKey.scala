@@ -18,9 +18,9 @@ import hydrozoa.multisig.persistence.codec.{StackEffectsCodec, TreasuryCodec}
   *   - Spine-indexed metadata CFs (one entry per block / stack): [[StoreKey.BlockResult]] —
   *     `Cf.BlockResult`, keyed by `blockNum`. [[StoreKey.SoftConfirmation]] —
   *     `Cf.SoftConfirmation`, keyed by `blockNum`. [[StoreKey.HardConfirmation]] —
-  *     `Cf.HardConfirmation`, keyed by `stackNum`.
-  *   - Singleton snapshot CFs (one entry total): [[StoreKey.DepositMap]], [[StoreKey.Treasury]],
-  *     [[StoreKey.EvacuationMap]].
+  *     `Cf.HardConfirmation`, keyed by `stackNum`. [[StoreKey.EvacuationMap]] —
+  *     `Cf.EvacuationMap`, keyed by `blockNum` (per-block; see the case docstring for why).
+  *   - Singleton snapshot CFs (one entry total): [[StoreKey.DepositMap]], [[StoreKey.Treasury]].
   *   - Store-level metadata: [[StoreKey.Meta]] — `Cf.Meta`, name-keyed.
   *
   * Each subtype declares its `Value` and a `given codec: StoreCodec[Value]`; the trait's
