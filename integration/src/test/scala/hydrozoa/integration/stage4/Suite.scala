@@ -193,11 +193,20 @@ case class Stage4Suite(
                             consensusActor <- system.actorOf(
                               FastConsensusActor(nodeConfig, pending, tracerLocal)
                             )
+                            // Per-peer in-memory persistence — test isolation, no disk I/O.
+                            // Stage4 verification (Task #24) will read this back to assert SC's
+                            // hard-ack-close writes land.
+                            backendStore <- hydrozoa.multisig.persistence.InMemoryBackendStore.open.allocated
+                                .map(_._1)
+                            persistence = {
+                                given hydrozoa.config.head.network.CardanoNetwork.Section = nodeConfig
+                                hydrozoa.multisig.persistence.Persistence.fromBackend(backendStore)
+                            }
                             stackComposer <- system.actorOf(
-                              StackComposer(nodeConfig, pending, tracerLocal)
+                              StackComposer(nodeConfig, pending, tracerLocal, persistence)
                             )
                             slowConsensusActor <- system.actorOf(
-                              SlowConsensusActor(nodeConfig, pending, tracerLocal)
+                              SlowConsensusActor(nodeConfig, pending, tracerLocal, persistence)
                             )
                         yield peerNum -> PeerStack(
                           blockWeaver,
@@ -206,7 +215,8 @@ case class Stage4Suite(
                           jointLedger,
                           consensusActor,
                           stackComposer,
-                          slowConsensusActor
+                          slowConsensusActor,
+                          backendStore
                         )
                     }
                 }
@@ -391,6 +401,9 @@ case class Stage4Suite(
           liaisonTickFibers = liaisonTickFibers.toList,
           blockBriefs = blockBriefsMap,
           stacks = stacksMap,
+          backendStores = peerStackMap.map { case (peerNum, stack) =>
+              peerNum -> stack.backendStore
+          },
           submittedRequestIds = submittedRequestIds,
           tracerLocal = tracerLocal,
           transportCleanup = transportCleanup,
@@ -595,12 +608,89 @@ case class Stage4Suite(
               attempts = 1,
               sleep = 0.seconds,
             )
+            persistenceProp <- analyzePersistence(sut, stacksByPeer, sortedPeers)
         yield propLiveness(submittedIds, canonicalBriefs) &&
             propDepositTiming(lastState.registeredDeposits, canonicalBriefs) &&
             propValidRatio(lastState, canonicalBriefs) &&
             propStackCoverage(canonicalBriefs, canonicalStacks) &&
-            effectsLandedProp
+            effectsLandedProp &&
+            persistenceProp
     }
+
+    /** Post-scenario verification of the §6 producer-side persistence writes:
+      *   - **SC** (`StackComposer`) writes `Treasury` + `EvacuationMap` at every own hard-ack
+      *     stack-close (#21).
+      *   - **SCA** (`SlowConsensusActor`) writes `HardConfirmation` at every hard-confirmation
+      *     (#22).
+      *
+      * For each peer that observed at least one `Stack.HardConfirmed` during the scenario, this
+      * property asserts:
+      *   1. `Cf.HardConfirmation` holds an entry per hard-confirmed stack (= the captured stacks
+      *      count, since both the observer and the persistence write happen on hard-confirmation).
+      *   2. `Cf.Treasury` and `Cf.EvacuationMap` each hold their single snapshot blob
+      *      (always exactly 1 — they're overwritten in place per close).
+      *
+      * Skip a peer entirely if it never reached a hard-confirmation (the typical `nPeers < 3`
+      * cold-start scenarios). The property only fires once at least one hard-confirmation actually
+      * happened, which is exactly where the writes should have landed.
+      */
+    private def analyzePersistence(
+        sut: Stage4Sut,
+        stacksByPeer: Map[HeadPeerNumber, Vector[Stack.HardConfirmed]],
+        sortedPeers: Seq[HeadPeerNumber]
+    ): IO[Prop] = {
+        sortedPeers
+            .traverse { peerNum =>
+                val backend = sut.backendStores(peerNum)
+                val expectedStacks = stacksByPeer.getOrElse(peerNum, Vector.empty).size
+                for {
+                    hardConfirmations <- countEntries(
+                      backend,
+                      hydrozoa.multisig.persistence.Cf.HardConfirmation
+                    )
+                    treasuries <- countEntries(
+                      backend,
+                      hydrozoa.multisig.persistence.Cf.Treasury
+                    )
+                    evacuationMaps <- countEntries(
+                      backend,
+                      hydrozoa.multisig.persistence.Cf.EvacuationMap
+                    )
+                    _ <- logger.info(
+                      s"peer${peerNum: Int} persistence: expectedHardConf=$expectedStacks " +
+                          s"hardConfirmations=$hardConfirmations treasuries=$treasuries " +
+                          s"evacuationMaps=$evacuationMaps"
+                    )
+                } yield {
+                    if expectedStacks == 0 then Prop.passed
+                    else {
+                        val hardOk = hardConfirmations == expectedStacks
+                        val treasuryOk = treasuries == 1
+                        val evacOk = evacuationMaps == 1
+                        Prop(hardOk && treasuryOk && evacOk).label(
+                          s"peer${peerNum: Int}: " +
+                              s"hardConfirmations=$hardConfirmations expected=$expectedStacks, " +
+                              s"treasuries=$treasuries (expected 1), " +
+                              s"evacuationMaps=$evacuationMaps (expected 1)"
+                        )
+                    }
+                }
+            }
+            .map(_.foldLeft(Prop.passed)(_ && _))
+    }
+
+    private def countEntries(
+        backend: hydrozoa.multisig.persistence.BackendStore[IO],
+        cf: hydrozoa.multisig.persistence.Cf
+    ): IO[Int] =
+        backend.cursor(cf, Array.emptyByteArray).use { c =>
+            def loop(n: Int): IO[Int] =
+                c.next.flatMap {
+                    case None    => IO.pure(n)
+                    case Some(_) => loop(n + 1)
+                }
+            loop(0)
+        }
 
     // TODO: side-channel validity-error tracking + propNoStaleRejections
     //
