@@ -56,12 +56,13 @@ import scala.concurrent.duration.{DurationInt, FiniteDuration}
   *   - [[InMemory]] (default) — per-peer [[InMemoryBackendStore]]. No disk I/O; test isolation is
   *     automatic.
   *   - [[RocksDb]] — per-peer RocksDB directory under `root`. Each peer gets `root/peer-N/`. The
-  *     suite creates and removes the root automatically. Use this when reproducing on-disk
-  *     compaction / batching behavior, or when you want to inspect a live store after a run.
+  *     default `root` is a fresh tempdir per `RocksDb()` invocation so concurrent runs don't
+  *     collide; pass an explicit path to keep the store around (e.g. for inspection). Use this
+  *     when reproducing on-disk compaction / batching behavior.
   */
 enum BackendMode:
     case InMemory
-    case RocksDb(root: Path)
+    case RocksDb(root: Path = Files.createTempDirectory("stage4-rocksdb-"))
 
 case class Stage4Suite(
     label: String = "stage4",
