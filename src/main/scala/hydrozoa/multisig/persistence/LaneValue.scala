@@ -2,6 +2,13 @@ package hydrozoa.multisig.persistence
 
 import java.nio.ByteBuffer
 
+/** A typed lane-CF value: the wire payload `P` plus its 8-byte arrival stamp. The stamp is
+  * per-entry runtime data (local monotonic time — creation for own entries, receipt for inbound),
+  * not derivable from `P`, so it rides alongside the payload here and is framed ahead of it by
+  * [[StoreCodec.laneValue]]. See the [[LaneValue$]] companion for the byte framing.
+  */
+final case class LaneValue[P](stamp: Long, payload: P)
+
 /** Framing for the value stored at a lane key.
   *
   * Lane values are encoded as `[arrivalStamp : 8 big-endian Long][wirePayload …]`. The arrival

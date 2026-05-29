@@ -1,10 +1,12 @@
 package hydrozoa.multisig.persistence
 
-import hydrozoa.multisig.consensus.ack.{HardAckNumber, SoftAckNumber}
+import hydrozoa.multisig.consensus.UserRequestWithId
+import hydrozoa.multisig.consensus.ack.{HardAck as HardAckMsg, HardAckNumber, SoftAck as SoftAckMsg, SoftAckNumber}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.block.BlockNumber
+import hydrozoa.multisig.consensus.transport.Codecs.given
+import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
-import hydrozoa.multisig.ledger.stack.StackNumber
+import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
 import java.nio.ByteBuffer
 
 /** A full addressable entry key in the persistence layer — a [[LaneId]] paired with the within-lane
@@ -20,48 +22,60 @@ import java.nio.ByteBuffer
   *   - `HardAck` → `[peer : 1][hardAckNum : 4]`
   *
   * The lane-type discriminant is the column family ([[Cf]]) — no tag byte in the key.
+  *
+  * Each case's `Value` is a [[LaneValue]] wrapping that lane's wire payload (the wire codec from
+  * `consensus.transport.Codecs`, reused under the 8-byte arrival-stamp prefix via
+  * [[StoreCodec.laneValue]]; §5.4, §7.1). A sealed trait (not an `enum`) so each case can declare
+  * its own path-dependent `Value` + codec.
   */
-enum LaneKey extends StoreKey:
-    case Block(num: BlockNumber)
-    case Stack(num: StackNumber)
-    case Request(peer: HeadPeerNumber, num: RequestNumber)
-    case SoftAck(peer: HeadPeerNumber, num: SoftAckNumber)
-    case HardAck(peer: HeadPeerNumber, num: HardAckNumber)
-
-    /** Lane payload — scaffolding placeholder. Real per-case Value types (e.g. `BlockBrief`,
-      * `SoftAck`, …) and wire-codec bodies land per CF as actors wire them; replacing this type
-      * member per case will require LaneKey to convert from enum to sealed-trait, which we'll do at
-      * that point. See [[StoreKey]] for the rationale.
-      */
-    type Value = Array[Byte]
-
-    /** Passthrough codec inherited via [[StoreCodec.passthrough]]; switches per-case once a typed
-      * payload is wired (see the [[Value]] note).
-      */
-    given codec: StoreCodec[Value] = StoreCodec.passthrough
-
+sealed trait LaneKey extends StoreKey:
     /** The lane this key belongs to (and therefore the column family — see [[LaneId.cf]]). */
-    def laneId: LaneId = this match
-        case Block(_)      => LaneId.BlockSpine
-        case Stack(_)      => LaneId.StackSpine
-        case Request(p, _) => LaneId.Request(p)
-        case SoftAck(p, _) => LaneId.SoftAck(p)
-        case HardAck(p, _) => LaneId.HardAck(p)
+    def laneId: LaneId
 
     /** The column family this lane key lives in — delegates through [[LaneId.cf]]. Satisfies the
       * [[StoreKey]] contract.
       */
-    def cf: Cf = laneId.cf
-
-    /** Encode this key into bytes for the lane's column family. */
-    def encode: Array[Byte] = this match
-        case Block(num)         => LaneKey.intBytes(num)
-        case Stack(num)         => LaneKey.intBytes(num)
-        case Request(peer, num) => LaneKey.peerByte(peer) ++ LaneKey.longBytes(num)
-        case SoftAck(peer, num) => LaneKey.peerByte(peer) ++ LaneKey.intBytes(num)
-        case HardAck(peer, num) => LaneKey.peerByte(peer) ++ LaneKey.intBytes(num)
+    final def cf: Cf = laneId.cf
 
 object LaneKey:
+
+    /** Block spine: the block brief, keyed by `blockNum`. */
+    final case class Block(num: BlockNumber) extends LaneKey:
+        type Value = LaneValue[BlockBrief.Next]
+        given codec: StoreCodec[Value] = StoreCodec.laneValue[BlockBrief.Next]
+        def laneId: LaneId = LaneId.BlockSpine
+        def encode: Array[Byte] = intBytes(num)
+
+    /** Stack spine: the stack brief, keyed by `stackNum`. */
+    final case class Stack(num: StackNumber) extends LaneKey:
+        type Value = LaneValue[StackBrief]
+        given codec: StoreCodec[Value] = StoreCodec.laneValue[StackBrief]
+        def laneId: LaneId = LaneId.StackSpine
+        def encode: Array[Byte] = intBytes(num)
+
+    /** Request satellite (per author): the assigned user request, keyed by `(peer, requestNum)`. */
+    final case class Request(peer: HeadPeerNumber, num: RequestNumber) extends LaneKey:
+        type Value = LaneValue[UserRequestWithId]
+        given codec: StoreCodec[Value] = StoreCodec.laneValue[UserRequestWithId]
+        def laneId: LaneId = LaneId.Request(peer)
+        def encode: Array[Byte] = peerByte(peer) ++ longBytes(num)
+
+    /** Soft-ack satellite (per author): a peer's soft-ack signature, keyed by `(peer, softAckNum)`.
+      */
+    final case class SoftAck(peer: HeadPeerNumber, num: SoftAckNumber) extends LaneKey:
+        type Value = LaneValue[SoftAckMsg]
+        given codec: StoreCodec[Value] = StoreCodec.laneValue[SoftAckMsg]
+        def laneId: LaneId = LaneId.SoftAck(peer)
+        def encode: Array[Byte] = peerByte(peer) ++ intBytes(num)
+
+    /** Hard-ack satellite (per author): a peer's hard-ack signature, keyed by `(peer, hardAckNum)`.
+      */
+    final case class HardAck(peer: HeadPeerNumber, num: HardAckNumber) extends LaneKey:
+        type Value = LaneValue[HardAckMsg]
+        given codec: StoreCodec[Value] = StoreCodec.laneValue[HardAckMsg]
+        def laneId: LaneId = LaneId.HardAck(peer)
+        def encode: Array[Byte] = peerByte(peer) ++ intBytes(num)
+
     /** Decode a key from its byte form, given the CF the bytes came from. Throws on a malformed
       * payload (interpreted as store corruption — fail safe).
       */

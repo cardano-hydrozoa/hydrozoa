@@ -4,12 +4,9 @@ import cats.effect.unsafe.implicits.global
 import cats.effect.{IO, IOLocal}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.Tracer
-import hydrozoa.multisig.consensus.ack.{HardAckNumber, SoftAckNumber}
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
-import hydrozoa.multisig.ledger.stack.StackNumber
 import hydrozoa.multisig.persistence.codec.TreasuryFixture
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import java.nio.file.{Files, Path}
@@ -21,20 +18,22 @@ import org.scalatest.funsuite.AnyFunSuite
   * `Array[Byte]` at the call sites, just typed [[StoreKey]] + path-dependent `key.Value`.
   *
   * CFs with a real `Value` type round-trip their typed payload (e.g. `DepositMap` →
-  * [[DepositsMap]], `Treasury` → `MultisigTreasuryUtxo`, `EvacuationMap`); CFs still on the
-  * `Array[Byte]` passthrough (the lane CFs until §7.1 framing lands, and `Meta`) use bytes.
+  * [[DepositsMap]], `Treasury` → `MultisigTreasuryUtxo`, `EvacuationMap`); lane CFs carry a
+  * [[LaneValue]] (`StoreCodec.laneValue` framing, exercised end-to-end by stage1/stage4) and only
+  * `Meta` stays on the `Array[Byte]` passthrough.
   */
 class PersistenceTest extends AnyFunSuite:
 
     given CardanoNetwork.Section = CardanoNetwork.Preview
 
-    test("typed put/get round-trips a lane key") {
+    test("typed put/get round-trips a typed value") {
         withTypedStore { p =>
-            val key = LaneKey.Block(BlockNumber(7))
+            val key = StoreKey.Treasury
+            val treasury = TreasuryFixture.sampleTreasury
             for
-                _ <- p.put(key)(Array[Byte](0xab.toByte))
+                _ <- p.put(key)(treasury)
                 got <- p.get(key)
-            yield assert(got.map(_.head) == Some(0xab.toByte))
+            yield assert(got == Some(treasury))
         }
     }
 
@@ -49,30 +48,29 @@ class PersistenceTest extends AnyFunSuite:
         }
     }
 
-    test("typed WriteBatch lands a 4-CF per-soft-ack bundle atomically") {
-        // Mirrors §6 JointLedger's per-soft-ack write: two lane CFs (still bytes until §7.1
-        // framing lands), the typed `DepositMap` snapshot, and `Meta` standing in for the
-        // `BlockResult` CF (whose typed value needs a full `BlockResult` fixture).
+    test("typed WriteBatch lands a 4-CF bundle atomically across distinct CFs") {
+        // Atomic multi-CF write, using the CFs with easy fixtures (typed snapshots + Meta bytes).
+        // Lane-CF (`LaneValue`) round-trips are exercised end-to-end by the stage1/stage4 runs;
+        // the framing itself is covered below.
         withTypedStore { p =>
-            val blockNum = BlockNumber(1)
-            val ownPeer = HeadPeerNumber(0)
-            val softNum = SoftAckNumber(1)
+            val treasury = TreasuryFixture.sampleTreasury
+            val evacKey = StoreKey.EvacuationMap(BlockNumber(1))
             val batch = WriteBatch.start
-                .put(LaneKey.Block(blockNum))(Array[Byte](0xaa.toByte))
-                .put(LaneKey.SoftAck(ownPeer, softNum))(Array[Byte](0xbb.toByte))
-                .put(StoreKey.Meta("block-result"))(Array[Byte](0xcc.toByte))
                 .put(StoreKey.DepositMap)(DepositsMap.empty)
+                .put(StoreKey.Treasury)(treasury)
+                .put(evacKey)(EvacuationMap.empty)
+                .put(StoreKey.Meta("schema-version"))(Array[Byte](0xcc.toByte))
             for
                 _ <- p.write(batch)
-                a <- p.get(LaneKey.Block(blockNum))
-                b <- p.get(LaneKey.SoftAck(ownPeer, softNum))
-                c <- p.get(StoreKey.Meta("block-result"))
-                d <- p.get(StoreKey.DepositMap)
+                a <- p.get(StoreKey.DepositMap)
+                b <- p.get(StoreKey.Treasury)
+                c <- p.get(evacKey)
+                d <- p.get(StoreKey.Meta("schema-version"))
             yield assert(
-              a.map(_.head) == Some(0xaa.toByte) &&
-                  b.map(_.head) == Some(0xbb.toByte) &&
-                  c.map(_.head) == Some(0xcc.toByte) &&
-                  d == Some(DepositsMap.empty)
+              a == Some(DepositsMap.empty) &&
+                  b == Some(treasury) &&
+                  c == Some(EvacuationMap.empty) &&
+                  d.map(_.head) == Some(0xcc.toByte)
             )
         }
     }
@@ -88,34 +86,33 @@ class PersistenceTest extends AnyFunSuite:
         }
     }
 
-    test("the typed mirrors the slow-side close — 4 CFs in one WriteBatch") {
-        // Mirrors §6 StackComposer's per-hard-ack stack-close write.
+    test("the typed mirrors the slow-side snapshot — Treasury + EvacuationMap atomically") {
+        // Mirrors §6 StackComposer's per-hard-ack snapshot write (the Treasury + per-block
+        // EvacuationMap pair landed in one batch).
         withTypedStore { p =>
-            val stackNum = StackNumber(0)
-            val ownPeer = HeadPeerNumber(1)
-            val hardNum = HardAckNumber(0)
-            val blockNum = BlockNumber(0)
-            val evacKey = StoreKey.EvacuationMap(blockNum)
+            val evacKey = StoreKey.EvacuationMap(BlockNumber(0))
             val emptyEvac = EvacuationMap.empty
             val treasury = TreasuryFixture.sampleTreasury
             val batch = WriteBatch.start
-                .put(LaneKey.Stack(stackNum))(Array[Byte](1))
-                .put(LaneKey.HardAck(ownPeer, hardNum))(Array[Byte](2))
                 .put(StoreKey.Treasury)(treasury)
                 .put(evacKey)(emptyEvac)
             for
                 _ <- p.write(batch)
-                a <- p.get(LaneKey.Stack(stackNum))
-                b <- p.get(LaneKey.HardAck(ownPeer, hardNum))
                 c <- p.get(StoreKey.Treasury)
                 d <- p.get(evacKey)
-            yield assert(
-              a.map(_.head) == Some(1.toByte) &&
-                  b.map(_.head) == Some(2.toByte) &&
-                  c == Some(treasury) &&
-                  d == Some(emptyEvac)
-            )
+            yield assert(c == Some(treasury) && d == Some(emptyEvac))
         }
+    }
+
+    test("LaneValue framing round-trips stamp + payload bytes") {
+        val stamp = 0x0102030405060708L
+        val payload = Array[Byte](0xaa.toByte, 0xbb.toByte, 0xcc.toByte)
+        val framed = LaneValue.frame(stamp, payload)
+        assert(
+          LaneValue.stamp(framed) == stamp &&
+              java.util.Arrays.equals(LaneValue.payload(framed), payload) &&
+              framed.length == LaneValue.stampWidth + payload.length
+        )
     }
 
     // ---- helpers ----
