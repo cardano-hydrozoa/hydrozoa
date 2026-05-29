@@ -1,5 +1,6 @@
 package hydrozoa.multisig.persistence
 
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.consensus.ack.{HardAckNumber, SoftAckNumber}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockNumber
@@ -59,8 +60,8 @@ enum LaneKey extends StoreKey:
     /** Passthrough value codec — replaced per case (with the real wire codec, including the 8-byte
       * arrival-stamp prefix from §5.5) once a typed payload is wired.
       */
-    def encodeValue(value: Value): Array[Byte] = value
-    def decodeValue(bytes: Array[Byte]): Value = bytes
+    def encodeValue(value: Value)(using CardanoNetwork.Section): Array[Byte] = value
+    def decodeValue(bytes: Array[Byte])(using CardanoNetwork.Section): Value = bytes
 
 object LaneKey:
     /** Decode a key from its byte form, given the CF the bytes came from. Throws on a malformed

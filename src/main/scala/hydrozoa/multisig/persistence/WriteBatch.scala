@@ -1,5 +1,7 @@
 package hydrozoa.multisig.persistence
 
+import hydrozoa.config.head.network.CardanoNetwork
+
 /** The **typed, actor-facing** write batch — sibling of [[Persistence]]: a group of writes
   * committed atomically as one transaction.
   *
@@ -16,13 +18,17 @@ package hydrozoa.multisig.persistence
   * [[Persistence.write]] time each op runs its key's `encodeValue` and lowers to a
   * [[RawWriteBatch]] op before reaching the backend. Actors never see bytes.
   *
+  * `put` takes a `using CardanoNetwork.Section`: the builder encodes eagerly so the implicit
+  * is needed at builder-call time. Most actor code already has `Section` in scope (from
+  * `NodeConfig` plumbing); if not, pass it explicitly.
+  *
   * `deleteRange` stays byte-level — see [[RawWriteBatch.deleteRange]] — until the typed shape for
   * ack-pruning is settled (it spans peer-multiplexed keys, so the obvious typed range isn't
   * obvious).
   */
 final case class WriteBatch private (private val ops: Vector[WriteBatch.Op]):
     /** Add a put at the given typed key. The value is `key.Value` — path-dependent. */
-    def put(key: StoreKey)(value: key.Value): WriteBatch =
+    def put(key: StoreKey)(value: key.Value)(using CardanoNetwork.Section): WriteBatch =
         copy(ops = ops :+ WriteBatch.Op.Put(key, key.encodeValue(value)))
 
     /** Add a delete at the given typed key. */
@@ -31,6 +37,9 @@ final case class WriteBatch private (private val ops: Vector[WriteBatch.Op]):
 
     /** True iff this batch contains no operations. */
     def isEmpty: Boolean = ops.isEmpty
+
+    /** Number of operations in this batch. */
+    def size: Int = ops.size
 
     /** Lower the typed batch to its byte-level form for the backend.
       *
