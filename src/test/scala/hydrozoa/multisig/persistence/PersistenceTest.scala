@@ -1,7 +1,9 @@
 package hydrozoa.multisig.persistence
 
-import cats.effect.IO
+import cats.effect.{IO, IOLocal}
 import cats.effect.unsafe.implicits.global
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.consensus.ack.SoftAckNumber
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockNumber
@@ -20,6 +22,8 @@ import org.scalatest.funsuite.AnyFunSuite
   * and codec, the corresponding test will switch to constructing typed values.
   */
 class PersistenceTest extends AnyFunSuite:
+
+    given CardanoNetwork.Section = CardanoNetwork.Preview
 
     test("typed put/get round-trips a lane key") {
         withTypedStore { p =>
@@ -70,7 +74,7 @@ class PersistenceTest extends AnyFunSuite:
 
     test("typed WriteBatch + delete in the same batch") {
         withTypedStore { p =>
-            val key = StoreKey.Treasury
+            val key = StoreKey.DepositMap
             for
                 _ <- p.put(key)(Array[Byte](1))
                 _ <- p.write(WriteBatch.empty.delete(key))
@@ -85,11 +89,13 @@ class PersistenceTest extends AnyFunSuite:
             val stackNum = StackNumber(0)
             val ownPeer = HeadPeerNumber(1)
             val hardNum = hydrozoa.multisig.consensus.ack.HardAckNumber(0)
+            val emptyEvac = hydrozoa.multisig.ledger.joint.EvacuationMap.empty
+            val treasury = hydrozoa.multisig.persistence.codec.TreasuryFixture.sampleTreasury
             val batch = WriteBatch.empty
                 .put(LaneKey.Stack(stackNum))(Array[Byte](1))
                 .put(LaneKey.HardAck(ownPeer, hardNum))(Array[Byte](2))
-                .put(StoreKey.Treasury)(Array[Byte](3))
-                .put(StoreKey.EvacuationMap)(Array[Byte](4))
+                .put(StoreKey.Treasury)(treasury)
+                .put(StoreKey.EvacuationMap)(emptyEvac)
             for
                 _ <- p.write(batch)
                 a <- p.get(LaneKey.Stack(stackNum))
@@ -99,8 +105,8 @@ class PersistenceTest extends AnyFunSuite:
             yield assert(
               a.map(_.head) == Some(1.toByte) &&
                   b.map(_.head) == Some(2.toByte) &&
-                  c.map(_.head) == Some(3.toByte) &&
-                  d.map(_.head) == Some(4.toByte)
+                  c == Some(treasury) &&
+                  d == Some(emptyEvac)
             )
         }
     }
@@ -110,10 +116,15 @@ class PersistenceTest extends AnyFunSuite:
     private def withTypedStore(prog: Persistence[IO] => IO[Assertion]): Assertion =
         val tempDir = newTempDir()
         try
-            RocksDbBackendStore
-                .open(tempDir)
-                .use(backend => prog(Persistence.fromBackend(backend)))
-                .unsafeRunSync()
+            (for
+                tracerLocal <- Tracer.makeLocal
+                result <- {
+                    given IOLocal[Tracer] = tracerLocal
+                    RocksDbBackendStore
+                        .open(tempDir)
+                        .use(backend => prog(Persistence.fromBackend(backend)))
+                }
+            yield result).unsafeRunSync()
         finally recursivelyDelete(tempDir)
 
     private def newTempDir(): Path =
