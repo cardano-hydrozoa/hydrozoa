@@ -2,7 +2,7 @@ package hydrozoa.multisig.persistence
 
 import cats.effect.{IO, IOLocal}
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.lib.logging.{Level, LogEvent, Tracer}
+import hydrozoa.lib.logging.Tracer
 
 /** The **typed, actor-facing** persistence API.
   *
@@ -42,35 +42,50 @@ trait Persistence[F[_]]:
     def write(batch: WriteBatch): F[Unit]
 
 object Persistence:
-    private def trace(msg: String)(using local: IOLocal[Tracer]): IO[Unit] =
-        local.get.flatMap(
-          _.traceWith(LogEvent(Level.Info, msg, routingKey = Some("Persistence")))
-        )
+    /** Force the routing key to `"Persistence"` for the duration of `fa`, so every
+      * `Tracer.info` / `Tracer.debug` inside lands on the `"Persistence"` Logback logger
+      * regardless of the calling actor's `Tracer.routeLocal`. Restores the prior tracer on exit
+      * — does not corrupt the caller's per-fiber routing.
+      */
+    private def withRoute[A](fa: IO[A])(using IOLocal[Tracer]): IO[A] =
+        Tracer.scoped(_.copy(routingKey = Some("Persistence")))(fa)
 
     /** The standard `Persistence` implementation — wraps a [[BackendStore]] and threads keys /
       * values through each [[StoreKey]]'s codec on the way through.
       *
       * Takes the [[CardanoNetwork.Section]] once and makes it implicitly available to every codec
       * invocation (`encodeValue` / `decodeValue` / `WriteBatch.toRaw`). Also captures the ambient
-      * [[IOLocal]][[Tracer]] for per-op INFO trace lines (see the trait docstring).
+      * [[IOLocal]][[Tracer]] for per-op INFO trace lines (see the trait docstring); per-op trace
+      * lines are scoped through [[withRoute]] so they always route to the `"Persistence"` logger.
       */
     def fromBackend(
         backend: BackendStore[IO]
     )(using CardanoNetwork.Section, IOLocal[Tracer]): Persistence[IO] =
         new Persistence[IO]:
             def get(key: StoreKey): IO[Option[key.Value]] =
-                backend
-                    .get(key.cf, key.encode)
-                    .flatTap(bytesOpt =>
-                        trace(s"get $key -> ${if bytesOpt.isDefined then "hit" else "miss"}")
-                    )
-                    .map(_.map(key.decodeValue))
+                withRoute(
+                  backend
+                      .get(key.cf, key.encode)
+                      .flatTap(bytesOpt =>
+                          Tracer.info(
+                            s"get $key -> ${if bytesOpt.isDefined then "hit" else "miss"}"
+                          )
+                      )
+                      .map(_.map(key.decodeValue))
+                )
 
             def put(key: StoreKey)(value: key.Value): IO[Unit] =
-                backend.put(key.cf, key.encode, key.encodeValue(value)) <* trace(s"put $key")
+                withRoute(
+                  backend.put(key.cf, key.encode, key.encodeValue(value)) *>
+                      Tracer.info(s"put $key")
+                )
 
             def delete(key: StoreKey): IO[Unit] =
-                backend.delete(key.cf, key.encode) <* trace(s"delete $key")
+                withRoute(
+                  backend.delete(key.cf, key.encode) *> Tracer.info(s"delete $key")
+                )
 
             def write(batch: WriteBatch): IO[Unit] =
-                backend.write(batch.toRaw) <* trace(s"write batch (${batch.size} ops)")
+                withRoute(
+                  backend.write(batch.toRaw) *> Tracer.info(s"write batch (${batch.size} ops)")
+                )

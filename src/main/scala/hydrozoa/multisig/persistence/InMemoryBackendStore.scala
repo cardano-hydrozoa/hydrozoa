@@ -1,6 +1,7 @@
 package hydrozoa.multisig.persistence
 
 import cats.effect.{IO, Ref, Resource}
+import hydrozoa.lib.logging.Logging
 import scala.collection.immutable.TreeMap
 
 /** An in-memory [[BackendStore]] for tests. Mirrors the RocksDB contract (atomic batches across
@@ -12,6 +13,8 @@ import scala.collection.immutable.TreeMap
   */
 object InMemoryBackendStore:
 
+    private val logger = Logging.loggerIO("Persistence")
+
     private given byteVectorOrdering: Ordering[Vector[Byte]] =
         Ordering.Implicits.seqOrdering(
           Ordering.fromLessThan[Byte]((a, b) => (a & 0xff) < (b & 0xff))
@@ -22,11 +25,15 @@ object InMemoryBackendStore:
       */
     def open: Resource[IO, BackendStore[IO]] =
         Resource.eval(
-          Ref
-              .of[IO, Map[Cf, TreeMap[Vector[Byte], Array[Byte]]]](
-                Cf.all.iterator.map(cf => cf -> TreeMap.empty[Vector[Byte], Array[Byte]]).toMap
+          for
+              _ <- logger.info("opening in-memory backend")
+              state <- Ref.of[IO, Map[Cf, TreeMap[Vector[Byte], Array[Byte]]]](
+                Cf.all.iterator
+                    .map(cf => cf -> TreeMap.empty[Vector[Byte], Array[Byte]])
+                    .toMap
               )
-              .map(new Impl(_))
+              _ <- logger.info(s"in-memory backend ready (CFs=${Cf.all.size})")
+          yield new Impl(state)
         )
 
     private final class Impl(state: Ref[IO, Map[Cf, TreeMap[Vector[Byte], Array[Byte]]]])

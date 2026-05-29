@@ -1,6 +1,7 @@
 package hydrozoa.multisig.persistence.rocksdb
 
 import cats.effect.{IO, Resource}
+import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.persistence.*
 import java.nio.file.{Files, Path}
 import java.util.ArrayList as JArrayList
@@ -105,6 +106,8 @@ final class RocksDbBackendStore private (
         }
 
 object RocksDbBackendStore:
+    private val logger = Logging.loggerIO("Persistence")
+
     /** Open the RocksDB store at `path`, creating it (and parent directories) if it does not yet
       * exist. Runs the schema-version check ([[StoreVersion]]) and refuses to open an incompatible
       * store. Returns a `Resource` that closes the DB and releases all native resources on
@@ -112,6 +115,7 @@ object RocksDbBackendStore:
       */
     def open(path: Path): Resource[IO, BackendStore[IO]] =
         for
+            _ <- Resource.eval(logger.info(s"opening RocksDB backend at $path"))
             _ <- Resource.eval(IO.blocking {
                 RocksDB.loadLibrary()
                 Files.createDirectories(path)
@@ -128,6 +132,9 @@ object RocksDbBackendStore:
             (db, handles) = opened
             backend = new RocksDbBackendStore(db, handles, writeOptions, readOptions)
             _ <- Resource.eval(versionCheck(backend))
+            _ <- Resource.eval(
+              logger.info(s"RocksDB backend at $path ready (CFs=${handles.size})")
+            )
         yield backend
 
     /** Run the open-time schema-version check. Fresh stores get the current version stamped;
