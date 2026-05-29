@@ -14,6 +14,7 @@ import hydrozoa.lib.actor.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.logging.{Tracer, logWith}
 import hydrozoa.multisig.MultisigRegimeManager
+import hydrozoa.multisig.consensus.ack.SoftAck
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger.NotTriggered
 import hydrozoa.multisig.consensus.pollresults.PollResults
@@ -29,7 +30,7 @@ import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerCommand, L2LedgerError, L2LedgerState}
-import hydrozoa.multisig.persistence.{Persistence, StoreKey, WriteBatch}
+import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Persistence, StoreKey, WriteBatch}
 import monocle.Focus.focus
 
 private case class UserRequestState(
@@ -697,15 +698,16 @@ final case class JointLedger(
               vMin,
               evtCnt
             )
-            // 0. Persist the slow-side BlockResult + deposits snapshot before the soft-ack leaves
-            //    (CR4 write-before-send).
-            _ <- persistOwnBlock(brief, blockResult)
+            softAck = ownHeadWallet.mkSoftAck(brief, localFinalization.asBoolean)
+            // 0. Persist this peer's own per-soft-ack bundle before the soft-ack leaves (CR4
+            //    write-before-send): own brief (leader) + own soft-ack lanes + BlockResult +
+            //    deposits snapshot, in one atomic WriteBatch.
+            _ <- persistOwnBlock(brief, softAck, blockResult)
             // 1. Broadcast the brief to peer liaisons (leader only).
             _ <- IO.whenA(config.ownHeadPeerId.isLeader(brief.blockNum))(
               (conn.peerLiaisons ! brief).parallel
             )
-            // 2. Sign the brief and ship brief + own soft-ack to the consensus actor.
-            softAck = ownHeadWallet.mkSoftAck(brief, localFinalization.asBoolean)
+            // 2. Ship brief + own soft-ack to the consensus actor.
             _ <- conn.fastConsensusActor ! brief
             _ <- conn.fastConsensusActor ! softAck
             // 3. Slow side: hand the block result to the stack composer (independent of fast
@@ -713,16 +715,29 @@ final case class JointLedger(
             _ <- conn.stackComposer ! blockResult
         } yield ()
 
-    /** Persist this peer's per-block slow-side output (`BlockResult`) + the current deposits
-      * snapshot (`DepositMap`) in one atomic `WriteBatch` (CR4/CR6) at own soft-ack time. The own
-      * `Block` brief + `SoftAck` lane writes that complete this bundle (§6) land once lane values
-      * carry their arrival-stamp framing (§7.1).
+    /** Persist this peer's per-soft-ack bundle in one atomic `WriteBatch` (CR4/CR6/CR8, §6):
+      *   - own `BlockBrief` → `Block` lane (**leader only** — the BlockLane author for this block);
+      *   - own `SoftAck` → `SoftAck` lane;
+      *   - the per-block `BlockResult` → `BlockResult` CF;
+      *   - the current deposits snapshot → `DepositMap` CF.
+      *
+      * Lane values carry the 8-byte arrival stamp (creation time — local monotonic; §5.4/§7.1).
       */
-    private def persistOwnBlock(brief: BlockBrief.Next, blockResult: BlockResult): IO[Unit] =
+    private def persistOwnBlock(
+        brief: BlockBrief.Next,
+        softAck: SoftAck,
+        blockResult: BlockResult
+    ): IO[Unit] =
         for {
+            stamp <- IO.monotonic.map(_.toNanos)
             deposits <- state.get.map(_.deposits)
+            briefBatch =
+                if config.ownHeadPeerId.isLeader(brief.blockNum) then
+                    WriteBatch.start.put(LaneKey.Block(brief.blockNum))(LaneValue(stamp, brief))
+                else WriteBatch.start
             _ <- persistence.write(
-              WriteBatch.start
+              briefBatch
+                  .put(LaneKey.SoftAck(softAck.peerNum, softAck.ackNum))(LaneValue(stamp, softAck))
                   .put(StoreKey.BlockResult(brief.blockNum))(blockResult)
                   .put(StoreKey.DepositMap)(deposits)
             )

@@ -642,9 +642,10 @@ case class Stage4Suite(
       *     (#21).
       *   - **SCA** (`SlowConsensusActor`) writes `HardConfirmation` at every hard-confirmation
       *     (#22).
-      *   - **JL** (`JointLedger`) writes `BlockResult` + the `DepositMap` snapshot at each own
-      *     soft ack; **FCA** (`FastConsensusActor`) writes `SoftConfirmation` at each
-      *     soft-confirmation.
+      *   - **JL** (`JointLedger`) writes `BlockResult` + the `DepositMap` snapshot + its own
+      *     `Block` (leader) / `SoftAck` lane entries at each own soft ack; **FCA**
+      *     (`FastConsensusActor`) writes `SoftConfirmation` at each soft-confirmation; **SC** also
+      *     writes its own `Stack` (leader) / `HardAck` lane entries at stack-close.
       *
       * For each peer that observed at least one `Stack.HardConfirmed` during the scenario, this
       * property asserts:
@@ -659,6 +660,9 @@ case class Stage4Suite(
       *   4. The fast side wrote: `Cf.BlockResult` / `Cf.SoftConfirmation` non-empty and
       *      `Cf.DepositMap` a singleton — a peer that hard-confirmed necessarily produced and
       *      soft-confirmed blocks first (sanity lower bounds, not exact counts).
+      *   5. The own satellite lanes are non-empty: `Cf.SoftAck` (every block) and `Cf.HardAck`
+      *      (every confirmed stack). The `Block` / `Stack` spine lanes are leader-only (per-peer
+      *      variable), so they are logged but not asserted.
       *
       * Skip a peer entirely if it never reached a hard-confirmation (the typical `nPeers < 3`
       * cold-start scenarios). The property only fires once at least one hard-confirmation actually
@@ -701,12 +705,14 @@ case class Stage4Suite(
                     blockResults <- countEntries(backend, Cf.BlockResult)
                     softConfirmations <- countEntries(backend, Cf.SoftConfirmation)
                     depositMaps <- countEntries(backend, Cf.DepositMap)
+                    softAcks <- countEntries(backend, Cf.SoftAck)
+                    hardAcks <- countEntries(backend, Cf.HardAck)
                     _ <- logger.info(
                       s"peer${peerNum: Int} persistence: expectedHardConf=$expectedStacks " +
                           s"hardConfirmations=$hardConfirmations treasuries=$treasuries " +
                           s"evacuationMaps=$evacuationMaps (expected=$expectedEvac) " +
                           s"blockResults=$blockResults softConfirmations=$softConfirmations " +
-                          s"depositMaps=$depositMaps"
+                          s"depositMaps=$depositMaps softAcks=$softAcks hardAcks=$hardAcks"
                     )
                 } yield {
                     if expectedStacks == 0 then Prop.passed
@@ -719,13 +725,17 @@ case class Stage4Suite(
                         // `SoftConfirmation`), and the deposits snapshot is a singleton.
                         val fastOk =
                             blockResults >= 1 && softConfirmations >= 1 && depositMaps == 1
-                        Prop(hardOk && treasuryOk && evacOk && fastOk).label(
+                        // Own lane writes: every peer soft-acks every block (JL) and hard-acks
+                        // each stack it confirmed (SC), so both satellite lanes are non-empty.
+                        val laneOk = softAcks >= 1 && hardAcks >= 1
+                        Prop(hardOk && treasuryOk && evacOk && fastOk && laneOk).label(
                           s"peer${peerNum: Int}: " +
                               s"hardConfirmations=$hardConfirmations expected=$expectedStacks, " +
                               s"treasuries=$treasuries (expected 1), " +
                               s"evacuationMaps=$evacuationMaps (expected $expectedEvac), " +
                               s"blockResults=$blockResults softConfirmations=$softConfirmations " +
-                              s"depositMaps=$depositMaps (expected >=1, >=1, ==1)"
+                              s"depositMaps=$depositMaps softAcks=$softAcks hardAcks=$hardAcks " +
+                              s"(fast >=1/>=1/==1, lanes >=1/>=1)"
                         )
                     }
                 }

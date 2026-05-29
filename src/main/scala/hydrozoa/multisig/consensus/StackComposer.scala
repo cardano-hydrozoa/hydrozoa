@@ -17,7 +17,7 @@ import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockResult}
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
 import hydrozoa.multisig.ledger.stack.*
-import hydrozoa.multisig.persistence.{Persistence, StoreKey, WriteBatch}
+import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Persistence, StoreKey, WriteBatch}
 
 /** Stack composer.
   *
@@ -52,8 +52,8 @@ final case class StackComposer(
 
     /** `config` is a `CardanoNetwork.Section` transitively (`HeadConfig.Section` →
       * `HeadConfig.Bootstrap.Section` → `CardanoNetwork.Section`); expose it as a given so the
-      * typed `WriteBatch.put` / `Persistence.write` calls used by [[persistSlowSideSnapshots]] pick
-      * it up implicitly.
+      * typed `WriteBatch.put` / `Persistence.write` calls used by [[persistOwnStackClose]] pick it
+      * up implicitly.
       */
     private given CardanoNetwork.Section = config
 
@@ -185,59 +185,81 @@ final case class StackComposer(
                     // (which manages broadcast scheduling: round-1 / sole immediately, round-2
                     // withheld until local round-1 confirmation).
                     _ <- conn.slowConsensusActor ! handoff
-                    _ <- persistSlowSideSnapshots(s.evacuationMap, partitions, newTreasury)
+                    _ <- persistOwnStackClose(
+                      s.evacuationMap,
+                      partitions,
+                      newTreasury,
+                      brief,
+                      handoff.ownAcks
+                    )
                     _ <- state.update(_.afterClose(nextStackNum, prefix, newTreasury, newMap))
                 } yield ()
         }
 
-    /** Persist the slow-side passive snapshots at own hard-ack stack-close:
+    /** Persist this peer's per-hard-ack stack-close bundle in one atomic `WriteBatch` (CR4 / CR6 /
+      * CR8, §6):
       *
+      *   - own `StackBrief` → `Stack` lane (**leader only** — the StackLane author for this stack);
+      *   - this peer's `HardAck`s for the stack → `HardAck` lane;
       *   - `Treasury` — the singleton cumulative treasury UTXO ref at `hardAcked` (overwritten in
-      *     place — there's no rule-based scenario that needs an older treasury).
+      *     place — there's no rule-based scenario that needs an older treasury);
       *   - `EvacuationMap` — keyed **per block**, but only at the blocks whose map backs an
       *     on-chain KZG commitment: every **major** block (its post-diff map is the settlement's
       *     `nextKzg`) and every **last-of-partition minor** (the minor that gets a SEC). The maps
       *     at the other minors commit to nothing on-chain, so the rule-based dispute can never need
       *     them — persisting them would be dead weight (see [[StoreKey.EvacuationMap]]). Starting
       *     from `startMap` (the map at the prior `hardAcked`), the closing stack's blocks'
-      *     `evacuationMapDiff`s are folded one at a time and the running map is persisted under a
+      *     `evacuationMapDiff`s are folded in stack order and the running map is persisted under a
       *     block's `blockNum` only when that block is one of the committed ones.
       *
-      * Single atomic `WriteBatch` (CR4 / CR6 / CR8) — every persisted map in the stack lands
-      * together with the treasury and is un-tearable from the `hardAcked` anchor.
-      *
+      * Lane values carry the 8-byte arrival stamp (creation time — local monotonic; §5.4 / §7.1).
       * Takes the [[StackPartition]]s [[mkStackUnsigned]] already built (the prefix is partitioned
-      * once); the blocks fold back in stack order as `partitions.flatMap(_.blocks)`.
+      * once; the blocks fold back in stack order as `partitions.flatMap(_.blocks)`) plus the brief
+      * and this peer's hard-acks for the stack.
       */
-    private def persistSlowSideSnapshots(
+    private def persistOwnStackClose(
         startMap: EvacuationMap,
         partitions: NonEmptyList[StackPartition],
-        newTreasury: MultisigTreasuryUtxo
+        newTreasury: MultisigTreasuryUtxo,
+        brief: StackBrief,
+        ownAcks: List[HardAck]
     ): IO[Unit] = {
         val committed = committedBlockNums(partitions)
         val orderedResults = partitions.toList.flatMap(_.blocks.toList)
-        persistence.write(
-          orderedResults
-              .foldLeft((startMap, WriteBatch.start.put(StoreKey.Treasury)(newTreasury))) {
-                  case ((runMap, batch), result) =>
-                      val nextMap =
-                          EvacuationMap.applyDiffs(runMap, result.evacuationMapDiff)
-                      val nextBatch =
-                          if committed.contains(result.brief.blockNum) then
-                              batch.put(StoreKey.EvacuationMap(result.brief.blockNum))(nextMap)
-                          else batch
-                      (nextMap, nextBatch)
-              }
-              ._2
-        )
+        for {
+            stamp <- IO.monotonic.map(_.toNanos)
+            // Own lane outputs: StackBrief (leader only — StackLane author) + this peer's HardAcks.
+            laneBatch = {
+                val withBrief =
+                    if config.ownHeadPeerId.isSlowLeader(brief.stackNum) then
+                        WriteBatch.start.put(LaneKey.Stack(brief.stackNum))(LaneValue(stamp, brief))
+                    else WriteBatch.start
+                ownAcks.foldLeft(withBrief)((b, ack) =>
+                    b.put(LaneKey.HardAck(ack.peerNum, ack.hardAckNum))(LaneValue(stamp, ack))
+                )
+            }
+            // Snapshots: rotated treasury + committed evacuation maps, onto the same batch.
+            (_, fullBatch) =
+                orderedResults.foldLeft(
+                  (startMap, laneBatch.put(StoreKey.Treasury)(newTreasury))
+                ) { case ((runMap, batch), result) =>
+                    val nextMap = EvacuationMap.applyDiffs(runMap, result.evacuationMapDiff)
+                    val nextBatch =
+                        if committed.contains(result.brief.blockNum) then
+                            batch.put(StoreKey.EvacuationMap(result.brief.blockNum))(nextMap)
+                        else batch
+                    (nextMap, nextBatch)
+                }
+            _ <- persistence.write(fullBatch)
+        } yield ()
     }
 
     /** The blocks of a closed stack whose evacuation map backs an on-chain KZG commitment — the
-      * only maps the rule-based dispute can need, so the only ones [[persistSlowSideSnapshots]]
-      * keeps. Mirrors [[StackEffectsBuilder.mkEffectsRegular]]'s settlement / SEC logic over the
-      * same [[StackPartition]]s: each **major** block (its post-diff map is the settlement's
-      * `nextKzg`) and each **last-of-partition minor** (the minor that gets a SEC). Final blocks
-      * drain the map and commit nothing, so they contribute none.
+      * only maps the rule-based dispute can need, so the only ones [[persistOwnStackClose]] keeps.
+      * Mirrors [[StackEffectsBuilder.mkEffectsRegular]]'s settlement / SEC logic over the same
+      * [[StackPartition]]s: each **major** block (its post-diff map is the settlement's `nextKzg`)
+      * and each **last-of-partition minor** (the minor that gets a SEC). Final blocks drain the map
+      * and commit nothing, so they contribute none.
       */
     private def committedBlockNums(
         partitions: NonEmptyList[StackPartition]
@@ -325,10 +347,12 @@ final case class StackComposer(
                                 handoff <- buildHandoff(unsigned)
                                 conn <- getConnections
                                 _ <- conn.slowConsensusActor ! handoff
-                                _ <- persistSlowSideSnapshots(
+                                _ <- persistOwnStackClose(
                                   s.evacuationMap,
                                   partitions,
-                                  newTreasury
+                                  newTreasury,
+                                  brief,
+                                  handoff.ownAcks
                                 )
                                 _ <- state.update(
                                   _.afterClose(nextStackNum, slice, newTreasury, newMap)
@@ -344,7 +368,7 @@ final case class StackComposer(
       * (finalization + rollouts); see [[StackEffectsBuilder.mkEffectsRegular]].
       *
       * Returns the [[StackPartition]]s alongside the unsigned stack so the prefix is partitioned
-      * **once** — [[persistSlowSideSnapshots]] reuses them rather than re-partitioning.
+      * **once** — [[persistOwnStackClose]] reuses them rather than re-partitioning.
       */
     private def mkStackUnsigned(
         brief: StackBrief,
@@ -690,7 +714,7 @@ object StackComposer {
     /** The product of composing a stack from a prefix of paired blocks: the [[Stack.Unsigned]] to
       * hand to consensus, the rotated treasury + evacuation map the close advanced to, and the
       * [[StackPartition]] layout. The partitions are carried so the prefix is partitioned **once**
-      * — the effect derivation and `persistSlowSideSnapshots` both consume them.
+      * — the effect derivation and `persistOwnStackClose` both consume them.
       */
     final case class ComposedStack(
         unsigned: Stack.Unsigned,
