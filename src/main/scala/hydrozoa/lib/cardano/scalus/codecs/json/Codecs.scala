@@ -5,7 +5,7 @@ import io.circe.generic.semiauto.{deriveDecoder, deriveEncoder}
 import io.circe.{Decoder, DecodingFailure, Encoder, Json, KeyDecoder, KeyEncoder, parser}
 import scala.util.Try
 import scalus.cardano.address.Network
-import scalus.cardano.ledger.{CardanoInfo, ProtocolParams, SlotConfig, Transaction, TransactionHash, TransactionInput, TransactionOutput, Utxo}
+import scalus.cardano.ledger.{CardanoInfo, KeepRaw, ProtocolParams, SlotConfig, Transaction, TransactionHash, TransactionInput, TransactionOutput, Utxo}
 import scalus.crypto.ed25519.SigningKey
 import scalus.uplc.builtin.ByteString
 
@@ -62,7 +62,9 @@ object Codecs {
         )
     )
 
-    // FIXME (maybe?): combine with `given Encoder[KeepRaw[TransactionOutput]]` in RemoteL2LedgerCodecs(?)
+    given transactionEncoder: Encoder[Transaction] =
+        Encoder.encodeString.contramap(tx => ByteString.fromArray(tx.toCbor).toHex)
+
     given transactionOutputEncoder: Encoder[TransactionOutput] with {
 
         def apply(txOut: TransactionOutput): Json = {
@@ -89,6 +91,31 @@ object Codecs {
         } yield txOut
 
     }
+
+    /** [[KeepRaw]][[[TransactionOutput]]] CBOR-hex codec — the raw bytes the Scalus reader
+      * preserves on read are written back verbatim.
+      *
+      * Hoisted from `RemoteL2LedgerCodecs` (where it was first introduced) so persistence,
+      * L2-RPC, and anything else that needs the wire-identical raw form can share one
+      * implementation.
+      */
+    given keepRawTransactionOutputEncoder: Encoder[KeepRaw[TransactionOutput]] =
+        Encoder.instance(kr => Json.fromString(ByteString.fromArray(kr.raw).toHex))
+
+    given keepRawTransactionOutputDecoder: Decoder[KeepRaw[TransactionOutput]] =
+        Decoder.instance { c =>
+            c.as[String].flatMap { hexStr =>
+                val bs = ByteString.fromHex(hexStr)
+                Try(Cbor.decode(bs.bytes).to[TransactionOutput].value).toEither.left
+                    .map(e =>
+                        io.circe.DecodingFailure(
+                          s"Failed to decode TransactionOutput from CBOR: ${e.getMessage}",
+                          c.history
+                        )
+                    )
+                    .map(KeepRaw.apply)
+            }
+        }
 
     /** NOTE: This encoder is NOT CIP-0116 compliant.
       */

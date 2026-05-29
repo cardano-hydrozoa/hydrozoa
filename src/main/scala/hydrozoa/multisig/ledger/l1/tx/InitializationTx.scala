@@ -32,7 +32,7 @@ import scalus.|>
 // - Treasury Utxo
 // - Multisig Regime Utxo
 // - Change outputs
-final case class InitializationTx private (
+final case class InitializationTx (
     initializationTxEndTime: InitializationTxEndTime,
     // TODO: treasuryProduced and multisigRegimeProduced can probably be moved out of the constructor,
     //  since we can fish it out of the transaction

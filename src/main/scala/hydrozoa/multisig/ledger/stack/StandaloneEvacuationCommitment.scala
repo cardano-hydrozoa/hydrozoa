@@ -123,6 +123,11 @@ object StandaloneEvacuationCommitment {
             def apply(onchainHeader: Onchain): Serialized =
                 IArray.from(serialiseData(onchainHeader.toData).bytes)
 
+            /** Reconstruct a [[Serialized]] from its raw bytes. Used by the persistence codec to
+              * round-trip an already-built SEC; the bytes must be the exact `serialiseData` form.
+              */
+            def fromBytes(bytes: Array[Byte]): Serialized = IArray.from(bytes)
+
             given Conversion[Serialized, IArray[Byte]] = identity
 
             given Conversion[Serialized, Array[Byte]] = msg => IArray.genericWrapArray(msg).toArray
