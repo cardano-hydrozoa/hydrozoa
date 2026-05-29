@@ -1,11 +1,12 @@
 package hydrozoa.multisig.persistence
 
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.multisig.ledger.block.BlockNumber
+import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockResult as LedgerBlockResult}
 import hydrozoa.multisig.ledger.joint.EvacuationMap as JointEvacuationMap
+import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
 import hydrozoa.multisig.ledger.stack.{StackEffects, StackNumber}
-import hydrozoa.multisig.persistence.codec.{StackEffectsCodec, TreasuryCodec}
+import hydrozoa.multisig.persistence.codec.{BlockResultCodec, DepositMapCodec, SoftConfirmationCodec, StackEffectsCodec, TreasuryCodec}
 
 /** The typed key surface for the high-level persistence API.
   *
@@ -62,8 +63,9 @@ object StoreKey:
 
     /** Key for [[Cf.BlockResult]] — the per-block JL output, keyed by `blockNum`. */
     final case class BlockResult(num: BlockNumber) extends StoreKey:
-        type Value = Array[Byte]
-        given codec: StoreCodec[Value] = StoreCodec.passthrough
+        type Value = LedgerBlockResult
+        import BlockResultCodec.given
+        given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.BlockResult
         def encode: Array[Byte] = LaneKey.intBytes(num)
 
@@ -71,8 +73,9 @@ object StoreKey:
       * `softConfirmed` derives as the last key in this CF (§5.2).
       */
     final case class SoftConfirmation(num: BlockNumber) extends StoreKey:
-        type Value = Array[Byte]
-        given codec: StoreCodec[Value] = StoreCodec.passthrough
+        type Value = Block.SoftConfirmed.Next
+        import SoftConfirmationCodec.given
+        given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.SoftConfirmation
         def encode: Array[Byte] = LaneKey.intBytes(num)
 
@@ -93,8 +96,9 @@ object StoreKey:
 
     /** Key for [[Cf.DepositMap]] — the single blob holding JL's deposits map at `softAcked`. */
     case object DepositMap extends StoreKey:
-        type Value = Array[Byte]
-        given codec: StoreCodec[Value] = StoreCodec.passthrough
+        type Value = DepositsMap
+        import DepositMapCodec.given
+        given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.DepositMap
         def encode: Array[Byte] = singletonKey
 

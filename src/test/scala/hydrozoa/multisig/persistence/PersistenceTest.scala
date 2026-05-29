@@ -8,6 +8,7 @@ import hydrozoa.multisig.consensus.ack.{HardAckNumber, SoftAckNumber}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.joint.EvacuationMap
+import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.stack.StackNumber
 import hydrozoa.multisig.persistence.codec.TreasuryFixture
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
@@ -19,9 +20,9 @@ import org.scalatest.funsuite.AnyFunSuite
 /** Tests for the typed actor-facing [[Persistence]] API and [[WriteBatch]] — no `Cf.*` or
   * `Array[Byte]` at the call sites, just typed [[StoreKey]] + path-dependent `key.Value`.
   *
-  * Under today's scaffolding every `StoreKey.Value` is `Array[Byte]` (codecs land per CF as the
-  * first actor wires them); these tests use bytes accordingly. Once a CF gains a real `Value` type
-  * and codec, the corresponding test will switch to constructing typed values.
+  * CFs with a real `Value` type round-trip their typed payload (e.g. `DepositMap` →
+  * [[DepositsMap]], `Treasury` → `MultisigTreasuryUtxo`, `EvacuationMap`); CFs still on the
+  * `Array[Byte]` passthrough (the lane CFs until §7.1 framing lands, and `Meta`) use bytes.
   */
 class PersistenceTest extends AnyFunSuite:
 
@@ -41,7 +42,7 @@ class PersistenceTest extends AnyFunSuite:
         withTypedStore { p =>
             val key = StoreKey.DepositMap
             for
-                _ <- p.put(key)(Array[Byte](1, 2, 3))
+                _ <- p.put(key)(DepositsMap.empty)
                 _ <- p.delete(key)
                 got <- p.get(key)
             yield assert(got.isEmpty)
@@ -49,7 +50,9 @@ class PersistenceTest extends AnyFunSuite:
     }
 
     test("typed WriteBatch lands a 4-CF per-soft-ack bundle atomically") {
-        // Mirrors §6 JointLedger's per-soft-ack write — only typed keys at the call site.
+        // Mirrors §6 JointLedger's per-soft-ack write: two lane CFs (still bytes until §7.1
+        // framing lands), the typed `DepositMap` snapshot, and `Meta` standing in for the
+        // `BlockResult` CF (whose typed value needs a full `BlockResult` fixture).
         withTypedStore { p =>
             val blockNum = BlockNumber(1)
             val ownPeer = HeadPeerNumber(0)
@@ -57,19 +60,19 @@ class PersistenceTest extends AnyFunSuite:
             val batch = WriteBatch.start
                 .put(LaneKey.Block(blockNum))(Array[Byte](0xaa.toByte))
                 .put(LaneKey.SoftAck(ownPeer, softNum))(Array[Byte](0xbb.toByte))
-                .put(StoreKey.BlockResult(blockNum))(Array[Byte](0xcc.toByte))
-                .put(StoreKey.DepositMap)(Array[Byte](0xdd.toByte))
+                .put(StoreKey.Meta("block-result"))(Array[Byte](0xcc.toByte))
+                .put(StoreKey.DepositMap)(DepositsMap.empty)
             for
                 _ <- p.write(batch)
                 a <- p.get(LaneKey.Block(blockNum))
                 b <- p.get(LaneKey.SoftAck(ownPeer, softNum))
-                c <- p.get(StoreKey.BlockResult(blockNum))
+                c <- p.get(StoreKey.Meta("block-result"))
                 d <- p.get(StoreKey.DepositMap)
             yield assert(
               a.map(_.head) == Some(0xaa.toByte) &&
                   b.map(_.head) == Some(0xbb.toByte) &&
                   c.map(_.head) == Some(0xcc.toByte) &&
-                  d.map(_.head) == Some(0xdd.toByte)
+                  d == Some(DepositsMap.empty)
             )
         }
     }
@@ -78,7 +81,7 @@ class PersistenceTest extends AnyFunSuite:
         withTypedStore { p =>
             val key = StoreKey.DepositMap
             for
-                _ <- p.put(key)(Array[Byte](1))
+                _ <- p.put(key)(DepositsMap.empty)
                 _ <- p.write(WriteBatch.start.delete(key))
                 got <- p.get(key)
             yield assert(got.isEmpty)
