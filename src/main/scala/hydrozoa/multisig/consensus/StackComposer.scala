@@ -52,8 +52,8 @@ final case class StackComposer(
 
     /** `config` is a `CardanoNetwork.Section` transitively (`HeadConfig.Section` →
       * `HeadConfig.Bootstrap.Section` → `CardanoNetwork.Section`); expose it as a given so the
-      * typed `WriteBatch.put` / `Persistence.write` calls used by [[persistSlowSideSnapshots]]
-      * pick it up implicitly.
+      * typed `WriteBatch.put` / `Persistence.write` calls used by [[persistSlowSideSnapshots]] pick
+      * it up implicitly.
       */
     private given CardanoNetwork.Section = config
 
@@ -191,9 +191,9 @@ final case class StackComposer(
         }
 
     /** Persist the slow-side passive snapshots — `Treasury` + `EvacuationMap` — at each own
-      * hard-ack stack-close, matching the §6 StackComposer contract (the `Stack` brief lane and
-      * own `HardAck` lane writes join this batch once their typed `Value` types / wire codecs
-      * land — see §11 P2 / Tasks #16–#18).
+      * hard-ack stack-close, matching the §6 StackComposer contract (the `Stack` brief lane and own
+      * `HardAck` lane writes join this batch once their typed `Value` types / wire codecs land —
+      * see §11 P2 / Tasks #16–#18).
       *
       * One atomic `WriteBatch` (CR4 / CR6 / CR8). Bundling keeps the snapshots aligned with the
       * just-closed stack's `hardAcked` anchor and un-tearable from it.

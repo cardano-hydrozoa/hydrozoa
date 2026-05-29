@@ -1,9 +1,6 @@
 package hydrozoa.multisig.persistence.codec
 
-import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{
-    transactionInputDecoder,
-    transactionInputEncoder
-}
+import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{transactionInputDecoder, transactionInputEncoder}
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.{utxoDecoder, utxoEncoder}
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.l1.utxo.{MultisigRegimeUtxo, RolloutUtxo}

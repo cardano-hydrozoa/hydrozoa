@@ -1,9 +1,6 @@
 package hydrozoa.multisig.persistence
 
 import cats.effect.{IO, IOLocal}
-import cats.syntax.apply.*
-import cats.syntax.flatMap.*
-import cats.syntax.functor.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.{Level, LogEvent, Tracer}
 
@@ -53,9 +50,9 @@ object Persistence:
     /** The standard `Persistence` implementation — wraps a [[BackendStore]] and threads keys /
       * values through each [[StoreKey]]'s codec on the way through.
       *
-      * Takes the [[CardanoNetwork.Section]] once and makes it implicitly available to every
-      * codec invocation (`encodeValue` / `decodeValue` / `WriteBatch.toRaw`). Also captures the
-      * ambient [[IOLocal]][[Tracer]] for per-op INFO trace lines (see the trait docstring).
+      * Takes the [[CardanoNetwork.Section]] once and makes it implicitly available to every codec
+      * invocation (`encodeValue` / `decodeValue` / `WriteBatch.toRaw`). Also captures the ambient
+      * [[IOLocal]][[Tracer]] for per-op INFO trace lines (see the trait docstring).
       */
     def fromBackend(
         backend: BackendStore[IO]

@@ -4,30 +4,21 @@ import cats.syntax.functor.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, FinalizationTx, RefundTx, RolloutTx, SettlementTx}
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, StandaloneEvacuationCommitment}
-import hydrozoa.multisig.persistence.codec.FallbackTxCodec.{
-    fallbackTxDecoder,
-    fallbackTxEncoder
-}
-import hydrozoa.multisig.persistence.codec.FinalizationTxCodec.{
-    finalizationTxDecoder,
-    finalizationTxEncoder
-}
+import hydrozoa.multisig.persistence.codec.FallbackTxCodec.{fallbackTxDecoder, fallbackTxEncoder}
+import hydrozoa.multisig.persistence.codec.FinalizationTxCodec.{finalizationTxDecoder, finalizationTxEncoder}
 import hydrozoa.multisig.persistence.codec.RefundTxCodec.{refundTxDecoder, refundTxEncoder}
 import hydrozoa.multisig.persistence.codec.RolloutTxCodec.{rolloutTxDecoder, rolloutTxEncoder}
 import hydrozoa.multisig.persistence.codec.SecCodec.{multiSignedDecoder, multiSignedEncoder}
-import hydrozoa.multisig.persistence.codec.SettlementTxCodec.{
-    settlementTxDecoder,
-    settlementTxEncoder
-}
+import hydrozoa.multisig.persistence.codec.SettlementTxCodec.{settlementTxDecoder, settlementTxEncoder}
 import io.circe.syntax.*
 import io.circe.{Decoder, Encoder, Json}
 
-/** Persistence-layer JSON codec for [[PartitionEffects]] — sealed hierarchy with `Major`,
-  * `Final`, `Minor` cases. Tag-discriminated per the agreed convention.
+/** Persistence-layer JSON codec for [[PartitionEffects]] — sealed hierarchy with `Major`, `Final`,
+  * `Minor` cases. Tag-discriminated per the agreed convention.
   *
   * Specialised at `StandaloneEvacuationCommitment.MultiSigned` for the hard-confirmed shape
-  * (`PartitionEffects[StandaloneEvacuationCommitment.MultiSigned]`) — the only one persisted in
-  * the `HardConfirmation` CF. The unsigned generic variant isn't persisted.
+  * (`PartitionEffects[StandaloneEvacuationCommitment.MultiSigned]`) — the only one persisted in the
+  * `HardConfirmation` CF. The unsigned generic variant isn't persisted.
   */
 object PartitionEffectsCodec:
 

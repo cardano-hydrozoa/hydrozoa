@@ -229,41 +229,42 @@ object Main extends IOApp {
             )
         } yield (env, backend, nodeConfig, remoteL2Ledger, persistence, system, tracerLocal)
 
-        resource.use { case (env, backend, nodeConfig, remoteL2Ledger, persistence, system, tracerLocal) =>
-            for {
-                mrm <- MultisigRegimeManager.apply(
-                  nodeConfig,
-                  backend,
-                  remoteL2Ledger,
-                  persistence,
-                  tracerLocal
-                )
-                _ <- system.actorOf(mrm, "MultisigRegimeManager")
-                _ <- logger.info("Hydrozoa node started successfully")
-
-                // Start HTTP server once EventSequencer is available
-                _ <- mrm.connectionsDeferred.get.flatMap { connections =>
-                    val serverConfig = HydrozoaServer.Config(
-                      host = host"0.0.0.0",
-                      port = port"8080",
-                      adminUsername = env.adminUsername,
-                      adminPassword = env.adminPassword
+        resource.use {
+            case (env, backend, nodeConfig, remoteL2Ledger, persistence, system, tracerLocal) =>
+                for {
+                    mrm <- MultisigRegimeManager.apply(
+                      nodeConfig,
+                      backend,
+                      remoteL2Ledger,
+                      persistence,
+                      tracerLocal
                     )
-                    logger.info("Starting HTTP server...") *>
-                        HydrozoaServer
-                            .create(
-                              connections.eventSequencer,
-                              connections.blockWeaver,
-                              nodeConfig.headConfig,
-                              serverConfig
-                            )
-                            .use(_ => IO.never)
-                            .start // Run in background
-                            .void
-                }
+                    _ <- system.actorOf(mrm, "MultisigRegimeManager")
+                    _ <- logger.info("Hydrozoa node started successfully")
 
-                _ <- system.waitForTermination
-            } yield ExitCode.Success
+                    // Start HTTP server once EventSequencer is available
+                    _ <- mrm.connectionsDeferred.get.flatMap { connections =>
+                        val serverConfig = HydrozoaServer.Config(
+                          host = host"0.0.0.0",
+                          port = port"8080",
+                          adminUsername = env.adminUsername,
+                          adminPassword = env.adminPassword
+                        )
+                        logger.info("Starting HTTP server...") *>
+                            HydrozoaServer
+                                .create(
+                                  connections.eventSequencer,
+                                  connections.blockWeaver,
+                                  nodeConfig.headConfig,
+                                  serverConfig
+                                )
+                                .use(_ => IO.never)
+                                .start // Run in background
+                                .void
+                    }
+
+                    _ <- system.waitForTermination
+                } yield ExitCode.Success
         }
 
 }

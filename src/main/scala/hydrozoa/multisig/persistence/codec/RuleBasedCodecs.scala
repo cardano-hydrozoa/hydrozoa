@@ -1,14 +1,7 @@
 package hydrozoa.multisig.persistence.codec
 
 import cats.syntax.functor.*
-import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{
-    byteStringDecoder,
-    byteStringEncoder,
-    transactionInputDecoder,
-    transactionInputEncoder,
-    valueDecoder,
-    valueEncoder
-}
+import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{byteStringDecoder, byteStringEncoder, transactionInputDecoder, transactionInputEncoder, valueDecoder, valueEncoder}
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import io.circe.syntax.*
@@ -22,17 +15,17 @@ import scalus.uplc.builtin.ByteString
   * persistence read-set.
   *
   * `RuleBasedTreasuryDatum` is a Scala `enum` with `Unresolved` / `Resolved` variants — encoded
-  * tag-discriminated per the agreed convention. Sub-fields ride through CIP-116 (ByteString,
-  * Value) and Circe built-ins (BigInt, List). `MembershipProof` and the `VerificationKey` used
-  * here are both type-aliased to `scalus.uplc.builtin.ByteString` (see `TreasuryState.scala`),
-  * so they pick up the CIP-116 byteString codec automatically.
+  * tag-discriminated per the agreed convention. Sub-fields ride through CIP-116 (ByteString, Value)
+  * and Circe built-ins (BigInt, List). `MembershipProof` and the `VerificationKey` used here are
+  * both type-aliased to `scalus.uplc.builtin.ByteString` (see `TreasuryState.scala`), so they pick
+  * up the CIP-116 byteString codec automatically.
   */
 object RuleBasedCodecs:
 
     // --- RuleBasedTreasuryDatum ---
 
     private def plistToScala[A](xs: PList[A]): List[A] = xs match
-        case PList.Nil               => Nil
+        case PList.Nil              => Nil
         case PList.Cons(head, tail) => head :: plistToScala(tail)
 
     private given unresolvedEncoder: Encoder[RuleBasedTreasuryDatum.Unresolved] =
@@ -94,20 +87,18 @@ object RuleBasedCodecs:
 
     // --- RuleBasedTreasuryOutput ---
 
-    given ruleBasedTreasuryOutputEncoder: Encoder[RuleBasedTreasuryOutput] = Encoder.instance {
-        o =>
-            Json.obj(
-              "datum" -> o.datum.asJson,
-              "value" -> o.value.asJson
-            )
+    given ruleBasedTreasuryOutputEncoder: Encoder[RuleBasedTreasuryOutput] = Encoder.instance { o =>
+        Json.obj(
+          "datum" -> o.datum.asJson,
+          "value" -> o.value.asJson
+        )
     }
 
-    given ruleBasedTreasuryOutputDecoder: Decoder[RuleBasedTreasuryOutput] = Decoder.instance {
-        c =>
-            for
-                datum <- c.downField("datum").as[RuleBasedTreasuryDatum]
-                value <- c.downField("value").as[Value]
-            yield RuleBasedTreasuryOutput(datum, value)
+    given ruleBasedTreasuryOutputDecoder: Decoder[RuleBasedTreasuryOutput] = Decoder.instance { c =>
+        for
+            datum <- c.downField("datum").as[RuleBasedTreasuryDatum]
+            value <- c.downField("value").as[Value]
+        yield RuleBasedTreasuryOutput(datum, value)
     }
 
     // --- RuleBasedTreasuryUtxo ---

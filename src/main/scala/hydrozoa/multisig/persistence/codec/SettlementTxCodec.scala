@@ -8,24 +8,10 @@ import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.{transactionDecoder, trans
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.l1.tx.SettlementTx
 import hydrozoa.multisig.ledger.l1.utxo.{DepositUtxo, MultisigTreasuryUtxo, RolloutUtxo}
-import hydrozoa.multisig.persistence.codec.DepositUtxoCodec.{
-    depositUtxoDecoder,
-    depositUtxoEncoder
-}
-import hydrozoa.multisig.persistence.codec.FoundationCodecs.{
-    resolvedUtxosDecoder,
-    resolvedUtxosEncoder
-}
-import hydrozoa.multisig.persistence.codec.TreasuryCodec.{
-    multisigTreasuryUtxoDecoder,
-    multisigTreasuryUtxoEncoder
-}
-import hydrozoa.multisig.persistence.codec.UtxoWrapperCodecs.{
-    blockVersionMajorDecoder,
-    blockVersionMajorEncoder,
-    rolloutUtxoDecoder,
-    rolloutUtxoEncoder
-}
+import hydrozoa.multisig.persistence.codec.DepositUtxoCodec.{depositUtxoDecoder, depositUtxoEncoder}
+import hydrozoa.multisig.persistence.codec.FoundationCodecs.{resolvedUtxosDecoder, resolvedUtxosEncoder}
+import hydrozoa.multisig.persistence.codec.TreasuryCodec.{multisigTreasuryUtxoDecoder, multisigTreasuryUtxoEncoder}
+import hydrozoa.multisig.persistence.codec.UtxoWrapperCodecs.{blockVersionMajorDecoder, blockVersionMajorEncoder, rolloutUtxoDecoder, rolloutUtxoEncoder}
 import io.circe.syntax.*
 import io.circe.{Decoder, Encoder, Json}
 import scalus.cardano.ledger.Transaction

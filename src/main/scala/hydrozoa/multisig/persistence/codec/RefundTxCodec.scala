@@ -1,17 +1,17 @@
 package hydrozoa.multisig.persistence.codec
 
+import cats.syntax.functor.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{quantizedInstantDecoder, quantizedInstantEncoder}
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.{transactionDecoder, transactionEncoder}
 import hydrozoa.multisig.consensus.transport.Codecs.given
 import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import hydrozoa.multisig.persistence.codec.DestinationCodec.given
-import cats.syntax.functor.*
 import io.circe.generic.semiauto.{deriveDecoder, deriveEncoder}
 import io.circe.{Decoder, Encoder}
 
-/** Persistence-layer JSON codec for [[RefundTx.PostDated]] — the simplest Tx wrapper (4 fields,
-  * no `MultisigTreasuryUtxo` chain).
+/** Persistence-layer JSON codec for [[RefundTx.PostDated]] — the simplest Tx wrapper (4 fields, no
+  * `MultisigTreasuryUtxo` chain).
   *
   * Reuses:
   *   - `Transaction` CBOR-hex codec from `lib/cardano/scalus/codecs/json/Codecs` (hoisted in #13);

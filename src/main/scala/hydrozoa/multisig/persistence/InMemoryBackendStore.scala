@@ -13,9 +13,9 @@ import scala.collection.immutable.TreeMap
 object InMemoryBackendStore:
 
     private given byteVectorOrdering: Ordering[Vector[Byte]] =
-        Ordering.Implicits.seqOrdering(Ordering.fromLessThan[Byte]((a, b) =>
-            (a & 0xff) < (b & 0xff)
-        ))
+        Ordering.Implicits.seqOrdering(
+          Ordering.fromLessThan[Byte]((a, b) => (a & 0xff) < (b & 0xff))
+        )
 
     /** Open a fresh in-memory store. Resource-managed for parity with the RocksDB factory; the
       * release is a no-op (no native handles to free).
@@ -67,9 +67,13 @@ object InMemoryBackendStore:
               for
                   s <- state.get
                   remaining <- Ref.of[IO, List[(Array[Byte], Array[Byte])]](
-                    s(cf).rangeFrom(fromInclusive.toVector).iterator.map { case (k, v) =>
-                        (k.toArray, v)
-                    }.toList
+                    s(cf)
+                        .rangeFrom(fromInclusive.toVector)
+                        .iterator
+                        .map { case (k, v) =>
+                            (k.toArray, v)
+                        }
+                        .toList
                   )
               yield new BackendStore.Cursor[IO]:
                   def next: IO[Option[(Array[Byte], Array[Byte])]] =

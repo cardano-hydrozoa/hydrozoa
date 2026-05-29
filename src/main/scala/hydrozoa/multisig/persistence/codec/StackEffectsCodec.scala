@@ -4,23 +4,10 @@ import cats.data.NonEmptyList
 import cats.syntax.functor.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, InitializationTx}
-import hydrozoa.multisig.ledger.stack.{
-    PartitionEffects,
-    StackEffects,
-    StandaloneEvacuationCommitment
-}
-import hydrozoa.multisig.persistence.codec.FallbackTxCodec.{
-    fallbackTxDecoder,
-    fallbackTxEncoder
-}
-import hydrozoa.multisig.persistence.codec.InitializationTxCodec.{
-    initializationTxDecoder,
-    initializationTxEncoder
-}
-import hydrozoa.multisig.persistence.codec.PartitionEffectsCodec.{
-    partitionEffectsDecoder,
-    partitionEffectsEncoder
-}
+import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackEffects, StandaloneEvacuationCommitment}
+import hydrozoa.multisig.persistence.codec.FallbackTxCodec.{fallbackTxDecoder, fallbackTxEncoder}
+import hydrozoa.multisig.persistence.codec.InitializationTxCodec.{initializationTxDecoder, initializationTxEncoder}
+import hydrozoa.multisig.persistence.codec.PartitionEffectsCodec.{partitionEffectsDecoder, partitionEffectsEncoder}
 import io.circe.syntax.*
 import io.circe.{Decoder, Encoder, Json}
 
@@ -42,13 +29,19 @@ object StackEffectsCodec:
     private given partitionsListDecoder(using
         CardanoNetwork.Section
     ): Decoder[NonEmptyList[PartitionEffects[SecMS]]] =
-        Decoder.decodeList[PartitionEffects[SecMS]].emap(list =>
-            NonEmptyList
-                .fromList(list)
-                .toRight("expected non-empty list of partitions for StackEffects.HardConfirmed.Regular")
-        )
+        Decoder
+            .decodeList[PartitionEffects[SecMS]]
+            .emap(list =>
+                NonEmptyList
+                    .fromList(list)
+                    .toRight(
+                      "expected non-empty list of partitions for StackEffects.HardConfirmed.Regular"
+                    )
+            )
 
-    given initialEncoder(using CardanoNetwork.Section): Encoder[StackEffects.HardConfirmed.Initial] =
+    given initialEncoder(using
+        CardanoNetwork.Section
+    ): Encoder[StackEffects.HardConfirmed.Initial] =
         Encoder.instance { i =>
             Json.obj(
               "initializationTx" -> i.initializationTx.asJson,
@@ -56,20 +49,29 @@ object StackEffectsCodec:
             )
         }
 
-    given initialDecoder(using CardanoNetwork.Section): Decoder[StackEffects.HardConfirmed.Initial] =
+    given initialDecoder(using
+        CardanoNetwork.Section
+    ): Decoder[StackEffects.HardConfirmed.Initial] =
         Decoder.instance { c =>
             for
                 initTx <- c.downField("initializationTx").as[InitializationTx]
                 fallback <- c.downField("fallbackTx").as[FallbackTx]
-            yield StackEffects.HardConfirmed.Initial(initializationTx = initTx, fallbackTx = fallback)
+            yield StackEffects.HardConfirmed.Initial(
+              initializationTx = initTx,
+              fallbackTx = fallback
+            )
         }
 
-    given regularEncoder(using CardanoNetwork.Section): Encoder[StackEffects.HardConfirmed.Regular] =
+    given regularEncoder(using
+        CardanoNetwork.Section
+    ): Encoder[StackEffects.HardConfirmed.Regular] =
         Encoder.instance { r =>
             Json.obj("partitions" -> r.partitions.asJson)
         }
 
-    given regularDecoder(using CardanoNetwork.Section): Decoder[StackEffects.HardConfirmed.Regular] =
+    given regularDecoder(using
+        CardanoNetwork.Section
+    ): Decoder[StackEffects.HardConfirmed.Regular] =
         Decoder.instance { c =>
             for parts <- c.downField("partitions").as[NonEmptyList[PartitionEffects[SecMS]]]
             yield StackEffects.HardConfirmed.Regular(partitions = parts)

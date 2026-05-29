@@ -1,6 +1,6 @@
 package hydrozoa.multisig.persistence.codec
 
-import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{coinDecoder, coinEncoder}
+import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.coinEncoder
 import hydrozoa.multisig.ledger.l1.utxo.{Equity, MultisigTreasuryUtxo}
 import hydrozoa.multisig.persistence.codec.HydrozoaLocalCodecs.given
 import io.circe.parser.decode

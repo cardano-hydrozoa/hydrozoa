@@ -9,9 +9,9 @@ import scalus.uplc.builtin.ByteString
 
 /** A small, deterministic-ish [[MultisigTreasuryUtxo]] sample for codec / persistence tests.
   *
-  * Built from Scalus arbitraries for the on-chain identifiers (`TransactionInput`,
-  * `AddrKeyHash`) and fixed bytes everywhere else — semantic validity isn't the point, the
-  * tests using this fixture only care about byte-level round-trip.
+  * Built from Scalus arbitraries for the on-chain identifiers (`TransactionInput`, `AddrKeyHash`)
+  * and fixed bytes everywhere else — semantic validity isn't the point, the tests using this
+  * fixture only care about byte-level round-trip.
   */
 object TreasuryFixture:
     val sampleTreasury: MultisigTreasuryUtxo =

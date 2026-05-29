@@ -10,8 +10,8 @@ import scalus.uplc.builtin.ByteString
   *
   * The codec in `Destination`'s companion is asymmetric (encoder produces bech32 JSON; decoder
   * reads CBOR-hex), so we declare a fresh, symmetric pair here. Encoder uses the borer
-  * `Cbor.encode` (the type already has `given io.bullet.borer.Encoder[Destination]`); decoder
-  * goes the other way.
+  * `Cbor.encode` (the type already has `given io.bullet.borer.Encoder[Destination]`); decoder goes
+  * the other way.
   */
 object DestinationCodec:
 

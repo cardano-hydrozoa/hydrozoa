@@ -1,23 +1,8 @@
 package hydrozoa.multisig.persistence.codec
 
-import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{
-    DepositAbsorptionEndTime,
-    DepositAbsorptionStartTime,
-    RequestValidityEndTime
-}
+import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{DepositAbsorptionEndTime, DepositAbsorptionStartTime, RequestValidityEndTime}
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{
-    byteStringDecoder,
-    byteStringEncoder,
-    coinDecoder,
-    coinEncoder,
-    shelleyAddressDecoder,
-    shelleyAddressEncoder,
-    transactionInputDecoder,
-    transactionInputEncoder,
-    valueDecoder,
-    valueEncoder
-}
+import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{byteStringDecoder, byteStringEncoder, coinDecoder, coinEncoder, shelleyAddressDecoder, shelleyAddressEncoder, transactionInputDecoder, transactionInputEncoder, valueDecoder, valueEncoder}
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import io.bullet.borer.Cbor
 import io.circe.syntax.*
@@ -25,14 +10,14 @@ import io.circe.{Decoder, Encoder, Json}
 import scala.util.Try
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.{Coin, TransactionInput, Value}
-import scalus.uplc.builtin.{ByteString, Data}
 import scalus.uplc.builtin.Data.{fromData, toData}
+import scalus.uplc.builtin.{ByteString, Data}
 
 /** Persistence-layer JSON codec for [[DepositUtxo]] and its nested [[DepositUtxo.Datum]].
   *
   * Most fields ride existing CIP-116 / time codecs. The `Datum` field is a `derives FromData,
-  * ToData` Plutus type; we persist it as CBOR-hex of the on-chain `Data` form — the standard
-  * Plutus round-trip pattern used elsewhere in the project.
+  * ToData` Plutus type; we persist it as CBOR-hex of the on-chain `Data` form — the standard Plutus
+  * round-trip pattern used elsewhere in the project.
   */
 object DepositUtxoCodec:
 

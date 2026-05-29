@@ -10,10 +10,10 @@ import io.circe.{Decoder, Encoder}
   * `encodeValue` / `decodeValue` implementations and individual cases reduce to declaring
   * `type Value = X` plus a `given codec: StoreCodec[Value]`.
   *
-  * `CardanoNetwork.Section` is threaded through both methods so codecs that depend on slot
-  * config / protocol params (e.g. `QuantizedInstant`, `Payout.Obligation`) can pick it up. The
-  * section is captured once at [[Persistence.fromBackend]] time and reaches each codec invocation
-  * implicitly — see the [[StoreKey]] docstring.
+  * `CardanoNetwork.Section` is threaded through both methods so codecs that depend on slot config /
+  * protocol params (e.g. `QuantizedInstant`, `Payout.Obligation`) can pick it up. The section is
+  * captured once at [[Persistence.fromBackend]] time and reaches each codec invocation implicitly —
+  * see the [[StoreKey]] docstring.
   */
 trait StoreCodec[A]:
     def encode(a: A)(using CardanoNetwork.Section): Array[Byte]
@@ -24,11 +24,11 @@ object StoreCodec:
       * `Section`-dependent) lifts to a `StoreCodec[A]` automatically.
       *
       * The `Section ?=> Encoder[A]` context-function bound is what lets us summon codecs whose
-      * `given` definitions take `(using CardanoNetwork.Section)`. At call time the ambient
-      * section is forwarded into the factory.
+      * `given` definitions take `(using CardanoNetwork.Section)`. At call time the ambient section
+      * is forwarded into the factory.
       *
-      * Decode failures throw `IllegalArgumentException` — store corruption is treated as
-      * fail-fast, matching the previous per-case behavior.
+      * Decode failures throw `IllegalArgumentException` — store corruption is treated as fail-fast,
+      * matching the previous per-case behavior.
       */
     given fromCirce[A](using
         mkEnc: CardanoNetwork.Section ?=> Encoder[A],

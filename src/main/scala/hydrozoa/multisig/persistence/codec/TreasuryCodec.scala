@@ -1,23 +1,9 @@
 package hydrozoa.multisig.persistence.codec
 
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{
-    assetNameValueDecoder,
-    assetNameValueEncoder,
-    shelleyAddressDecoder,
-    shelleyAddressEncoder,
-    transactionInputDecoder,
-    transactionInputEncoder,
-    valueDecoder,
-    valueEncoder
-}
+import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{assetNameValueDecoder, assetNameValueEncoder, shelleyAddressDecoder, shelleyAddressEncoder, transactionInputDecoder, transactionInputEncoder, valueDecoder, valueEncoder}
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
-import hydrozoa.multisig.persistence.codec.HydrozoaLocalCodecs.{
-    datumDecoder,
-    datumEncoder,
-    equityDecoder,
-    equityEncoder
-}
+import hydrozoa.multisig.persistence.codec.HydrozoaLocalCodecs.{datumDecoder, datumEncoder, equityDecoder, equityEncoder}
 import io.circe.generic.semiauto.{deriveDecoder, deriveEncoder}
 import io.circe.{Decoder, Encoder}
 

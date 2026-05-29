@@ -1,7 +1,7 @@
 package hydrozoa.multisig.persistence
 
-import cats.effect.{IO, IOLocal}
 import cats.effect.unsafe.implicits.global
+import cats.effect.{IO, IOLocal}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.consensus.ack.{HardAckNumber, SoftAckNumber}

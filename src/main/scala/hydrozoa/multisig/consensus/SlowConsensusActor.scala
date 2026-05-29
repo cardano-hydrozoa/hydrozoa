@@ -63,8 +63,8 @@ final case class SlowConsensusActor(
     given IOLocal[Tracer] = tracerLocal
 
     /** `config` is a `CardanoNetwork.Section` transitively; expose it as a given so the typed
-      * `WriteBatch.put` / `Persistence.write` calls used by [[persistHardConfirmation]] pick it
-      * up implicitly.
+      * `WriteBatch.put` / `Persistence.write` calls used by [[persistHardConfirmation]] pick it up
+      * implicitly.
       */
     private given CardanoNetwork.Section = config
 
@@ -338,14 +338,14 @@ final case class SlowConsensusActor(
         _ <- stateRef.update(_.dropCell(stackNum))
     } yield ()
 
-    /** Persist the full multisigned `HardConfirmation` record for the just-confirmed stack —
-      * the §6 SCA contract write, and the **R10 evacuation floor** the rule-based regime later
-      * reads on handover (§5.7 / §10 Q6). Issued before the downstream signal so a crash mid-
-      * confirmation can be recovered from disk on next boot.
+    /** Persist the full multisigned `HardConfirmation` record for the just-confirmed stack — the §6
+      * SCA contract write, and the **R10 evacuation floor** the rule-based regime later reads on
+      * handover (§5.7 / §10 Q6). Issued before the downstream signal so a crash mid- confirmation
+      * can be recovered from disk on next boot.
       *
-      * Hard-ack pruning (per §3.2 / §6) is not yet wired here — the typed `WriteBatch` shape
-      * for it spans peer-multiplexed satellite keys and is deferred until ack-prune semantics
-      * land. The R10 floor is intact regardless.
+      * Hard-ack pruning (per §3.2 / §6) is not yet wired here — the typed `WriteBatch` shape for it
+      * spans peer-multiplexed satellite keys and is deferred until ack-prune semantics land. The
+      * R10 floor is intact regardless.
       */
     private def persistHardConfirmation(
         stackNum: StackNumber,

@@ -95,9 +95,8 @@ object Codecs {
     /** [[KeepRaw]][[[TransactionOutput]]] CBOR-hex codec — the raw bytes the Scalus reader
       * preserves on read are written back verbatim.
       *
-      * Hoisted from `RemoteL2LedgerCodecs` (where it was first introduced) so persistence,
-      * L2-RPC, and anything else that needs the wire-identical raw form can share one
-      * implementation.
+      * Hoisted from `RemoteL2LedgerCodecs` (where it was first introduced) so persistence, L2-RPC,
+      * and anything else that needs the wire-identical raw form can share one implementation.
       */
     given keepRawTransactionOutputEncoder: Encoder[KeepRaw[TransactionOutput]] =
         Encoder.instance(kr => Json.fromString(ByteString.fromArray(kr.raw).toHex))

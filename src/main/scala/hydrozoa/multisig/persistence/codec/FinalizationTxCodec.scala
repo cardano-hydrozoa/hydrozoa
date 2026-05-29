@@ -7,30 +7,17 @@ import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.{transactionDecoder, trans
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.l1.tx.FinalizationTx
 import hydrozoa.multisig.ledger.l1.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo, RolloutUtxo}
-import hydrozoa.multisig.persistence.codec.FoundationCodecs.{
-    resolvedUtxosDecoder,
-    resolvedUtxosEncoder
-}
-import hydrozoa.multisig.persistence.codec.TreasuryCodec.{
-    multisigTreasuryUtxoDecoder,
-    multisigTreasuryUtxoEncoder
-}
-import hydrozoa.multisig.persistence.codec.UtxoWrapperCodecs.{
-    blockVersionMajorDecoder,
-    blockVersionMajorEncoder,
-    multisigRegimeUtxoDecoder,
-    multisigRegimeUtxoEncoder,
-    rolloutUtxoDecoder,
-    rolloutUtxoEncoder
-}
+import hydrozoa.multisig.persistence.codec.FoundationCodecs.{resolvedUtxosDecoder, resolvedUtxosEncoder}
+import hydrozoa.multisig.persistence.codec.TreasuryCodec.{multisigTreasuryUtxoDecoder, multisigTreasuryUtxoEncoder}
+import hydrozoa.multisig.persistence.codec.UtxoWrapperCodecs.{blockVersionMajorDecoder, blockVersionMajorEncoder, multisigRegimeUtxoDecoder, multisigRegimeUtxoEncoder, rolloutUtxoDecoder, rolloutUtxoEncoder}
 import io.circe.syntax.*
 import io.circe.{Decoder, Encoder, Json}
 import scalus.cardano.ledger.Transaction
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 
 /** Persistence-layer JSON codec for [[FinalizationTx]] — sealed trait with `NoPayouts`,
-  * `WithOnlyDirectPayouts`, `WithRollouts` variants. Tag-discriminated. Lens field skipped per
-  * the agreed convention.
+  * `WithOnlyDirectPayouts`, `WithRollouts` variants. Tag-discriminated. Lens field skipped per the
+  * agreed convention.
   */
 object FinalizationTxCodec:
 
@@ -153,9 +140,9 @@ object FinalizationTxCodec:
     given finalizationTxDecoder(using CardanoNetwork.Section): Decoder[FinalizationTx] =
         Decoder.instance { c =>
             c.downField("kind").as[String].flatMap {
-                case "NoPayouts"            => c.as[FinalizationTx.NoPayouts].widen
+                case "NoPayouts"             => c.as[FinalizationTx.NoPayouts].widen
                 case "WithOnlyDirectPayouts" => c.as[FinalizationTx.WithOnlyDirectPayouts].widen
-                case "WithRollouts"         => c.as[FinalizationTx.WithRollouts].widen
+                case "WithRollouts"          => c.as[FinalizationTx.WithRollouts].widen
                 case other =>
                     Left(
                       io.circe.DecodingFailure(s"unknown FinalizationTx kind: $other", c.history)

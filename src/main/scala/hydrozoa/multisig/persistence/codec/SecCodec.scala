@@ -1,22 +1,19 @@
 package hydrozoa.multisig.persistence.codec
 
-import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{
-    byteStringDecoder,
-    byteStringEncoder
-}
+import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{byteStringDecoder, byteStringEncoder}
 import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
 import io.circe.syntax.*
 import io.circe.{Decoder, Encoder, Json}
 import scalus.uplc.builtin.ByteString
 
-/** Persistence-layer JSON codecs for [[StandaloneEvacuationCommitment]] (SEC) and its
-  * `MultiSigned` form.
+/** Persistence-layer JSON codecs for [[StandaloneEvacuationCommitment]] (SEC) and its `MultiSigned`
+  * form.
   *
   * The SEC's `header` field is `StandaloneEvacuationCommitment.Onchain.Serialized` (opaque
   * `IArray[Byte]`); we ride the public `Serialized.fromBytes` constructor added for the codec.
-  * `BlockHeader.Minor.HeaderSignature` is similarly an opaque `IArray[Byte]` with a public
-  * bytes constructor.
+  * `BlockHeader.Minor.HeaderSignature` is similarly an opaque `IArray[Byte]` with a public bytes
+  * constructor.
   */
 object SecCodec:
 
@@ -56,7 +53,8 @@ object SecCodec:
                 blockNum <- c.downField("blockNum").as[BlockNumber]
                 blockVersion <- c.downField("blockVersion").as[BlockVersion.Full]
                 kzg <- c.downField("kzgCommitment").as[ByteString]
-                header <- c.downField("header")
+                header <- c
+                    .downField("header")
                     .as[StandaloneEvacuationCommitment.Onchain.Serialized]
             yield StandaloneEvacuationCommitment(
               blockNum = blockNum,
@@ -78,7 +76,8 @@ object SecCodec:
         Decoder.instance { c =>
             for
                 commitment <- c.downField("commitment").as[StandaloneEvacuationCommitment]
-                sigs <- c.downField("headerMultiSigned")
+                sigs <- c
+                    .downField("headerMultiSigned")
                     .as[List[BlockHeader.Minor.HeaderSignature]]
             yield StandaloneEvacuationCommitment.MultiSigned(
               commitment = commitment,

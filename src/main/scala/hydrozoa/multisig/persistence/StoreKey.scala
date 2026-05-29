@@ -2,7 +2,7 @@ package hydrozoa.multisig.persistence
 
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.ledger.block.BlockNumber
-import hydrozoa.multisig.ledger.joint.{EvacuationMap as JointEvacuationMap}
+import hydrozoa.multisig.ledger.joint.EvacuationMap as JointEvacuationMap
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
 import hydrozoa.multisig.ledger.stack.{StackEffects, StackNumber}
 import hydrozoa.multisig.persistence.codec.{StackEffectsCodec, TreasuryCodec}
@@ -86,7 +86,6 @@ object StoreKey:
       */
     final case class HardConfirmation(num: StackNumber) extends StoreKey:
         type Value = StackEffects.HardConfirmed
-        import StackEffectsCodec.given
         given codec: StoreCodec[Value] = summon
         val cf: Cf = Cf.HardConfirmation
         def encode: Array[Byte] = LaneKey.intBytes(num)
@@ -100,13 +99,12 @@ object StoreKey:
 
     /** Key for [[Cf.Treasury]] — the single blob holding SC's treasury UTXO chain at `hardAcked`.
       *
-      * Value type = `hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo`. Codec routes
-      * through `persistence.codec.TreasuryCodec` (CIP-116 leaves + `HydrozoaLocalCodecs` for
-      * `Datum` / `Equity`).
+      * Value type = `hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo`. Codec routes through
+      * `persistence.codec.TreasuryCodec` (CIP-116 leaves + `HydrozoaLocalCodecs` for `Datum` /
+      * `Equity`).
       */
     case object Treasury extends StoreKey:
         type Value = MultisigTreasuryUtxo
-        import TreasuryCodec.given
         given codec: StoreCodec[Value] = summon
         val cf: Cf = Cf.Treasury
         def encode: Array[Byte] = singletonKey
@@ -119,7 +117,6 @@ object StoreKey:
       */
     case object EvacuationMap extends StoreKey:
         type Value = JointEvacuationMap
-        import JointEvacuationMap.given
         given codec: StoreCodec[Value] = summon
         val cf: Cf = Cf.EvacuationMap
         def encode: Array[Byte] = singletonKey

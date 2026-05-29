@@ -4,14 +4,8 @@ import cats.syntax.functor.*
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.{transactionDecoder, transactionEncoder}
 import hydrozoa.multisig.ledger.l1.tx.RolloutTx
 import hydrozoa.multisig.ledger.l1.utxo.RolloutUtxo
-import hydrozoa.multisig.persistence.codec.FoundationCodecs.{
-    resolvedUtxosDecoder,
-    resolvedUtxosEncoder
-}
-import hydrozoa.multisig.persistence.codec.UtxoWrapperCodecs.{
-    rolloutUtxoDecoder,
-    rolloutUtxoEncoder
-}
+import hydrozoa.multisig.persistence.codec.FoundationCodecs.{resolvedUtxosDecoder, resolvedUtxosEncoder}
+import hydrozoa.multisig.persistence.codec.UtxoWrapperCodecs.{rolloutUtxoDecoder, rolloutUtxoEncoder}
 import io.circe.syntax.*
 import io.circe.{Decoder, Encoder, Json}
 import scalus.cardano.ledger.Transaction
@@ -20,9 +14,9 @@ import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 /** Persistence-layer JSON codec for [[RolloutTx]] — sealed trait with `Last` and `NotLast`
   * variants. Tag-discriminated `{"kind": "Last"|"NotLast", ...}` per the agreed convention.
   *
-  * Hand-rolled (not `deriveEncoder`/`deriveDecoder`) because every variant carries a
-  * `monocle.Lens` field with a sensible default — we don't persist it; on decode the case-class
-  * default constructor expression rebuilds it.
+  * Hand-rolled (not `deriveEncoder`/`deriveDecoder`) because every variant carries a `monocle.Lens`
+  * field with a sensible default — we don't persist it; on decode the case-class default
+  * constructor expression rebuilds it.
   */
 object RolloutTxCodec:
 
@@ -62,9 +56,11 @@ object RolloutTxCodec:
     given notLastDecoder: Decoder[RolloutTx.NotLast] = Decoder.instance { c =>
         for
             tx <- c.downField("tx").as[Transaction]
-            rolloutSpent <- c.downField("rolloutSpent")
+            rolloutSpent <- c
+                .downField("rolloutSpent")
                 .as[RolloutUtxo]
-            rolloutProduced <- c.downField("rolloutProduced")
+            rolloutProduced <- c
+                .downField("rolloutProduced")
                 .as[RolloutUtxo]
             payoutCount <- c.downField("payoutCount").as[Int]
             resolvedUtxos <- c.downField("resolvedUtxos").as[ResolvedUtxos]

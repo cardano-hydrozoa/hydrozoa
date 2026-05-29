@@ -10,8 +10,8 @@ import hydrozoa.multisig.ledger.stack.StackNumber
 import org.scalatest.Assertion
 import org.scalatest.funsuite.AnyFunSuite
 
-/** Smoke tests for the in-memory [[BackendStore]] — mirrors the RocksDB test set to assert
-  * the two implementations agree on the contract.
+/** Smoke tests for the in-memory [[BackendStore]] — mirrors the RocksDB test set to assert the two
+  * implementations agree on the contract.
   */
 class InMemoryBackendStoreTest extends AnyFunSuite:
 

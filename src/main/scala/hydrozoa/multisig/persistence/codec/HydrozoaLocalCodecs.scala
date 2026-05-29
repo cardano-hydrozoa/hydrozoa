@@ -1,11 +1,6 @@
 package hydrozoa.multisig.persistence.codec
 
-import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{
-    byteStringDecoder,
-    byteStringEncoder,
-    coinDecoder,
-    coinEncoder
-}
+import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{byteStringDecoder, byteStringEncoder, coinDecoder, coinEncoder}
 import hydrozoa.multisig.ledger.l1.utxo.{Equity, MultisigTreasuryUtxo}
 import io.circe.generic.semiauto.{deriveDecoder, deriveEncoder}
 import io.circe.{Decoder, Encoder}
@@ -18,9 +13,9 @@ import io.circe.{Decoder, Encoder}
   * (`multisig/ledger/remote/RemoteL2LedgerCodecs`) — they're a dedicated persistence set per the
   * design decision (2026-05-28). CIP-116 leaves and the Scalus CBOR-hex codecs are reused as-is.
   *
-  * `KzgCommitment` is a `type` alias for `scalus.uplc.builtin.ByteString` and is therefore
-  * covered transparently by CIP-116's `byteStringEncoder` / `byteStringDecoder` — no separate
-  * instance is needed here.
+  * `KzgCommitment` is a `type` alias for `scalus.uplc.builtin.ByteString` and is therefore covered
+  * transparently by CIP-116's `byteStringEncoder` / `byteStringDecoder` — no separate instance is
+  * needed here.
   */
 object HydrozoaLocalCodecs:
 
