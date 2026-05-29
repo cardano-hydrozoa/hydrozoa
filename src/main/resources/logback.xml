@@ -26,6 +26,7 @@
     <logger name="Limiter" level="trace"/>
     <logger name="RemoteL2Ledger" level="trace"/>
     <logger name="HydrozoaRoutes" level="trace"/>
+    <logger name="Persistence" level="info"/>
     <logger name="hydrozoa" level="trace"/>
     <logger name="scalus" level="trace"/>
     <logger name="TracerDemo" level="info"/>
