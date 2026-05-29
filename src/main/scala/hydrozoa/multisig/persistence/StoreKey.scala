@@ -86,7 +86,8 @@ object StoreKey:
       */
     final case class HardConfirmation(num: StackNumber) extends StoreKey:
         type Value = StackEffects.HardConfirmed
-        given codec: StoreCodec[Value] = summon
+        import StackEffectsCodec.given
+        given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.HardConfirmation
         def encode: Array[Byte] = LaneKey.intBytes(num)
 
@@ -105,7 +106,8 @@ object StoreKey:
       */
     case object Treasury extends StoreKey:
         type Value = MultisigTreasuryUtxo
-        given codec: StoreCodec[Value] = summon
+        import TreasuryCodec.given
+        given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.Treasury
         def encode: Array[Byte] = singletonKey
 
@@ -117,7 +119,8 @@ object StoreKey:
       */
     case object EvacuationMap extends StoreKey:
         type Value = JointEvacuationMap
-        given codec: StoreCodec[Value] = summon
+        import JointEvacuationMap.given
+        given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.EvacuationMap
         def encode: Array[Byte] = singletonKey
 
