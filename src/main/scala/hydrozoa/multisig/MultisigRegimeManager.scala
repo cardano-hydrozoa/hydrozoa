@@ -18,14 +18,13 @@ import hydrozoa.multisig.consensus.peer.HeadPeerId
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l2.L2Ledger
 import hydrozoa.multisig.persistence.Persistence
-import scala.annotation.unused
 import scala.concurrent.duration.DurationInt
 
 trait MultisigRegimeManager(
     config: NodeConfig,
     cardanoBackend: CardanoBackend[IO],
     l2Ledger: L2Ledger[IO],
-    @unused persistence: Persistence[IO],
+    persistence: Persistence[IO],
     tracerLocal: IOLocal[Tracer]
 ) extends Actor[IO, Request] {
 
@@ -118,7 +117,7 @@ trait MultisigRegimeManager(
             )
 
             stackComposer <- context.actorOf(
-              StackComposer(config, pendingConnections, tracerLocal)
+              StackComposer(config, pendingConnections, tracerLocal, persistence)
             )
 
             // Throttles the SlowConsensusActor → StackComposer hard-stack-confirmation lane.
@@ -127,7 +126,7 @@ trait MultisigRegimeManager(
             )
 
             slowConsensusActor <- context.actorOf(
-              SlowConsensusActor(config, pendingConnections, tracerLocal)
+              SlowConsensusActor(config, pendingConnections, tracerLocal, persistence)
             )
 
             localPeerLiaisons <-

@@ -166,6 +166,7 @@ object Main extends IOApp {
         )
 
     val cardanoNetwork: StandardCardanoNetwork = CardanoNetwork.Preview
+    given CardanoNetwork.Section = cardanoNetwork
 
     override def run(args: List[String]): IO[ExitCode] =
         val setupIO = for {
@@ -209,7 +210,11 @@ object Main extends IOApp {
             backendStore <- RocksDbBackendStore.open(
               Path.of(s".hydrozoa-data/peer-${nodeConfig.ownHeadPeerNum: Int}/rocksdb")
             )
-            persistence = Persistence.fromBackend(backendStore)
+            tracerLocal <- Resource.eval(Tracer.makeLocal)
+            persistence = {
+                given cats.effect.IOLocal[Tracer] = tracerLocal
+                Persistence.fromBackend(backendStore)
+            }
 
             // Attach cleanup to ActorSystem resource - env, backend, nodeConfig are in scope here
             system <- ActorSystem[IO]("Hydrozoa Demo").onFinalize(
@@ -222,11 +227,10 @@ object Main extends IOApp {
                     tokenRecoveryAddress = env.tokenRecoveryAddress
                   )
             )
-        } yield (env, backend, nodeConfig, remoteL2Ledger, persistence, system)
+        } yield (env, backend, nodeConfig, remoteL2Ledger, persistence, system, tracerLocal)
 
-        resource.use { case (env, backend, nodeConfig, remoteL2Ledger, persistence, system) =>
+        resource.use { case (env, backend, nodeConfig, remoteL2Ledger, persistence, system, tracerLocal) =>
             for {
-                tracerLocal <- Tracer.makeLocal
                 mrm <- MultisigRegimeManager.apply(
                   nodeConfig,
                   backend,

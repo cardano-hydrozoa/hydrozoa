@@ -16,6 +16,7 @@ import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockResult}
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
 import hydrozoa.multisig.ledger.stack.*
+import hydrozoa.multisig.persistence.{Persistence, StoreKey, WriteBatch}
 
 /** Stack composer.
   *
@@ -41,11 +42,19 @@ import hydrozoa.multisig.ledger.stack.*
 final case class StackComposer(
     config: StackComposer.Config,
     pendingConnections: MultisigRegimeManager.PendingConnections | StackComposer.Connections,
-    tracerLocal: IOLocal[Tracer]
+    tracerLocal: IOLocal[Tracer],
+    persistence: Persistence[IO]
 ) extends Actor[IO, StackComposer.Request] {
     import StackComposer.*
 
     given IOLocal[Tracer] = tracerLocal
+
+    /** `config` is a `CardanoNetwork.Section` transitively (`HeadConfig.Section` →
+      * `HeadConfig.Bootstrap.Section` → `CardanoNetwork.Section`); expose it as a given so the
+      * typed `WriteBatch.put` / `Persistence.write` calls used by [[persistSlowSideSnapshots]]
+      * pick it up implicitly.
+      */
+    private given hydrozoa.config.head.network.CardanoNetwork.Section = config
 
     private val connections = Ref.unsafe[IO, Option[Connections]](None)
 
@@ -176,8 +185,27 @@ final case class StackComposer(
                     // withheld until local round-1 confirmation).
                     _ <- conn.slowConsensusActor ! handoff
                     _ <- state.update(_.afterClose(nextStackNum, prefix, newTreasury, newMap))
+                    _ <- persistSlowSideSnapshots(newTreasury, newMap)
                 } yield ()
         }
+
+    /** Persist the slow-side passive snapshots — `Treasury` + `EvacuationMap` — at each own
+      * hard-ack stack-close, matching the §6 StackComposer contract (the `Stack` brief lane and
+      * own `HardAck` lane writes join this batch once their typed `Value` types / wire codecs
+      * land — see §11 P2 / Tasks #16–#18).
+      *
+      * One atomic `WriteBatch` (CR4 / CR6 / CR8). Bundling keeps the snapshots aligned with the
+      * just-closed stack's `hardAcked` anchor and un-tearable from it.
+      */
+    private def persistSlowSideSnapshots(
+        newTreasury: MultisigTreasuryUtxo,
+        newMap: EvacuationMap
+    ): IO[Unit] =
+        persistence.write(
+          WriteBatch.empty
+              .put(StoreKey.Treasury)(newTreasury)
+              .put(StoreKey.EvacuationMap)(newMap)
+        )
 
     private def mkStackBrief(
         stackNum: StackNumber,
@@ -253,6 +281,7 @@ final case class StackComposer(
                                 _ <- state.update(
                                   _.afterClose(nextStackNum, slice, newTreasury, newMap)
                                 )
+                                _ <- persistSlowSideSnapshots(newTreasury, newMap)
                             } yield ()
                     }
         }

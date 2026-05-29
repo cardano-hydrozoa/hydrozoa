@@ -12,6 +12,7 @@ import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.HardAck
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects, StackNumber}
+import hydrozoa.multisig.persistence.{Persistence, StoreKey, WriteBatch}
 
 /** Slow-consensus actor.
   *
@@ -53,11 +54,18 @@ import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects, St
 final case class SlowConsensusActor(
     config: SlowConsensusActor.Config,
     pendingConnections: MultisigRegimeManager.PendingConnections | SlowConsensusActor.Connections,
-    tracerLocal: IOLocal[Tracer]
+    tracerLocal: IOLocal[Tracer],
+    persistence: Persistence[IO]
 ) extends Actor[IO, SlowConsensusActor.Request] {
     import SlowConsensusActor.*
 
     given IOLocal[Tracer] = tracerLocal
+
+    /** `config` is a `CardanoNetwork.Section` transitively; expose it as a given so the typed
+      * `WriteBatch.put` / `Persistence.write` calls used by [[persistHardConfirmation]] pick it
+      * up implicitly.
+      */
+    private given hydrozoa.config.head.network.CardanoNetwork.Section = config
 
     private val connections = Ref.unsafe[IO, Option[Connections]](None)
     private val stateRef = Ref.unsafe[IO, State](State.initial)
@@ -323,10 +331,28 @@ final case class SlowConsensusActor(
               "effect tx(s); emitting downstream"
         )
         hardConfirmed = Stack.HardConfirmed(cell.unsigned.brief, signed)
+        _ <- persistHardConfirmation(stackNum, signed)
         _ <- conn.cardanoLiaison ! hardConfirmed
         _ <- conn.stackComposer ! hardConfirmed
         _ <- stateRef.update(_.dropCell(stackNum))
     } yield ()
+
+    /** Persist the full multisigned `HardConfirmation` record for the just-confirmed stack —
+      * the §6 SCA contract write, and the **R10 evacuation floor** the rule-based regime later
+      * reads on handover (§5.7 / §10 Q6). Issued before the downstream signal so a crash mid-
+      * confirmation can be recovered from disk on next boot.
+      *
+      * Hard-ack pruning (per §3.2 / §6) is not yet wired here — the typed `WriteBatch` shape
+      * for it spans peer-multiplexed satellite keys and is deferred until ack-prune semantics
+      * land. The R10 floor is intact regardless.
+      */
+    private def persistHardConfirmation(
+        stackNum: StackNumber,
+        signed: StackEffects.HardConfirmed
+    ): IO[Unit] =
+        persistence.write(
+          WriteBatch.empty.put(StoreKey.HardConfirmation(stackNum))(signed)
+        )
 
     // ===================================
     // Plumbing
