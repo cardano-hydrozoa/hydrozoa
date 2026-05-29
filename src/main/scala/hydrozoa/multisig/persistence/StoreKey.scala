@@ -18,8 +18,8 @@ import hydrozoa.multisig.persistence.codec.{StackEffectsCodec, TreasuryCodec}
   *   - Spine-indexed metadata CFs (one entry per block / stack): [[StoreKey.BlockResult]] —
   *     `Cf.BlockResult`, keyed by `blockNum`. [[StoreKey.SoftConfirmation]] —
   *     `Cf.SoftConfirmation`, keyed by `blockNum`. [[StoreKey.HardConfirmation]] —
-  *     `Cf.HardConfirmation`, keyed by `stackNum`. [[StoreKey.EvacuationMap]] —
-  *     `Cf.EvacuationMap`, keyed by `blockNum` (per-block; see the case docstring for why).
+  *     `Cf.HardConfirmation`, keyed by `stackNum`. [[StoreKey.EvacuationMap]] — `Cf.EvacuationMap`,
+  *     keyed by `blockNum` (per-block; see the case docstring for why).
   *   - Singleton snapshot CFs (one entry total): [[StoreKey.DepositMap]], [[StoreKey.Treasury]].
   *   - Store-level metadata: [[StoreKey.Meta]] — `Cf.Meta`, name-keyed.
   *
@@ -112,8 +112,8 @@ object StoreKey:
         def encode: Array[Byte] = singletonKey
 
     /** Key for [[Cf.EvacuationMap]] — the cumulative evacuation map at each block, keyed by
-      * `blockNum`. One entry per soft-confirmed block: SC folds the per-block
-      * `evacuationMapDiff`s from `BlockResult` onto the running map and persists the result.
+      * `blockNum`. One entry per soft-confirmed block: SC folds the per-block `evacuationMapDiff`s
+      * from `BlockResult` onto the running map and persists the result.
       *
       * Why per-block, not a singleton snapshot: the rule-based dispute can land on **any** minor
       * block in the latest major's tail, and evacuation needs the map exactly at that block. The

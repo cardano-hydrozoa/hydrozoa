@@ -635,8 +635,9 @@ case class Stage4Suite(
     }
 
     /** Post-scenario verification of the §6 producer-side persistence writes:
-      *   - **SC** (`StackComposer`) writes `Treasury` once and one `EvacuationMap` per soft-
-      *     confirmed block at every own hard-ack stack-close (#21).
+      *   - **SC** (`StackComposer`) writes `Treasury` once and one `EvacuationMap` per **committed**
+      *     block (each major + each last-of-partition SEC minor) at every own hard-ack stack-close
+      *     (#21).
       *   - **SCA** (`SlowConsensusActor`) writes `HardConfirmation` at every hard-confirmation
       *     (#22).
       *
@@ -645,9 +646,11 @@ case class Stage4Suite(
       *   1. `Cf.HardConfirmation` holds an entry per hard-confirmed stack (= the captured stacks
       *      count, since both the observer and the persistence write happen on hard-confirmation).
       *   2. `Cf.Treasury` holds its single snapshot blob (always exactly 1 — overwritten per close).
-      *   3. `Cf.EvacuationMap` holds one entry per block contained in every Regular stack the
-      *      peer hard-confirmed. `Initial` (stack 0) contributes nothing since
-      *      `bootstrapInitialStack` doesn't go through the close paths.
+      *   3. `Cf.EvacuationMap` holds one entry per committed block (major / SEC minor) of every
+      *      Regular stack the peer hard-confirmed — the only maps that back an on-chain commitment,
+      *      counted from each stack's partitions (mirroring `StackComposer.committedBlockNums`).
+      *      `Initial` (stack 0) contributes nothing since `bootstrapInitialStack` doesn't go through
+      *      the close paths.
       *
       * Skip a peer entirely if it never reached a hard-confirmation (the typical `nPeers < 3`
       * cold-start scenarios). The property only fires once at least one hard-confirmation actually
@@ -663,14 +666,24 @@ case class Stage4Suite(
                 val backend = sut.backendStores(peerNum)
                 val captured = stacksByPeer.getOrElse(peerNum, Vector.empty)
                 val expectedStacks = captured.size
-                // Per-block evacuation map: one entry per soft-confirmed block in every Regular
-                // stack. `Initial` (stack 0) goes through `bootstrapInitialStack` which doesn't
-                // hit the close paths, so it contributes nothing.
+                // Only the blocks that back an on-chain KZG commitment get an `EvacuationMap`
+                // entry — each major (the settlement's `nextKzg`) and each last-of-partition SEC
+                // minor — mirroring `StackComposer.committedBlockNums` /
+                // `StackEffectsBuilder.mkEffectsRegular`. So per Regular stack the count is, over
+                // its partitions: Major → 1 (the major) + 1 iff it carries a trailing-minor SEC;
+                // Minor → 1 (its mandatory SEC minor); Final → 0 (drains the map, commits nothing).
+                // `Initial` (stack 0) goes through `bootstrapInitialStack`, never the close paths,
+                // so it contributes nothing.
                 val expectedEvac = captured.map { s =>
                     s.effects match {
                         case _: StackEffects.HardConfirmed.Initial => 0
-                        case _: StackEffects.HardConfirmed.Regular =>
-                            (s.brief.lastBlockNum: Int) - (s.brief.firstBlockNum: Int) + 1
+                        case r: StackEffects.HardConfirmed.Regular =>
+                            r.partitions.toList.map {
+                                case m: PartitionEffects.Major[?] =>
+                                    if m.sec.isDefined then 2 else 1
+                                case _: PartitionEffects.Minor[?] => 1
+                                case _: PartitionEffects.Final     => 0
+                            }.sum
                     }
                 }.sum
                 for {

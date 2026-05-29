@@ -42,10 +42,10 @@ trait Persistence[F[_]]:
     def write(batch: WriteBatch): F[Unit]
 
 object Persistence:
-    /** Force the routing key to `"Persistence"` for the duration of `fa`, so every
-      * `Tracer.info` / `Tracer.debug` inside lands on the `"Persistence"` Logback logger
-      * regardless of the calling actor's `Tracer.routeLocal`. Restores the prior tracer on exit
-      * — does not corrupt the caller's per-fiber routing.
+    /** Force the routing key to `"Persistence"` for the duration of `fa`, so every `Tracer.info` /
+      * `Tracer.debug` inside lands on the `"Persistence"` Logback logger regardless of the calling
+      * actor's `Tracer.routeLocal`. Restores the prior tracer on exit — does not corrupt the
+      * caller's per-fiber routing.
       */
     private def withRoute[A](fa: IO[A])(using IOLocal[Tracer]): IO[A] =
         Tracer.scoped(_.copy(routingKey = Some("Persistence")))(fa)
