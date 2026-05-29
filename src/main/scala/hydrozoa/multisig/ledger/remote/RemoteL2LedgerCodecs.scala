@@ -1,7 +1,7 @@
 package hydrozoa.multisig.ledger.remote
 
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.{keepRawTransactionOutputEncoder, keepRawTransactionOutputDecoder}
+import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.{keepRawTransactionOutputDecoder, keepRawTransactionOutputEncoder}
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
@@ -12,7 +12,6 @@ import io.circe.generic.semiauto.*
 import io.circe.syntax.*
 import io.circe.{Decoder, Encoder}
 import scalus.cardano.ledger.{AssetName, Coin, KeepRaw, MultiAsset, PolicyId, ScriptHash, TransactionOutput, Value}
-import scalus.uplc.builtin.ByteString
 
 /** JSON codecs for RemoteL2Ledger WebSocket protocol */
 object RemoteL2LedgerCodecs {
