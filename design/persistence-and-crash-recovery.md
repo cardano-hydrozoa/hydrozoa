@@ -59,8 +59,9 @@ see [timing-rules](https://) `#fallback`).
   post-recovery for forward progress — what is excluded is any recovery-specific
   re-send path.
 - **Coil peers, entirely.** This spec is written for **head peers only**. Coil
-  consensus is a separate M5 workstream that is not built yet; coil-peer recovery
-  will be specified when it exists.
+  consensus is a separate M5 workstream — the **coil-ready peer node-type** is
+  specified in `coil-network.md`; coil-side persistence + recovery will be
+  added as a §11 here later.
 - TDX sealed storage / encryption-at-rest (the M5 TDX workstream; this spec
   assumes a pluggable "sealed blob" primitive).
 - Backup/restore tooling, multi-host replication.
