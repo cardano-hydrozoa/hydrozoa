@@ -1,0 +1,200 @@
+# Recovery (read-path) — implementation plan
+
+Companion to `persistence-and-crash-recovery.md` (the design). That doc says
+**what** recovery is and **why**; this one says **how** and **in what order** we
+build the read/boot side. Section refs (§5.1 etc.) point at the design doc.
+
+**Status:** Draft for review · **Branch:** `feature/recovery` · 2026-05-30
+**Scope:** head-peer multisig recovery read-path only (coil, TDX, rule-based
+payloads out of scope per design §1).
+
+---
+
+## 1. Where we are (audit, 2026-05-30)
+
+**Write side — done.** Everything a peer must persist is wired:
+
+| Producer | Persists | CFs |
+|---|---|---|
+| JointLedger | own brief, own soft-ack, per-block result, deposits snapshot | `Block`, `SoftAck`, `BlockResult`, `DepositMap` |
+| StackComposer | own stack brief, own hard-acks, treasury, per-committed-block evac map | `Stack`, `HardAck`, `Treasury`, `EvacuationMap` |
+| FastConsensusActor | soft-confirmation record (CR4, before fan-out) | `SoftConfirmation` |
+| SlowConsensusActor | hard-confirmation record in full (R10 floor) | `HardConfirmation` |
+| EventSequencer | assigned request (CR1) | `Request` |
+| PeerLiaison | inbound remote lane entries, arrival-stamped (CR8) | all lane CFs |
+
+**Foundation — done.** `BackendStore` (InMemory + RocksDb) with `cursor(cf,
+fromInclusive)` range-scan, `lastKey`, `lastKeyWithPrefix`; typed `Persistence`;
+12 `Cf`s; `LaneId`/`LaneKey`/`LaneValue`; `StoreKey` with every typed key
+(incl. `HardConfirmation = StackEffects.HardConfirmed`, `EvacuationMap`,
+`Treasury`, `DepositMap`, `BlockResult`, `SoftConfirmation`); all codecs;
+`ArrivalStamp`; `StoreVersion`; `StoreDump`. `Markers.derive` is built.
+
+**Read/boot side — not started.** This is the entire scope of this plan:
+
+- `Markers.derive` is **never called** — no boot derivation.
+- No per-actor base-state load: JointLedger / StackComposer still cold-init /
+  `bootstrapInitialStack` unconditionally; the snapshot CFs are written but never
+  read back into actor state.
+- No indices algorithm (§5.3), no total-order merge (§5.4), no `ReplayActor`.
+- No boot sequence (§8) in `MultisigRegimeManager.preStartLocal` (it spawns all
+  actors and completes one `PendingConnections` barrier — nothing recovery-aware).
+- No boundary restore (PeerLiaison cursors / EventSequencer counter /
+  CardanoLiaison `HardConfirmation` fold + live L1 re-sample).
+- `rulebased/persistence/Persistence` is a bare `object Persistence {}` — the
+  R10 read path (design §10 Q6, priority P2) does not exist.
+- No fail-safe validation (CR6/CR7), no crash-restart tests (§9).
+
+**Drift to fix in passing:** `Cf.scala` docstring says the arrival stamp is
+**8 bytes** and cites §5.5; design §5.4/§7.1 say **12 bytes**
+`[generation:4][monotonicNanos:8]` and §5.4. `ArrivalStamp(generation: Int,
+monotonic: Long)` is 12 bytes — the code comment is wrong. Correct it when R1
+touches that area.
+
+---
+
+## 2. Decisions already settled (design §10) — encoded as constraints
+
+- **Resume points (Q9 = a).** Signers/ledger replay from `*Acked + 1`
+  (JointLedger `softAcked + 1`, StackComposer `hardAcked + 1`); aggregators
+  (FCA/SCA) from `*Confirmed + 1`. Per-actor resume cursors, not one global one.
+- **Start order (Q4).** All actors start **together**; the steady-state
+  cursor/equivocation filter at each boundary suppresses replay re-emissions, so
+  there is **no boundary-last phase**. This matches today's topology exactly.
+- **Replay mechanism.** Pre-populate mailboxes (mechanism 1) for production;
+  one-by-one + quiescence (mechanism 2) is the **test oracle** only.
+- **L1.** Re-sampled live (§5.5); the `ReplayActor` seeds the **first**
+  `PollResults` straight from `CardanoBackend.utxosAt(treasuryAddress)` so deposit
+  decisions don't wait on CardanoLiaison's poll tick.
+- **fsync gradient (Q5)** is a write-side concern; out of scope here except that
+  request-ID's `sync=false`-vs-CR1 call must be decided before mainnet (note it).
+
+---
+
+## 3. Phasing
+
+Bottom-up: pure logic first (testable without the actor system and resilient to
+the flaky tooling), then per-actor seams, then orchestration, then end-to-end.
+
+### R1 — Recovery read primitives (pure, property-tested). No actor/boot changes.
+
+New package `multisig/persistence/recovery/`:
+
+1. **`LaneScan`** — typed range-scan over a lane CF from a `LaneKey` cursor,
+   yielding `(LaneKey, payload, ArrivalStamp)`. Thin layer over
+   `BackendStore.cursor`; strips/exposes the 12-byte stamp prefix; reuses the wire
+   codec for the payload. (Satellite scans bound by `[peer]` prefix; spine scans
+   are whole-CF.)
+2. **`ReplayCursors`** — the indices algorithm (§5.3). From `Markers` + N head
+   peers derive the **2 + 3N** lane resume cursors:
+   - BlockLane = `softAcked + 1`; StackLane = `hardAcked + 1`.
+   - SoftAckLane[p] / HardAckLane[p] from the side's ack mark.
+   - RequestLane[p] = (highest request from p included in any block `≤ softAcked`)
+     `+ 1`. **Open:** confirm `BlockBrief` carries the per-peer included-request
+     high-water (else we scan block bodies). Resolve at top of R1.
+3. **`ArrivalOrderedMerge`** — k-way merge (§5.4) of the lane tails by 12-byte
+   big-endian `ArrivalStamp`, producing one ordered, lazy stream of
+   `(LaneKey, payload)`. This is the order the `ReplayActor` (R3) and the oracle
+   (R4) both consume.
+
+Tests (ScalaCheck): cursor derivation vs a generated marker set; merge output is
+exactly stamp order; round-trip — seed a store through the real write paths, merge
+it back, assert the recovered interleaving equals the recorded one.
+
+### R2 — Per-actor base-state recover seams (unit-tested).
+
+For each consensus actor add a pure `recover(persistence, markers, cursors): IO[State]`
+and change cold init to **"non-empty store → recovered; empty store → bootstrap"**
+(cold start is the degenerate case, §5).
+
+- **JointLedger** → `Done(previousBlockHeader, deposits)`:
+  `deposits` from `DepositMap`; `previousBlockHeader` from `BlockLane[softAcked].brief`.
+  L2 co-anchoring: load committed L2 state **as of `softAcked`** via the `L2Ledger`
+  black box — define the **load-by-ack interface**; the snapshot-cadence-vs-replay
+  mechanism stays inside `L2Ledger` (design §6 JointLedger, out of scope here).
+- **StackComposer** → full `State`: `treasury` from `Treasury`; `evacuationMap`
+  from `EvacuationMap[StackLane[hardAcked].lastBlockNum]` (load invariant §5.2);
+  `pending` from a `BlockResult` scan over `(StackLane[hardAcked].lastBlockNum, head]`;
+  counters derived (`lastClosedStackNum = hardAcked`, `lastClosedBlockNum`,
+  `nextOwnHardAckNum = max(own HardAck) + 1`,
+  `previousStackHardConfirmed = hardAcked ≤ hardConfirmed`). `inboundLeaderBrief`
+  fills from replayed StackLane in R3. Keep `bootstrapInitialStack` for empty store.
+- **Boundaries (restore, no replay):**
+  - EventSequencer: `next = max(own Request) + 1` — must precede telling the user
+    an id (CR1; design flags the current code completes `dResponse` before persist —
+    fix the barrier here).
+  - PeerLiaison: per-remote cursors = `max(persisted) + 1`; queues empty; outbox
+    becomes the DB-backed view (`[remote cursor, head]`).
+  - CardanoLiaison: fold the `HardConfirmation` CF to rebuild
+    `effectInputs` / `happyPathEffects` / `fallbackEffects`; `targetState` from
+    config until stack-0 hard-confirms; effects faulted in lazily. Submission
+    progress comes from L1 itself (§5.5), no own marker.
+- **Rule-based read path (P2 / R10):** implement `rulebased/persistence/Persistence`
+  as a **read-only** view over the same store loading `HardConfirmation` +
+  `Treasury` + `EvacuationMap` once on handover (design §10 Q6). Custody-safe in
+  isolation; no replay, no fast-side state.
+
+Tests: seed a store through the real write paths, run each `recover`, assert the
+returned State equals the expected crash-time State. The `recover` functions are
+pure `IO` over `Persistence` — no actor system needed.
+
+### R3 — `ReplayActor` + boot sequence (§8) + fail-safe.
+
+- **`ReplayActor`** (new consensus-side actor): on boot — load base snapshots,
+  build `ReplayCursors`, stream `ArrivalOrderedMerge`, **seed each consensus
+  actor's mailbox** with its lane tail at its own resume cursor; read L1 from
+  `CardanoBackend` and send the first `PollResults` to BlockWeaver; hold the
+  suspend window.
+- **`MultisigRegimeManager.preStartLocal`** grows the §8 steps: derive markers →
+  load snapshots → spawn actors (recovered or bootstrapped) → `ReplayActor` seeds
+  mailboxes → open the start barrier (`pendingConnections.complete`) → boundaries
+  restore + filter → reconcile L1 → resume `GetMsgBatch`.
+- **Suspend barrier decision.** Today every actor blocks in `initializeConnections`
+  on the single `PendingConnections` `Deferred` until the manager completes it.
+  **Plan A (preferred):** seed mailboxes *before* `pendingConnections.complete`,
+  reusing that `Deferred` as the suspend gate — sends queue in the mailbox while
+  the actor is parked, then drain in order once the barrier opens. **Plan B:** add
+  a second `Deferred` suspend barrier only if cats-actors does not accept
+  pre-barrier mailbox sends cleanly. Verify empirically at the start of R3.
+- **Fail-safe (CR6/CR7):** validate marker/snapshot consistency on load (anchors
+  aligned, counters monotone) → refuse start on violation; abort + signal/evacuate
+  if catch-up can't finish within the timing budget.
+
+### R4 — Tests (design §9, priority Pg).
+
+- **One-by-one oracle** (mechanism 2) under `TestControl` via the cede-settle
+  trick (see `reference_testcontrol_cats_actors`): feed the ordered tail one entry
+  at a time, settle, assert.
+- **Crash-restart action** in the stage1 / stage4 model suites: kill a peer,
+  reconstruct it from its store mid-run, assert consensus invariants hold.
+- **Observational-equivalence property:** for any crash point, recovered committed
+  state is observationally equivalent to the no-crash run; the concurrent replay
+  (mechanism 1) must match the oracle (mechanism 2).
+- **Adversarial scenarios:** crash *during* recovery (re-entrancy), L1 moved while
+  down (legitimate divergence, not corruption), long downtime → head went
+  rule-based (detect, don't re-enter multisig), torn record → refuse start.
+
+---
+
+## 4. Open questions to close during implementation
+
+1. **RequestLane cursor source (R1).** Does `BlockBrief` expose each peer's
+   included-request high-water, or must we scan block bodies? Settles the indices
+   algorithm.
+2. **L2Ledger load-by-ack interface (R2).** Exact signature + who owns the
+   snapshot/replay tradeoff (delegated to the black box; we only fix the contract +
+   shared block boundary).
+3. **Suspend barrier (R3).** Reuse `PendingConnections` (Plan A) vs second
+   `Deferred` (Plan B) — decide by testing pre-barrier mailbox sends.
+4. **Request-ID fsync vs CR1 (write-side, pre-mainnet).** `sync=false` on `Request`
+   trades against CR1 under power loss (§10 Q5) — decide explicitly; out of this
+   plan's critical path but track it.
+
+---
+
+## 5. Suggested order of landing
+
+R1 → R2 → R3 → R4, each its own PR. R1 and the R2 `recover` functions are pure and
+independently testable, so they de-risk the architectural R3 step. The
+rule-based read path (R2, P2) can land first within R2 if we want the R10 custody
+floor demonstrably recoverable before the liveness machinery.
