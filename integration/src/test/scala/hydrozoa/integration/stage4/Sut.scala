@@ -15,7 +15,7 @@ import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.stack.Stack
-import hydrozoa.multisig.persistence.BackendStore
+import hydrozoa.multisig.persistence.{BackendStore, Persistence}
 import org.scalacheck.commands.SutCommand
 
 // ===================================
@@ -35,6 +35,11 @@ private[stage4] case class PeerStack(
       * (HardConfirmation) landed in the store. See `analyzePersistence` in `Suite.scala`.
       */
     backendStore: BackendStore[IO],
+    /** Per-peer typed persistence over [[backendStore]] — shared by all of this peer's actors
+      * (the ones here + the peer's `PeerLiaison`s, built later). One per peer so the arrival-stamp
+      * generation is bumped exactly once per peer/process.
+      */
+    persistence: Persistence[IO],
 )
 
 // ===================================

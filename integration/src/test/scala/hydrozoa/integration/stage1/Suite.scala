@@ -542,7 +542,7 @@ case class Suite(
             // In-memory persistence for the SUT — stage1 doesn't assert on it, but the actors
             // need a handle. `given IOLocal[Tracer]` is already in scope above.
             persistenceBackend <- InMemoryBackendStore.open.allocated.map(_._1)
-            persistence = {
+            persistence <- {
                 given CardanoNetwork.Section = nodeConfig
                 Persistence.fromBackend(persistenceBackend)
             }

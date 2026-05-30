@@ -102,8 +102,8 @@ store, clock, and chain." Per resource:
   would be (§5). That is why all actors can start **together** (§5) — the filter,
   not a deferred boundary start, is what keeps replay re-emissions off the wire / chain.
 - **Durable store — written by both.** Boundaries persist what crosses them
-  (`PeerLiaison`: inbound lane entries (CR8), each value carrying an 8-byte
-  arrival-stamp prefix; `RequestSequencer`: assigned requests, CR1/CR4). Consensus
+  (`PeerLiaison`: inbound lane entries (CR8), each value carrying a 12-byte
+  `ArrivalStamp` prefix; `RequestSequencer`: assigned requests, CR1/CR4). Consensus
   *producers* persist their authoritative
   **lane outputs once, at creation** (CR4) — `JointLedger` its block briefs +
   soft-acks, `StackComposer` its stacks + hard-acks — and re-save their **passive
@@ -520,10 +520,19 @@ own soft ack — the one place a snapshot is unavoidable on the fast side.
 
 Within a lane, order is intrinsic — the lane's own index (RequestNumber;
 Block/StackNumber; ack index). To order entries *across* the `2 + 3N` streams,
-**every persisted lane value carries an 8-byte big-endian arrival-stamp prefix**
-(local monotonic time at receipt for inbound entries, at creation for own ones —
-§7.1); merging by stamp yields a fixed, durable interleaving — "not canonical,
-but correct."
+**every persisted lane value carries a 12-byte big-endian `ArrivalStamp` prefix**
+— a `(generation, monotonic)` pair (receipt time for inbound entries, creation for
+own ones — §7.1); merging by stamp yields a fixed, durable interleaving — "not
+canonical, but correct."
+
+The stamp must stay comparable **across restarts**, which a bare process-monotonic
+clock is not (its zero resets each boot). So it pairs a **`generation`** — a
+per-process counter persisted in `Cf.Meta` and bumped once at store-open — with
+`IO.monotonic` *within* the process: the generation separates restarts (a later
+process always sorts after an earlier one), and monotonic orders within one
+(strictly increasing, ns resolution, never stepping backward like a wall clock).
+Encoded big-endian `[generation : 4][monotonicNanos : 8]`, so raw byte order is
+exactly `(generation, monotonic)` order.
 
 That interleaving is the *one that actually happened*, hence already causally valid
 (nothing was delivered before its prerequisites — it physically couldn't be). The
@@ -673,7 +682,7 @@ Each contract has four fields — **State**, **Recover** (how it is rebuilt),
   transient disconnect.
 - **Inputs:** remote lane entries — **cursor-gated (CR8)**.
 - **Persists:** inbound remote lane entries (CR8); each persisted value carries
-  an **8-byte arrival-stamp prefix** (§5.4, §7.1) — local monotonic time at
+  a **12-byte `ArrivalStamp` prefix** (§5.4, §7.1) — `(generation, monotonic)` at
   receipt. The one actor that durably stores data it did not produce.
 
 #### CardanoLiaison
@@ -1099,7 +1108,7 @@ Notes / decisions:
 
 - **Native dependency** (RocksJava / JNI) — accepted.
 - The "schema" is now **key-layout design**; **lane values reuse the existing wire
-  codecs** (`consensus/transport/Codecs.scala`) under an **8-byte arrival-stamp
+  codecs** (`consensus/transport/Codecs.scala`) under a **12-byte `ArrivalStamp`
   prefix** (§5.4, §7.1) — strip the prefix and you have the byte-identical wire
   form (one codec to test, byte-identical forward path). Non-lane CF values
   (`BlockResult` / `SoftConfirmation` / `HardConfirmation` / `DepositMap` /
@@ -1168,10 +1177,10 @@ position an iterator on the lane's CF at `[cursorBE]` (spine) / `[peer][cursorBE
 (satellite). Each of the `2 + 3N` replay cursors (§5.3) is a `LaneKey` — its
 `laneId` picks the CF, the index gives the seek key.
 
-**Values.** Lane values are framed as `[arrivalStamp : 8][wirePayload …]` — the
-local monotonic arrival stamp (8-byte big-endian `Long`) is a fixed prefix on the
-wire-codec payload (§5.4). Stripping the prefix gives the bytes that go on the
-wire — there is no separate `ArrivalStamps` CF. Non-lane CFs (`BlockResult`,
+**Values.** Lane values are framed as `[arrivalStamp : 12][wirePayload …]` — the
+durable `ArrivalStamp` (`[generation : 4][monotonicNanos : 8]` big-endian; §5.4) is
+a fixed prefix on the wire-codec payload. Stripping the prefix gives the bytes that
+go on the wire — there is no separate `ArrivalStamps` CF. Non-lane CFs (`BlockResult`,
 `SoftConfirmation`, `HardConfirmation`, `DepositMap`, `Treasury`,
 `EvacuationMap`, `Meta`) carry no stamp prefix.
 
@@ -1356,7 +1365,7 @@ built **in any order**.
 | P1 | **Foundation (prerequisite for all below).** `Persistence[F]` + RocksDB backend skeleton; `LaneId`/`LaneKey` layout (§7.1); versioning; wired through `MultisigRegimeManager.Dependencies.Persistence`. |
 | **P2 — first priority** | **The rule-based regime's read-set = the R10 floor.** SlowConsensusActor writes `HardConfirmation` records **in full** (multisigned effects / SECs / fallbacks) as it produces them (CR4); StackComposer's `Treasury` + `EvacuationMap` snapshots ride alongside (§6 StackComposer); the rule-based regime's **read path** loads `HardConfirmation` + `Treasury` + `EvacuationMap` once on handover and runs off live L1 (§10 Q6). Custody-safe in isolation — needs no replay, no fast-side state. |
 | *the rest — any order* | |
-| Pa | Boundary persistence: RequestSequencer write-before-tell-user (CR1/CR4); PeerLiaison inbound write-before-advance + cursors (CR8), with the 8-byte arrival-stamp prefix on each lane value (§5.4). |
+| Pa | Boundary persistence: RequestSequencer write-before-tell-user (CR1/CR4); PeerLiaison inbound write-before-advance + cursors (CR8), with the 12-byte `ArrivalStamp` prefix on each lane value (§5.4). |
 | Pb | Equivocation guard at the peer boundary (CR2) + counter recovery (CR3); unit tests. |
 | Pc | Fast-side per-block persistence (JointLedger): per-soft-ack `WriteBatch` over `Block` + `SoftAck` + `BlockResult` + `DepositMap` (§6 JointLedger); plus `FastConsensusActor`'s confirmation write to `SoftConfirmation` + soft-ack pruning. The `BlockResult` CF is what lets `StackComposer` rebuild `pending` from disk on restart (§5.2). |
 | Pd | `ReplayActor` + total-order merge (§5.4) + indices algorithm (§5.3); pre-populate-mailboxes mechanism + suspend barrier (§5.6); seeds the first `PollResults` straight from `CardanoBackend` so deposit decisions don't wait on CardanoLiaison's poll cadence (§5.5). |

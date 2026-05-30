@@ -195,7 +195,7 @@ case class Stage4Suite(
                             // every producer (EventSequencer/JL/FCA/SC/SCA/PeerLiaison) shares the
                             // one per-peer store; `analyzePersistence` reads it back.
                             backendStore <- openPeerBackend(peerNum).allocated.map(_._1)
-                            persistence = {
+                            persistence <- {
                                 given CardanoNetwork.Section = nodeConfig
                                 Persistence.fromBackend(backendStore)
                             }
@@ -236,7 +236,8 @@ case class Stage4Suite(
                           consensusActor,
                           stackComposer,
                           slowConsensusActor,
-                          backendStore
+                          backendStore,
+                          persistence
                         )
                     }
                 }
@@ -295,11 +296,10 @@ case class Stage4Suite(
                 .traverse { peerNum =>
                     val nodeConfig = multiNodeConfig.nodeConfigs(peerNum)
                     val pending = pendingConnsMap(peerNum)
-                    // PeerLiaison shares this peer's persistence store (CR8 inbound writes).
-                    val persistence = {
-                        given CardanoNetwork.Section = nodeConfig
-                        Persistence.fromBackend(peerStackMap(peerNum).backendStore)
-                    }
+                    // Reuse this peer's persistence (same store + arrival-stamp generation) for its
+                    // PeerLiaisons' CR8 inbound writes — do NOT build a second one (that would
+                    // double-bump the generation).
+                    val persistence = peerStackMap(peerNum).persistence
                     peers
                         .filterNot(_ == peerNum)
                         .traverse { remotePeerNum =>

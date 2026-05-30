@@ -51,8 +51,8 @@ object StoreCodec:
         def encode(a: Array[Byte])(using CardanoNetwork.Section): Array[Byte] = a
         def decode(bytes: Array[Byte])(using CardanoNetwork.Section): Array[Byte] = bytes
 
-    /** Lane-CF codec: the Circe (wire-codec) JSON of `A` framed behind the 8-byte arrival-stamp
-      * prefix ([[LaneValue]]). Stripping the prefix yields the byte-identical wire form (§7.1).
+    /** Lane-CF codec: the Circe (wire-codec) JSON of `A` framed behind the [[ArrivalStamp]] prefix
+      * ([[LaneValue]]). Stripping the prefix yields the byte-identical wire form (§7.1).
       *
       * An explicit factory (not a `given`) — each lane `StoreKey` case calls `StoreCodec.laneValue`
       * directly, so there is no implicit ambiguity with [[fromCirce]] and no `summon`

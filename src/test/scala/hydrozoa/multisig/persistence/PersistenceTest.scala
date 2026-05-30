@@ -104,8 +104,8 @@ class PersistenceTest extends AnyFunSuite:
         }
     }
 
-    test("LaneValue framing round-trips stamp + payload bytes") {
-        val stamp = 0x0102030405060708L
+    test("LaneValue framing round-trips ArrivalStamp + payload bytes") {
+        val stamp = ArrivalStamp(generation = 7, monotonicNanos = 0x0102030405060708L)
         val payload = Array[Byte](0xaa.toByte, 0xbb.toByte, 0xcc.toByte)
         val framed = LaneValue.frame(stamp, payload)
         assert(
@@ -126,7 +126,7 @@ class PersistenceTest extends AnyFunSuite:
                     given IOLocal[Tracer] = tracerLocal
                     RocksDbBackendStore
                         .open(tempDir)
-                        .use(backend => prog(Persistence.fromBackend(backend)))
+                        .use(backend => Persistence.fromBackend(backend).flatMap(prog))
                 }
             yield result).unsafeRunSync()
         finally recursivelyDelete(tempDir)

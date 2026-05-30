@@ -211,7 +211,7 @@ object Main extends IOApp {
               Path.of(s".hydrozoa-data/peer-${nodeConfig.ownHeadPeerNum: Int}/rocksdb")
             )
             tracerLocal <- Resource.eval(Tracer.makeLocal)
-            persistence = {
+            persistence <- Resource.eval {
                 given IOLocal[Tracer] = tracerLocal
                 Persistence.fromBackend(backendStore)
             }

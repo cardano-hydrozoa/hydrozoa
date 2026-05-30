@@ -153,7 +153,9 @@ object JointLedgerTestHelpers {
             eutxoLedger <- PropertyM.run(EutxoL2Ledger(config))
             tracerLocal <- PropertyM.run(Tracer.makeLocal)
             persistenceBackend <- PropertyM.run(InMemoryBackendStore.open.allocated.map(_._1))
-            persistence = Persistence.fromBackend(persistenceBackend)(using config, tracerLocal)
+            persistence <- PropertyM.run(
+              Persistence.fromBackend(persistenceBackend)(using config, tracerLocal)
+            )
             jointLedger <- PropertyM.run(
               system.actorOf(
                 JointLedger(

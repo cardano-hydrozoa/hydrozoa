@@ -91,7 +91,7 @@ trait EventSequencer(
                       )
                       // CR1: persist the assigned request to the Request lane BEFORE telling the
                       // user the id (the id is durable before it is observable; §4 CR1/CR4).
-                      stamp <- IO.monotonic.map(_.toNanos)
+                      stamp <- persistence.arrivalStamp
                       _ <- persistence.write(
                         WriteBatch.start
                             .put(LaneKey.Request(config.ownHeadPeerNum, newNum))(

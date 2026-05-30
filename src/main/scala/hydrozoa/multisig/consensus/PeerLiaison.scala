@@ -94,30 +94,35 @@ trait PeerLiaison(
 
     /** Persist the inbound remote lane entries carried by a [[NewMsgBatch]] before the receive
       * cursor advances past them (CR8 write-before-advance, §4). The one place this peer persists
-      * data it did not author. Each entry is **receipt**-stamped (local monotonic time) and keyed
-      * by its author: spine entries (`Block` / `Stack`) by their index; satellites (`SoftAck` /
-      * `HardAck` / `Request`) by the remote author + index. An empty batch is a no-op.
+      * data it did not author. Each entry is **receipt**-stamped and keyed by its author: spine
+      * entries (`Block` / `Stack`) by their index; satellites (`SoftAck` / `HardAck` / `Request`)
+      * by the remote author + index. An empty batch is a no-op.
       */
     private def persistInbound(batch: NewMsgBatch): IO[Unit] =
-        IO.monotonic.map(_.toNanos).flatMap { stamp =>
-            val wb0 = WriteBatch.start
-            val wb1 =
-                batch.blockBrief
-                    .fold(wb0)(b => wb0.put(LaneKey.Block(b.blockNum))(LaneValue(stamp, b)))
-            val wb2 =
-                batch.stackBrief
-                    .fold(wb1)(b => wb1.put(LaneKey.Stack(b.stackNum))(LaneValue(stamp, b)))
-            val wb3 = batch.softAck
-                .fold(wb2)(a => wb2.put(LaneKey.SoftAck(a.peerNum, a.ackNum))(LaneValue(stamp, a)))
-            val wb4 = batch.hardAck.fold(wb3)(a =>
-                wb3.put(LaneKey.HardAck(a.peerNum, a.hardAckNum))(LaneValue(stamp, a))
-            )
-            val wb5 = batch.requests.foldLeft(wb4)((acc, r) =>
-                acc.put(LaneKey.Request(r.requestId.peerNum, r.requestId.requestNum))(
-                  LaneValue(stamp, r)
+        persistence.arrivalStamp.flatMap { stamp =>
+            def lv[P](payload: P): LaneValue[P] = LaneValue(stamp, payload)
+            // One independent put-thunk per present entry, then a single fold — no running `wbN`
+            // chain to thread by hand (where a wrong index would silently drop an entry).
+            val puts: List[WriteBatch => WriteBatch] =
+                List(
+                  batch.blockBrief.map(b =>
+                      (wb: WriteBatch) => wb.put(LaneKey.Block(b.blockNum))(lv(b))
+                  ),
+                  batch.stackBrief.map(b =>
+                      (wb: WriteBatch) => wb.put(LaneKey.Stack(b.stackNum))(lv(b))
+                  ),
+                  batch.softAck.map(a =>
+                      (wb: WriteBatch) => wb.put(LaneKey.SoftAck(a.peerNum, a.ackNum))(lv(a))
+                  ),
+                  batch.hardAck.map(a =>
+                      (wb: WriteBatch) => wb.put(LaneKey.HardAck(a.peerNum, a.hardAckNum))(lv(a))
+                  )
+                ).flatten ++ batch.requests.map(r =>
+                    (wb: WriteBatch) =>
+                        wb.put(LaneKey.Request(r.requestId.peerNum, r.requestId.requestNum))(lv(r))
                 )
-            )
-            IO.whenA(wb5.size > 0)(persistence.write(wb5))
+            val full = puts.foldLeft(WriteBatch.start)((wb, put) => put(wb))
+            IO.whenA(full.size > 0)(persistence.write(full))
         }
 
     private def receiveTotal(req: Request, conn: Connections): IO[Unit] =

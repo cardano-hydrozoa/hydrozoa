@@ -212,7 +212,7 @@ final case class StackComposer(
       *     `evacuationMapDiff`s are folded in stack order and the running map is persisted under a
       *     block's `blockNum` only when that block is one of the committed ones.
       *
-      * Lane values carry the 8-byte arrival stamp (creation time — local monotonic; §5.4 / §7.1).
+      * Lane values carry the [[hydrozoa.multisig.persistence.ArrivalStamp]] (creation time; §5.4).
       * Takes the [[StackPartition]]s [[mkStackUnsigned]] already built (the prefix is partitioned
       * once; the blocks fold back in stack order as `partitions.flatMap(_.blocks)`) plus the brief
       * and this peer's hard-acks for the stack.
@@ -227,7 +227,7 @@ final case class StackComposer(
         val committed = committedBlockNums(partitions)
         val orderedResults = partitions.toList.flatMap(_.blocks.toList)
         for {
-            stamp <- IO.monotonic.map(_.toNanos)
+            stamp <- persistence.arrivalStamp
             // Own lane outputs: StackBrief (leader only — StackLane author) + this peer's HardAcks.
             laneBatch = {
                 val withBrief =

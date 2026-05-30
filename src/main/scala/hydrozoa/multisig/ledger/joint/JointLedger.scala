@@ -729,7 +729,7 @@ final case class JointLedger(
         blockResult: BlockResult
     ): IO[Unit] =
         for {
-            stamp <- IO.monotonic.map(_.toNanos)
+            stamp <- persistence.arrivalStamp
             deposits <- state.get.map(_.deposits)
             briefBatch =
                 if config.ownHeadPeerId.isLeader(brief.blockNum) then

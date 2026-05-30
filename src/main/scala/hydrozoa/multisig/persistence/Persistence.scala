@@ -3,6 +3,7 @@ package hydrozoa.multisig.persistence
 import cats.effect.{IO, IOLocal}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.Tracer
+import java.nio.ByteBuffer
 
 /** The **typed, actor-facing** persistence API.
   *
@@ -41,6 +42,11 @@ trait Persistence[F[_]]:
       */
     def write(batch: WriteBatch): F[Unit]
 
+    /** A fresh [[ArrivalStamp]] for an entry admitted *now*: `(this process's generation, current
+      * monotonic)`. Used to stamp lane values (§5.4) — own entries at creation, inbound at receipt.
+      */
+    def arrivalStamp: F[ArrivalStamp]
+
 object Persistence:
     /** Force the routing key to `"Persistence"` for the duration of `fa`, so every `Tracer.info` /
       * `Tracer.debug` inside lands on the `"Persistence"` Logback logger regardless of the calling
@@ -50,8 +56,24 @@ object Persistence:
     private def withRoute[A](fa: IO[A])(using IOLocal[Tracer]): IO[A] =
         Tracer.scoped(_.copy(routingKey = Some("Persistence")))(fa)
 
+    /** The arrival-stamp generation counter's key in `Cf.Meta` (a 4-byte big-endian `Int`). */
+    private val generationKey: Array[Byte] = "arrival-generation".getBytes("UTF-8")
+
+    /** The per-process arrival-stamp generation: read the persisted counter, increment it, write it
+      * back, and return the new value. Bumped **once per store-open per process** so stamps from a
+      * later process always sort after earlier ones across restarts (§5.4, [[ArrivalStamp]]).
+      */
+    private def bumpGeneration(backend: BackendStore[IO]): IO[Int] =
+        for
+            prev <- backend.get(Cf.Meta, generationKey)
+            next = prev.map(b => ByteBuffer.wrap(b).getInt).getOrElse(0) + 1
+            _ <- backend.put(Cf.Meta, generationKey, ByteBuffer.allocate(4).putInt(next).array())
+        yield next
+
     /** The standard `Persistence` implementation — wraps a [[BackendStore]] and threads keys /
-      * values through each [[StoreKey]]'s codec on the way through.
+      * values through each [[StoreKey]]'s codec on the way through. Bumps the arrival-stamp
+      * generation once at open ([[bumpGeneration]]) so the returned instance's
+      * [[Persistence.arrivalStamp]]s are durably ordered across restarts.
       *
       * Takes the [[CardanoNetwork.Section]] once and makes it implicitly available to every codec
       * invocation (`encodeValue` / `decodeValue` / `WriteBatch.toRaw`). Also captures the ambient
@@ -60,8 +82,12 @@ object Persistence:
       */
     def fromBackend(
         backend: BackendStore[IO]
-    )(using CardanoNetwork.Section, IOLocal[Tracer]): Persistence[IO] =
-        new Persistence[IO]:
+    )(using CardanoNetwork.Section, IOLocal[Tracer]): IO[Persistence[IO]] =
+        for generation <- bumpGeneration(backend)
+        yield new Persistence[IO]:
+            def arrivalStamp: IO[ArrivalStamp] =
+                IO.monotonic.map(m => ArrivalStamp(generation, m.toNanos))
+
             def get(key: StoreKey): IO[Option[key.Value]] =
                 withRoute(
                   backend
