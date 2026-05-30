@@ -73,6 +73,34 @@ make spec-clean
 - **Bloxbean Cardano Client**: Off-chain Cardano interaction
 - **MUnit + ScalaCheck**: Testing framework with property-based testing
 
+## Design specifications
+
+Durable design specifications live in `design/` (a top-level directory). Specs are added here as
+they are written — none are committed on this branch yet.
+
+## Documentation
+
+Working design and reference docs live in `docs/`:
+
+**Consensus & protocol**
+- [`fast-consensus.md`](docs/fast-consensus.md) — fast cycle: per-block soft-confirmation via
+  per-peer header signatures.
+- [`slow-consensus.md`](docs/slow-consensus.md) — slow cycle: turning a run of soft-confirmed
+  blocks into a multisigned, L1-submittable set of effect transactions over stacks.
+- [`rate-limiter.md`](docs/rate-limiter.md) — generic throttling actor that slows the consensus
+  cycles without changing consensus logic.
+
+**Testing**
+- [`integration-stages.md`](docs/integration-stages.md) — the stage1/stage4 integration test
+  levels: what each exercises and where to add a test.
+- [`testcontrol-driver.md`](docs/testcontrol-driver.md) — how `ModelBasedSuite` drives tests on a
+  cats-effect `TestControl` virtual clock.
+
+**Reference**
+- [`style-guide.md`](docs/style-guide.md) — hand-applied Scala conventions (see [Code
+  Style](#code-style)).
+- [`logging-tracing.md`](docs/logging-tracing.md) — contextual logging and Tracer design.
+- [`Codecs.md`](docs/Codecs.md) — codec conventions (WIP notes).
 
 ## Development Environment
 
