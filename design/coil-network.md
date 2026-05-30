@@ -1,6 +1,7 @@
 # Coil-Ready Peer (M5)
 
-**Status:** Draft outline — **active M5 workstream**.
+**Status:** Active M5 workstream — core decisions locked 2026-05-30 (see
+**Resolved decisions** below).
 
 This spec describes the **coil-peer node type**: the process that joins a
 Gummiworm head as a custodial slow-consensus follower. It is M5's "coil
@@ -23,6 +24,42 @@ future-work spec**. It builds on this node-type but is not part of M5.
 - `single-head-gummiworm-protocol/consensus/slow-consensus` — coil quorum role; round-1 / round-2 signing
 - `single-head-gummiworm-protocol/replicated-state-machine` — what state each peer maintains
 - `blockchain-specifics/cardano/initialization` — bootstrap config (`coilPeers`, `coilQuorum`), multisig native script
+
+---
+
+## Resolved decisions (2026-05-30)
+
+Decided after reviewing `peer-network`, `slow-consensus`, and
+`initialization`. These supersede the matching entries in §14.
+
+- **D-coil-1 — peer identity is a tagged sum.**
+  `SlowPeerId = Head(HeadPeerNumber) | Coil(CoilPeerNumber)`, where
+  `CoilPeerNumber` is the coil's index in the canonically-sorted `coilPeers`.
+  Wire form: the peer number plus a one-bit tag (`1` = head, `0` = coil), so
+  the existing 2-int `HardAckId` tuple grows by one bit rather than gaining a
+  structural tag field. `HardAckId`, the slow-consensus quorum set, the
+  aggregator's vkey map, the verifier, and the native-script signer ordering
+  all carry it. **Both** peer types thread it — head peers aggregate coil
+  hard-acks to hard-confirm, so this is not coil-only. (§6.)
+- **Threshold native script.** The head's native script becomes
+  `AllOf(headSigs) ∧ AtLeast(coilQuorum, coilSigs)`. It governs beacon-token
+  minting, the treasury / multisig-regime spend, and the head address — one
+  script, all uses. Confirmed by `initialization`: the init tx "must be signed
+  by all head peers and a quorum of coil peers." (§6.)
+- **Fixed-count coil witnesses.** Every effect tx is built and fee-sized for
+  exactly `nHeadPeers + coilQuorum` witnesses. The aggregator considers a cell
+  saturated as soon as it holds all head acks + any `coilQuorum` verified coil
+  acks, attaches exactly that many coil witnesses (never more — a larger set
+  underpays the fee), and proceeds. Which coil keys fill the slots may differ
+  across peers; only the count is fixed, and any `coilQuorum` satisfies the
+  on-chain `AtLeast`. (§6.)
+- **D-coil-2 / D-coil-6 — reuse `HeadConfig`, parallel manager.** Coil reuses
+  `HeadConfig` wholesale (distribution delivers the same head config to head
+  and coil peers); the only difference is identity, carried at the
+  `NodeConfig` private layer as an `OwnCoilPeerPrivate` (signing key + derived
+  `CoilPeerNumber`) in place of `OwnHeadPeerPrivate`. A separate
+  `CoilMultisigRegimeManager` spawns the follower actor subset. No slim
+  `CoilConfig`. (§5.)
 
 ---
 
@@ -147,22 +184,29 @@ construction; it is **not** carried in any wire message.
 
 ## 5. Configuration
 
-The head's `HeadConfig.Bootstrap` already carries
-`coilPeers: List[CoilPeer(vkey, hub: HeadPeerNumber)]` and `coilQuorum: Int` —
-every head peer consumes these for slow-consensus quorum logic. A coil peer
-needs its **own** config record:
+**Coil reuses `HeadConfig` wholesale** — `initialization`'s distribution phase
+delivers the *same* head config to head and coil peers, and coil needs nearly
+all of it (`coilPeers`, `coilQuorum`, `headParams`, timing, `initTx`,
+`headId`). The only thing that differs between a head node and a coil node is
+**identity**, carried at the `NodeConfig` private layer:
 
-- **Identity** — this coil peer's vkey (matched against an entry in
-  `coilPeers`), with the derived `CoilPeerNumber` (position in
-  canonical-sorted coil list).
-- **Head set** — the full `headPeers` list (vkeys + network addresses), same
-  view every head peer has.
-- **Hub** — read from the matching `coilPeers` entry; not re-specified.
-- **Head parameters** — `coilQuorum`, head quorum, slow-consensus timing,
-  finalization rules — the same `HeadParameters` head peers use.
-- **L1 access** — independent `CardanoBackend` connection.
-- **L2Ledger** — same configuration used to construct head's L2Ledger
-  (byte-deterministic across head and coil).
+```
+NodeConfig(headConfig: HeadConfig,        // shared verbatim, head & coil
+           nodePrivateConfig)             // carries identity
+```
+
+Today `nodePrivateConfig` holds an `OwnHeadPeerPrivate`. A coil node swaps in
+an **`OwnCoilPeerPrivate`** — this coil's signing key plus its derived
+`CoilPeerNumber` (its index in the canonically-sorted `coilPeers`, matched by
+vkey). `HeadConfig` is untouched; `CoilMultisigRegimeManager` reads the private
+side to know "I am coil N" and finds its hub via the matching `coilPeers`
+entry.
+
+Everything else a coil needs it reads from the shared `HeadConfig`: the head
+set, `coilQuorum`, slow-consensus timing, finalization rules. L1 access is an
+independent `CardanoBackend` connection (§9); the `L2Ledger` is constructed
+from the same configuration head peers use (byte-deterministic across head and
+coil). This resolves **D-coil-2** toward reuse.
 
 ## 6. Slow-consensus participation
 
@@ -180,6 +224,66 @@ identity of the signing key and the gappy allowance:
   population (head + coil) the same way head's does. Threshold met (all head
   hard-acks + `coilQuorum` coil hard-acks) → write `HardConfirmation` → fan
   out.
+
+### Peer identity — `SlowPeerId`
+
+Coil-authored hard-acks travel the same lanes as head ones, so every slow-side
+identity slot widens from `HeadPeerNumber` to the tagged
+`SlowPeerId = Head(HeadPeerNumber) | Coil(CoilPeerNumber)`:
+
+- `HardAckId` becomes `(SlowPeerId, HardAckNumber)`. Wire form: peer number +
+  a one-bit tag (`1` = head, `0` = coil), so the existing 2-int tuple grows by
+  one bit rather than gaining a structural tag field.
+- `SlowConsensusActor`'s quorum set and `HardAckAggregator`'s
+  `vkeys: Map[SlowPeerId, VerificationKey]` both key on `SlowPeerId`.
+- The verifier rebuilds each `VKeyWitness` from the `SlowPeerId` → vkey lookup,
+  so a peer can only ever contribute a witness under its own key (head or coil).
+
+This lands on **both** peer types: head peers aggregate coil hard-acks to reach
+hard confirmation, so the widening is not coil-local.
+
+### Threshold native script
+
+The head's native script (`HeadMultisigScript`) becomes a threshold
+composition:
+
+```
+AllOf(
+  headPeerVKeys.map(Signature)                            // every head peer
+    :+ AtLeast(coilQuorum, coilPeerVKeys.map(Signature))  // any coilQuorum coils
+)
+```
+
+It governs all four uses of the script: minting the `HYDR` / `HMRW` beacon
+tokens, spending the treasury and multisig-regime outputs, and the head
+address. `initialization` makes the requirement explicit — the init tx "must
+be signed by all head peers and a quorum of coil peers."
+
+`HeadMultisigScript.requiredSigners` currently flattens `AllOf → Signature` and
+feeds every key to the tx builder as a required signer; that flat cast no
+longer holds. The head keys stay **mandatory**; the coil contribution is a
+fixed **count** of `coilQuorum` slots — not all coils, and not identity-pinned
+for fee purposes.
+
+### Fixed-count coil witnesses
+
+Because every peer derives byte-identical tx bodies and the fee covers the
+witness-set size, the witness *count* must be fixed. Every effect tx is built
+and fee-sized for exactly `nHeadPeers + coilQuorum` witnesses:
+
+- **Saturate early.** A `SlowConsensusActor` cell is saturated the instant it
+  holds all head acks + *any* `coilQuorum` verified coil acks — no waiting for
+  stragglers. This is exactly the whitepaper's "coil may skip" allowance: only
+  *some* `coilQuorum` is ever needed.
+- **Cap hard.** The aggregator attaches exactly `coilQuorum` coil witnesses and
+  no more; a coil ack arriving after saturation is dropped (same path as the
+  existing round-1-already-saturated drop). Attaching `coilQuorum + 1` would
+  exceed the fee-budgeted size and invalidate the tx.
+- **Witness sets may differ across peers.** Each peer aggregates and submits
+  its *own* tx (R8/R9, §9); peer A may attach coils `{1,2}` and peer B
+  `{2,3}` — same count, both satisfy the on-chain `AtLeast(coilQuorum, …)`, and
+  L1 duplicate-rejection decides which lands. No cross-peer witness agreement
+  is required.
 
 ## 7. Fast-consensus participation — receive-only
 
@@ -296,6 +400,16 @@ head peer does. Coil's first observable output is signing the round-2
 init-tx hard-ack, joining the head's stack-0 hard confirmation. Whitepaper
 anchor: `slow-consensus` (stack-0 hard-confirm arms stack 1).
 
+`coilQuorum` bites at stack 0 in **both** signing rounds: round 1 (fallback)
+and round 2 (init tx) each complete only when all head peers + at least
+`coilQuorum` coil peers have signed (`initialization` §Signing initialization
+block effects). So even a 1-head / 1-coil bring-up with `coilQuorum = 1` forces
+the coil through both `HardAck.Round1Payload.Initial` and
+`Round2Payload.Initial` — the thin slice is a full end-to-end exercise of coil
+slow consensus, not a degenerate one. Coil's
+`Round2Payload.Initial.individualSig` is always `None`: only head peers fund
+the init tx from individual addresses.
+
 ## 12. Skip-hard-ack policy
 
 A coil peer's freedom to *skip* is **scoped to its hard-ack signature
@@ -344,12 +458,16 @@ is a recovery concern picked up later in
 
 ## 13. Implementation phasing
 
+**First PR = Pc1–Pc3** (the whole spine). `coilQuorum` is a parameter, so the
+thin slice already builds the general mechanism; Pc4 then validates it at
+higher quorum with little new production code.
+
 | Step | Deliverable |
 |---|---|
-| Pc1 | `CoilPeerNumber` opaque type + wire codec disambiguation (resolves D-coil-1) |
-| Pc2 | `CoilMultisigRegimeManager` + actor wiring with role gates on BW / JL / FCA / SC / SCA / PL (single-hub); `CardanoLiaison` reused unchanged; `RuleBasedRegimeManager` shared with head |
-| Pc3 | Coil-side bootstrap entry point + integration test: 1 head + 1 coil reach `Stack(0).HardConfirmed` |
-| Pc4 | Multi-coil quorum: `coilQuorum > 0` slow-consensus path through stage1 |
+| Pc1 | `SlowPeerId` tagged sum (Head / Coil) + `CoilPeerNumber` + one-bit wire tag through `HardAckId` / verifier / aggregator vkey map; threshold `HeadMultisigScript` (`AllOf(head) ∧ AtLeast(coilQuorum, coil)`) with the mandatory-head / fixed-count-coil signer split (resolves D-coil-1) |
+| Pc2 | `CoilMultisigRegimeManager` + `OwnCoilPeerPrivate` identity seam (reuse `HeadConfig`); actor wiring with role gates on BW / JL / FCA / SC / SCA / PL (single-hub); fixed-count aggregator (saturate at `coilQuorum`, cap hard); `CardanoLiaison` reused unchanged; `RuleBasedRegimeManager` shared (resolves D-coil-2, D-coil-6) |
+| Pc3 | Coil-side bootstrap entry point + integration test: 1 head + 1 coil reach `Stack(0).HardConfirmed` with `coilQuorum = 1` |
+| Pc4 | Multi-coil quorum: `coilQuorum > 1`, multiple coil peers through stage1 (validates the spine; minimal new production code) |
 | Pc5 | Stage-4 multi-peer model-based test with coil follower(s) |
 | Pc6 | Skip-stack policy plumbing (resolves D-coil-4) |
 | Pc7 | Coil submits happy-path + fallback alongside head (R8/R9) verified; rule-based-regime handover spawns `DisputeActor` + `EvacuationActor` on coil the same as on head |
@@ -359,19 +477,17 @@ Persistence + crash-recovery for coil deferred to
 
 ## 14. Open questions
 
-- **D-coil-1.** `CoilPeerNumber` representation (§5) — opaque `Int`
-  mirroring `HeadPeerNumber`, or a wider tagged identifier? Needed by the
-  multisig native script AND the `HardAck` wire codec to disambiguate
-  head- vs coil-author IDs.
-- **D-coil-2.** Slim `CoilConfig` record vs reusing `HeadConfig` and
-  ignoring head-only fields (§5).
+- **D-coil-1 — RESOLVED.** Tagged sum `SlowPeerId = Head(HeadPeerNumber) |
+  Coil(CoilPeerNumber)`; wire = peer number + one-bit tag (`1` head, `0`
+  coil). See Resolved decisions and §6.
+- **D-coil-2 — RESOLVED.** Reuse `HeadConfig` wholesale; identity differs via
+  `OwnCoilPeerPrivate` at the `NodeConfig` private layer. No slim
+  `CoilConfig`. See §5.
 - **D-coil-3.** Hub-fallover semantics for M5 (§8) — strictly out of
   scope, or worth a stub?
 - **D-coil-4.** Concrete skip-stack triggers (§12).
 - **D-coil-5.** Coil's `L2Ledger` — same restore-by-block-boundary
   interface as head's, or simpler forward-only? Confirm byte-determinism
   across head/coil divide.
-- **D-coil-6.** `CoilMultisigRegimeManager` shape — fully parallel to head's
-  `MultisigRegimeManager`, or extract a shared `MultisigRegimeManager` base
-  and parametrise on role? (`RuleBasedRegimeManager` stays shared either
-  way.)
+- **D-coil-6 — RESOLVED.** Fully parallel `CoilMultisigRegimeManager`
+  (`RuleBasedRegimeManager` stays shared). See §3, §5.
