@@ -27,7 +27,7 @@ final case class RawWriteBatch private (ops: Vector[RawWriteBatch.Op]):
 
 object RawWriteBatch:
     /** The empty batch — starting point for building. */
-    val empty: RawWriteBatch = RawWriteBatch(Vector.empty)
+    val start: RawWriteBatch = RawWriteBatch(Vector.empty)
 
     /** One operation in a raw write batch. */
     enum Op:

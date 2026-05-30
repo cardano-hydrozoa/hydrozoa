@@ -47,7 +47,7 @@ final case class WriteBatch private (private val ops: Vector[WriteBatch.Op]):
       * called by `Persistence.write`.
       */
     private[persistence] def toRaw: RawWriteBatch =
-        ops.foldLeft(RawWriteBatch.empty) { (acc, op) =>
+        ops.foldLeft(RawWriteBatch.start) { (acc, op) =>
             op match
                 case WriteBatch.Op.Put(key, valueBytes) =>
                     acc.put(key.cf, key.encode, valueBytes)

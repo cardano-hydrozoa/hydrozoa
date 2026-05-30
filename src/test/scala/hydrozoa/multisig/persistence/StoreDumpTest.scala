@@ -22,7 +22,7 @@ class StoreDumpTest extends AnyFunSuite:
             val ownPeer = HeadPeerNumber(0)
             val populate = (b: BackendStore[IO]) =>
                 b.write(
-                  RawWriteBatch.empty
+                  RawWriteBatch.start
                       .put(Cf.Block, LaneKey.Block(BlockNumber(1)).encode, Array[Byte](1, 2, 3))
                       .put(Cf.Block, LaneKey.Block(BlockNumber(2)).encode, Array[Byte](1, 2, 3, 4))
                       .put(
@@ -90,7 +90,7 @@ class StoreDumpTest extends AnyFunSuite:
                 .open(tempDir)
                 .use { b =>
                     b.write(
-                      RawWriteBatch.empty
+                      RawWriteBatch.start
                           .put(Cf.Block, LaneKey.Block(BlockNumber(7)).encode, Array[Byte](1))
                           .put(
                             Cf.SoftAck,

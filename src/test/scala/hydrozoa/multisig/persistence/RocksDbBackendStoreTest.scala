@@ -55,7 +55,7 @@ class RocksDbBackendStoreTest extends AnyFunSuite:
             val blockKey = LaneKey.Block(BlockNumber(1)).encode
             val softKey = LaneKey.SoftAck(HeadPeerNumber(2), SoftAckNumber(1)).encode
             val batch =
-                RawWriteBatch.empty
+                RawWriteBatch.start
                     .put(Cf.Block, blockKey, Array[Byte](0xaa.toByte))
                     .put(Cf.SoftAck, softKey, Array[Byte](0xbb.toByte))
                     .put(Cf.DepositMap, "snap-key".getBytes("UTF-8"), Array[Byte](0xcc.toByte))
