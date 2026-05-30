@@ -1048,7 +1048,8 @@ of the committed bytes in our CFs, we rebuild actor state from there.
   (`BlockResult`, `SoftConfirmation`, `HardConfirmation`), three snapshot CFs
   (`DepositMap` + `Treasury` single keyed blobs; `EvacuationMap` keyed per
   committed block), and one metadata
-  (`Meta`, store version). The generic benefits of CF-per-concern (per-CF
+  (`Meta`, store version + the arrival-stamp generation counter, §5.4). The
+  generic benefits of CF-per-concern (per-CF
   tuning, compaction isolation, scoped Bloom filters, tag-byte savings) are
   enumerated in the primer above. **Atomicity across CFs is preserved**:
   `WriteBatch` covers puts in multiple CFs as one WAL record, so the per-soft-ack
@@ -1074,7 +1075,7 @@ compaction style) can match its shape. Concretely:
 | `DepositMap` | one key (`Meta`-like — single keyed blob), medium-sized blob, **rewritten on every own soft ack** (high churn on a single key) | RocksDB-friendly single-key churn (large MemTable absorbs the overwrites; compaction collapses the chain quickly); isolated from ack-CF compaction |
 | `Treasury` | one key, rewritten only at own hard-ack stack-close (slow cadence); small (UTXO ref) | low write rate ⇒ tiny compaction footprint; own CF makes it trivially backupable / restorable as part of the R10 floor |
 | `EvacuationMap` | keyed by `blockNum`; one entry per **committed** block (each major + each last-of-partition SEC minor — the only maps that back an on-chain commitment), written in batches at own hard-ack stack-close (the closing stack's committed blocks in one `WriteBatch`); each map is cumulative L2 state | scan-optimized profile (range-read for evacuation reconstruction); pruning is bounded — anything strictly older than the last-hard-confirmed major can be dropped, since those minors can never be disputed against once the next major supersedes them |
-| `Meta` | one key today (store version) | no tuning needed; one obvious place for store-level metadata |
+| `Meta` | store-level keys: the schema version and the **arrival-stamp `generation`** — a per-process counter read+incremented+persisted once at store-open (§5.4), so this process's lane stamps sort after earlier ones across restarts | no tuning needed; one obvious place for store-level metadata |
 
 A few benefits worth calling out separately:
 
@@ -1192,8 +1193,11 @@ Executed in/around `MultisigRegimeManager.preStartLocal`, before
 `pendingConnections.complete`. **All actors start together**; the two recovery
 mechanisms (replay / restore) run concurrently (§5).
 
-1. Open the store; verify version. Absent → cold start (the degenerate replay:
-   empty base, empty mailboxes).
+1. Open the store; verify version; **bump the arrival-stamp `generation`** — read
+   the `Cf.Meta` counter, increment, persist (once per store-open), so every lane
+   stamp this process writes sorts after every earlier process's (§5.4). Absent
+   store → cold start (the degenerate replay: empty base, empty mailboxes), and the
+   generation simply starts at 1.
 2. **Derive the four markers** by CF scan (§5.1): `softConfirmed =
    max(SoftConfirmation.key)`, `hardConfirmed = max(HardConfirmation.key)`,
    `softAcked = max(own SoftAck key)`, `hardAcked` from the last own `HardAck`.
