@@ -23,8 +23,15 @@ import java.nio.ByteBuffer
   *
   * The lane-type discriminant is the column family ([[Cf]]) — no tag byte in the key.
   *
+  * **Satellite CFs are peer-major.** Because the `peer` byte **leads** the key, the store's
+  * unsigned-lex key order groups all of one author's entries together (ascending by index), then
+  * the next author's, and so on. So within a satellite CF a single peer's lane is a **contiguous**
+  * run — the property [[recovery.LaneScan]] relies on to bound a per-peer scan (stop at the first
+  * key whose `peer` differs). The spine CFs carry no peer byte, so the whole CF is one
+  * index-ordered lane.
+  *
   * Each case's `Value` is a [[LaneValue]] wrapping that lane's wire payload (the wire codec from
-  * `consensus.transport.Codecs`, reused under the 8-byte arrival-stamp prefix via
+  * `consensus.transport.Codecs`, reused under the 12-byte arrival-stamp prefix via
   * [[StoreCodec.laneValue]]; §5.4, §7.1). A sealed trait (not an `enum`) so each case can declare
   * its own path-dependent `Value` + codec.
   */

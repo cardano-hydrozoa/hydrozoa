@@ -213,6 +213,7 @@ Structural facts:
 | Hard acks (per-effect, round-1/2/sole)                                            | signed by StackComposer, aggregated by SlowConsensusActor; remote via PeerLiaison | replayed; own ack authoritative (CR2) |
 | **Hard confirmation** (`HardConfirmation` CF)                                     | SlowConsensusActor → CardanoLiaison | multisigned effects / SECs / fallbacks **in full**, written at confirmation time, keyed by `stackNum`. `hardConfirmed` **derives** as `max(HardConfirmation.key)` — no marker key. CardanoLiaison submits; evacuation reads. Prunes hard-acks. **R10 evacuation floor.** |
 | Deposits map (`DepositMap` CF)                                                    | JointLedger | **snapshotted** (one keyed blob, rewritten on every own soft ack — out-of-order subset, §5.3) |
+| Request high-water (`RequestHighWater` CF)                                        | JointLedger | **snapshotted** (one keyed blob — a `Map[HeadPeerNumber, RequestNumber]`, the highest request each peer has had included in a block; rewritten on every own soft ack). The RequestLane recovery cursor is this `+ 1` per peer. Snapshotted, not derived, because retention (§5.1) prunes the old briefs a brief-fold would need (§5.3). |
 | Treasury (`Treasury` CF)                                                          | StackComposer | **snapshotted** (one keyed blob, rewritten on every own hard-ack stack-close — rotates per settlement / finalization) |
 | Evacuation maps (`EvacuationMap` CF)                                              | StackComposer | **per-block, but only at the blocks that back an on-chain KZG commitment** — every **major** block (its post-diff map is the settlement's `nextKzg`) and every **last-of-partition minor** (the minor that gets a SEC), keyed by `blockNum`. SC folds each block's `evacuationMapDiff` onto the running map and persists the result at those blocks on every own hard-ack stack-close. The maps at other minors commit to nothing on-chain, so the rule-based dispute can never need them. KZG commitment derives from the map, not stored separately. |
 
@@ -431,18 +432,23 @@ below.
 ### 5.2 State recovery: the base snapshots
 
 Replay starts from **per-side passive snapshots at the ack mark**: the fast
-snapshot lives in `DepositMap`, the slow in `Treasury` + `EvacuationMap`. Each
-snapshot is rewritten in the same atomic `WriteBatch` as its side's own ack
-write (deposits per own soft ack, treasury + evac per own hard-ack stack-close),
-so the snapshotted state is always exactly aligned with the side's `*Acked`
-mark and can never be torn from it.
+snapshots live in `DepositMap` + `RequestHighWater`, the slow in `Treasury` +
+`EvacuationMap`. Each snapshot is rewritten in the same atomic `WriteBatch` as its
+side's own ack write (deposits + request high-water per own soft ack, treasury +
+evac per own hard-ack stack-close), so the snapshotted state is always exactly
+aligned with the side's `*Acked` mark and can never be torn from it.
 
 Snapshots carry **only the non-derivable** passive state on each side:
 
-- fast — **`DepositMap`** CF (JointLedger): one keyed blob, the deposits map at
-  `softAcked`. JL is at `Done(softAcked)` after restore — `previousBlockHeader`
-  reloads from `BlockLane[softAcked].brief`, deposits come from `DepositMap`,
-  nothing else needed.
+- fast — **`DepositMap`** + **`RequestHighWater`** CFs (JointLedger):
+    - `DepositMap` — one keyed blob, the deposits map at `softAcked`. JL is at
+      `Done(softAcked)` after restore — `previousBlockHeader` reloads from
+      `BlockLane[softAcked].brief`, deposits come from `DepositMap`, nothing else
+      needed for JL's own state.
+    - `RequestHighWater` — one keyed blob, a `Map[HeadPeerNumber, RequestNumber]`
+      giving each peer's highest included request as of `softAcked`. It is *not*
+      JointLedger state; it feeds the RequestLane recovery cursors (§5.3), rewritten
+      here so it stays aligned with `softAcked` and survives brief pruning.
 - slow — **`Treasury`** + **`EvacuationMap`** CFs (StackComposer):
     - `Treasury` — one keyed blob, the cumulative treasury UTXO ref at
       `hardAcked`. Overwritten in place — there's no rule-based scenario that
@@ -500,14 +506,47 @@ them **derives from the markers** via Hydrozoa's monotonicity invariants:
 
 - **Requests** — monotonic per peer: *if a block includes Peer A's Request `N`,
   the next block includes only A's requests `> N`.* So A's RequestLane cursor is
-  the highest `N` from A in any block `≤ softAcked`, `+ 1` — derivable, not
-  stored.
-- **Blocks / stacks** — sequential and monotonic ⇒ BlockLane cursor =
-  `softAcked + 1`; StackLane cursor = `hardAcked + 1`.
-- **Soft / hard acks** — tied to block / stack numbers ⇒ each peer's
-  SoftAckLane / HardAckLane cursor is derived from the side's ack mark.
+  A's highest-ever included request `+ 1`. This high-water is **persisted as a
+  small per-peer counter** (one entry per head peer, written as blocks are
+  produced) and read directly at boot — *not* recomputed by scanning briefs.
+  Folding briefs is unsound: to get *every* peer's high-water you must scan back
+  until each peer's latest included request appears (worst case to block 0), and
+  once retention (§5.1) prunes old briefs below the hard-confirmed floor they are
+  gone. The counter sidesteps both — `N` reads, immune to pruning. (This is the one
+  request-side datum that *is* stored; the lane cursors themselves still derive
+  from the markers.)
+- **Blocks / stacks (the spines) — two floors each, one per consumer role.** Each
+  spine is read by **two** roles: the aggregator (FCA / SCA), which resumes at the
+  `*Confirmed` mark `+ 1` to rebuild in-flight confirmation cells, and the
+  re-deriving ledger (BlockWeaver → JointLedger / StackComposer), which resumes at
+  the `*Acked` mark `+ 1` to re-produce / re-close what it has not yet signed. So a
+  spine has a **`confirmed` floor** and an **`acked` floor**, with
+  `confirmed ≤ acked`. The `ReplayActor` scans the spine once from the lower
+  (`confirmed`) floor and feeds the `acked` consumer only the suffix `≥ acked` —
+  **the one place the no-re-sign-`≤ *Acked` rule (CR2) lives**, so no consensus
+  actor re-filters for it. The fast-side floors are both marker-derived
+  (`softConfirmed`; `softAcked`, whose `SoftAckNumber` coincides with the block
+  number, §3.1). On the slow side `hardConfirmed` is marker-derived but the **acked
+  stack** is *not* — `hardAcked` is a `HardAckNumber` counter, not a `StackNumber`,
+  so the acked-stack floor is sourced separately (unpack the stack id from the last
+  own `HardAck` value; §10 Q9).
+- **Soft acks** — single consumer (FCA). The soft-ack index *coincides with the
+  block number* (one ack per block, §3.1), so each peer's SoftAckLane cursor is the
+  fast-side confirmed mark `+ 1`, exactly the BlockSpine `confirmed` floor.
+- **Requests** — single consumer (BlockWeaver), at the per-peer high-water `+ 1`
+  (the persisted counter above).
+- **Hard acks** — single consumer (SCA), and the **one lane whose floor does *not*
+  derive from a marker.** The HardAckLane is indexed by the author's own
+  `HardAckNumber`, not by `StackNumber`, and no marker records the
+  `StackNumber → HardAckNumber` correspondence — so there is no marker-findable
+  floor. Recovery scans each peer's HardAckLane **from 0** (correct, not minimal).
+  Tightening needs a per-peer hard-ack marker or a stack-indexed hard-ack lane;
+  deferred (§10 Q9).
 
-So all `2 + 3N` lane cursors fall out of the markers; none is stored.
+So the cursors split into **dual-floor spines + single-floor satellites** (`4 + 3N`
+floors over `2 + 3N` lanes). All derive from the markers + the request high-water
+counter, except the slow-side acked stack and the HardAck floor (the hard-ack-lane
+indexing gap, §10 Q9). None of the cursors is stored.
 
 **The deposits map is the exception — and it is not a lane**, so it has no cursor
 to derive. The pending-deposits map mutates on *any* block (a request *adds* a
@@ -748,7 +787,7 @@ Post-split, owns only the fast-side state; treasury moved to StackComposer.
   `Block.SoftConfirmed.Next`. (`GetState.Sync` is a defined query with no current
   sender.)
 - **Persists:** on each own soft ack, one atomic `WriteBatch` (CR4/CR6/CR8)
-  spanning four CFs:
+  spanning five CFs:
     - the own `BlockBrief` → **`Block`** CF (leader only — BlockLane author),
     - the own soft-ack → **`SoftAck`** CF (SoftAckLane author),
     - the per-block **`BlockResult`** → **`BlockResult`** CF (keyed by
@@ -757,10 +796,16 @@ Post-split, owns only the fast-side state; treasury moved to StackComposer.
       loading `(StackLane[hardAcked].lastBlockNum, head]` directly, instead of
       relying on JointLedger to re-emit results below `softAcked` (§3.2),
     - the current **deposits snapshot** → **`DepositMap`** CF (single keyed
-      blob; overwrites the previous snapshot).
+      blob; overwrites the previous snapshot),
+    - the current **request high-water** → **`RequestHighWater`** CF (single keyed
+      blob, a `Map[HeadPeerNumber, RequestNumber]`; fold this block's included
+      request ids into the running per-peer max and overwrite). Feeds the
+      RequestLane recovery cursors (§5.3); snapshotted here so it stays aligned
+      with `softAcked` and survives brief pruning.
 
-  Bundling deposits here keeps the snapshot aligned with the `softAcked` anchor
-  (our last soft-ack) and un-tearable from it. No marker key is written:
+  Bundling deposits + request high-water here keeps both snapshots aligned with
+  the `softAcked` anchor (our last soft-ack) and un-tearable from it. No marker key
+  is written:
   `softAcked = max(SoftAck.softAckNum where peer == own)` derives from the
   `SoftAck` CF on restart (§5.1). Soft-**confirmation** is *not* written here
   — that is `FastConsensusActor`'s job (below). The own soft-ack's
@@ -940,7 +985,8 @@ Two further mechanisms we lean on:
 - **`WriteBatch`** — a group of puts/deletes committed **atomically** as a single
   WAL record. All operations land or none, even after a crash. This is our
   durability barrier for CR4/CR6/CR8 (e.g. the per-soft-ack bundle
-  `{brief, ack, BlockResult, DepositMap}` lands together across four CFs).
+  `{brief, ack, BlockResult, DepositMap, RequestHighWater}` lands together across
+  five CFs).
 - **Column families (CFs)** — logically separate keyspaces inside one DB, each
   with its own MemTable + its own SSTables, all **sharing the WAL**. The shared
   WAL is exactly what makes a `WriteBatch` atomic *across* CFs. Splitting a
@@ -961,7 +1007,7 @@ Two further mechanisms we lean on:
     - **Per-CF metrics + backup granularity** — observability and (later) backups
       are CF-level.
 
-Our store opens **12 CFs** — singular names throughout, no marker CF (every
+Our store opens **13 CFs** — singular names throughout, no marker CF (every
 marker derives from a single-CF scan, §5.1):
 
 ```
@@ -983,16 +1029,16 @@ marker derives from a single-CF scan, §5.1):
    │     └────────────┘ └─────────────────┘ └─────────────────┘            │
    │                                                                       │
    │   Per-side snapshots:                                                 │
-   │     ┌───────────┐ ┌────────┐ ┌─────────────┐                          │
-   │     │DepositMap │ │Treasury│ │EvacuationMap│                          │
-   │     └───────────┘ └────────┘ └─────────────┘                          │
+   │     ┌───────────┐ ┌────────────────┐ ┌────────┐ ┌─────────────┐       │
+   │     │DepositMap │ │RequestHighWater│ │Treasury│ │EvacuationMap│       │
+   │     └───────────┘ └────────────────┘ └────────┘ └─────────────┘       │
    │                                                                       │
    │   Metadata:                                                           │
    │     ┌──────┐                                                          │
    │     │ Meta │                                                          │
    │     └──────┘                                                          │
    │                                                                       │
-   │   (arrival stamps ride inline as an 8-byte prefix on each             │
+   │   (arrival stamps ride inline as a 12-byte prefix on each            │
    │    lane value — not a separate CF; see §5.4, §7.1)                    │
    └───────────────────────────────────────────────────────────────────────┘
 ```
@@ -1019,8 +1065,8 @@ of the committed bytes in our CFs, we rebuild actor state from there.
   the **derived `*Acked` marks** (§5.1 — from lane-CF scans), never by a
   `RocksDB.Snapshot`. Keep the distinction firm: "RocksDB snapshot" = a
   consistent live read view across ongoing writes; "our base snapshot" = the
-  persisted passive-state blob (in `DepositMap` / `Treasury` / `EvacuationMap`)
-  at the ack mark.
+  persisted passive-state blob (in `DepositMap` / `RequestHighWater` / `Treasury` /
+  `EvacuationMap`) at the ack mark.
 - **The blocking pool is unbounded by default.** Cats-effect's `IO.blocking`
   shifts onto a *cached* (unbounded) executor by default — fine for moderate
   throughput, but a flood of concurrent RocksDB calls can spawn many OS
@@ -1043,23 +1089,23 @@ of the committed bytes in our CFs, we rebuild actor state from there.
   else that would breach the R10 evacuation floor (§5.1 note). The storage
   engine's own **native (SST) compaction** runs underneath and is a separate,
   internal matter.
-- **Column families.** Twelve CFs — five lane (`Block`, `Stack`, `Request`,
+- **Column families.** Thirteen CFs — five lane (`Block`, `Stack`, `Request`,
   `SoftAck`, `HardAck`; §7.1), three spine-indexed working / confirmation
-  (`BlockResult`, `SoftConfirmation`, `HardConfirmation`), three snapshot CFs
-  (`DepositMap` + `Treasury` single keyed blobs; `EvacuationMap` keyed per
-  committed block), and one metadata
+  (`BlockResult`, `SoftConfirmation`, `HardConfirmation`), four snapshot CFs
+  (`DepositMap` + `RequestHighWater` + `Treasury` single keyed blobs;
+  `EvacuationMap` keyed per committed block), and one metadata
   (`Meta`, store version + the arrival-stamp generation counter, §5.4). The
   generic benefits of CF-per-concern (per-CF
   tuning, compaction isolation, scoped Bloom filters, tag-byte savings) are
   enumerated in the primer above. **Atomicity across CFs is preserved**:
   `WriteBatch` covers puts in multiple CFs as one WAL record, so the per-soft-ack
-  bundle `{Block, SoftAck, BlockResult, DepositMap}` lands as one transaction
-  even though its pieces live in four CFs.
+  bundle `{Block, SoftAck, BlockResult, DepositMap, RequestHighWater}` lands as one
+  transaction even though its pieces live in five CFs.
 - **Snapshots** = `DepositMap` / `Treasury` are single keyed blobs in their own
   CF, overwritten in place; `EvacuationMap` is keyed by `blockNum`, one entry per
   committed block (§3.2).
 
-**Per-CF profile — what CF-per-concern buys us.** The twelve CFs have very
+**Per-CF profile — what CF-per-concern buys us.** The thirteen CFs have very
 different workload shapes, and the win of splitting them is that each one's
 tuning knobs (block size, Bloom-filter bits / prefix extractor, MemTable size,
 compaction style) can match its shape. Concretely:
@@ -1073,6 +1119,7 @@ compaction style) can match its shape. Concretely:
 | `SoftConfirmation` | one entry per soft-confirmed block (FCA aggregate output), keyed by `blockNum`, low write rate (one per confirmation event); `softConfirmed = max(key)` | a single `SeekToLast` derives the marker for free; small + sparse — cheap to keep |
 | `HardConfirmation` | one entry per hard-confirmed stack (multisigned effects / SECs / fallbacks), keyed by `stackNum`, the R10 evacuation floor — physical deletion never descends here; folded sequentially at recovery (CardanoLiaison + rule-based regime, §6, §10 Q6) | scan-optimized; `hardConfirmed = max(key)` from `SeekToLast`; **never compacted past — physical-retention floor** |
 | `DepositMap` | one key (`Meta`-like — single keyed blob), medium-sized blob, **rewritten on every own soft ack** (high churn on a single key) | RocksDB-friendly single-key churn (large MemTable absorbs the overwrites; compaction collapses the chain quickly); isolated from ack-CF compaction |
+| `RequestHighWater` | one key — single keyed blob holding `Map[HeadPeerNumber, RequestNumber]` (small, `N` entries), **rewritten on every own soft ack** (same cadence as `DepositMap`) | tiny single-key churn; read once at boot to seed the `N` RequestLane recovery cursors (§5.3); its own CF keeps the churn off the lane / ack compaction queues |
 | `Treasury` | one key, rewritten only at own hard-ack stack-close (slow cadence); small (UTXO ref) | low write rate ⇒ tiny compaction footprint; own CF makes it trivially backupable / restorable as part of the R10 floor |
 | `EvacuationMap` | keyed by `blockNum`; one entry per **committed** block (each major + each last-of-partition SEC minor — the only maps that back an on-chain commitment), written in batches at own hard-ack stack-close (the closing stack's committed blocks in one `WriteBatch`); each map is cumulative L2 state | scan-optimized profile (range-read for evacuation reconstruction); pruning is bounded — anything strictly older than the last-hard-confirmed major can be dropped, since those minors can never be disputed against once the next major supersedes them |
 | `Meta` | store-level keys: the schema version and the **arrival-stamp `generation`** — a per-process counter read+incremented+persisted once at store-open (§5.4), so this process's lane stamps sort after earlier ones across restarts | no tuning needed; one obvious place for store-level metadata |
@@ -1084,8 +1131,8 @@ A few benefits worth calling out separately:
   one big keyspace those two would share a compaction queue and starve each
   other; per-CF queues let them be independent.
 - **The atomic `WriteBatch` across CFs is what lets the per-soft-ack bundle
-  `{Block, SoftAck, BlockResult, DepositMap}` land as one transaction**, even
-  though its pieces live in four CFs. Without CF-cross-atomicity we'd need a
+  `{Block, SoftAck, BlockResult, DepositMap, RequestHighWater}` land as one
+  transaction**, even though its pieces live in five CFs. Without CF-cross-atomicity we'd need a
   manual two-phase scheme; with it the durability barrier (CR4/CR6/CR8) is one
   batch. The SC per-hard-ack-close bundle `{Stack, HardAck, Treasury, EvacuationMap}`
   is the slow-side mirror.
@@ -1094,7 +1141,7 @@ A few benefits worth calling out separately:
   handover — no entanglement with fast-side lane CFs. If we ever want to back up
   *just* the evacuation floor, it's three CFs, not a key-range carve-out.
 - **Self-documenting layout.** "Where do block briefs live?" → `Cf.Block`.
-  "Where do `BlockResult`s live?" → `Cf.BlockResult`. The 12-CF inventory is the
+  "Where do `BlockResult`s live?" → `Cf.BlockResult`. The 13-CF inventory is the
   persistence map of the system, enumerable in one place (`Cf.scala`).
 - **No marker CF saves a write per confirmation.** The aggregator's
   confirmation write *is* the marker advance (the new last key in the
@@ -1182,8 +1229,8 @@ position an iterator on the lane's CF at `[cursorBE]` (spine) / `[peer][cursorBE
 durable `ArrivalStamp` (`[generation : 4][monotonicNanos : 8]` big-endian; §5.4) is
 a fixed prefix on the wire-codec payload. Stripping the prefix gives the bytes that
 go on the wire — there is no separate `ArrivalStamps` CF. Non-lane CFs (`BlockResult`,
-`SoftConfirmation`, `HardConfirmation`, `DepositMap`, `Treasury`,
-`EvacuationMap`, `Meta`) carry no stamp prefix.
+`SoftConfirmation`, `HardConfirmation`, `DepositMap`, `RequestHighWater`,
+`Treasury`, `EvacuationMap`, `Meta`) carry no stamp prefix.
 
 ---
 
@@ -1201,7 +1248,8 @@ mechanisms (replay / restore) run concurrently (§5).
 2. **Derive the four markers** by CF scan (§5.1): `softConfirmed =
    max(SoftConfirmation.key)`, `hardConfirmed = max(HardConfirmation.key)`,
    `softAcked = max(own SoftAck key)`, `hardAcked` from the last own `HardAck`.
-   **Load base snapshots** for the consensus actors — `DepositMap` (JL),
+   **Load base snapshots** for the consensus actors — `DepositMap` +
+   `RequestHighWater` (JL; the latter feeds the RequestLane cursors, §5.3),
    `Treasury` + `EvacuationMap` (SC; the latter at
    `EvacuationMap[StackLane[hardAcked].lastBlockNum]`, always present for a
    non-final stack — §5.2). Validate invariants (markers consistent with the
@@ -1354,6 +1402,16 @@ observationally equivalent to the no-crash run.*
    **(b)** the aggregator **re-reads** the band's briefs / acks from the persisted
    lanes on demand. Decide — (a) looks cleaner.
 
+   **Related (surfaced in R1): the HardAckLane scan floor.** Resume *points* aside,
+   the slow side also lacks a derivable scan *floor* for the per-peer hard-ack
+   lanes. The HardAckLane is indexed by the author's own `HardAckNumber`, not by
+   `StackNumber`, and no marker records the `StackNumber → HardAckNumber`
+   correspondence — so unlike the other four lane families (§5.3) its cursor cannot
+   be derived from `hardConfirmed` / `hardAcked`. R1 scans these lanes **from 0**
+   (correct, not minimal). A tight floor needs one of: a per-peer hard-ack marker;
+   a stack-indexed hard-ack lane; or reading each entry's embedded stack id while
+   scanning and stopping once it passes the band. Decide alongside (a)/(b).
+
 ---
 
 **Priority.** Sequence by **custody value, not by data flow.** After the storage
@@ -1371,7 +1429,7 @@ built **in any order**.
 | *the rest — any order* | |
 | Pa | Boundary persistence: RequestSequencer write-before-tell-user (CR1/CR4); PeerLiaison inbound write-before-advance + cursors (CR8), with the 12-byte `ArrivalStamp` prefix on each lane value (§5.4). |
 | Pb | Equivocation guard at the peer boundary (CR2) + counter recovery (CR3); unit tests. |
-| Pc | Fast-side per-block persistence (JointLedger): per-soft-ack `WriteBatch` over `Block` + `SoftAck` + `BlockResult` + `DepositMap` (§6 JointLedger); plus `FastConsensusActor`'s confirmation write to `SoftConfirmation` + soft-ack pruning. The `BlockResult` CF is what lets `StackComposer` rebuild `pending` from disk on restart (§5.2). |
+| Pc | Fast-side per-block persistence (JointLedger): per-soft-ack `WriteBatch` over `Block` + `SoftAck` + `BlockResult` + `DepositMap` + `RequestHighWater` (§6 JointLedger); plus `FastConsensusActor`'s confirmation write to `SoftConfirmation` + soft-ack pruning. The `BlockResult` CF is what lets `StackComposer` rebuild `pending` from disk on restart (§5.2); `RequestHighWater` feeds the RequestLane recovery cursors (§5.3). |
 | Pd | `ReplayActor` + total-order merge (§5.4) + indices algorithm (§5.3); pre-populate-mailboxes mechanism + suspend barrier (§5.6); seeds the first `PollResults` straight from `CardanoBackend` so deposit decisions don't wait on CardanoLiaison's poll cadence (§5.5). |
 | Pe | L1 reconciliation + live re-sample in CardanoLiaison (§5.5, §8 step 6 — post-barrier). |
 | Pf | Boot sequence end-to-end (§8); fail-safe paths (CR6/CR7). |

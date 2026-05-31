@@ -5,8 +5,8 @@ package hydrozoa.multisig.persistence
   * Twelve CFs in total, grouped as:
   *
   *   - **Lane CFs** (5) — one per lane type, with the CF acting as the lane-type discriminant
-  *     (replaces a tag byte in the encoded key; see [[LaneKey]]). Lane values carry the 8-byte
-  *     arrival-stamp prefix (§5.5).
+  *     (replaces a tag byte in the encoded key; see [[LaneKey]]). Lane values carry the 12-byte
+  *     arrival-stamp prefix (§5.4).
   *   - **Aggregator outputs + JL working data** (3) — `BlockResult` (JL per-block output, keyed by
   *     `blockNum`, written at ack time so `StackComposer` can rebuild `pending` from disk on
   *     restart); `SoftConfirmation` (`FastConsensusActor` aggregate, keyed by `blockNum`);

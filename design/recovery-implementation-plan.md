@@ -118,6 +118,11 @@ and change cold init to **"non-empty store → recovered; empty store → bootst
   `deposits` from `DepositMap`; `previousBlockHeader` from `BlockLane[softAcked].brief`.
   L2 co-anchoring: load committed L2 state **as of `softAcked`** via the `L2Ledger`
   black box — see R2b below for the actual persistence work.
+  **Write-side addition:** JointLedger's per-soft-ack `WriteBatch` gains a
+  `Cf.RequestHighWater` put — fold this block's included request ids into the
+  running `Map[HeadPeerNumber, RequestNumber]` (`maxRequestNumberPerPeer`) and
+  overwrite the single blob. Not read by JL's own `recover`; the ReplayActor reads
+  it to seed the RequestLane cursors (§5.3 / R1 `ReplayCursors`).
 
 ### R2b — EUTXO L2 ledger persistence (NEW — design gap, flagged by Ilia 2026-05-30).
 
@@ -219,9 +224,13 @@ pure `IO` over `Persistence` — no actor system needed.
 
 ## 4. Open questions to close during implementation
 
-1. ~~**RequestLane cursor source (R1).**~~ **Resolved (Ilia 2026-05-30):** derive
-   from the `BlockBrief`'s included-`RequestId` high-water (RequestId carries the
-   peer id). No block-body scan.
+1. ~~**RequestLane cursor source (R1).**~~ **Resolved (Ilia 2026-05-31):** read a
+   **persisted per-peer request high-water counter** at boot; the RequestLane cursor
+   is that `+ 1`. *Supersedes* the 2026-05-30 "derive from `BlockBrief` high-water"
+   answer — folding briefs can't determine the high-water for a peer not covered by
+   the unpruned brief suffix (you'd need to scan back to block 0, and §5.1 prunes
+   old briefs). Counter maintenance + write-side wiring is R2/R3; `maxRequestNumberPerPeer`
+   is the fold. R3 open: where the counter lives (Meta key / snapshot CF).
 2. **EUTXO L2 store placement (R2b).** Own RocksDB store/CFs vs CFs in the shared
    store (leaning separate — clean black-box boundary). Plus the load-by-ack
    signature on `L2Ledger[F]` and the snapshot-cadence choice inside `EutxoL2Ledger`.
