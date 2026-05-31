@@ -43,6 +43,12 @@ fromInclusive)` range-scan, `lastKey`, `lastKeyWithPrefix`; typed `Persistence`;
   CardanoLiaison `HardConfirmation` fold + live L1 re-sample).
 - `rulebased/persistence/Persistence` is a bare `object Persistence {}` — the
   R10 read path (design §10 Q6, priority P2) does not exist.
+- **EUTXO L2 ledger has no persistence at all** (design gap, not just unwired):
+  `EutxoL2Ledger` keeps `State` in an in-memory `Ref`, always seeded from
+  `config.initialEvacuationMap`. The design assumed the `L2Ledger` black box owns
+  its own store + a load-by-ack interface; neither exists. See R2b.
+- PeerLiaison queues are not loaded from the store on boot (`state = State()`
+  starts empty); see R2.
 - No fail-safe validation (CR6/CR7), no crash-restart tests (§9).
 
 **Drift to fix in passing:** `Cf.scala` docstring says the arrival stamp is
@@ -90,8 +96,9 @@ New package `multisig/persistence/recovery/`:
    - BlockLane = `softAcked + 1`; StackLane = `hardAcked + 1`.
    - SoftAckLane[p] / HardAckLane[p] from the side's ack mark.
    - RequestLane[p] = (highest request from p included in any block `≤ softAcked`)
-     `+ 1`. **Open:** confirm `BlockBrief` carries the per-peer included-request
-     high-water (else we scan block bodies). Resolve at top of R1.
+     `+ 1`. **Resolved (Ilia, 2026-05-30):** `BlockBrief` exposes the included
+     `RequestId` high-water, and `RequestId` carries the peer id — so we derive
+     each peer's cursor directly from the brief, no block-body scan needed.
 3. **`ArrivalOrderedMerge`** — k-way merge (§5.4) of the lane tails by 12-byte
    big-endian `ArrivalStamp`, producing one ordered, lazy stream of
    `(LaneKey, payload)`. This is the order the `ReplayActor` (R3) and the oracle
@@ -110,8 +117,35 @@ and change cold init to **"non-empty store → recovered; empty store → bootst
 - **JointLedger** → `Done(previousBlockHeader, deposits)`:
   `deposits` from `DepositMap`; `previousBlockHeader` from `BlockLane[softAcked].brief`.
   L2 co-anchoring: load committed L2 state **as of `softAcked`** via the `L2Ledger`
-  black box — define the **load-by-ack interface**; the snapshot-cadence-vs-replay
-  mechanism stays inside `L2Ledger` (design §6 JointLedger, out of scope here).
+  black box — see R2b below for the actual persistence work.
+
+### R2b — EUTXO L2 ledger persistence (NEW — design gap, flagged by Ilia 2026-05-30).
+
+The design (§6 JointLedger "L2 co-anchoring") treats the `L2Ledger` as a black box
+that owns its own persistence and only fixes the *load-by-ack interface*. **That
+persistence does not exist.** `EutxoL2Ledger` holds its entire state in an
+in-memory `cats.effect.Ref[IO, State]` — `State(activeUtxos, pendingDeposits,
+errors, confirmations, headId)` — and `EutxoL2Ledger.apply` always seeds it from
+`config.initialEvacuationMap.toUtxos`. A crashed peer loses all L2 state.
+
+This is its own work item because the `L2Ledger` is a separate component (the
+black box behind the `L2Ledger[F]` trait), and SugarRush will have its own L2 with
+its own store. Scope here = the **EUTXO reference ledger** only:
+
+- **Persist** `EutxoL2Ledger.State` durably, anchored so it can restore **to a
+  given block boundary** (`softAcked`), co-anchored with JointLedger's recovered
+  `Done(softAcked)` — the §6 exact-co-anchoring requirement (they tear otherwise).
+- **Interface:** add the **load-by-ack** entry point to `L2Ledger[F]` (restore L2
+  state as of block `n`); `EutxoL2Ledger` implements it. The mechanism — full
+  snapshot per block vs periodic snapshot + forward-replay of its own block ops —
+  stays *inside* the EUTXO ledger (design §6 calls this the snapshot-interval-vs-
+  replay tradeoff). Full L2 state ≫ the deposits map, so per-block snapshotting may
+  be too costly; start simple (snapshot per committed block) and optimize later.
+- **Store placement (decide in R2b):** its own RocksDB store/CFs vs a CF set in the
+  shared store. Leaning separate — keeps the black-box boundary clean and mirrors
+  how SugarRush's L2 will be wholly external. Flag for Ilia.
+- **Out of scope:** SugarRush's L2 persistence (their component, their store) — we
+  only fix the trait contract so they can implement against it.
 - **StackComposer** → full `State`: `treasury` from `Treasury`; `evacuationMap`
   from `EvacuationMap[StackLane[hardAcked].lastBlockNum]` (load invariant §5.2);
   `pending` from a `BlockResult` scan over `(StackLane[hardAcked].lastBlockNum, head]`;
@@ -123,8 +157,15 @@ and change cold init to **"non-empty store → recovered; empty store → bootst
   - EventSequencer: `next = max(own Request) + 1` — must precede telling the user
     an id (CR1; design flags the current code completes `dResponse` before persist —
     fix the barrier here).
-  - PeerLiaison: per-remote cursors = `max(persisted) + 1`; queues empty; outbox
-    becomes the DB-backed view (`[remote cursor, head]`).
+  - PeerLiaison: per-remote cursors = `max(persisted) + 1`. **Queue loading
+    (Ilia 2026-05-30 — must do, not just "queues empty"):** the in/out queues in
+    `PeerLiaison.State` are reconstructed from the store on boot, not left empty.
+    The **outbox** is the DB-backed view of this peer's own-produced lane prefix
+    `[remote's cursor, head]` (re-served on each `GetMsgBatch`, exactly the
+    steady-state write-through-cache behavior — a cold cache *is* recovery). The
+    **inbound** side restores from the persisted inbound lane entries (CR8) above
+    each remote's cursor. Define how `State()` is seeded from `persistence` at
+    `preStartLocal` — today it's `private val state = State()` (empty).
   - CardanoLiaison: fold the `HardConfirmation` CF to rebuild
     `effectInputs` / `happyPathEffects` / `fallbackEffects`; `targetState` from
     config until stack-0 hard-confirms; effects faulted in lazily. Submission
@@ -178,15 +219,18 @@ pure `IO` over `Persistence` — no actor system needed.
 
 ## 4. Open questions to close during implementation
 
-1. **RequestLane cursor source (R1).** Does `BlockBrief` expose each peer's
-   included-request high-water, or must we scan block bodies? Settles the indices
-   algorithm.
-2. **L2Ledger load-by-ack interface (R2).** Exact signature + who owns the
-   snapshot/replay tradeoff (delegated to the black box; we only fix the contract +
-   shared block boundary).
+1. ~~**RequestLane cursor source (R1).**~~ **Resolved (Ilia 2026-05-30):** derive
+   from the `BlockBrief`'s included-`RequestId` high-water (RequestId carries the
+   peer id). No block-body scan.
+2. **EUTXO L2 store placement (R2b).** Own RocksDB store/CFs vs CFs in the shared
+   store (leaning separate — clean black-box boundary). Plus the load-by-ack
+   signature on `L2Ledger[F]` and the snapshot-cadence choice inside `EutxoL2Ledger`.
 3. **Suspend barrier (R3).** Reuse `PendingConnections` (Plan A) vs second
-   `Deferred` (Plan B) — decide by testing pre-barrier mailbox sends.
-4. **Request-ID fsync vs CR1 (write-side, pre-mainnet).** `sync=false` on `Request`
+   `Deferred` (Plan B) — *Ilia: TBD; decide empirically by testing pre-barrier
+   mailbox sends.*
+4. **Land order (§5).** Straight R1→R4 vs pull the rule-based R10 read path to the
+   front — *Ilia: TBD.*
+5. **Request-ID fsync vs CR1 (write-side, pre-mainnet).** `sync=false` on `Request`
    trades against CR1 under power loss (§10 Q5) — decide explicitly; out of this
    plan's critical path but track it.
 
@@ -194,7 +238,9 @@ pure `IO` over `Persistence` — no actor system needed.
 
 ## 5. Suggested order of landing
 
-R1 → R2 → R3 → R4, each its own PR. R1 and the R2 `recover` functions are pure and
-independently testable, so they de-risk the architectural R3 step. The
+R1 → R2 (incl. R2b) → R3 → R4, each its own PR. R1 and the R2 `recover` functions
+are pure and independently testable, so they de-risk the architectural R3 step. The
 rule-based read path (R2, P2) can land first within R2 if we want the R10 custody
-floor demonstrably recoverable before the liveness machinery.
+floor demonstrably recoverable before the liveness machinery. R2b (EUTXO L2
+persistence) is loosely coupled — it can proceed in parallel with the other R2
+seams since it's a self-contained component with its own store.
