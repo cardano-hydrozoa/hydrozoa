@@ -33,7 +33,7 @@ Decided after reviewing `peer-network`, `slow-consensus`, and
 `initialization`. These supersede the matching entries in §14.
 
 - **D-coil-1 — peer identity is a tagged sum.**
-  `SlowPeerId = Head(HeadPeerNumber) | Coil(CoilPeerNumber)`, where
+  `PeerId = Head(HeadPeerNumber) | Coil(CoilPeerNumber)`, where
   `CoilPeerNumber` is the coil's index in the canonically-sorted `coilPeers`.
   Wire form: the peer number plus a one-bit tag (`1` = head, `0` = coil), so
   the existing 2-int `HardAckId` tuple grows by one bit rather than gaining a
@@ -225,18 +225,18 @@ identity of the signing key and the gappy allowance:
   hard-acks + `coilQuorum` coil hard-acks) → write `HardConfirmation` → fan
   out.
 
-### Peer identity — `SlowPeerId`
+### Peer identity — `PeerId`
 
 Coil-authored hard-acks travel the same lanes as head ones, so every slow-side
 identity slot widens from `HeadPeerNumber` to the tagged
-`SlowPeerId = Head(HeadPeerNumber) | Coil(CoilPeerNumber)`:
+`PeerId = Head(HeadPeerNumber) | Coil(CoilPeerNumber)`:
 
-- `HardAckId` becomes `(SlowPeerId, HardAckNumber)`. Wire form: peer number +
+- `HardAckId` becomes `(PeerId, HardAckNumber)`. Wire form: peer number +
   a one-bit tag (`1` = head, `0` = coil), so the existing 2-int tuple grows by
   one bit rather than gaining a structural tag field.
 - `SlowConsensusActor`'s quorum set and `HardAckAggregator`'s
-  `vkeys: Map[SlowPeerId, VerificationKey]` both key on `SlowPeerId`.
-- The verifier rebuilds each `VKeyWitness` from the `SlowPeerId` → vkey lookup,
+  `vkeys: Map[PeerId, VerificationKey]` both key on `PeerId`.
+- The verifier rebuilds each `VKeyWitness` from the `PeerId` → vkey lookup,
   so a peer can only ever contribute a witness under its own key (head or coil).
 
 This lands on **both** peer types: head peers aggregate coil hard-acks to reach
@@ -249,15 +249,18 @@ composition:
 
 ```
 AllOf(
-  headPeerVKeys.map(Signature)                            // every head peer
-    :+ AtLeast(coilQuorum, coilPeerVKeys.map(Signature))  // any coilQuorum coils
+  headPeerVKeys.map(Signature)                        // every head peer
+    :+ MOf(coilQuorum, coilPeerVKeys.map(Signature))  // any coilQuorum coils
 )
 ```
 
-It governs all four uses of the script: minting the `HYDR` / `HMRW` beacon
-tokens, spending the treasury and multisig-regime outputs, and the head
-address. `initialization` makes the requirement explicit — the init tx "must
-be signed by all head peers and a quorum of coil peers."
+`MOf` is Scalus's k-of-n `Timelock` constructor — `MOf(m: Int, scripts:
+IndexedSeq[Timelock])`, Blockfrost JSON `atLeast`/`required` (verified against
+Scalus 0.15.1 `Timelock.scala`). It governs all four uses of the script:
+minting the `HYDR` / `HMRW` beacon tokens, spending the treasury and
+multisig-regime outputs, and the head address. `initialization` makes the
+requirement explicit — the init tx "must be signed by all head peers and a
+quorum of coil peers."
 
 `HeadMultisigScript.requiredSigners` currently flattens `AllOf → Signature` and
 feeds every key to the tx builder as a required signer; that flat cast no
@@ -318,6 +321,21 @@ Concrete:
   head-side outbox retransmission covers transient outages. Durable hub-down
   → coil is dark until hub recovers or head escalates to rule-based regime /
   evacuation. **D-coil-3** flags whether even a stub fallover is M5-worth.
+
+### Head-side wiring — the hub spawns liaisons toward its coils
+
+The hub relationship is **two-sided**, and the head side does not exist yet.
+`MultisigRegimeManager` today spawns one `PeerLiaison` per *head* peer
+(`headPeerIds.filterNot(_ == ownHeadPeerId)`) and has no notion of coils — so a
+hub head peer currently has no way to deliver fast-side traffic to its coils or
+to receive their hard-acks. **Pc2 therefore also touches the head
+`MultisigRegimeManager`**, not only the new coil manager: a head peer that is a
+hub (`coilPeers.filter(_.hub == ownHeadPeerNum)`) must additionally spawn a
+`PeerLiaison` toward each such coil, whose remote identity is coil-typed
+(`PeerId.Coil`) — so the per-remote `PeerLiaison` construction widens its
+`remotePeerId` to accept a coil remote. Non-hub head peers are unaffected: a
+coil's hard-ack reaches them relayed through the normal head mesh, fanned out by
+the hub's existing outbox.
 
 ## 9. L1 access — independent (multisig regime)
 
@@ -464,8 +482,8 @@ higher quorum with little new production code.
 
 | Step | Deliverable |
 |---|---|
-| Pc1 | `SlowPeerId` tagged sum (Head / Coil) + `CoilPeerNumber` + one-bit wire tag through `HardAckId` / verifier / aggregator vkey map; threshold `HeadMultisigScript` (`AllOf(head) ∧ AtLeast(coilQuorum, coil)`) with the mandatory-head / fixed-count-coil signer split (resolves D-coil-1) |
-| Pc2 | `CoilMultisigRegimeManager` + `OwnCoilPeerPrivate` identity seam (reuse `HeadConfig`); actor wiring with role gates on BW / JL / FCA / SC / SCA / PL (single-hub); fixed-count aggregator (saturate at `coilQuorum`, cap hard); `CardanoLiaison` reused unchanged; `RuleBasedRegimeManager` shared (resolves D-coil-2, D-coil-6) |
+| Pc1 | `PeerId` tagged sum (Head / Coil) + `CoilPeerNumber` + one-bit wire tag through `HardAckId` / verifier / aggregator vkey map; threshold `HeadMultisigScript` (`AllOf(head) ∧ AtLeast(coilQuorum, coil)`) with the mandatory-head / fixed-count-coil signer split (resolves D-coil-1) |
+| Pc2 | `CoilMultisigRegimeManager` + `OwnCoilPeerPrivate` identity seam (reuse `HeadConfig`); actor wiring with role gates on BW / JL / FCA / SC / SCA / PL (single-hub); fixed-count aggregator (saturate at `coilQuorum`, cap hard); **head `MultisigRegimeManager` hub spawns coil-ward `PeerLiaison`(s)** (§8); `CardanoLiaison` reused unchanged; `RuleBasedRegimeManager` shared (resolves D-coil-2, D-coil-6) |
 | Pc3 | Coil-side bootstrap entry point + integration test: 1 head + 1 coil reach `Stack(0).HardConfirmed` with `coilQuorum = 1` |
 | Pc4 | Multi-coil quorum: `coilQuorum > 1`, multiple coil peers through stage1 (validates the spine; minimal new production code) |
 | Pc5 | Stage-4 multi-peer model-based test with coil follower(s) |
@@ -475,9 +493,45 @@ higher quorum with little new production code.
 Persistence + crash-recovery for coil deferred to
 `persistence-and-crash-recovery.md` §11.
 
+## Cross-cutting concerns (Pc1 readiness audit, 2026-05-31)
+
+A pre-implementation audit surfaced concerns that cut across the phases above;
+each must be honored even though none is owned by a single section:
+
+- **Script-hash consistency (Pc1, load-bearing).** The threshold
+  `HeadMultisigScript` must be the *same* script used to derive the stack-0
+  treasury / beacon-token address at bootstrap. If any effect-tx builder
+  re-derives the head address without the `MOf(coilQuorum, …)` branch, the
+  script hash mismatches and stack-0 silently fails even with correct witness
+  counts. Thread `coilQuorum` + coil keys into `HeadMultisigScript.apply` at
+  the single derivation point.
+- **`requiredSigners` downcast (Pc1).** The current
+  `script.asInstanceOf[Timelock.AllOf].scripts.map(_.asInstanceOf[Signature])`
+  flatten **throws** on the nested `MOf` node. Rewrite it to walk the head
+  `Signature` leaves plus the `MOf` branch, emitting exactly
+  `nHead + coilQuorum` `ExpectedSigner` placeholders — count-only, since Scalus
+  sizes fees by witness count (dummy 32-byte vkey + 64-byte sig, added then
+  removed during balancing). `checkSigners` likewise moves from set-equality to
+  *all-head ∧ coil ≥ coilQuorum*. Confirm every coil-relevant effect-tx builder
+  stays on `Tx.Validators.nonSigningValidators` (signature-satisfaction rules
+  commented out) so placeholder coil keys don't fail the build.
+- **Persistence codec shape (Pc1 → recovery).** Widening `HardAckId` to carry
+  the `PeerId` tag changes the on-disk ack codec. The
+  `persistence-and-crash-recovery.md` store keys for ack records must track the
+  new shape; fold into the deferred coil-persistence §11.
+- **Logback sync (Pc2).** Any new coil Tracer route (e.g. a
+  `CoilMultisigRegimeManager` route) must be added to **all three**
+  `logback.xml` configs (root main + test, integration test), per the repo
+  logging rule.
+- **Coil `NodeConfig` validations (Pc2).** The shared `HeadConfig` validations
+  (e.g. `pollingPeriod * 5 ≤ depositMaturityDuration`) must still run for a coil
+  node, but head-private validations must be skipped / replaced. Enumerate which
+  `NodeConfig.apply`-time checks are head-specific when building the coil apply
+  path.
+
 ## 14. Open questions
 
-- **D-coil-1 — RESOLVED.** Tagged sum `SlowPeerId = Head(HeadPeerNumber) |
+- **D-coil-1 — RESOLVED.** Tagged sum `PeerId = Head(HeadPeerNumber) |
   Coil(CoilPeerNumber)`; wire = peer number + one-bit tag (`1` head, `0`
   coil). See Resolved decisions and §6.
 - **D-coil-2 — RESOLVED.** Reuse `HeadConfig` wholesale; identity differs via
