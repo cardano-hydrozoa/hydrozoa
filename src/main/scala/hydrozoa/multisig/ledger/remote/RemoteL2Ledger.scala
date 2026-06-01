@@ -8,7 +8,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerCommand, L2LedgerError}
+import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerCommand, L2LedgerError, L2Serial}
 import hydrozoa.multisig.ledger.remote
 import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.{Request, Response}
 import io.circe.Codec
@@ -193,6 +193,16 @@ class RemoteL2Ledger private (
     ): EitherT[IO, L2LedgerError, Unit] = {
         sendRequest(Request.ProxyRequestError(req)).map(_ => ())
     }
+
+    /** Unsupported: the remote ledger owns its own persistence + recovery behind the WebSocket, so
+      * the host does not track or restore its serial (R2b is the EUTXO reference ledger only).
+      */
+    override def currentSerial: IO[L2Serial] =
+        IO.raiseError(L2LedgerError("currentSerial is not supported by RemoteL2Ledger"))
+
+    /** Unsupported — see [[currentSerial]]. */
+    override def restoreTo(serial: L2Serial): EitherT[IO, L2LedgerError, Unit] =
+        EitherT.leftT(L2LedgerError("restoreTo is not supported by RemoteL2Ledger"))
 }
 
 object RemoteL2Ledger {

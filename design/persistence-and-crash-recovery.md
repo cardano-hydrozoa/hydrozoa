@@ -811,21 +811,31 @@ Post-split, owns only the fast-side state; treasury moved to StackComposer.
   — that is `FastConsensusActor`'s job (below). The own soft-ack's
   equivocation guard is a PeerLiaison-boundary fact per CR2; JointLedger
   computes the signature.
-- **L2 co-anchoring (load by ack, like the deposits map).**
+- **L2 co-anchoring (keyed by an L2 serial number — *not* by any ack).**
   `Producing.l2LedgerState` is WIP; the committed L2 state lives in the `L2Ledger`
-  black box (its own persistence). Recovery loads it the **same way as the deposits
-  map**: given our `softAcked` mark (the latest block we constructed and signed),
-  restore the L2 state **as of that block**. The co-anchoring requirement is
-  exact — the `L2Ledger` must return at the *same* block boundary as JointLedger's
-  recovered `Done(softAcked)`, or the two tear.
+  black box (its own persistence). That black box **knows nothing of acks, blocks,
+  stacks, or confirmations**, so its persistence is keyed by something intrinsic to
+  *its own* operation, never by a consensus marker like `softAcked`. The key is the
+  L2's own **monotonic serial number** — a commit counter it increments on each
+  state-mutating command. (A content hash of the evacuation map was considered and
+  dropped: no cheap whole-map hash exists — only a slow `kzgCommitment` BLS pairing
+  and a private per-entry blake2b — and the EUTXO ledger holds `activeUtxos` + diffs,
+  not an assembled map, so a content key would cost a projection + digest per commit.
+  Recovery needs only a stable per-commit key, which the serial gives for free.) The
+  L2 reconstructs from `(initial state, target serial)`; the interface is
+  `restoreTo(serial)`. The **consensus → L2 translation lives entirely on the
+  JointLedger side**: the L2 returns its new serial on each commit, JL records per
+  own soft-ack the serial for that block (durable alongside its own snapshot), and on
+  recover restores `Done(softAcked)` then calls `restoreTo(thatBlock'sSerial)`. The
+  co-anchoring requirement is still exact — the two must agree on the same committed
+  point — but the membrane is never crossed by an ack; only a serial passes.
   - **Cost / optimization.** Full L2 state is far larger than the deposits map, so
-    snapshotting it on *every* ack (the deposits cadence) may be too expensive. The
-    `L2Ledger` may instead snapshot **less frequently** and restore-to-`softAcked`
-    by loading its nearest snapshot `≤ softAcked` and replaying its own block
-    operations forward to the ack boundary — the usual snapshot-interval-vs-replay-
-    length tradeoff, internal to the black box. The mechanism is delegated /
-    out-of-scope here; the contract is the **load-by-ack interface** plus the
-    **shared boundary**.
+    snapshotting it at *every* commit may be too expensive. The `L2Ledger` may
+    instead snapshot **less frequently** and restore-to-serial by loading its nearest
+    snapshot `≤ serial` and replaying its own command log forward to the target — the
+    usual snapshot-interval-vs-replay-length tradeoff, internal to the black box. The
+    mechanism is delegated / out-of-scope here; the contract is the
+    `restoreTo(serial)` interface plus JL holding the soft-ack → serial mapping.
 
 #### FastConsensusActor, SlowConsensusActor
 

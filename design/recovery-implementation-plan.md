@@ -46,7 +46,8 @@ fromInclusive)` range-scan, `lastKey`, `lastKeyWithPrefix`; typed `Persistence`;
 - **EUTXO L2 ledger has no persistence at all** (design gap, not just unwired):
   `EutxoL2Ledger` keeps `State` in an in-memory `Ref`, always seeded from
   `config.initialEvacuationMap`. The design assumed the `L2Ledger` black box owns
-  its own store + a load-by-ack interface; neither exists. See R2b.
+  its own store + a restore interface keyed by an L2 serial number; neither exists.
+  See R2b.
 - PeerLiaison queues are not loaded from the store on boot (`state = State()`
   starts empty); see R2.
 - No fail-safe validation (CR6/CR7), no crash-restart tests (§9).
@@ -114,75 +115,248 @@ For each consensus actor add a pure `recover(persistence, markers, cursors): IO[
 and change cold init to **"non-empty store → recovered; empty store → bootstrap"**
 (cold start is the degenerate case, §5).
 
-- **JointLedger** → `Done(previousBlockHeader, deposits)`:
-  `deposits` from `DepositMap`; `previousBlockHeader` from `BlockLane[softAcked].brief`.
-  L2 co-anchoring: load committed L2 state **as of `softAcked`** via the `L2Ledger`
-  black box — see R2b below for the actual persistence work.
-  **Write-side addition:** JointLedger's per-soft-ack `WriteBatch` gains a
-  `Cf.RequestHighWater` put — fold this block's included request ids into the
-  running `Map[HeadPeerNumber, RequestNumber]` (`maxRequestNumberPerPeer`) and
-  overwrite the single blob. Not read by JL's own `recover`; the ReplayActor reads
-  it to seed the RequestLane cursors (§5.3 / R1 `ReplayCursors`).
+**Sub-tracks.** R2 splits into loosely-coupled sub-tracks:
 
-### R2b — EUTXO L2 ledger persistence (NEW — design gap, flagged by Ilia 2026-05-30).
+  1. **R2-fast — JointLedger + StackComposer recover + the `RequestHighWater` write.**
+  2. **R2-bnd — boundary restores (EventSequencer / PeerLiaison / CardanoLiaison).**
+  3. **R2b — EUTXO L2 persistence** (own section; parallelizable).
 
-The design (§6 JointLedger "L2 co-anchoring") treats the `L2Ledger` as a black box
-that owns its own persistence and only fixes the *load-by-ack interface*. **That
-persistence does not exist.** `EutxoL2Ledger` holds its entire state in an
-in-memory `cats.effect.Ref[IO, State]` — `State(activeUtxos, pendingDeposits,
-errors, confirmations, headId)` — and `EutxoL2Ledger.apply` always seeds it from
-`config.initialEvacuationMap.toUtxos`. A crashed peer loses all L2 state.
+The **rule-based read path (R10 custody floor)** was originally folded in here as a
+first sub-track; it is now its own terminal phase **R5** (below) — likely handed off
+to Peter — because it is fully self-contained (read-only, no replay, no fast-side
+state) and shares nothing with the R2 recover seams beyond reading the same CFs.
 
-This is its own work item because the `L2Ledger` is a separate component (the
-black box behind the `L2Ledger[F]` trait), and SugarRush will have its own L2 with
-its own store. Scope here = the **EUTXO reference ledger** only:
+**Common shape.** Every recover path is a pure `IO` over `Persistence` /
+`BackendStore` (+ `Markers` from R1's derivation) — no actor system, unit-tested by
+seeding a store through the *real write paths* (the producers already exist) and
+asserting the recovered value equals the crash-time value. The actor wiring is the
+same one seam in each: today every actor builds its `state` cold via
+`Ref.unsafe(State.initial(config))` at construction and resolves peers in
+`initializeConnections` (inside `preStartLocal` / the `PreStart` receive). R2 adds,
+right after connections resolve: *if the store is non-empty, `state.set(recovered)`;
+else keep the cold/bootstrap value.* Markers being all-`None` **is** the empty-store
+signal — no separate "is cold" flag.
 
-- **Persist** `EutxoL2Ledger.State` durably, anchored so it can restore **to a
-  given block boundary** (`softAcked`), co-anchored with JointLedger's recovered
-  `Done(softAcked)` — the §6 exact-co-anchoring requirement (they tear otherwise).
-- **Interface:** add the **load-by-ack** entry point to `L2Ledger[F]` (restore L2
-  state as of block `n`); `EutxoL2Ledger` implements it. The mechanism — full
-  snapshot per block vs periodic snapshot + forward-replay of its own block ops —
-  stays *inside* the EUTXO ledger (design §6 calls this the snapshot-interval-vs-
-  replay tradeoff). Full L2 state ≫ the deposits map, so per-block snapshotting may
-  be too costly; start simple (snapshot per committed block) and optimize later.
-- **Store placement (decide in R2b):** its own RocksDB store/CFs vs a CF set in the
-  shared store. Leaning separate — keeps the black-box boundary clean and mirrors
-  how SugarRush's L2 will be wholly external. Flag for Ilia.
+#### R2-fast — JointLedger + StackComposer recover (+ RequestHighWater write)
+
+- **JointLedger** → restore `Done(previousBlockHeader, deposits)`. Today
+  `State.initialize(config) = Done(config.initialBlock.blockBrief.header,
+  DepositsMap.empty)` (cold), held in `Ref.unsafe`. Recover (when `softAcked` is
+  `Some`): `deposits` from `Cf.DepositMap`; `previousBlockHeader` from
+  `BlockLane[softAcked].brief` (the persisted own/leader brief). A mid-`Producing`
+  block is **not** restored — it was never acked, so `Done(softAcked)` is the whole
+  passive state; BlockWeaver re-drives the `[softAcked + 1, head]` tail in R3.
+  - **L2 co-anchoring (keyed by an L2 serial number, *not* by ack — Ilia
+    2026-05-31).** Also restore the committed L2 state to match JL's `softAcked`. The
+    L2 ledger is a **black box that knows nothing of acks / blocks / stacks /
+    confirmations**, so it is addressed by its own **monotonic serial** (commit
+    counter), and recovers from `(initial state, target serial)`. JL holds the
+    translation: per own soft-ack it records the L2 serial for that block (durable on
+    JL's side), and on recover calls `l2Ledger.restoreTo(serial)` — the consensus →
+    L2 mapping stays entirely on JL; the membrane is never crossed by an ack. R2b
+    builds this; R2-fast assumes it exists (we do R2b first — see §5).
+  - **Write-side addition (`RequestHighWater`):** `persistOwnBlock` today writes
+    `{Block(leader), SoftAck, BlockResult, DepositMap}` in one `WriteBatch`; add a
+    fifth put `StoreKey.RequestHighWater` — fold this block's included request ids
+    into the running `Map[HeadPeerNumber, RequestNumber]`
+    (`ReplayCursors.maxRequestNumberPerPeer`) and overwrite the single blob. Needs
+    the new `Cf.RequestHighWater` + `StoreKey.RequestHighWater` + its `Map` codec
+    (this is where the R1-deferred CF gets created — it is dead until this write).
+    Not read by JL's own `recover`; the ReplayActor reads it to seed the RequestLane
+    cursors (§5.3 / R1 `ReplayCursors`).
+- **StackComposer** → restore full `State`. Today `State.initial(config)` seeds
+  `treasury = config.initializationTx.treasuryProduced`,
+  `evacuationMap = config.initialEvacuationMap`, empty maps, and `PreStart` runs
+  `bootstrapInitialStack` (compose stack 0 → hand to SlowConsensusActor). Recover
+  (when `hardAcked` is `Some`): `treasury` from `Cf.Treasury`; `evacuationMap` from
+  `EvacuationMap[StackLane[hardAcked].lastBlockNum]` (load invariant §5.2);
+  `pending` rebuilt from a `BlockResult` scan over
+  `(StackLane[hardAcked].lastBlockNum, head]` via `recordBlockResult` (the
+  `Block.SoftConfirmed` halves arrive from FCA replay in R3, completing each
+  `PendingBlock` then `tryPair → ready`); counters derived
+  (`lastClosedStackNum = hardAcked`, `lastClosedBlockNum =
+  StackLane[hardAcked].brief.lastBlockNum`, `nextOwnHardAckNum = max(own HardAck)
+  + 1`, `previousStackHardConfirmed = hardAcked ≤ hardConfirmed`).
+  `inboundLeaderBrief` fills from replayed StackLane in R3. **Skip
+  `bootstrapInitialStack` on a non-empty store** — stack 0 long since hard-confirmed;
+  keep it only for the empty-store cold path.
+
+#### R2-bnd — boundary restores (restore only, no replay)
+
+- **EventSequencer:** `next = max(own Request) + 1` (its `nLedgerEvent`
+  `Ref[RequestNumber]`, cold-init 0). **CR1 is already satisfied** — current code
+  persists the assigned request to the `Request` lane *before*
+  `dResponse.complete(id)` (verified: `persistence.write(...)` precedes
+  `req.dResponse.complete`). So R2-bnd only adds the boot-time counter restore; the
+  earlier "fix the barrier" note is stale and dropped.
+- **PeerLiaison:** per-remote cursors = `max(persisted) + 1`. **Queue loading
+  (Ilia 2026-05-30 — must do, not just "queues empty"):** the in/out queues in
+  `PeerLiaison.State` are reconstructed from the store on boot, not left empty.
+  Concretely `State` holds five per-remote cursor `Ref`s
+  (`nAck`/`nBlock`/`nRequest`/`nStackBrief`/`nHardAck`), five outbox queues
+  (`qAck`/`qBlock`/`qRequest`/`qStackBrief`/`qHardAck`), and `currentlyRequesting`
+  (the outstanding `GetMsgBatch`). The **outbox** is the DB-backed view of this
+  peer's own-produced lane prefix `[remote's cursor, head]` (re-served on each
+  `GetMsgBatch`, exactly the steady-state write-through-cache behavior — a cold
+  cache *is* recovery). The **inbound** side restores from the persisted inbound
+  lane entries (CR8) above each remote's cursor. Define how `State()` is seeded
+  from `persistence` at `preStartLocal` — today it's `private val state = State()`
+  (all `Ref`s cold-zeroed / empty queues).
+- **CardanoLiaison:** `State(targetState, effectInputs, happyPathEffects,
+  fallbackEffects)` (cold: `targetState = Active(config…treasuryProduced.utxoId)`,
+  empty maps). Recover by **folding `Cf.HardConfirmation` in stack order** through
+  the same handlers the live path uses (`handleInitialStackL1Effects` for
+  `Initial`, `handleStackL1Effects` for `Regular`) so `effectInputs` /
+  `happyPathEffects` / `fallbackEffects` / `targetState` rebuild identically to a
+  live run. **Submission progress is *not* persisted** — it is re-sampled from L1
+  (`runEffects` polls `utxosAt(treasuryAddress)`, §5.5), so recover only restores
+  the effect *index*; what is already on-chain is observed, not remembered. (Reads
+  `Cf.HardConfirmation` directly — the same CF R5 reads, but independently; R2-bnd
+  does not depend on R5.)
+
+**R2 testing.** Seed a store through the real write paths, run each `recover` /
+read-model query, assert the returned value equals the expected crash-time value.
+All pure `IO` over `Persistence` / `BackendStore` — no actor system needed.
+
+### R2b — EUTXO L2 ledger persistence (do first; design gap flagged by Ilia 2026-05-30)
+
+**Do this before R2-fast** (Ilia 2026-05-31): JointLedger's recover cannot be
+finished without a real L2 restore seam to co-anchor against, so we land R2b first
+rather than against a stub.
+
+`EutxoL2Ledger` holds its entire state in an in-memory `cats.effect.Ref[IO, State]`
+— `State(activeUtxos, pendingDeposits, errors, confirmations, headId)` — and
+`EutxoL2Ledger.apply` always seeds it from `config.initialEvacuationMap.toUtxos`. A
+crashed peer loses all L2 state.
+
+This is its own work item because the `L2Ledger` is a separate component (the black
+box behind the `L2Ledger[F]` trait), and SugarRush will have its own L2 with its own
+store. Scope here = the **EUTXO reference ledger** only.
+
+**The anchoring key is an L2-internal serial number — not any consensus marker, and
+not a content hash (Ilia 2026-05-31).** The L2 ledger knows nothing about acks,
+blocks, stacks, or confirmations, so keying its snapshots by `softAcked` would leak
+consensus vocabulary across the membrane. A *content* hash was considered (the
+evac-map digest) and dropped: there is no cheap whole-map hash today — `EvacuationMap`
+only offers `kzgCommitment` (a slow BLS12-381 pairing, unviable per-interaction) and
+a *private per-entry* blake2b; worse, the EUTXO ledger doesn't even hold an
+`EvacuationMap` (it holds `activeUtxos` + emits diffs), so a content key would force
+both a `toEvacuationMap` projection and a new digest on every commit. Instead the L2
+keeps its **own monotonic serial number** — a commit counter it increments on each
+state-mutating command. Cheap, deterministic, consensus-agnostic; recovery doesn't
+need content-addressing, only a stable per-commit key, which the serial gives for
+free.
+
+**Recovery contract: the L2 reconstructs from `(initial state, target serial)`.**
+The initial state it already has (`config.initialEvacuationMap`); the target serial
+is the only recovery input it takes.
+
+**Storage: own RocksDB store, two CFs, via a dedicated `L2Store` (Ilia 2026-05-31).**
+The L2 owns its store (separate from the consensus store) — clean black-box boundary,
+mirrors how SugarRush's L2 will be wholly external. **Not** the consensus
+`BackendStore`: that trait is hardwired to the consensus `Cf` enum
+(`get(cf: Cf, …)`, `open()` over `Cf.all`/`Cf.Meta`), so reusing it for a separate L2
+CF set would force parameterizing `BackendStore[F, C]` + `RawWriteBatch[C]` over the
+CF type — a refactor reaching committed R1 (`LaneScan`/`ReplayCursors`) +
+`Persistence`/`Markers`/`StoreDump`. Rejected. Instead a **small purpose-built
+`L2Store` trait** in the `eutxol2` package, with `InMemory` + `RocksDb` impls, exposing
+exactly what the two serial-keyed CFs need (append log entry, get snapshot ≤ serial,
+scan log range, put snapshot). `EutxoL2Ledger.apply(config, store: L2Store[IO])` takes
+it as a param (caller provides; tests use the in-memory impl). Zero consensus-store /
+R1 churn.
+
+- **`L2Log` CF** — append-only command log, key = `serial` (BE), value = the applied
+  ledger-state command. The **source of truth.** For the EUTXO ledger the command
+  *is* the diff (applying it via the deterministic `transit` reproduces the next
+  `activeUtxos`), so an event-sourced log needs no separate diff type.
+- **`L2Snapshot` CF** — restore accelerator, key = `serial` (BE), value = full
+  `State` at that serial. Written every **N** commits, where **`N` is a named
+  constant — `SnapshotInterval = 100`** (Ilia 2026-05-31; tune later if needed, not
+  config-driven for now). Genesis (`config.initialEvacuationMap`) is the implicit
+  serial-0 snapshot, so an empty CF is fine.
+
+`restoreTo(S)`: `SeekForPrev` the greatest snapshot key `≤ S` (else genesis), load
+it, then re-fold the `L2Log` entries `(snapSerial, S]`. The log is authoritative; the
+snapshot only bounds replay length.
+
+**Which commands advance the serial + get logged: the ledger-state mutators only**
+— `sendApplyTransaction`, `sendApplyDepositDecisions`, `sendRegisterDeposit` (they
+mutate `activeUtxos` / `pendingDeposits`). The proxy commands
+(`sendProxyBlockConfirmation`, `sendProxyRequestError`) write transient,
+client-facing data (`confirmations` / `errors`) that recovery's co-anchoring does
+not need — **excluded** from serial + log (so `confirmations` / `errors` are *not*
+restored; a client needing them post-restart is a separate concern).
+
+**Factoring (so restore reuses production logic exactly).** Split each mutator into a
+pure `applyMutation(state, cmd): Either[L2LedgerError, State]` (the existing `transit`
+core, advancing `state.serial`) and a public method = `applyMutation` + append to
+`L2Log` + snapshot-every-N. Restore folds `applyMutation` over the logged commands —
+**no re-logging, no re-snapshot, no serial re-bump.** Relies on `transit` being
+deterministic given `(state, command)` (true today; verify at the top of R2b).
+
+- **Interface:** `restoreTo(serial): EitherT[F, L2LedgerError, Unit]` on `L2Ledger[F]`
+  (name TBD), implemented by `EutxoL2Ledger` from `(genesis, serial)` via the
+  snapshot + log above.
+- **Serial exposure: a `currentSerial` query (Ilia 2026-05-31).** Add
+  `currentSerial: F[L2Serial]` to `L2Ledger`; JointLedger reads it right after a
+  commit. Safe despite "non-atomic in general" because JL is a single-message-at-a-
+  time actor and the sole L2 driver in this regime, so nothing interleaves between
+  commit and read. Chosen over return-on-commit because the existing mutators go
+  through a Kleisli / `L2LedgerAction` indirection and return a *consumer-side*
+  `L2LedgerState`; threading the serial out of that is far more invasive than a query.
+  - *Alternative noted (Ilia): JL computes the serial itself* by counting the
+    successful real-commands it issues (it sees each `Either` result, the L2 logs
+    only successes, JL is the sole driver → the two counts stay in lockstep). That
+    would drop the `currentSerial` trait method entirely. **But the L2 still needs an
+    internal serial to key its own log/snapshot**, so this only removes the *query*,
+    not the counter. Deferred — `currentSerial` for now; revisit if the trait surface
+    matters.
+- **Trait blast radius:** `L2Ledger[F]` has **two** implementors — `EutxoL2Ledger`
+  (our target) and `RemoteL2Ledger` (the SugarRush-facing remote). New trait methods
+  (`restoreTo`, `currentSerial`) force both to compile; `RemoteL2Ledger` gets an
+  **unsupported stub** (`L2LedgerError` / `raiseError`) — it's out of scope ("we only
+  fix the trait contract so SugarRush implements against it"). Constructors to ripple:
+  `MultisigRegimeManager`, `JointLedgerTest` (both build an `EutxoL2Ledger`).
+- **Snapshot value: the recoverable subset only (Ilia 2026-05-31)** —
+  `(serial, activeUtxos, pendingDeposits)`. `errors` / `confirmations` are the
+  transient proxy data excluded from recovery, so on restore they start empty. Keeps
+  the "not restored" contract honest and avoids needing codecs for `Tx.Serialized`
+  (the `confirmations` value type).
+- **State + codecs:** add a `serial` field to `EutxoL2Ledger.State`; needs a codec for
+  the snapshot subset (`L2Snapshot`) and a codec for the logged command (`L2Log`).
+  `L2Serial` = a small `opaque type` over `Long` in the `eutxol2` package.
+- **Co-anchoring wiring:** JointLedger holds the consensus → L2 mapping: per own
+  soft-ack it records the L2 serial for that block (durable alongside its own
+  snapshot), then on recover restores `Done(softAcked)` and calls
+  `restoreTo(thatBlock'sSerial)`. The serial means nothing to the L2 beyond "how many
+  commits"; the ack never crosses the membrane.
+- **Pruning — none in the first cut.** The target serial JL asks for is its
+  `softAcked` boundary, which can lag the L2 head, so a target may fall *below* the
+  newest snapshot — we must keep the log (and a snapshot ≤ any reachable target).
+  First cut: **keep all logs + periodic snapshots** (literally "always restore"). A
+  later optimization prunes below a **JL-supplied serial floor** (a serial, not an
+  ack — membrane stays clean); deferred.
 - **Out of scope:** SugarRush's L2 persistence (their component, their store) — we
-  only fix the trait contract so they can implement against it.
-- **StackComposer** → full `State`: `treasury` from `Treasury`; `evacuationMap`
-  from `EvacuationMap[StackLane[hardAcked].lastBlockNum]` (load invariant §5.2);
-  `pending` from a `BlockResult` scan over `(StackLane[hardAcked].lastBlockNum, head]`;
-  counters derived (`lastClosedStackNum = hardAcked`, `lastClosedBlockNum`,
-  `nextOwnHardAckNum = max(own HardAck) + 1`,
-  `previousStackHardConfirmed = hardAcked ≤ hardConfirmed`). `inboundLeaderBrief`
-  fills from replayed StackLane in R3. Keep `bootstrapInitialStack` for empty store.
-- **Boundaries (restore, no replay):**
-  - EventSequencer: `next = max(own Request) + 1` — must precede telling the user
-    an id (CR1; design flags the current code completes `dResponse` before persist —
-    fix the barrier here).
-  - PeerLiaison: per-remote cursors = `max(persisted) + 1`. **Queue loading
-    (Ilia 2026-05-30 — must do, not just "queues empty"):** the in/out queues in
-    `PeerLiaison.State` are reconstructed from the store on boot, not left empty.
-    The **outbox** is the DB-backed view of this peer's own-produced lane prefix
-    `[remote's cursor, head]` (re-served on each `GetMsgBatch`, exactly the
-    steady-state write-through-cache behavior — a cold cache *is* recovery). The
-    **inbound** side restores from the persisted inbound lane entries (CR8) above
-    each remote's cursor. Define how `State()` is seeded from `persistence` at
-    `preStartLocal` — today it's `private val state = State()` (empty).
-  - CardanoLiaison: fold the `HardConfirmation` CF to rebuild
-    `effectInputs` / `happyPathEffects` / `fallbackEffects`; `targetState` from
-    config until stack-0 hard-confirms; effects faulted in lazily. Submission
-    progress comes from L1 itself (§5.5), no own marker.
-- **Rule-based read path (P2 / R10):** implement `rulebased/persistence/Persistence`
-  as a **read-only** view over the same store loading `HardConfirmation` +
-  `Treasury` + `EvacuationMap` once on handover (design §10 Q6). Custody-safe in
-  isolation; no replay, no fast-side state.
+  only fix the `L2Ledger` trait contract so they can implement against it. (The
+  JointLedger side — recording the per-soft-ack serial — is **R2-fast**, not R2b.
+  R2b delivers only the L2's own serial + persistence + `restoreTo`.)
 
-Tests: seed a store through the real write paths, run each `recover`, assert the
-returned State equals the expected crash-time State. The `recover` functions are
-pure `IO` over `Persistence` — no actor system needed.
+**Build order (R2b):**
+
+1. `L2Serial` opaque type (`Long`) + `serial` field on `EutxoL2Ledger.State`
+   (genesis = 0); bump it in the three real mutators. Pure, compiles, no persistence
+   yet. Confirm `HydrozoaTransactionMutator.transit` is deterministic here.
+2. `L2Ledger` trait: add `currentSerial` + `restoreTo(serial)`; stub both in
+   `RemoteL2Ledger` (unsupported). `EutxoL2Ledger.currentSerial` reads `state.serial`.
+3. The L2 store: own RocksDB store, two CFs (`L2Log`, `L2Snapshot`); BE-`Long` keys;
+   `Codec[command]` (reuse `L2LedgerCommand.Real` circe / wire codecs) + codec for the
+   snapshot subset `(serial, activeUtxos, pendingDeposits)`. `SnapshotInterval = 100`.
+4. Factor each mutator into pure `applyMutation` + public wrapper that appends to
+   `L2Log` and snapshots every `SnapshotInterval`. Implement `restoreTo`
+   (SeekForPrev snapshot ≤ serial, fold log tail via `applyMutation`).
+5. Tests: serial monotonicity; commit→`currentSerial`; `restoreTo(S)` reproduces the
+   live state for S on a snapshot boundary, mid-interval, below the newest snapshot,
+   and at 0/genesis; codec round-trips.
 
 ### R3 — `ReplayActor` + boot sequence (§8) + fail-safe.
 
@@ -220,6 +394,43 @@ pure `IO` over `Persistence` — no actor system needed.
   down (legitimate divergence, not corruption), long downtime → head went
   rule-based (detect, don't re-enter multisig), torn record → refuse start.
 
+### R5 — Rule-based read path (R10 custody floor). Standalone; **candidate hand-off (Peter).**
+
+The read-only view the rule-based regime loads on handover (design §10 Q6, priority
+P2). Pulled out of R2 into its own terminal phase (Ilia 2026-05-31): it is fully
+self-contained — read-only, no replay, no fast-side state, no actor changes — and
+shares nothing with the R2 recover seams beyond reading the same CFs, so it can be
+built independently and on its own timeline. Likely handed to Peter this week;
+sequenced last here only because nothing else depends on it, **not** by custody
+priority (in custody terms it is the highest-value piece — a crashed peer that
+restores nothing else can still fall back, vote, evacuate from it).
+
+`rulebased/persistence/Persistence` is today a bare `object Persistence {}`, and
+`RuleBasedRegimeManager` (params `sec`, `signatures`, `cardanoBackend`,
+`votingDeadline`, `toEvacuate`, `evacuationMapAtFallback`, `fallbackTxHash`) is
+**never instantiated**. R5 builds the read-only facade that supplies that
+construction data from the durable store:
+
+- **Read-set (all already persisted, never pruned below the R10 floor):**
+  - `Cf.HardConfirmation[stackNum]` → `StackEffects.HardConfirmed` (`Initial` =
+    init + fallback; `Regular` = `NonEmptyList[PartitionEffects[SEC.MultiSigned]]`).
+    The SECs (`StandaloneEvacuationCommitment.MultiSigned` = `commitment` +
+    `headerMultiSigned: List[HeaderSignature]`) inside the partitions are the vote
+    material; `hardConfirmed = max(HardConfirmation.key)` (R1 marker) is the floor.
+  - `Cf.Treasury` → `MultisigTreasuryUtxo` (singleton, the `hardAcked` treasury).
+  - `Cf.EvacuationMap[blockNum]` → `EvacuationMap` for whichever committed block the
+    dispute lands on (per-committed-block, §3.2). Exposes `kzgCommitment` +
+    `totalValue`.
+- **Shape:** a read-only `RuleBasedReadModel` (name TBD) over `BackendStore[IO]`:
+  `loadHardConfirmation(stackNum)`, `latestHardConfirmed`, `loadTreasury`,
+  `loadEvacuationMap(blockNum)`. Pure reads; no `WriteBatch`, no `Ref`, no replay.
+  Unit-tested by seeding via the SCA / SC write paths then asserting the SECs +
+  treasury + map round-trip and that the marker picks the right stack.
+- **Out of scope for R5 (→ R3 / orchestration):** the actual *handover* —
+  `MultisigRegimeManager` watching the consensus children and, on panic, constructing
+  `RuleBasedRegimeManager` from this read model. R5 delivers the read capability;
+  wiring the panic→spawn path is boot/orchestration (R3). Flag, don't build here.
+
 ---
 
 ## 4. Open questions to close during implementation
@@ -231,14 +442,20 @@ pure `IO` over `Persistence` — no actor system needed.
    the unpruned brief suffix (you'd need to scan back to block 0, and §5.1 prunes
    old briefs). Counter maintenance + write-side wiring is R2/R3; `maxRequestNumberPerPeer`
    is the fold. R3 open: where the counter lives (Meta key / snapshot CF).
-2. **EUTXO L2 store placement (R2b).** Own RocksDB store/CFs vs CFs in the shared
-   store (leaning separate — clean black-box boundary). Plus the load-by-ack
-   signature on `L2Ledger[F]` and the snapshot-cadence choice inside `EutxoL2Ledger`.
+2. ~~**EUTXO L2 store placement (R2b).**~~ **Resolved (Ilia 2026-05-31):** own
+   RocksDB store, two CFs — `L2Log` (append-only command log, source of truth) +
+   `L2Snapshot` (full-state every N commits, restore accelerator); `restoreTo(serial)`
+   = nearest snapshot `≤ serial` + re-fold log tail. Serial advances on the
+   ledger-state mutators only; first cut keeps all logs (no pruning). `N` =
+   `SnapshotInterval = 100` (named constant). Remaining sub-decision for the top of
+   R2b: confirm `transit` determinism for replay.
 3. **Suspend barrier (R3).** Reuse `PendingConnections` (Plan A) vs second
    `Deferred` (Plan B) — *Ilia: TBD; decide empirically by testing pre-barrier
    mailbox sends.*
-4. **Land order (§5).** Straight R1→R4 vs pull the rule-based R10 read path to the
-   front — *Ilia: TBD.*
+4. ~~**Land order (§5).**~~ **Resolved (Ilia 2026-05-31):** the rule-based read path
+   is **not** pulled to the front — it becomes a standalone terminal phase **R5**,
+   likely handed off to Peter. Main line is R1 → R2 → R2b → R3 → R4; R5 in parallel
+   / last.
 5. **Request-ID fsync vs CR1 (write-side, pre-mainnet).** `sync=false` on `Request`
    trades against CR1 under power loss (§10 Q5) — decide explicitly; out of this
    plan's critical path but track it.
@@ -247,9 +464,14 @@ pure `IO` over `Persistence` — no actor system needed.
 
 ## 5. Suggested order of landing
 
-R1 → R2 (incl. R2b) → R3 → R4, each its own PR. R1 and the R2 `recover` functions
-are pure and independently testable, so they de-risk the architectural R3 step. The
-rule-based read path (R2, P2) can land first within R2 if we want the R10 custody
-floor demonstrably recoverable before the liveness machinery. R2b (EUTXO L2
-persistence) is loosely coupled — it can proceed in parallel with the other R2
-seams since it's a self-contained component with its own store.
+R1 → R2 (R2-fast, R2-bnd) → R2b → R3 → R4, each its own PR. R1 and the R2 `recover`
+functions are pure and independently testable, so they de-risk the architectural R3
+step. R2b (EUTXO L2 persistence) is loosely coupled — it can proceed in parallel
+with the other R2 sub-tracks since it's a self-contained component with its own
+store.
+
+**R5 (rule-based read path)** runs **off the main line** — standalone, read-only,
+depends on nothing but the already-written CFs, and is a candidate hand-off to
+Peter this week. It can land at any point (the consensus children must panic before
+anything *uses* it, and that wiring is R3), so it is sequenced last here purely for
+independence, not low priority.
