@@ -4,9 +4,12 @@ Companion to `persistence-and-crash-recovery.md` (the design). That doc says
 **what** recovery is and **why**; this one says **how** and **in what order** we
 build the read/boot side. Section refs (§5.1 etc.) point at the design doc.
 
-**Status:** Draft for review · **Branch:** `feature/recovery` · 2026-05-30
+**Status:** Draft for review · **Branch:** `feature/recovery` · 2026-05-31
 **Scope:** head-peer multisig recovery read-path only (coil, TDX, rule-based
 payloads out of scope per design §1).
+**Landed:** R1 (recovery primitives) · R2b (EUTXO L2 persistence — `L2Serial`,
+`L2Store` InMemory + RocksDB, `restoreTo`/`currentSerial`, codecs, tests). **Next:**
+R2-fast.
 
 ---
 
@@ -43,11 +46,11 @@ fromInclusive)` range-scan, `lastKey`, `lastKeyWithPrefix`; typed `Persistence`;
   CardanoLiaison `HardConfirmation` fold + live L1 re-sample).
 - `rulebased/persistence/Persistence` is a bare `object Persistence {}` — the
   R10 read path (design §10 Q6, priority P2) does not exist.
-- **EUTXO L2 ledger has no persistence at all** (design gap, not just unwired):
-  `EutxoL2Ledger` keeps `State` in an in-memory `Ref`, always seeded from
-  `config.initialEvacuationMap`. The design assumed the `L2Ledger` black box owns
-  its own store + a restore interface keyed by an L2 serial number; neither exists.
-  See R2b.
+- ~~**EUTXO L2 ledger has no persistence at all**~~ **Done (R2b, 2026-05-31):**
+  `EutxoL2Ledger` now owns a serial-keyed `L2Store` (InMemory + RocksDB), advances an
+  `L2Serial` on each real mutator, snapshots every `SnapshotInterval`, and restores via
+  `restoreTo(serial)`. The JL-side co-anchoring (recording the per-soft-ack serial) is
+  still R2-fast.
 - PeerLiaison queues are not loaded from the store on boot (`state = State()`
   starts empty); see R2.
 - No fail-safe validation (CR6/CR7), no crash-restart tests (§9).
@@ -349,8 +352,14 @@ deterministic given `(state, command)` (true today; verify at the top of R2b).
 2. `L2Ledger` trait: add `currentSerial` + `restoreTo(serial)`; stub both in
    `RemoteL2Ledger` (unsupported). `EutxoL2Ledger.currentSerial` reads `state.serial`.
 3. The L2 store: own RocksDB store, two CFs (`L2Log`, `L2Snapshot`); BE-`Long` keys;
-   `Codec[command]` (reuse `L2LedgerCommand.Real` circe / wire codecs) + codec for the
-   snapshot subset `(serial, activeUtxos, pendingDeposits)`. `SnapshotInterval = 100`.
+   `Codec[command]` + codec for the snapshot subset `(serial, activeUtxos,
+   pendingDeposits)`. `SnapshotInterval = 100`. **Codec correction (landed 2026-05-31):**
+   the `L2LedgerCommand.Real` wire codecs the trait exports **cannot be reused** — they
+   rename fields (`userVKey` → `userVk`) and encode `Destination` lossily (object out,
+   CBOR-hex string in), so they do *not* round-trip (the FIXMEs in `L2LedgerCommand`
+   confirm it). `L2StoreCodecs` instead re-derives the three subtypes symmetrically
+   (`deriveCodec`) and routes the Borer-only leaves (`Destination`, `L2Genesis`) through
+   a CBOR-hex string. Lives store-local; the wire codecs are untouched.
 4. Factor each mutator into pure `applyMutation` + public wrapper that appends to
    `L2Log` and snapshots every `SnapshotInterval`. Implement `restoreTo`
    (SeekForPrev snapshot ≤ serial, fold log tail via `applyMutation`).
