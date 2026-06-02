@@ -1,7 +1,9 @@
 # Coil-Ready Peer (M5)
 
 **Status:** Active M5 workstream — core decisions locked 2026-05-30 (see
-**Resolved decisions** below).
+**Resolved decisions** below). **Pc1 implemented** (identity spine + threshold
+script; compiles, lints, unit suite green; uncommitted on `feature/coil`).
+**Pc2 next**.
 
 This spec describes the **coil-peer node type**: the process that joins a
 Gummiworm head as a custodial slow-consensus follower. It is M5's "coil
@@ -34,7 +36,10 @@ Decided after reviewing `peer-network`, `slow-consensus`, and
 
 - **D-coil-1 — peer identity is a tagged sum.**
   `PeerId = Head(HeadPeerNumber) | Coil(CoilPeerNumber)`, where
-  `CoilPeerNumber` is the coil's index in the canonically-sorted `coilPeers`.
+  `CoilPeerNumber` is the coil's index in `coilPeers` sorted canonically **by
+  verification-key bytes** (independent of the config's list order — every peer
+  must derive the same index→vkey map AND the same `MOf` branch order, else the
+  script hash diverges).
   Wire form: the peer number plus a one-bit tag (`1` = head, `0` = coil), so
   the existing 2-int `HardAckId` tuple grows by one bit rather than gaining a
   structural tag field. `HardAckId`, the slow-consensus quorum set, the
@@ -197,8 +202,8 @@ NodeConfig(headConfig: HeadConfig,        // shared verbatim, head & coil
 
 Today `nodePrivateConfig` holds an `OwnHeadPeerPrivate`. A coil node swaps in
 an **`OwnCoilPeerPrivate`** — this coil's signing key plus its derived
-`CoilPeerNumber` (its index in the canonically-sorted `coilPeers`, matched by
-vkey). `HeadConfig` is untouched; `CoilMultisigRegimeManager` reads the private
+`CoilPeerNumber` (its index in `coilPeers` sorted canonically by
+verification-key bytes, located by matching its own vkey). `HeadConfig` is untouched; `CoilMultisigRegimeManager` reads the private
 side to know "I am coil N" and finds its hub via the matching `coilPeers`
 entry.
 
@@ -207,6 +212,23 @@ set, `coilQuorum`, slow-consensus timing, finalization rules. L1 access is an
 independent `CardanoBackend` connection (§9); the `L2Ledger` is constructed
 from the same configuration head peers use (byte-deterministic across head and
 coil). This resolves **D-coil-2** toward reuse.
+
+**Script accessor — make coil context type-level (Pc2).** Pc1 wires the
+threshold script via an *override* of `headMultisigScript` on
+`HeadConfig.Bootstrap.Section` (which has `coilPeers` + `coilQuorum`), leaving
+the head-only derivation on `HeadPeers.Section` as the base. Dynamic dispatch
+makes every runtime caller coil-aware (they all hold a `HeadConfig`), but the
+head-only base stays reachable for a bare `HeadPeers` value — a latent footgun
+(`headConfig.headPeers.headMultisigScript` would silently drop the coil branch
+with no compile error). Pc2 closes this: **move `headMultisigScript` /
+`headMultisigAddress` off `HeadPeers.Section` onto the coil-aware
+`Bootstrap.Section` and delete the head-only base**, so coil context becomes a
+*type* requirement rather than a runtime invariant. This widens the ~12
+tx-builder `Config` aliases currently typed `… & HeadPeers.Section & …`
+(Initialization / Settlement / Refund / Deposit / Finalization / Rollout /
+MultisigRegimeUtxo + rulebased Vote / Tally / Resolution / Deinit /
+RuleBasedTreasury) to carry `Bootstrap.Section`. Deferred to Pc2 (not Pc1)
+because the config-seam work already re-types this layer.
 
 ## 6. Slow-consensus participation
 
@@ -261,6 +283,12 @@ minting the `HYDR` / `HMRW` beacon tokens, spending the treasury and
 multisig-regime outputs, and the head address. `initialization` makes the
 requirement explicit — the init tx "must be signed by all head peers and a
 quorum of coil peers."
+
+With **no coil peers configured** (`coilPeers` empty) the `MOf` branch is
+omitted entirely and the script is **byte-identical** to today's head-only
+`AllOf(headSigs)` — same script hash, address, and policy id. Coil-free heads
+are therefore unaffected, which is what makes the change safe to land ahead of
+the coil node type.
 
 `HeadMultisigScript.requiredSigners` currently flattens `AllOf → Signature` and
 feeds every key to the tx builder as a required signer; that flat cast no
@@ -483,7 +511,7 @@ higher quorum with little new production code.
 | Step | Deliverable |
 |---|---|
 | Pc1 | `PeerId` tagged sum (Head / Coil) + `CoilPeerNumber` + one-bit wire tag through `HardAckId` / verifier / aggregator vkey map; threshold `HeadMultisigScript` (`AllOf(head) ∧ AtLeast(coilQuorum, coil)`) with the mandatory-head / fixed-count-coil signer split (resolves D-coil-1) |
-| Pc2 | `CoilMultisigRegimeManager` + `OwnCoilPeerPrivate` identity seam (reuse `HeadConfig`); actor wiring with role gates on BW / JL / FCA / SC / SCA / PL (single-hub); fixed-count aggregator (saturate at `coilQuorum`, cap hard); **head `MultisigRegimeManager` hub spawns coil-ward `PeerLiaison`(s)** (§8); `CardanoLiaison` reused unchanged; `RuleBasedRegimeManager` shared (resolves D-coil-2, D-coil-6) |
+| Pc2 | `CoilMultisigRegimeManager` + `OwnCoilPeerPrivate` identity seam (reuse `HeadConfig`); actor wiring with role gates on BW / JL / FCA / SC / SCA / PL (single-hub); fixed-count aggregator (saturate at `coilQuorum`, cap hard); **head `MultisigRegimeManager` hub spawns coil-ward `PeerLiaison`(s)** (§8); **move `headMultisigScript` / `headMultisigAddress` to the coil-aware `Bootstrap.Section` and delete the head-only base** (§5); `CardanoLiaison` reused unchanged; `RuleBasedRegimeManager` shared (resolves D-coil-2, D-coil-6) |
 | Pc3 | Coil-side bootstrap entry point + integration test: 1 head + 1 coil reach `Stack(0).HardConfirmed` with `coilQuorum = 1` |
 | Pc4 | Multi-coil quorum: `coilQuorum > 1`, multiple coil peers through stage1 (validates the spine; minimal new production code) |
 | Pc5 | Stage-4 multi-peer model-based test with coil follower(s) |

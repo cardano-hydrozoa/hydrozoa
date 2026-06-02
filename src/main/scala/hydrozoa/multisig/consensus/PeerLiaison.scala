@@ -11,7 +11,7 @@ import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.PeerLiaison.*
 import hydrozoa.multisig.consensus.PeerLiaison.Request.*
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, SoftAck, SoftAckId, SoftAckNumber}
-import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
+import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber, BlockStatus, BlockType}
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
@@ -110,7 +110,7 @@ trait PeerLiaison(
                             logger.debug(s"outbox: stack brief stack=${y.stackNum}")
                         case y: HardAck =>
                             logger.debug(
-                              s"outbox: hard ack stack=${y.stackNum} peer=${y.peerNum} " +
+                              s"outbox: hard ack stack=${y.stackNum} peer=${y.peerId} " +
                                   s"round=${y.payload.round}"
                             )
                     }
@@ -538,9 +538,9 @@ trait PeerLiaison(
             // 3b. If a hard-ack is present, its peer must be the remote peer and its
             //     hardAckNum must equal the next-expected `current.hardAckNum`.
             received.hardAck match
-                case Some(h) if h.ackId.peerNum != remotePeerId.peerNum =>
+                case Some(h) if h.ackId.peerId != PeerId.Head(remotePeerId.peerNum) =>
                     return Reject(
-                      Rejection.HardAckPeerMismatch(remotePeerId.peerNum, h.ackId.peerNum)
+                      Rejection.HardAckPeerMismatch(remotePeerId.peerNum, h.ackId.peerId)
                     )
                 case Some(h) if h.hardAckNum != current.hardAckNum =>
                     return Reject(
@@ -657,7 +657,7 @@ object PeerLiaison {
             case AckNumMismatch(expected: SoftAckNumber, received: SoftAckNumber)
             case BlockNumMismatch(expected: BlockNumber, received: BlockNumber)
             case StackBriefNumMismatch(expected: StackNumber, received: StackNumber)
-            case HardAckPeerMismatch(expected: HeadPeerNumber, received: HeadPeerNumber)
+            case HardAckPeerMismatch(expected: HeadPeerNumber, received: PeerId)
             case HardAckNumMismatch(expected: HardAckNumber, received: HardAckNumber)
             case RequestsHeadMismatch(expected: RequestNumber, received: RequestNumber)
             case RequestsNotConsecutive(prev: RequestId, next: RequestId)

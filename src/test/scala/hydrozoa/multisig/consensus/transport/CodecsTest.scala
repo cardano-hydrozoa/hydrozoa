@@ -5,7 +5,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.consensus.PeerLiaison
 import hydrozoa.multisig.consensus.PeerLiaison.Request.{GetMsgBatch, NewMsgBatch}
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, SoftAck, SoftAckId}
-import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
+import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
@@ -150,7 +150,7 @@ class CodecsTest extends AnyFunSuite {
             stackBrief = None,
             hardAck = Some(
               HardAck(
-                ackId = HardAckId(HeadPeerNumber(2), HardAckNumber(9)),
+                ackId = HardAckId(PeerId.Head(HeadPeerNumber(2)), HardAckNumber(9)),
                 stackNum = StackNumber(6),
                 payload = payload
               )

@@ -10,7 +10,7 @@ import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.HardAck
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects, StackNumber}
 
 /** Slow-consensus actor.
@@ -62,11 +62,25 @@ final case class SlowConsensusActor(
     private val connections = Ref.unsafe[IO, Option[Connections]](None)
     private val stateRef = Ref.unsafe[IO, State](State.initial)
 
-    private lazy val allPeers: Set[HeadPeerNumber] =
-        config.headPeerNums.toList.toSet
+    private lazy val allHeadPeers: Set[PeerId] =
+        config.headPeerNums.toList.map(n => PeerId.Head(n)).toSet
 
-    private val ackVerifier = HardAckVerifier(config)
-    private val ackAggregator = HardAckAggregator(config)
+    private def coilQuorum: Int = config.coilQuorum
+
+    private def coilCount(peers: Set[PeerId]): Int =
+        peers.count {
+            case _: PeerId.Coil => true
+            case _: PeerId.Head => false
+        }
+
+    /** A round is saturated once every head peer plus at least `coilQuorum` coil peers have
+      * contributed.
+      */
+    private def isSaturated(present: Set[PeerId]): Boolean =
+        allHeadPeers.subsetOf(present) && coilCount(present) >= coilQuorum
+
+    private val ackVerifier = HardAckSignatureVerifier(config)
+    private val ackAggregator = HardAckAggregator()
 
     override def preStart: IO[Unit] = for {
         _ <- context.self ! PreStart
@@ -98,7 +112,7 @@ final case class SlowConsensusActor(
     private def handleStackHandoff(h: StackHandoff): IO[Unit] =
         Tracer.scopedCtx("stackNum" -> h.unsigned.stackNum.toString) {
             val stackNum = h.unsigned.stackNum
-            val ownPeer = config.ownHeadPeerNum
+            val ownPeer: PeerId = PeerId.Head(config.ownHeadPeerNum)
 
             h.unsigned.effects match {
                 case _: StackEffects.Unsigned.Initial =>
@@ -150,7 +164,7 @@ final case class SlowConsensusActor(
       */
     private def start2Phase(
         stackNum: StackNumber,
-        ownPeer: HeadPeerNumber,
+        ownPeer: PeerId,
         unsigned: Stack.Unsigned,
         ownR1: (HardAck, HardAck.Payload.Round1),
         ownR2: HardAck
@@ -180,7 +194,7 @@ final case class SlowConsensusActor(
       */
     private def startSolePhase(
         stackNum: StackNumber,
-        ownPeer: HeadPeerNumber,
+        ownPeer: PeerId,
         unsigned: Stack.Unsigned,
         ownSole: (HardAck, HardAck.SolePayload)
     ): IO[Unit] = for {
@@ -210,7 +224,7 @@ final case class SlowConsensusActor(
                 s.cells.get(h.stackNum) match {
                     case None =>
                         Tracer.debug(
-                          s"orphan hard-ack for stack ${h.stackNum} from peer ${h.peerNum} " +
+                          s"orphan hard-ack for stack ${h.stackNum} from peer ${h.peerId} " +
                               "(no cell yet); buffering"
                         ) >> stateRef.update(_.bufferOrphan(h))
                     case Some(_) =>
@@ -221,7 +235,7 @@ final case class SlowConsensusActor(
 
     /** Apply one remote ack into its (existing) cell, verifying it against the local effects. */
     private def applyRemote(h: HardAck): IO[Unit] = withCell(h.stackNum) { cell =>
-        val peer = h.peerNum
+        val peer = h.peerId
         cell match {
             case c: Cell.WaitingRound1 =>
                 h.payload match {
@@ -272,11 +286,15 @@ final case class SlowConsensusActor(
 
     private def tryAdvance(stackNum: StackNumber): IO[Unit] = stateRef.get.flatMap { s =>
         s.cells.get(stackNum) match {
-            case Some(c: Cell.WaitingRound1) if c.round1.keySet == allPeers =>
+            case Some(c: Cell.WaitingRound1) if isSaturated(c.round1.keySet) =>
                 completeRound1(stackNum, c)
-            case Some(c: Cell.WaitingRound2) if c.round2.keySet == allPeers =>
+            // Round 2 completes once the set of peers who signed BOTH rounds is saturated
+            // (every head + ≥ coilQuorum coils) — only such peers yield a coherent, fully-signed
+            // witness set across the round-1 effects and the round-2 unlock.
+            case Some(c: Cell.WaitingRound2)
+                if isSaturated(c.round1.keySet.intersect(c.round2.keySet)) =>
                 completeStack(stackNum, c)
-            case Some(c: Cell.WaitingSole) if c.sole.keySet == allPeers =>
+            case Some(c: Cell.WaitingSole) if isSaturated(c.sole.keySet) =>
                 completeStack(stackNum, c)
             case _ => IO.unit
         }
@@ -286,7 +304,7 @@ final case class SlowConsensusActor(
         _ <- Tracer.info(
           s"stack $stackNum round-1 confirmed; releasing own round-2 ack"
         )
-        ownPeer = config.ownHeadPeerNum
+        ownPeer = PeerId.Head(config.ownHeadPeerNum)
         ownR2Payload <- round2PayloadOf(c.ownRound2)
         round2 = c.round2Stash.updated(ownPeer, ownR2Payload)
         _ <- putCell(
@@ -312,11 +330,12 @@ final case class SlowConsensusActor(
         cell: Cell.WaitingRound2 | Cell.WaitingSole
     ): IO[Unit] = for {
         conn <- getConnections
-        vkeys <- allPeers.toList
+        signers = chooseSigners(cell)
+        vkeys <- signers
             .traverse(p => ackVerifier.resolvePeerVKey(p).map(p -> _))
             .map(_.toMap)
         wmap = ackAggregator.aggregateTxSignatures(cell, vkeys)
-        evac = ackAggregator.collectSecSignatures(cell)
+        evac = ackAggregator.collectSecSignatures(cell, signers)
         signed <- ackAggregator.attachWitnesses(cell.unsigned, wmap, evac)
         _ <- Tracer.info(
           s"stack $stackNum HARD-CONFIRMED — aggregated ackAggregator onto ${wmap.size} " +
@@ -327,6 +346,21 @@ final case class SlowConsensusActor(
         _ <- conn.stackComposer ! hardConfirmed
         _ <- stateRef.update(_.dropCell(stackNum))
     } yield ()
+
+    /** The fixed signer set attached at hard-confirmation: every head peer plus exactly
+      * `coilQuorum` coil peers (the lowest-ordered coils that contributed every required round), so
+      * every effect tx carries exactly `nHeadPeers + coilQuorum` witnesses regardless of how many
+      * coils acked.
+      */
+    private def chooseSigners(cell: Cell.WaitingRound2 | Cell.WaitingSole): List[PeerId] = {
+        val present: Set[PeerId] = cell match {
+            case c: Cell.WaitingRound2 => c.round1.keySet.intersect(c.round2.keySet)
+            case c: Cell.WaitingSole   => c.sole.keySet
+        }
+        val coils =
+            present.collect { case c: PeerId.Coil => c: PeerId }.toList.sorted.take(coilQuorum)
+        allHeadPeers.toList.sorted ++ coils
+    }
 
     // ===================================
     // Plumbing
@@ -413,22 +447,22 @@ object SlowConsensusActor {
     object Cell {
         final case class WaitingRound1(
             unsigned: Stack.Unsigned,
-            round1: Map[HeadPeerNumber, HardAck.Payload.Round1],
+            round1: Map[PeerId, HardAck.Payload.Round1],
             ownRound2: HardAck,
-            round2Stash: Map[HeadPeerNumber, HardAck.Payload.Round2]
+            round2Stash: Map[PeerId, HardAck.Payload.Round2]
         ) extends Cell
 
         final case class WaitingRound2(
             unsigned: Stack.Unsigned,
             // Carried through from round 1: needed at hard-confirmation to aggregate the
             // non-unlock per-effect signatures into ackAggregator (round 2 only signs the unlock).
-            round1: Map[HeadPeerNumber, HardAck.Payload.Round1],
-            round2: Map[HeadPeerNumber, HardAck.Payload.Round2]
+            round1: Map[PeerId, HardAck.Payload.Round1],
+            round2: Map[PeerId, HardAck.Payload.Round2]
         ) extends Cell
 
         final case class WaitingSole(
             unsigned: Stack.Unsigned,
-            sole: Map[HeadPeerNumber, HardAck.SolePayload]
+            sole: Map[PeerId, HardAck.SolePayload]
         ) extends Cell
     }
 
@@ -455,14 +489,14 @@ object SlowConsensusActor {
 
     enum CellError extends Throwable:
         case NoCell(stackNum: StackNumber)
-        case UnknownPeer(peer: HeadPeerNumber)
+        case UnknownPeer(peer: PeerId)
         case UnexpectedPayload(stackNum: StackNumber, roundLabel: String)
         case EffectsPayloadMismatch(round: String, payloadRound: String)
         case BadSignature(what: String)
         case KeysetMismatch(label: String, expected: String, actual: String)
         override def getMessage: String = this match
             case NoCell(s)      => s"No cell for stack $s"
-            case UnknownPeer(p) => s"Unknown head peer $p"
+            case UnknownPeer(p) => s"Unknown peer $p"
             case UnexpectedPayload(s, r) =>
                 s"Unexpected $r payload for stack $s in current phase"
             case EffectsPayloadMismatch(r, pr) =>

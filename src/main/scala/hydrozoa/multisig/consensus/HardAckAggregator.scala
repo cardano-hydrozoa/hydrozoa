@@ -4,10 +4,9 @@ import cats.data.NonEmptyList
 import cats.data.Validated.{Invalid, Valid}
 import cats.effect.IO
 import cats.implicits.*
-import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.multisig.consensus.SlowConsensusActor.Cell
 import hydrozoa.multisig.consensus.ack.HardAck
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.l1.tx.{RefundTx, Tx, TxSignature}
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects, StandaloneEvacuationCommitment}
@@ -16,10 +15,12 @@ import scalus.crypto.ed25519.VerificationKey
 
 /** Aggregates a saturated stack's per-peer hard-ack signatures into the multisigned
   * [[StackEffects.HardConfirmed]]: per-effect tx-body sigs become `VKeyWitness`es keyed by tx hash
-  * ([[WitnessMap]]), and each partition's SEC header sigs are collected separately. Pure given
-  * `config` (only `allPeers` is read from it) + its inputs.
+  * ([[WitnessMap]]), and each partition's SEC header sigs are collected separately. The signer
+  * population is driven entirely by its inputs — the keys of the `vkeys` map for tx witnesses, and
+  * the `signers` list for SEC header sigs — so the caller fixes which peers (all head peers plus a
+  * chosen `coilQuorum` coil peers) contribute.
   */
-final class HardAckAggregator(config: HeadPeers.Section) {
+final class HardAckAggregator() {
 
     /** This peer-set's multisig witnesses for each effect, keyed by tx body hash. */
     type WitnessMap = Map[TransactionHash, Set[VKeyWitness]]
@@ -32,11 +33,11 @@ final class HardAckAggregator(config: HeadPeers.Section) {
       */
     def aggregateTxSignatures(
         cell: Cell.WaitingRound2 | Cell.WaitingSole,
-        vkeys: Map[HeadPeerNumber, VerificationKey]
+        vkeys: Map[PeerId, VerificationKey]
     ): WitnessMap =
         cell match {
             case c: Cell.WaitingRound2 =>
-                allPeers.foldLeft(Map.empty: WitnessMap) { (m, peer) =>
+                vkeys.keySet.foldLeft(Map.empty: WitnessMap) { (m, peer) =>
                     val vk = vkeys(peer)
                     val afterR1 = (regularPartitions(c.unsigned), c.round1.get(peer)) match {
                         case (Some(parts), Some(r: HardAck.Round1Payload.Regular)) =>
@@ -76,7 +77,7 @@ final class HardAckAggregator(config: HeadPeers.Section) {
                     }
                 }
             case c: Cell.WaitingSole =>
-                allPeers.foldLeft(Map.empty: WitnessMap) { (m, peer) =>
+                vkeys.keySet.foldLeft(Map.empty: WitnessMap) { (m, peer) =>
                     (regularPartitions(c.unsigned), c.sole.get(peer)) match {
                         case (Some(parts), Some(p)) =>
                             parts.head match {
@@ -89,19 +90,20 @@ final class HardAckAggregator(config: HeadPeers.Section) {
                 }
         }
 
-    /** Per-partition SEC header signatures across all peers, in `allPeers` order, aligned to the
-      * effects' partition list. A partition with no SEC contributes an empty list; a present SEC
-      * has one header sig per peer (verification already enforced presence + count). Empty list
-      * overall for an Initial stack (no partitions).
+    /** Per-partition SEC header signatures across the `signers`, in their given order, aligned to
+      * the effects' partition list. A partition with no SEC contributes an empty list; a present
+      * SEC has one header sig per signer (verification already enforced presence + count). Empty
+      * list overall for an Initial stack (no partitions).
       */
     def collectSecSignatures(
-        cell: Cell.WaitingRound2 | Cell.WaitingSole
+        cell: Cell.WaitingRound2 | Cell.WaitingSole,
+        signers: List[PeerId]
     ): List[List[BlockHeader.HeaderSignature]] =
         regularPartitions(cell.unsigned) match {
             case None => Nil
             case Some(parts) =>
                 val peerSigParts: List[Option[NonEmptyList[HardAck.Round1Payload.PartitionSigs]]] =
-                    allPeers.toList.map { peer =>
+                    signers.map { peer =>
                         cell match {
                             case c: Cell.WaitingRound2 =>
                                 c.round1.get(peer).collect {
@@ -214,8 +216,6 @@ final class HardAckAggregator(config: HeadPeers.Section) {
               fallbackTx = fb
             )
     }
-
-    private val allPeers: Set[HeadPeerNumber] = config.headPeerNums.toList.toSet
 
     private def signOne[A <: Tx[A]](a: A, wmap: WitnessMap): IO[A] =
         wmap.get(a.tx.id).filter(_.nonEmpty) match {

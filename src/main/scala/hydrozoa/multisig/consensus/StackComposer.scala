@@ -12,6 +12,7 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuanti
 import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
+import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockResult}
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
@@ -297,7 +298,7 @@ final case class StackComposer(
     ): IO[SlowConsensusActor.StackHandoff] =
         state.modify { s =>
             val stackNum = unsigned.brief.stackNum
-            val peer = config.ownHeadPeerNum
+            val peer: PeerId = PeerId.Head(config.ownHeadPeerNum)
 
             val (acks, newNextOwnHardAckNum) = unsigned.effects match {
                 case i: StackEffects.Unsigned.Initial =>

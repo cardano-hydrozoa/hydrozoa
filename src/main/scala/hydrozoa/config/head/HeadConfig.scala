@@ -22,15 +22,18 @@ import hydrozoa.lib.cardano.scalus.codecs.json.Codecs
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.given
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost}
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects}
 import hydrozoa.multisig.ledger.joint.EvacuationMap
+import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import io.circe.syntax.*
 import io.circe.{Encoder, *}
 import scala.collection.immutable.SortedSet
 import scalus.cardano.ledger.*
+import scalus.crypto.ed25519.VerificationKey
+import scodec.bits.ByteVector
 
 /** Invariant: this _must_ be able to project down to a HeadConfig.Bootstrap
   */
@@ -564,7 +567,32 @@ object HeadConfig {
             def cardanoNetwork: CardanoNetwork = headConfigBootstrap.cardanoNetwork
             def headParameters: HeadParameters = headConfigBootstrap.headParameters
             def headPeers: HeadPeers = headConfigBootstrap.headPeers
+            // TODO: should we use similar wrapper like CoilPeers?
             def coilPeers: List[CoilPeer] = headConfigBootstrap.coilPeers
+
+            /** Coil peer verification keys in canonical order — sorted by key bytes, independent of
+              * the config's list order. A peer's index into this list is its [[CoilPeerNumber]],
+              * shared by the threshold native script's coil branch and by hard-ack signer
+              * resolution.
+              */
+            final def coilPeerVKeys: List[VerificationKey] =
+                coilPeers.map(_.vkey).sortBy(vk => ByteVector(vk.bytes).toHex)
+
+            /** Resolve a coil peer's verification key from its [[CoilPeerNumber]] (its position in
+              * the canonical [[coilPeerVKeys]] order).
+              */
+            final def coilPeerVKey(p: CoilPeerNumber): Option[VerificationKey] =
+                coilPeerVKeys.lift(p.convert)
+
+            /** The head multisig native script including the coil threshold branch — all head peers
+              * plus `MOf(coilQuorum, coilPeerVKeys)`. Overrides the head-only derivation on
+              * [[HeadPeers.Section]] so every `headMultisigScript` / `headMultisigAddress` call
+              * (and thus the minting policy, treasury / regime spend, and head address) resolves to
+              * the threshold script. With no coil peers it is byte-identical to the head-only
+              * script.
+              */
+            override def headMultisigScript: HeadMultisigScript =
+                HeadMultisigScript(this, coilPeerVKeys, coilQuorum)
             def initializationParameters: InitializationParameters =
                 headConfigBootstrap.initializationParameters
             def scriptReferenceUtxos: ScriptReferenceUtxos =
