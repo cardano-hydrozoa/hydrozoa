@@ -114,7 +114,7 @@ object StoreDump:
             case Cf.Block | Cf.Stack | Cf.Request | Cf.SoftAck | Cf.HardAck =>
                 try LaneKey.decode(cf, key).toString
                 catch case _: IllegalArgumentException => hex(key)
-            case Cf.BlockResult | Cf.SoftConfirmation =>
+            case Cf.BlockResult | Cf.SoftConfirmation | Cf.RequestHighWater =>
                 if key.length == 4 then s"$cf(${ByteBuffer.wrap(key).getInt})"
                 else hex(key)
             case Cf.HardConfirmation =>

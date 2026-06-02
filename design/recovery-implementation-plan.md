@@ -158,14 +158,16 @@ signal — no separate "is cold" flag.
     JL's side), and on recover calls `l2Ledger.restoreTo(serial)` — the consensus →
     L2 mapping stays entirely on JL; the membrane is never crossed by an ack. R2b
     builds this; R2-fast assumes it exists (we do R2b first — see §5).
-  - **Write-side addition (`RequestHighWater`):** `persistOwnBlock` today writes
-    `{Block(leader), SoftAck, BlockResult, DepositMap}` in one `WriteBatch`; add a
-    fifth put `StoreKey.RequestHighWater` — fold this block's included request ids
-    into the running `Map[HeadPeerNumber, RequestNumber]`
-    (`ReplayCursors.maxRequestNumberPerPeer`) and overwrite the single blob. Needs
-    the new `Cf.RequestHighWater` + `StoreKey.RequestHighWater` + its `Map` codec
-    (this is where the R1-deferred CF gets created — it is dead until this write).
-    Not read by JL's own `recover`; the ReplayActor reads it to seed the RequestLane
+  - **Write-side addition (`RequestHighWater`) — LANDED 2026-06-01:**
+    `persistOwnBlock` writes `{Block(leader), SoftAck, BlockResult, DepositMap}` in
+    one `WriteBatch`; a fifth put `StoreKey.RequestHighWater(blockNum)` was added —
+    the previous block's high-water with this block's included request ids folded in
+    via `ReplayCursors.mergeHighWater`, keyed **per block** (not a singleton, so the
+    high-water at any committed block is recoverable; the latest entry subsumes the
+    old singleton design). Created the new `Cf.RequestHighWater` (13th CF, spine-
+    indexed group) + `StoreKey.RequestHighWater(num: BlockNumber)` + its `Map` codec
+    (`RequestHighWaterCodec`). Not read by JL's own `recover`; the ReplayActor reads
+    `RequestHighWater[softAcked]` to seed the RequestLane
     cursors (§5.3 / R1 `ReplayCursors`).
 - **StackComposer** → restore full `State`. Today `State.initial(config)` seeds
   `treasury = config.initializationTx.treasuryProduced`,

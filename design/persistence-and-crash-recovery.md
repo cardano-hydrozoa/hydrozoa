@@ -213,7 +213,7 @@ Structural facts:
 | Hard acks (per-effect, round-1/2/sole)                                            | signed by StackComposer, aggregated by SlowConsensusActor; remote via PeerLiaison | replayed; own ack authoritative (CR2) |
 | **Hard confirmation** (`HardConfirmation` CF)                                     | SlowConsensusActor → CardanoLiaison | multisigned effects / SECs / fallbacks **in full**, written at confirmation time, keyed by `stackNum`. `hardConfirmed` **derives** as `max(HardConfirmation.key)` — no marker key. CardanoLiaison submits; evacuation reads. Prunes hard-acks. **R10 evacuation floor.** |
 | Deposits map (`DepositMap` CF)                                                    | JointLedger | **snapshotted** (one keyed blob, rewritten on every own soft ack — out-of-order subset, §5.3) |
-| Request high-water (`RequestHighWater` CF)                                        | JointLedger | **snapshotted** (one keyed blob — a `Map[HeadPeerNumber, RequestNumber]`, the highest request each peer has had included in a block; rewritten on every own soft ack). The RequestLane recovery cursor is this `+ 1` per peer. Snapshotted, not derived, because retention (§5.1) prunes the old briefs a brief-fold would need (§5.3). |
+| Request high-water (`RequestHighWater` CF)                                        | JointLedger | **per-block** — keyed by `blockNum`, a `Map[HeadPeerNumber, RequestNumber]` giving the highest request from each peer included in any block `≤ blockNum` (cumulative, monotone in `blockNum`). One entry per own soft-ack, bundled with that block. The RequestLane recovery cursor is `RequestHighWater[softAcked] + 1` per peer. Persisted (not derived) because retention (§5.1) prunes the old briefs a brief-fold would need (§5.3); block-keyed (not a singleton) so the high-water at any committed block is recoverable. |
 | Treasury (`Treasury` CF)                                                          | StackComposer | **snapshotted** (one keyed blob, rewritten on every own hard-ack stack-close — rotates per settlement / finalization) |
 | Evacuation maps (`EvacuationMap` CF)                                              | StackComposer | **per-block, but only at the blocks that back an on-chain KZG commitment** — every **major** block (its post-diff map is the settlement's `nextKzg`) and every **last-of-partition minor** (the minor that gets a SEC), keyed by `blockNum`. SC folds each block's `evacuationMapDiff` onto the running map and persists the result at those blocks on every own hard-ack stack-close. The maps at other minors commit to nothing on-chain, so the rule-based dispute can never need them. KZG commitment derives from the map, not stored separately. |
 
@@ -431,24 +431,26 @@ below.
 
 ### 5.2 State recovery: the base snapshots
 
-Replay starts from **per-side passive snapshots at the ack mark**: the fast
-snapshots live in `DepositMap` + `RequestHighWater`, the slow in `Treasury` +
-`EvacuationMap`. Each snapshot is rewritten in the same atomic `WriteBatch` as its
-side's own ack write (deposits + request high-water per own soft ack, treasury +
-evac per own hard-ack stack-close), so the snapshotted state is always exactly
-aligned with the side's `*Acked` mark and can never be torn from it.
+Replay starts from **per-side passive state at the ack mark**: the fast side
+persists `DepositMap` (singleton snapshot) + `RequestHighWater` (per-block), the
+slow `Treasury` (singleton) + `EvacuationMap` (per committed block). Each is
+written in the same atomic `WriteBatch` as its side's own ack write (deposits +
+request high-water per own soft ack, treasury + evac per own hard-ack
+stack-close), so the state at the side's `*Acked` mark is always exactly aligned
+with it and can never be torn from it.
 
-Snapshots carry **only the non-derivable** passive state on each side:
+These carry **only the non-derivable** passive state on each side:
 
 - fast — **`DepositMap`** + **`RequestHighWater`** CFs (JointLedger):
     - `DepositMap` — one keyed blob, the deposits map at `softAcked`. JL is at
       `Done(softAcked)` after restore — `previousBlockHeader` reloads from
       `BlockLane[softAcked].brief`, deposits come from `DepositMap`, nothing else
       needed for JL's own state.
-    - `RequestHighWater` — one keyed blob, a `Map[HeadPeerNumber, RequestNumber]`
-      giving each peer's highest included request as of `softAcked`. It is *not*
-      JointLedger state; it feeds the RequestLane recovery cursors (§5.3), rewritten
-      here so it stays aligned with `softAcked` and survives brief pruning.
+    - `RequestHighWater` — keyed by `blockNum`, a `Map[HeadPeerNumber, RequestNumber]`
+      giving each peer's highest included request as of that block; recovery reads
+      the entry at `softAcked`. It is *not* JointLedger state; it feeds the
+      RequestLane recovery cursors (§5.3), written here so the `softAcked` entry
+      stays aligned with the soft-ack and survives brief pruning.
 - slow — **`Treasury`** + **`EvacuationMap`** CFs (StackComposer):
     - `Treasury` — one keyed blob, the cumulative treasury UTXO ref at
       `hardAcked`. Overwritten in place — there's no rule-based scenario that
@@ -506,9 +508,10 @@ them **derives from the markers** via Hydrozoa's monotonicity invariants:
 
 - **Requests** — monotonic per peer: *if a block includes Peer A's Request `N`,
   the next block includes only A's requests `> N`.* So A's RequestLane cursor is
-  A's highest-ever included request `+ 1`. This high-water is **persisted as a
-  small per-peer counter** (one entry per head peer, written as blocks are
-  produced) and read directly at boot — *not* recomputed by scanning briefs.
+  A's highest-ever included request `+ 1`. This high-water is **persisted in the
+  `RequestHighWater` CF** (per-block, keyed by `blockNum`, holding a per-peer map;
+  written as blocks are produced) and read directly at boot from the `softAcked`
+  entry — *not* recomputed by scanning briefs.
   Folding briefs is unsound: to get *every* peer's high-water you must scan back
   until each peer's latest included request appears (worst case to block 0), and
   once retention (§5.1) prunes old briefs below the hard-confirmed floor they are
@@ -797,11 +800,12 @@ Post-split, owns only the fast-side state; treasury moved to StackComposer.
       relying on JointLedger to re-emit results below `softAcked` (§3.2),
     - the current **deposits snapshot** → **`DepositMap`** CF (single keyed
       blob; overwrites the previous snapshot),
-    - the current **request high-water** → **`RequestHighWater`** CF (single keyed
-      blob, a `Map[HeadPeerNumber, RequestNumber]`; fold this block's included
-      request ids into the running per-peer max and overwrite). Feeds the
-      RequestLane recovery cursors (§5.3); snapshotted here so it stays aligned
-      with `softAcked` and survives brief pruning.
+    - the cumulative **request high-water** → **`RequestHighWater`** CF (keyed by
+      `blockNum`, a `Map[HeadPeerNumber, RequestNumber]`; the previous block's map
+      with this block's included request ids folded into the per-peer max). Feeds
+      the RequestLane recovery cursors (§5.3) — recovery reads the entry at
+      `softAcked`; written here so that entry stays aligned with the soft-ack and
+      survives brief pruning.
 
   Bundling deposits + request high-water here keeps both snapshots aligned with
   the `softAcked` anchor (our last soft-ack) and un-tearable from it. No marker key
@@ -1037,11 +1041,14 @@ marker derives from a single-CF scan, §5.1):
    │     ┌────────────┐ ┌─────────────────┐ ┌─────────────────┐            │
    │     │BlockResult │ │SoftConfirmation │ │HardConfirmation │            │
    │     └────────────┘ └─────────────────┘ └─────────────────┘            │
+   │     ┌────────────────┐                                                 │
+   │     │RequestHighWater│                                                 │
+   │     └────────────────┘                                                 │
    │                                                                       │
    │   Per-side snapshots:                                                 │
-   │     ┌───────────┐ ┌────────────────┐ ┌────────┐ ┌─────────────┐       │
-   │     │DepositMap │ │RequestHighWater│ │Treasury│ │EvacuationMap│       │
-   │     └───────────┘ └────────────────┘ └────────┘ └─────────────┘       │
+   │     ┌───────────┐ ┌────────┐ ┌─────────────┐                          │
+   │     │DepositMap │ │Treasury│ │EvacuationMap│                          │
+   │     └───────────┘ └────────┘ └─────────────┘                          │
    │                                                                       │
    │   Metadata:                                                           │
    │     ┌──────┐                                                          │
@@ -1100,9 +1107,9 @@ of the committed bytes in our CFs, we rebuild actor state from there.
   engine's own **native (SST) compaction** runs underneath and is a separate,
   internal matter.
 - **Column families.** Thirteen CFs — five lane (`Block`, `Stack`, `Request`,
-  `SoftAck`, `HardAck`; §7.1), three spine-indexed working / confirmation
-  (`BlockResult`, `SoftConfirmation`, `HardConfirmation`), four snapshot CFs
-  (`DepositMap` + `RequestHighWater` + `Treasury` single keyed blobs;
+  `SoftAck`, `HardAck`; §7.1), four spine-indexed working / confirmation
+  (`BlockResult`, `SoftConfirmation`, `HardConfirmation`, `RequestHighWater`),
+  three snapshot CFs (`DepositMap` + `Treasury` single keyed blobs;
   `EvacuationMap` keyed per committed block), and one metadata
   (`Meta`, store version + the arrival-stamp generation counter, §5.4). The
   generic benefits of CF-per-concern (per-CF
@@ -1129,7 +1136,7 @@ compaction style) can match its shape. Concretely:
 | `SoftConfirmation` | one entry per soft-confirmed block (FCA aggregate output), keyed by `blockNum`, low write rate (one per confirmation event); `softConfirmed = max(key)` | a single `SeekToLast` derives the marker for free; small + sparse — cheap to keep |
 | `HardConfirmation` | one entry per hard-confirmed stack (multisigned effects / SECs / fallbacks), keyed by `stackNum`, the R10 evacuation floor — physical deletion never descends here; folded sequentially at recovery (CardanoLiaison + rule-based regime, §6, §10 Q6) | scan-optimized; `hardConfirmed = max(key)` from `SeekToLast`; **never compacted past — physical-retention floor** |
 | `DepositMap` | one key (`Meta`-like — single keyed blob), medium-sized blob, **rewritten on every own soft ack** (high churn on a single key) | RocksDB-friendly single-key churn (large MemTable absorbs the overwrites; compaction collapses the chain quickly); isolated from ack-CF compaction |
-| `RequestHighWater` | one key — single keyed blob holding `Map[HeadPeerNumber, RequestNumber]` (small, `N` entries), **rewritten on every own soft ack** (same cadence as `DepositMap`) | tiny single-key churn; read once at boot to seed the `N` RequestLane recovery cursors (§5.3); its own CF keeps the churn off the lane / ack compaction queues |
+| `RequestHighWater` | one entry per block keyed by `blockNum`, a small `Map[HeadPeerNumber, RequestNumber]` (`N` entries), written on every own soft ack (cumulative — each entry extends the previous) | scan-optimized + sparse like `BlockResult`; recovery reads the `softAcked` entry to seed the `N` RequestLane cursors (§5.3); its own CF keeps the churn off the lane / ack compaction queues |
 | `Treasury` | one key, rewritten only at own hard-ack stack-close (slow cadence); small (UTXO ref) | low write rate ⇒ tiny compaction footprint; own CF makes it trivially backupable / restorable as part of the R10 floor |
 | `EvacuationMap` | keyed by `blockNum`; one entry per **committed** block (each major + each last-of-partition SEC minor — the only maps that back an on-chain commitment), written in batches at own hard-ack stack-close (the closing stack's committed blocks in one `WriteBatch`); each map is cumulative L2 state | scan-optimized profile (range-read for evacuation reconstruction); pruning is bounded — anything strictly older than the last-hard-confirmed major can be dropped, since those minors can never be disputed against once the next major supersedes them |
 | `Meta` | store-level keys: the schema version and the **arrival-stamp `generation`** — a per-process counter read+incremented+persisted once at store-open (§5.4), so this process's lane stamps sort after earlier ones across restarts | no tuning needed; one obvious place for store-level metadata |
@@ -1259,8 +1266,8 @@ mechanisms (replay / restore) run concurrently (§5).
    max(SoftConfirmation.key)`, `hardConfirmed = max(HardConfirmation.key)`,
    `softAcked = max(own SoftAck key)`, `hardAcked` from the last own `HardAck`.
    **Load base snapshots** for the consensus actors — `DepositMap` +
-   `RequestHighWater` (JL; the latter feeds the RequestLane cursors, §5.3),
-   `Treasury` + `EvacuationMap` (SC; the latter at
+   `RequestHighWater[softAcked]` (JL; the latter feeds the RequestLane cursors,
+   §5.3), `Treasury` + `EvacuationMap` (SC; the latter at
    `EvacuationMap[StackLane[hardAcked].lastBlockNum]`, always present for a
    non-final stack — §5.2). Validate invariants (markers consistent with the
    snapshot blobs being aligned to their anchors; counter monotonicity). On

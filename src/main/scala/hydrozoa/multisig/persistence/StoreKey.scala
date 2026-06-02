@@ -1,12 +1,14 @@
 package hydrozoa.multisig.persistence
 
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockResult as LedgerBlockResult}
+import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.joint.EvacuationMap as JointEvacuationMap
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
 import hydrozoa.multisig.ledger.stack.{StackEffects, StackNumber}
-import hydrozoa.multisig.persistence.codec.{BlockResultCodec, DepositMapCodec, SoftConfirmationCodec, StackEffectsCodec, TreasuryCodec}
+import hydrozoa.multisig.persistence.codec.{BlockResultCodec, DepositMapCodec, RequestHighWaterCodec, SoftConfirmationCodec, StackEffectsCodec, TreasuryCodec}
 
 /** The typed key surface for the high-level persistence API.
   *
@@ -134,6 +136,21 @@ object StoreKey:
         import JointEvacuationMap.given
         given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.EvacuationMap
+        def encode: Array[Byte] = LaneKey.intBytes(num)
+
+    /** Key for [[Cf.RequestHighWater]] — JointLedger's cumulative per-peer request high-water
+      * `Map[HeadPeerNumber, RequestNumber]` **as of block `num`** (the highest request number from
+      * each author included in any block `≤ num`). One entry per own soft-ack, written in the same
+      * atomic bundle as that block; entries are monotone-non-decreasing in `num`. Not read by JL's
+      * own recover; the `ReplayActor` reads `RequestHighWater(softAcked)` to seed each peer's
+      * RequestLane resume cursor (`high-water + 1`, §5.3). Block-keyed (not a singleton) so the
+      * high-water at any committed block is recoverable, mirroring the other spine-indexed CFs.
+      */
+    final case class RequestHighWater(num: BlockNumber) extends StoreKey:
+        type Value = Map[HeadPeerNumber, RequestNumber]
+        import RequestHighWaterCodec.given
+        given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
+        val cf: Cf = Cf.RequestHighWater
         def encode: Array[Byte] = LaneKey.intBytes(num)
 
     /** Key for [[Cf.Meta]] — store-level metadata, name-keyed (UTF-8). */

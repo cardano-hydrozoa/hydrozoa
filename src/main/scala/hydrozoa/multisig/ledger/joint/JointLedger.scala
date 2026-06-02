@@ -15,6 +15,7 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.logging.{Tracer, logWith}
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.SoftAck
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger.NotTriggered
 import hydrozoa.multisig.consensus.pollresults.PollResults
@@ -23,6 +24,7 @@ import hydrozoa.multisig.ledger.block.*
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag.{Invalid, Valid}
+import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.joint.JointLedger.*
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.*
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
@@ -30,6 +32,7 @@ import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerCommand, L2LedgerError, L2LedgerState}
+import hydrozoa.multisig.persistence.recovery.ReplayCursors
 import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Persistence, StoreKey, WriteBatch}
 import monocle.Focus.focus
 
@@ -719,9 +722,13 @@ final case class JointLedger(
       *   - own `BlockBrief` → `Block` lane (**leader only** — the BlockLane author for this block);
       *   - own `SoftAck` → `SoftAck` lane;
       *   - the per-block `BlockResult` → `BlockResult` CF;
-      *   - the current deposits snapshot → `DepositMap` CF.
+      *   - the current deposits snapshot → `DepositMap` CF;
+      *   - the cumulative per-peer request high-water at this block → `RequestHighWater[blockNum]`
+      *     (the previous block's high-water with this block's included request ids merged in; the
+      *     `ReplayActor` reads `RequestHighWater[softAcked]` to seed each peer's RequestLane resume
+      *     cursor, §5.3).
       *
-      * Lane values carry the 8-byte arrival stamp (creation time — local monotonic; §5.4/§7.1).
+      * Lane values carry the 12-byte arrival stamp (creation time — local monotonic; §5.4/§7.1).
       */
     private def persistOwnBlock(
         brief: BlockBrief.Next,
@@ -731,6 +738,11 @@ final case class JointLedger(
         for {
             stamp <- persistence.arrivalStamp
             deposits <- state.get.map(_.deposits)
+            // The high-water is cumulative: extend the previous block's map (blocks are contiguous
+            // and never pruned below softAcked, so the predecessor entry is always present once past
+            // the first block).
+            priorHighWater <- previousBlockHighWater(brief.blockNum)
+            highWater = ReplayCursors.mergeHighWater(priorHighWater, brief.events.map(_._1))
             briefBatch =
                 if config.ownHeadPeerId.isLeader(brief.blockNum) then
                     WriteBatch.start.put(LaneKey.Block(brief.blockNum))(LaneValue(stamp, brief))
@@ -740,8 +752,21 @@ final case class JointLedger(
                   .put(LaneKey.SoftAck(softAck.peerNum, softAck.ackNum))(LaneValue(stamp, softAck))
                   .put(StoreKey.BlockResult(brief.blockNum))(blockResult)
                   .put(StoreKey.DepositMap)(deposits)
+                  .put(StoreKey.RequestHighWater(brief.blockNum))(highWater)
             )
         } yield ()
+
+    /** The cumulative request high-water persisted at the block before `blockNum`, or empty for the
+      * first block (no predecessor entry).
+      */
+    private def previousBlockHighWater(
+        blockNum: BlockNumber
+    ): IO[Map[HeadPeerNumber, RequestNumber]] =
+        if (blockNum: Int) <= 0 then IO.pure(Map.empty)
+        else
+            persistence
+                .get(StoreKey.RequestHighWater(BlockNumber((blockNum: Int) - 1)))
+                .map(_.getOrElse(Map.empty))
 
     // TODO: classify the mismatch instead of emitting a generic "consensus is broken" panic.
     //   One specific subcase worth singling out is "a deposit absorbed by the leader was not

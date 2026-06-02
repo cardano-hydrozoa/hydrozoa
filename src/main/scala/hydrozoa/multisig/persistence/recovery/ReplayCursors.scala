@@ -127,11 +127,20 @@ object ReplayCursors:
     def maxRequestNumberPerPeer(
         requestIds: Iterable[RequestId]
     ): Map[HeadPeerNumber, RequestNumber] =
-        requestIds.foldLeft(Map.empty[HeadPeerNumber, RequestNumber]) { (acc, rid) =>
-            val author = rid.peerNum
-            val num = rid.requestNum
-            acc.updatedWith(author) {
-                case Some(cur) if Ordering[RequestNumber].gteq(cur, num) => Some(cur)
-                case _                                                   => Some(num)
+        mergeHighWater(Map.empty, requestIds)
+
+    /** Fold `requestIds` into an existing high-water map, keeping the per-author max — the
+      * write-side maintenance step JointLedger runs on each own soft-ack: read the prior persisted
+      * blob, merge this block's included ids, rewrite. Monotone in `into`, so it never lowers a
+      * counter (a peer whose ids are all `≤` its current high-water leaves the entry unchanged).
+      */
+    def mergeHighWater(
+        into: Map[HeadPeerNumber, RequestNumber],
+        requestIds: Iterable[RequestId]
+    ): Map[HeadPeerNumber, RequestNumber] =
+        requestIds.foldLeft(into) { (acc, rid) =>
+            acc.updatedWith(rid.peerNum) {
+                case Some(cur) if Ordering[RequestNumber].gteq(cur, rid.requestNum) => Some(cur)
+                case _ => Some(rid.requestNum)
             }
         }

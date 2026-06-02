@@ -39,6 +39,26 @@ class ReplayCursorsTest extends AnyFunSuite:
         assert(ReplayCursors.maxRequestNumberPerPeer(Nil).isEmpty)
     }
 
+    test("mergeHighWater folds new ids into a prior map and never lowers a counter") {
+        val prior = Map(
+          HeadPeerNumber(0) -> RequestNumber(7),
+          HeadPeerNumber(1) -> RequestNumber(5)
+        )
+        // peer 0 sees only older ids (≤ 7 → unchanged); peer 1 advances; peer 2 is new.
+        val merged = ReplayCursors.mergeHighWater(prior, List(rid(0, 2), rid(1, 9), rid(2, 0)))
+        assert(merged(HeadPeerNumber(0)) == RequestNumber(7))
+        assert(merged(HeadPeerNumber(1)) == RequestNumber(9))
+        assert(merged(HeadPeerNumber(2)) == RequestNumber(0))
+        assert(merged.size == 3)
+    }
+
+    test("mergeHighWater onto the empty map equals maxRequestNumberPerPeer") {
+        val ids = List(rid(0, 3), rid(0, 7), rid(1, 2))
+        assert(
+          ReplayCursors.mergeHighWater(Map.empty, ids) == ReplayCursors.maxRequestNumberPerPeer(ids)
+        )
+    }
+
     test("derive: each spine carries both floors and each satellite its floor, fully populated") {
         val markers = Markers(
           softConfirmed = Some(BlockNumber(5)),

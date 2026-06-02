@@ -4,7 +4,9 @@ import cats.effect.unsafe.implicits.global
 import cats.effect.{IO, IOLocal}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.Tracer
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockNumber
+import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.persistence.codec.TreasuryFixture
@@ -34,6 +36,20 @@ class PersistenceTest extends AnyFunSuite:
                 _ <- p.put(key)(treasury)
                 got <- p.get(key)
             yield assert(got == Some(treasury))
+        }
+    }
+
+    test("RequestHighWater round-trips per-block high-water maps under distinct keys") {
+        withTypedStore { p =>
+            val atBlock3 = Map(HeadPeerNumber(0) -> RequestNumber(3))
+            val atBlock4 =
+                Map(HeadPeerNumber(0) -> RequestNumber(3), HeadPeerNumber(2) -> RequestNumber(40))
+            for
+                _ <- p.put(StoreKey.RequestHighWater(BlockNumber(3)))(atBlock3)
+                _ <- p.put(StoreKey.RequestHighWater(BlockNumber(4)))(atBlock4)
+                got3 <- p.get(StoreKey.RequestHighWater(BlockNumber(3)))
+                got4 <- p.get(StoreKey.RequestHighWater(BlockNumber(4)))
+            yield assert(got3 == Some(atBlock3) && got4 == Some(atBlock4))
         }
     }
 
